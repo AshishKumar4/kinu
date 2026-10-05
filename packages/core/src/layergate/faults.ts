@@ -78,16 +78,16 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     id: 'context-assembly/prefix-renderers-regress',
     layer: 'context-assembly',
     patches: ['compilePromptSurface', 'buildSystemPromptSync', 'admitAgentsMd'],
-    models: 'the surface compiler stops filtering unavailable executors, a prefix section renderer drops a line, and AGENTS.md admission stops bounding what it reads: every file is materialized whatever its size',
+    models: 'the surface compiler stops filtering unconfigured executors, a prefix section renderer drops a line, and AGENTS.md admission stops bounding what it reads: every file is materialized whatever its size',
     inject: (s) => ({
       ...s,
       compilePromptSurface: (opts) => {
         const surface = s.compilePromptSurface(opts);
 
-        return { ...surface, selectableExecutors: surface.executors };
+        return { ...surface, configuredExecutors: surface.executors };
       },
       buildSystemPromptSync: (opts) =>
-        s.buildSystemPromptSync(opts).split('\n').filter((line) => !line.startsWith('- Model: ')).join('\n'),
+        s.buildSystemPromptSync(opts).split('\n').filter((line) => !line.startsWith('- Inspect current code')).join('\n'),
       admitAgentsMd: (candidates) => ({ admit: candidates, referenced: [] }),
     }),
   },
@@ -212,13 +212,13 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'evolution-gate/acceptance-weakens',
     layer: 'evolution-gate',
-    patches: ['checkMisevolution', 'decidePromotion'],
-    models: 'the network-egress criterion stops matching and the shadow regression veto is dropped',
+    patches: ['checkMisevolution', 'trialDecision'],
+    models: 'the network-egress criterion stops matching and the live trial ignores a risen guardrail',
     inject: (s) => ({
       ...s,
       checkMisevolution: (source) => s.checkMisevolution(source.replace(/\bfetch\s*\(/g, 'noop(')),
-      decidePromotion: (pending, config) =>
-        s.decidePromotion(pending, { ...config, maxRegressions: Number.MAX_SAFE_INTEGER }),
+      trialDecision: (candidate, incumbent, trial, now) =>
+        s.trialDecision({ ...candidate, errors: incumbent.errors, steps: incumbent.steps }, incumbent, trial, now),
     }),
   },
   {

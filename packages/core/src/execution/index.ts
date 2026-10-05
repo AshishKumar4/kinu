@@ -31,9 +31,14 @@ export {
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
 } from './escalation';
 
-export { DefaultExecutionRouter } from './router';
+export { DefaultExecutionRouter, runOnExecutor, type ExecutorRun } from './router';
 
-export { withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach } from './approval';
+export { withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach, type ShellReach } from './approval';
+
+export {
+  busyShell, callJob, createBashShell, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
+  type MachineShells,
+} from './shell-session';
 
 export {
   createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,

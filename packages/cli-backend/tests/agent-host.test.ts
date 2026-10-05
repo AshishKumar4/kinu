@@ -52,6 +52,9 @@ import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
 
+/** A roster row's lifetime is its actor's. */
+const ROSTER_LIFETIME = "(SELECT lifetime FROM workspace_actors WHERE actor_id = json_extract(actor_subordinates.actor_reference, '$.actorId')) AS lifetime";
+
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake',
   baseURL: 'http://localhost:0',
@@ -968,6 +971,59 @@ describe('LocalAgentHost', () => {
     }
   });
 
+  test("a hire's shell answers to its root's standing approval mode, never its own", async () => {
+    const brief = 'Check the env file.';
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let afterTool = '';
+    let asked = false;
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doGenerate: async () => textAnswer('acknowledged', usage),
+      doStream: async (options) => {
+        const prompt = JSON.stringify(options.prompt);
+
+        if (prompt.includes(brief) && !asked && (options.tools ?? []).some((tool) => tool.name === 'shell')) {
+          asked = true;
+
+          return {
+            stream: new ReadableStream<LanguageModelV2StreamPart>({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({ type: 'tool-call', toolCallId: 'call_env', toolName: 'shell', input: JSON.stringify({ command: 'cat .env' }) });
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+                controller.close();
+              },
+            }),
+          };
+        }
+
+        if (asked && prompt.includes('"tool-result"')) afterTool = prompt;
+
+        return { stream: textStream('ok', usage) };
+      },
+    });
+
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const { host, runtimes } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+
+    try {
+      const team = await host.team('root');
+      await team.create({ name: 'auditor', role: 'researcher', mission: 'Watch the ledger.' });
+      // A secret read is a warn: the hire's own default (strict) runs it; the root's deny_all refuses it.
+      present(runtimes.get('root'), 'the root runtime').actor.config.setShellApprovalMode('deny_all');
+      const turned = awaitTurns(host, 'root/auditor', 1);
+      await team.assign({ name: 'auditor', task: brief, mode: 'build' });
+      await turned;
+
+      expect(afterTool).toContain('deny_all');
+    } finally {
+      await host.close();
+    }
+  });
+
   test('a hire runs at the effort its parent runs at', async () => {
     // Before, a local hire resolved only its own setting and ran at the default whatever `/effort` the owner set.
     const { state, project } = makeRoots();
@@ -1048,7 +1104,7 @@ describe('LocalAgentHost', () => {
 
     const rows = archived.query<{
       name: string; status: string; lifetime: string; task_event_id: string | null;
-    }, []>('SELECT name, status, lifetime, task_event_id FROM actor_subordinates').all();
+    }, []>(`SELECT name, status, ${ROSTER_LIFETIME}, task_event_id FROM actor_subordinates`).all();
 
     archived.close();
     expect(rows).toEqual([
@@ -1177,7 +1233,7 @@ describe('LocalAgentHost', () => {
       const view = new Database(dbPath, { readonly: true });
 
       const rows = view.query<{ name: string; status: string; lifetime: string }, []>(
-        'SELECT name, status, lifetime FROM actor_subordinates',
+        `SELECT name, status, ${ROSTER_LIFETIME} FROM actor_subordinates`,
       ).all();
 
       const reports = view.query<{ n: number }, []>(
@@ -1284,6 +1340,29 @@ describe('LocalAgentHost', () => {
     expect(hirerCopies(false)).toEqual([]);
   });
 
+  // As on the cloud, a hire is framed with its workspace's soul, never a SOUL.md of its own.
+  test('a hire is framed with its workspace\'s soul, not one written for it', async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const systems: string[] = [];
+
+    const model = streamingModel('Checked.', (options) => {
+      if (!isReview(options)) systems.push(JSON.stringify(options.prompt.filter((message) => message.role === 'system')));
+    });
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const hireRan = Promise.withResolvers<void>();
+    host.subscribe((agent, event) => { if (agent !== 'root' && event.type === 'turn-end') hireRan.resolve(); });
+    const team = await host.team('root');
+    await team.spawn({ role: 'researcher', mission: 'Check the probe.', mode: 'build' });
+    await hireRan.promise;
+    await host.close();
+
+    const hire = present(systems.find((system) => system.includes('## Role: Researcher')), "the hire's system prompt");
+    expect(hire).toContain('Test agent root');
+    expect(hire).not.toContain('Check the probe.');
+  });
+
   test('no hosted child records a turn into the evolution window, whatever its lifetime', async () => {
     const ask = makeRoots();
     const askDb = await seedAgent(ask.state, 'root');
@@ -1387,7 +1466,7 @@ describe('LocalAgentHost', () => {
       const view = new Database(dbPath, { readonly: true });
 
       const rows = view.query<{ status: string; lifetime: string }, []>(
-        'SELECT status, lifetime FROM actor_subordinates',
+        `SELECT status, ${ROSTER_LIFETIME} FROM actor_subordinates`,
       ).all();
 
       // The progress note is not the answer, so it reaches the rail like any mid-work note, and the answer after it.
@@ -1579,7 +1658,7 @@ describe('LocalAgentHost', () => {
     });
     await team.assign({ name: 'ask-researcher-late', task: 'Report it.', mode: 'build' });
     const roster = new Database(dbPath);
-    roster.run("UPDATE actor_subordinates SET lifetime='task' WHERE name='ask-researcher-late'");
+    roster.run("UPDATE workspace_actors SET lifetime='task' WHERE actor_id = (SELECT json_extract(actor_reference, '$.actorId') FROM actor_subordinates WHERE name='ask-researcher-late')");
     roster.close();
     await reported.promise;
     await host.close();
@@ -1591,7 +1670,7 @@ describe('LocalAgentHost', () => {
     ).get()?.n ?? 0;
 
     const rows = view.query<{ status: string; lifetime: string }, []>(
-      "SELECT status, lifetime FROM actor_subordinates WHERE name='ask-researcher-late'",
+      `SELECT status, ${ROSTER_LIFETIME} FROM actor_subordinates WHERE name='ask-researcher-late'`,
     ).all();
 
     view.close();
@@ -1615,7 +1694,6 @@ describe('LocalAgentHost', () => {
       VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
     seed.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
       VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
-    seed.run(`UPDATE workspace_actors SET origin = 'evolution', tab = 0, input = 0, lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
     seed.close();
 
     const stage = () => {
@@ -1647,6 +1725,10 @@ describe('LocalAgentHost', () => {
     };
 
     await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
+    // The helper the lane hires is task-lived, and durable verbs refuse one: so it becomes one after the handoff.
+    const helper = new Database(dbPath);
+    helper.run(`UPDATE workspace_actors SET origin = 'evolution', tab = 0, input = 0, lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
+    helper.close();
     await held.promise;
     const closing = host.close();
     release.resolve();

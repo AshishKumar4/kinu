@@ -7,8 +7,8 @@
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type {
-  HeadId, HeadInput, HeadReport, HeadStep, HeadRunView, HeadRunHeadView, MergeStrategy,
+import {
+  HeadStepPartsSchema, type HeadId, type HeadInput, type HeadReport, type HeadStep, type HeadRunView, type HeadRunHeadView, type MergeStrategy,
 } from './types';
 import { DecisionSchema } from './merge-schema';
 import { USAGE_FIELDS, type Usage } from '../usage';
@@ -22,13 +22,6 @@ export interface StepTotals {
   readonly toolCalls: number;
 }
 
-
-const ToolCallSchema = v.object({
-  toolCallId: v.optional(v.string()),
-  name: v.string(),
-  input: v.optional(v.unknown()),
-  output: v.optional(v.unknown()),
-});
 
 /** This module is the column's only writer, so any other shape is corruption and propagates, named. */
 function parseArray<Item extends v.GenericSchema>(item: Item, json: string | null): v.InferOutput<Item>[] {
@@ -46,15 +39,10 @@ function runStatusOf(heads: readonly HeadRunHeadView[], merged: boolean): string
   return heads.every((h) => h.status === 'completed') ? 'completed' : 'partial';
 }
 
-type StepRow = { text: string | null; reasoning: string | null; tool_calls_json: string | null };
+type StepRow = { parts_json: string };
 
-/** A NULL `reasoning` reads back absent, not empty. */
 function stepOf(row: StepRow): HeadStep {
-  return {
-    text: row.text ?? '',
-    reasoning: row.reasoning ?? undefined,
-    toolCalls: parseArray(ToolCallSchema, row.tool_calls_json),
-  };
+  return { parts: v.parse(v.pipe(v.string(), v.parseJson(), HeadStepPartsSchema), row.parts_json) };
 }
 
 /** A NULL column becomes an absent field (never reported, not zero). Shared with `read-models/workspace-spend.ts` so there is one decoder. */
@@ -310,17 +298,15 @@ export class HeadJournal {
   /** The only writer of `head_steps`, keyed `${headId}-s${seq}` with INSERT OR REPLACE. `created_at` is liveness: never rewrite it in bulk. */
   appendStep(headId: HeadId, seq: number, step: HeadStep): void {
     this.actor.assertCurrent();
-    void this.sql`INSERT OR REPLACE INTO head_steps
-      (actor_id, id, head_id, seq, text, reasoning, tool_calls_json, created_at)
-      VALUES (${this.actorId}, ${`${headId}-s${seq}`}, ${headId}, ${seq}, ${step.text}, ${step.reasoning ?? null},
-              ${JSON.stringify(step.toolCalls)}, ${Date.now()})`;
+    void this.sql`INSERT OR REPLACE INTO head_steps (actor_id, id, head_id, seq, parts_json, created_at)
+      VALUES (${this.actorId}, ${`${headId}-s${seq}`}, ${headId}, ${seq}, ${JSON.stringify(step.parts)}, ${Date.now()})`;
   }
 
   readSteps(headId: HeadId): HeadStep[] {
     this.actor.assertCurrent();
 
     return this.sql<StepRow>`
-      SELECT text, reasoning, tool_calls_json FROM head_steps
+      SELECT parts_json FROM head_steps
       WHERE actor_id = ${this.actorId} AND head_id = ${headId} ORDER BY seq`.map(stepOf);
   }
 
@@ -338,10 +324,10 @@ export class HeadJournal {
 
     return mapPage(seekPage(from === null
       ? this.sql<Row>`
-        SELECT id, text, reasoning, tool_calls_json FROM head_steps
+        SELECT id, parts_json FROM head_steps
         WHERE actor_id = ${this.actorId} AND head_id = ${headId} ORDER BY seq DESC LIMIT ${over}`
       : this.sql<Row>`
-        SELECT id, text, reasoning, tool_calls_json FROM head_steps
+        SELECT id, parts_json FROM head_steps
         WHERE actor_id = ${this.actorId} AND head_id = ${headId} AND seq < ${from} ORDER BY seq DESC LIMIT ${over}`,
       limit, (row) => row.id), (rows) => rows.slice().reverse().map(stepOf));
   }
@@ -350,8 +336,9 @@ export class HeadJournal {
     this.actor.assertCurrent();
 
     const row = this.sql<StepTotals & { tools: number | null }>`
-      SELECT COUNT(*) AS steps, SUM(json_array_length(tool_calls_json)) AS tools
-      FROM head_steps WHERE actor_id = ${this.actorId} AND head_id = ${headId}`[0];
+      SELECT COUNT(DISTINCT s.id) AS steps, COUNT(p.value) AS tools
+      FROM head_steps s LEFT JOIN json_each(s.parts_json) p ON json_extract(p.value, '$.type') LIKE 'tool-%'
+      WHERE s.actor_id = ${this.actorId} AND s.head_id = ${headId}`[0];
 
     return { steps: row?.steps ?? 0, toolCalls: row?.tools ?? 0 };
   }

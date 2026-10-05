@@ -220,7 +220,7 @@ export function buildProgram(): Command {
       .command('acp <name>')
       .helpGroup(RUNNING)
       .description('Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim, Marimo)')
-      .option('--no-auto-evolve', 'Turn off evolution after turns and sessions (local workspaces)')
+      .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons, proposals or trials')
       .option('--transcript-dir <dir>', 'Where to store transcripts'),
   ).action(wrapAction(acpCommand));
 
@@ -231,7 +231,7 @@ export function buildProgram(): Command {
       .description('Run one task without the TUI and exit, for CI and scripts')
       .option('-w, --workspace <name>', 'Workspace to run (default: the only one configured)')
       .option('--json', 'Emit line-delimited JSON events')
-      .option('--no-auto-evolve', 'Turn off evolution after turns and sessions (local workspaces)')
+      .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons, proposals or trials')
       .option('--transcript-dir <dir>', 'Where to store transcripts')
       .option('--no-transcript', 'Do not record a transcript for this run'),
   ).action(wrapAction(execCommand));
@@ -388,11 +388,8 @@ export function buildProgram(): Command {
   program
     .command('gepa <name> [runId]')
     .helpGroup(INSPECT)
-    .description('Show GEPA optimisation runs, or run one pass with --run')
-    .option('--run', 'Run one optimisation pass over the scaffold')
-    .option('--iterations <n>', 'Reflection iterations (--run)')
-    .option('--eval-size <n>', 'Labeled turns to draw the split from (--run)')
-    .option('--metric-calls <n>', 'Most metric calls to make (--run)')
+    .description('Show GEPA searches, or run one over the scaffold with --run')
+    .option('--run', 'Run one proposer search over the scaffold, judged on recent turns without running it')
     .option('--limit <n>', 'Run limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(gepaCommand));
@@ -502,7 +499,7 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['swarm', 'kinu swarm jarvis'],
   ['heads', 'kinu heads jarvis --limit 5'],
   ['debug', 'kinu debug jarvis -o jarvis.debug.jsonl'],
-  ['gepa', 'kinu gepa jarvis --run --iterations 3'],
+  ['gepa', 'kinu gepa jarvis --run'],
   ['quality', 'kinu quality jarvis'],
   ['connect', 'kinu connect --label studio'],
   ['desktop', 'kinu desktop status'],

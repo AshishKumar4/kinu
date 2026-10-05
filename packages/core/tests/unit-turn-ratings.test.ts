@@ -51,7 +51,7 @@ function turn(): CompletedTurn {
 }
 
 function decide(answers: DecisionAnswers): DecisionPort {
-  return async () => ({ answers, usage: {} });
+  return async () => ({ answers, usage: { input: 0, output: 0 } });
 }
 
 /** Refusal notices over the runtime's own config and activity log, as both backends build them. */
@@ -95,7 +95,7 @@ describe('the rating ledger', () => {
     rt.decide = async () => {
       asked++;
 
-      return { answers: LOW, usage: {} };
+      return { answers: LOW, usage: { input: 0, output: 0 } };
     };
 
     const engine = new EvolutionEngine(rt, stores.history);
@@ -217,6 +217,15 @@ describe('the decision model', () => {
     expect(listTurnRatings(rt.storage.sql, rt.actor)).toEqual([]);
     expect(said()).toEqual(['Your decision model is refusing requests. workers-ai/@cf/cloudflare/clef: '
       + '@cf/cloudflare/clef answered 403: Authentication error. Change it in Settings → Models.']);
+  });
+
+  test('an owner tier named `decision` is said as a tier, never as the decision model', () => {
+    const { rt } = createTestRuntime();
+    const { refusals, said } = noticesOf(rt);
+
+    refusals.refused({ tier: 'decision', since: 0, refusals: [{ model: 'openrouter/acme/m', cause: new KinuError('budget', 'acme answered 402') }] });
+
+    expect(said()).toEqual(['Your decision tier is refusing requests. openrouter/acme/m: acme answered 402. Change it in Settings → Models.']);
   });
 
   test('a failure that may pass fails the review, for its retry', async () => {

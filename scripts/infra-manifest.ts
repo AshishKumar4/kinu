@@ -663,6 +663,15 @@ export const SUPPLY = new Map<string, Supply>([
     source: 'https://dash.cloudflare.com/profile/api-tokens — a custom token with '
       + 'Account | Workers Observability | Read, scoped to this account. The owner mints it.',
   }],
+  ['DEVBOX_REGISTRY_TOKEN', {
+    handling: 'prompt',
+    required: true,
+    absent: 'every workspace box keeps the snapshots of lineages nothing can wake again: a destroyed '
+      + 'box, a box re-rooted through chain recovery. They pile up in the image\'s registry repository '
+      + 'until they lapse after 30 days, and each box logs that it could not delete them (D65).',
+    source: 'https://dash.cloudflare.com/profile/api-tokens — a custom token with '
+      + 'Account | Containers | Edit, scoped to this account. The owner mints it.',
+  }],
   ['CREDENTIAL_ENCRYPTION_KEY_PREVIOUS', {
     handling: 'out-of-band',
     required: false,

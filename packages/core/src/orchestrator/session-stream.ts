@@ -1,6 +1,6 @@
 import type { ModelMessage, ProviderMetadata, TextStreamPart, ToolSet } from 'ai';
 import * as v from 'valibot';
-import type { ChatEvent } from '../chat';
+import type { ChatEvent, StepRecord } from '../chat';
 import { SessionHistory } from '../session/history';
 import type { ClaimFence, MessageReference, StoredPart, StreamPartInput, PreparedContent } from '../session/messages';
 import type { SessionPayload } from '../session/payload';
@@ -123,6 +123,8 @@ export class SessionStream {
   private step = 0;
   private completedMessageCount = 0;
   private nativeProducer = false;
+  private terminal = false;
+  private failedRecord = false;
   /** Writers run one at a time in arrival order, so two cannot reach one container's seal together. */
   private readonly exclusive = serialQueue();
   private readonly calls = new Map<string, { messageId: string; part: number }>();
@@ -304,23 +306,38 @@ export class SessionStream {
     }
   }
 
-  nativeStep(messages: readonly ModelMessage[]): Promise<void> {
+  nativeStep(record: StepRecord, rows?: () => void | (() => void)): Promise<void> {
     this.nativeProducer = true;
 
     return this.exclusive(async () => {
-      await this.finishStep(messages);
-      await this.nextStep();
+      if (this.terminal) return;
+
+      let committed = false;
+
+      try {
+        await this.sealStep(record.messages, rows);
+        committed = true;
+      } finally { if (!committed) this.failedRecord = true; }
+
+      this.nextStep();
     });
   }
 
   /** Scaffold-authored ChatEvents have no native stream; their explicit calls retain the same pairing rule. */
   observe(event: ChatEvent): Promise<void> {
-    if (this.nativeProducer) return Promise.resolve();
+    if (event.source === 'native') return Promise.resolve();
 
     return this.witnessCall(event.type === 'tool-call' ? event.toolCallId : null, this.exclusive(() => this.observeScaffold(event)));
   }
 
   private async observeScaffold(event: ChatEvent): Promise<void> {
+    if (this.nativeProducer) {
+      // A native step the program cut off seals first: its messages and the program's never share an output slot.
+      if ([this.assistant, this.tool, this.ui].some(container => container.reference !== null)) await this.sealStep(null);
+      this.nativeProducer = false;
+      this.nextStep();
+    }
+
     if (event.type === 'text-delta' || event.type === 'reasoning-delta') {
       const kind = event.type === 'text-delta' ? 'text' : 'reasoning';
       await this.publish({ container: this.assistant, key: kind, descriptor: { type: kind }, delta: event.delta });
@@ -333,21 +350,21 @@ export class SessionStream {
       await this.publish({ container: this.tool, key: `result:${event.toolCallId}`, descriptor: { type: 'tool-result', toolCallId: event.toolCallId, toolName: event.toolName, output }, delta: null });
       this.tick('settled');
     } else if (event.type === 'step-finish') {
-      await this.finishStep(event.responseMessages);
-      await this.nextStep();
+      await this.sealStep(event.responseMessages);
+      this.nextStep();
     } else if (event.type === 'done') {
-      await this.finishStep(event.responseMessages);
+      await this.sealStep(event.responseMessages);
     }
   }
 
 
   private container(role: 'assistant' | 'tool', slot = role === 'assistant' ? 0 : 1): StreamContainer {
-    return { id: `${this.requestId}:${this.nativeProducer ? slot : this.step * 3 + slot}`, role, slot, reference: null, working: slot !== 2, sealed: false, parts: new Map() };
+    const outputSlot = this.step * 3 + slot;
+
+    return { id: `${this.requestId}:${outputSlot}`, role, slot: outputSlot, reference: null, working: slot !== 2, sealed: false, parts: new Map() };
   }
 
-  /** A container streamed into without a final message still commits what it holds. */
-  private async nextStep(): Promise<void> {
-    for (const container of [this.assistant, this.tool, this.ui]) await this.sealOpen(container);
+  private nextStep(): void {
     this.cadence.reset();
     this.step += 1;
     this.sourceOrder = 0;
@@ -461,7 +478,7 @@ export class SessionStream {
   /** Joins the working context only when sealed: a revision names immutable content. */
   private openContainer(container: StreamContainer, write?: () => void): void {
     this.fenced(() => {
-      container.reference = this.history.messages.open(container.role, container.id, container.working ? 'output' : 'render', { requestId: this.requestId, slot: this.nativeProducer ? container.slot : this.step * 3 + container.slot });
+      container.reference = this.history.messages.open(container.role, container.id, container.working ? 'output' : 'render', { requestId: this.requestId, slot: container.slot });
       write?.();
     });
   }
@@ -470,7 +487,6 @@ export class SessionStream {
   private sealContainer(container: StreamContainer, content: PreparedContent, envelope: JsonObject = {}): void {
     if (!container.working) {
       this.fenced(() => this.history.messages.seal(container.id, content, envelope));
-      container.sealed = true;
 
       return;
     }
@@ -485,13 +501,15 @@ export class SessionStream {
 
       return [...entries, { messageId: container.id, entryId: container.id, position: entries.length }];
     } });
-    container.sealed = true;
   }
 
-  private async finishStep(cumulative: readonly ModelMessage[]): Promise<void> {
-    const produced = cumulative.slice(this.completedMessageCount);
+  /** Prepare content first; seals and rows publish in one fenced commit. */
+  private async sealStep(cumulative: readonly ModelMessage[] | null, rows?: () => void | (() => void)): Promise<void> {
+    const seals: (() => void)[] = [];
+    const bind: (() => void)[] = [];
+    const finals = new Set<StreamContainer>();
 
-    for (const message of produced) {
+    for (const message of cumulative?.slice(this.completedMessageCount) ?? []) {
       if (message.role !== 'assistant' && message.role !== 'tool') throw new KinuError('bad_input', 'a model response contains an input role');
       const container = message.role === 'assistant' ? this.assistant : this.tool;
       const { role: _role, content, ...envelope } = encodeModelMessage(message);
@@ -503,15 +521,50 @@ export class SessionStream {
 
       // Settled before its step finished: what streamed is the record, with no source to bind.
       if (container.sealed) continue;
+      finals.add(container);
       const parts = this.reconcile(container, finalParts);
       const sealed = await this.history.messages.prepareContent(parts);
 
-      if (container.reference === null) this.openContainer(container);
-      this.sealContainer(container, sealed, envelope);
-      this.history.messages.bindSource(message, { messageId: container.id }, { ...envelope, role: message.role, content: parts.map(part => part.value) });
+      seals.push(() => {
+        if (container.reference === null) this.openContainer(container);
+        this.sealContainer(container, sealed, envelope);
+      });
+      bind.push(() => this.history.messages.bindSource(message, { messageId: container.id }, { ...envelope, role: message.role, content: parts.map(part => part.value) }));
     }
 
-    this.completedMessageCount = cumulative.length;
+    // A container streamed into without a final message still commits what it holds.
+    for (const container of [this.assistant, this.tool, this.ui]) {
+      if (container.reference === null || container.sealed || finals.has(container)) continue;
+      const content = await this.history.messages.prepareContent(this.openParts(container));
+      seals.push(() => { this.sealContainer(container, content); });
+    }
+
+    const containers = [this.assistant, this.tool, this.ui];
+    const references = containers.map((container) => container.reference);
+    let committed = false;
+    let publish: void | (() => void);
+
+    try {
+      publish = this.fenced(() => {
+        const recorded = rows?.();
+
+        for (const seal of seals) seal();
+
+        return recorded;
+      });
+      committed = true;
+    } finally {
+      if (!committed) for (const [index, container] of containers.entries()) container.reference = references[index] ?? null;
+    }
+
+    for (const container of finals) container.sealed = true;
+
+    for (const container of containers) if (container.reference !== null) container.sealed = true;
+
+    for (const remember of bind) remember();
+    publish?.();
+
+    if (cumulative !== null) this.completedMessageCount = cumulative.length;
   }
 
   /** Paired by {@link partIdentity}: the final message decides order and content; a streamed part it omits is kept in place. Disagreement is {@link STREAM_DIVERGED}, never a throw. */
@@ -606,16 +659,18 @@ export class SessionStream {
     return parts;
   }
 
-  private async sealOpen(container: StreamContainer): Promise<void> {
-    if (container.reference === null || container.sealed) return;
-    this.sealContainer(container, await this.history.messages.prepareContent(this.openParts(container)));
-  }
-
+  /** Seals unclosed output with its rows. */
   settle(): Promise<void> {
     return this.exclusive(async () => {
+      if (this.terminal) return;
+
+      this.terminal = true;
+
+      if (this.failedRecord || [this.assistant, this.tool, this.ui].every(container => container.reference === null || container.sealed)) return;
+
       if (!this.history.epochCurrent(this.turnId, this.epoch)) return;
 
-      for (const container of [this.assistant, this.tool, this.ui]) await this.sealOpen(container);
+      await this.sealStep(null);
     });
   }
 }

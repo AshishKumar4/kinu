@@ -39,7 +39,7 @@ const KIND_ICON = {
   fact: BrainIcon,
   gepa: SparkleIcon,
   ratings: ChecksIcon,
-  prompt_section: NotePencilIcon,
+  artifact: NotePencilIcon,
   refinement: ArrowsClockwiseIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 

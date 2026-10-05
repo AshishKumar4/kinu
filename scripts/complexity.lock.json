@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-02",
-  "files": 2955,
-  "functions": 74294,
+  "measuredAt": "2026-10-04",
+  "files": 2968,
+  "functions": 74175,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -74,10 +74,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
-      "complexity": 37
-    },
-    {
       "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 37
     },
@@ -106,19 +102,11 @@
       "complexity": 34
     },
     {
-      "key": "packages/devbox/tests/support/delta-shell.ts#DeltaShell.line",
-      "complexity": 34
-    },
-    {
       "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
       "complexity": 34
     },
     {
       "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput",
-      "complexity": 33
-    },
-    {
-      "key": "packages/devbox/src/chunked-delta.ts#planDeltaPublication",
       "complexity": 33
     },
     {
@@ -135,10 +123,6 @@
     },
     {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
-      "complexity": 32
-    },
-    {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>attachChainOnce",
       "complexity": 32
     },
     {
@@ -182,31 +166,11 @@
       "complexity": 31
     },
     {
-      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
-      "complexity": 31
-    },
-    {
-      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
-      "complexity": 31
-    },
-    {
-      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep",
-      "complexity": 31
-    },
-    {
       "key": "packages/core/src/scaffold/chat-transform.ts#scaffoldTurn",
       "complexity": 31
     },
     {
       "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
-      "complexity": 31
-    },
-    {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>commitChain",
-      "complexity": 31
-    },
-    {
-      "key": "packages/devbox/tests/snapshot-chain.test.ts#shellLabel",
       "complexity": 31
     },
     {
@@ -230,7 +194,7 @@
       "complexity": 30
     },
     {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>checkpoint",
+      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
       "complexity": 30
     },
     {
@@ -258,11 +222,11 @@
       "complexity": 29
     },
     {
-      "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
+      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
       "complexity": 29
     },
     {
-      "key": "packages/core/src/chat.ts#ProviderCall.consume",
+      "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
       "complexity": 29
     },
     {
@@ -271,10 +235,6 @@
     },
     {
       "key": "packages/core/src/feedback/png.ts#sanitizePng",
-      "complexity": 29
-    },
-    {
-      "key": "packages/core/src/session/transcript.ts#SessionTranscriptReader.materializeEntry",
       "complexity": 29
     },
     {
@@ -330,6 +290,10 @@
       "complexity": 28
     },
     {
+      "key": "packages/core/src/chat.ts#ProviderCall.consume",
+      "complexity": 28
+    },
+    {
       "key": "packages/core/src/execution/hub-device-transport.ts#createHubDeviceTransport>rpc",
       "complexity": 28
     },
@@ -358,15 +322,7 @@
       "complexity": 28
     },
     {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>stageChunkedDelta",
-      "complexity": 28
-    },
-    {
       "key": "scripts/agents-fields.ts#collectReads>walkExcept",
-      "complexity": 28
-    },
-    {
-      "key": "scripts/bench-devbox-block-attach.ts#measureLarge",
       "complexity": 28
     },
     {

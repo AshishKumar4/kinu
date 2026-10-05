@@ -1,10 +1,66 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { scratchDir, createScriptedLLM } from '@kinu.run/test-utils';
+import { evaluateWithMultiModelJudging } from '@kinu.run/core';
 import { createSandboxedExecutor } from '../src/executor';
 
 describe('createSandboxedExecutor', () => {
+  test('a subprocess candidate cannot read its verifier receipt, while completed checks verify', async () => {
+    const executor = createSandboxedExecutor();
+
+    const code = `
+const x = 0;
+const fs = await import('node:fs');
+let receipt = 'done';
+try { receipt = fs.readFileSync(process.argv[1], 'utf8').match(/KINU_VERIFY_[0-9a-f-]+ completed/)[0]; }
+catch (error) { if (error.code !== 'ENOENT') throw error; }
+return receipt;
+`;
+
+    for (const candidate of [code, 'const x = 42;']) {
+      const suite = 'if (x !== 42) throw new Error("wrong answer");';
+      const language = 'javascript';
+      const judge = createScriptedLLM([`\`\`\`${language}\n${suite}\n\`\`\``, '{"score": 1}']);
+
+      const result = await evaluateWithMultiModelJudging({
+        task: 'compute 42', trajectory: `\`\`\`${language}\n${candidate}\n\`\`\``,
+        executor, judge, explorer: judge, judgeSamples: 1,
+      });
+
+      expect(result.grounding).toBe(candidate === code ? 'unverified' : 'verified');
+      expect(result.execution?.passedChecks).toBe(candidate === code ? 0 : 1);
+    }
+  });
+
+  test('Python cannot forge completion, and successful checks remain unverified', async () => {
+    const executor = createSandboxedExecutor();
+
+    if (!executor.languages.includes('python')) return;
+
+    const code = `
+import sys
+x = 0
+for value in sys._getframe().f_code.co_consts:
+    if isinstance(value, str) and value.startswith('KINU_VERIFY_') and value.endswith(' completed'):
+        print(value)
+sys.exit(0)
+`;
+
+    for (const candidate of [code, 'x = 42', 'x = 0']) {
+      const judge = createScriptedLLM(['```python\nassert x == 42\n```', '{"score": 1}']);
+
+      const result = await evaluateWithMultiModelJudging({
+        task: 'compute 42', trajectory: `\`\`\`python\n${candidate}\n\`\`\``,
+        executor, judge, explorer: judge, judgeSamples: 1,
+      });
+
+      expect(result.grounding).toBe(candidate === 'x = 0' ? 'failed' : 'unverified');
+      expect(result.execution?.passedChecks).toBe(0);
+      expect(result.execution?.failedChecks).toBe(candidate === 'x = 0' ? 1 : 0);
+    }
+  });
+
   test('code runs apart from the project it was started in: no bunfig preload, no .env, not its directory', async () => {
     // The CLI now runs in the owner's project, which may be a cloned repo holding a hostile bunfig.toml.
     const project = scratchDir('executor-hostile-project');

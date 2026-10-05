@@ -1,13 +1,13 @@
 import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
-// SOUL.md is a file, edited via setSoul; its mission is mirrored onto `workspace_identity` by
-// {@link writeSoul} alone, so listings never open (and mutate) a filesystem.
+// SOUL.md is a file, edited via setSoul; `workspace_soul` holds its bytes, so a listing reads the mission off that
+// row ({@link readMission}) and never opens (and mutates) a filesystem.
 
 import * as v from 'valibot';
 import { WORKSPACE_SOUL_DDL } from './schema';
 import type { SqlRow } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { AgentSignal } from '../types/signals';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { SqlExecutor } from '../types/primitives';
+import type { SqlExecutor, SqlValue } from '../types/primitives';
 import { NIMBUS_WORKSPACE_ROOT, workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 export const SOUL_PATH = 'SOUL.md';
@@ -140,36 +140,25 @@ export async function readSoul(vfs: VFS): Promise<string | null> {
 
 
 
-/** The mission off the identity row, readable without opening a filesystem. */
+/** The mission every listing shows: summarized from the owner's soul, readable without opening a filesystem. */
 export function readMission(sql: SqlExecutor): string | null {
-  const mission = sql<{ mission: string | null }>`
-    SELECT mission FROM workspace_identity LIMIT 1
-  `[0]?.mission?.trim();
+  // A turn reads this: the soul table exists from schema init, so no probe of sqlite_master.
+  const [row] = sql<SqlRow>`SELECT markdown FROM workspace_soul WHERE id = 1`;
 
-  return mission === undefined || mission === '' ? null : mission;
+  return missionOf(row === undefined ? null : soulText(row));
 }
 
-/** The one writer of soul and mission; `seal` is `writeWorkspaceSoul`. */
-export async function writeSoul(
-  sql: SqlExecutor,
-  markdown: string,
-  seal: (content: string) => Promise<void>,
-): Promise<void> {
-  await seal(markdown);
-  void sql`UPDATE workspace_identity SET mission = ${summarizeSoul(markdown)}`;
-}
-
+/** The first soul, from the workspace's name and stated purpose; `seal` is `writeWorkspaceSoul`, the one writer. */
 export async function seedSoul(
-  sql: SqlExecutor, input: { name: string; mission?: string },
-  seal: (content: string) => Promise<void>,
+  input: { name: string; mission?: string }, seal: (content: string) => Promise<void>,
 ): Promise<string> {
   const soul = renderSoulMarkdown(input);
-  await writeSoul(sql, soul, seal);
+  await seal(soul);
 
   return soul;
 }
 
-const IdentityRow = v.object({ name: v.string(), mission: v.optional(v.string(), '') });
+const IdentityRow = v.object({ name: v.string() });
 
 const SoulRow = v.object({ markdown: v.string() });
 
@@ -180,46 +169,38 @@ function soulText(row: SqlRow): string {
 export interface SoulReads {
   readonly soulTable: boolean;
   readonly soul: string | null;
-  readonly identity: { name: string; mission: string } | null;
+  readonly identity: { name: string } | null;
 }
 
 export const UNVERIFIED_SOUL_PATH = 'SOUL.md.unverified';
 
-function soulReadsDb(db: SqlDatabase): SoulReads {
-  const has = (table: string): boolean =>
-    [...db.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, table)].length > 0;
+/** One statement's rows, untyped: each read parses its own. */
+type SoulRows = (query: string, ...bindings: SqlValue[]) => readonly SqlRow[];
 
-  const soulRows = has('workspace_soul') ? [...db.exec(`SELECT markdown FROM workspace_soul WHERE id = 1`)] : [];
-
-  const soul = soulRows.length === 0 ? null : soulText(soulRows[0]);
-
-  const identity = has('workspace_identity')
-    ? v.safeParse(IdentityRow, [...db.exec(`SELECT * FROM workspace_identity LIMIT 1`)][0])
-    : { success: false as const };
+/** The one read of the soul and identity rows; a table not yet made reads as absent. */
+function soulReads(rows: SoulRows): SoulReads {
+  const has = (table: string): boolean => rows(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, table).length > 0;
+  const soulTable = has('workspace_soul');
+  const [soulRow] = soulTable ? rows(`SELECT markdown FROM workspace_soul WHERE id = 1`) : [];
+  const identity = has('workspace_identity') ? v.safeParse(IdentityRow, rows(`SELECT name FROM workspace_identity LIMIT 1`)[0]) : null;
 
   return {
-    soulTable: has('workspace_soul'),
-    soul,
-    identity: identity.success ? { name: identity.output.name, mission: identity.output.mission } : null,
+    soulTable,
+    soul: soulRow === undefined ? null : soulText(soulRow),
+    identity: identity?.success === true ? { name: identity.output.name } : null,
   };
 }
 
 export function soulReadsSql(sql: SqlExecutor): SoulReads {
-  const [soulRow] = sql<SqlRow>`SELECT markdown FROM workspace_soul WHERE id = 1`;
+  return soulReads((query, ...bindings) => {
+    const strings = query.split('?');
 
-  const soul = soulRow === undefined ? null : soulText(soulRow);
-
-  const identity = v.safeParse(IdentityRow, sql<SqlRow>`SELECT * FROM workspace_identity LIMIT 1`[0]);
-
-  return {
-    soulTable: sql<SqlRow>`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_soul'`.length > 0,
-    soul,
-    identity: identity.success ? { name: identity.output.name, mission: identity.output.mission } : null,
-  };
+    return sql<SqlRow>(Object.assign(strings, { raw: strings }), ...bindings);
+  });
 }
 
 export function ownerSoulDb(db: SqlDatabase, kernelHeld: string | null): { soul: string; seeded: boolean } | null {
-  const reads = soulReadsDb(db);
+  const reads = soulReads((query, ...bindings) => [...db.exec(query, ...bindings)]);
 
   if (reads.soul !== null) return { soul: reads.soul, seeded: false };
 
@@ -244,10 +225,9 @@ function recordKernelSoul(db: SqlDatabase, markdown: string): void {
   db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, markdown);
 }
 
-/** Null when the soul says nothing a summary keeps (a heading alone, whitespace), as {@link readMission} reads it. */
-export function ownerMissionOf(reads: SoulReads): string | null {
-  const markdown = reads.soul ?? (reads.identity === null ? null : renderSoulMarkdown(reads.identity));
-  const mission = summarizeSoul(markdown);
+/** Summarized from the soul the owner wrote: null before one is written, or when it says nothing a summary keeps. */
+export function missionOf(soul: string | null): string | null {
+  const mission = summarizeSoul(soul);
 
   return mission === '' ? null : mission;
 }

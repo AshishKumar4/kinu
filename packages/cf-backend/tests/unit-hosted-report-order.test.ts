@@ -118,7 +118,9 @@ for (const { verb, args, notes } of CASES) {
 
     await driveUntil(workspace, 'the durable hire never started its turn', () => parked);
 
-    const durable = sql<{ name: string }>`SELECT name FROM actor_subordinates WHERE actor_id = ${middleId} AND lifetime = 'durable'`[0]?.name;
+    const durable = sql<{ name: string }>`SELECT s.name FROM actor_subordinates s
+      JOIN workspace_actors a ON a.actor_id = json_extract(s.actor_reference, '$.actorId')
+      WHERE s.actor_id = ${middleId} AND a.lifetime = 'durable'`[0]?.name;
 
     if (durable === undefined) throw new Error('the helper hired no durable agent');
     // Queued while the durable hire's turn is still parked.

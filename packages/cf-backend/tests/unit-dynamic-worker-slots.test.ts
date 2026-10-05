@@ -23,6 +23,11 @@ async function hire(workspace: ActorHarness<HarnessOrchestratorAgent>, count: nu
 }
 
 /** Main hires one helper, which answers one task in two priced steps. */
+/** Each turn of the event loop is one RPC round trip of the platform's, a refusal included. */
+async function roundTrips(count: number): Promise<void> {
+  for (let turn = 0; turn < count; turn += 1) await new Promise<void>((resolve) => { setImmediate(resolve); });
+}
+
 function hiringGateway() {
   return stubAiBinding((run) => {
     const request = requestOf(run);
@@ -112,11 +117,35 @@ describe("a read across every agent's isolate", () => {
     const spend = workspace.agent.accountSpend();
 
     await workers.when(() => workers.refused === 1 && workers.inFlight.size === 1);
+    await roundTrips(20);
 
     workers.gate = null;
     gate.resolve();
 
     expect(await spend).toEqual(expect.any(Array));
+  });
+
+  // Only a call that ran frees a platform slot: refused calls that woke each other would resend in a loop.
+  test('refused calls are not sent again until a call that ran ends, then every call completes', async () => {
+    const workspace = orchestratorHarness();
+
+    await hire(workspace, 3);
+    const workers = workspace.agent.harnessDynamicWorkers;
+    const gate = Promise.withResolvers<void>();
+
+    workers.hidden = 9;
+    workers.gate = gate.promise;
+    const spend = workspace.agent.accountSpend();
+
+    await workers.when(() => workers.refused === 2 && workers.inFlight.size === 1);
+    await roundTrips(20);
+
+    expect({ refused: workers.refused, calls: workers.calls.length }).toEqual({ refused: 2, calls: 1 });
+    workers.gate = null;
+    gate.resolve();
+
+    expect(await spend).toEqual(expect.any(Array));
+    expect(new Set(workers.calls).size).toBe(3);
   });
 
   test("fails naming the ledger when every slot is Nimbus's and none of Kinu's calls is in flight", async () => {

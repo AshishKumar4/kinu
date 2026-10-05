@@ -105,6 +105,67 @@ function answeredTexts(parts: readonly JsonObject[], answer: string): number[] {
   return covered;
 }
 
+function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role']): JsonObject[] {
+  const projected: JsonObject[] = [];
+  const calls = new Map<string, JsonObject>();
+
+  for (const part of parts) {
+    if (part.type === 'tool-call') {
+      const id = v.parse(v.string(), part.toolCallId);
+      const call: JsonObject = { type: `tool-${v.parse(v.string(), part.toolName)}`, toolCallId: id, state: 'input-available', input: part.input ?? null };
+      calls.set(id, call);
+      projected.push(call);
+    } else if (part.type === 'tool-result') {
+      const id = v.parse(v.string(), part.toolCallId);
+      const call = calls.get(id);
+
+      if (call === undefined) throw new KinuError('io', 'public tool result has no call in its entry');
+      const output = v.parse(JsonObjectSchema, part.output);
+      call.state = output.type === 'error-text' || output.type === 'error-json' ? 'output-error' : 'output-available';
+
+      if (call.state === 'output-error') call.errorText = v.is(v.string(), output.value) ? output.value : JSON.stringify(output.value);
+      else call.output = output.value ?? output;
+    } else if (part.type === 'file' || part.type === 'image') {
+      const carrier = part.data ?? part.image;
+      const string = v.safeParse(v.string(), carrier);
+      const url = v.safeParse(v.object({ $url: v.string() }), carrier);
+      const binary = v.safeParse(v.object({ $binary: v.string() }), carrier);
+      const mediaType = v.is(v.string(), part.mediaType) ? part.mediaType : 'application/octet-stream';
+      let address: string;
+
+      if (url.success) address = url.output.$url;
+      else if (binary.success) address = `data:${mediaType};base64,${binary.output.$binary}`;
+      else if (string.success) address = /^(https?:|data:|\/)/u.test(string.output) ? string.output : `data:${mediaType};base64,${string.output}`;
+      else throw new KinuError('io', 'stored attachment has no native data carrier');
+      const file: JsonObject = { type: 'file', mediaType, url: address };
+
+      if (part.filename !== undefined) file.filename = part.filename;
+      projected.push(file);
+    } else {
+      const { providerOptions, ...value } = part;
+
+      if (providerOptions !== undefined) value.providerMetadata = providerOptions;
+
+      if (role === 'assistant' && (value.type === 'text' || value.type === 'reasoning')) value.state = 'done';
+
+      projected.push(value);
+    }
+  }
+
+  return projected;
+}
+
+const StepMessageSchema = v.looseObject({ content: v.union([v.string(), v.array(JsonObjectSchema)]) });
+
+/** A recorded step projected for display. */
+export function drawnStep(messages: readonly JsonValue[]): JsonObject[] {
+  return drawnParts(messages.flatMap((message) => {
+    const { content } = v.parse(StepMessageSchema, message);
+
+    return v.is(v.string(), content) ? [{ type: 'text', text: content }] : content;
+  }), 'assistant');
+}
+
 export function readSessionTranscript(sql: SqlExecutor, authority: ActorReadAuthority, sessionId: string, files: (() => Promise<Pick<VFS, 'readFile'>>) | null): SessionTranscriptReader {
   const payloads = new SessionPayloadReader(files);
 
@@ -356,55 +417,10 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 
   private async materializeEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>): Promise<UIMessage> {
-      const parts = await this.parts(entry.parts, cache);
-      const projected: JsonObject[] = [];
-      const calls = new Map<string, JsonObject>();
+      const parts: JsonObject[] = [];
 
-      for (const part of parts) {
-        if (part.type === 'tool-call') {
-          const id = v.parse(v.string(), part.toolCallId);
-          const call: JsonObject = { type: `tool-${v.parse(v.string(), part.toolName)}`, toolCallId: id, state: 'input-available', input: part.input ?? null };
-          calls.set(id, call);
-          projected.push(call);
-        } else if (part.type === 'tool-result') {
-          const id = v.parse(v.string(), part.toolCallId);
-          const call = calls.get(id);
-
-          if (call === undefined) throw new KinuError('io', 'public tool result has no call in its entry');
-          const output = v.parse(JsonObjectSchema, part.output);
-          call.state = output.type === 'error-text' || output.type === 'error-json' ? 'output-error' : 'output-available';
-
-          if (call.state === 'output-error') call.errorText = v.is(v.string(), output.value) ? output.value : JSON.stringify(output.value);
-          else call.output = output.value ?? output;
-        } else if (part.type === 'file' || part.type === 'image') {
-          const native = await this.payloads.resolveMedia(part);
-          const carrier = native.data ?? native.image;
-          const string = v.safeParse(v.string(), carrier);
-          const url = v.safeParse(v.object({ $url: v.string() }), carrier);
-          const binary = v.safeParse(v.object({ $binary: v.string() }), carrier);
-          const mediaType = v.is(v.string(), native.mediaType) ? native.mediaType : 'application/octet-stream';
-          let address: string;
-
-          if (url.success) address = url.output.$url;
-          else if (binary.success) address = `data:${mediaType};base64,${binary.output.$binary}`;
-          else if (string.success) address = /^(https?:|data:|\/)/u.test(string.output) ? string.output : `data:${mediaType};base64,${string.output}`;
-          else throw new KinuError('io', 'stored attachment has no native data carrier');
-          const file: JsonObject = { type: 'file', mediaType, url: address };
-
-          if (native.filename !== undefined) file.filename = native.filename;
-          projected.push(file);
-        } else {
-          const { providerOptions, ...value } = part;
-
-          if (providerOptions !== undefined) value.providerMetadata = providerOptions;
-
-          // A recorded answer is finished: its streamed text and reasoning read back as done, not mid-stream.
-          if (entry.role === 'assistant' && (value.type === 'text' || value.type === 'reasoning')) value.state = 'done';
-
-          projected.push(value);
-        }
-      }
-
+      for (const part of await this.parts(entry.parts, cache)) parts.push(part.type === 'file' || part.type === 'image' ? await this.payloads.resolveMedia(part) : part);
+      const projected = drawnParts(parts, entry.role);
       const message: StoredUiMessage = { id: entry.id, role: entry.role, parts: projected };
 
       if (entry.metadata !== null) message.metadata = await this.payloads.read(entry.metadata);

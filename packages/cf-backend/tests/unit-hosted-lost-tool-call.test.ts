@@ -45,7 +45,7 @@ test('a hosted turn cut off inside a claimed call makes it once and is told it m
 
   rosterOver(first.db).create({
     name: 'lead', actorReference: child.reference, birth: null, deleteRequested: false,
-    status: 'working', currentTask: BRIEF, createdAt: Date.now(), dismissedAt: null, lifetime: 'durable', taskEventId: null,
+    status: 'working', currentTask: BRIEF, createdAt: Date.now(), dismissedAt: null, taskEventId: null,
   });
 
   const tasks = () => first.db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM agent_tasks WHERE actor_id = ?')

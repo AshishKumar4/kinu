@@ -10,19 +10,17 @@
  * already shipped that way once — so provisioning composes with that command
  * rather than reimplementing half of it.
  *
- * THE TWO PASSES ARE STATED, NOT HIDDEN. `wrangler secret put` needs the Worker
- * to exist, so on an empty account the order is necessarily:
+ * ON AN EMPTY ACCOUNT the secrets come first. `wrangler secret put` on a Worker
+ * that does not exist creates a placeholder Worker to hold them, so the deploy's
+ * upload gate finds them and no Kinu version is ever live without them:
  *
- *     bun run infra:provision     storage, and the manual worklist
- *     bun run deploy              the Worker, its DO namespaces, container,
- *                                 routes and cron
- *     bun run infra:provision     the secrets, now that there is a Worker
- *     bun run gate:infra          the whole inventory, verified
+ *     bun run infra:provision          storage, secrets, and the manual worklist
+ *     bun run deploy --bootstrap       the Worker, its DO namespaces, container,
+ *                                      routes and cron, over the placeholder
+ *     bun run gate:infra               the whole inventory, verified
  *
- * The second provision run creates nothing it created the first time. Detecting
- * whether the Worker exists and saying "secrets deferred until it does" is the
- * whole difference between a two-pass procedure and a program that appears to
- * have succeeded while the root secret was never set.
+ * `--bootstrap` because the first deploy declares everything only a deploy can
+ * create; its post-deploy check tolerates nothing.
  *
  * IDEMPOTENCE IS BUILT ON THE THREE-STATE LOOKUP, not on tolerating errors.
  * `present` is a no-op that says so; `absent` is created; `unknown` REFUSES —
@@ -81,8 +79,8 @@ function deploymentNote(live: Deployment): string {
   if (live.state === 'deployed') return `deployed, version ${live.versionId}`;
 
   if (live.state === 'absent') {
-    return 'not deployed yet — its Durable Object namespaces, container, routes and cron do not '
-      + 'exist until it is';
+    return 'not deployed yet — the secrets below go onto a placeholder Worker until the first '
+      + '`bun run deploy --bootstrap` replaces it';
   }
 
   return `could not be read — ${live.reason}`;
@@ -251,6 +249,57 @@ const MARK = {
   failed: 'FAILED  ',
 } satisfies Record<Outcome, string>;
 
+/** The secrets step: each required secret the Worker does not hold, installed through `io`. */
+export async function provisionSecrets(
+  infrastructure: Pick<Infrastructure, 'worker'>,
+  live: Deployment,
+  held: () => Observation & { readonly names?: readonly string[] },
+  io: SecretIo,
+): Promise<Step[]> {
+  // On a Worker that does not exist `wrangler secret put` makes a placeholder to hold them, so the secrets precede
+  // any code, and the first deploy replaces it.
+  const observed = live.state === 'absent' ? { state: 'absent' } as const : held();
+
+  if (observed.state === 'unknown') {
+    console.log(`  [${MARK.refused}] secrets\n           ${observed.reason}`);
+
+    return [{ id: 'secrets', outcome: 'refused', detail: observed.reason }];
+  }
+
+  const names = new Set(observed.state === 'present' ? observed.names ?? [] : []);
+  const steps: Step[] = [];
+
+  for (const [name, supply] of SUPPLY) {
+    if (supply.handling === 'config-var') continue;
+
+    if (names.has(name)) {
+      console.log(`  [${MARK.existed}] ${name}\n           already set`);
+      continue;
+    }
+
+    if (supply.handling === 'out-of-band') {
+      console.log(`  [${MARK.noted}] ${name}\n           `
+        + `must be supplied out of band: ${supply.source ?? ''}\n           absent ⇒ ${supply.absent}`);
+      continue;
+    }
+
+    if (!requiredIn(name, infrastructure.worker)) {
+      console.log(`  [${MARK.noted}] ${name}\n           `
+        + `optional here (no ${supply.pairedWith ?? 'paired var'} in the Worker's vars). `
+        + `absent ⇒ ${supply.absent}`);
+      continue;
+    }
+
+    const step = await putSecret(name, infrastructure, io);
+
+    steps.push(step);
+    console.log(`  [${MARK[step.outcome]}] ${step.id}\n           ${step.detail}`);
+  }
+
+  return steps;
+}
+
+
 function manualWorklist(resources: readonly Resource[]): void {
   console.log(`\n${BOLD}Cannot be created by anything in this repository${NC}`);
   console.log('Each one is a step a human takes. None of them is skipped quietly:\n');
@@ -314,50 +363,14 @@ async function main(): Promise<number> {
   console.log(`\n${BOLD}Secrets${NC} — presence is checked; no value is ever read back`);
   const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
   const reader = interactive ? createInterface({ input: process.stdin, output: process.stderr }) : undefined;
-  const held = live.state === 'deployed' ? secretNames(environment) : undefined;
 
   try {
-    if (held === undefined) {
-      console.log('  deferred — `wrangler secret put` needs the Worker to exist. Run '
-        + '`bun run deploy`, then this command again.');
-    } else if (held.state === 'unknown') {
-      steps.push({ id: 'secrets', outcome: 'refused', detail: held.reason });
-      console.log(`  [${MARK.refused}] secrets\n           ${held.reason}`);
-    } else {
-      const names = new Set(held.state === 'present' ? held.names ?? [] : []);
-
-      for (const [name, supply] of SUPPLY) {
-        if (supply.handling === 'config-var') continue;
-
-        if (names.has(name)) {
-          console.log(`  [${MARK.existed}] ${name}\n           already set`);
-          continue;
-        }
-
-        if (supply.handling === 'out-of-band') {
-          console.log(`  [${MARK.noted}] ${name}\n           `
-            + `must be supplied out of band: ${supply.source ?? ''}\n           absent ⇒ ${supply.absent}`);
-          continue;
-        }
-
-        if (!requiredIn(name, worker)) {
-          console.log(`  [${MARK.noted}] ${name}\n           `
-            + `optional here (no ${supply.pairedWith ?? 'paired var'} in the Worker's vars). `
-            + `absent ⇒ ${supply.absent}`);
-          continue;
-        }
-
-        const step = await putSecret(name, infrastructure, {
-          ask: async (question) => (reader === undefined ? '' : reader.question(question)),
-          interactive,
-          install: (secret, value) => wrangler(['secret', 'put', secret, ...environmentArgs(infrastructure.environment)], 120_000, value),
-          show: (text) => { process.stderr.write(text); },
-        });
-
-        steps.push(step);
-        console.log(`  [${MARK[step.outcome]}] ${step.id}\n           ${step.detail}`);
-      }
-    }
+    steps.push(...await provisionSecrets(infrastructure, live, () => secretNames(environment), {
+      ask: async (question) => (reader === undefined ? '' : reader.question(question)),
+      interactive,
+      install: (secret, value) => wrangler(['secret', 'put', secret, ...environmentArgs(infrastructure.environment)], 120_000, value),
+      show: (text) => { process.stderr.write(text); },
+    }));
   } finally {
     reader?.close();
   }
@@ -374,7 +387,7 @@ async function main(): Promise<number> {
   );
 
   for (const step of failed) console.error(`  FAILED  ${step.id}: ${step.detail}`);
-  console.log('  next: bun run deploy, then this command again, then bun run gate:infra');
+  console.log(`  next: bun run deploy${live.state === 'absent' ? ' --bootstrap' : ''}, then bun run gate:infra`);
 
   return failed.length > 0 ? 1 : 0;
 }

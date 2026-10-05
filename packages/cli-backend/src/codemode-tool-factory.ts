@@ -3,7 +3,7 @@
  * hosted sandbox's `kinu-node.js`, so a program's files and cwd are its workspace, never the machine.
  */
 
-import { KINU_NODE_MODULE_SOURCE, requireBuild, WORKSPACE_ROOT } from '@kinu.run/core';
+import { KINU_NODE_MODULE_SOURCE, requireBuild, WORKSPACE_ROOT, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type {
   CodemodeProvider,
   CodemodeBuilder,
@@ -16,14 +16,16 @@ import {
   decodeJsonValue, explainSandboxError, nativeToolFunctions,
   renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram,
+  codemodeFunction, withCodemodeProgram, currentWorkMode, toolsInWorkMode, execCallArgs, readDeviceRequestChannel,
 } from '@kinu.run/core';
 import { tool } from 'ai';
-import { normalizeCode } from '@cloudflare/codemode/normalize';
+import { programBody } from './executor';
 import * as v from 'valibot';
 
 interface NodeExecuteToolFactoryDeps {
   extraProviders?: CodemodeProvider[];
+  /** The role's reach, over every namespace bound, as cf's factory takes it. */
+  reach: ToolSurfaceNarrowing;
 }
 
 /** Always-bound sandbox parameters; a provider may not take them. `__kinu` defines the crafted tools. */
@@ -60,12 +62,14 @@ interface ExecuteSuccess {
 }
 
 /** Pass as `codemode` to `buildActorTools`, or call with a finished confined surface (heads). */
-export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps = {}): CodemodeBuilder {
+export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): CodemodeBuilder {
   return (surface) => {
-    const providers: CodemodeProvider[] = [
+    const bound: CodemodeProvider[] = [
       ...surface.providers.map(adaptExecutorProvider),
       ...(deps.extraProviders ?? []),
     ];
+
+    const providers = deps.reach.narrowProviders(bound);
 
     // A crafted name shadows a native one, as in the CF prelude.
     const nativeBindings = nativeToolFunctions(surface.native);
@@ -90,11 +94,14 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
         try {
           const signal = options.abortSignal;
           const context = signal ? { signal } : undefined;
+          const channel = readDeviceRequestChannel({ toolOptions: options });
           const toolBindings: Record<string, CodemodeExecute> = {};
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
 
-          for (const [name, entry] of Object.entries({ ...nativeBindings, ...craftedFailureFunctions(crafted) })) {
+          const external = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.external()));
+
+          for (const [name, entry] of Object.entries({ ...external, ...nativeBindings, ...craftedFailureFunctions(crafted) })) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 
@@ -104,7 +111,8 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
             const nsp: Record<string, CodemodeExecute> = {};
 
             for (const [toolName, t] of Object.entries(p.tools)) {
-              nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...toolArgs, context));
+              const exec = toolName === 'exec' && p.positionalArgs === true;
+              nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...(exec ? execCallArgs(toolArgs, { signal, channel }) : [...toolArgs, context])));
             }
 
             providerBindings[p.name] = nsp;
@@ -125,10 +133,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 
-          const fn = new Function(
-            ...argNames,
-            `${renderCraftedDefinitions(crafted)}\nreturn (\n${normalizeCode(args.code)}\n)()`,
-          );
+          const fn = new Function(...argNames, programBody(args.code, renderCraftedDefinitions(crafted)));
 
           const rawResult = await fn(...argValues);
 

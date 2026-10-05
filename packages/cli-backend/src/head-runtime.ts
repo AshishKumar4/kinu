@@ -6,14 +6,14 @@ import type { LanguageModel, ToolSet } from 'ai';
 import {
   type HeadRuntime, type HeadGrounding, type HeadInput, type HeadSeat,
   type WebSearchProvider, type CodemodeProvider,
-  type HeadMergeModelBinder, type ResolvedTurnProfile,
+  type RouteModelBinder, type ResolvedTurnProfile,
   type PublishHeadStream,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
   type HostedActor, type WriteObserver,
   runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
   codemodeSurface, createDbCodemodeProvider, createStateCodemodeProvider,
   headMergeLLM, spawnSeatedHead,
-  localMissionScope,
+  localMissionScope, type ToolSurfaceNarrowing,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { CLIRuntime } from './runtime';
@@ -25,7 +25,7 @@ export interface CLIHeadRuntimeDeps {
   model: () => LanguageModel;
   /** Profile the merge's `judge` route resolves against; read per merge. */
   profile: () => Promise<ResolvedTurnProfile>;
-  bindMergeModel: HeadMergeModelBinder;
+  bindMergeModel: RouteModelBinder;
   /** Per-head model spec resolver. Absent or unresolvable falls back to `model`:
    *  one fork's bad spec should not fail the whole split. */
   resolveModel?: (spec: string) => LanguageModel;
@@ -101,14 +101,10 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps) {
  * `eval` over one hosted actor: `state.*` and `db` bind off the actor's own handle and stores, never the
  * parent's (a fork must not move its parent's program state), and code routes through its own runtime.
  */
-export function hostedCodemodeTool(actor: HostedActor, extras: readonly CodemodeProvider[]): (finished: ToolSet) => ToolSet[string] {
-  const sandbox = createNodeCodemodeToolFactory({
-    extraProviders: [
-      ...extras,
-      createStateCodemodeProvider(actor.handle.programState),
-      createDbCodemodeProvider(actor.stores.appData),
-    ],
-  });
+export function hostedCodemodeTool(
+  actor: HostedActor, extras: readonly CodemodeProvider[],
+): (finished: ToolSet, reach: ToolSurfaceNarrowing) => ToolSet[string] {
+  const extraProviders = [...extras, createStateCodemodeProvider(actor.handle.programState), createDbCodemodeProvider(actor.stores.appData)];
 
-  return (finished) => sandbox(codemodeSurface(actor.runtime, finished));
+  return (finished, reach) => createNodeCodemodeToolFactory({ extraProviders, reach })(codemodeSurface(actor.runtime, finished));
 }

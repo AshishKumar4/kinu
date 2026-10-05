@@ -13,8 +13,8 @@ import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
 import { withVfsErrorHint } from '../vfs/errno';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
-import { readExecSignal } from '../execution/signal';
 import { commandResult, existsTool } from '../execution/exec-result';
+import { shellExecOptions } from '../execution/shell-session';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
@@ -208,7 +208,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     exec: {
       description:
         'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
-        + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops, variables and a working directory that persists across calls. '
+        + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops and variables; each call starts fresh in `cwd` (default: your home) '
+        + 'unless it names a shell, which keeps its directory and exported variables. '
         + 'Available binaries and process features are listed in this workspace provider\'s capabilities; use sandbox or device only when the task needs that separate machine.',
       execute: async (...args: unknown[]) => {
         const command = parseInput(StringSchema, { value: args[0] });
@@ -217,9 +218,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           return refusalOf(new KinuError('bad_input', 'workspace.exec: command must be a string'));
         }
 
-        const signal = readExecSignal({ context: args[1] });
-
-        return commandResult(await shell.exec(command, signal ? { signal } : undefined));
+        return commandResult(await shell.exec(command, shellExecOptions({ value: args[1] })));
       },
     },
 
@@ -415,7 +414,7 @@ declare namespace workspace {
   function readdir(path: string): Promise<string[] | Refusal>;
   function exists(path: string): Promise<boolean | Refusal>;
   /** The workspace shell; its working directory persists across calls. */
-  function exec(command: string): Promise<string | Refusal>;
+  function exec(command: string, options?: { cwd?: string; name?: string }): Promise<string | Refusal>;
   function searchMemory(query: string): Promise<string | Refusal>;
   function saveNote(content: string): Promise<string | Refusal>;
   /** Your crafted tools. */
@@ -424,40 +423,9 @@ declare namespace workspace {
   function createTool(
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;
-  ${slate === undefined ? '' : `/**
-   * Slates in this workspace; read /skills/slates/SKILL.md before authoring one. \`workspace.slates.<id>\`
-   * is the slate's server class: \`await workspace.slates.board.addStroke(stroke)\` runs its \`addStroke\`.
-   */
-  type SlateValue = null | boolean | number | string | SlateValue[] | { [key: string]: SlateValue };
-  interface Slate {
-    [method: string]: (...args: SlateValue[]) => Promise<SlateValue | Refusal>;
-    /** Compile and boot it; a compile error is \`bad_input\` naming file and line. */
-    $preview(): Promise<{ url: string; port: number; inline: { height: number } } | Refusal>;
-    $methods(): Promise<string[] | Refusal>;
-    /** Freeze its source as a version. */
-    $commit(): Promise<SlateValue | Refusal>;
-    /** Oldest first; pass the answer's next cursor to continue. */
-    $history(after?: string): Promise<SlateValue | Refusal>;
-    $restore(version: string): Promise<SlateValue | Refusal>;
-    /** End its process, URL, storage and files; committed versions stay. */
-    $remove(): Promise<SlateValue | Refusal>;
-    /** Sharing, workspace root only. */
-    $inspect(version: string, include?: string[]): Promise<SlateValue | Refusal>;
-    $publish(version: string, include?: string[]): Promise<SlateValue | Refusal>;
-    $share(options: { visibility: 'users' | 'public'; approved: Array<{ slate: string; binding: string; member: string }>; fork?: boolean }): Promise<SlateValue | Refusal>;
-    $graph(): Promise<SlateValue | Refusal>;
-  }
-  const slates: { readonly [id: string]: Slate } & {
-    /** Every slate, and why any failed to load. */
-    $list(): Promise<{ slates: Array<{ id: string; title: string; bindings: string[] }>; problems: Array<{ id: string; reason: string; error: string }> } | Refusal>;
-    /** A committed version copied into a new slate. */
-    $fork(version: string): Promise<SlateValue | Refusal>;
-    /** Sharing, workspace root only. */
-    $shares(): Promise<SlateValue | Refusal>;
-    $liveShares(): Promise<SlateValue | Refusal>;
-    $unshare(share: string): Promise<SlateValue | Refusal>;
-    $viewerRequests(share: string): Promise<SlateValue | Refusal>;
-  };
+  ${slate === undefined ? '' : `/** Slates in this workspace; read /skills/slates/SKILL.md first, which names the \`$\` members.
+   * \`await workspace.slates.board.addStroke(stroke)\` runs the board slate's \`addStroke\`. */
+  const slates: { readonly [id: string]: { readonly [member: string]: (...args: unknown[]) => Promise<unknown> } };
 `}
 }`;
 

@@ -6,8 +6,21 @@ import type { AgentFacetCalls } from './agent-facet/agent-facet';
 
 const REFUSED = 'Dynamic worker concurrency limit exceeded';
 
+/** The platform's refusal of a call it never ran, or null. */
+function refusedBy(exit: Exit.Exit<unknown, unknown>): Error | null {
+  if (Exit.isSuccess(exit)) return null;
+  const failure = Cause.squash(exit.cause);
+
+  if (classifyError(failure) !== 'dynamic_worker_cap') return null;
+
+  return failure instanceof Error ? failure : new Error(REFUSED);
+}
+
 export class AgentIsolateSlots {
   #running = 0;
+
+  /** Calls that ran and ended: each freed a platform slot. */
+  #ended = 0;
 
   readonly #waiting: Array<() => void> = [];
 
@@ -25,14 +38,18 @@ export class AgentIsolateSlots {
     return Effect.promise(() => promise);
   }
 
-  #hold(key: string): () => void {
+  /** Only the end of a call that ran frees a platform slot, so only that wakes the waiting. */
+  #hold(key: string): (ran: boolean) => void {
     const end = beginLoaderFetch(this.ledger, key);
 
     this.#running += 1;
 
-    return () => {
+    return (ran) => {
       end();
       this.#running -= 1;
+
+      if (!ran) return;
+      this.#ended += 1;
 
       for (const wake of this.#waiting.splice(0)) wake();
     };
@@ -48,14 +65,20 @@ export class AgentIsolateSlots {
           continue;
         }
 
-        const end = this.#hold(key);
-        const exit = yield* Effect.exit(Effect.tryPromise({ try: () => call(isolate), catch: (cause) => cause })).pipe(Effect.ensuring(Effect.sync(end)));
+        const sent = this.#ended;
+        const release = this.#hold(key);
+
+        const exit = yield* Effect.exit(Effect.tryPromise({ try: () => call(isolate), catch: (cause) => cause })).pipe(
+          Effect.onExit((settled) => Effect.sync(() => release(!(Exit.isSuccess(settled) && refusedBy(settled.value) !== null)))),
+        );
 
         if (Exit.isSuccess(exit)) return exit.value;
-        const failure = Cause.squash(exit.cause);
+        const refused = refusedBy(exit);
 
-        if (classifyError(failure) !== 'dynamic_worker_cap') return yield* Effect.die(failure);
-        yield* this.#wait(failure instanceof Error ? failure : new Error(REFUSED));
+        if (refused === null) return yield* Effect.die(Cause.squash(exit.cause));
+
+        // A slot freed while the refusal was on its way: no later end would wake this call.
+        if (this.#ended === sent) yield* this.#wait(refused);
       }
     });
   }

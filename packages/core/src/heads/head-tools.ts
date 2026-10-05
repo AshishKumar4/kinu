@@ -15,6 +15,7 @@ import type { ConversationRecall } from '../memory/conversation-search';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
 import { permitInPlan } from '../execution/work-mode';
+import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
 
 export interface HeadSplitRequest {
   readonly rationale: string;
@@ -38,11 +39,13 @@ export interface HeadToolDeps {
   rt: AgentRuntime;
   /** The builtin factory builds the whole surface and narrows it afterwards, so its deps are whole. */
   conversations: ConversationRecall;
-  /** Pre-built `eval` (codemode differs per platform). A function receives the finished head surface and its result replaces `eval`. */
+  /** Pre-built `eval` (codemode differs per platform). A function receives the finished head surface and its allowed
+   *  reach, and its result replaces `eval`. */
   codemodeTool: unknown;
   webSearch: WebSearchProvider;
   /** The backend owns the spawn substrate; the budget gate lives here. */
   split(request: HeadSplitRequest): Promise<HeadSplitResult>;
+  jobs: ActorJobs;
 }
 
 const SplitSubheadsInputSchema = z.object({
@@ -107,5 +110,6 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     extra,
     allowed: input.allowedTools,
     codemodeTool: deps.codemodeTool,
+    wrapFinished: (finished) => wrapToolsForBackground(finished, deps.jobs),
   });
 }

@@ -4,7 +4,7 @@ import type { Command } from 'commander';
 import { BUILTIN_TOOLS, describeProviderError, describeToolCall, fmtUsd, quotaWindowText, summarizeToolCall, timeAgo, usageTotal } from '@kinu.run/core';
 import { clipText, TUI_MARKS } from '@kinu.run/core/tui';
 import type { AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
-import type { AgentSearchNode } from './agent-client';
+import { STEP_RESTART_NOTICE, type AgentSearchNode } from './agent-client';
 import cliPackage from '../package.json' with { type: 'json' };
 
 // Kinu design tokens; cf-backend index.css :root is the source of truth. Fixed hexes assume a dark terminal.
@@ -294,6 +294,10 @@ export function printSearchTree(nodes: SearchNode[]): void {
 
   for (const line of renderSearchTreeLines(nodes)) console.log(line);
   console.log('');
+}
+
+export function printStepCut(): void {
+  (process.stdout.isTTY === true ? process.stdout : process.stderr).write(STEP_RESTART_NOTICE);
 }
 
 /** Summarized as the web chat card does; the raw-argument fallback applies only to MCP and crafted tools. */

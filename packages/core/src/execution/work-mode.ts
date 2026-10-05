@@ -54,6 +54,11 @@ export function requireBuild(operation: string): void {
   requireWorkModePermission(currentWorkMode(), false, operation);
 }
 
+/** What a prompt may tell a turn in `mode` to call: Plan names only the tools it permits. */
+export function callableToolNames(mode: WorkMode, tools: ToolSet): string[] {
+  return Object.entries(tools).filter(([name, entry]) => workModeRefusal(mode, hasPlanPermission(entry), name) === null).map(([name]) => name);
+}
+
 /** Native tools retain their declared input schema; only their authority is narrowed. */
 export function toolsInWorkMode(mode: WorkMode, tools: ToolSet): ToolSet {
   if (mode === 'build') return tools;

@@ -6,7 +6,7 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { describe, test, expect } from 'bun:test';
 import {
-  readForkLineage, SOUL_PATH, summarizeSoul, createWorkspaceForkSink,
+  readForkLineage, readMission, SOUL_PATH, summarizeSoul, createWorkspaceForkSink,
   ForkTargetWriter, ForkTransferReceiver, forkTransferFrames, sealForkFrame,
   FORK_TRANSFER_VERSION, FORK_STREAM_SEED, foldForkStream,
   type ForkFileSink, type ForkFileSource, type ForkFrameReply,
@@ -327,8 +327,7 @@ describe('fork transfer receiver', () => {
     // Kernel-owned and read-only, as the owner's write seals it: never the session user's.
     expect({ uid: stat.uid, mode: stat.mode & 0o777 }).toEqual({ uid: 0, mode: 0o444 });
     expect(new TextDecoder().decode(kernel.readFile(`${WORKSPACE_ROOT}/${SOUL_PATH}`))).toBe(new TextDecoder().decode(soul.bytes));
-    expect(tgt.sql<{ mission: string }>`SELECT mission FROM workspace_identity`[0]?.mission)
-      .toBe(summarizeSoul(new TextDecoder().decode(soul.bytes)));
+    expect(readMission(tgt.sql)).toBe(summarizeSoul(new TextDecoder().decode(soul.bytes)));
   });
 
   test('an import of a name under the home the fork does not carry is refused, and nothing lands', async () => {
@@ -890,7 +889,7 @@ describe('a fork holds one frame, never a whole file', () => {
 
         return { want, done: want.length === 0 };
       },
-      async publishSoul() { return { mission: 'mission' }; },
+      async publishSoul() {},
       async remove() {},
       stored: () => stored.size,
     };

@@ -19,7 +19,6 @@ import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stat
 import { KinuError, settle } from '../obs/index';
 import type { QualityDay } from '../types/quality';
 import { Effect } from 'effect';
-import type { ScaffoldArchiveEntry } from '../scaffold/archive';
 
 const TRIVIAL_MESSAGE = new RegExp(
   '^\\s*(hi|hiya|hey|hello|yo|sup|thanks?|thank you|thx|ty|ok(ay)?|k|kk|cool|nice|great|awesome|perfect|' +
@@ -36,33 +35,6 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
   if (TRIVIAL_MESSAGE.test(msg)) return true;
 
   return msg.length < 12 && !msg.includes('?');
-}
-
-/** High and low ratings per scaffold version, the archive's real-use evidence. */
-export interface RealOutcomeRate {
-  accepted: number;
-  negative: number;
-}
-
-/** Blends rated outcomes into archive win-rates and trials for branch-base
- *  selection. Pure; never mutates. */
-export function blendRealOutcomeRates(
-  archive: ReadonlyArray<ScaffoldArchiveEntry>,
-  rates: ReadonlyMap<number, RealOutcomeRate>,
-): ScaffoldArchiveEntry[] {
-  return archive.map((e) => {
-    const real = rates.get(e.version);
-    const realDecisive = real ? real.accepted + real.negative : 0;
-
-    if (!real || realDecisive === 0) return e;
-    const shadowDecisive = e.wins + e.losses;
-
-    return {
-      ...e,
-      trials: e.trials + realDecisive,
-      winRate: (e.wins + real.accepted) / (shadowDecisive + realDecisive),
-    };
-  });
 }
 
 /** Strongest first; the effective rating of a turn is its strongest source's newest row. */
@@ -387,22 +359,6 @@ export function retractThumbs(sql: SqlExecutor, actor: ActorHandle, turnId: stri
   actor.assertCurrent();
   void sql`DELETE FROM turn_ratings WHERE actor_id = ${actor.actorId} AND turn_id = ${turnId} AND source = 'thumbs'`;
   markStoreChanged(sql);
-}
-
-/** How turns served by each scaffold version were rated: high counts as accepted, low as negative. */
-export function realRatingScaffoldRates(sql: SqlExecutor, actor: ActorHandle): Map<number, RealOutcomeRate> {
-  const rates = new Map<number, RealOutcomeRate>();
-
-  for (const rating of listTurnRatings(sql, actor)) {
-    if (rating.scaffoldVersion === null) continue;
-    const rate = rates.get(rating.scaffoldVersion) ?? { accepted: 0, negative: 0 };
-
-    if (isHighRating(rating.score)) rate.accepted++;
-    else if (isLowRating(rating.score)) rate.negative++;
-    rates.set(rating.scaffoldVersion, rate);
-  }
-
-  return rates;
 }
 
 /** Effective, so a thumbs-up over a low model rating clears the turn. */

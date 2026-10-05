@@ -59,7 +59,23 @@ export type JobHarvester = (
 type JobRecoveryOutcome =
   | { readonly state: 'redriven'; readonly job: BackgroundJob }
   | { readonly state: 'deferred'; readonly job: BackgroundJob }
+  | { readonly state: 'held'; readonly job: BackgroundJob }
   | { readonly state: 'none' };
+
+/** Which process runs a job, where several processes share one store. */
+export interface JobHolder {
+  hold(jobId: string): void;
+  /** Another live process runs it: it is that process's, not an orphan. */
+  heldElsewhere(jobId: string): boolean;
+  /** One write against every process sharing the store: `held` while another live one runs it, else `claim`'s
+   *  answer, the job held here when it is not null. */
+  take<Claim>(jobId: string, claim: () => Claim | null): Claim | null | 'held';
+}
+
+export interface JobRetirement {
+  readonly stopped: string[];
+  readonly refused: string[];
+}
 
 /** Each detached job is a live process tree; past the cap the detach is refused and cancelled. */
 export const MAX_CONCURRENT_DETACHED_JOBS = 8;
@@ -110,7 +126,13 @@ export interface BackgroundJobRunnerDeps {
   harvest?: JobHarvester;
   /** Wake at `atMs` to retry a deferred attempt; absent when no later activation exists. */
   scheduleResume?: (atMs: number) => Promise<void> | void;
+  /** Absent: one process owns the store (a Durable Object). */
+  holder?: JobHolder;
 }
+
+/** The workspace's half of every job runner in it. */
+export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutput'>>
+  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock' | 'holder'>;
 
 const SearchJobInputSchema = v.object({ task: v.string() });
 
@@ -146,15 +168,18 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
   return undefined;
 }
 
-/** Wake text differs by outcome because the agent's next action does. */
-function wakeText(job: BackgroundJob): string {
+/** By outcome; `inline` carries the result to an agent without `agent.jobResult`. */
+export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent'): string {
   const generation = job.resumeAttempts > 0
     ? ` (generation ${String(job.resumeAttempts + 1)}: it was interrupted and re-driven)`
     : '';
 
   if (job.status === 'completed') {
-    return `Background ${job.kind} job ${job.id} completed${generation}. Read the full result with `
-      + `agent.jobResult('${job.id}'), then synthesize it / continue the work you backgrounded. `
+    const read = reader === 'inline'
+      ? `Its result:\n${job.result ?? '(empty)'}\n\nSynthesize it / continue`
+      : `Read the full result with agent.jobResult('${job.id}'), then synthesize it / continue`;
+
+    return `Background ${job.kind} job ${job.id} completed${generation}. ${read} the work you backgrounded. `
       + `The result says whether it is COMPLETE or PARTIAL: say which when you report it.`;
   }
 
@@ -194,6 +219,9 @@ export class BackgroundJobRunner {
 
   readonly output: JobOutputFeeds;
 
+  /** Foreground calls; the actor's Stop aborts them. */
+  readonly foreground = new Set<AbortController>();
+
   constructor(private readonly deps: BackgroundJobRunnerDeps) {
     this.output = new JobOutputFeeds({ clock: deps.clock ?? REAL_CLOCK, send: (frame) => { deps.jobOutput?.(frame); } });
   }
@@ -204,6 +232,8 @@ export class BackgroundJobRunner {
   }
 
   private createJob(id: string, { kind, input, mode, controller }: Pick<DetachRequest, 'kind' | 'input' | 'mode' | 'controller'>): string {
+    // Held before it is running: a process sweeping in between would otherwise reclaim it from its creator.
+    this.deps.holder?.hold(id);
     this.deps.store.create({
       id, kind, workMode: mode, input: serializeJobResult({ value: input }), now: Date.now(),
       label: describeJobInput(kind, input),
@@ -216,6 +246,8 @@ export class BackgroundJobRunner {
   /** Null means another retry already owns the source row. */
   createRetry(request: BackgroundRetryRequest): string | null {
     const id = newJobId();
+
+    this.deps.holder?.hold(id);
 
     const created = this.deps.store.createRetry({
       sourceId: request.sourceId,
@@ -575,9 +607,30 @@ export class BackgroundJobRunner {
 
   /** Abort, mark cancelled, and wake the agent, which was told to wait for this result. */
   async cancel(jobId: string): Promise<boolean> {
-    if (this.deps.store.get(jobId)?.status !== 'running') return false;
+    if (await this.stop(jobId) !== 'stopped') return false;
+    await this.wake(jobId);
 
-    if (this.cancelling.has(jobId)) return false;
+    return true;
+  }
+
+  /** No wake: its reader is leaving. */
+  async retire(): Promise<JobRetirement> {
+    const retirement: JobRetirement = { stopped: [], refused: [] };
+
+    for (const jobId of this.deps.store.runningIds()) {
+      const outcome = await this.stop(jobId);
+
+      if (outcome === 'stopped') retirement.stopped.push(jobId);
+      else if (outcome === 'refused') retirement.refused.push(jobId);
+    }
+
+    return retirement;
+  }
+
+  private async stop(jobId: string): Promise<'stopped' | 'refused' | 'settled'> {
+    if (this.deps.store.get(jobId)?.status !== 'running') return 'settled';
+
+    if (this.cancelling.has(jobId)) return 'refused';
     this.cancelling.add(jobId);
     let refusal: { readonly error: unknown } | undefined;
 
@@ -601,13 +654,10 @@ export class BackgroundJobRunner {
 
       if (held) await held();
 
-      return false;
+      return 'refused';
     }
 
-    if (!this.settleCancelled(jobId)) return false;
-    await this.wake(jobId);
-
-    return true;
+    return this.settleCancelled(jobId) ? 'stopped' : 'settled';
   }
 
   /**
@@ -660,7 +710,7 @@ export class BackgroundJobRunner {
     for (const jobId of this.deps.store.runningIds()) {
       const outcome = await this.recoverJob(jobId);
 
-      if (outcome.state === 'deferred') inFlight.add(jobId);
+      if (outcome.state === 'deferred' || outcome.state === 'held') inFlight.add(jobId);
     }
 
     for (const jobId of this.controllers.keys()) inFlight.add(jobId);
@@ -708,6 +758,8 @@ export class BackgroundJobRunner {
       return { state: 'none' };
     }
 
+    if (this.deps.holder?.heldElsewhere(jobId) === true) return { state: 'held', job };
+
     if (this.deps.resume) {
       const now = Date.now();
 
@@ -715,7 +767,10 @@ export class BackgroundJobRunner {
         return await this.deferRecovery(job, job.resumeAfter);
       }
 
-      const claim = this.deps.store.reclaim(jobId, now);
+      const reclaim = () => this.deps.store.reclaim(jobId, job.epoch, now);
+      const claim = this.deps.holder?.take(jobId, reclaim) ?? reclaim();
+
+      if (claim === 'held') return { state: 'held', job };
 
       if (!claim) return { state: 'none' }; // lost the race — another activation reclaimed it
       // Armed before the drive: an eviction during it cannot write the wait afterwards.

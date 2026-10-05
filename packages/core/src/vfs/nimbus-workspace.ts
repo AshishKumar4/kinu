@@ -18,6 +18,8 @@ import type { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
+import type { ShellCommandIdentity } from '@nimbus-sh/core/substrate/lifo/shell/Shell.js';
+import type { CommandRunAsHost } from '@nimbus-sh/core/substrate/lifo/commands/types.js';
 import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates, resealWorkspaceSoul,
@@ -96,16 +98,29 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceBundle['vf
 }
 
 /** No per-command `cwd`: the shell owns its working directory so `cd` persists. */
-function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
+/**
+ * The workspace's one shell keeps a `cd` or `export` from call to call, so every call runs in a subshell, whose state
+ * ends with it, started at its `cwd` or the home. This shell keeps no named shells (Nimbus has none in process).
+ */
+function workspaceShell(open: () => Promise<NimbusWorkspace>, identity: (workspace: NimbusWorkspace) => ShellCommandIdentity): Shell {
   return {
     async exec(command, stdinOrOptions) {
       const options = shellExecOptions({ value: stdinOrOptions });
 
-      const workspace = await open();
+      if (options?.name !== undefined) {
+        const refusal = { reason: 'unsupported' as const, error: 'this workspace keeps no named shells; run the command without a name' };
 
+        return { stdout: '', stderr: refusal.error, exitCode: 1, refusal };
+      }
+
+      const workspace = await open();
+      const home = workspace.shell.getEnv().HOME ?? WORKSPACE_ROOT;
+      const start = options?.cwd === undefined ? home : workspacePath(options.cwd, home);
       const output = options?.output;
 
-      const result = await workspace.exec(command, {
+      // The newline closes a command that ends in a comment.
+      const result = await (await callCommands(workspace, identity(workspace))).run(`(${command}\n)`, {
+        cwd: start,
         stdin: options?.stdin,
         signal: options?.signal,
         ...(output !== undefined && {
@@ -115,12 +130,25 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
       });
 
       return workspaceCommandNotFound(
-        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
+        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, cwd: start },
         // Read per call: installs re-register bins mid-session.
         (bin) => workspace.registry.has(bin),
       );
     },
   };
+}
+
+/** Nimbus runs one shell's calls in turn, so each call gets a shell of its own, as the workspace's shell, over its files. */
+async function callCommands(workspace: NimbusWorkspace, identity: ShellCommandIdentity) {
+  const [{ Shell }, { HeadlessTerminal }, { SandboxCommandsImpl }] = await Promise.all([
+    import('@nimbus-sh/core/substrate/lifo/shell/Shell.js'),
+    import('@nimbus-sh/core/substrate/lifo/sandbox/HeadlessTerminal.js'),
+    import('@nimbus-sh/core/substrate/lifo/sandbox/SandboxCommands.js'),
+  ]);
+
+  const shell = new Shell(new HeadlessTerminal(), workspace.shell.filesystem, workspace.registry, workspace.shell.getEnv(), workspace.kernel.processRegistry, identity);
+
+  return new SandboxCommandsImpl(shell, workspace.registry);
 }
 
 /** One agent's credentialed view of the same rows, on both the file and shell planes. */
@@ -308,11 +336,16 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
   // One supervisor for this filesystem so no two shells share a pid; `open` sets its pid base.
   const processes = new SessionProcessSupervisor();
+
+  const identityOf = (pid: number, runAs: CommandRunAsHost | undefined): ShellCommandIdentity => ({
+    pid, cred: processes.cred(pid), setUmask: (mask: number) => { processes.setUmask(pid, mask); }, runAs,
+  });
+
   const planes = new Map<number, Promise<WorkspaceAgentPlane>>();
 
   return {
     vfs: workspaceVfs(open),
-    shell: workspaceShell(open),
+    shell: workspaceShell(open, (workspace) => identityOf(workspace.shellProcessPid, workspace.shell.getRunAsHost())),
     onFilesChanged(listener) {
       fileListeners.add(listener);
 
@@ -364,12 +397,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
             vfs: origin.vfs,
             cwd: agent.home,
             env: { HOME: agent.home, TMPDIR: agent.tmp },
-            identity: {
-              pid: process.pid,
-              cred: processes.cred(process.pid),
-              setUmask: (mask: number) => { processes.setUmask(process.pid, mask); },
-              runAs: origin.shell.getRunAsHost(),
-            },
+            identity: identityOf(process.pid, origin.shell.getRunAsHost()),
             fabric: opts.fabric,
             // The origin's namespace, so this shell serves the same mount points.
             filesystem: origin.filesystem,
@@ -377,7 +405,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
           return {
             vfs: agentVfs(origin.vfs.as(agent.cred), agent.home),
-            shell: workspaceShell(() => Promise.resolve(asAgent)),
+            shell: workspaceShell(() => Promise.resolve(asAgent), () => identityOf(process.pid, origin.shell.getRunAsHost())),
           };
         } catch (cause) {
           // Same rule as `booting`: never cache a rejection.

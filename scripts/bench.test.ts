@@ -1318,12 +1318,11 @@ describe('the evolution-event vocabulary does not drift across languages', () =>
 
     expect(fromCore.length).toBeGreaterThan(5);
 
-    // The two shadow-eval outcomes local-session.ts emits directly, not via the
-    // engine's listener, so they are absent from the union above.
-    const session = readSource('packages/cli-backend/src/local-session.ts');
+    // Scaffold decisions come from the shared run-event emitter, not the engine's listener.
+    const decisions = readSource('packages/core/src/scaffold/versions.ts');
     const direct = ['scaffold_promotion', 'scaffold_rollback'];
 
-    for (const name of direct) expect(session).toContain(`'${name}'`);
+    for (const name of direct) expect(decisions).toContain(`'${name}'`);
 
     const python = readSource('bench/clbench/kinu/events.py');
     const block = present(/EVOLUTION_EVENTS = frozenset\(\{([\s\S]*?)\}\)/.exec(python), "the reader's EVOLUTION_EVENTS set");

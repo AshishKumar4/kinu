@@ -23,7 +23,7 @@ import type { AgentSignal, SendOutcome } from '../types/signals';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
-import { readVersionedScaffoldSource } from '../scaffold/shadow';
+import { readVersionedScaffoldSource } from '../scaffold/versions';
 import { sha256Hex } from '../safety/argument-digest';
 import { diagnostics, renderThrownChain, toKinuError, type AgentTracing } from '../obs/index';
 
@@ -238,6 +238,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         turns: tracing && (() => tracing().turns(actor)),
         history: bound.stores.history,
         events: deps.contextEvents(bound),
+        recording: bound.stores.eventRecorder,
         advisorPort: () => deps.advisorPort?.(bound) ?? null,
         reviewed: bound.record.input,
         advisor: reference.parentActorId === null ? undefined : {

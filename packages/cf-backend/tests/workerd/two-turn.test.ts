@@ -68,8 +68,8 @@ describe('two real turns over the HTTP model seam', () => {
   it('admits two websocket asks after held genesis through the installed Think queue', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('queue-driver'));
 
-    const calls = v.parse(QueuedConversationSchema, await root.queuedConversation('chat')).http
-      .filter((call) => call.model === 'probe-queue');
+    const conversation = v.parse(QueuedConversationSchema, await root.queuedConversation('chat'));
+    const calls = conversation.http.filter((call) => call.model === 'probe-queue');
 
     expect(calls).toHaveLength(2);
     const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
@@ -83,6 +83,8 @@ describe('two real turns over the HTTP model seam', () => {
       { role: 'assistant', content: `echo:${genesis}` },
       { role: 'user', content: 'QUEUE-A\n\nQUEUE-B' },
     ]);
+    expect(conversation.answers.at(-1)).toContain('QUEUE-A');
+    expect(conversation.answers.at(-1)).toContain('QUEUE-B');
 
     // A busy socket's pending_steers row drains once the turn settles; the durable-token proof is the cold arm.
   });
@@ -299,26 +301,6 @@ describe('two real turns over the HTTP model seam', () => {
     expect(out.transcript.some((row) => row.role === 'user' && row.id === 'input-FIRST-CHAT')).toBe(true);
     expect(calls.length).toBe(1);
     expect(out.sleepTimeSettled).toBe(1);
-  });
-
-  it('the owner\'s first chat after genesis rides the genesis turn', async () => {
-    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('first-gen-driver'));
-
-    // Absorb contract: the owner's first prompt lands mid-genesis as a steer and the same turn's next
-    // step carries it to the model: one call, no second turn.
-    const out = await root.firstChatAfterGenesis();
-    const calls = v.parse(HttpSchema, out.http).filter((call) => call.model === 'probe-queue');
-
-    expect(calls).toHaveLength(1);
-
-    const human = calls[0]?.users.filter((text) => !text.startsWith('<')) ?? [];
-    expect(human[0]).toContain('This workspace has just been created.');
-    expect(human[1]).toBe('FIRST-PROMPT');
-
-    expect(out.steers).toHaveLength(0);
-    expect(out.transcript.some((row) => row.role === 'user' && row.id === 'input-FIRST-PROMPT')).toBe(true);
-    expect(out.inbox.busy).toBe(false);
-    expect(out.landed).toBe('mid-turn');
   });
 
   it('runs A and B end to end', async () => {

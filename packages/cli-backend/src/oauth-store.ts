@@ -12,8 +12,10 @@ import {
   accountOf,
   baseCredentialKey,
   credentialToHeaders,
-  OAuthTokenError,
   refusedLogin,
+  rotateLogin,
+  usableLogin,
+  type LoginRenewal,
   type AuthRequest,
   type AuthResolution,
   type JsonObject,
@@ -22,8 +24,7 @@ import {
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { readFileSync } from 'node:fs';
-import { Effect } from 'effect';
-import { settle, tolerate } from '@kinu.run/core/obs';
+import { tolerate } from '@kinu.run/core/obs';
 import { registrationOf, revokeSession } from '../../pc-agent/src/chatgpt.js';
 import { chatgptLoginIssuer } from './chatgpt-login';
 import { withConfigLock } from './config-lock';
@@ -99,6 +100,11 @@ export interface LocalOAuthStore {
   save(key: string, credential: OAuthCredential): Promise<void>;
 }
 
+/** A login a call can use: one without a refresh token is no login, as a hosted account refuses to store one. */
+function renewable(login: { readonly accessToken?: string; readonly refreshToken?: string } | null | undefined): boolean {
+  return Boolean(login?.accessToken && login.refreshToken);
+}
+
 export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof fetch } = {}): LocalOAuthStore {
   return {
     keys(): string[] {
@@ -106,14 +112,14 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
 
       return [...ISSUERS].flatMap(([base, issuer]) => {
         const stored = providers?.[issuer.section];
-        const named = Object.keys(stored?.accounts ?? {}).filter((name) => Boolean(stored?.accounts?.[name]?.accessToken)).sort();
+        const named = Object.keys(stored?.accounts ?? {}).filter((name) => renewable(stored?.accounts?.[name])).sort();
 
-        return [...(stored?.accessToken ? [MAIN_ACCOUNT] : []), ...named].map((account) => accountCredentialKey(base, account));
+        return [...(renewable(stored) ? [MAIN_ACCOUNT] : []), ...named].map((account) => accountCredentialKey(base, account));
       });
     },
 
     has(key: string): boolean {
-      return Boolean(readCredential(configPath, key)?.accessToken);
+      return renewable(readCredential(configPath, key));
     },
 
     async getAuth(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null> {
@@ -124,15 +130,11 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
       const rejected = authOpts?.rejected;
       const refused = rejected !== undefined && refusedLogin(issuer.headers(credential), rejected);
 
-      if (!credential.refreshToken || !(refused || issuer.renewal.expiring(credential))) {
-        return { headers: issuer.headers(credential), credentialKey: key };
-      }
+      const usable = await usableLogin({
+        issuer: issuer.renewal, credential, refused, renew: () => renewUnderLock(configPath, key, credential, opts.fetch),
+      });
 
-      return settle(Effect.flatMap(Effect.promise(() => renewUnderLock(configPath, key, credential, opts.fetch)), (renewal) => {
-        if (renewal.kind === 'refused') return Effect.die(renewal.reason);
-
-        return Effect.succeed(renewal.credential === null ? null : { headers: issuer.headers(renewal.credential), credentialKey: key });
-      }));
+      return usable === null ? null : { headers: issuer.headers(usable), credentialKey: key };
     },
 
     async save(key: string, credential: OAuthCredential): Promise<void> {
@@ -140,9 +142,6 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
     },
   };
 }
-
-/** A renewal's outcome: the login to use (null once it is gone), or the issuer's refusal. */
-type Renewal = { readonly kind: 'renewed'; readonly credential: OAuthCredential | null } | { readonly kind: 'refused'; readonly reason: unknown };
 
 /** The network call runs inside the lock: released at the first `await`, a
  *  second caller could submit the same refresh token and race its replacement.
@@ -152,29 +151,22 @@ function renewUnderLock(
   key: string,
   original: OAuthCredential,
   fetchFn?: typeof fetch,
-): Promise<Renewal> {
+): Promise<LoginRenewal> {
   const issuer = issuerOf(key);
 
-  return withConfigLock(configPath, async (): Promise<Renewal> => {
+  return withConfigLock(configPath, async (): Promise<LoginRenewal> => {
     const latest = readCredential(configPath, key);
 
-    if (latest?.refreshToken === undefined) return { kind: 'renewed', credential: null };
+    if (latest?.refreshToken === undefined) return 'revoked';
 
-    if (latest.accessToken !== original.accessToken && !issuer.renewal.expiring(latest)) return { kind: 'renewed', credential: latest };
-    const [renewal] = await Promise.allSettled([issuer.renewal.refresh(latest, fetchFn)]);
+    if (latest.accessToken !== original.accessToken && !issuer.renewal.expiring(latest)) return latest;
+    const renewal = await rotateLogin(key, `refreshing the ${issuer.section} login`, () => issuer.renewal.refresh(latest, fetchFn));
 
-    if (renewal.status === 'fulfilled') {
-      writeLogin(configPath, key, credentialToConfig(renewal.value));
+    // A spent refresh token is retired, so no later call submits it again and the login reads as signed out.
+    if (renewal === 'revoked') writeLogin(configPath, key, signedOutLogin(issuer, latest.metadata));
+    else if (!('failed' in renewal)) writeLogin(configPath, key, credentialToConfig(renewal));
 
-      return { kind: 'renewed', credential: renewal.value };
-    }
-
-    // A spent refresh token is retired, so no later call submits it again.
-    if (issuer.signedOut !== undefined && renewal.reason instanceof OAuthTokenError && renewal.reason.revoked) {
-      writeLogin(configPath, key, signedOutLogin(issuer, latest.metadata));
-    }
-
-    return { kind: 'refused', reason: renewal.reason };
+    return renewal;
   });
 }
 

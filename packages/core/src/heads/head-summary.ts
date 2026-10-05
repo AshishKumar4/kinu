@@ -1,8 +1,7 @@
 // Head report summary helpers. ai-SDK v6 `result.text` is only the last step's text, which is
 // usually empty for a head that ends on a tool call.
 
-import { digestJsonValue } from '../utils/json';
-import type { HeadReport, HeadStep } from "./types";
+import type { HeadReport } from "./types";
 
 /** A stopped head with no evidence, decision or artifact learned nothing; tool calls alone are not findings. */
 export function headProducedFindings(
@@ -16,47 +15,6 @@ export function headProducedFindings(
 interface StepLike { text?: string }
 
 interface ResultLike { text?: string; reasoningText?: string; steps?: ReadonlyArray<StepLike> }
-
-interface ToolCallLike { toolName?: string; name?: string; input?: unknown; toolCallId?: string }
-
-interface ToolResultLike { toolName?: string; output?: unknown; result?: unknown; toolCallId?: string }
-
-export interface TraceStepLike {
-  text?: string;
-  reasoningText?: string;
-  toolCalls?: ReadonlyArray<ToolCallLike>;
-  toolResults?: ReadonlyArray<ToolResultLike>;
-}
-
-
-/** Null for a step with no prose, reasoning or tool call. Per step, because the trace is written live. */
-export function toHeadStep(step: TraceStepLike): HeadStep | null {
-  const calls = Array.isArray(step.toolCalls) ? step.toolCalls : [];
-  const results = Array.isArray(step.toolResults) ? step.toolResults : [];
-
-  const toolCalls = calls.map((c, i) => {
-    const match = c.toolCallId
-      ? results.find((r) => r.toolCallId === c.toolCallId)
-      : results[i];
-
-    const output = match?.output ?? match?.result;
-
-    return {
-      toolCallId: c.toolCallId,
-      name: String(c.toolName ?? c.name ?? "?"),
-      input: digestJsonValue({ value: c.input }),
-      output: output === undefined ? undefined : digestJsonValue({ value: output }),
-    };
-  });
-
-  const text = step.text?.trim() ?? "";
-  const trimmedReasoning = step.reasoningText?.trim();
-  const reasoning = trimmedReasoning === "" ? undefined : trimmedReasoning;
-
-  if (!text && !reasoning && toolCalls.length === 0) return null;
-
-  return { text, reasoning, toolCalls };
-}
 
 /** The last text-bearing step (not just the last step), falling back to reasoning. */
 export function extractFinalText(result: ResultLike): string {

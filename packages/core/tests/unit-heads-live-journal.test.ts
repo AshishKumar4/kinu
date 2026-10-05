@@ -7,6 +7,7 @@ import {
   HeadJournal, initHeadsTables, LiveHeadJournal, type HeadInput, type HeadReport,
 } from '../src/index';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
+import { saidStep } from './helpers';
 
 function spawn(id: string, rootId: string): HeadInput {
   return {
@@ -50,8 +51,8 @@ describe('LiveHeadJournal', () => {
     const { journal, announced } = live();
     journal.insertSpawn(spawn('n1', 'root-1'));
     announced.length = 0;
-    journal.appendStep('n1', 0, { text: 'first', toolCalls: [] });
-    journal.appendStep('n1', 1, { text: 'second', toolCalls: [] });
+    journal.appendStep('n1', 0, saidStep('first'));
+    journal.appendStep('n1', 1, saidStep('second'));
     expect(announced).toEqual(['n1', 'n1']);
   });
 

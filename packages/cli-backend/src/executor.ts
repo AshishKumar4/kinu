@@ -8,7 +8,7 @@ import { decodeJsonValue, JsonValueSchema } from '@kinu.run/core';
 import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeFileSync, unlinkSync } from 'node:fs';
+import { writeFileSync, unlinkSync, rmSync } from 'node:fs';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
 import { requireBuild } from '@kinu.run/core';
@@ -66,6 +66,7 @@ export function createSandboxedExecutor(): Executor {
         return executeInProcess(code, providerList);
       }
 
+      // Apart on purpose: a verifier check cannot read its receipt, nor a probe the owner's project.
       return executeInSubprocess(code);
     },
   };
@@ -116,7 +117,7 @@ async function runToCompletion(
       stderr: await Bun.file(errFile).text(),
     };
   } finally {
-    unlinkSync(tmpFile);
+    rmSync(tmpFile, { force: true });
     unlinkSync(outFile);
     unlinkSync(errFile);
   }
@@ -129,6 +130,7 @@ async function executeInSubprocess(code: string): Promise<ExecuteResult> {
   if (!bunBin) return executeInProcess(code, []);
 
   const wrapper = `
+    await Bun.file(import.meta.path).delete();
     try {
       const result = await (
         ${normalizeCode(code)}
@@ -171,6 +173,11 @@ function normalizeProviders(
   return [{ name: 'codemode', fns: providers }];
 }
 
+/** The one body every in-process CLI program runs as, `eval`'s and the executor's: `prelude`, then the code's value. */
+export function programBody(code: string, prelude = ''): string {
+  return `${prelude}\nreturn (\n${normalizeCode(code)}\n)()`;
+}
+
 /** In-process execution: tool-backed code, or JS when no subprocess runtime is on PATH. */
 async function executeInProcess(
   code: string, providers: ResolvedProvider[],
@@ -196,7 +203,7 @@ async function executeInProcess(
   const argValues = argNames.map(k => context[k]);
 
   try {
-    const fn = new Function(...argNames, `return (\n${normalizeCode(code)}\n)()`);
+    const fn = new Function(...argNames, programBody(code));
 
     const value: unknown = await fn(...argValues);
 

@@ -1,4 +1,4 @@
-import { runToExit } from '@kinu.run/test-utils';
+import { childEnv, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import * as v from "valibot";
 import { describe, expect, test } from "bun:test";
 import {
-  initWorkspaceSchema, openWorkspaceMainActor,
+  initWorkspaceSchema, MEMORY_PATH, openWorkspaceMainActor,
   type LLMProviderConfig, type SpendSource, type Usage,
 } from "@kinu.run/core";
 import { createWorkspace } from "@kinu.run/core/workspace-birth";
@@ -39,6 +39,62 @@ function runCli(home: string, args: string[], extraEnv: Record<string, string> =
   });
 }
 
+describe('CLI explicit endpoint options', () => {
+  const flags = ['--model', 'fixture-model', '--base-url', 'http://127.0.0.1:1/v1', '--auth', 'Bearer fixture-only'];
+  const environment = { KINU_MODEL: 'fixture-model', KINU_BASE_URL: 'http://127.0.0.1:1/v1', KINU_AUTH: 'Bearer fixture-only' };
+
+  async function createEndpointWorkspace(extraEnv: Record<string, string> = {}) {
+    const home = scratchDir('cli-endpoint-home');
+    const kinuHome = join(home, '.kinu');
+    const cwd = newProjectDir();
+
+    const run = (args: string[], env: Record<string, string> = {}) => runToExit([process.execPath, cliBin, ...args], {
+      cwd, env: childEnv({ HOME: home, KINU_HOME: kinuHome, KINU_SKIP_DAEMON: '1', ...env }),
+    });
+
+    const created = await run(['create', 'explicit-local', '--mode', 'local', '--no-alias-shim', '--purpose', 'Offline endpoint fixture', ...flags], extraEnv);
+    expect(created.exitCode, created.stderr).toBe(0);
+
+    return { created, home: kinuHome, run };
+  }
+
+  test('create diagnoses the supplied endpoint and does not persist its bearer', async () => {
+    const { created, home, run } = await createEndpointWorkspace();
+
+    expect(created.stdout).not.toContain('has no connected provider');
+    const status = await run(['status', 'explicit-local', ...flags]);
+
+    expect(status.exitCode, status.stderr).toBe(0);
+    expect(readFileSync(join(home, 'config.json'), 'utf8')).not.toContain(environment.KINU_AUTH);
+    expect(readFileSync(join(home, 'explicit-local', 'agent.db')).includes(environment.KINU_AUTH)).toBe(false);
+  });
+
+  test('status uses explicit flags without inference and matches the environment invocation', async () => {
+    const { run } = await createEndpointWorkspace();
+    const status = await run(['status', 'explicit-local', ...flags]);
+    expect(status.exitCode, status.stderr).toBe(0);
+    expect(status.stdout).toContain('Offline endpoint fixture');
+    expect(status.stdout).toContain('fixture-model');
+    const fromEnvironment = await run(['status', 'explicit-local'], environment);
+
+    expect(fromEnvironment.exitCode, fromEnvironment.stderr).toBe(0);
+    expect(fromEnvironment.stdout).toBe(status.stdout);
+  });
+
+  test('command-line endpoint options take precedence over conflicting environment values', async () => {
+    const conflicting = { KINU_MODEL: 'unknown-provider/env-model', KINU_BASE_URL: '', KINU_AUTH: '' };
+    const { created, run } = await createEndpointWorkspace(conflicting);
+
+    expect(created.stdout).toContain('fixture-model');
+    expect(created.stdout).not.toContain('has no connected provider');
+    const status = await run(['status', 'explicit-local', ...flags], conflicting);
+
+    expect(status.exitCode, status.stderr).toBe(0);
+    expect(status.stdout).toContain('fixture-model');
+    expect(status.stdout).not.toContain('env-model');
+  });
+});
+
 /** The production schema via `kinu create`, not a hand-written DDL copy. */
 async function createLocalAgent(home: string, name: string): Promise<void> {
   const dir = join(home, name);
@@ -46,13 +102,14 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
   const db = new Database(join(dir, "agent.db"));
 
   try {
-    await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM });
+    const rt = await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     // `search_nodes` and `agent_log` are actor-private: seed under the main actor `createWorkspace` issued;
     // rows under any other id are silently invisible to `kinu swarm` and `kinu events`.
     const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
-    db.run("INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text) VALUES (?, ?, ?, ?, ?, ?)",
-      ["c1", "memory/MEMORY.md", 0, 2, "h", "# Memory\n\nhello local memory\n"]);
+    // Through the agent's own memory, so the file and its index are what a session leaves.
+    await rt.memory.write(MEMORY_PATH, "# Memory\n\nhello local memory\n");
+    await rt.memory.index(MEMORY_PATH);
     db.run("INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
       actorId,
       "root",
@@ -135,6 +192,25 @@ describe("CLI inspection commands", () => {
     expect(executors.exitCode).toBe(0);
     expect(executors.stdout).not.toContain("device");
     expect(executors.stdout).toContain("native_binary");
+  });
+
+  test("kinu executors <name> workspace runs in the addressed workspace, never the invoking directory", async () => {
+    const home = scratchDir("cli-executor-exec");
+    await createLocalAgent(home, "localtest");
+    const invokedFrom = newProjectDir();
+
+    const run = (command: string) => runToExit([process.execPath, cliBin, "executors", "localtest", "workspace", command], {
+      cwd: invokedFrom, env: { ...process.env, KINU_HOME: home },
+    });
+
+    const wrote = await run("echo addressed > marker.txt && pwd");
+    expect(wrote.exitCode).toBe(0);
+    expect(wrote.stdout).not.toContain(invokedFrom);
+    expect(existsSync(join(invokedFrom, "marker.txt"))).toBe(false);
+
+    const read = await run("cat marker.txt");
+    expect(read.exitCode).toBe(0);
+    expect(read.stdout).toContain("addressed");
   });
 
   test("kinu model normalizes specs through the provider resolver", async () => {

@@ -3,7 +3,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
-import type { OutputSink, Shell } from '../types/primitives';
+import type { OutputSink, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { collectExecStream, type ExecChunk, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
 import type { MountedVfs } from '../vfs/mounts';
 import { atVfsPath } from '../vfs/errno';
@@ -73,6 +73,8 @@ export interface NimbusExecOptions {
   /** Identity the command runs as; absent is the session user. Host-injected only: {@link NimbusExecOptionsSchema}
    *  omits it so an agent cannot choose uid 0. */
   cred?: VfsCred;
+  /** A named shell, whose directory and exported variables last between the calls naming it; absent keeps nothing. */
+  name?: string;
 }
 
 type NimbusRunCodeOptions = NimbusExecOptions & {
@@ -141,6 +143,8 @@ export interface NimbusSandboxFiles {
 export interface NimbusSandboxHandle {
   ready(): Promise<void>;
   exec(command: string, options?: NimbusExecOptions): Promise<NimbusExecResult>;
+  /** A named shell's directory as its last call left it; null before its first call. */
+  shellCwd?(name: string): Promise<string | null>;
   execStream?: (command: string, options?: NimbusExecOptions) => Promise<ExecStream>;
   startProcess?: (command: string, options?: NimbusExecOptions) => Promise<NimbusStartResult>;
   runCode?: (code: string, options?: NimbusRunCodeOptions) => Promise<NimbusExecResult>;
@@ -215,7 +219,7 @@ function workspaceExecFailure(input: { doing: string; cause: unknown; command?: 
   return nimbusFailure({ doing: input.doing, cause: input.cause });
 }
 
-const NO_LISTENER_MARK = 'No process is listening';
+const NO_LISTENER_MARK = 'nothing is serving port';
 
 function workspaceNoListenerReason(port: number): string {
   return `workspace port ${port} has no server listening. Start the server with startProcess, then expose the port `
@@ -609,37 +613,83 @@ export function nimbusSession(opts: NimbusSessionOpts) {
   };
 }
 
-/** Shell over the bytes nimbusSessionFiles exposes. `cred` is fixed at construction, never per call
- *  (see {@link NimbusExecOptions.cred}); absent is the session user. */
-export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Shell {
-  return {
+/** Where a call starts: `cwd` under `base`, or `base`. */
+function startIn(base: string, cwd: string | undefined): string {
+  if (cwd === undefined) return base;
+
+  return cwd.startsWith('/') ? cwd : workspacePath(cwd, base);
+}
+
+interface SessionCall {
+  readonly run: string;
+  readonly execOptions: NimbusExecOptions;
+  readonly start: string;
+}
+
+/**
+ * How one call runs on the box: an unnamed one at its start; a named one in Nimbus's named shell, behind a `cd` when
+ * the call names a directory or the shell has none yet (a per-call directory would not outlast the call).
+ */
+async function sessionCall(
+  command: string, options: ShellExecOptions, place: { readonly home: string; readonly cred?: VfsCred }, shellCwd: ((name: string) => Promise<string | null>) | undefined,
+): Promise<SessionCall> {
+  const { home, cred } = place;
+  const { name, stdin } = options;
+  const kept = name === undefined ? null : await shellCwd?.(name) ?? null;
+  const start = startIn(kept ?? home, options.cwd);
+  // Absent option must be an absent key: the substrate reads `'cred' in options` to decide whether to inherit.
+  const execOptions: NimbusExecOptions = name === undefined ? { cwd: start } : { name };
+  const moves = name !== undefined && (kept === null || options.cwd !== undefined);
+
+  if (stdin !== undefined) execOptions.stdin = stdin;
+
+  if (cred !== undefined) execOptions.cred = cred;
+
+  // Absolute, so no `--`, which Nimbus's `cd` reads as a directory.
+  return { run: moves ? `cd ${shellQuote(start)} || exit\n${command}` : command, execOptions, start };
+}
+
+/** A box that streams stops the command on a cancel; one that cannot only stops waiting for it. */
+function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExecOptions): Promise<NimbusExecResult> {
+  const streamed = box.execStream;
+
+  if (streamed === undefined) {
+    return raceAbort(() => box.exec(call.run, call.execOptions), options.signal, 'workspace exec aborted: the command may still finish in the session');
+  }
+
+  const stopped = new AbortController();
+  let exit: Promise<unknown> = Promise.resolve();
+
+  return raceAbort(async () => {
+    const stream = await streamed(call.run, call.execOptions);
+
+    exit = stream.exit;
+
+    return heard(stream, options.output, stopped.signal);
+  }, options.signal, 'workspace exec cancelled before it started', async () => {
+    stopped.abort();
+    await Promise.allSettled([exit]);
+
+    return 'workspace exec cancelled: the command was stopped';
+  });
+}
+
+/**
+ * Shell over the bytes nimbusSessionFiles exposes, its calls starting at `home`. `cred` is fixed at construction,
+ * never per call (see {@link NimbusExecOptions.cred}); absent is the session user.
+ */
+export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly home: string; readonly cred?: VfsCred }): Shell {
+  const shellCwd = box.shellCwd?.bind(box);
+
+  const shell: Shell = {
     async exec(command, stdinOrOptions) {
-      const options = v.is(v.string(), stdinOrOptions)
-        ? { stdin: stdinOrOptions }
-        : stdinOrOptions;
+      const options: ShellExecOptions = v.is(v.string(), stdinOrOptions) ? { stdin: stdinOrOptions } : stdinOrOptions ?? {};
+      const call = await sessionCall(command, options, place, shellCwd);
+      const result = await runOnBox(box, call, options);
+      const outcome: ShellExecResult = { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, cwd: call.start };
+      const final = options.name === undefined ? null : await shellCwd?.(options.name) ?? null;
 
-      // Absent option must be an absent key: the substrate reads `'cred' in options` to decide whether to inherit.
-      const stdin = options?.stdin;
-      let execOptions: NimbusExecOptions | undefined;
-
-      if (stdin !== undefined || cred !== undefined) {
-        execOptions = {};
-
-        if (stdin !== undefined) execOptions.stdin = stdin;
-
-        if (cred !== undefined) execOptions.cred = cred;
-      }
-
-      const output = options?.output;
-      const streamed = box.execStream;
-
-      const result = await raceAbort(
-        () => (output === undefined || streamed === undefined ? box.exec(command, execOptions) : heard(streamed(command, execOptions), output)),
-        options?.signal,
-        'workspace exec aborted: the command may still finish in the session',
-      );
-
-      const outcome = { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+      if (final !== null) outcome.finalCwd = final;
       const refusal = nimbusTransportRefusal(result);
 
       if (refusal !== null) return { ...outcome, refusal };
@@ -656,17 +706,20 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
       });
     },
   };
+
+  if (shellCwd !== undefined) shell.cwd = shellCwd;
+
+  return shell;
 }
 
-async function heard(started: Promise<ExecStream>, output: OutputSink): Promise<NimbusExecResult> {
-  const stream = await started;
-
+/** A command's stream read to its end; `stop` cancels the stream, which ends the command. */
+async function heard(stream: ExecStream, output: OutputSink | undefined, stop: AbortSignal): Promise<NimbusExecResult> {
   const told = stream.output.pipeThrough(new TransformStream<ExecChunk, ExecChunk>({
     transform(chunk, forward) {
-      output.write(chunk.stream, chunk.data);
+      output?.write(chunk.stream, chunk.data);
       forward.enqueue(chunk);
     },
-  }));
+  }), { signal: stop });
 
   return collectExecStream({ output: told, exit: stream.exit });
 }

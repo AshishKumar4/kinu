@@ -5,12 +5,13 @@ import {
   BrainIcon, CaretDownIcon, CaretRightIcon, CheckCircleIcon, GitForkIcon,
   TreeStructureIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
+import type { UIMessage } from "ai";
 import type { HeadStep, NodeTranscriptView } from "@kinu.run/core";
 import { shownHeadStatus, threadLiveTail, usageTotal, type TurnLiveness } from "@kinu.run/core";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { ChatLiveTail, MessageView } from "@/components/MessageView";
 import {
-  deltaAsMessage, stepAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
+  deltaAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
 import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -182,7 +183,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
   );
 
   const messages = useMemo(
-    () => allSteps.map((step, index) => stepAsMessage(step, index, view.nodeId)),
+    () => allSteps.map((step, index): UIMessage => ({ id: `${view.nodeId}-s${String(index)}`, role: "assistant", parts: step.parts })),
     [allSteps, view.nodeId],
   );
 

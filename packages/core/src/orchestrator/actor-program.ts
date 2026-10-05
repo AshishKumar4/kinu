@@ -1,6 +1,6 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { WorkMode } from '../types/turn';
-import { readVersionedScaffoldSource } from '../scaffold/shadow';
+import { readVersionedScaffoldSource } from '../scaffold/versions';
 import { assertScaffoldActive, type ScaffoldRunControl } from '../scaffold/executor';
 import { sha256Hex } from '../safety/argument-digest';
 import { KinuError } from '../obs/error';

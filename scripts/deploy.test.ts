@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, join, resolve } from "node:path";
-import { childEnv, scratchDir } from "@kinu.run/test-utils";
+import { childEnv, runToExit, scratchDir } from "@kinu.run/test-utils";
 import { parseReleaseManifest } from "@kinu.run/core/deploy";
 import { generateReleaseSigningKey } from "../packages/core/src/http/release-signing";
 import {
@@ -990,6 +990,42 @@ describe("one deploy path", () => {
  * Cloudflare's per-file asset limit, and complete — a missing platform is a
  * platform that installs nothing.
  */
+describe('CLI distribution signing prerequisites', () => {
+  async function rejectedBuild(signing: Record<string, string> = {}) {
+    const directory = scratchDir('cli-dist-signing');
+    const out = join(directory, 'downloads');
+
+    const build = await runToExit(['bash', join(REPO_ROOT, 'scripts/build-cli-dist.sh'), out], {
+      cwd: REPO_ROOT,
+      env: { ...freshHome(directory), KINU_RELEASE_SIGNING_KEY_FILE: join(directory, 'absent.key'), ...signing },
+    });
+
+    expect(build.exitCode, build.stderr).toBe(1);
+    expect(existsSync(out), 'a refused signing configuration must leave the distribution unbuilt').toBe(false);
+
+    return build.stderr;
+  }
+
+  test('a missing key refuses before building and names the bootstrap command', async () => {
+    const error = await rejectedBuild();
+
+    expect(error).toContain('bun scripts/release-signing-key.ts');
+    expect(error).toContain('docs/SELF-HOSTING.md');
+  });
+
+  test('a missing or mismatched pin refuses before building and names both client pins', async () => {
+    const key = await generateReleaseSigningKey();
+    const other = await generateReleaseSigningKey();
+
+    for (const pin of ['', other.publicKeyHex]) {
+      const error = await rejectedBuild({ KINU_RELEASE_SIGNING_KEY: key.privateKeyPkcs8Base64, KINU_RELEASE_SIGNING_PUBLIC_KEY: pin });
+
+      expect(error).toContain('packages/core/src/http/release-signing.ts');
+      expect(error).toContain('packages/pc-agent/src/update.js');
+    }
+  });
+});
+
 describe("CLI distribution artifacts", () => {
   const PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"] as const;
   const CPYTHON = "kinu-runtime-cpython.tar.gz";
@@ -1000,21 +1036,21 @@ describe("CLI distribution artifacts", () => {
     const directory = scratchDir("cli-dist-test");
     const manifest = join(REPO_ROOT, "packages", "cli", "package.json");
     const before = { bytes: readFileSync(manifest, "utf8"), mtimeMs: statSync(manifest).mtimeMs };
-    const signingKey = await generateReleaseSigningKey();
+    const env = freshHome(directory);
+    const generated = await runToExit([process.execPath, join(REPO_ROOT, 'scripts/release-signing-key.ts')], { cwd: REPO_ROOT, env });
+    expect(generated.exitCode, generated.stderr).toBe(0);
+    const publicKey = /^RELEASE_SIGNING_PUBLIC_KEY=([0-9a-f]{64})$/m.exec(generated.stdout)?.[1];
 
-    const build = Bun.spawnSync(
-      ["bash", join(REPO_ROOT, "scripts", "build-cli-dist.sh"), directory],
-      {
-        cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe",
-        env: {
-          ...freshHome(directory),
-          KINU_RELEASE_SIGNING_KEY: signingKey.privateKeyPkcs8Base64,
-          KINU_RELEASE_SIGNING_PUBLIC_KEY: signingKey.publicKeyHex,
-        },
-      },
-    );
+    if (publicKey === undefined) throw new Error(`the key generator printed no public pin: ${generated.stdout}`);
+    const keyFile = join(directory, 'home/.config/kinu/release-signing.key');
+    expect(statSync(keyFile).mode & 0o777).toBe(0o600);
+    expect(generated.stdout).not.toContain(readFileSync(keyFile, 'utf8').trim());
 
-    expect(build.exitCode, new TextDecoder().decode(build.stderr)).toBe(0);
+    const build = await runToExit(['bash', join(REPO_ROOT, 'scripts/build-cli-dist.sh'), directory], {
+      cwd: REPO_ROOT, env: { ...env, KINU_RELEASE_SIGNING_PUBLIC_KEY: publicKey },
+    });
+
+    expect(build.exitCode, build.stderr).toBe(0);
 
     return { directory, before };
   }

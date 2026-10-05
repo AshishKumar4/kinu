@@ -3,10 +3,12 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode } from '@kinu.run/core';
+import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode, type Clock } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
+import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
 import { hostNodeSeat, nodeCodemodeTool } from '../../src/hosted-actors';
-import { HIRE_CHILD_MODEL, hireModelsBaseUrl } from './hire-shapes';
+import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_MISSION, type JobRow } from './hire-shapes';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
@@ -15,13 +17,13 @@ import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
 import { createRuntimeExecutor } from '../../src/codemode-sandbox';
 import { SLATE_STORAGE_BINDING, type SlateCallResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
-import type { AgentFacetAnswer, CraftedFromNodeObservation, OnePlaneObservation, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
+import type { AgentFacetAnswer, CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
 export * from '../../src/server';
 
 const PROBE_OWNER_ID = 'a9e1c0de5eed0000a9e1c0de5eed0000';
 
-const PROBE_RPC = ['onePlane', 'swarmNode', 'agentFor', 'craftedFromNode'];
+const PROBE_RPC = ['onePlane', 'swarmNode', 'agentFor', 'craftedFromNode', 'swarmJobNode', 'jobWindowArmed', 'outrunJobWindow', 'jobRows', 'taskEvents'];
 
 let bootId: string | null = null;
 
@@ -59,6 +61,74 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     };
   }
 
+  private readonly probeClock = handClock(Date.now());
+
+  /** Every job runner here detaches on this clock: a window fires only when the test moves it. */
+  protected override jobClock(): Clock {
+    return this.probeClock;
+  }
+
+  async jobWindowArmed(count: number): Promise<void> {
+    await this.probeClock.whenArmed(count);
+  }
+
+  /** The armed window fires: the call it bounds outruns it. */
+  async outrunJobWindow(): Promise<void> {
+    this.probeClock.tick();
+  }
+
+  async jobRows(): Promise<JobRow[]> {
+    return this.ctx.storage.sql.exec<{ actor_id: string; id: string; status: string }>(
+      'SELECT actor_id, id, status FROM background_jobs ORDER BY created_at').toArray()
+      .map((row) => ({ actorId: row.actor_id, id: row.id, status: row.status }));
+  }
+
+  /** Tasks admitted to `actorId`'s log: a hired agent's queue, which a swarm node has no drain for. */
+  async taskEvents(actorId: string): Promise<number> {
+    return this.ctx.storage.sql.exec<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ? AND variant = 'subordinate_task'`, actorId).one().n;
+  }
+
+  /** A node on the builtin loop whose brief starts a command that outruns its window; streams once the node's run ends. */
+  async swarmJobNode(): Promise<ReadableStream<Uint8Array>> {
+    return new ReadableStream({
+      start: async (controller) => {
+        try {
+          await this.runFiber('probe:swarm-job', async () => {
+            controller.enqueue(new TextEncoder().encode(JSON.stringify(await this.runJobNode())));
+            controller.close();
+          });
+        } catch (cause) {
+          controller.error(cause);
+        }
+      },
+    });
+  }
+
+  private async runJobNode(): Promise<NodeJobObservation> {
+    const seams = this.hostedSeams();
+    const identity = { nodeId: 'job-node', rootId: 'job-swarm', depth: 1 };
+    const seat = await hostNodeSeat(seams, identity);
+    const home = await seams.nodeHome(seat.actor);
+
+    const run = await runNodeAgent({
+      ...identity, parentId: null, task: JOB_MISSION,
+      rationale: 'run the job', base: 'Answer the assigned question.',
+      messages: [{ role: 'user', content: JOB_MISSION }], inherited: [],
+      context: 'fresh', mode: 'build', settle: 'best', arbitrate: null,
+      modelSpec: `openai-compat/${HIRE_CHILD_MODEL}`,
+    }, {
+      hostNode: hostNodeSeat.bind(undefined, seams),
+      model: seams.resolveModel(`openai-compat/${HIRE_CHILD_MODEL}`),
+      journal: this.headJournal, logger: diagnostics,
+      reportModelCall: (report) => { this.reportModelCall(report); },
+      provisionHome: async () => home,
+      nodeCodemode: nodeCodemodeTool.bind(undefined, seams), webSearch: seams.webSearch(),
+    });
+
+    return { actorId: seat.actor.record.actorId, status: run.report.status, summary: run.report.summary };
+  }
+
   async agentFor(name: string): Promise<string> {
     const directory = this.actorDirectoryStore();
 
@@ -85,7 +155,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     this.rt.craftStore.create({ name: 'double', description: 'doubles a number', code: 'async (n) => n * 2' });
     const seams = this.hostedSeams();
     const seat = await hostNodeSeat(seams, { nodeId: 'crafted-node', rootId: 'crafted-swarm', depth: 1 });
-    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)({}) }).eval?.execute;
+    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)({}, narrowToolSurface(undefined)) }).eval?.execute;
 
     if (execute === undefined) throw new Error('the node has no eval');
 
@@ -158,7 +228,9 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 }
 
 export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
-  private async target(workspace: string): Promise<Pick<OrchestratorAgent, 'onePlane' | 'swarmNode' | 'agentFor' | 'craftedFromNode' | 'setModel' | 'setSoul'>> {
+  private async target(workspace: string): Promise<Pick<OrchestratorAgent,
+    'onePlane' | 'swarmNode' | 'agentFor' | 'craftedFromNode' | 'setModel' | 'setSoul' | 'swarmJobNode' | 'jobWindowArmed' | 'outrunJobWindow' | 'jobRows'
+    | 'taskEvents' | 'cancelBackgroundJob'>> {
     const owner = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
     await userDO.ensureProfile(owner, 'owner@probe.local', 'Owner');
@@ -245,6 +317,44 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
 
   async craftedFromNode(workspace: string): Promise<CraftedFromNodeObservation> {
     return await (await this.target(workspace)).craftedFromNode();
+  }
+
+  /** The node's model answers from the hire fake's `job` script, keyed by the brief its conversation opened on. */
+  async swarmJobNode(workspace: string): Promise<ReadableStream<Uint8Array>> {
+    await fetch(hireControlUrl(workspace, 'reset'), { method: 'POST', body: JSON.stringify({ script: 'job' }) });
+    const root = await this.target(workspace);
+    const owner = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
+    await userDO.setCredential(owner, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'facet-probe-key',
+    });
+    const catalog = await userDO.getProfileCatalog(owner);
+    await userDO.putProfileCatalog(owner, { roles: {}, tiers: { default: { model: `openai-compat/${HIRE_CHILD_MODEL}` } } }, catalog.version);
+    await root.setModel(`openai-compat/${HIRE_CHILD_MODEL}`);
+    await root.setSoul('# Facet Probe\n\nRun the assigned swarm work.');
+
+    return await root.swarmJobNode();
+  }
+
+  async jobWindowArmed(workspace: string, count: number): Promise<void> {
+    await (await this.target(workspace)).jobWindowArmed(count);
+  }
+
+  async outrunJobWindow(workspace: string): Promise<void> {
+    await (await this.target(workspace)).outrunJobWindow();
+  }
+
+  async jobRows(workspace: string): Promise<JobRow[]> {
+    return await (await this.target(workspace)).jobRows();
+  }
+
+  async taskEvents(workspace: string, actorId: string): Promise<number> {
+    return await (await this.target(workspace)).taskEvents(actorId);
+  }
+
+  /** The workspace's own Cancel on a job card, by the job's id alone. */
+  async cancelJob(workspace: string, jobId: string): Promise<{ ok: boolean }> {
+    return await (await this.target(workspace)).cancelBackgroundJob(jobId);
   }
 
   async swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>> {

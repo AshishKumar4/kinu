@@ -7,6 +7,7 @@ import {
   RunEventRecorder, WORKSPACE_RUN_ID,
   type ActorHandle, type JsonValue, type SqlExecutor,
 } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { createTestActors, toolExecute, type TestActors } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { makeWorkspaceSchemaSql } from '../src/runtime';
@@ -54,8 +55,8 @@ function sandbox(): Sandbox {
       });
 
       // `extraProviders` is the production seam for codemode namespaces; `surface.providers` takes executors.
-      const factory = createNodeCodemodeToolFactory({ extraProviders: [createDbCodemodeProvider(store)] });
-      const tool = factory({ native: {}, craftedTools: () => [], providers: [] });
+      const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [createDbCodemodeProvider(store)] });
+      const tool = factory({ native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
 
       return toolExecute(tool)({ code });
     },

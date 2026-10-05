@@ -5,7 +5,6 @@
  * `TerminalTransitions.end` settles only when no row is owed.
  */
 import * as v from 'valibot';
-import { modelMessageSchema, type ModelMessage } from 'ai';
 
 import { parseJsonValue, JsonValueSchema, type JsonValue } from '../utils/json';
 import {
@@ -31,12 +30,6 @@ import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/remind
 /** The picklist is {@link RUN_END_REASONS}, so a stored row cannot carry an unknown word. */
 export const RunEndReasonSchema = v.picklist(RUN_END_REASONS);
 
-/** Narrowed by the AI SDK's own `modelMessageSchema`, not a hand-written copy. */
-const ModelMessagesSchema: v.GenericSchema<ModelMessage[]> = v.array(
-  v.custom<ModelMessage>((value) => modelMessageSchema.safeParse(value).success),
-);
-
-
 /** Recorded rather than re-read: a fresh actor defaults to `conversation`. */
 const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
   v.literal('conversation'), v.literal('independent_task'),
@@ -46,7 +39,7 @@ const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
 const TERMINAL_EFFECT_KEY_VERSION = 'v1';
 
 /** An empty scope is not an identity: such a sequence runs unledgered and its bodies key nothing. */
-export function keyedScope(scope: string): string | undefined {
+function keyedScope(scope: string): string | undefined {
   return scope === '' ? undefined : scope;
 }
 
@@ -64,8 +57,9 @@ export function isDefinitiveTerminalFailure(code: ErrorCode): boolean {
 
 /** The owner reads an abandoned effect in the Activity log, by what it was doing. */
 const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {
-  sleep_time: 'memory compression', auto_title: 'naming the chat', auto_gepa: 'prompt tuning',
-  shadow_trial: 'the shadow trial', improvement_lanes: 'self-improvement', turn_record: 'recording the turn',
+  sleep_time: 'memory compression', auto_title: 'naming the chat',
+  improvement_lanes: 'self-improvement', turn_record: 'recording the turn',
+  turn_lessons: 'learning from the turn\'s struggles',
 };
 
 /** Doubling from the base delay to the ceiling. */
@@ -84,13 +78,17 @@ const TERMINAL_EFFECT_NAMES = [
   // `output_continuation` are mutually exclusive.
   'turn_end_extensions', 'overflow_retry', 'output_continuation', 'task_reminder',
   'turn_record', 'event_drain', 'improvement_lanes',
+  // Detached: its reflection is a model call that waits on no reply; the row is its one owner, retried and parked.
+  'turn_lessons',
   // Detached: the review is a model call the next turn must not wait on; a replay finds its note already recorded.
   'advisor_review',
-  // Its own row: a full queue is a legitimate refusal, and the lanes' model calls must not wait on it.
-  'shadow_trial',
-  'sleep_time', 'auto_title', 'auto_gepa',
+  'sleep_time', 'auto_title',
   'parent_report',
+  // Retired (docs/EVOLUTION-REDESIGN.md §6): no turn owes them, and a row an older build wrote completes unrun.
+  'shadow_trial', 'auto_gepa',
 ] as const;
+
+const RETIRED_TERMINAL_EFFECTS: ReadonlySet<TerminalEffectName> = new Set(['shadow_trial', 'auto_gepa']);
 
 export type TerminalEffectName = (typeof TERMINAL_EFFECT_NAMES)[number];
 
@@ -130,6 +128,8 @@ export function terminalEffect<I>(spec: {
     ? { synchronous: true, run: (raw, scope) => spec.runSync(v.parse(spec.input, raw), scope) }
     : { synchronous: false, run: async (raw, scope) => await spec.run(v.parse(spec.input, raw), scope) };
 }
+
+const RETIRED_EFFECT = terminalEffect({ input: v.unknown(), runSync: () => ({ status: 'completed', detail: 'the effect is retired' }) });
 
 /** `announcementOnDisk` is the backend's durable answer; a queued turn is only RAM until it says yes. */
 export interface OwedTurnQueue {
@@ -173,21 +173,37 @@ function fixedOwedTurnEffect(
   });
 }
 
-export function overflowRetryTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+function overflowRetryTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
   return fixedOwedTurnEffect(queue, { event: OVERFLOW_RETRY_EVENT, text: OVERFLOW_RETRY_TEXT, prefix: 'overflow-retry' });
 }
 
 /** Think's loop cannot extend past a `length` finish, so the continuation is the next turn, owed durably. */
-export function outputLimitContinuationTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+function outputLimitContinuationTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
   return fixedOwedTurnEffect(queue, { event: OUTPUT_CONTINUATION_EVENT, text: OUTPUT_CONTINUATION_TEXT, prefix: 'output-continuation' });
 }
 
 /** The text is a recorded input: a replay announces what the turn was owed. */
-export function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
   return owedTurnTerminalEffect(queue, {
     input: v.object({ text: v.string() }), event: TASK_REMINDER_EVENT, text: ({ text }) => text,
     key: taskReminderIdempotencyKey,
   });
+}
+
+/** The bodies every chat backend owes alike: the loop's follow-up turns, the recording, the lessons and the drain. */
+export function chatTerminalEffects(deps: {
+  readonly chat: () => OwedTurnQueue;
+  readonly orchestrator: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+  readonly engine: Pick<EvolutionEngine, 'learnFromTurn'>;
+}): TerminalEffectTable {
+  return {
+    overflow_retry: overflowRetryTerminalEffect(deps.chat),
+    output_continuation: outputLimitContinuationTerminalEffect(deps.chat),
+    task_reminder: taskReminderTerminalEffect(deps.chat),
+    turn_record: turnRecordTerminalEffect(deps.orchestrator),
+    turn_lessons: turnLessonsTerminalEffect(deps.engine),
+    event_drain: eventDrainTerminalEffect(deps.orchestrator),
+  };
 }
 
 /**
@@ -253,7 +269,7 @@ export function branchesTerminalEffect(deps: {
 }
 
 /** The window append is idempotent on the message's identity. Continuity, mode and the evolution gate come off the row. A plan turn records nothing. */
-export function turnRecordTerminalEffect(
+function turnRecordTerminalEffect(
   orch: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn'>,
 ): TerminalEffect {
   return terminalEffect({
@@ -284,8 +300,20 @@ export function turnRecordTerminalEffect(
   });
 }
 
+/** Each part is tombstoned on the turn, so a retry neither rescores nor asks again; a refusal throws, for the ledger. */
+function turnLessonsTerminalEffect(engine: Pick<EvolutionEngine, 'learnFromTurn'>): TerminalEffect {
+  return terminalEffect({
+    input: v.object({ turn: JsonValueSchema }),
+    run: async ({ turn }) => {
+      await engine.learnFromTurn(v.parse(CompletedTurnSchema, turn));
+
+      return { status: 'completed' };
+    },
+  });
+}
+
 /** Idempotent (PENDING, unbound rows only). Rethrows: `completed` over a half-bound batch strands the assignment. */
-export function eventDrainTerminalEffect(
+function eventDrainTerminalEffect(
   orch: Pick<AgentOrchestrator, 'drainPendingEvents'>,
 ): TerminalEffect {
   return terminalEffect({
@@ -294,35 +322,6 @@ export function eventDrainTerminalEffect(
       await orch.drainPendingEvents({ rethrow: true });
 
       return { status: 'completed' };
-    },
-  });
-}
-
-/** Its own row: a full queue stays owed; `not_sampled` discharges the obligation. */
-export function shadowTrialTerminalEffect(
-  engine: Pick<EvolutionEngine, 'queueShadowTrial'>,
-): TerminalEffect {
-  return terminalEffect({
-    input: v.object({
-      turn: JsonValueSchema, trialContext: JsonValueSchema, pendingVersion: v.number(),
-    }),
-    runSync: ({ turn, trialContext, pendingVersion }, scope) => {
-      const trialScope = keyedScope(scope);
-
-      const queued = engine.queueShadowTrial(
-        v.parse(CompletedTurnSchema, turn), v.parse(ModelMessagesSchema, trialContext),
-        trialScope === undefined
-          ? { pendingVersion }
-          : { pendingVersion, id: `trial-${trialScope}` },
-      );
-
-      if (queued === 'queue_full' || queued === 'failed') {
-        return { status: 'owed', detail: `the shadow trial for this turn is ${queued}` };
-      }
-
-      return queued === 'queued'
-        ? { status: 'completed' }
-        : { status: 'completed', detail: `no trial to queue: ${queued}` };
     },
   });
 }
@@ -646,7 +645,7 @@ export class TerminalEffectLedger {
       return { kind: 'blocked', name: null, reason: `unknown effect "${rawName}"` };
     }
 
-    const effect = this.deps.effects[parsed.output];
+    const effect = RETIRED_TERMINAL_EFFECTS.has(parsed.output) ? RETIRED_EFFECT : this.deps.effects[parsed.output];
 
     if (effect === undefined) {
       return {

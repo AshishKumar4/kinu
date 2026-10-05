@@ -18,11 +18,9 @@ export interface DevboxPolicy {
   /** Quiescing also requires this much OBSERVED quiet — consecutive
    *  heartbeats that agreed — so one unlucky sample cannot stop a box. */
   readonly quietConfirmMs: number;
-  /** Minimum checkpoint gap and the sync's tick period are one number, so an early tick (a
-   *  container restart re-arms it) cannot double-commit. It bounds the loss window (D30). */
+  /** The ambient checkpoint's period and minimum gap: the loss window. */
   readonly checkpointIntervalMs: number;
-  /** Whole onStart restore budget: identity, attachment, workload resumption, durable settlement.
-   *  A raced timer bounds each step; control-listener proof precedes the SDK opening the block. */
+  /** The whole onStart restore budget; a raced timer bounds each step. */
   readonly attachBudgetMs: number;
   /** Cap on waiting for a restored server to listen; a forked process is STARTED before it binds.
    *  A cap, not a per-port timer: each port gets min(this, remaining `attachBudgetMs`). */
@@ -369,8 +367,7 @@ export function isTerminalRecovery(failure: RecoveryClass): boolean {
   return failure === 'exhausted' || failure === 'permanent';
 }
 
-/** A stale owner retries without advancing: a failure on a gone identity says nothing of its successor.
- *  Abandoned work enters at `replace`, since its only cancellation is the container's death. */
+/** A stale owner retries without advancing; abandoned work enters at `replace`. */
 export function recoveryStep(input: RecoveryInput): RecoveryDecision {
   if (!input.owned) return { action: 'inert', stage: input.stage };
   const { stage } = input;
@@ -435,93 +432,9 @@ export function quiesceStep(input: QuiesceInput): QuiesceDecision {
   return { action: confirmed ? 'quiesce' : 'hold', quietSince };
 }
 
-interface MountLine {
-  readonly source: string;
-  readonly fstype: string;
-  readonly options: string;
-}
-
-/** Fields follow fstab order; mountpoints octal-escape spaces (`\040`), so decode first. */
-export function findMount(procMounts: string, dir: string): MountLine | undefined {
-  for (const line of procMounts.split('\n')) {
-    const [source, mountpoint, fstype, options] = line.trim().split(/\s+/);
-
-    if (source === undefined || mountpoint === undefined || fstype === undefined) continue;
-
-    if (mountpoint.replace(/\\040/g, ' ') !== dir) continue;
-
-    return { source, fstype, options: options ?? '' };
-  }
-
-  return undefined;
-}
-
-/** TERM's grace before KILL, for work-directory holders and supervised processes alike: without
- *  KILL one process that ignores TERM is unstoppable, and a waiting caller's stop runs this. Long
- *  enough to flush, short enough to stop within ceilings. */
+/** TERM's grace before KILL for supervised processes: long enough to flush, short
+ *  enough to stop within ceilings. */
 export const TERM_GRACE_MS = 5_000;
-
-/** After admissions drain, release fd, mapped-file and cwd holders. PID 1 and this command
- *  ancestor chain are never signalled. */
-export function releaseWorkdirHoldersCommand(workdir: string): string {
-  const quoted = `'${workdir.replaceAll("'", `'\\''`)}'`;
-  // A binary or library mapped from the workdir holds it with no fd (D61).
-  const mapped = `' ${workdir.replaceAll("'", `'\\''`)}/'`;
-  const termWait = String(Math.ceil(TERM_GRACE_MS / 1_000));
-
-  // This shell's parent chain. `comm` can hold spaces and parentheses, so ppid is read after
-  // the last `)` of `pid (comm) state ppid …`, never by column.
-  const ancestorPids = 'mine=" $$ "; a=$$; '
-    + 'while [ -n "$a" ] && [ "$a" != 0 ] && [ "$a" != 1 ]; do '
-    + `a=$(sed 's/.*) //' /proc/$a/stat 2>/dev/null | cut -d' ' -f2); `
-    + 'if [ -n "$a" ]; then mine="$mine$a "; fi; done; ';
-
-  // Both scans use the same ownership classification.
-  const scan = '__devbox_hold() { fdh=""; cwdh=""; kin=""; '
-    + `for pid in $(ls /proc | grep -E '^[0-9]+$' | grep -v '^1$'); do `
-    + 'h=""; '
-    + `if ls -l /proc/$pid/fd 2>/dev/null | grep -q -F ${quoted} || grep -q -F ${mapped} /proc/$pid/maps 2>/dev/null; then h=fd; `
-    + `else case "$(readlink /proc/$pid/cwd 2>/dev/null)" in `
-    + `${quoted}|${quoted}/*) h=cwd;; esac; fi; `
-    + 'if [ -n "$h" ]; then '
-    + 'entry="$pid:$(cat /proc/$pid/comm 2>/dev/null)"; '
-    + 'case "$mine" in *" $pid "*) kin="$kin $entry"; h=kin;; esac; '
-    + 'if [ "$h" = fd ]; then fdh="$fdh $entry"; elif [ "$h" = cwd ]; then '
-    + 'cwdh="$cwdh $entry"; fi; fi; '
-    + 'done; }; ';
-
-  return `${ancestorPids}${scan}__devbox_hold; `
-    + 'if [ -n "$kin" ]; then echo "not signalled, this session\'s own:$kin" >&2; fi; '
-    + 'holders="$fdh$cwdh"; if [ -n "$holders" ]; then echo "signalling:$holders" >&2; '
-    + 'for name in $holders; do kill -TERM "${name%%:*}" 2>/dev/null || true; done; '
-    + `sleep ${termWait}; `
-    + 'for name in $holders; do p="${name%%:*}"; '
-    + 'if [ -d "/proc/$p" ]; then kill -KILL "$p" 2>/dev/null || true; fi; done; fi; '
-    // The final stdout line comes from a fresh `__devbox_hold` scan after signalling, not from
-    // the pre-signal lists; it is the only output a caller acts on.
-    + '__devbox_hold; still="$fdh$cwdh$kin"; '
-    + 'if [ -z "$still" ]; then echo none; else echo "$still"; fi';
-}
-
-/** Holders still present after one {@link releaseWorkdirHoldersCommand} run; `none` means a
- *  clear scan and parses to an empty list, not a failure. */
-export function parseWorkdirHolders(
-  stdout: string,
-): readonly { readonly pid: string; readonly comm: string }[] {
-  const trimmed = stdout.trim();
-
-  if (trimmed.length === 0 || trimmed === 'none') return [];
-  const holders: { readonly pid: string; readonly comm: string }[] = [];
-
-  for (const token of trimmed.split(/\s+/)) {
-    const [pid, comm] = token.split(':');
-
-    if (pid === undefined || pid.length === 0) continue;
-    holders.push({ pid, comm: comm ?? 'unknown' });
-  }
-
-  return holders;
-}
 
 /** A rejection reason is whatever was thrown, so a non-`Error` value is stringified.
  *  Shared so every failure path renders thrown values the same way. */
@@ -828,7 +741,7 @@ export function createCheckpointLane(): CheckpointLane {
 
 /** A runtime list, not a bare type union: the receiving host validates stages against it,
  *  so producer and consumer share this one list or incidents get rejected unseen. */
-export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port', 'quiesce', 'rest'] as const;
+export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port', 'quiesce', 'rest', 'recovered'] as const;
 
 export type IncidentStage = (typeof INCIDENT_STAGES)[number];
 

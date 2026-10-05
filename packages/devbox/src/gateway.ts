@@ -5,35 +5,10 @@ import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { TRUST } from './processes';
-import { CHAIN_STORE_MOUNT, STORE_PUBLISH_ROUTE, storeRouteHost } from './snapshot-chain';
-import type { Devbox } from './devbox';
 import type { GatewayBindings } from './contracts';
 import type { DevboxStore } from './storage';
 import { createResourceLane } from './lifecycle';
-import { DEVBOX_SYNC_HOST } from './sync';
-import { storeSource } from './store-gateway';
-
-export interface SyncGatewayProps {
-  readonly binding: string;
-  readonly id: string;
-}
-
-/** Native outbound routing keeps checkpoint bytes off the owner object; only this control
- *  endpoint reaches the DO. Its props are set by the DO, never by a guest request. */
-export class DevboxSyncGateway extends WorkerEntrypoint<Record<string, DurableObjectNamespace<Devbox>>, SyncGatewayProps> {
-  override fetch(request: Request): Promise<Response> {
-    return settle(Effect.gen({ self: this }, function* () {
-      if (request.method !== 'POST' || new URL(request.url).pathname !== '/v1/sync') return new Response('POST /v1/sync only', { status: 405 });
-      const namespace = this.env[this.ctx.props.binding];
-
-      if (namespace === undefined) return yield* Effect.fail(new DevboxError('configuration', `devbox namespace ${this.ctx.props.binding} is not configured`));
-      const body = yield* attempt('invalid-input', () => request.text());
-      const reply = yield* attempt('io', () => namespace.get(namespace.idFromString(this.ctx.props.id)).devboxSync(body));
-
-      return new Response(reply.body, { status: reply.status, headers: { 'content-type': 'application/json' } });
-    }));
-  }
-}
+import { STORE_MOUNT as CHAIN_STORE_MOUNT, STORE_PUBLISH_ROUTE, storeRouteHost, storeSource } from './store-gateway';
 
 export interface OutboundPolicy {
   readonly routes: Record<string, Fetcher>;
@@ -79,9 +54,8 @@ interface StorePath {
   readonly mounts: Pick<S3Mount, 'inspect'>;
 }
 
-/** `undefined`: nothing is mounted at the store path, so there is no route to rebuild and the chain's
- *  next mount registers its own. `mount-marker` is terminal (D47), so only what the container
- *  answered about the marker carries it; a failure to reach the container is retried as itself. */
+/** `undefined`: nothing is mounted, so the next mount registers its own route. `mount-marker` is
+ *  terminal (D47), so only the container's answer about the marker carries it. */
 function restoredStoreRoute(at: StorePath, source: S3MountRequest['source'], prefix: string, gateway: S3GatewayBinding): Effect.Effect<Readonly<{ hostname: string; handler: Fetcher }> | undefined, DevboxError> {
   return Effect.gen(function* () {
     const read = yield* Effect.result(attempt('io', () => at.files.readFile(SDK_STORE_MARKER)));
@@ -140,7 +114,6 @@ export interface RouteHost {
   readonly bindings: GatewayBindings;
   readonly files: Pick<Files, 'readFile'>;
   readonly prefix: string;
-  readonly owner: SyncGatewayProps;
   readonly internet: boolean;
 }
 
@@ -164,9 +137,6 @@ export class ContainerRoutes {
 
       if (source !== undefined) {
         const gateway = yield* this.#gateway();
-        const sync = this.host.bindings.DevboxSyncGateway;
-
-        if (sync === undefined) return yield* Effect.fail(new DevboxError('configuration', 'export DevboxSyncGateway from the Worker'));
 
         if (reused) {
           const mount = yield* restoredStoreRoute({ files: this.host.files, mounts: yield* this.#mounts() }, source, this.host.prefix, gateway);
@@ -174,7 +144,6 @@ export class ContainerRoutes {
           if (mount !== undefined) routes[mount.hostname] = mount.handler;
         }
 
-        routes[DEVBOX_SYNC_HOST] = sync({ props: this.host.owner });
         routes[storeRouteHost(STORE_PUBLISH_ROUTE)] = gateway({ props: {
           protocolVersion: 1, mode: 'active', routeId: STORE_PUBLISH_ROUTE, source, keyPrefix: this.host.prefix, access: 'read-write',
         } });

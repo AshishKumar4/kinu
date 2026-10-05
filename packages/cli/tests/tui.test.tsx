@@ -11,7 +11,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { ReactNode } from 'react';
 
-import { createCLIRuntime } from '@kinu.run/cli-backend';
+import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
 import { commandsForClient } from '../src/slash-commands';
 import {
   ChangelogOverlay,
@@ -25,6 +25,7 @@ import {
 } from '../src/tui/overlays';
 
 import type { AgentModelEntry } from '@kinu.run/core';
+import { readMission } from '@kinu.run/core';
 import type { KinuConfig } from '../src/config';
 import { MessageList } from '../src/tui/messages';
 
@@ -962,7 +963,7 @@ describe('CLI TUI layout', () => {
 
     try {
       expect(db.query('SELECT COUNT(*) AS messages FROM conversation_entries').get()).toEqual({ messages: 0 });
-      expect(db.query('SELECT mission FROM workspace_identity').all()).toEqual([{ mission }]);
+      expect(readMission(makeSql(db))).toBe(mission);
     } finally {
       db.close();
     }

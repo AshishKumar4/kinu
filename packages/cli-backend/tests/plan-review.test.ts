@@ -66,8 +66,10 @@ function session(steps: readonly Step[]) {
   const events: SessionEvent[] = [];
   const { model, taken } = scriptedSteps(steps);
 
+  rt.actor.config.setLearning(false);
+
   const agent = new LocalAgentSession({
-    rt, db, model, noAutoEvolve: true, onEvent: (event) => events.push(event),
+    rt, db, model, onEvent: (event) => events.push(event),
   });
 
   return { db, rt, agent, events, taken };

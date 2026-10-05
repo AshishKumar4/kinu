@@ -87,7 +87,7 @@ describe('an eviction part-way through a terminal sequence', () => {
     const survived = await fresh.effectRows('u-cut', 'a-cut');
     expect(survived.map((row) => `${row.name}=${row.status}`)).toEqual([
       'craft_usage=completed', 'event_reply=completed',
-      'turn_record=pending', 'auto_title=pending', 'auto_gepa=pending',
+      'turn_record=pending', 'auto_title=pending',
     ]);
     expect(survived.every((row) => row.answer === ANSWER)).toBe(true);
 
@@ -112,7 +112,6 @@ describe('an eviction part-way through a terminal sequence', () => {
       { key: terminalEffectKey('craft_usage', 'a-cut'), runs: 1 },
       { key: terminalEffectKey('event_reply', 'a-cut'), runs: 1 },
       { key: terminalEffectKey('auto_title', 'a-cut'), runs: 1 },
-      { key: terminalEffectKey('auto_gepa', 'a-cut'), runs: 1 },
       { key: terminalEffectKey('turn_record', 'a-cut'), runs: 1 },
     ]);
     const outputs = await fresh.outputs();
@@ -148,7 +147,6 @@ describe('an eviction part-way through a terminal sequence', () => {
       { key: terminalEffectKey('event_reply', 'a-after'), runs: 1 },
       { key: terminalEffectKey('turn_record', 'a-after'), runs: 2 },
       { key: terminalEffectKey('auto_title', 'a-after'), runs: 1 },
-      { key: terminalEffectKey('auto_gepa', 'a-after'), runs: 1 },
     ]);
     const outputs = await fresh.outputs();
     expect(outputs.map((output) => output.key).sort()).toEqual([...keys('a-after')].sort());
@@ -243,7 +241,6 @@ describe('an effect that is still owed when the isolate dies', () => {
       { key: terminalEffectKey(HELD_EFFECT, 'a-owed'), runs: 2 },
       { key: terminalEffectKey('turn_record', 'a-owed'), runs: 1 },
       { key: terminalEffectKey('auto_title', 'a-owed'), runs: 1 },
-      { key: terminalEffectKey('auto_gepa', 'a-owed'), runs: 1 },
     ]);
     const outputs = await fresh.outputs();
     expect(outputs.map((output) => output.key).sort()).toEqual([...keys('a-owed')].sort());

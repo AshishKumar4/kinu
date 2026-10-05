@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import * as config from '../src/config';
 import * as evaluation from '../src/mcts/evaluation';
 import * as scaffoldExecutor from '../src/scaffold/executor';
-import * as autoJudge from '../src/scaffold/auto-judge';
 import * as agentOrchestrator from '../src/orchestrator/agent-orchestrator';
 import type { EvaluateBranchOptions } from '../src/mcts/evaluation';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
@@ -78,7 +77,6 @@ describe('owned work carries no default elapsed deadline', () => {
 
     const hasScaffoldTimeout: HasScaffoldTimeout = false;
     expect(hasScaffoldTimeout).toBe(false);
-    expect('scaffoldTimeoutMs' in autoJudge.DEFAULT_AUTO_JUDGE_CONFIG).toBe(false);
   });
 
   test('evolution settle exposes no join bound constant or dep field', () => {

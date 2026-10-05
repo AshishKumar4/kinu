@@ -1,11 +1,19 @@
 /** Per-variant dedupe keys; the unique index on `agent_log.dedupe_key` enforces once-per-key. */
 
 import { sha256Hex, stableStringify } from '../../safety/argument-digest';
-import type { IngressDescriptor, KinuEvent, ReadableKinuEvent } from './types';
+import type { IngressDescriptor, KinuEvent, ReadableKinuEvent, SubordinateTaskPayload } from './types';
 import { decodeJsonValue } from '../../utils/json';
 
 export function subordinateReportDedupeKey(sequenceId: string): string {
   return `subordinate_report:${sequenceId}`;
+}
+
+function subordinateTaskDedupeKey(payload: SubordinateTaskPayload): string | null {
+  if (payload.creation_id !== undefined) return `subordinate-birth:${payload.creation_id}`;
+
+  if (payload.idempotency_key !== undefined) return `subordinate-signal:${payload.idempotency_key}`;
+
+  return payload.message_id === undefined ? null : `subordinate-message:${payload.message_id}`;
 }
 
 export function dedupeKeyFor(event: KinuEvent): string | null {
@@ -63,7 +71,7 @@ function dedupeReadableEvent(
       return subordinateReportDedupeKey(event.payload.sequence_id);
 
     case 'subordinate_task':
-      return event.payload.creation_id === undefined ? null : `subordinate-birth:${event.payload.creation_id}`;
+      return subordinateTaskDedupeKey(event.payload);
 
     case 'chat':
     case 'internal':

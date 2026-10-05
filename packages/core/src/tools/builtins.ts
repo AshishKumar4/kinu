@@ -12,7 +12,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ConversationRecall } from '../memory/conversation-search';
 import type { ExecutorProviderSurface } from '../execution/types';
 import {
-  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins,
+  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins, narrowToolSurface,
 } from './registry';
 import { TaskListStore } from './task-store';
 import { clampToolResult, withClampedToolResult, type ClampToolResultOptions } from './clamp';
@@ -29,10 +29,10 @@ import { TurnFileLedger } from '../vfs/file-ledger';
 import { TurnContextBudget } from '../context-budget';
 import { isMcpToolKey } from './mcp-naming';
 import { selectInjectableCraftedTools, type CraftedToolSource } from './crafted-executor';
-import { commandResult, CommandResultSchema, type CommandResult } from '../execution/exec-result';
+import { commandResultAt, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
 import type { ShellExecOptions } from '../types/primitives';
-import { readCallJob } from './call-job';
+import { readCallJob, type CallJob } from './call-job';
 import { createMemoryDispatcher, memoryToolInputSchema } from './memory-tool';
 import { createTasksDispatcher, TasksToolInputSchema, type RoleSwitch } from './tasks-tool';
 import type { WebSearchProvider } from '../web/index';
@@ -53,6 +53,11 @@ export interface CodemodeSurface {
   readonly native: ToolSet;
   /** Read per execute so a tool crafted mid-turn is callable on the next `eval`; compiled in the program. */
   readonly craftedTools: () => readonly CraftedToolSource[];
+  /**
+   * The turn's MCP and extension tools, read per execute: callable as `tools.<name>` only through `eval`, never a
+   * native definition, so the tools prefix stays the same in every workspace. The dynamic block declares them.
+   */
+  readonly external: () => ToolSet;
   readonly providers: ExecutorProviderSurface[];
 }
 
@@ -61,11 +66,12 @@ export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 
 /** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */
 export function codemodeSurface(
-  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'executionRouter'>, native: ToolSet,
+  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'executionRouter'>, native: ToolSet, external: () => ToolSet = () => ({}),
 ): CodemodeSurface {
   return {
     native,
     craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
+    external: () => withCheckedInputs(external()),
     providers: rt.executionRouter?.getProviders() ?? [],
   };
 }
@@ -73,6 +79,8 @@ export function codemodeSurface(
 export interface BuiltinToolDeps {
   workMode?: WorkMode;
   rt: AgentRuntime;
+  /** The turn's MCP and extension tools, which `eval` reaches (`CodemodeSurface.external`). */
+  external?: () => ToolSet;
   /** Ready `eval` for a confined surface (head, swarm node); actors set `codemode` on `buildActorTools` instead. */
   prebuiltCodemodeTool?: unknown;
   /** Hybrid memory search when present; null declares no semantic index (results report lexical-only). */
@@ -111,7 +119,7 @@ export interface ReportToolDeps {
 const PlanEditsInputSchema = z.object({ edits: z.array(PlanEditSchema).min(1) });
 
 /** Device nicknames are not in the enum, so it stays advisory: any string passes, and an unknown one is a device. */
-function shellInputSchema(runtimes: readonly string[]) {
+export function shellInputSchema(runtimes: readonly string[]) {
   return z.object({
     command: z.string(),
     runtime: z.string().meta({
@@ -119,7 +127,32 @@ function shellInputSchema(runtimes: readonly string[]) {
       description: 'Default: workspace. A user\'s machine goes by its nickname from the execution status, which is required when several are connected.',
     }).optional(),
     why: z.string().describe('Optional, for a runtime other than workspace: what it gives that the workspace shell lacks. Recorded with the outcome.').optional(),
+    cwd: z.string().describe('Where the command starts; relative paths are from your home, or from the named shell\'s directory.').optional(),
+    name: z.string().min(1).describe('A shell that keeps its directory and exported variables between the calls naming it.').optional(),
   });
+}
+
+/** What the call hands its runtime: absent keys stay absent, so a runtime reads presence. */
+function shellCallOptions(
+  args: { readonly cwd?: string | undefined; readonly name?: string | undefined },
+  signal: AbortSignal | undefined,
+  job: CallJob | undefined,
+): ShellExecOptions {
+  const options: ShellExecOptions = {};
+
+  if (signal) options.signal = signal;
+
+  if (job) {
+    options.job = job.id;
+    options.detached = job.detached;
+    options.output = job.output;
+  }
+
+  if (args.cwd !== undefined) options.cwd = args.cwd;
+
+  if (args.name !== undefined) options.name = args.name;
+
+  return options;
 }
 
 /** Log event names; constants so emitter and query spell them identically. Only refusals and handled failures. */
@@ -216,17 +249,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           throw refusal;
         }
 
-        const job = readCallJob(options);
-        const execOptions: ShellExecOptions = {};
-
-        if (signal) execOptions.signal = signal;
-
-        if (job) {
-          execOptions.detach = job.detached;
-          execOptions.output = job.output;
-        }
-
-        return clamp(commandResult(await shell.exec(args.command, execOptions)));
+        return clamp(commandResultAt(await shell.exec(args.command, shellCallOptions(args, signal, readCallJob(options)))));
       }
 
       // Past here is an escalation; every exit records it, including refusals.
@@ -255,8 +278,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         throw new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
       }
 
-      const job = readCallJob(options);
-      const context = { signal, device: nickname, job: job?.id, output: job?.output };
+      const context = { ...shellCallOptions(args, signal, readCallJob(options)), device: nickname, reportCwd: true };
       let result: CommandResult;
 
       try {
@@ -391,7 +413,7 @@ export function installCodemode(
   deps: BuiltinToolDeps,
 ): void {
   const { rt } = deps;
-  const built = build(codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface)));
+  const built = build(codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external));
   const clamp = { files: rt.storage, producer: 'eval' as const, images: true as const };
   surface.eval = withCheckedInput('eval', withClampedToolResult(
     built,
@@ -440,7 +462,8 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
     const buildFromSurface = v.safeParse(v.function(), deps.codemodeTool);
 
     if (buildFromSurface.success && 'eval' in surface) {
-      const entry = { value: buildFromSurface.output(surface) };
+      // `eval` reaches only the namespaces the allowed tools reach.
+      const entry = { value: buildFromSurface.output(surface, narrowToolSurface(deps.allowed)) };
 
       if (isExecutableToolEntry(entry)) surface.eval = withCheckedInput('eval', entry.value);
     }

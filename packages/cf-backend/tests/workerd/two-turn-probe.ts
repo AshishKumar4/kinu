@@ -517,6 +517,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
 export { ObservedOrchestrator as OrchestratorAgent };
 
+
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 /** `durableObjects` installs `ObservedOrchestrator` under the `OrchestratorAgent` name,
@@ -532,9 +533,9 @@ type ExerciseTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'settleState'>;
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
+  'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent'>
-  & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -761,6 +762,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await awaitSleepTimeSettled(recording, workspace, 21);
     await awaitSettled(target);
 
+    // A lost binding call is retried by its owed effect inside the window: a fixture fault, never a cost.
+    const lost = recording.of(workspace).filter((event) => event.event === 'workers_ai.direct_call_failed');
+
+    if (lost.length > 0) throw new Error(`long cost: the AI binding lost ${String(lost.length)} call(s): ${lost[0]?.cause ?? ''}`);
+
     return await target.meterEnd();
   }
 
@@ -906,7 +912,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       await awaitSleepTimeSettled(recording, workspace, { chat: 2, peer: 2, signal: 2, yield: 1, attach: 2 }[mode]);
       await awaitSettled(target);
 
-      return { http: await this.httpCalls(), task };
+      const answers = (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').map((message) => message.content);
+
+      return { http: await this.httpCalls(), task, answers };
     } finally {
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       socket?.close(1000, 'queue probe complete');
@@ -1037,9 +1045,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   private async sendChatFrame(
     target: QueueTarget, workspace: string, text: string,
-    opts: { file?: { filename: string; mediaType: string; url: string }; afterTrace?: () => Promise<void> } = {},
+    opts: { file?: { filename: string; mediaType: string; url: string } } = {},
   ): Promise<{ wire: string; landed: string | null }> {
-    const { file, afterTrace } = opts;
+    const { file } = opts;
 
     const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
       headers: { Upgrade: 'websocket' },
@@ -1092,8 +1100,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         if (Date.now() - began > 20000) throw new Error(`socket input ${text} left no durable trace`);
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
       }
-
-      await afterTrace?.();
 
       // A busy-routed frame can close before the socket echoes it, so bound the wait.
       const landedValue = await Promise.race([
@@ -1293,6 +1299,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
     });
     await target.setModel('openai-compat/probe-parity');
+    // This row measures chat and eviction, not the autonomous proposer.
+    await target.setEvolutionConfig({ learning: false });
     await target.setSoul('# Parity\n\n## Mission\n\nFollow the owner\'s exact request.');
     await this.httpReset();
     const recording = createWorkspaceRecording();
@@ -1644,62 +1652,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     } finally {
       socket.close(1000, 'agent tab probe complete');
     }
-  }
-
-  /** A first chat that lands as a steer on a live genesis turn must reach the model after resume. */
-  async firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: SocketHistory; failures: Array<{ event: string; code: string; cause: string }> }> {
-    const workspace = 'first-gen-workspace';
-    const owner = 'first-gen-owner';
-    const target: QueueTarget = await this.queueTarget(workspace);
-
-    const caller = await ownerCaller(this.env);
-    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
-    await userDO.registerWorkspace(caller, workspace, 'First Gen');
-    const claim = await target.claimOwner(owner);
-    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
-    await userDO.setCredential(caller, 'openai-compat.default', {
-      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
-    });
-    await target.setModel('openai-compat/probe-queue');
-    await target.setSoul('# First Gen\n\n## Mission\n\nAnswer briefly.');
-    await this.httpReset();
-
-    const recording = createWorkspaceRecording();
-    setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
-    // Genesis parks before its first step, so the prompt steers into it without a race.
-    await fetch('http://probe-control.invalid/wake/hold', { method: 'POST', body: JSON.stringify({ where: 'start' }) });
-    const genesis = await target.beginGenesisTurn();
-
-    if (!genesis.started) throw new Error('first-gen probe genesis did not start');
-    await fetch('http://probe-control.invalid/wake/arrived');
-
-    const { landed } = await this.sendChatFrame(target, workspace, 'FIRST-PROMPT', {
-      afterTrace: async () => { await fetch('http://probe-control.invalid/wake/release', { method: 'POST' }); },
-    });
-
-    // Wait on the call and the turn's close so the landed row and retired steer are both observable.
-    const began = Date.now();
-
-    for (;;) {
-      const calls = (await this.httpCalls()).filter((call) => call.model === 'probe-queue');
-      const inbox = await target.inboxState();
-
-      if (calls.length >= 1 && !inbox.busy) break;
-
-      if (Date.now() - began > 30000) break;
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
-    }
-
-    return {
-      http: await this.httpCalls(),
-      steers: await target.pendingSteers(),
-      inbox: await target.inboxState(),
-      landed,
-      transcript: await this.socketHistory(target, workspace),
-      failures: recording.of(workspace)
-        .filter((e) => e.code !== null)
-        .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
-    };
   }
 
   /**

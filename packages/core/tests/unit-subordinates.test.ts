@@ -394,6 +394,8 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
         directory.apply(directory.main(), [], { action: 'retire', name, reference });
         directory.apply(directory.main(), [], { action: 'release', name, reference });
       }
+
+      return { stoppedJobs: [] };
     },
   };
 
@@ -684,7 +686,7 @@ describe('team action routing', () => {
   test('assign and message refuse a task-lifetime row before trying anything', async () => {
     const h = makeTeamHarness();
     // A task agent answers its one brief and retires; more work belongs to a durable hire.
-    h.roster.create({ name: 'ask-auditor-a1b2c3', actorReference: null, birth: { creationId: 'c-auditor', seed: { name: 'ask-auditor-a1b2c3', displayName: 'Auditor', nameOrigin: 'auto', role: 'auditor', mission: 'Is the migration reversible?', lifetime: 'task', origin: 'agent' }, assignment: null }, deleteRequested: false, status: 'working', currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
+    h.roster.create({ name: 'ask-auditor-a1b2c3', actorReference: null, birth: { creationId: 'c-auditor', seed: { name: 'ask-auditor-a1b2c3', displayName: 'Auditor', nameOrigin: 'auto', role: 'auditor', mission: 'Is the migration reversible?', lifetime: 'task', origin: 'agent' }, assignment: null }, deleteRequested: false, status: 'working', currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000, dismissedAt: null, taskEventId: 'evt-1' });
     const before = h.roster.get('ask-auditor-a1b2c3');
 
     const attempts: Array<() => Promise<object>> = [
@@ -753,7 +755,11 @@ describe('team action routing', () => {
       async status() { return { lastActivity: null, recentSteps: [] }; },
       async message(name) { return observe('message', name); },
       async rename(name) { observed.push({ operation: 'rename', roster: roster.get(name) }); },
-      async dismiss(name) { observed.push({ operation: 'dismiss', roster: roster.get(name) }); },
+      async dismiss(name) {
+        observed.push({ operation: 'dismiss', roster: roster.get(name) });
+
+        return { stoppedJobs: [] };
+      },
     };
 
     const team = createTeamToolDeps({
@@ -819,7 +825,7 @@ describe('team action routing', () => {
     await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' });
 
     expect(await h.team.dismiss({ name: 'researcher-a1b2c3' }))
-      .toEqual({ ok: true, name: 'researcher-a1b2c3', historyKept: true });
+      .toEqual({ ok: true, name: 'researcher-a1b2c3', historyKept: true, stoppedJobs: [] });
     // keepHistory=true skips the orchestrator's deleteSubAgent storage wipe.
     expect(h.calls.at(-1)).toBe('dismiss:researcher-a1b2c3:true');
   });
@@ -857,6 +863,34 @@ describe('subordinate event admission', () => {
         sequence_id: 'settle:msg-1', kinu_mode: 'build',
       },
     });
+  });
+
+  // Review of 4028013fc, 2026-10-03: a hire's job wake was admitted again on each restart's re-delivery, and with its key
+  // passed as an owner's message id, so the turn opened on no row and the hire never read what woke it.
+  test("a queued signal's repeat and an owner's resent message each land once; neither stands for the other", () => {
+    const { sql, actor } = makeWorld();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
+
+    const wake = (now: number) => admitSubordinateTask(log, {
+      fromWorkspace: 'kinu-main', kind: 'message', body: 'Background shell job bgjob-1 completed.', mode: 'build',
+      idempotencyKey: 'background-job-wake:bgjob-1', now,
+    });
+
+    const owner = (now: number) => admitSubordinateTask(log, {
+      fromWorkspace: 'kinu-main', kind: 'message', body: 'Look at the logs.', mode: 'build', messageId: 'msg-1', now,
+    });
+
+    expect([wake(10).admitted, wake(11).admitted]).toEqual([true, false]);
+    expect([owner(12).admitted, owner(13).admitted]).toEqual([true, false]);
+
+    // The wake opens its own turn on its text: it carries no message id, which says the owner's row is already open.
+    const pending = log.pending({ variant: 'subordinate_task' });
+
+    const messageIds = pending.map((event) => (event.variant === 'subordinate_task'
+      && (event.payload_visibility === 'full' || event.payload_visibility === 'redact') ? event.payload.message_id ?? null : 'unreadable'));
+
+    expect(messageIds).toEqual([null, 'msg-1']);
   });
 
   test('the sender is told the event id its report will cite', () => {

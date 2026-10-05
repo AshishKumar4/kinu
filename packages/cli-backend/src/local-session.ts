@@ -7,6 +7,7 @@ import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { ConversationSearchStore, sameActorReference, testModel, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
+import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
 import type { Database } from 'bun:sqlite';
@@ -19,7 +20,7 @@ import {
 import type {
   ChatOptions,
   TurnContinuity, FiberCtx,
-  LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
+  LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding,
   BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
   ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
@@ -38,10 +39,11 @@ import { TierIdSchema,
   recoverActorTurns,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
-  type BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type TaskListStore,
+  BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type TaskListStore,
+  WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
-  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
+  BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
   EventLog,
@@ -51,34 +53,30 @@ import { TierIdSchema,
   createTimerTrigger, cancelTrigger, fireDueTriggers,
   EvolutionEngine,
   readMemoryTail,
-  agentsActionsFor,
-  facetHomeProvisioner, facetHomeReleaser, headAgentName, explorationActorKey,
+  agentsActionsFor, betaSwarms, type ProfileCatalog,
+  facetHomeProvisioner, facetHomeReleaser, actorHomeName, explorationActorKey,
   type HeadSeat, type HostedNodeSeat, type NodeIdentity, type ModelPricing,
-  type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
-  resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills,
+  resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolSetBySkills,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
-  BUILTIN_TOOL_NAMES, isMcpToolKey,
-  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial, readMission,
-  branchesTerminalEffect, turnRecordTerminalEffect,
-  eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
+  BUILTIN_TOOL_NAMES,
+  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, readMission,
+  branchesTerminalEffect, chatTerminalEffects,
   SUBORDINATE_REPORT_STATUSES,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
   terminalEffect,
   RunEndReasonSchema, WorkModeSchema,
-  shadowTrialPlan, trimTrialContext,
   type TerminalTransition, type TerminalEffectTable, type TerminalEffectFault,
   type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, buildSystemPromptSync, currentDateForPrompt,
   type ActorToolsetDeps,
-  activePromptSectionOverrides,
+  turnArtifactBodies, artifactOverrides, currentArtifacts, withToolText, type TurnOpening,
   turnReasonForMetadata, type TurnReason,
   type CountableRequest,
-  parseModelSpec, agentAffinityKey,
-  generateReported, type GenerateRequest,
+  parseModelSpec, agentAffinityKey, bindRoute, routedLlm,
   measureCompactionTrigger,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   AdvisorRecoverySnapshotSchema,
@@ -91,15 +89,15 @@ import { TierIdSchema,
   renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
+  type RuntimeFacts,
   initWorkspaceSchema, initPendingSendTables, PendingSendStore,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldGepaOptimization,
-  queueTurnShadowTrial, runQueuedShadowTrials,
-  type GepaOptimizationResult, type ScaffoldControl,
+  applyScaffoldDecision, createLlmJsonJudge, getEvolutionStatus, runOptimization,
+  type ProposerOutcome, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
-  type ShadowStatus,
+  type EvolutionStatus,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, refinementPass, requestOwnerRefinement,
   showRefinementRoute, type RefinementLaneStep,
   type RefinementDecisionInput, type RefinementDecisionResult,
@@ -120,7 +118,7 @@ import { TierIdSchema,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
   resolveAgentTurnProfile, resolveModelRoute, completeOnRoute,
-  resolveRoutingProfile, currentOperationProfile, ownProfileChoices,
+  resolveRoutingProfile, currentOperationProfile, ownProfileChoices, ancestorPins,
   type PinnedProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
@@ -140,7 +138,7 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode,
+  McpToolSurfaceCache, servedMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, type McpServedSurface, type McpSurfaceBudget,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
@@ -151,11 +149,12 @@ import { TierIdSchema,
   type ChatTurnInput, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
-  diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
+  diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
+import { OS_LEASE_PROCESS } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
 import { detectOrphanedFibers } from '@kinu.run/core';
@@ -194,7 +193,6 @@ export interface LocalOrchestrationInput {
   readonly session: () => LocalAgentSession;
   /** This host runs one task turn and exits; it never starts the cadence. */
   readonly oneShot: boolean;
-  readonly noAutoEvolve?: boolean;
 }
 
 type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
@@ -221,19 +219,11 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
   });
 
   const engine = new EvolutionEngine(input.runtime, input.history, {
-    enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
-    shadowTrialQueue: (turn, opts) => input.session().queueShadowTrial(turn, opts),
-    // A resolved gate swaps the live scaffold, so model-bound state is dropped.
-    shadowTrialRunner: () => input.session().runShadowTrials(),
   });
 
   engine.onEvent((event) => { input.session().reportEvolutionEvent(event); });
-
-  const reportRunEvent = (event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void => {
-    input.session().reportActorRunEvent(input.runtime.actor, event);
-  };
 
   return {
     engine,
@@ -257,8 +247,8 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
       refinementLane: () => input.session().runRefinementLane(),
       sinks: {
         logActivity: (event, detail) => { input.session().logActivity(event, detail); },
-        onToolCallEvent: (ev) => { reportRunEvent({ type: 'tool_call_end', ...ev }); },
-        onStepEvent: (ev) => { reportRunEvent({ type: 'step_finish', ...ev }); },
+        onToolCallEvent: (ev) => input.session().recordActorStepEvent(input.runtime.actor, { type: 'tool_call_end', ...ev }),
+        onStepEvent: (ev) => input.session().recordActorStepEvent(input.runtime.actor, { type: 'step_finish', ...ev }),
       },
     },
   };
@@ -321,7 +311,6 @@ export interface LocalAgentSessionOpts {
    */
   providerRevision?: () => number;
   onEvent: (event: SessionEvent) => void;
-  noAutoEvolve?: boolean;
   /** One task turn then exit (`kinu exec`/`kinu run`): the next prompt never grades the previous
    *  turn, and the evolution pass is left to the scheduler daemon. */
   oneShot?: boolean;
@@ -338,6 +327,9 @@ export interface LocalAgentSessionOpts {
   /** The actor as the root's {@link LocalAgentHost} bound it; absent when this session owns it. */
   hosted?: LocalHostedSession;
 }
+
+/** A job fiber's checkpoint names its job. */
+const FiberJobSchema = v.looseObject({ jobId: v.string() });
 
 const TurnTierMetadataSchema = v.object({
   profile_tier: v.optional(TierIdSchema),
@@ -374,7 +366,9 @@ export class LocalAgentSession {
   private cachedModel: LanguageModel | null = null;
   private cachedModelSpec: string | null = null;
   private tools: ToolSet = {};
-  private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
+  private readonly toolSets: Partial<Record<WorkMode, ActorToolsets>> = {};
+  /** The account's "Beta: swarms" the tool sets are built under; a turn whose catalog moved it rebuilds them. */
+  private accountSwarms = false;
   private readonly engine: EvolutionEngine;
   private readonly actorSession: ActorSession;
   private readonly chat: ChatSession;
@@ -406,6 +400,9 @@ export class LocalAgentSession {
   private readonly jobs: BackgroundJobStore;
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
+  private readonly jobHolder: JobHolder;
+  /** Every job operation in this session reaches the runner over the job's rows: the root's, or a node's or head's. */
+  private readonly jobAuthorities: WorkspaceJobAuthorities;
   private readonly clock: Clock;
   /** Durable swarm checkpoint, so an interrupted swarm resumes instead of losing its budget. */
   private readonly mctsSearchStore: MctsSearchStore;
@@ -455,6 +452,8 @@ export class LocalAgentSession {
     (path, content) => this.instructionApprovals.trustOf(path, content);
   /** Whether this turn came from the parent; gates the `report` surface. */
   private turnIsParentAssigned = false;
+  /** The learning setting where the turn opened, as cf reads it: a change applies from the next turn. */
+  private turnLearns = false;
 
   /** The running turn's author-stamped metadata: plan submission is refused to a harness turn. */
   private turnDriving: JsonObject | undefined;
@@ -471,6 +470,8 @@ export class LocalAgentSession {
   private readonly compactionExtension: KinuExtension;
 
   private extraTools: ToolSet = {};
+  /** `externalToolsFor` the running turn's profile, which `eval` reads during the turn. */
+  private turnExternalTools: ToolSet = {};
   private mcpClose: (() => Promise<void>) | null = null;
 
   /** Steer-as-Branch redirects; each runs as a budgeted head and settles into Alternate Takes. */
@@ -515,7 +516,6 @@ export class LocalAgentSession {
       eventLog: new EventLog(hubSql, this.rt.actor),
       session: () => this,
       oneShot: this.oneShot,
-      noAutoEvolve: opts.noAutoEvolve === true,
     });
 
     this.host = orchestration.deps.host;
@@ -589,6 +589,7 @@ export class LocalAgentSession {
       // No build identity for the builtin loop: a `bun`-run checkout has no build stamp.
       installedBuild: null,
       events: this.eventRecorder,
+      recording: this.eventRecorder,
       orchestration: orchestration.deps,
       advisorPort: () => this.advisorPort(),
       // The completion gate is RAM here: while it waits for its answer, the advisor records its note silently.
@@ -609,7 +610,7 @@ export class LocalAgentSession {
       transaction: (body) => writeTransaction(this.db, body),
       transport: { deliver: (event) => { opts.onEvent(event); } },
       ports: {
-        prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+        prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
         composeRequest: () => this.composeNextRequest(),
         // Only a root chat can approve a plan; a subordinate's plan is refused at admission.
         stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
@@ -692,6 +693,7 @@ export class LocalAgentSession {
     });
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channel);
+    this.jobHolder = processJobHolder(this.rt.storage, OS_LEASE_PROCESS);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
@@ -716,9 +718,13 @@ export class LocalAgentSession {
       )),
       // Arms the session's one terminal-retry timer, which sweeps due jobs before replaying owed effects.
       scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
+      holder: this.jobHolder,
     } satisfies BackgroundJobRunnerDeps);
-    // Scaffold cold-start heal (DO onStart parity): without scaffold/agent.js,
-    // engine.maybeEvolveScaffold silently disables scaffold evolution. Idempotent; tracked for end().
+    this.jobAuthorities = new WorkspaceJobAuthorities({
+      root: () => ({ kind: 'root', actorId: this.rt.actor.actorId, store: this.jobs, runner: this.jobRunner }),
+      revive: (actorId) => this.endedLoopJobs(actorId),
+    });
+    // Scaffold cold-start heal (DO onStart parity): the proposer edits scaffold/agent.js, so it must exist. Idempotent; tracked for end().
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
     // The next turn awaits this before admitting input.
@@ -979,12 +985,20 @@ export class LocalAgentSession {
     return jobResult(this.jobs, jobId);
   }
 
-  async listBackgroundJobs(limit = 20): Promise<ListedBackgroundJob[]> {
-    return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
+  /** `actor`: a `/`-joined path of names below this one, as the cloud names a hosted child; absent, this actor's own. */
+  async listBackgroundJobs(limit = 20, actor?: string): Promise<ListedBackgroundJob[]> {
+    if (actor === undefined) return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
+    const { directory } = localActorDirectory(this.rt.actor);
+    const owner = actor.split('/').reduce<ActorHandle | null>((parent, name) => (parent === null ? null : directory.resolveChild(parent, name)), this.rt.actor);
+
+    if (owner === null) return settleSync(Effect.fail(new KinuError('missing', `No agent named ${actor} in this workspace.`)));
+    const live = this.jobAuthorities.live(owner.actorId);
+
+    return listBackgroundJobs(new BackgroundJobStore(this.rt.storage.sql, owner), limit, (jobId) => live?.runner.output.tail(jobId));
   }
 
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return cancelBackgroundJob(this.jobRunner, jobId);
+    return cancelBackgroundJob((this.jobAuthorities.owning(jobId) ?? this.jobAuthorities.root()).runner, jobId);
   }
 
   getEvolutionChangelog(limit = 50): EvolutionChangelogView {
@@ -1188,22 +1202,21 @@ export class LocalAgentSession {
 
   async connectMcp(servers: Record<string, McpServerConfig>): Promise<void> {
     if (!servers || Object.keys(servers).length === 0) return;
+    const conn = await connectMcpServers(servers, (message) => { this.emitMcp(message); }, this.lifetime.signal);
 
-    const log = (message: string): void => {
-      this.emit({ type: 'background', event: 'mcp', message });
+    this.mcpServed = {
+      descriptors: conn.descriptors,
+      unavailable: [
+        ...conn.diagnostics.filter((d) => d.status === 'failed').map((d) => ({
+          server: d.server, reason: d.reason ?? 'failed to start, so its tools are missing from this turn',
+        })),
+        ...conn.refused,
+      ],
     };
-
-    const conn = await connectMcpServers(servers, log, this.lifetime.signal);
-
-    // Admission is session-scoped, so the native figure is the full surface; a narrower turn keeps more room.
-    const admission = admitMcpDescriptors(conn.descriptors, {
-      ...this.modelCatalog.window(),
-      nativeToolTokens: toolSurfaceTokens(this.tools),
-    });
 
     // Admitted tools without a readOnly annotation run under the same durable claim as natives
     // (KINU-019: unwrapped MCP effects started unclaimed and replayed after reset).
-    this.extraTools = buildMcpToolSet(admission.admitted, {
+    this.mcpSurface = new McpToolSurfaceCache(async (admitted) => buildMcpToolSet(admitted, {
       call: (d, args, options) => conn.call(d.serverName, d.name, args, options.abortSignal),
       effectClaims: {
         sql: this.rt.storage.sql,
@@ -1216,25 +1229,39 @@ export class LocalAgentSession {
         budget: this.actorSession.orchestrator.acc.context,
         producer: 'external_tool',
       },
-    });
+    }));
     this.mcpClose = () => conn.close();
-    // Unavailable or deferred servers are named in the live context so the model can explain their absence.
-    this.mcpUnavailable = [
-      ...conn.diagnostics
-        .filter((d) => d.status === 'failed')
-        .map((d) => ({
-          source: `MCP server "${d.server}"`,
-          reason: d.reason ?? 'failed to start, so its tools are missing from this turn',
-        })),
-      ...[...conn.refused, ...admission.deferred].map((d) => ({
-        source: `MCP server "${d.server}"`,
-        reason: d.reason,
-      })),
-    ];
+    await this.admitMcp(await this.modelCatalog.resolved());
+  }
 
-    for (const d of admission.deferred) {
-      log(`mcp: ${d.server} deferred: ${d.reason}`);
+  private mcpServed: McpServedSurface | null = null;
+  private mcpSurface: McpToolSurfaceCache<ToolSet> | null = null;
+  private readonly mcpDeferred = new Set<string>();
+
+  private emitMcp(message: string): void {
+    this.emit({ type: 'background', event: 'mcp', message });
+  }
+
+  /** Against the window the next request runs on, so a switched model re-admits what fits it. */
+  private async admitMcp(window: Pick<McpSurfaceBudget, 'contextWindow' | 'modelOutputLimit'>): Promise<void> {
+    const served = this.mcpServed;
+
+    if (served === null || this.mcpSurface === null) return;
+
+    this.extraTools = await this.mcpSurface.refresh(async () => served, {
+      contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit, nativeToolTokens: toolSurfaceTokens(this.tools),
+    });
+    // Unavailable or deferred servers are named in the live context so the model can explain their absence.
+    this.mcpUnavailable = this.mcpSurface.unavailable.map((u) => ({ source: `MCP server "${u.server}"`, reason: u.reason }));
+    const deferred = this.mcpSurface.deferred;
+
+    for (const d of deferred) {
+      if (!this.mcpDeferred.has(d.server)) this.emitMcp(`mcp: ${d.server} deferred: ${d.reason}`);
     }
+
+    this.mcpDeferred.clear();
+
+    for (const d of deferred) this.mcpDeferred.add(d.server);
   }
 
   private mcpUnavailable: MissingCapability[] = [];
@@ -1407,7 +1434,12 @@ export class LocalAgentSession {
     });
 
     for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
-      if (orphan.name.startsWith('bg:')) await this.jobRunner.recover(orphan.snapshot);
+      const job = v.safeParse(FiberJobSchema, orphan.snapshot);
+
+      // Its process is alive and still running it.
+      if (job.success && this.jobHolder.heldElsewhere(job.output.jobId)) continue;
+
+      if (orphan.name.startsWith('bg:')) await this.jobAuthorities.recover(orphan.snapshot);
       void this.rt.storage.sql`DELETE FROM fibers
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
     }
@@ -1419,7 +1451,8 @@ export class LocalAgentSession {
       runEvents: this.eventRecorder,
       liveRuns: () => this.chat.drivenRuns(),
       resume: jobRedriveResumeGate({
-        recoverOrphans: () => this.jobRunner.recoverOrphans(),
+        // Every actor's: a node's or head's loop died with this process too.
+        recoverOrphans: () => this.jobAuthorities.recoverOrphans(),
         inputOf: (jobId) => this.jobs.getInput(jobId),
         rootsForTask: (task) => resumableForkRoots(
           { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
@@ -1468,13 +1501,16 @@ export class LocalAgentSession {
 
   /** Re-drive an interrupted background job through core's shared resume gate over the raw surface,
    *  so it cannot detach a second job. Legacy `fork`/'think' rows map onto search. */
-  private resumeBackgroundJob(
+  private async resumeBackgroundJob(
     kind: string,
     input: { value: unknown },
     mode: WorkMode,
     signal: AbortSignal,
   ) {
-    return resumeBackgroundJob({
+    // A re-drive can come before any turn: the setting is read first, as a turn reads it.
+    this.followAccountSwarms((await this.profiles().envelope()).catalog);
+
+    return await resumeBackgroundJob({
       rawTools: (resumeMode) => {
         this.ensureModelState();
         const surface = this.toolSets[resumeMode];
@@ -1565,6 +1601,11 @@ export class LocalAgentSession {
     return this.chat.flushEvents();
   }
 
+  /** This agent is leaving: its running jobs stop without a wake. */
+  retireJobs(): Promise<JobRetirement> {
+    return this.jobRunner.retire();
+  }
+
   async settleBackgroundWork(): Promise<void> {
     const deadline = this.drainDeadline();
 
@@ -1602,10 +1643,14 @@ export class LocalAgentSession {
     return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
-  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
+  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
+    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it.
+    const artifacts = turnArtifactBodies(this.rt.storage.sql, this.rt.actor, { ...opening, main: this.rt.actor.parentActorId === null });
+    this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnIsParentAssigned = item.kind === 'programmatic';
+    this.turnLearns = this.engine.recordsTurns;
     this.turnDriving = authoredTurnMetadata(item);
 
     // A user message grades the previous turn, unless this is a one-shot process.
@@ -1619,6 +1664,12 @@ export class LocalAgentSession {
     const model = this.ensureModelState();
     this.activateToolMode(this.actorSession.workMode);
     const { execution } = await this.composeTurnRequest(resolved, model);
+    const context = execution.chat.modelContext;
+
+    await this.admitMcp(context?.contextWindow === undefined
+      ? await this.modelCatalog.resolved()
+      : { contextWindow: context.contextWindow, modelOutputLimit: context.modelOutputLimit ?? null });
+    this.turnExternalTools = this.externalToolsFor(resolved.profile);
     this.recordSystemPromptHash(execution.chat.system);
     const sessionKey = this.cacheIdentity().sessionKey;
     // `historyLength` is the durable length the measurement is bound to (orchestrator/turn-context.ts).
@@ -1628,11 +1679,21 @@ export class LocalAgentSession {
 
     if (measured.providerReportedTokens !== undefined) chat.providerReportedTokens = measured.providerReportedTokens;
 
-    return { execution: { ...execution, chat }, sessionKey, contextWindow: chat.modelContext?.contextWindow ?? 0, historyLength };
+    return { execution: { ...execution, chat }, sessionKey, contextWindow: chat.modelContext?.contextWindow ?? 0, historyLength, trial: artifacts.trial };
+  }
+
+  /** The turn's evolved text; between turns, the promoted text. */
+  private turnArtifacts: ReturnType<typeof artifactOverrides> | null = null;
+
+  private currentTurnArtifacts(): ReturnType<typeof artifactOverrides> {
+    return this.turnArtifacts ?? artifactOverrides(currentArtifacts(this.rt.storage.sql, this.rt.actor));
   }
 
   private async resolveTurnProfile(item: TurnAsked): Promise<ResolvedLocalTurn> {
     const profileInputs = await this.profiles().inputs();
+
+    this.followAccountSwarms(profileInputs.envelope.catalog);
+
     const activeRoleId = this.getActiveRoleId();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     const { available: availableSkills, activeSkills } = await this.resolveTurnSkills(item.text, roleSkills);
@@ -1646,11 +1707,11 @@ export class LocalAgentSession {
 
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
-      activeRoleId,
       workMode,
       availableTools: [
         ...candidateBuiltinNames,
-        ...Object.keys(this.extraTools),
+        // Every connected tool: what fits this turn's model is admitted after its window is known.
+        ...servedMcpDescriptors(this.mcpServed?.descriptors ?? []).map((descriptor) => descriptor.toolKey),
         // `report` is added to the toolset after this resolution; name it or a role's tool list drops it.
         ...(this.reportDeps !== null && parentAssigned ? [REPORT_TOOL] : []),
         // `submit_plan` lives outside BUILTIN_TOOLS; same reason as `report`.
@@ -1659,9 +1720,7 @@ export class LocalAgentSession {
         ...codemodeCapabilitiesFor(this.codemodeProviders(workMode)),
       ],
       activeSkills: activeSkills?.active.map((skill) => skill.name) ?? [],
-      ...ownProfileChoices(this.config, profileInputs, this.ancestors?.()),
-      // This message's tier, then the hire's pinned tier, else the role's own default (not the workspace's).
-      explicitTier: tierFromMetadata(item.metadata) ?? this.config.getAssignedTier() ?? undefined,
+      ...ownProfileChoices(this.config, profileInputs, this.ancestors?.(), { explicitTier: tierFromMetadata(item.metadata) ?? undefined }),
     });
 
     return {
@@ -1683,23 +1742,18 @@ export class LocalAgentSession {
       Object.entries(filterToolSetBySkills(this.toolSurface(profile.workMode), activeSkills)).filter(([name]) => toolAllowed(name)),
     );
 
-    const filteredExternal = Object.fromEntries(Object.entries(this.extraTools).filter(([name]) => toolAllowed(name)));
-    const turnTools = toolsInWorkMode(profile.workMode, { ...filteredBuiltins, ...filteredExternal });
+    const turnTools = withToolText(toolsInWorkMode(profile.workMode, filteredBuiltins), this.currentTurnArtifacts().tools);
 
     const availableBuiltins = Object.keys(filteredBuiltins).filter(
       (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
     );
 
-    const externalTools = Object.keys(filteredExternal).map((name) => ({
-      name,
-      source: isMcpToolKey(name) ? 'mcp' as const : 'external' as const,
-    }));
 
     const resolvedAgentActions = toolAllowed('agents') ? resolved.agentActions : [];
     const memoryTail = await readMemoryTail(this.rt.memory);
 
     // Re-statted each turn; only files fitting the model window are read, each classified by owner approval.
-    const agentsMd = discoverAgentsMd(this.cwd, this.modelCatalog.window(), this.instructionTrust);
+    const agentsMd = await discoverAgentsMd(this.cwd, this.modelCatalog.window(), this.instructionTrust);
 
     // agentStateVfs is the identity tree when it differs; a missing SOUL.md renders the default.
     const soul = await currentSoul(this.rt);
@@ -1710,14 +1764,11 @@ export class LocalAgentSession {
       agentsActions: resolvedAgentActions,
       // A session with no roster substrate never advertises the temporary rung.
       temporaryAsk: this.teamDeps?.temporary !== undefined,
-      externalTools,
       backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
       roleSection: profile.role,
       model: { id: turnSpec },
-      cwd: this.cwd,
-      currentDate: currentDateForPrompt(),
       // Read here: the builder is the byte-stable cacheable prefix and does no I/O.
-      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.rt.actor),
+      sectionOverrides: this.currentTurnArtifacts().sections,
       identity: this.promptIdentity(),
     };
 
@@ -1725,13 +1776,15 @@ export class LocalAgentSession {
 
     if (availableSkills.lines.length > 0) systemPromptOptions.availableSkills = availableSkills;
 
-    if (activeSkills) systemPromptOptions.activeSkills = activeSkills;
+    const { pinned, invoked } = splitTurnSkills(activeSkills);
+
+    if (pinned) systemPromptOptions.activeSkills = pinned;
 
     if (soul) systemPromptOptions.soulOverride = soul;
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     // Why the turn runs and the unapproved instruction files ride the dynamic-context ledger, out of the cached
     // prefix: provenance flips when a background job lands.
-    const instructions = renderUnverifiedInstructions(activeSkills ? { agentsMd, activeSkills } : { agentsMd });
+    const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
     const cache = this.cacheIdentity(turnSpec);
     // Normalized spelling: `parseModelSpec` refuses a bare tier id without a slash.
     const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, parseModelSpec(turnSpec).provider);
@@ -1792,6 +1845,7 @@ export class LocalAgentSession {
         extensions: [this.compactionExtension],
         dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools, { turn, activeSkills }),
         instructions,
+        activated: invoked ? activatedSkillsBlock(invoked) : null,
         scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       },
       profile,
@@ -1838,34 +1892,17 @@ export class LocalAgentSession {
       scopedTurn: projectJsonValue({ value: scoped }),
       recordedAt: Date.now(),
       // Frozen beside the turn so a replay records what the producing run had.
-      evolutionEnabled: this.engine.recordsTurns,
+      evolutionEnabled: this.turnLearns,
     };
 
-    const parts: Writable<TerminalTurnParts> = {};
-    parts.credited = input.credited;
+    const parts: Writable<TerminalTurnParts> = { ...chatTurnParts(input) };
     parts.branches = this.pendingBranches.map(({ id, task }) => ({ id, task }));
-
-    if (input.taskReminder !== null) parts.taskReminder = { text: input.taskReminder.text };
-
-    if (input.overflowRetry) parts.overflowRetry = true;
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
 
     // Recorded, not re-read on replay: the tool surface can change. Owed only when the actor reviews turns.
     if (this.actorSession.reviewsTurns) {
       parts.advisor = projectJsonValue({ value: this.actorSession.advisorSnapshot(scoped, input.reachableTools) });
-    }
-
-    // Decided once: the plan re-reads the pending version, so a replay would score against the wrong candidate.
-    const sampled = owesShadowTrial(facts) ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
-
-    if (sampled !== null) {
-      parts.shadowTrial = {
-        pendingVersion: sampled,
-        // Bounded here: a million-token turn exceeds a SQLite row, and a failed insert mid-sequence leaves
-        // a prefix recovery reads as the whole roster.
-        trialContext: projectJsonValue({ value: trimTrialContext([...input.trialContext]) }),
-      };
     }
 
     parts.autoTitle = { mission };
@@ -1946,11 +1983,7 @@ export class LocalAgentSession {
           };
         },
       }),
-      overflow_retry: overflowRetryTerminalEffect(() => this.chat),
-      task_reminder: taskReminderTerminalEffect(() => this.chat),
-
-      turn_record: turnRecordTerminalEffect(this.actorSession.orchestrator),
-      event_drain: eventDrainTerminalEffect(this.actorSession.orchestrator),
+      ...chatTerminalEffects({ chat: () => this.chat, orchestrator: this.actorSession.orchestrator, engine: this.engine }),
 
       // The CLI's lanes run elsewhere (evolution on its own queue); the row keeps the roster whole.
       improvement_lanes: terminalEffect({
@@ -1968,8 +2001,6 @@ export class LocalAgentSession {
           return { status: 'completed' };
         },
       }),
-
-      shadow_trial: shadowTrialTerminalEffect(this.engine),
 
       auto_title: terminalEffect({
         input: v.object({ subject: v.string() }),
@@ -2102,10 +2133,6 @@ export class LocalAgentSession {
       : { workspace: own };
   }
 
-  /**
-   * Auto-title via core's naming policy (identity/naming.ts). The plan is checked synchronously first
-   * so titled workspaces skip the model call. Only an Error from the suggestion is best-effort.
-   */
   private async applyAutoTitle(mission: string): Promise<void> {
     const state: WorkspaceTitleState = {
       // `agentName()` reads the root's slug; a child's codename comes from its roster name.
@@ -2123,19 +2150,7 @@ export class LocalAgentSession {
 
         return true;
       },
-      // Only an Error is absorbed; anything else reaches the owed row.
-      suggest: async (text) => {
-        try {
-          return await this.suggestTitle(text);
-        } catch (cause) {
-          if (!(cause instanceof Error)) throw cause;
-          diagnostics.failure('agent.auto_title_suggestion_failed', toKinuError({
-            doing: 'deriving a title from the mission', cause, otherwise: 'unavailable',
-          }));
-
-          return null;
-        }
-      },
+      suggest: (text) => this.suggestTitle(text),
     });
   }
 
@@ -2232,9 +2247,9 @@ export class LocalAgentSession {
       events: this.eventRecorder,
       sql: this.rt.storage.sql,
       history: this.stores.history,
-      config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         rt: this.rt,
+        compose: () => this.composeNextRequest(),
         profile: () => this.routingProfile([...Object.keys(this.tools), ...codemodeCapabilitiesFor(this.codemodeProviders('build'))]),
         bindModel: spec => this.modelResolver?.resolveModel(spec, this.conversation()) ?? this.defaultModel('scaffold model lane'),
         modelContext: spec => this.modelCatalog.contextFor(spec),
@@ -2318,29 +2333,44 @@ export class LocalAgentSession {
     return listRefinements(this.refinementDeps, limit);
   }
 
-  getShadowStatus(): ShadowStatus {
-    return getShadowStatus(this.rt.storage.sql, this.rt.actor);
+  getEvolutionStatus(): EvolutionStatus {
+    return getEvolutionStatus(this.rt.storage.sql, this.rt.actor);
   }
 
-  /** 'auto' acts only on a conclusive promotion gate; 'promote'/'rollback' force it. */
-  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
+  /** The owner's decision on the pending scaffold; a promote swaps the live scaffold, so model-bound state is dropped. */
+  async applyScaffoldDecision(mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
     const result = await applyScaffoldDecision(this.scaffoldControl, mode);
 
-    if (result.ok) this.invalidateModelState();
+    this.invalidateModelState();
 
     return result;
   }
 
-  /** GEPA pass over this workspace's scaffold; a strictly better winner enters shadow-eval → promote. */
-  runScaffoldGepaOptimization(opts?: {
-    maxIterations?: number; evalSize?: number; maxMetricCalls?: number;
-  }): Promise<GepaOptimizationResult> {
-    return runScaffoldGepaOptimization(this.scaffoldControl, opts);
+  /** One proposer search on `target` (default the scaffold); the edit waits like any other. */
+  runOptimization(target?: string): Promise<ProposerOutcome> {
+    return runOptimization(this.scaffoldControl, target);
   }
 
   /** `host.history`: a read-only, budgeted page, resolved per call. */
   private makeScaffoldHistory(): NonNullable<ScaffoldRunOptions['history']> {
     return createScaffoldHistory(async () => this.actorSession.history);
+  }
+
+  /** The model as the turn names it, after the same normalisation the request uses. */
+  private runtimeFacts(profile: ResolvedTurnProfile, cwd?: string): RuntimeFacts {
+    return {
+      backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
+      model: { id: this.profiles().normalizeSpec(profile.tier.model) },
+      cwd,
+      date: currentDateForPrompt(),
+    };
+  }
+
+  /** The allowed MCP tools, which only `eval` reaches: as native definitions they would split the tools prefix. */
+  private externalToolsFor(profile: Pick<ResolvedTurnProfile, 'allowedTools'>): ToolSet {
+    const allowed = new Set(profile.allowedTools);
+
+    return allowed.has('eval') ? Object.fromEntries(Object.entries(this.extraTools).filter(([name]) => allowed.has(name))) : {};
   }
 
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
@@ -2354,6 +2384,8 @@ export class LocalAgentSession {
       stores: this.stores,
       profile,
       tools,
+      externalTools: this.externalToolsFor(profile),
+      runtime: this.runtimeFacts(profile, this.cwd),
       turn: turnOf.turn,
       ...(turnOf.activeSkills !== undefined && { activeSkills: turnOf.activeSkills }),
       memoryTail,
@@ -2384,9 +2416,11 @@ export class LocalAgentSession {
     this.recordRunEvent({ type: 'budget_exhausted', ...refusal });
   }
 
-  reportActorRunEvent(actor: ActorHandle, event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void {
+  recordActorStepEvent(actor: ActorHandle, event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void {
     if (sameActorReference(actor, this.rt.actor)) {
-      this.recordRunEvent(event);
+      const runId = this.chat.currentRunId;
+
+      if (runId !== null) this.eventRecorder.emit(runId, event);
 
       return;
     }
@@ -2398,31 +2432,11 @@ export class LocalAgentSession {
       throw new KinuError('missing', 'A reporting actor has no active turn for its event.');
     }
 
-    this.recordRunEvent(event, claim.runId, hosted.stores.eventRecorder);
+    hosted.stores.eventRecorder.emit(claim.runId, event);
   }
 
   reportEvolutionEvent(event: { readonly type: string; readonly message: string }): void {
     this.emit({ type: 'evolution', event: event.type, message: event.message });
-  }
-
-  queueShadowTrial(turn: ShadowTrialTurn, plan: ShadowTrialPlan): ShadowTrialQueueOutcome {
-    return queueTurnShadowTrial(this.scaffoldControl, turn, plan);
-  }
-
-  /** A resolved gate swaps the live scaffold, so model-bound state is dropped. */
-  async runShadowTrials(): Promise<ShadowTrialDrain> {
-    const drain = await runQueuedShadowTrials(this.scaffoldControl);
-
-    if (drain.applied) {
-      this.emit({
-        type: 'evolution',
-        event: drain.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
-        message: `Shadow eval ${drain.applied}d the pending scaffold after ${drain.trials} trial(s)`,
-      });
-      this.invalidateModelState();
-    }
-
-    return drain;
   }
 
   /** The ActorHost for a session with no {@link LocalAgentHost} above it; it is the root of its tree. */
@@ -2452,7 +2466,6 @@ export class LocalAgentSession {
         // Heads and nodes run in this process, so this session is their fan-out and queue.
         session: () => this,
         oneShot: this.oneShot,
-        noAutoEvolve: !this.engine.enabled,
       }).deps,
       // A head inherits the parent's promoted program, making it a fork of this agent.
       loopFor: (bound) => ({
@@ -2501,7 +2514,7 @@ export class LocalAgentSession {
         : () => async (node) => {
           const actor = registerLocalNode(this.rt.actor, node);
 
-          return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(headAgentName(actor.storageKey));
+          return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(actorHomeName({ origin: 'swarm', storageKey: actor.storageKey }));
         },
       // Wired from the same runtime as the host, so the uid and filesystem cannot come from different workspaces.
       runtimeForNodeWorkspace: nodeRuntime === undefined
@@ -2571,7 +2584,7 @@ export class LocalAgentSession {
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {
     const swarm = this.buildAgentsSwarmDeps();
-    const base: AgentsToolDeps = { mode, swarm, budget: this.budget };
+    const base: AgentsToolDeps = { mode, swarm, swarms: this.accountSwarms, budget: this.budget };
     base.profile = () => agentsProfileContext(this.actorSession.profile, this.actorSession.profileInputs);
 
     if (this.teamDeps) base.team = this.teamDeps;
@@ -2585,51 +2598,20 @@ export class LocalAgentSession {
     return inheritedContextFromTranscript(this.stores.history.transcript(CHAT_SESSION_ID));
   }
 
-  /** The shared background wrap (core background-tools), the same the cf backend applies: shallow
-   *  clone, 30s threshold, per-call abort. */
-  private wrapToolsForBackground(raw: ToolSet): ToolSet {
-    return wrapToolsForBackground(raw, {
-      jobRunner: this.jobRunner,
-      backgroundable: BACKGROUNDABLE_TOOLS,
-      mode: () => this.actorSession.workMode,
-    });
-  }
-
-  /** One routed non-turn lane as an {@link LLM}. `system` carries core-declared prompt pairs so the
-   *  CLI issues the same request as the cloud backend. */
+  /** One routed non-turn lane as an {@link LLM}; `system` carries core-declared prompt pairs. */
   private localRouteLlm(resolution: ModelRouteResolution, system?: string): LLM {
-    const { model, providerOptions } = this.bindRouteModel(resolution);
-
-    return {
-      async *stream() { yield ""; },
-      complete: async (prompt: string): Promise<string> => {
-        const request: GenerateRequest = { model, prompt };
-
-        if (system !== undefined) request.system = system;
-
-        if (providerOptions) request.providerOptions = providerOptions;
-
-        return (await generateReported(request, {
-          spend: { source: resolution.source, report: this.modelCallSink, operations: this.modelOperations },
-          spec: resolution.model,
-        })).text.trim();
-      },
-    };
+    return routedLlm((route) => this.bindRouteModel(route), resolution, { report: this.modelCallSink, operations: this.modelOperations }, system);
   }
 
   /** A routed lane's client and effort options, shared with the head merge (policy in core's
    *  `headMergeLLM`). A resolver-less session resolves every lane to its one model. */
-  private bindRouteModel(resolution: ModelRouteResolution): HeadMergeModelBinding {
-    const model = this.modelResolver
-      ? this.modelResolver.resolveModel(resolution.model, this.conversation())
-      : this.defaultModel(`${resolution.source} model lane`);
+  private bindRouteModel(resolution: ModelRouteResolution): RouteModelBinding {
+    const { modelResolver } = this;
 
-    const providerOptions = reasoningEffortOptions(
-      resolution.reasoningEffort,
-      parseModelSpec(this.profiles().normalizeSpec(resolution.model)).provider,
-    );
-
-    return providerOptions ? { model, providerOptions } : { model };
+    return bindRoute({
+      normalize: (spec) => this.profiles().normalizeSpec(spec),
+      resolve: (spec) => (modelResolver ? modelResolver.resolveModel(spec, this.conversation()) : this.defaultModel(`${resolution.source} model lane`)),
+    }, resolution);
   }
   /** Precedence is core's `resolveRoutingProfile`, shared with the Cloudflare backend. Asked per call:
    *  a lane built at construction must not pin the account's tier from then. */
@@ -2802,13 +2784,34 @@ export class LocalAgentSession {
         this.loopOrigins.delete(binding.reference.actorId);
         this.actorWrites.delete(binding.reference.actorId);
         await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
-          const agentName = headAgentName(binding.storageKey);
+          const agentName = actorHomeName(binding);
 
           if (this.rt.cwd) cleanupFacetCwdScratch(this.rt.cwd, agentName);
           else if (this.rt.nodeHome) await facetHomeReleaser(this.rt.nodeHome())(agentName);
         });
       },
     };
+  }
+
+  /** The session's own job seams: a node's or head's output reaches the same listeners its chat's does. */
+  private loopJobPorts(): WorkspaceJobPorts {
+    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null, holder: this.jobHolder };
+  }
+
+  /** A swarm actor no loop holds: its loop ended, with this process or before it, so its rows settle and wake nobody. */
+  private endedLoopJobs(actorId: string): JobAuthority | null {
+    // Only the local root owns the actor directory; a hire's session runs no loop of its own here.
+    if (this.rt.actor.parentActorId !== null) return null;
+    const record = localActorDirectory(this.rt.actor).directory.retained(actorId);
+
+    if (record === null || record.origin !== 'swarm' || record.retiringAt !== null || record.deletedAt !== null) return null;
+
+    return endedStepLoopJobs({
+      actorId,
+      store: this.actorHost.bindStores(actorReferenceOf(record)).stores.jobs,
+      ports: this.loopJobPorts(),
+      fiber: (name, fn) => this.trackFiber(name, fn),
+    });
   }
 
   /** One run actor's seat, for a head or a swarm node; `declare` runs before the host builds it. */
@@ -2832,6 +2835,7 @@ export class LocalAgentSession {
         dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
         windowOf: (spec) => (spec === null ? this.modelCatalog.resolved() : this.modelCatalog.windowFor(spec)),
         conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
+        jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
       },
     };
   }
@@ -2858,15 +2862,19 @@ export class LocalAgentSession {
   ): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
     const inputs = await this.profiles().inputs();
 
+    const ancestors = ancestorPins(actor.handle.parentActorId, { actorId: this.rt.actor.actorId, pins: this.config }, (id) => {
+      const parent = this.actorHost.describe(id);
+
+      return parent === null ? null : { parentActorId: parent.parentActorId, pins: this.actorHost.bindStores(actorReferenceOf(parent)).handle.config };
+    });
+
     const profile = resolveAgentTurnProfile({
       ...inputs,
-      activeRoleId: actor.handle.config.getRoleSelection() ?? this.getActiveRoleId(),
+      ...ownProfileChoices(actor.handle.config, inputs, ancestors),
       workMode: input.workMode,
       availableTools: [...input.availableTools],
       // A fork explores under its parent's promoted program and that program's skills.
       activeSkills: [],
-      // The workspace pin applies to hosted-actor turns too.
-      workspaceModel: this.config.getModel(),
     });
 
     return { profile, inputs };
@@ -2879,6 +2887,7 @@ export class LocalAgentSession {
       stores: actor.stores,
       profile,
       tools,
+      runtime: this.runtimeFacts(profile),
       memoryTail: undefined,
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => [],
@@ -2888,15 +2897,24 @@ export class LocalAgentSession {
 
   private rebuildModelBoundState(model: LanguageModel): void {
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(() => model));
+    this.buildToolSets();
+  }
 
+  /** Rebuilds the tool sets when the account's catalog moved "Beta: swarms"; unbuilt, they are built with it. */
+  private followAccountSwarms(catalog: ProfileCatalog): void {
+    if (betaSwarms(catalog) === this.accountSwarms) return;
+    this.accountSwarms = !this.accountSwarms;
+
+    if (this.toolSets.build !== undefined) this.buildToolSets();
+  }
+
+  private buildToolSets(): void {
     for (const mode of ['build', 'plan'] as const) {
-      const raw = buildActorTools(this.actorToolsetDeps(
+      this.toolSets[mode] = buildActorTools(this.actorToolsetDeps(
         mode,
         // A closure: this toolset is rebuilt only on model change, but the turn changes every turn.
         () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
       ));
-
-      this.toolSets[mode] = { raw, wrapped: this.wrapToolsForBackground(raw) };
     }
 
     this.activateToolMode(this.actorSession.workMode);
@@ -2922,6 +2940,7 @@ export class LocalAgentSession {
       fileLedger: this.actorSession.orchestrator.acc.files,
       escalations: this.actorSession.orchestrator.acc.escalations,
       vectorStore: null,
+      external: () => this.turnExternalTools,
       codemode: (surface) => {
         // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
         const narrowing = narrowToolSurface(this.actorSession.profile?.allowedTools);
@@ -2931,14 +2950,13 @@ export class LocalAgentSession {
           if (narrowing.allowsTool(name)) native[name] = entry;
         }
 
-        return createNodeCodemodeToolFactory({
-          extraProviders: narrowing.narrowProviders(this.codemodeProviders(mode)),
-        })({ ...surface, native });
+        return createNodeCodemodeToolFactory({ extraProviders: this.codemodeProviders(mode), reach: narrowing })({ ...surface, native });
       },
       agents: this.agentsToolDeps(mode),
       roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),
       facts: this.factsStore,
       webSearch: this.getWebSearchProvider(),
+      jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },
     };
 
     // The toolset is rebuilt per turn, so `report` exists only on parent-driven turns.
@@ -2954,7 +2972,7 @@ export class LocalAgentSession {
   /** Raw tools with the effect-claim id pinned to the rollout, so a live run and a replay claim the
    *  same call once. Raw because backgrounding would key work to the ambient turn. */
   private rolloutTools(callScope: string): ToolSet {
-    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => callScope));
+    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => callScope)).raw;
   }
 
   private activateToolMode(mode: WorkMode): void {
@@ -2966,7 +2984,7 @@ export class LocalAgentSession {
 
     if (!surface) throw new Error(`tool surface for ${mode} mode is unavailable`);
 
-    return surface.wrapped;
+    return surface.turn;
   }
 }
 

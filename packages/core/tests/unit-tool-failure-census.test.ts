@@ -519,12 +519,6 @@ describe('each executor tool files its own failure in the right part', () => {
   // The same thrown sandbox prose is filed by what it says happened, not where.
   const sandboxFaults = [
     {
-      // 429 on the container start-rate burst after `withSandboxRetry` gave up: `unavailable`, not an `io`
-      // defect in this tool.
-      name: 'sandbox: admission control that outlived its retries is also a platform gap',
-      thrown: 'Too many containers per second', key: 'shell·unavailable', part: 'runtimeMissing' as const,
-    },
-    {
       // Pooling both under one prose string would file every container fault as never provisioned.
       name: 'sandbox: a transport fault is NOT a platform gap',
       thrown: 'the container hung up mid-write', key: 'shell·io', part: 'broke' as const,
@@ -547,11 +541,8 @@ describe('each executor tool files its own failure in the right part', () => {
   }
 
   test('sandbox: a classified not-ready refusal is asked once, never folded into the retry loop', async () => {
-    // Already classified `unavailable` though the reason can carry transient marker text; the KinuError guard
-    // keeps `withSandboxRetry` from retrying it.
     let readinessCalls = 0;
 
-    // Thrown on the `exec` call, the member `withSandboxRetry` wraps, as in production.
     const notReady = (): SandboxHandle => ({
       ...sandboxHandleLifecycle,
       exec: async () => {
@@ -587,7 +578,7 @@ describe('each executor tool files its own failure in the right part', () => {
         delete: async () => {} } };
 
     const narrow = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
     });
 
     const refusal = await narrow.tools.runCode.execute('print(1)');

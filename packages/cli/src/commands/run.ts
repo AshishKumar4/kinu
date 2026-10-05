@@ -11,7 +11,7 @@ import { chatCommand } from './chat';
 import { ensureLocalDaemonRunning } from './daemon';
 import { resolvePromptAttachments } from '../attachments';
 import { watchHeadlessConsents, watchTerminalConsents, type ConsentWatcher } from '../consent-watch';
-import { DIM, ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display';
+import { DIM, ERR, formatFailure, printFailure, printStepCut, printToolCall, printToolResult } from '../display';
 import { normalizeWebhookAuthMode, numberField, oneOfFlag, stringField } from '../options';
 import {
   executeLocalExecutor,
@@ -26,7 +26,6 @@ import {
   listLocalMcts,
   listLocalTriggers,
   listLocalTimeline,
-  markLocalBackgroundJobsCancelled,
   readLocalMemory,
   searchLocalMemory,
 } from '../local-inspection';
@@ -456,13 +455,13 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
     case 'get_state':
     case 'state':
       return decodeJsonValue({ value: {
-        ...getLocalAgentState(name),
+        ...await getLocalAgentState(name),
         sessionId: client.cliSession.id,
         tools: getLocalToolSurface(name),
         model: await client.getModelSpec(),
       } });
     case 'status':
-      return decodeJsonValue({ value: getLocalAgentState(name) });
+      return decodeJsonValue({ value: await getLocalAgentState(name) });
     case 'tools':
       return decodeJsonValue({ value: await client.describeTools() });
     case 'triggers':
@@ -472,7 +471,7 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
     case 'memory': {
       const query = stringField(cmd, 'query');
 
-      return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: readLocalMemory(name) } });
+      return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: await readLocalMemory(name) } });
     }
 
     case 'events':
@@ -513,7 +512,7 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
     case 'stop':
       client.stop();
 
-      return { interrupted: true, cancelledBackgroundJobs: await markLocalBackgroundJobsCancelled(name) };
+      return { interrupted: true };
     default:
       throw new Error('Unsupported command');
   }
@@ -523,6 +522,9 @@ function renderRunEvent(event: AgentClientEvent): void {
   switch (event.type) {
     case 'text-delta':
       process.stdout.write(event.delta);
+      break;
+    case 'step-cut':
+      printStepCut();
       break;
     case 'reasoning-delta':
       break;
@@ -602,6 +604,8 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
       ];
     }
 
+    case 'step-cut':
+      return [{ type: 'step_cut', stepIndex: event.stepIndex }];
     case 'step-finish':
       return [];
     case 'error':

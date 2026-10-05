@@ -6,7 +6,7 @@
 
 import * as v from 'valibot';
 
-export const MetricScoreSchema = v.pipe(v.number(), v.finite(), v.minValue(0), v.maxValue(1));
+const MetricScoreSchema = v.pipe(v.number(), v.finite(), v.minValue(0), v.maxValue(1));
 
 export const MetricOutcomeSchema = v.object({ score: MetricScoreSchema, feedback: v.string() });
 
@@ -93,6 +93,8 @@ export interface GepaConfig<I = unknown, E = unknown> extends GepaProgressHooks 
   trainSet?: ReadonlyArray<EvalInstance<I, E>>;
   metric: GepaMetric<I, E>;
   reflectionLm: ReflectionLM;
+  /** What the reflection LM is rewriting, as its prompt names it. Default 'scaffold source'. */
+  artifactDescription?: string;
   budget?: Partial<GepaBudget>;
   constraints?: GepaConstraints;
   /** 'pareto' samples weighted by per-instance dominance count; 'best-aggregate' is greedy. Default 'pareto'. */

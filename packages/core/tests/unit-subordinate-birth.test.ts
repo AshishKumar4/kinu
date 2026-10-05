@@ -53,19 +53,21 @@ function setup() {
     message: async () => { throw new KinuError('unsupported', 'This test does not send a second message.'); },
     rename: async () => { throw new KinuError('unsupported', 'This test does not rename actors.'); },
     dismiss: async (name, { keepHistory }, reference) => {
-      if (keepHistory) return;
+      if (keepHistory) return { stoppedJobs: [] };
       const actor = directory.apply(main, [], { action: 'retire', name, reference });
 
       if (interruptDeletion) { interruptDeletion = false; throw new KinuError('unavailable', 'Deletion acknowledgement lost.'); }
 
       if (actor.state !== 'deleted') directory.apply(main, [], { action: 'release', name, reference });
+
+      return { stoppedJobs: [] };
     },
   };
 
   const admit = (creationId: string, assignment: SubordinateBirth['assignment'] = { body: 'Read the source.', mode: 'plan' }) => roster.create({
     name: 'reader', actorReference: null, deleteRequested: false,
     birth: { creationId, seed: { name: 'reader', displayName: '', nameOrigin: 'auto', role: 'researcher', mission: 'Read the source.', lifetime: 'durable', origin: 'agent' }, assignment },
-    status: 'working', currentTask: 'Read the source.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null,
+    status: 'working', currentTask: 'Read the source.', createdAt: 100, dismissedAt: null, taskEventId: null,
   });
 
   return { database, child, childActor, directory, main, roster, runtime, admit, events,

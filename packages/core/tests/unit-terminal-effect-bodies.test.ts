@@ -4,12 +4,12 @@ import * as v from 'valibot';
 import { Database } from 'bun:sqlite';
 
 import {
-  TERMINAL_EFFECT_RETRY_BASE_MS, TerminalEffectLedger, initTerminalEffectTable, shadowTrialTerminalEffect,
-  terminalEffect, turnRecordTerminalEffect, TerminalEffectInterrupt,
+  TERMINAL_EFFECT_RETRY_BASE_MS, TerminalEffectLedger, initTerminalEffectTable,
+  terminalEffect, chatTerminalEffects, TerminalEffectInterrupt,
 } from '../src/orchestrator/terminal-effects';
 import { projectJsonValue, type CompletedTurn } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { present, testActorHandle } from '@kinu.run/test-utils';
 
 const TURN: CompletedTurn = {
   userMessage: 'name the parser', assistantResponse: 'the parser is sound',
@@ -18,40 +18,33 @@ const TURN: CompletedTurn = {
 
 const TURN_JSON = projectJsonValue({ value: TURN });
 
-describe('shadowTrialTerminalEffect', () => {
-  const effectOver = (outcome: 'queued' | 'not_sampled' | 'queue_full' | 'failed') => {
-    const asked: unknown[] = [];
+describe('a retired effect', () => {
+  // docs/EVOLUTION-REDESIGN.md §6: no turn owes `shadow_trial` or `auto_gepa`; a row an older build wrote must not stall its sequence.
+  test.each(['shadow_trial', 'auto_gepa'] as const)('an owed %s row completes unrun, and the sequence goes on', async (name) => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    initTerminalEffectTable(makeExecRaw(db));
+    let after = 0;
 
-    const effect = shadowTrialTerminalEffect({
-      queueShadowTrial: (turn, context, plan) => {
-        asked.push({ turn, context, plan });
+    const ledger = new TerminalEffectLedger({
+      sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), now: () => 1_000,
+      effects: { craft_usage: terminalEffect({ input: v.object({}), runSync: () => { after += 1;
 
-        return outcome;
-      },
+        return { status: 'completed' }; } }) },
+      transaction: (body) => db.transaction(body)(),
+      scheduleRetry: async () => {},
     });
 
-    return { effect, asked };
-  };
+    const run = await ledger.run('seq', [
+      { name, scope: 'msg-1', input: { turn: TURN_JSON, trialContext: [], pendingVersion: 7 }, lane: 'inline' },
+      { name: 'craft_usage', scope: '', input: {}, lane: 'inline' },
+    ]);
 
-  const input = { turn: TURN_JSON, trialContext: [], pendingVersion: 7 };
-
-  test('a refusal discharges the row; only a full queue or a failed insert stays owed', async () => {
-    expect(await effectOver('queued').effect.run(input, 'msg-1')).toEqual({ status: 'completed' });
-    expect(await effectOver('not_sampled').effect.run(input, 'msg-1'))
-      .toEqual({ status: 'completed', detail: 'no trial to queue: not_sampled' });
-    expect(await effectOver('queue_full').effect.run(input, 'msg-1'))
-      .toEqual({ status: 'owed', detail: 'the shadow trial for this turn is queue_full' });
-    expect(await effectOver('failed').effect.run(input, 'msg-1'))
-      .toEqual({ status: 'owed', detail: 'the shadow trial for this turn is failed' });
-  });
-
-  test('the trial is keyed on the response scope, and an unkeyed scope carries no id', async () => {
-    const keyed = effectOver('queued');
-    await keyed.effect.run(input, 'msg-1');
-    expect(keyed.asked).toMatchObject([{ plan: { pendingVersion: 7, id: 'trial-msg-1' } }]);
-    const unkeyed = effectOver('queued');
-    await unkeyed.effect.run(input, '');
-    expect(unkeyed.asked).toEqual([{ turn: TURN, context: [], plan: { pendingVersion: 7 } }]);
+    await run.reported;
+    expect(sql<{ effect_name: string; status: string }>`SELECT effect_name, status FROM terminal_effects ORDER BY effect_name`)
+      .toEqual([{ effect_name: name, status: 'completed' }, { effect_name: 'craft_usage', status: 'completed' }].sort((x, y) => x.effect_name.localeCompare(y.effect_name)));
+    expect(after).toBe(1);
+    db.close();
   });
 });
 
@@ -59,10 +52,15 @@ describe('turnRecordTerminalEffect', () => {
   const recorderOver = () => {
     const recorded: unknown[] = [];
 
-    const effect = turnRecordTerminalEffect({
-      recordedTurn: (status, turn) => ({ ...turn, status }),
-      recordTurn: (turn, continuity, options) => { recorded.push({ turn, continuity, options }); },
-    });
+    const effect = present(chatTerminalEffects({
+      chat: () => { throw new Error('the recording owes no turn'); },
+      orchestrator: {
+        recordedTurn: (status, turn) => ({ ...turn, status }),
+        recordTurn: (turn, continuity, options) => { recorded.push({ turn, continuity, options }); },
+        drainPendingEvents: () => Promise.reject(new Error('the recording drains nothing')),
+      },
+      engine: { learnFromTurn: () => Promise.reject(new Error('the recording learns nothing')) },
+    }).turn_record, 'the recording body');
 
     return { effect, recorded };
   };

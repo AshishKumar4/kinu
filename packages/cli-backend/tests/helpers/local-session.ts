@@ -14,6 +14,9 @@ import {
 import { createCLIRuntime, makeSql, makeSqlExec, type CLIRuntime, makeWorkspaceSchemaSql } from '../../src/runtime';
 import { LocalAgentSession, type LocalAgentSessionOpts, type SessionEvent } from '../../src/local-session';
 import { type LocalModelResolver } from '../../src/model-resolver';
+import {
+  createLocalProfileAuthority, resolverModelPlane, staticModelPlane, type LocalProfileModelPlane, type ProfileEnvelopeSource,
+} from '../../src/profile-authority';
 import * as v from 'valibot';
 
 export const resolverRest = {
@@ -241,12 +244,27 @@ export function transcript(rt: CLIRuntime, sessionId = CHAT_SESSION_ID): Promise
   return readTranscriptRows(rt.storage.sql, rt.actor, rt.storage.vfs, sessionId);
 }
 
+/** The catalog a fresh local workspace bootstraps, with "Beta: swarms" on: the session suites pin the tool as it
+ *  stands, as the cf harness does; a suite passes its own `profileAuthority` to turn it off. */
+export function swarmsOn(rt: CLIRuntime, plane: LocalProfileModelPlane): ProfileEnvelopeSource {
+  const bootstrap = createLocalProfileAuthority({ config: rt.actor.config, plane });
+
+  return async () => {
+    const catalog = { ...(await bootstrap.envelope()).catalog, betaSwarms: true };
+
+    return { authority: { kind: 'local' }, version: 0, digest: profileCatalogDigest(catalog), catalog };
+  };
+}
+
 export function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<LocalAgentSessionOpts>) {
   const { db, rt } = workspaceRuntime();
   const events = new AwaitedList<SessionEvent>();
 
+  rt.actor.config.setLearning(false);
+
   const session = new LocalAgentSession({
-    rt, db, model: model ?? fakeModel(answer), onEvent: (event) => events.push(event), noAutoEvolve: true,
+    rt, db, model: model ?? fakeModel(answer), onEvent: (event) => events.push(event),
+    profileAuthority: swarmsOn(rt, staticModelPlane()),
     ...extra,
   });
 
@@ -309,40 +327,47 @@ export function codemodeModel(code: string): LanguageModel {
   });
 }
 
-export function toolSequenceModel(calls: ReadonlyArray<{ name: string; input: JsonObject }>): LanguageModel {
+export function toolSequenceModel(
+  calls: ReadonlyArray<{ name: string; input: JsonObject }>,
+  seen?: (options: LanguageModelV2CallOptions) => void,
+): TestLanguageModelV2 {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let step = 0;
 
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    doStream: async () => ({
-      stream: new ReadableStream({
-        start(controller) {
-          controller.enqueue({ type: 'stream-start', warnings: [] });
-          const call = calls[step];
-          step += 1;
+    doStream: async (options) => {
+      seen?.(options);
 
-          if (call) {
-            controller.enqueue({
-              type: 'tool-call',
-              toolCallId: `call-${step}`,
-              toolName: call.name,
-              input: JSON.stringify(call.input),
-            });
-            controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
-          } else {
-            controller.enqueue({ type: 'text-start', id: '0' });
-            controller.enqueue({ type: 'text-delta', id: '0', delta: 'done' });
-            controller.enqueue({ type: 'text-end', id: '0' });
-            controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
-          }
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            const call = calls[step];
+            step += 1;
 
-          controller.close();
-        },
-      }),
-      response: { headers: {} },
-    }),
+            if (call) {
+              controller.enqueue({
+                type: 'tool-call',
+                toolCallId: `call-${step}`,
+                toolName: call.name,
+                input: JSON.stringify(call.input),
+              });
+              controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+            } else {
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: 'done' });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            }
+
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
   });
 }
 
@@ -440,9 +465,12 @@ export function setupWithResolver(
   const { db, rt } = workspaceRuntime();
   const events = new AwaitedList<SessionEvent>();
 
+  rt.actor.config.setLearning(false);
+
   const session = new LocalAgentSession({
     rt, db, model: fakeModel('fallback'), modelResolver: resolver,
-    onEvent: (event) => events.push(event), noAutoEvolve: true,
+    onEvent: (event) => events.push(event),
+    profileAuthority: swarmsOn(rt, resolverModelPlane(resolver)),
     ...extra,
   });
 
@@ -528,7 +556,7 @@ export const steerStatuses = (events: AwaitedList<SessionEvent>) => events.items
   event.type === 'broadcast' && event.event.type === 'steer_status' ? [event.event] : []);
 
 export function isDynamicBlock(text: string): boolean {
-  return /^<dynamic_context fingerprint="[0-9a-f]{16}" (?:kind="full"|kind="delta" state="[0-9a-f]{16}")>\n/.test(text)
+  return /^<dynamic_context fingerprint="[0-9a-f]{16}"(?: state="[0-9a-f]{16}")?>\n/.test(text)
     && text.endsWith('\n</dynamic_context>');
 }
 

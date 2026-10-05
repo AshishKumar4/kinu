@@ -53,7 +53,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { moduleEdges, readAliases, readWorkspace, resolveSpecifier, walkModules } from './import-graph';
+import { readAliases, readWorkspace, resolveSpecifier, walkModules } from './import-graph';
+import { moduleEdges } from './module-edges';
 import type { Alias, PackageDir } from './import-graph';
 import { enumerateRepository, isManifest, isParseable, isTypescriptConfig, readRepositoryFile } from './sources';
 import type { Node } from 'oxc-parser';

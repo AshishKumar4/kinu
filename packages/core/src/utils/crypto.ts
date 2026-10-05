@@ -36,17 +36,29 @@ export function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-export async function hmacSha256Hex(secret: string, message: string): Promise<string> {
+export async function hmacSha256Signer(secret: string): Promise<(message: string) => Promise<string>> {
+  const encoder = new TextEncoder();
+  const encode = encoder.encode.bind(encoder);
+  const sign = crypto.subtle.sign.bind(crypto.subtle);
+
   const key = await crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode(secret),
+    encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign'],
   );
 
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  return async (message) => {
+    const sig = await sign('HMAC', key, encode(message));
 
-  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+  };
+}
+
+export async function hmacSha256Hex(secret: string, message: string): Promise<string> {
+  const sign = await hmacSha256Signer(secret);
+
+  return sign(message);
 }
 

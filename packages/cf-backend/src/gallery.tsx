@@ -82,7 +82,7 @@ import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
-  BUILTIN_PROFILE_CATALOG,
+  BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
@@ -566,20 +566,30 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   return null;
 }
 
-/** Hashed with WebCrypto: the gallery has no `node:crypto`. */
-async function profileCatalogFixture(path: string): Promise<Response | null> {
+/** A saved catalog reads back. */
+let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = { catalog: BUILTIN_PROFILE_CATALOG, version: 0 };
+
+/** Hashed with WebCrypto: the gallery has no `node:crypto`. A stale write is refused. */
+async function profileCatalogFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
   if (path !== "/api/user/profile-catalog") return null;
 
-  const bytes = new TextEncoder().encode(profileCatalogCanonical(BUILTIN_PROFILE_CATALOG));
+  if (method === "PUT") {
+    const put = v.parse(v.object({ catalog: v.unknown(), expectedVersion: v.number() }), JSON.parse(v.parse(v.string(), body)));
+
+    if (put.expectedVersion !== galleryCatalog.version) return fixtureJson({ error: "The catalog changed since you read it." }, 409);
+    galleryCatalog = { catalog: validateProfileCatalog({ value: put.catalog }), version: galleryCatalog.version + 1 };
+  }
+
+  const bytes = new TextEncoder().encode(profileCatalogCanonical(galleryCatalog.catalog));
 
   const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
     .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
   return fixtureJson({
     authority: { kind: "account", accountId: "gallery" },
-    version: 0,
+    version: galleryCatalog.version,
     digest,
-    catalog: BUILTIN_PROFILE_CATALOG,
+    catalog: galleryCatalog.catalog,
   });
 }
 
@@ -2388,28 +2398,22 @@ const TRANSCRIPTS = {
     spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5, wallClockMs: 14_200,
     usage: { input: 8_420, output: 610 },
     steps: { status: "end", items: [
-      {
-        text: "Reading the handler and both of its callers before changing anything.",
-        reasoning: "The 500 is a dereference of `rules[kind]` where kind is null, so the fix has to sit where the dereference is — not where the value was created. That means I need every reader, not just the one in the stack trace.",
-        toolCalls: [
-          { name: "file", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "export function applyCoupon(cart: Cart, coupon: Coupon) {\n  const rule = rules[coupon.kind];\n  return rule.apply(cart, coupon);\n}" },
-          { name: "grep", input: { pattern: "rules\\[", path: "packages/checkout" }, output: "apply-coupon.ts:14\napply-coupon.ts:31\nvalidate.ts:9" },
-        ],
-      },
-      {
-        text: "Three readers, one shape. `validate.ts:9` already guards; the two in `apply-coupon.ts` do not.",
-        toolCalls: [
-          { name: "file", input: { action: "read", path: "packages/checkout/src/validate.ts" }, output: "const rule = rules[coupon.kind ?? inferKind(coupon)];" },
-        ],
-      },
-      {
-        text: "Guarding at the reader, and proving it with the suite.",
-        reasoning: "Guarding at the edge would still let a null through the cart serializer, which reads the same table on the lazy path.",
-        toolCalls: [
-          { name: "file", input: { action: "edit", path: "packages/checkout/src/apply-coupon.ts" }, output: "2 hunks applied" },
-          { name: "shell", input: { command: "bun test packages/checkout" }, output: "42 pass\n0 fail\nRan 42 tests across 6 files. [1.21s]" },
-        ],
-      },
+      { parts: [
+        { type: "reasoning", text: "The 500 is a dereference of `rules[kind]` where kind is null, so the fix has to sit where the dereference is — not where the value was created. That means I need every reader, not just the one in the stack trace.", state: "done" },
+        { type: "text", text: "Reading the handler and both of its callers before changing anything.", state: "done" },
+        { type: "tool-file", toolCallId: "gallery-call-1", state: "output-available", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "export function applyCoupon(cart: Cart, coupon: Coupon) {\n  const rule = rules[coupon.kind];\n  return rule.apply(cart, coupon);\n}" },
+        { type: "tool-grep", toolCallId: "gallery-call-2", state: "output-available", input: { pattern: "rules\\[", path: "packages/checkout" }, output: "apply-coupon.ts:14\napply-coupon.ts:31\nvalidate.ts:9" },
+      ] },
+      { parts: [
+        { type: "text", text: "Three readers, one shape. `validate.ts:9` already guards; the two in `apply-coupon.ts` do not.", state: "done" },
+        { type: "tool-file", toolCallId: "gallery-call-3", state: "output-available", input: { action: "read", path: "packages/checkout/src/validate.ts" }, output: "const rule = rules[coupon.kind ?? inferKind(coupon)];" },
+      ] },
+      { parts: [
+        { type: "reasoning", text: "Guarding at the edge would still let a null through the cart serializer, which reads the same table on the lazy path.", state: "done" },
+        { type: "text", text: "Guarding at the reader, and proving it with the suite.", state: "done" },
+        { type: "tool-file", toolCallId: "gallery-call-4", state: "output-available", input: { action: "edit", path: "packages/checkout/src/apply-coupon.ts" }, output: "2 hunks applied" },
+        { type: "tool-shell", toolCallId: "gallery-call-5", state: "output-available", input: { command: "bun test packages/checkout" }, output: "42 pass\n0 fail\nRan 42 tests across 6 files. [1.21s]" },
+      ] },
     ] },
     stepCount: 3,
     toolCount: 5,
@@ -2431,11 +2435,11 @@ const TRANSCRIPTS = {
     rationale: "the lazy path", status: "running",
     spawnedAt: NOW - 42e3, lastStepAt: NOW - 9e3, wallClockMs: 0,
     usage: { input: 5_110 },
-    steps: { status: "end", items: [{
-      text: "Opening the serializer.",
-      reasoning: "If this path already optional-chains, the guard belongs only in apply-coupon.",
-      toolCalls: [{ name: "file", input: { action: "read", path: "packages/cart/src/serializer.ts" }, output: "const rule = rules[coupon.kind]?.serialize;" }],
-    }] },
+    steps: { status: "end", items: [{ parts: [
+                                      { type: "reasoning", text: "If this path already optional-chains, the guard belongs only in apply-coupon.", state: "done" },
+                                      { type: "text", text: "Opening the serializer.", state: "done" },
+                                      { type: "tool-file", toolCallId: "gallery-call-6", state: "output-available", input: { action: "read", path: "packages/cart/src/serializer.ts" }, output: "const rule = rules[coupon.kind]?.serialize;" },
+                                    ] }] },
     stepCount: 1,
     toolCount: 1,
     answer: null, decisions: [], errorMessage: null,
@@ -2481,17 +2485,14 @@ const TRANSCRIPTS = {
     spawnedAt: NOW - 9e5, lastStepAt: NOW - 84e4, wallClockMs: 61_400,
     usage: { input: 5_140, output: 380 },
     steps: { status: "end", items: [
-      {
-        text: "Checking whether Tuesday's migration reached staging at all.",
-        reasoning: "If staging never ran it, the null `kind` column there proves nothing about production and the whole comparison is off.",
-        toolCalls: [
-          { name: "shell", input: { command: "./scripts/migrations.sh status --env staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
-        ],
-      },
-      {
-        text: "It did run, on the 11th. The snapshot is comparable after all.",
-        toolCalls: [],
-      },
+      { parts: [
+        { type: "reasoning", text: "If staging never ran it, the null `kind` column there proves nothing about production and the whole comparison is off.", state: "done" },
+        { type: "text", text: "Checking whether Tuesday's migration reached staging at all.", state: "done" },
+        { type: "tool-shell", toolCallId: "gallery-call-7", state: "output-available", input: { command: "./scripts/migrations.sh status --env staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
+      ] },
+      { parts: [
+        { type: "text", text: "It did run, on the 11th. The snapshot is comparable after all.", state: "done" },
+      ] },
     ] },
     stepCount: 2,
     toolCount: 1,
@@ -2510,31 +2511,18 @@ const TRANSCRIPTS = {
     spawnedAt: NOW - 40e4, lastStepAt: NOW - 30e4, wallClockMs: 118_000,
     usage: { input: 9_180, output: 720 },
     steps: { status: "end", items: [
-      {
-        text: "Listing the readers before I judge any of them.",
-        reasoning: "The task names one file but the serializer re-exports from two others, so grepping the package is cheaper than reading it and less likely to miss a caller.",
-        toolCalls: [
-          {
-            name: "shell",
-            input: { command: "rg -n 'coupon\\.kind|rules\\[' packages/cart/src" },
-            output: "src/serializer.ts:88:  const rule = rules[coupon.kind];\nsrc/serializer.ts:141:  if (coupon.kind === 'fixed') {\nsrc/totals.ts:52:  const pct = rules[coupon.kind].percent;",
-          },
-        ],
-      },
-      {
-        text: "Three reads, two of them unguarded. `serializer.ts:141` compares rather than indexes, so a null kind takes the else branch and is fine.",
-        toolCalls: [
-          {
-            name: "read",
-            input: { path: "packages/cart/src/serializer.ts", offset: 80, limit: 20 },
-            output: "  const rule = rules[coupon.kind];\n  return { ...line, discount: rule.apply(line.subtotal) };",
-          },
-        ],
-      },
-      {
-        text: "Confirmed. `rule` is undefined for a null kind and `.apply` throws before anything is returned to the caller.",
-        toolCalls: [],
-      },
+      { parts: [
+        { type: "reasoning", text: "The task names one file but the serializer re-exports from two others, so grepping the package is cheaper than reading it and less likely to miss a caller.", state: "done" },
+        { type: "text", text: "Listing the readers before I judge any of them.", state: "done" },
+        { type: "tool-shell", toolCallId: "gallery-call-8", state: "output-available", input: { command: "rg -n 'coupon\\.kind|rules\\[' packages/cart/src" }, output: "src/serializer.ts:88:  const rule = rules[coupon.kind];\nsrc/serializer.ts:141:  if (coupon.kind === 'fixed') {\nsrc/totals.ts:52:  const pct = rules[coupon.kind].percent;" },
+      ] },
+      { parts: [
+        { type: "text", text: "Three reads, two of them unguarded. `serializer.ts:141` compares rather than indexes, so a null kind takes the else branch and is fine.", state: "done" },
+        { type: "tool-read", toolCallId: "gallery-call-9", state: "output-available", input: { path: "packages/cart/src/serializer.ts", offset: 80, limit: 20 }, output: "  const rule = rules[coupon.kind];\n  return { ...line, discount: rule.apply(line.subtotal) };" },
+      ] },
+      { parts: [
+        { type: "text", text: "Confirmed. `rule` is undefined for a null kind and `.apply` throws before anything is returned to the caller.", state: "done" },
+      ] },
     ] },
     stepCount: 3,
     toolCount: 2,
@@ -2553,24 +2541,15 @@ const TRANSCRIPTS = {
     spawnedAt: NOW - 40e4, lastStepAt: NOW - 4e3, wallClockMs: 0,
     usage: { input: 4_260, output: 190 },
     steps: { status: "end", items: [
-      {
-        text: "Finding the refactor first — the guard may have moved rather than gone.",
-        reasoning: "A read that lost its guard and a read that never had one need different fixes, and only the history tells them apart.",
-        toolCalls: [
-          {
-            name: "shell",
-            input: { command: "git log --oneline -S'rules[' -- packages/pricing/src" },
-            output: "8c1f20a1 refactor(pricing): one rate table, read through a resolver",
-          },
-        ],
-      },
-      {
-        // No output: the chat draws this call as still running.
-        text: "Reading that commit.",
-        toolCalls: [
-          { name: "shell", input: { command: "git show 8c1f20a1 --stat" } },
-        ],
-      },
+      { parts: [
+        { type: "reasoning", text: "A read that lost its guard and a read that never had one need different fixes, and only the history tells them apart.", state: "done" },
+        { type: "text", text: "Finding the refactor first — the guard may have moved rather than gone.", state: "done" },
+        { type: "tool-shell", toolCallId: "gallery-call-10", state: "output-available", input: { command: "git log --oneline -S'rules[' -- packages/pricing/src" }, output: "8c1f20a1 refactor(pricing): one rate table, read through a resolver" },
+      ] },
+      { parts: [
+        { type: "text", text: "Reading that commit.", state: "done" },
+        { type: "tool-shell", toolCallId: "gallery-call-11", state: "input-available", input: { command: "git show 8c1f20a1 --stat" } },
+      ] },
     ] },
     stepCount: 2,
     toolCount: 2,
@@ -3623,7 +3602,7 @@ function QualityRetryFrame() {
   return (
     <div data-quality-retry className="p-bg p-text min-h-screen p-6">
       <div className="mx-auto max-w-[760px]">
-        <QualityView rpc={rpc} />
+        <QualityView rpc={rpc} moved={0} />
       </div>
     </div>
   );
@@ -6421,6 +6400,33 @@ const snapshotRaceRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promi
   return value === undefined ? workspacePageRpc<T>(method, args) : rpcResult(value).json<T>();
 };
 
+let qualityLiveRatings = 0;
+
+/** The Quality tab as a rating lands. */
+function QualityLiveFrame() {
+  const state = useKinu(WORKSPACE_PAGE_NAME);
+
+  const rpc = useMemo<Rpc>(() => async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method !== "getQuality") return workspacePageRpc<T>(method, args);
+    const today = QUALITY_DAYS.at(-1);
+
+    return rpcResult(today === undefined ? QUALITY_DAYS : [
+      ...QUALITY_DAYS.slice(0, -1),
+      { ...today, rated: today.rated + qualityLiveRatings, turns: today.turns + qualityLiveRatings },
+    ]).json<T>();
+  }, []);
+
+  return (
+    <div data-quality-live className="p-bg p-text min-h-screen p-6">
+      <button data-quality-rate onClick={() => {
+        qualityLiveRatings += 1;
+        galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getQuality"] }));
+      }}>Rate a turn</button>
+      <div className="mx-auto max-w-[760px]"><QualityView rpc={rpc} moved={state.readMoves.getQuality ?? 0} /></div>
+    </div>
+  );
+}
+
 function snapshotRaceFrame(): MountedFrame {
   serveGalleryRpc(snapshotRaceRpc);
 
@@ -6498,6 +6504,11 @@ async function mount() {
     }],
     ["drive-design", () => Promise.resolve(driveDesignFrame())],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
+    ["qualitylive", () => {
+      serveGalleryRpc(workspacePageRpc);
+
+      return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
+    }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
   ]);
 

@@ -17,6 +17,7 @@ import {
   type WebSearchProvider,
   type BrowserSessions,
 } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { ROOT_DELEGATION_BUDGET } from '@kinu.run/core';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import * as v from 'valibot';
@@ -92,8 +93,8 @@ function buildCodemode(agents?: () => AgentsToolDeps) {
   };
 
   return agents
-    ? createCodemodeToolFactory({ ...options, agents }).toolFor(codemodeSurface(rt, native))
-    : createCodemodeToolFactory(options).toolFor(codemodeSurface(rt, native));
+    ? createCodemodeToolFactory({ ...options, agents, reach: narrowToolSurface(undefined) }).toolFor(codemodeSurface(rt, native))
+    : createCodemodeToolFactory({ ...options, reach: narrowToolSurface(undefined) }).toolFor(codemodeSurface(rt, native));
 }
 
 function codemodeDescription(agents?: () => AgentsToolDeps): string {
@@ -130,7 +131,7 @@ function searchOnlyDeps(): AgentsToolDeps {
   // would otherwise share one claim ledger and loop pointer.
   const seats = hostedSeatsOver({ rt, db: testSql.db });
 
-  return { mode: 'build', swarm: { rt, hostNode: seats.hostNode, model: expandingModel(), ...unobservedSearchSeams() } };
+  return { mode: 'build', swarms: true, swarm: { rt, hostNode: seats.hostNode, model: expandingModel(), ...unobservedSearchSeams() } };
 }
 
 function fullDeps(): AgentsToolDeps {
@@ -157,7 +158,7 @@ function fullDeps(): AgentsToolDeps {
       knows: async () => true,
       status: async () => ({}),
       message: async () => ({ ok: true as const, name: 'n', ...codemodeHandoff }),
-      dismiss: async () => ({ ok: true, name: 'n', historyKept: true }),
+      dismiss: async () => ({ ok: true, name: 'n', historyKept: true, stoppedJobs: [] }),
     },
     peers: {
       listPeers: async () => [],
@@ -205,6 +206,7 @@ describe('the eval docstring the model receives', () => {
     initCraftedToolsTables(testSql.sql);
 
     const built = createCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       launch: unlaunched, rt, workspace: 'test-workspace', webSearch: webSearchProvider(), browserSessions: noBrowsers,
       extraProviders: () => [{ name: 'probe', tools: {}, types, positionalArgs: true }],
     }).toolFor(codemodeSurface(rt, {}));

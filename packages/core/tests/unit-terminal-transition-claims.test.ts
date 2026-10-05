@@ -25,7 +25,8 @@ function ledger(opts: { readonly cutBeforeRecord?: boolean } = {}) {
   initTerminalEffectTable(execRaw);
   initToolEffectClaimTable(execRaw);
 
-  const transitions = new TerminalTransitions({
+  /** One activation's transitions over the rows; a later activation is another instance over the same rows. */
+  const activation = () => new TerminalTransitions({
     sql, actor, now: () => NOW,
     effects: { turn_record: terminalEffect({ input: v.object({}), run: () => ({ status: 'completed' }) }) },
     fault: () => opts.cutBeforeRecord === true
@@ -37,11 +38,13 @@ function ledger(opts: { readonly cutBeforeRecord?: boolean } = {}) {
     settled: async () => {},
   });
 
+  const transitions = activation();
+
   const claims = () => sql<{ turn_id: string; call_id: string; result_json: string | null }>`
     SELECT turn_id, normalized_call_id AS call_id, result_json FROM tool_effect_claims
     WHERE normalized_call_id LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`} ORDER BY turn_id`;
 
-  return { transitions, claims };
+  return { transitions, claims, activation };
 }
 
 describe('the terminal transition claim', () => {
@@ -81,6 +84,18 @@ describe('the terminal transition claim', () => {
     transitions.end(step);
     expect(transitions.begin(final)).toBe('first');
     expect(claims().map((row) => row.call_id).sort()).toEqual(['terminal:response:a-final', 'terminal:response:a-step']);
+  });
+
+  // A wake for a sequence this process is finishing only re-enters it and finds it held: each lap re-read the roster.
+  test('a sequence this process runs is owed to no wake, and the next activation over its rows recovers it', () => {
+    const { transitions, activation } = ledger();
+    const transition = { turnId: 'u-running', messageId: 'a-running' };
+
+    transitions.record(transition, []);
+    expect(transitions.enter(transition)).toBe(true);
+
+    expect(transitions.hasIncomplete()).toBe(false);
+    expect(activation().hasIncomplete()).toBe(true);
   });
 
   /**

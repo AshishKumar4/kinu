@@ -430,8 +430,9 @@ The other three belong to the `EvolutionEngine`
 - Turn level: `reviewTurn()` assesses the finished turn. A negative outcome
   writes a reflection into memory; a strong one extracts a crafted tool into
   the CraftStore.
-- Session level: `onSessionReflection()` consolidates patterns and can call
-  `maybeEvolveScaffold()` to propose a new `agent.js`.
+- Session level: `onSessionComplete()` consolidates patterns.
+- Background: `runDueEvolution()` runs the proposer, whose edit to `agent.js`,
+  a prompt section or a tool description is kept only if a live trial wins.
 - Lifetime: `onLifetimeEvolution()` runs craft consolidation.
 
 Hosted actors tick the step clock only: they record no turn into the evolution

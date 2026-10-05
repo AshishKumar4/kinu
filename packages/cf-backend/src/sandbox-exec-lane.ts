@@ -13,7 +13,7 @@ import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
 type ContainerOperations = Pick<KinuDevbox,
-  "execUntimed" | "execUntimedStream" | "killUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles"
+  "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
   | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved" | "resize" | "portListeners" | "answerRest">;
 
@@ -25,9 +25,8 @@ const PREVIEWS_UNPUBLISHABLE =
 const DEVBOX_FAILURE_CODES: Readonly<Record<DevboxErrorCode, ErrorCode>> = {
   io: 'io', configuration: 'unavailable', 'invalid-input': 'bad_input', 'not-ready': 'unavailable',
   cancelled: 'cancelled', missing: 'missing', file: 'io', process: 'io',
-  'start-overrun': 'timeout', 'start-interrupted': 'unavailable', 'container-changed': 'unavailable',
-  'layer-unreadable': 'io', 'chain-advanced': 'io', 'delta-namespace': 'io', 'mount-marker': 'unsupported',
-  refused: 'unavailable',
+  'start-overrun': 'timeout', 'start-interrupted': 'unavailable', 'chain-advanced': 'io', 'mount-marker': 'unsupported',
+  refused: 'unavailable', indeterminate: 'io',
 };
 
 /** A terminal refusal names what its reader can do; the owner's own is on the Environment card (D52). */
@@ -59,10 +58,11 @@ function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
 async function execWithoutDeadline(
   handle: Pick<KinuDevbox, "execUntimed" | "execUntimedStream" | "killUntimed">,
   command: string,
-  { cwd, signal, env }: { readonly cwd?: string | undefined; readonly signal?: AbortSignal | undefined; readonly env?: Readonly<Record<string, string>> | undefined },
+  { cwd, signal, env, execId }: {
+    readonly cwd?: string | undefined; readonly signal?: AbortSignal | undefined; readonly env?: Readonly<Record<string, string>> | undefined; readonly execId: string;
+  },
   output: OutputSink | undefined,
 ) {
-  const execId = crypto.randomUUID();
   const options = { cwd: cwd ?? WORKSPACE_BACKUP_DIR, execId, ...(env !== undefined && { env }) };
 
   const ran = output === undefined
@@ -144,12 +144,27 @@ export function adaptCloudflareSandbox(
 
   return {
     ensureReady: () => settle(onContainer(() => Promise.resolve())),
-    exec: (command, opts) => settle(onContainer(() => {
+    // One launch id per call: after a lost reply the same id reads the box's answer, never a second launch.
+    exec: (command, opts) => {
       const signals = [opts?.signal, opts?.timeout === undefined ? undefined : AbortSignal.timeout(opts.timeout)].filter((held) => held !== undefined);
       const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+      const execId = crypto.randomUUID();
+      const ready = onContainer(() => Promise.resolve());
+      const run = callDevbox(() => execWithoutDeadline(handle, command, { cwd: opts?.cwd, signal, env: opts?.env, execId }, opts?.output));
+      // The exec call itself gave no verdict, and nothing cancelled it: it may or may not have reached the box.
+      const lost = (failure: KinuError): boolean => signal?.aborted !== true && failure.code === 'io' && devboxFailure({ cause: failure.cause }) === undefined;
 
-      return execWithoutDeadline(handle, command, { cwd: opts?.cwd, signal, env: opts?.env }, opts?.output);
-    })),
+      const again = Effect.andThen(ready, run).pipe(Effect.mapError((failure) => (lost(failure)
+        ? new KinuError('io', `the box lost the reply twice, so whether \`${command}\` ran is unknown (exec ${execId}); it was not run again`, { cause: failure })
+        : failure)));
+
+      return settle(Effect.andThen(ready, run.pipe(
+        Effect.catch((failure) => (lost(failure) ? again : Effect.fail(failure))),
+        Effect.ensuring(callDevbox(() => handle.releaseUntimed(execId)).pipe(
+          Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('sandbox.exec_release_failed', failure, { execId }); })),
+        )),
+      )));
+    },
     // Not `onContainer`: a read never starts a container.
     portListeners: (stamp, ports) => settle(callDevbox(() => handle.portListeners(stamp, ports))),
     readFile: (path, opts) => settle(onContainer(() => handle.readFile(path, opts))),

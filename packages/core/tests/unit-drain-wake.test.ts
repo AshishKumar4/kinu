@@ -66,6 +66,7 @@ function inertEngine(): AgentOrchestratorDeps['engine'] {
 
   return {
     enabled: false,
+    withTurnLearning: (body) => body(),
     recordsTurns: false,
     recoverInterruptedWork: () => {},
     recentAdvisorNotes: () => [],
@@ -76,7 +77,7 @@ function inertEngine(): AgentOrchestratorDeps['engine'] {
     craftLedger: { names: () => [], observe: () => [] },
     reviewTurn: async () => {},
     onSessionComplete: async () => {},
-    runDueShadowTrials: async () => {},
+    runDueEvolution: async () => {},
     recordRecovery: () => {},
     deferTurnReview: (turn, followup, opts) => store.enqueueReview(turn, followup, opts),
     runDeferredTurnReviews: async () => ({ reviewed: 0, refused: [] }),

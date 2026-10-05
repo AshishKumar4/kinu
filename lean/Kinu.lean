@@ -8,7 +8,7 @@
   MCTS: StorageIsolation, Backpropagation, Uct
   Evolution: Timescales, CraftStore, Scaffold, FullCraftLifecycle
   Agent: Lifecycle, FiberDurability, TurnQueue
-  Storage: FTS5Search, SqliteFSCorrectness, CostModel, SnapshotChain, BlockLayer, LossWindow
+  Storage: FTS5Search, SqliteFSCorrectness, CostModel, BlockLayer, LossWindow
   Execution: Capabilities
   Exploration: Objective, Publication, Settle, Archive, Records, Arbitration,
     Isolation, RecordsStore, ArchiveAdmission, FanIn, Rebase, Concurrent,
@@ -44,7 +44,6 @@ import Kinu.Agent.TurnQueue
 import Kinu.Storage.FTS5Search
 import Kinu.Storage.SqliteFSCorrectness
 import Kinu.Storage.CostModel
-import Kinu.Storage.SnapshotChain
 import Kinu.Storage.BlockLayer
 import Kinu.Storage.LossWindow
 

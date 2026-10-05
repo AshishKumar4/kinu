@@ -27,6 +27,7 @@ import {
   ActivitySpendSchema,
   callAgentRpc,
   CloudAgentStatusSchema,
+  CancelJobSchema,
   CloudBackgroundJobSchema,
   CloudToolDescriptionsSchema,
   createCloudAgentConnectTicket,
@@ -73,11 +74,8 @@ import * as v from 'valibot';
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
 
 const EvolutionConfigSchema: v.GenericSchema<EvolutionConfigView> = v.object({
-  reviewModel: v.nullable(v.string()),
-  autoPromoteScaffold: v.boolean(),
-  gepaEvalBudget: v.number(),
-  shadowSampleRate: v.number(),
-  scaffoldExploreShare: v.number(),
+  learning: v.boolean(),
+  liveTrials: v.boolean(),
   advisorEnabled: v.boolean(),
   advisorMinSeverity: v.picklist(ADVISOR_SEVERITIES),
 });
@@ -252,6 +250,8 @@ const SocketFrameSchema = v.objectWithRest({
   body: v.optional(v.string()),
   done: v.optional(v.boolean()),
   replay: v.optional(v.boolean()),
+  restated: v.optional(v.boolean()),
+  replayComplete: v.optional(v.boolean()),
   landed: v.optional(v.picklist(['mid-turn', 'turn'])),
   turnId: v.optional(v.string()),
 }, JsonValueSchema);
@@ -771,11 +771,16 @@ export class CloudAgentClient implements AgentClient {
     }));
   }
 
-  async listJobs(limit = 20): Promise<AgentJobSummary[]> {
-    const args: JsonValue[] = this.subordinateName === null ? [limit] : [limit, this.subordinateName];
+  async listJobs(limit = 20, actor?: string): Promise<AgentJobSummary[]> {
+    const owner = actor ?? this.subordinateName;
+    const args: JsonValue[] = owner === null ? [limit] : [limit, owner];
     const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), args);
 
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status, label: job.label ?? null, ...(job.output !== undefined && { output: job.output }) }));
+  }
+
+  async cancelJob(jobId: string): Promise<{ ok: boolean }> {
+    return await this.callHttp('cancelBackgroundJob', CancelJobSchema, this.subordinateName === null ? [jobId] : [jobId, this.subordinateName]);
   }
 
   async getModelSpec(): Promise<string | null> {
@@ -1015,7 +1020,7 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    if (payload.body?.trim()) active.apply(payload.body, payload.replay === true);
+    active.apply(payload);
 
     if (payload.done) {
       if (this.stoppingTurnIds.has(id)) return;

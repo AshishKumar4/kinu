@@ -100,7 +100,7 @@ function searchableDeps(opts: {
   };
 
   return {
-    mode: 'build',
+    mode: 'build', swarms: true,
     swarm: {
       rt,
       // One actor per node: spend is charged per node, and a shared handle would bill a wave to one ledger.
@@ -131,7 +131,7 @@ function searchableDeps(opts: {
       knows: async () => true,
       status: async () => ({}),
       message: recordHandoff('send'),
-      dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
+      dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),
     },
     budget: opts.budget,
   };

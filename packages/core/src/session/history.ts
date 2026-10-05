@@ -142,7 +142,7 @@ export class SessionHistory {
 
     if (parts.some((part) => part.kind === 'tool-call')) return 'tools';
 
-    return parts.some((part) => part.kind === 'text' && v.parse(v.string(), part.value.text) !== '') ? 'text' : null;
+    return parts.some((part) => (part.kind === 'text' || part.kind === 'reasoning') && v.parse(v.string(), part.value.text) !== '') ? 'text' : null;
   }
 
   transcript(sessionId: string): SessionTranscript {

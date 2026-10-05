@@ -45,6 +45,14 @@ const SUBJECTS: readonly Subject[] = [{
   why: 'an activation asks it before any request (kinu-logs/onstart/DESIGN.md, S2): a pointer written with the '
     + 'turn\'s start and removed with its end answers it, whatever number of turns finished before',
 }, {
+  name: 'terminal recovery, the owed-response check',
+  unit: 'settled responses',
+  sizes: [50, 1_000],
+  run: async (probe, size) => await probe.terminalRecoveryCheck(size),
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
+  why: 'every wake tick asks it (`owedUntimedArms`): it reads the claims that never settled, never the settled claim '
+    + 'each response leaves behind',
+}, {
   name: 'session store, one turn',
   unit: 'turns of history',
   sizes: [50, 300],

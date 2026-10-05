@@ -4,6 +4,7 @@
 import { Effect } from 'effect';
 import { CODE_WORK_DID_NOT_START, diagnostics, KinuError, type ErrorCode } from '../obs/index';
 import { boundWriteCommand, type WriteSubject } from './bound-write';
+import type { ShellCallJob } from '../types/primitives';
 
 export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 
@@ -29,21 +30,21 @@ export interface ShellCwd {
 export interface ShellSession {
   readonly home: string;
   readonly userRoots: () => readonly string[];
-  /** Behind earlier calls, so a review sees their `cd`s. */
-  serial<R>(call: () => Promise<R>, detach?: AbortSignal): Promise<R>;
-  /** Where a call without its own `cwd` starts. */
-  at(): Promise<ShellCwd>;
-  /** A foreground call without a `cwd` exited. */
-  ran(command: string, exitCode: number): void;
+  /** Where a call starts: its `cwd`, under its name's directory (the home for none). */
+  at(name: string | undefined, cwd: string | undefined): Promise<ShellCwd>;
+  /** A named call ended in `cwd`; null: unknown, so the next call reads it again. */
+  ran(name: string, cwd: string | null): void;
+  /** A named call cut short: its shell may have moved after it, so it is unknown until a call reports. */
+  lost(name: string): void;
+  /** One call at a time per name, and a name a detached job holds answers `busy` at once; unnamed calls never wait. */
+  hold<R>(name: string | undefined, job: ShellCallJob | undefined, call: () => Promise<R>, busy: (message: string) => R): Promise<R>;
 }
 
 export interface ShellSessionOptions {
   readonly home: string;
   readonly userRoots: () => readonly string[];
-  /** False when the box starts every call at home. */
-  readonly keepsCwd: boolean;
-  /** Its cwd as an earlier process left it; null: unreadable. */
-  readonly stored?: () => Promise<string | null>;
+  /** A name's directory as an earlier process left it; null: unreadable. Absent: every name starts at home. */
+  readonly stored?: (name: string) => Promise<string | null>;
 }
 
 export interface ApprovalRuleHit {
@@ -531,39 +532,6 @@ function cdTarget(step: ShellStep, cwd: string, home: string): string | null | u
   return target === '-' ? null : shellPath(target, cwd, home);
 }
 
-/** Known when every step ran (`&&`, exit 0) or it ends on the `cd`; else a `cd` that may enter the user's files
- *  marks the session. `cd "$DIR"` moves nothing. */
-function nextShellCwd(at: ShellCwd, command: string, exitCode: number, userRoots: readonly string[]): ShellCwd {
-  const steps = shellSteps(command);
-  let cwd = at.cwd;
-  let known = true;
-  let mayBeUsers = at.mayBeUsers;
-  let lastCd = -1;
-
-  for (const [index, step] of steps.entries()) {
-    const target = cdTarget(step, cwd, at.home);
-
-    if (target === undefined) continue;
-    lastCd = index;
-
-    if (target === null) {
-      known = false;
-      continue;
-    }
-
-    cwd = target;
-    mayBeUsers ||= underRoots(target, userRoots);
-  }
-
-  if (lastCd === -1) return at;
-  const allRan = steps.every((step, index) => index === 0 || step.after === '&&');
-  const endsOnCd = lastCd === steps.length - 1 && ['', ';', '&&'].includes(steps[lastCd]?.after ?? '');
-
-  if (exitCode === 0 && known && (allRan || endsOnCd)) return { ...at, cwd, mayBeUsers: underRoots(cwd, userRoots) };
-
-  return { ...at, cwd, mayBeUsers };
-}
-
 function namesRoot(command: string, root: string): boolean {
   const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -571,45 +539,100 @@ function namesRoot(command: string, root: string): boolean {
 }
 
 /** A call's session from its `cwd` option; an unresolvable one may be the user's. */
-export function sessionAt(home: string, cwd: string | undefined): ShellCwd {
+function sessionAt(home: string, cwd: string | undefined): ShellCwd {
   const at = cwd === undefined ? home : shellPath(cwd, home, home);
 
   return at === null ? { cwd: home, home, mayBeUsers: true } : { cwd: at, home, mayBeUsers: false };
 }
 
-function aborted(signal: AbortSignal): Promise<void> {
-  const fired = Promise.withResolvers<void>();
-
-  if (signal.aborted) fired.resolve();
-  else signal.addEventListener('abort', () => { fired.resolve(); }, { once: true });
-
-  return fired.promise;
+interface HeldName {
+  readonly ended: Promise<void>;
+  readonly detached: Promise<void>;
+  job: { readonly id: string; readonly since: number } | null;
 }
 
-export function createShellSession({ home, userRoots, keepsCwd, stored }: ShellSessionOptions): ShellSession {
-  const atHome: ShellCwd = { home, cwd: home, mayBeUsers: false };
-  let known: ShellCwd | null = keepsCwd && stored !== undefined ? null : atHome;
-  let tail: Promise<unknown> = Promise.resolve();
+export function createShellSession({ home, userRoots, stored }: ShellSessionOptions): ShellSession {
+  const directories = new Map<string, Promise<ShellCwd>>();
+  const held = new Map<string, HeldName>();
+  const unknown: ShellCwd = { home, cwd: home, mayBeUsers: true };
+
+  // A read that failed or found nothing is not kept: the next call reads again.
+  const directory = (name: string): Promise<ShellCwd> => {
+    const known = directories.get(name);
+
+    if (known !== undefined) return known;
+
+    const read = (async (): Promise<ShellCwd> => {
+      let cwd: string | null = null;
+
+      try {
+        cwd = stored === undefined ? home : await stored(name);
+      } finally {
+        if (cwd === null) directories.delete(name);
+      }
+
+      return cwd === null ? unknown : sessionAt(home, cwd);
+    })();
+
+    directories.set(name, read);
+
+    return read;
+  };
 
   return {
     home,
     userRoots,
-    serial<R>(call: () => Promise<R>, detach?: AbortSignal): Promise<R> {
-      const next = tail.then(call, call);
-      tail = detach === undefined ? next : Promise.race([next, aborted(detach)]);
+    async at(name, cwd) {
+      if (name === undefined) return sessionAt(home, cwd);
+      const base = await directory(name);
+      const at = cwd === undefined ? base.cwd : shellPath(cwd, base.cwd, home);
+      // An absolute `cwd` is where it starts whatever the name's directory is.
+      const known = cwd?.startsWith('/') === true || !base.mayBeUsers;
 
-      return next;
+      return at === null ? unknown : { home, cwd: at, mayBeUsers: !known };
     },
-    async at() {
-      if (known !== null) return known;
-      const cwd = stored === undefined ? home : await stored();
-      known = cwd === null ? { ...atHome, mayBeUsers: true } : sessionAt(home, cwd);
+    ran(name, cwd) {
+      // Unreported: read again when the shell can say, else unknown until a call reports it.
+      if (cwd !== null) directories.set(name, Promise.resolve(sessionAt(home, cwd)));
+      else if (stored === undefined) directories.set(name, Promise.resolve(unknown));
+      else directories.delete(name);
+    },
+    lost(name) {
+      directories.set(name, Promise.resolve(unknown));
+    },
+    async hold(name, job, call, busy) {
+      if (name === undefined) return await call();
 
-      return known;
-    },
-    ran(command, exitCode) {
-      // Unread: the next review reads it.
-      if (keepsCwd && known !== null) known = nextShellCwd(known, command, exitCode, userRoots());
+      for (let previous = held.get(name); previous !== undefined; previous = held.get(name)) {
+        if (previous.job !== null) {
+          return busy(`shell ${name} is busy with job ${previous.job.id} since ${new Date(previous.job.since).toISOString()}; use another name or none`);
+        }
+
+        await Promise.race([previous.ended, previous.detached]);
+      }
+
+      const ended = Promise.withResolvers<void>();
+      const detached = Promise.withResolvers<void>();
+      const mine: HeldName = { ended: ended.promise, detached: detached.promise, job: null };
+
+      const onDetach = (): void => {
+        if (job !== undefined) mine.job = { id: job.id, since: Date.now() };
+
+        detached.resolve();
+      };
+
+      held.set(name, mine);
+
+      if (job?.detached.aborted === true) onDetach();
+      else job?.detached.addEventListener('abort', onDetach, { once: true });
+
+      try {
+        return await call();
+      } finally {
+        job?.detached.removeEventListener('abort', onDetach);
+        held.delete(name);
+        ended.resolve();
+      }
     },
   };
 }
@@ -679,7 +702,11 @@ function overwritesUserFiles(executor: GatedExecutor, command: string, session: 
   let cwd = session?.cwd ?? '/';
 
   for (const step of roots.length === 0 ? [] : shellSteps(command)) {
-    const written = [...redirectTargets(step), copyTarget(step)].map((target) => (target === undefined ? null : shellPath(target, cwd, home)));
+    const targets = [...redirectTargets(step), copyTarget(step)].filter((target): target is ShellWord => target !== undefined);
+
+    // From a directory that may be the user's, a relative write may land there.
+    if (session?.mayBeUsers === true && targets.some((target) => target === null || !/^[/~]/u.test(target))) return true;
+    const written = targets.map((target) => shellPath(target, cwd, home));
 
     if (written.some((path) => path !== null && underRoots(path, roots))) return true;
     cwd = cdTarget(step, cwd, home) ?? cwd;
@@ -885,7 +912,7 @@ export function gateExec<R>(
     const cmd = String(command);
 
     const review = tuning.review === undefined
-      ? reviewShellCommand(executor, cmd, await executor.shellSession?.at())
+      ? reviewShellCommand(executor, cmd, await executor.shellSession?.at(undefined, undefined))
       : await tuning.review(cmd, rest);
 
     const decision = await decideApproval({ command: cmd, executor: executor.name }, review, policy);

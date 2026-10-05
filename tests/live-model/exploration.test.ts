@@ -8,6 +8,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
 
 import {
   type LLMProviderConfig,
@@ -90,7 +91,7 @@ describe('Exploration evals — the agent reaches for exploration', () => {
     target?.teardown();
   });
 
-  test('the agent is actually offered the delegation tool', () => {
+  test('the agent is actually offered the delegation tool', async () => {
     // Credential-free, and the precondition every eval below rests on. Without
     // it "the model did not fork" would be indistinguishable from "the model
     // could not fork", and the delegation rate would be measuring the harness.
@@ -98,8 +99,22 @@ describe('Exploration evals — the agent reaches for exploration', () => {
     // And the prompt names it: a tool the model is never told about is not
     // offered in any sense that matters (PRD §9.5 — production prompt AND tool
     // projection). The tool index is the one prompt text about delegation.
-    const system = surface.systemPrompt();
+    const { system } = await surface.request([{ role: 'user', content: EXPLORATION_TASK }]);
     expect(system).toContain('- **agents**:');
+  });
+
+  test('the issued request carries the runtime facts the system prompt no longer states', async () => {
+    // Credential-free: a scripted model stands in for the provider, and the recorder reads what it was sent.
+    const recorder = recordRequestSurface(new MockLanguageModelV3({ doGenerate: async () => ({
+      content: [{ type: 'text', text: 'ok' }], finishReason: { unified: 'stop', raw: undefined }, warnings: [],
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
+    }) }));
+
+    const { system, messages } = await surface.request([{ role: 'user', content: EXPLORATION_TASK }]);
+    await generateText({ model: recorder.model, system, messages, tools: surface.tools });
+
+    expect(recorder.evidence().runtimeFacts).toBe(true);
+    expect(JSON.stringify(messages)).toContain(`- Model: ${LLM_CONFIG.model}`);
   });
 
   liveTest('AUTONOMOUS: the model reaches for exploration on a task that warrants it', async () => {
@@ -110,11 +125,12 @@ describe('Exploration evals — the agent reaches for exploration', () => {
     // something, but not the product's conversion behaviour: it scores the model
     // on reaching for a capability it was neither offered nor told about.
     const recorder = recordRequestSurface(model);
+    const { system, messages } = await surface.request([{ role: 'user', content: EXPLORATION_TASK }]);
 
     const result = await generateText({
       model: recorder.model,
-      system: surface.systemPrompt(),
-      messages: [{ role: 'user' as const, content: EXPLORATION_TASK }],
+      system,
+      messages,
       tools: surface.tools,
       stopWhen: stepCountIs(12),
       onStepFinish: (step: StepResult<ToolSet>) => {
@@ -143,6 +159,7 @@ describe('Exploration evals — the agent reaches for exploration', () => {
     expect(evidence.toolsOffered).toEqual(Object.keys(surface.tools).sort());
     expect(evidence.agentsOffered).toBe(true);
     expect(evidence.agentsIndexed).toBe(true);
+    expect(evidence.runtimeFacts).toBe(true);
 
     // The denominator is one eligible turn, stated. This is a SAMPLE of a rate,
     // not the rate: a single turn cannot measure a conversion percentage, and

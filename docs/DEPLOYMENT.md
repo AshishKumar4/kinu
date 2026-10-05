@@ -51,21 +51,40 @@ From source I run `bun run cli -- setup`, then `bun run cli -- ...`. Origin defa
 
 ## Zero to production
 
-This assumes an empty Cloudflare account. Three commands bring up each environment, staging first because every build lands there, and a fourth proves it:
+This assumes an empty Cloudflare account. Two commands bring up each environment, staging first because every build lands there, and a third proves it:
 
 ```bash
-bun run infra:provision staging   # staging's R2 buckets and Vectorize index
-bun run deploy                    # kinu-staging, its DO namespaces, containers, routes, cron
-bun run infra:provision staging   # its secrets; `wrangler secret put` needs the Worker to exist
-bun run gate:infra staging        # every resource staging declares exists and is bound
+bun run infra:provision staging      # staging's R2 buckets, Vectorize index and secrets
+bun run deploy --bootstrap           # kinu-staging, its DO namespaces, containers, routes, cron
+bun run gate:infra staging           # every resource staging declares exists and is bound
 
-bun run infra:provision           # the same for production
-bun run deploy --promote          # kinu, from the build staging verified
-bun run infra:provision
-bun run gate:infra
+bun run infra:provision production   # the same for production
+bun run deploy --promote --bootstrap # kinu, from the build staging verified
+bun run gate:infra production
 ```
 
-`wrangler secret put` refuses on a nonexistent Worker, so on a fresh account the root secret installs only after the first deploy. That is why provisioning runs twice. The second run creates nothing new. `bun run deploy` is the only supported deploy path. Provisioning creates resources and never deploys.
+On an environment with no Worker yet, `wrangler secret put` creates a placeholder Worker to hold the secrets, so the deploy's upload gate finds them and no Kinu version is live without them. The first deploy replaces the placeholder. It passes `--bootstrap` because it declares everything only a deploy can create; its post-deploy check tolerates nothing. Later deploys drop the flag. `bun run deploy` is the only supported deploy path. Provisioning creates resources and secrets and never deploys Kinu.
+
+### Release signing
+
+A source self-host needs its own Ed25519 signing key before the first distribution build. I generate it on the build machine, from the repository root:
+
+```bash
+bun scripts/release-signing-key.ts
+```
+
+`scripts/release-signing-key.ts` writes a PKCS#8 base64 private key to `~/.config/kinu/release-signing.key` with mode `0600`. It prints the path and `RELEASE_SIGNING_PUBLIC_KEY=<64 hex characters>`, never the private key, and refuses an existing file. `KINU_RELEASE_SIGNING_KEY_FILE` chooses another path; I set it for generation and every later build. The private key belongs in a backup or build-runner secret store, never in source or Worker secrets. Staging and production use the same signed artifacts, so the key belongs to the build machine, not one deployment environment.
+
+I replace `RELEASE_SIGNING_PUBLIC_KEY` in both `packages/core/src/http/release-signing.ts` and `packages/pc-agent/src/update.js` with that printed hex value. Core's pin reaches the served installer launcher and the bundled CLI; the daemon ships its own copy. Both must name the new key.
+
+```bash
+unset KINU_RELEASE_SIGNING_PUBLIC_KEY
+bun scripts/sign-release.ts --check
+```
+
+The check signs a probe and verifies it against the source pin. I commit both pins with the deployment configuration and push the revision before the supported deploy path runs. `KINU_RELEASE_SIGNING_PUBLIC_KEY` overrides verification only in the operator's process; setting it on a builder alone does not change the pins clients ship. It is useful for distribution fixtures, not a substitute for this bootstrap. A client already installed with another key does not acquire trust in the new one through this procedure.
+
+For CI, `KINU_RELEASE_SIGNING_KEY` supplies the private key as PKCS#8 base64 and takes precedence over the configured key file. `scripts/build-cli-dist.sh` runs `sign-release.ts --check` before creating output or bundling. The final `sign-release.ts <out dir> <version> <sha>` signs the artifact checksums and verifies the signature again before writing `kinu-version.json`. Missing keys or pins and key/pin mismatches refuse the build with the bootstrap instructions. Installer, CLI and daemon verification still refuse unsigned, foreign-signed, or checksum-mismatched artifacts.
 
 ### Before you start
 

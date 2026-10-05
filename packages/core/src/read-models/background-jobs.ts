@@ -13,7 +13,7 @@ import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 import { resumableAgentsInput } from '../delegation/agents-tool';
 import { Effect } from 'effect';
-import { renderThrownChain, settleSync } from '../obs/index';
+import { renderThrownChain, settle, settleSync } from '../obs/index';
 
 /** BackgroundJobRunner's surface as this plane uses it. `cancelRunning` is deliberately absent:
  *  nothing here stops a job whose id it was not given. */
@@ -27,8 +27,8 @@ export interface BackgroundJobControl {
 export interface BackgroundJobPlaneDeps {
   readonly jobs: BackgroundJobStore;
   readonly jobRunner: BackgroundJobControl;
-  /** Raw tools, so a retry cannot detach a second job on top of the one it replays. */
-  readonly rawTools: (mode: WorkMode) => ToolSet;
+  /** The job owner's raw tools, so a retry cannot detach a second job on top of the one it replays. */
+  readonly rawTools: (mode: WorkMode) => Promise<ToolSet>;
   readonly logActivity: (event: string, detail?: string) => void;
 }
 
@@ -80,8 +80,8 @@ export function clearBackgroundJobs(jobs: BackgroundJobStore): JobCommandOutcome
  * Re-run a settled job's tool with its stored input as a fresh background job. Input goes through
  * the same `resumableAgentsInput` narrowing as the evict-resume path; declined kinds replay as stored.
  */
-export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string): RetryOutcome {
-  return settleSync(Effect.gen(function* () {
+export async function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string): Promise<RetryOutcome> {
+  return await settle(Effect.gen(function* () {
     const job = deps.jobs.get(jobId);
 
     if (!job) return { ok: false, error: 'job not found' };
@@ -92,7 +92,7 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
     const inputJson = deps.jobs.getInput(jobId);
 
     if (inputJson == null) return { ok: false, error: 'no stored input to retry' };
-    const tool = deps.rawTools(job.workMode)[job.kind];
+    const tool = (yield* Effect.promise(() => deps.rawTools(job.workMode)))[job.kind];
 
     if (!tool?.execute) return { ok: false, error: `tool "${job.kind}" unavailable` };
 

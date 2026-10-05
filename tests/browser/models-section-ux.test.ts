@@ -105,7 +105,8 @@ describe('the models section keeps every control reachable by name', () => {
       // The role navigation and the selected role's editor fields.
       expect(await page.$('nav[aria-label="Agent roles"] [aria-current="true"]')).not.toBeNull();
 
-      for (const field of ['Label', 'Description', 'Instructions', 'Default tier', 'Default swarm preset']) {
+      // "Default swarm preset" waits on "Beta: swarms", below.
+      for (const field of ['Label', 'Description', 'Instructions', 'Default tier']) {
         expect(await named(field)).toBe(true);
       }
 
@@ -139,3 +140,28 @@ describe('the composer reasoning control', () => {
     });
   });
 });
+
+describe('Beta: swarms in account Settings', () => {
+  test('off by default, with no swarm preset to choose; turned on, it saves and the preset is offered', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1100 });
+      const presetChoice = () => page.evaluate(() => document.body.textContent?.includes('Default swarm preset') === true);
+
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Description"]');
+      expect(await presetChoice()).toBe(false);
+
+      await page.click('a[href$="#beta"]');
+      await page.waitForSelector('[data-beta-swarms][aria-checked="false"]');
+      await page.click('[data-beta-swarms]');
+      await page.waitForSelector('[data-beta-swarms][aria-checked="true"]:not([disabled])');
+
+      await page.click('a[href$="#models"]');
+      await page.waitForSelector('[aria-label="Description"]');
+      expect(await presetChoice()).toBe(true);
+      await page.close();
+    });
+  });
+});
+

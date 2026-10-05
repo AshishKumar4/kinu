@@ -1,98 +1,89 @@
-/**
- * Parity net: the hosted root on core's ChatSession changes no durable row or frame against `fixtures/chat-session-parity.json`,
- * normalized like the local backend's parity test. Re-record from the logged `chat-session-parity snapshot` line only for a
- * change meant to alter the record, read field by field against the previous fixture (last: 2026-10-02, each reply rates the turn before it on the binding with Clef's measured answer, a correction at 1.5/5, so the curriculum proposer is asked once after the restart: its task row, its model call and a `changes_moved` frame).
- */
+/** Workers measurement, 2026-10-01: a hard DO abort preserves the turn's recorded steps and pending steers. */
 import { abortAllDurableObjects, env } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
 import * as v from 'valibot';
-import { DYNAMIC_CONTEXT_OPEN_TAG, JsonValueSchema, READS_CHANGED_EVENT, type JsonValue } from '@kinu.run/core';
-import { parityNormalizer, type ParityNormalizer } from '@kinu.run/test-utils/parity-normalizer';
-import recorded from '../../fixtures/chat-session-parity.json';
-import {
-  ParityCompletedSchema, ParityPreparedSchema,
-  type ParityFrame, type ParityRows,
-} from '../two-turn-shapes';
+import { DYNAMIC_CONTEXT_OPEN_TAG, RunEventSchema, drawnStep } from '@kinu.run/core';
+import { ParityCompletedSchema, ParityPreparedSchema } from '../two-turn-shapes';
 
-const parse = (column: string): JsonValue => v.parse(JsonValueSchema, JSON.parse(column));
+const MessageSchema = v.object({ parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })) });
 
-function rows(norm: ParityNormalizer, raw: ParityRows): JsonValue {
-  return {
-    assistantMessages: raw.assistantMessages.map((row) => ({
-      id: norm.text(row.id), position: row.position, role: row.role,
-      content: norm.json(parse(row.content)),
-    })),
-    pendingSteers: raw.pendingSteers.map((row) => ({
-      id: norm.text(row.id), turnId: row.turnId === null ? null : norm.text(row.turnId), mode: row.mode, text: row.text,
-    })),
-    pendingSteerFiles: raw.pendingSteerFiles.map((row) => ({ steerId: norm.text(row.steerId), filename: row.filename, mediaType: row.mediaType, url: row.url })),
-    agentLog: raw.agentLog.map((row) => ({
-      id: norm.opaque(row.id, 'log'), kind: row.kind, turnId: row.turnId === null ? null : norm.text(row.turnId),
-      variant: row.variant, consumed: row.consumed, payload: norm.json(parse(row.payload)),
-    })),
-    terminalEffects: raw.terminalEffects.map((row) => ({
-      sequenceId: norm.text(row.sequenceId), effectKey: norm.text(row.effectKey), effectName: row.effectName,
-      scope: norm.text(row.scope), seq: row.seq, input: norm.json(parse(row.input)), lane: row.lane, status: row.status,
-      attempts: row.attempts,
-    })),
-    runEvents: raw.runEvents.map((row) => {
-      const payload = v.parse(v.record(v.string(), JsonValueSchema), parse(row.payload));
-      // A size for the analytics, not a durable fact the loop replays.
-      const { context: _context, runId: _runId, ...durable } = payload;
+it('steering and a restarted turn preserve conversation order and each step index once', async () => {
+  const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('parity-driver'));
+  const prepared = v.parse(ParityPreparedSchema, await root.parityPrepare());
+  await abortAllDurableObjects();
+  const coldRoot = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('parity-driver'));
+  const completed = v.parse(ParityCompletedSchema, await coldRoot.parityComplete(prepared));
 
-      return { runId: norm.opaque(row.runId, 'run'), type: row.type, payload: norm.json(durable) };
-    }),
-  };
-}
+  expect(completed.failures).toEqual([]);
+  expect(prepared.beforeRestart.pendingSteers.some((steer) => steer.text === 'PARITY-FOUR-STEER')).toBe(true);
+  expect(completed.end.pendingSteers).toEqual([]);
+  expect(completed.end.pendingSteerFiles).toEqual([]);
+  // These native turns must not leave the scaffold's effect journal or mutable instruction log behind.
+  expect(prepared.afterTwo.agentLog).toEqual([]);
+  expect(prepared.beforeRestart.agentLog).toEqual([]);
+  expect(completed.end.agentLog).toEqual([]);
+  expect(completed.end.terminalEffects).toEqual([]);
 
-/** State syncs are compared by count: they are re-sent whenever state moves, so their position is timing, not protocol.
- *  Read notices are left out: a timer batches them, so their count, position and which socket hears them are timing too
- *  (unit-live-reads pins which reads a write names). */
-function frames(norm: ParityNormalizer, raw: readonly ParityFrame[]): JsonValue {
-  const protocol = raw.filter((frame) => !frame.type.startsWith('cf_agent_session') && frame.type !== 'cf_agent_chat_messages'
-    && frame.type !== 'cf_agent_identity' && frame.type !== 'cf_agent_mcp_servers' && frame.type !== READS_CHANGED_EVENT);
+  const users = completed.end.assistantMessages.filter((row) => row.role === 'user').map((row) =>
+    v.parse(MessageSchema, JSON.parse(row.content)).parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''));
 
-  const syncs = Object.fromEntries([...new Set(raw.map((frame) => frame.type))].sort()
-    .filter((type) => type !== READS_CHANGED_EVENT && !protocol.some((frame) => frame.type === type))
-    .map((type) => [type, raw.filter((frame) => frame.type === type).length]));
+  expect(users).toEqual(['PARITY-ONE', 'PARITY-TWO', 'PARITY-TWO-STEER', 'PARITY-THREE', 'PARITY-FOUR-TOOL', 'PARITY-FOUR-STEER', 'PARITY-FIVE']);
 
-  return {
-    protocol: protocol.map((frame) => norm.json({
-      ...frame,
-      ...(frame.body !== undefined && { body: frame.body.startsWith('{') ? parse(frame.body) : frame.body }),
-    })),
-    syncs,
-  };
-}
+  const events = completed.end.runEvents.map((row) => ({ runId: row.runId, event: v.parse(RunEventSchema, JSON.parse(row.payload)) }));
 
-describe('ChatSession parity — the hosted root changes no durable row and no frame', () => {
-  it('the scripted conversation leaves the pre-track record, checkpoint by checkpoint', async () => {
-    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('parity-driver'));
-    const prepared = v.parse(ParityPreparedSchema, await root.parityPrepare());
+  const runs = events.filter(({ event }) => event.type === 'run_start').map(({ runId, event }) => {
+    if (event.type !== 'run_start') throw new Error('a run must start with its opening record');
+    const own = events.filter((row) => row.runId === runId).map(({ event: record }) => record);
+    const steps = own.filter((record) => record.type === 'step_finish');
+    const tools = own.filter((record) => record.type === 'tool_call_end');
 
-    await abortAllDurableObjects();
-    const coldRoot = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('parity-driver'));
-    const completed = v.parse(ParityCompletedSchema, await coldRoot.parityComplete(prepared));
+    for (const step of steps) {
+      expect(step.account).toEqual({ provider: 'openai-compat', name: 'main' });
+      // The scripted provider does not report these: preserve unknown, never manufacture a free call.
+      expect(step.usage).toBeUndefined();
+      expect(step.usd).toBeUndefined();
+    }
 
-    const norm = parityNormalizer();
+    if (steps.length > 0) {
+      const assistant = completed.end.assistantMessages.find((row) => row.id === event.turn?.messageId);
 
-    const snapshot = {
-      landings: { ...prepared.landings, ...completed.landings },
-      afterTwo: rows(norm, prepared.afterTwo),
-      beforeRestart: rows(norm, prepared.beforeRestart),
-      end: rows(norm, completed.end),
-      framesBefore: frames(norm, prepared.frames),
-      framesAfter: frames(norm, completed.frames),
-      modelCallsBefore: prepared.modelCallsBefore,
-      modelCallsAfter: completed.modelCallsAfter,
-      failures: completed.failures,
+      if (assistant === undefined) throw new Error('a completed answer must be in the conversation');
+
+      const text = v.parse(MessageSchema, JSON.parse(assistant.content)).parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');
+      const replayed = steps.flatMap((record) => drawnStep(record.messages ?? []).flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : [])).join('');
+
+      expect(replayed).toBe(text);
+    }
+
+    return {
+      text: event.userMessage,
+      types: own.map((record) => record.type),
+      indices: steps.map((record) => record.stepIndex),
+      stepReasons: steps.map((record) => record.reason),
+      tools: tools.map((record) => ({ name: record.name, call: record.toolCallId, outcome: record.outcome })),
+      ends: own.flatMap((record) => record.type === 'run_end' ? [record.reason] : []),
     };
-
-    console.log(`chat-session-parity snapshot ${JSON.stringify(snapshot)}`);
-    expect(completed.failures).toEqual([]);
-    // The runtime context the restarted turns re-wove is the model's, never the page's chat.
-    expect(completed.seed).toContain('PARITY-FIVE');
-    expect(completed.seed).not.toContain(DYNAMIC_CONTEXT_OPEN_TAG);
-    expect(snapshot).toEqual(recorded);
   });
+
+  const textRun = (text: string) => ({ text, types: ['run_start', 'step_finish', 'run_end'], indices: [1], stepReasons: ['stop'], tools: [], ends: ['completed'] });
+
+  expect(runs).toEqual([
+    textRun('PARITY-ONE'), textRun('PARITY-TWO'), textRun('PARITY-TWO-STEER'),
+    { text: 'PARITY-THREE', types: ['run_start', 'run_end'], indices: [], stepReasons: [], tools: [], ends: ['aborted'] },
+    { text: 'PARITY-FOUR-TOOL', types: ['run_start', 'tool_call_end', 'step_finish', 'step_finish', 'run_end'], indices: [1, 2],
+      stepReasons: ['tool-calls', 'stop'],
+      tools: [{ name: 'file', call: 'call_parity_1', outcome: { success: false, reason: 'missing' } }], ends: ['completed'] },
+    textRun('PARITY-FIVE'),
+  ]);
+
+  const resuming = completed.frames.findIndex((frame) => frame.type === 'cf_agent_stream_resuming');
+  const resumed = completed.frames[resuming];
+  expect(completed.frames.some((frame) => frame.type === 'cf_agent_stream_pending')).toBe(true);
+  expect(completed.frames.slice(resuming + 1).filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === resumed?.id && frame.done === true)).toHaveLength(1);
+  expect(completed.frames.some((frame) => frame.type === 'steer_status' && frame.steerId === 'input-PARITY-FOUR-STEER' && frame.status === 'landed')).toBe(true);
+  expect(completed.frames.filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === 'PARITY-FIVE' && frame.done === true && frame.error !== true)).toHaveLength(1);
+  expect(completed.modelCallsAfter[0]?.toolResults).toEqual(prepared.modelCallsBefore.at(-1)?.toolResults);
+  expect(completed.modelCallsAfter[0]?.users.some((user) => user.endsWith('helloPARITY-FOUR-STEER'))).toBe(true);
+  expect(completed.seed).toContain('PARITY-FIVE');
+  expect(completed.seed).not.toContain(DYNAMIC_CONTEXT_OPEN_TAG);
 });

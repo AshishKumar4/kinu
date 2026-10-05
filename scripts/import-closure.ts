@@ -6,10 +6,11 @@
  *
  * Its own module, with nothing heavy imported, because Vite bundles the
  * first-run config and cannot bundle `ladder.ts`, whose tier runner awaits at
- * the top level. Edges are `moduleEdges`' (`import-graph.ts`), the one reader
+ * the top level. Edges are `moduleEdges`' (`module-edges.ts`), the one reader
  * of a module's imports; a type-only edge loads nothing, so it is not followed.
  */
-import { moduleEdges, type ModuleEdges } from './import-graph';
+import { moduleEdges } from './module-edges';
+import type { ModuleEdges } from './module-edges';
 import { IMPORT_CANDIDATES, collapsePath, parse, type Parsed } from './syntax';
 
 /**

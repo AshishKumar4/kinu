@@ -16,9 +16,7 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
   agentCred, bindActorHandle, initWorkspaceSchema, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY,
-  shareSpendLabel, subordinateAgentName,
-  type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor, type SqlValue,
-} from '@kinu.run/core';
+  shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
@@ -177,7 +175,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
    */
   async previewAsHire(): Promise<{ preview: SlateCallResult; removed: SlateCallResult; left: boolean }> {
     const identity = { uid: 2001, gid: 2001 };
-    const home = provisionAgentHome(this.vfs.as(CRED_KERNEL), subordinateAgentName('builder'), identity);
+    const home = provisionAgentHome(this.vfs.as(CRED_KERNEL), actorHomeName({ origin: 'agent', storageKey: 'builder' }), identity);
     const hire: SlateCaller = { path: [{ name: 'builder' }], cred: agentCred(identity), workMode: 'build' };
     const dir = slateDirectory(new SlateId('widgets'));
     const files = this.vfs.as(hire.cred);

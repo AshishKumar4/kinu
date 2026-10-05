@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
   BackgroundJobStore,
+  runOnExecutor,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOLS,
   EventLog,
@@ -12,7 +13,7 @@ import {
   type AlarmScheduler,
   openWorkspaceMainActor,
   WorkspaceActorDirectory,
-  createAgentConfigStore,
+  createAgentConfigStore, getCurrentScaffoldVersion,
   type ActorHandle,
   type SqlExecutor,
   type WorkspaceActor,
@@ -76,15 +77,21 @@ import {
   type SeekCursor,
   type WorkspaceSpend,
   type AccountSpend,
+  MEMORY_PATH,
+  WORKSPACE_ROOT,
+  readMission,
+  searchMemoryChunks,
+  type MemorySearchResult,
 } from '@kinu.run/core';
-import { classify } from '@kinu.run/core/obs';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { classify, tolerateAsync } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, schemaGenesisOf, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
-  resolverModelPlane,
+  makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
+  openWorkspaceCLI, resolverModelPlane,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveAgentRef } from './config';
-import { createConfiguredLocalModelResolver } from './local-model-resolver';
+import { createConfiguredLocalModelResolver, type LocalModelResolverOptions } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
 import { KinuError } from '@kinu.run/core/obs';
 
@@ -119,6 +126,8 @@ export interface LocalExecResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  /** Set when the executor refused or failed before producing output. */
+  error?: string;
 }
 
 export interface LocalAgentInfoSnapshot {
@@ -158,11 +167,13 @@ export interface LocalAgentState {
   executors: LocalExecutorInfo[];
 }
 
-export function getLocalAgentState(name: string): LocalAgentState {
+export async function getLocalAgentState(name: string): Promise<LocalAgentState> {
+  const memoryContent = await readLocalMemory(name);
+
   return withLocalDb(name, (db) => ({
     status: getLocalStatus(db),
     tools: getLocalToolSummary(db),
-    memoryContent: readLocalMemory(name),
+    memoryContent,
     mcts: listLocalMcts(name),
     timeline: listLocalTimeline(name, 250),
     executors: listLocalExecutors(),
@@ -213,9 +224,9 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
 }
 
 /** Null when nothing names a model. */
-export async function readLocalNextTurnTier(name: string): Promise<ResolvedTurnProfile['tier'] | null> {
+export async function readLocalNextTurnTier(name: string, opts: LocalModelResolverOptions = {}): Promise<ResolvedTurnProfile['tier'] | null> {
   const envelope = await createProfileAuthorityReader()();
-  const { llmConfig, resolver } = createConfiguredLocalModelResolver();
+  const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
 
   return withLocalDbAsync(name, async (db) => {
     const { config } = openWorkspaceMainActor(makeSql(db));
@@ -227,35 +238,18 @@ export async function readLocalNextTurnTier(name: string): Promise<ResolvedTurnP
   });
 }
 
-/** Reassembled from `memory_chunks`, MemoryStore's index of `memory/MEMORY.md`; opening the file would write (see getLocalStatus). */
-export function readLocalMemory(name: string): string {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'memory_chunks')) return '';
-
-    return all<{ text: string }>(
-      db,
-      `SELECT text FROM memory_chunks WHERE path = 'memory/MEMORY.md' ORDER BY start_line ASC`,
-    ).map((row) => row.text).join('\n');
-  });
+/** The file itself, through the read-only plane; `memory_chunks` is the search index and can lag an edit. */
+export function readLocalMemory(name: string): Promise<string> {
+  return withLocalDbAsync(name, async (db) =>
+    await tolerateAsync(() => readText(inspectionFiles(db, null), `${WORKSPACE_ROOT}/${MEMORY_PATH}`), 'enoent') ?? '');
 }
 
 /** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */
-export function searchLocalMemory(name: string, query: string, limit = 10): Array<{ path: string; text: string; score?: number; startLine?: number; endLine?: number }> {
-  const q = query.trim();
-
-  if (!q) return [];
+/** The agent's own ranked search over the same index. */
+export function searchLocalMemory(name: string, query: string, limit = 10): MemorySearchResult[] {
   const window = boundedInt(limit, 10, 1, Number.MAX_SAFE_INTEGER);
 
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'memory_chunks')) return [];
-
-    return all<{ path: string; text: string; start_line: number; end_line: number }>(
-      db,
-      `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY rowid DESC LIMIT ?`,
-      `%${q}%`,
-      window,
-    ).map((row) => ({ path: row.path, text: row.text, startLine: row.start_line, endLine: row.end_line }));
-  });
+  return withLocalDb(name, (db) => tableExists(db, 'memory_chunks_fts') ? searchMemoryChunks(makeSql(db), query, window) : []);
 }
 
 export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {
@@ -614,53 +608,31 @@ export function listLocalJobs(name: string, limit = 20): BackgroundJob[] {
   return readMainActorTable(name, 'background_jobs', [], (sql, actor) => new BackgroundJobStore(sql, actor).list(limit));
 }
 
-export async function cancelLocalJob(name: string, id: string): Promise<{ ok: boolean }> {
-  return withLocalWritableDb(name, (db) => {
-    if (!tableExists(db, 'background_jobs')) return { ok: false };
-    const sql = makeSql(db);
-    const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
-    const before = store.get(id);
-
-    if (!before || before.status !== 'running') return { ok: false };
-    store.cancel(id, before.epoch, Date.now());
-
-    return { ok: true };
-  });
+/** Whichever actor owns it. */
+export function localJobRunning(name: string, id: string): boolean {
+  return readMainActorTable(name, 'background_jobs', false, (sql) => sql<{ status: string }>`
+    SELECT status FROM background_jobs WHERE id = ${id}`.some((row) => row.status === 'running'));
 }
 
+/** The addressed workspace's own registered executor runs the command, as the cloud's executeInExecutor does. */
 export async function executeLocalExecutor(name: string, executorId: string, command: string): Promise<LocalExecResult> {
   ensureLocalAgent(name);
-  const normalized = executorId.toLowerCase();
+  const dbPath = agentDbPath(name);
+  const db = new Database(dbPath);
 
-  if (!['workspace', 'device', 'local', 'your-pc'].includes(normalized)) {
-    throw new Error(`Executor "${executorId}" is not available for local agents.`);
+  try {
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: null, cwd: resolveAgentRef(name)?.cwd ?? null });
+
+    const run = rt.executionRouter
+      ? await runOnExecutor(rt.executionRouter, executorId, command)
+      : { kind: 'refused' as const, error: `Workspace "${name}" has no execution router` };
+
+    return run.kind === 'ran'
+      ? { executor: executorId, command, stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode }
+      : { executor: executorId, command, stdout: '', stderr: '', exitCode: 1, error: run.error };
+  } finally {
+    db.close();
   }
-
-  // createHostShell owns group kill on abort and settles when the command exits, not when a grandchild closes the pipe.
-  const result = await createHostShell(process.cwd()).exec(command);
-
-  return { executor: executorId, command, ...result };
-}
-
-export async function markLocalBackgroundJobsCancelled(name: string): Promise<string[]> {
-  return withLocalWritableDb(name, (db) => {
-    if (!tableExists(db, 'background_jobs')) return [];
-    // Through the store: the registry is actor-private and `cancel` is epoch-fenced; a blanket UPDATE would cancel other actors' jobs.
-    const sql = makeSql(db);
-    const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
-    const cancelled: string[] = [];
-    const now = Date.now();
-
-    for (const id of store.runningIds()) {
-      const job = store.get(id);
-
-      if (!job || job.status !== 'running') continue;
-      store.cancel(id, job.epoch, now);
-      cancelled.push(id);
-    }
-
-    return cancelled.reverse();
-  });
 }
 
 function openLocalDb(name: string): SqliteDb {
@@ -732,17 +704,6 @@ function all<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T[] {
 
 function countOf(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): number {
   return all<{ c: number }>(db, sql, ...params).at(0)?.c ?? 0;
-}
-
-function currentScaffoldVersion(db: SqliteDb, actorId: string): number {
-  const current = all<{ version: number }>(
-    db,
-    `SELECT version FROM scaffold_versions
-     WHERE actor_id = ? AND status = 'current' ORDER BY version DESC LIMIT 1`,
-    actorId,
-  ).at(0);
-
-  return current?.version ?? 0;
 }
 
 function tableExists(db: SqliteDb, name: string): boolean {
@@ -835,20 +796,16 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
 
     if (!row) return null;
 
-    const config = tableExists(db, 'actor_config')
-      ? createAgentConfigStore(makeSql(db), actorId, () => {
-        if (!directory?.retained(actorId)) {
-          throw new Error(`actor ${actorId} is no longer retained in this workspace`);
-        }
-      })
-      : null;
+    const assertCurrent = () => {
+      if (!directory?.retained(actorId)) throw new Error(`actor ${actorId} is no longer retained in this workspace`);
+    };
+
+    const config = tableExists(db, 'actor_config') ? createAgentConfigStore(makeSql(db), actorId, assertCurrent) : null;
 
     return {
       name: row.name,
       purpose: '',
-      scaffoldVersion: tableExists(db, 'scaffold_versions')
-        ? currentScaffoldVersion(db, actorId)
-        : 0,
+      scaffoldVersion: tableExists(db, 'scaffold_versions') ? getCurrentScaffoldVersion(makeSql(db), { actorId, assertCurrent }) ?? 0 : 0,
       searchNodeCount: tableExists(db, 'search_nodes')
         ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId)
         : 0,
@@ -873,19 +830,14 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
       db, `SELECT name, created_at FROM workspace_identity LIMIT 1`).at(0)
     : null;
 
-  // From the identity row, not SOUL.md: opening the workspace filesystem writes. `writeSoul` keeps it current (identity/soul.ts).
-  const mission = hasIdentity
-    ? all<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`).at(0)?.mission?.trim() ?? null
-    : null;
+  // Off the soul's row, not SOUL.md: opening the workspace filesystem writes.
+  const mission = readMission(makeSql(db));
 
   return {
     name: identity?.name ?? null,
     purpose: mission ?? '',
     createdAt: identity?.created_at ?? null,
-    // The live version, not MAX(version), which would include a pending proposal.
-    scaffoldVersion: actor && tableExists(db, 'scaffold_versions')
-      ? currentScaffoldVersion(db, actor.actorId)
-      : 0,
+    scaffoldVersion: actor && tableExists(db, 'scaffold_versions') ? getCurrentScaffoldVersion(makeSql(db), actor) ?? 0 : 0,
     searchNodeCount: actor && tableExists(db, 'search_nodes')
       ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actor.actorId)
       : 0,

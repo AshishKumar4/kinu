@@ -80,7 +80,7 @@ requirements:
       - Kinu.Evolution.Scaffold.append_increases_length
     tsRefs:
       - packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn
-      - packages/core/src/evolution/engine.ts#EvolutionEngine.maybeEvolveScaffold
+      - packages/core/src/evolution/engine.ts#EvolutionEngine.runDueEvolution
       - packages/core/src/orchestrator/agent-orchestrator.ts#AgentOrchestrator.sessionTurnIndex
       - packages/core/src/scaffold/rollback.ts#rollbackScaffold
       - packages/core/src/scaffold/modify.ts#modifyScaffold
@@ -909,100 +909,6 @@ requirements:
       - Rule 4 is proved to have teeth but its precedence over rule 6 is not modelled, and the source records that the opposite order would leave this comparison as dead code
       - The re-verifier is a parameter, so a verifier that lies satisfies every theorem here and no gate ordering reaches it
       - Declared dependency edges (rule 1, dependency-unsettled) are not modelled in Rebase, so safety for a member depending on a skipped one is proved only for assumed-base dependence, not for named edges
-  PR-DEVBOX-001:
-    statement: A chunked tick accounts for whole-file fallbacks or changed nonzero blocks plus records; v2 attach reads changed namespace records and no file payload.
-    status: proved-in-abstract-model
-    theorems:
-      - Kinu.Storage.SnapshotChain.layers_le_two
-      - Kinu.Storage.SnapshotChain.small_file_travels_whole
-      - Kinu.Storage.SnapshotChain.sparse_file_travels_whole
-      - Kinu.Storage.SnapshotChain.unavailable_hashes_travel_whole
-      - Kinu.Storage.SnapshotChain.chunked_file_publishes_blocks_and_record
-      - Kinu.Storage.SnapshotChain.chain_tick_is_sum_of_file_publications
-      - Kinu.Storage.SnapshotChain.chain_tick_append
-      - Kinu.Storage.SnapshotChain.identical_upper_republishes_same_blocks
-      - Kinu.Storage.SnapshotChain.deduplicated_stage_le_file_sum
-      - Kinu.Storage.SnapshotChain.unavailable_chunking_uses_full_upper
-      - Kinu.Storage.SnapshotChain.c3_overwrite_touches_at_most_five_blocks
-      - Kinu.Storage.SnapshotChain.c3_aligned_overwrite_touches_four_blocks
-      - Kinu.Storage.SnapshotChain.c3_uses_chunked_publication
-      - Kinu.Storage.SnapshotChain.c3_publication_bound
-      - Kinu.Storage.SnapshotChain.c3_wire_bound
-      - Kinu.Storage.SnapshotChain.c3_is_strictly_cheaper_than_whole_file
-      - Kinu.Storage.SnapshotChain.chain_attach_layer_setup
-      - Kinu.Storage.SnapshotChain.chain_attach_reads_manifest
-      - Kinu.Storage.SnapshotChain.chain_attach_reads_no_payload
-      - Kinu.Storage.SnapshotChain.chain_attach_independent_of_n
-      - Kinu.Storage.SnapshotChain.chain_attach_independent_of_pending
-      - Kinu.Storage.SnapshotChain.attach_without_delta_materializes_nothing
-      - Kinu.Storage.SnapshotChain.extract_attach_is_linear_in_n
-      - Kinu.Storage.SnapshotChain.first_base_uploads_unexcluded_bytes
-      - Kinu.Storage.SnapshotChain.first_base_upper_bound
-      - Kinu.Storage.SnapshotChain.unchanged_tick_uploads_nothing
-    tsRefs:
-      - packages/devbox/src/delta-index.ts#DELTA_BLOCK_BYTES
-      - packages/devbox/src/chunked-delta.ts#DELTA_WHOLE_FILE_THRESHOLD
-      - packages/devbox/src/chunked-delta.ts#DELTA_SPARSE_WHOLE_FRACTION
-      - packages/devbox/src/chunked-delta.ts#planDeltaPublication
-      - packages/devbox/src/chunked-delta.ts#buildDeltaStageOps
-      - packages/devbox/src/chunked-delta.ts#buildDeltaAttachOps
-      - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
-      - packages/devbox/bench/witness-files.ts#C3_WORKLOAD
-      - packages/devbox/bench/witness-files.ts#C3_BYTES_BOUND
-    remainingEvidence:
-      - The per-file publication sum rounds final blocks up and precedes blob and inode deduplication; zero overrides carry records but no uploaded chunk
-      - C3's strict 196608 wire bound requires explicit record and encoding budgets; arbitrary paths and squashfs compression or framing are not proved here and remain bench obligations
-      - The upper is compared against the base, not the last tick; unchanged cumulative dirty blocks can be republished and no pending-only complexity claim is made
-      - Hosts that cannot stage a chunked package fall back to the whole upper, and the first base and extraction modes still process whole trees
-      - V2 M counts files and H other namespace records; override pages are outside the attach manifest and inside the conditional wire framing allowance
-      - R2 classB counts layer probes only, not demand-driven FUSE GETs; actual network traffic and elapsed time remain measured by the bench
-  PR-DEVBOX-002:
-    statement: Rebase compares stored delta and base bytes only at quiesce, ticks retain chunked publication, and generation retention covers the current generation plus one proven fallback and named orphans.
-    status: proved-in-abstract-model
-    theorems:
-      - Kinu.Storage.SnapshotChain.tick_never_rebases
-      - Kinu.Storage.SnapshotChain.rebase_requires_the_delta_to_outgrow_k_base
-      - Kinu.Storage.SnapshotChain.rebase_amortizes_at_a_quiesce
-      - Kinu.Storage.SnapshotChain.a_tick_past_the_ratio_still_publishes_changed_blocks
-      - Kinu.Storage.SnapshotChain.retained_generations_le_two
-      - Kinu.Storage.SnapshotChain.fresh_retention_is_bounded
-      - Kinu.Storage.SnapshotChain.genStep_preserves_retention_bound
-      - Kinu.Storage.SnapshotChain.stored_is_bounded_by_current_fallback_and_orphans
-      - Kinu.Storage.SnapshotChain.first_rebase_retains_a_fallback
-      - Kinu.Storage.SnapshotChain.further_rebase_names_one_generation
-      - Kinu.Storage.SnapshotChain.proven_attach_retires_the_fallback
-      - Kinu.Storage.SnapshotChain.a_completed_sweep_leaves_current_and_fallback
-      - Kinu.Storage.SnapshotChain.a_partial_sweep_preserves_retained_generations
-      - Kinu.Storage.SnapshotChain.without_a_sweep_current_fallback_and_orphans_grow
-    tsRefs:
-      - packages/devbox/src/snapshot-chain.ts#REBASE_DELTA_RATIO
-      - packages/devbox/src/snapshot-chain.ts#shouldRebase
-      - packages/devbox/src/snapshot-chain.ts#supersedeGeneration
-      - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
-      - packages/devbox/src/storage.ts#CheckpointKind
-    remainingEvidence:
-      - Amortization is conditional on merged archive bytes being at most stored base plus delta bytes; chunking and compression do not establish that premise
-      - The ratio is shipped as one and was measured for whole-delta publication; its firing rate under chunked publication remains unmeasured
-      - A completed sweep retains the current generation and any proven fallback; only successful attach releases the fallback into the orphan list
-      - The model covers atomic record transitions and named cleanup, not interrupted object PUTs before record publication or crashes within one storage operation
-      - Named generations can accumulate until a successful commit sweeps them; reference retention alone does not impose a global stored-byte cap
-  PR-DEVBOX-005:
-    statement: After a completed checkpoint, snapshot-chain crash loss is exactly the writes accepted since that tick. Removing snapshot-chain's cannot-decide-commits gate leaves the window open under any finite cadence of skipped ticks.
-    status: proved-in-abstract-model
-    theorems:
-      - Kinu.Storage.SnapshotChain.a_completed_tick_closes_the_window
-      - Kinu.Storage.SnapshotChain.a_tick_free_segment_only_writes
-      - Kinu.Storage.SnapshotChain.loss_is_the_writes_since_the_last_tick
-      - Kinu.Storage.SnapshotChain.skipped_ticks_preserve_loss
-      - Kinu.Storage.SnapshotChain.no_number_of_skipping_ticks_closes_the_window
-      - Kinu.Storage.SnapshotChain.a_skipping_tick_leaves_the_window_open
-    tsRefs:
-      - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
-      - packages/devbox/src/snapshot-chain.ts#shouldCheckpoint
-    remainingEvidence:
-      - The tick is modelled as one atomic pointer commit, so exact equality is a claim about that model and says nothing about an archive that was interrupted partway
-      - The wall-clock width is checkpoint cadence plus one in-flight operation, a scheduling fact the counter models do not see
-      - A write is one unit; the models bound lost writes, and bytes follow from the implementation's whole-file fingerprints and fixed-size chunks
   PR-DEVBOX-006:
     statement: A crash loses no write P + J + 2D - 1 old while every periodic tick commits, a schedule loses one P + J + 2D - 2 old, each missed tick adds P + J + D, and because the minimum-interval gate is clocked by tick commits alone it never skips a periodic tick, so a quiesce commit whose stop is refused leaves the window at P + J + 2D.
     status: proved-in-abstract-model
@@ -1018,13 +924,13 @@ requirements:
     tsRefs:
       - packages/devbox/src/devbox.ts#Devbox.devboxCheckpoint
       - packages/devbox/src/devbox.ts#Devbox.quiesce
-      - packages/devbox/src/snapshot-chain.ts#shouldCheckpoint
+      - packages/devbox/src/disk-chain.ts#diskChain
       - packages/devbox/src/lifecycle.ts#DEFAULT_DEVBOX_POLICY
     remainingEvidence:
       - P is the shipped checkpointIntervalMs of 300000 ms; J, the alarm lateness, and D, the longest tick, are parameters with no recorded measurement
-      - The gate is modelled as lane/devbox 42c7c64a7 ships it, clocked by tick commits alone (tickClock); this branch's shouldCheckpoint predates that commit, and the refinement against it follows once it is on main
+      - The gate is modelled clocked by tick commits alone; the hybrid's (diskChain's commit) compares against the last commit of any kind, so it is not yet a refinement
       - A background sync that replaces the periodic tick instantiates Tick with its own period and upload bound
-      - A tick is modelled from its start to its commit; interruption inside one storage operation is PR-DEVBOX-002's scope
+      - A tick is modelled from its start to its commit; interruption inside one storage operation is not modelled
   PR-DEVBOX-004:
     statement: V2 storage attach processes bounded namespace and layer metadata with zero file payload; balanced authenticated indexes resolve blocks logarithmically and compose size-clipped base, holes and chunks; readiness requires matching composed mounts and copy-up is file-local.
     status: proved-in-abstract-model
@@ -1042,14 +948,11 @@ requirements:
       - Kinu.Storage.BlockLayer.absent_override_reads_base
       - Kinu.Storage.BlockLayer.ready_implies_all_composed_mounted
       - Kinu.Storage.BlockLayer.copyup_is_file_local
-      - Kinu.Storage.BlockLayer.publication_accounting_unchanged
-      - Kinu.Storage.BlockLayer.c3_publication_stays_bounded
     tsRefs:
-      - packages/devbox/src/delta-index.ts#buildDeltaIndex
-      - packages/devbox/src/delta-index.ts#lookupDeltaIndex
-      - packages/devbox/src/chunked-delta.ts#buildDeltaAttachOps
-      - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
+      - packages/devbox/src/disk-chain.ts#DELTA_SCRIPT
+      - packages/devbox/src/disk-chain.ts#diskChain
     remainingEvidence:
+      - The index is built by DELTA_SCRIPT and read by the Rust block lower (packages/devbox/block-lower/src/index.rs), which tsRefs cannot cite
       - Metadata costs have explicit bounded-record premises; Rust uses byte-radix namespace tables with fanout at most 256 and platform-bounded path lengths
       - The search theorem assumes the balanced rank shape produced by median paging; median_children_half proves both child sizes satisfy the halving premise
       - Read correctness assumes ordered authentic records and correct base and chunk bytes; SHA-256 collision resistance and the Rust translation are tested assumptions, not axioms or kernel proofs

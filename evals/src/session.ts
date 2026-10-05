@@ -102,7 +102,7 @@ import {
   RunEventSchema, STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type SubordinateInspectionRequest, type WorkspaceSpend,
-  QualityDaySchema, type QualityDay,
+  QualityDaySchema, type QualityDay, ProfileCatalogEnvelopeSchema, betaSwarms,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream, TurnStreams } from '../../packages/cli/src/cloud-turn-stream';
@@ -405,6 +405,12 @@ export interface PublicResponseFrame {
   /** Set by the DO on every frame of a stream it REPLAYS. Carried because the
    *  accumulator needs it to stay idempotent across a resume. */
   readonly replay?: boolean;
+  /** On a replayed chunk: a step the ledger records, restated rather than
+   *  relayed, which a client that streamed it skips. A build before 2026-10-01
+   *  restates nothing. */
+  readonly restated?: boolean;
+  /** The replay's last frame: the live chunks follow. */
+  readonly replayComplete?: boolean;
 }
 
 /** What one decoded socket frame is. `other` is not an error: the DO fans
@@ -455,6 +461,8 @@ const FrameSchema = v.object({
    *  admitted here and each branch below reads the one it means. */
   error: v.optional(v.union([v.boolean(), JsonValueSchema])),
   replay: v.optional(v.boolean()),
+  restated: v.optional(v.boolean()),
+  replayComplete: v.optional(v.boolean()),
   success: v.optional(v.boolean()),
   result: v.optional(JsonValueSchema),
   turnId: v.optional(v.string()),
@@ -491,6 +499,8 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
         done: frame.output.done,
         error: frame.output.error === true,
         replay: frame.output.replay,
+        restated: frame.output.restated,
+        replayComplete: frame.output.replayComplete,
         landed: frame.output.landed,
       },
     };
@@ -613,9 +623,7 @@ export function recordPublicTurn(): PublicTurnRecorder {
         return;
       }
 
-      if (frame.body !== undefined && frame.body.trim() !== '') {
-        stream.apply(frame.body, frame.replay === true);
-      }
+      stream.apply(frame);
 
       // The done frame is the DO's verdict on WHERE the send landed. A
       // mid-turn answer opens no stream of its own — `settle` would mint a
@@ -704,7 +712,7 @@ const InspectionAnswerSchema = v.variant('view', [
   v.object({ view: v.literal('children'), page: pageOf(v.object({
     name: v.string(), status: v.string(), lifetime: v.string(), actorReference: v.nullable(v.object({ actorId: v.string() })),
   })) }),
-  v.object({ view: v.literal('runs'), page: pageOf(v.object({ runId: v.string(), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
+  v.object({ view: v.literal('runs'), page: pageOf(v.object({ runId: v.string(), startedAt: v.number(), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
   v.object({ view: v.literal('events'), page: v.variant('status', [
     v.object({ status: v.literal('more'), items: v.array(RunEventSchema), next: v.number() }),
     v.object({ status: v.literal('end'), items: v.array(RunEventSchema) }),
@@ -967,6 +975,8 @@ const HistorySchema = v.array(v.object({
 
 /** One durable message, as the web pane's seed carries it. */
 export interface PublicMessage {
+  /** Absent on a row the transcript keeps no id for. */
+  readonly id?: string;
   readonly role: string;
   /** What it says: an answer's final text, never the narration its steps streamed before it. */
   readonly text: string;
@@ -1077,8 +1087,33 @@ export function beatWorkspace(origin: string, identity: PublicWebIdentity, name:
   return everyBeat(() => markLive(origin, identity, name));
 }
 
+/** Writers per account racing for its catalog, and a spare: each lost race means another writer landed. */
+const CATALOG_WRITE_ATTEMPTS = 4;
+
+/** "Beta: swarms" on for the account the evals run as, whose swarms are part of what they measure; the cases of one
+ *  run race to turn it on, so a lost version race reads again until it is on. */
+async function turnOnSwarms(origin: string, headers: Record<string, string>): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    const read = await fetch(`${origin}/api/user/profile-catalog`, { headers });
+    const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await readJson(read, 'read the profile catalog'));
+
+    if (betaSwarms(catalog)) return;
+
+    const answer = await fetch(`${origin}/api/user/profile-catalog`, {
+      method: 'PUT',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ catalog: { ...catalog, betaSwarms: true }, expectedVersion: version }),
+    });
+
+    if (answer.ok || (answer.status === 409 && attempt < CATALOG_WRITE_ATTEMPTS)) continue;
+    await readJson(answer, 'turn on Beta: swarms');
+  }
+}
+
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
   const headers = webHeaders(input.identity);
+
+  await infraBoundary(`PUT ${input.origin}/api/user/profile-catalog`, () => turnOnSwarms(input.origin, headers));
 
   const created = await infraBoundary(
     `POST ${input.origin}/api/user/workspaces`,
@@ -1119,9 +1154,7 @@ export async function openPublicSession(input: PublicSessionInput): Promise<Kinu
       // (workspace-create.ts's renderSoulMarkdown over the same display name),
       // and it lands before the first prompt — so every turn still runs under
       // the case's real mission and only the unrequested first turn is gone.
-      await session.setSoul(renderSoulMarkdown({
-        name: SESSION_DISPLAY_NAME, mission: input.purpose,
-      }));
+      await session.setMission(input.purpose);
     }
 
     await session.pinModel(input.llm.model);
@@ -1448,6 +1481,11 @@ export class KinuPublicSession {
       this.rpc('setSoul', [markdown]));
   }
 
+  /** The mission, written as creation writes it. */
+  setMission(mission: string): Promise<void> {
+    return this.setSoul(renderSoulMarkdown({ name: SESSION_DISPLAY_NAME, mission }));
+  }
+
   /** Start a turn and hand back its id and its promise. The promise resolves
    *  when the run that ANSWERS the prompt closes — the prompt's own turn, or
    *  the run it spliced into when the done frame answers `mid-turn`. */
@@ -1670,8 +1708,8 @@ export class KinuPublicSession {
 
   /**
    * Listen to exactly these helpers' rooms, by name or path. A helper's turn streams to its own window alone (`broadcastToActor`), so it
-   * is heard only on a socket opened on its path, as its window opens one. A room relays no replay: a call that started
-   * before its socket opened is not known to run.
+   * is heard only on a socket opened on its path, as its window opens one. A room opened mid-turn is replayed the turn, as every room
+   * is, so a call that started before it opened is known to run.
    */
   listen(helpers: readonly string[]): void {
     for (const [name, room] of this.rooms) {
@@ -1690,10 +1728,18 @@ export class KinuPublicSession {
   private openRoom(name: string): HelperRoom {
     const socket = this.newSocket(hostedActorSocketPath(name));
     const heard = new HeardStreams();
+    const acked = new Set<string>();
 
     this.hearing.add(heard);
     socket.addEventListener('message', (event: MessageEvent) => {
       const frame = decodeFrame(event.data);
+
+      // Told on connect and again on request, acked once as the SDK's hook acks it: until then the room keeps the turn's
+      // live chunks from this socket.
+      if (frame?.kind === 'resuming' && !acked.has(frame.id)) {
+        acked.add(frame.id);
+        socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }));
+      }
 
       // A head's broadcasts reach every socket, and the workspace's own hears them.
       if (frame?.kind !== 'response') return;
@@ -1755,11 +1801,37 @@ export class KinuPublicSession {
     return v.parse(ToolDescriptionsSchema, answer).crafted;
   }
 
+  /** The agent's own learning setting, as Settings and `--no-auto-evolve` set it (`setEvolutionConfig`). */
+  async setLearning(on: boolean): Promise<void> {
+    await this.boundary(`setEvolutionConfig on ${this.input.origin}/${this.workspace}`, () => this.rpc('setEvolutionConfig', [{ learning: on }]));
+  }
+
+  /** A thumb on one answer, as the web pane gives it (`setTurnFeedback`). */
+  async rate(messageId: string, feedback: 'positive' | 'negative'): Promise<void> {
+    await this.boundary(`setTurnFeedback on ${this.input.origin}/${this.workspace}`, () => this.rpc('setTurnFeedback', [messageId, feedback]));
+  }
+
   /** Satisfaction per day as the Quality tab reads it (`getQuality`): rated turns, by thumbs or the decision model. */
   async quality(days = 1): Promise<readonly QualityDay[]> {
     return v.parse(v.array(QualityDaySchema), await this.boundary(
       `getQuality on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getQuality', [days]),
+    ));
+  }
+
+  /** The memory note displayed by the UI's memory pane. */
+  async memoryContent(): Promise<string> {
+    return v.parse(v.string(), await this.boundary(
+      `getMemoryContent on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getMemoryContent', []),
+    ));
+  }
+
+  /** The same public fact listing the workspace exposes to its owner. */
+  async memoryFacts(): Promise<readonly { key: string; value: JsonValue }[]> {
+    return v.parse(v.array(v.object({ key: v.string(), value: JsonValueSchema })), await this.boundary(
+      `getFacts on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getFacts', []),
     ));
   }
 
@@ -1987,7 +2059,9 @@ export class KinuPublicSession {
     return rows.map((row) => {
       const spliceStep = v.safeParse(v.number(), row.metadata?.[STEER_STEP_METADATA_KEY]);
 
-      const message: PublicMessage = { role: row.role, text: rowText({ role: row.role, parts: row.parts ?? [] }) };
+      const message: PublicMessage = {
+        ...(row.id !== undefined && { id: row.id }), role: row.role, text: rowText({ role: row.role, parts: row.parts ?? [] }),
+      };
 
       // SAFETY: `v.number()` above already proved the metadata value is a
       // number — the splice step is a field the row either carries or lacks.

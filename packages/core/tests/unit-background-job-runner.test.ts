@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, newJobId,
-  type JobHarvester, type JobResumer,
+  type JobHarvester, type JobHolder, type JobResumer,
 } from '../src/jobs/runner';
 import { Inbox } from '../src/orchestrator/inbox';
 import {
@@ -20,6 +20,9 @@ import { makeSql, makeExecRaw, makeSqlExec, conversationsFor } from './helpers';
 import { createTestRuntime, createTestActors, toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { inWorkMode } from '../src/execution/work-mode';
+import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
+import { processJobHolder } from '../src/jobs/process-holder';
+import { scratchPath } from '@kinu.run/test-utils';
 
 /** Runs the body inline; exposes in-flight bodies so a test can await detach completion. */
 function fakeFiber() {
@@ -68,6 +71,7 @@ function setup(opts: {
   onDetached?: ((jobId: string, requestIds: readonly string[]) => Promise<void> | void) | null;
   onCancelled?: ((jobId: string) => Promise<void> | void) | null;
   scheduleResume?: (atMs: number) => Promise<void> | void;
+  holder?: JobHolder;
 } = {}) {
   const db = opts.db ?? new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
@@ -107,6 +111,7 @@ function setup(opts: {
     policy: policy === undefined ? undefined : () => policy,
     harvest: opts.harvest,
     scheduleResume: opts.scheduleResume,
+    holder: opts.holder,
   };
 
   const runner = new BackgroundJobRunner(runnerDeps);
@@ -298,6 +303,42 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
     const { runner, store } = setup();
     const id = runner.create('agents', { action: 'hire', agent: 'x' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBeNull();
+  });
+});
+
+// Review of 4028013fc, 2026-10-03: dismissing a hire left its detached processes alive, holding the workspace's detach cap.
+describe('BackgroundJobRunner.retire — the actor leaves', () => {
+  test("every running job stops, its external work confirmed, and nothing wakes the agent that is leaving", async () => {
+    const confirmed: string[] = [];
+    const { runner, runnerDeps, store, enqueued } = setup({ onCancelled: (jobId) => { confirmed.push(jobId); } });
+    const live = new AbortController();
+    const held = runner.create('shell', { command: 'node server.js' }, 'build', live);
+
+    runner.detach(held, 'shell', new Promise(() => {}));
+
+    // A row an earlier activation left running: no controller here, and still this actor's.
+    const orphan = new BackgroundJobRunner({ ...runnerDeps }).create('shell', { command: 'sleep 600' }, 'build', new AbortController());
+    const retirement = await runner.retire();
+
+    expect([...retirement.stopped].sort()).toEqual([held, orphan].sort());
+    expect(retirement.refused).toEqual([]);
+    expect(live.signal.aborted).toBe(true);
+    expect([store.get(held)?.status, store.get(orphan)?.status]).toEqual(['cancelled', 'cancelled']);
+    expect(confirmed.sort()).toEqual([held, orphan].sort());
+    expect(enqueued).toEqual([]);
+  });
+
+  test('a job whose device work nothing confirmed stopped is refused, and keeps running', async () => {
+    const { runner, store, enqueued } = setup({
+      onCancelled: (jobId) => { if (jobId === refused) throw new Error('the device did not answer the cancel'); },
+    });
+
+    const refused = runner.create('shell', { command: 'tail -f log' }, 'build', new AbortController());
+    const stopped = runner.create('shell', { command: 'node server.js' }, 'build', new AbortController());
+
+    expect(await runner.retire()).toEqual({ stopped: [stopped], refused: [refused] });
+    expect([store.get(refused)?.status, store.get(stopped)?.status]).toEqual(['running', 'cancelled']);
+    expect(enqueued).toEqual([]);
   });
 });
 
@@ -720,6 +761,133 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     expect(first.store.runningIds()).toEqual(['jz']);
   });
 
+  test('a job another live process runs is left to it and named in flight; one it no longer runs is re-driven and held here', async () => {
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const held = new Map<string, string>([['jl', 'daemon'], ['jg', 'gone']]);
+
+    const holder: JobHolder = {
+      hold: (jobId) => { held.set(jobId, 'this'); },
+      heldElsewhere: (jobId) => held.get(jobId) === 'daemon',
+      take: (jobId, claim) => {
+        if (held.get(jobId) === 'daemon') return 'held';
+        const won = claim();
+
+        if (won !== null) held.set(jobId, 'this');
+
+        return won;
+      },
+    };
+
+    const { runner, store } = setup({ resume, holder });
+    store.create({ id: 'jl', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    store.create({ id: 'jg', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+
+    expect((await runner.recoverOrphans()).map((job) => job.id).sort()).toEqual(['jg', 'jl']);
+    expect({ live: store.get('jl')?.resumeAttempts, gone: store.get('jg')?.resumeAttempts }).toEqual({ live: 0, gone: 1 });
+    expect(Object.fromEntries(held)).toEqual({ jl: 'daemon', jg: 'this' });
+    expect(held.get(runner.create('think', {}, 'build', new AbortController()))).toBe('this');
+  });
+
+  /** Two processes on one SQLite file: this one, and a live `sleep` standing in for the other. */
+  async function twoProcesses() {
+    const path = scratchPath('job-claim', 'jobs.db');
+    const [first, second] = [new Database(path), new Database(path)];
+    const other = Bun.spawn(['sleep', '600']);
+    const gone = Bun.spawn(['true']);
+    await gone.exited;
+
+    // Both racers live; a holder that left its job does not.
+    const alive = new Set([process.pid, other.pid]);
+    const resumed: string[] = [];
+
+    const holderOn = (db: Database, pid: number): JobHolder => processJobHolder(
+      { sql: makeSql(db), execRaw: makeExecRaw(db), transactionSync: (write) => db.transaction(write).immediate() },
+      { pid, isAlive: (candidate) => alive.has(candidate) },
+    );
+
+    const racer = (db: Database, pid: number, name: string, holder = holderOn(db, pid)) => {
+      const sql = makeSql(db);
+      const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
+      const { fiber, settled } = fakeFiber();
+
+      const resume: JobResumer = async () => {
+        resumed.push(name);
+
+        return 'done';
+      };
+
+      return { store, settled, holder, runner: new BackgroundJobRunner({ store, fiber, inbox: new Inbox(fakeHost().host), resume, holder }) };
+    };
+
+    initBackgroundJobsTable(makeExecRaw(first));
+    createTestActors(makeSql(first), makeExecRaw(first));
+
+    return {
+      first, gone, resumed, holderOn, racer, other: racer(second, other.pid, 'b'),
+      close: () => { other.kill(); first.close(); second.close(); },
+    };
+  }
+
+  // Main, 2026-10-04: two processes starting together after a job's holder died both reclaimed it and both resumed it.
+  test('two processes recovering a job whose holder died resume it once, though one claims while the other reads', async () => {
+    const { first, gone, resumed, holderOn, racer, other: b, close } = await twoProcesses();
+
+    try {
+      const real = racer(first, process.pid, 'a').holder;
+      let raced: Promise<unknown> | null = null;
+
+      // The other process's recovery runs to its claim between this one's read of the holder and its own claim.
+      const a = racer(first, process.pid, 'a', {
+        ...real,
+        heldElsewhere: (jobId) => {
+          const answer = real.heldElsewhere(jobId);
+
+          raced ??= b.runner.recover({ jobId, phase: 'running' });
+
+          return answer;
+        },
+      });
+
+      a.store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+      holderOn(first, gone.pid).hold('jd');
+
+      await a.runner.recover({ jobId: 'jd', phase: 'running' });
+      await raced;
+      await Promise.all([a.settled(), b.settled()]);
+
+      expect(resumed).toEqual(['b']);
+      expect(a.store.get('jd')).toMatchObject({ status: 'completed', resumeAttempts: 1 });
+    } finally {
+      close();
+    }
+  });
+
+  // Main, 2026-10-04: a job was published running before its holder, so a process starting between the two reclaimed it.
+  test('a process sweeping while a job is created leaves it to its creator', async () => {
+    const { first, resumed, racer, other: b, close } = await twoProcesses();
+
+    try {
+      const a = racer(first, process.pid, 'a');
+      const insert = a.store.create.bind(a.store);
+      let raced: Promise<unknown> | null = null;
+
+      // The other process sweeps the moment the running row is visible.
+      a.store.create = (row) => {
+        insert(row);
+        raced ??= b.runner.recoverOrphans();
+      };
+
+      const id = a.runner.create('agents', {}, 'build', new AbortController());
+      await raced;
+      await b.settled();
+
+      expect(resumed).toEqual([]);
+      expect(b.store.get(id)).toMatchObject({ status: 'running', epoch: 0, resumeAttempts: 0 });
+    } finally {
+      close();
+    }
+  });
+
   test('a job whose executor is alive in THIS process is not reclaimed as an orphan', async () => {
     const resume: JobResumer = async () => 'should not run';
     const { runner, store, settled } = setup({ resume });
@@ -955,7 +1123,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       store.create({ id: `owed-${i}`, kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
-      store.reclaim(`owed-${i}`);
+      store.reclaim(`owed-${i}`, store.epochOf(`owed-${i}`) ?? -1);
       store.deferResume(`owed-${i}`, Date.now() + 60_000);
     }
 
@@ -1061,7 +1229,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     store.create({ id: 'j1', kind: 'agents', workMode: 'build', input: '{}', now: 1_000 });
     expect(store.get('j1')?.attemptStartedAt).toBe(1_000);
 
-    store.reclaim('j1', 5_000);
+    store.reclaim('j1', store.epochOf('j1') ?? -1, 5_000);
     expect(store.get('j1')).toMatchObject({
       attemptStartedAt: 5_000, resumeAttempts: 1, epoch: 1,
     });
@@ -1085,7 +1253,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     store.create({ id: 'bgjob-unresumable', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
     // The attempt count rides the partial but decides nothing.
-    for (let i = 0; i < 50; i++) store.reclaim('bgjob-unresumable');
+    for (let i = 0; i < 50; i++) store.reclaim('bgjob-unresumable', store.epochOf('bgjob-unresumable') ?? -1);
 
     await runner.recoverOrphans();
     await settled();
@@ -1184,8 +1352,8 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     });
 
     store.create({ id: 'bgjob-gen', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
-    store.reclaim('bgjob-gen');
-    store.reclaim('bgjob-gen');
+    store.reclaim('bgjob-gen', store.epochOf('bgjob-gen') ?? -1);
+    store.reclaim('bgjob-gen', store.epochOf('bgjob-gen') ?? -1);
 
     await runner.recoverOrphans();
     await settled();

@@ -1,20 +1,11 @@
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The evolution loop's evidence budget: the end of a long turn must reach the judge.
-import type { ChatEvent } from '../src/chat';
 import { describe, test, expect } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
-import * as v from 'valibot';
 import {
   EVIDENCE_BUDGETS, evidenceWindow,
-  initScaffoldTables, initShadowTables, runAutoShadowEval, queueTurnShadowTrial,
-  runQueuedShadowTrials, type JudgeOutput, type ScaffoldControl,
 } from '../src/index';
 import { renderReflectionPrompt } from '../src/evolution/gepa/mutate';
 import type { GepaCandidate } from '../src/evolution/gepa/types';
 import { rateTurn } from '../src/evolution/ratings';
-import { createTestRuntime, storesFor } from './helpers';
-import { unobservedSpend } from '@kinu.run/test-utils';
-import { RunEventRecorder } from '../src/events/recorder';
 
 /** A seed candidate carrying `source`, the only field these prompts read. */
 function candidate(source: string): GepaCandidate {
@@ -57,9 +48,6 @@ describe('the budgets are ordered — a reader never asks for more than was stor
     const stored = EVIDENCE_BUDGETS;
     expect(stored.replayTask).toBeLessThanOrEqual(stored.storedUserMessage);
     expect(stored.outcomeFollowup).toBeLessThanOrEqual(stored.storedFollowup);
-    expect(stored.replayReferenceResponse).toBeLessThanOrEqual(stored.storedAssistantResponse);
-    expect(stored.replayFailedResponse).toBeLessThanOrEqual(stored.storedAssistantResponse);
-    expect(stored.replayCorrection).toBeLessThanOrEqual(stored.storedFollowup);
     expect(stored.gepaInstanceInput).toBeLessThanOrEqual(stored.storedUserMessage);
     expect(stored.outcomeAssistantResponse).toBeLessThanOrEqual(stored.storedAssistantResponse);
   });
@@ -67,104 +55,6 @@ describe('the budgets are ordered — a reader never asks for more than was stor
 
 describe('the readers can see the end of a long turn', () => {
   const ending = 'THE-DECISIVE-STEP';
-
-  test('the shadow judge is shown, and the trial row records, how the live turn ended', async () => {
-    const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
-    initShadowTables(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
-      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
-      VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
-    await writeText(rt.storage.vfs, 'scaffold/agent.js.v1', 'async function* run() {}');
-
-    const prompts: string[] = [];
-
-    const judge = async (prompt: string): Promise<JudgeOutput> => {
-      prompts.push(prompt);
-
-      return { winner: 'tie', rationale: 'mock', scoreA: 0.5, scoreB: 0.5 };
-    };
-
-    const result = await runAutoShadowEval({
-      events: new RunEventRecorder(rt.storage.sql, rt.actor),
-      rt,
-      task: trajectory(20_000, `ASK-${ending}`),
-      currentOutput: trajectory(40_000, `CURRENT-${ending}`),
-      judge,
-      llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
-      random: () => 0,
-    });
-
-    expect(result.skipped).toBe(false);
-    expect(prompts).toHaveLength(2);
-
-    for (const prompt of prompts) {
-      expect(prompt).toContain(`ASK-${ending}`);
-      expect(prompt).toContain(`CURRENT-${ending}`);
-    }
-
-    // The recorded task is the one the verdict was formed on.
-    const row = rt.storage.sql<{ task: string }>`
-      SELECT task FROM scaffold_evaluations
-      WHERE actor_id = ${rt.actor.actorId} LIMIT 1`[0];
-
-    expect(row.task).toBe(evidenceWindow(trajectory(20_000, `ASK-${ending}`), EVIDENCE_BUDGETS.shadowTask));
-  });
-
-  // Windowing twice would report the second pass's omission count.
-  test('the orchestrated path windows once, so the omission count is the true one', async () => {
-    const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
-    initShadowTables(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
-      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
-      VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
-    await writeText(rt.storage.vfs, 'scaffold/agent.js.v1', 'async function* run() {}');
-
-    const prompts: string[] = [];
-    const currentOutput = trajectory(200_000, `CURRENT-${ending}`);
-
-    const control: ScaffoldControl = {
-      reportModelCall: unobservedSpend,
-      events: new RunEventRecorder(rt.storage.sql, rt.actor),
-      rt,
-      sql: rt.storage.sql,
-      history: storesFor(rt).history,
-      config: {
-        getShadowSampleRate: () => 1,
-        getAutoPromoteScaffold: () => false,
-        getGepaEvalBudget: () => 1,
-      },
-      surface: () => ({
-        llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
-        callTool: async () => ({}),
-        history: async () => ({ total: 0, offset: 0, entries: [], clipped: false }),
-        defaultInference: async function* () { yield { value: '' }; },
-      }),
-      model: () => new MockLanguageModelV3(),
-      judge: async ({ prompt, schema }) => {
-        prompts.push(prompt);
-
-        return v.parse(schema, { winner: 'tie', rationale: 'm', scoreA: 0.5, scoreB: 0.5 });
-      },
-    };
-
-    // The turn stores the live output whole; the drain windows it once.
-    expect(queueTurnShadowTrial(control, {
-      task: 'short task', currentOutput, context: [{ role: 'user', content: 'short task' }],
-    }, { pendingVersion: 1 })).toBe('queued');
-    await runQueuedShadowTrials(control);
-
-    expect(prompts.length).toBeGreaterThan(0);
-    const prompt = prompts[0];
-
-    if (!prompt) throw new Error('expected shadow judge prompt');
-    const omissions = [...prompt.matchAll(/(\d+) chars omitted from the middle/g)].map((match) => Number(match[1]));
-    // One window, reporting what it really dropped.
-    expect(omissions).toEqual([currentOutput.length - EVIDENCE_BUDGETS.shadowOutput]);
-  });
 
   test('the decision model sees how the request, the answer and the reply ended', async () => {
     const states: string[] = [];
@@ -174,7 +64,7 @@ describe('the readers can see the end of a long turn', () => {
 
       return { answers: {
         satisfaction: { type: 'score', score: 2 }, corrected: { type: 'noul', noul: 0 }, wrong: { type: 'choice', choice: 'nothing' },
-      }, usage: {} };
+      }, usage: { input: 0, output: 0 } };
     }, {
       request: trajectory(20_000, `ASK-${ending}`),
       actions: '',

@@ -4,18 +4,18 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import type { LanguageModel } from 'ai';
+import { getToolName, isToolUIPart, type LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture, MergeOutputSchema,
-  MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions, explorationActorKey, headAgentName, defaultLoopOrigin,
-  initWorkspaceSchema, RunEventRecorder, startBranchHead, workspaceSpend, createAgentStores,
+  MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions, explorationActorKey, defaultLoopOrigin,
+  initWorkspaceSchema, RunEventRecorder, startBranchHead, workspaceSpend, createAgentStores, BackgroundJobRunner,
+  CONFINED_BACKGROUNDABLE_TOOLS,
   type ReasoningEffort,
   type HeadInput, type WebSearchProvider, type JsonObject, type WriteObserver,
   type ModelCallReport, type ModelOperationEvent,
-  type HeadStreamFrame, type ExecutionRouter, type AgentRuntime,
-} from '@kinu.run/core';
+  type HeadStreamFrame, type ExecutionRouter, type AgentRuntime, actorHomeName } from '@kinu.run/core';
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
   mergePolicyProfile, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, createTestActorsOver,
@@ -127,6 +127,24 @@ function headStorageKey(parent: CLIRuntime, id: string): string {
   return openLocalActor(parent.actor, explorationActorKey(id)).storageKey;
 }
 
+/** A head that runs `code` through eval once, then answers. */
+function evalThenDone(code: string) {
+  let calls = 0;
+
+  return scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
+    const invoke = calls++ === 0;
+
+    return {
+      content: invoke
+        ? [{ type: 'tool-call', toolName: 'eval', toolCallId: 'program', input: JSON.stringify({ code }) }]
+        : [{ type: 'text', text: 'done' }],
+      finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    };
+  } });
+}
+
 function capturingHeadModel(
   answer: string,
   sink: (names: string[]) => void,
@@ -222,7 +240,8 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       },
     });
 
-    const session = new LocalAgentSession({ rt: parent, db: parent.db, model, noAutoEvolve: true, onEvent: () => {} });
+    parent.actor.config.setLearning(false);
+    const session = new LocalAgentSession({ rt: parent, db: parent.db, model, onEvent: () => {} });
     const turn = session.send('Inspect the parser.', { id: crypto.randomUUID() });
 
     try {
@@ -391,23 +410,21 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     ]));
   });
 
+  // Rank 36: a Plan head was told to inspect through eval and run, and both refuse in Plan here.
+  test('a Plan head is told only of the tools that can run in Plan', async () => {
+    let prompt = '';
+    const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('done', () => {}, (text) => { prompt = text; })));
+    await (await runtime.spawnHead(aHeadInput({ mode: 'plan' }))).run();
+
+    expect(prompt).toContain('file is available for reading');
+    expect(prompt).not.toContain('use eval only for read-only inspection');
+    expect(prompt).not.toContain('run only read-only inspection commands');
+  });
+
   test('a head advertises and invokes the workspace\'s crafted tools, as every actor does', async () => {
     const parent = makeParent();
     parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-wide doubler', code: '(input) => input.n * 2' });
-    let calls = 0;
-
-    const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
-      const invoke = calls++ === 0;
-
-      return {
-        content: invoke
-          ? [{ type: 'tool-call', toolName: 'eval', toolCallId: 'crafted', input: JSON.stringify({ code: '// Call the workspace craft\nreturn await tools.secret_echo({ n: 21 });' }) }]
-          : [{ type: 'text', text: 'done' }],
-        finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
-        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-          outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-      };
-    } });
+    const model = evalThenDone('// Call the workspace craft\nreturn await tools.secret_echo({ n: 21 });');
 
     const runtime = createCLIHeadRuntime(headDeps(model, { parentRuntime: parent }));
     await (await runtime.spawnHead(aHeadInput({ task: 'Inspect the available sandbox.' }))).run();
@@ -415,6 +432,16 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     expect(model.doStreamCalls).toHaveLength(2);
     expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain('secret_echo');
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('{"result":42}');
+  });
+
+  // Rank 36: a head's allowed tools narrowed its native surface, never the namespaces its eval bound.
+  test('a head allowed only eval reaches no workspace through it', async () => {
+    const model = evalThenDone('return `${typeof workspace.exec} ${typeof state}`;');
+
+    const runtime = createCLIHeadRuntime(headDeps(model));
+    await (await runtime.spawnHead(aHeadInput({ allowedTools: ['eval'] }))).run();
+
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('undefined object');
   });
 
   test('the prompt identifies the canonical workspace reached by its file tools', async () => {
@@ -530,7 +557,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
     for (const head of run?.heads ?? []) {
       expect(head.status).toBe('completed');
-      expect(journal.readSteps(head.id).some((step) => step.text.includes('preserves its findings'))).toBe(true);
+      expect(journal.readSteps(head.id).some((step) => step.parts.some((part) => part.type === 'text' && part.text.includes('preserves its findings')))).toBe(true);
     }
   });
 });
@@ -573,12 +600,19 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     const rt = await createHeadRuntime(makeParent(dir), 'h2');
     const capture = new HeadCapture();
 
+    const stores = createAgentStores(() => rt.storage.sql, () => rt.actor,
+      rt.storage.transactionSync, async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }));
+
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
-      conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => createAgentStores(() => rt.storage.sql, () => rt.actor,
-        rt.storage.transactionSync, async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' })).history.transcript(sessionId)),
+      conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => stores.history.transcript(sessionId)),
       codemodeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
       webSearch: stubWeb,
+      jobs: {
+        jobRunner: new BackgroundJobRunner({ store: stores.jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'queued' } }),
+        backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
+        mode: () => 'build',
+      },
       split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),
     });
 
@@ -649,9 +683,9 @@ function readBack(journal: HeadJournal, rootId: string, headId: string): string 
   const head = journal.readRun(rootId)?.heads.find((h) => h.id === headId);
 
   return (head === undefined ? [] : journal.readSteps(head.id))
-    .flatMap((s) => s.toolCalls)
-    .filter((c) => c.name === 'file')
-    .map((c) => JSON.stringify(c.output ?? ''))
+    .flatMap((s) => s.parts.filter(isToolUIPart))
+    .filter((c) => getToolName(c) === 'file')
+    .map((c) => JSON.stringify(c.state === 'output-available' ? c.output : ''))
     .join('\n');
 }
 
@@ -673,7 +707,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
     };
 
     const runtime = createCLIHeadRuntime(headDeps(
-      scratchProbeModel(barrier(2, () => {}), (id) => `/home/${headAgentName(key(id))}/note.txt`),
+      scratchProbeModel(barrier(2, () => {}), (id) => `/home/${actorHomeName({ origin: 'swarm', storageKey: key(id) })}/note.txt`),
       { journal: () => journal, parentRuntime: parent },
     ));
 
@@ -807,9 +841,9 @@ describe("a head's eval holds the namespaces the shared description promises", (
     await (await runtime.spawnHead(input)).run();
 
     const outputs = journal.readSteps('stateful')
-      .flatMap((s) => s.toolCalls)
-      .filter((c) => c.name === 'eval')
-      .map((c) => JSON.stringify(c.output ?? ''));
+      .flatMap((s) => s.parts.filter(isToolUIPart))
+      .filter((c) => getToolName(c) === 'eval')
+      .map((c) => JSON.stringify(c.state === 'output-available' ? c.output : ''));
 
     expect(outputs).toHaveLength(1);
     expect(outputs[0]).toContain('kept');
@@ -974,7 +1008,7 @@ describe("the merge synthesis' operation lifecycle", () => {
     expect(operations[1].outcome).toBe('ok');
     expect(operations[1].usage).toEqual({ input: 8, output: 12 });
     expect(operations[1].modelId).toBe('fake-merge');
-    expect(reports).toEqual([{ source: 'judge', usage: { input: 8, output: 12 }, modelId: 'fake-merge' }]);
+    expect(reports).toEqual([{ source: 'judge', usage: { input: 8, output: 12 }, modelId: 'fake-merge', spec: 'fake/deep-grader', account: undefined }]);
   });
 
   test('a thrown provider leaves a failed end row and rethrows', async () => {
@@ -983,7 +1017,8 @@ describe("the merge synthesis' operation lifecycle", () => {
       doGenerate: async () => { throw new Error('socket hung up'); },
     }));
 
-    await expect(runtime.mergeLLM('merging the findings of 2 heads', MergeOutputSchema)).rejects.toThrow('socket hung up');
+    // Said as every fixed-tier call's failure is: the tier it was calling, after its chain ran out.
+    await expect(runtime.mergeLLM('merging the findings of 2 heads', MergeOutputSchema)).rejects.toThrow('calling the deep tier');
 
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
     expect(operations[1].outcome).toBe('failed');

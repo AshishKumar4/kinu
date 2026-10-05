@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 748" width="900" height="748" role="img" aria-labelledby="t d">
+  <!-- A docs figure. Its sibling in this directory (same name, -dark suffix)
+       is the same geometry under a different :root palette, and CONTEXT-WINDOW.md picks
+       between the two with <picture>. Everything below the palette block must
+       stay byte-identical in both, so edit them together. -->
+  <title id="t">How the context grows across steps and turns</title>
+  <desc id="d">Requests over two turns, each a row of segments: tools and system prompt cached, a full dynamic block before the first input, tool results and delta blocks appended after it, a delta before the next turn's input, a collapse to one full block after the cache goes cold, and compaction dropping superseded blocks at 85 percent of the window.</desc>
+  <style>
+    :root {
+      --fg: #1f2328;
+      --muted: #59636e;
+      --faint: #818b98;
+      --rule: #d1d9e0;
+      --ruleStrong: #8c959f;
+      --surface: #f6f8fa;
+      --surfaceAlt: #ffffff;
+      --bandFill: #f6f8fa;
+      --bandStroke: #d1d9e0;
+      --blue: #0550ae;
+      --blueFill: #ddf4ff;
+      --blueLine: #0969da;
+      --orange: #953800;
+      --orangeFill: #fff1e5;
+      --orangeLine: #bc4c00;
+      --green: #1a7f37;
+      --greenFill: #dafbe1;
+      --greenLine: #1f883d;
+      --purple: #6639ba;
+      --purpleFill: #fbefff;
+      --purpleLine: #8250df;
+      --pink: #99286e;
+      --pinkFill: #ffeff7;
+      --pinkLine: #bf3989;
+      --slateFill: #eef1f4;
+    }
+    text { font-family: ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; fill: var(--fg); }
+    text.mono { font-family: ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace; }
+    .h  { font-size: 15px; font-weight: 650; letter-spacing: .1px; }
+    .b  { font-size: 13px; font-weight: 600; }
+    .s  { font-size: 11.5px; fill: var(--muted); }
+    .xs { font-size: 10.5px; fill: var(--faint); }
+    .band { font-size: 11px; font-weight: 700; letter-spacing: .9px; fill: var(--faint); }
+    .edge { fill: none; stroke: var(--ruleStrong); stroke-width: 1.4; }
+    .edge-lite { fill: none; stroke: var(--rule); stroke-width: 1.2; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--ruleStrong)"/>
+    </marker>
+    <marker id="a-blue" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--blueLine)"/>
+    </marker>
+    <marker id="a-purple" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--purpleLine)"/>
+    </marker>
+    <marker id="a-pink" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--pinkLine)"/>
+    </marker>
+    <marker id="a-green" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--greenLine)"/>
+    </marker>
+    <marker id="a-orange" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--orangeLine)"/>
+    </marker>
+  </defs>
+  <text class="h" x="58" y="30" text-anchor="start">How the context grows</text>
+  <text class="s" x="58" y="49" text-anchor="start">DynamicContextLedger · composePrepareStep · promptCacheWarm · the compaction ladder</text>
+  <text class="s mono" x="58" y="95" text-anchor="start">turn 1 · step 0</text>
+  <rect x="170" y="78" width="78" height="26" rx="5" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs" x="209.0" y="95" text-anchor="middle">T+S</text>
+  <rect x="170" y="108" width="78" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="252" y="78" width="40" height="26" rx="5" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs" x="272.0" y="95" text-anchor="middle" fill="var(--purple)">full</text>
+  <rect x="252" y="108" width="40" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="296" y="78" width="36" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="314.0" y="95" text-anchor="middle" fill="var(--orange)">ask</text>
+  <rect x="296" y="108" width="36" height="4" rx="2" fill="var(--orangeLine)"/>
+  <text class="xs" x="170" y="128" text-anchor="start">one full block just before the input; nothing cached yet</text>
+  <text class="s mono" x="58" y="169" text-anchor="start">turn 1 · step 1</text>
+  <rect x="170" y="152" width="78" height="26" rx="5" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs" x="209.0" y="169" text-anchor="middle">T+S</text>
+  <rect x="170" y="182" width="78" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="252" y="152" width="40" height="26" rx="5" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs" x="272.0" y="169" text-anchor="middle" fill="var(--purple)">full</text>
+  <rect x="252" y="182" width="40" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="296" y="152" width="36" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="314.0" y="169" text-anchor="middle" fill="var(--orange)">ask</text>
+  <rect x="296" y="182" width="36" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="336" y="152" width="80" height="26" rx="5" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="xs" x="376.0" y="169" text-anchor="middle" fill="var(--green)">call+result</text>
+  <rect x="336" y="182" width="80" height="4" rx="2" fill="var(--orangeLine)"/>
+  <text class="xs" x="170" y="202" text-anchor="start">state unchanged: no block; the whole previous request is read back</text>
+  <text class="s mono" x="58" y="243" text-anchor="start">turn 1 · step 2</text>
+  <rect x="170" y="226" width="78" height="26" rx="5" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs" x="209.0" y="243" text-anchor="middle">T+S</text>
+  <rect x="170" y="256" width="78" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="252" y="226" width="40" height="26" rx="5" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs" x="272.0" y="243" text-anchor="middle" fill="var(--purple)">full</text>
+  <rect x="252" y="256" width="40" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="296" y="226" width="36" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="314.0" y="243" text-anchor="middle" fill="var(--orange)">ask</text>
+  <rect x="296" y="256" width="36" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="336" y="226" width="80" height="26" rx="5" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="xs" x="376.0" y="243" text-anchor="middle" fill="var(--green)">call+result</text>
+  <rect x="336" y="256" width="80" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="420" y="226" width="80" height="26" rx="5" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="xs" x="460.0" y="243" text-anchor="middle" fill="var(--green)">call+result</text>
+  <rect x="420" y="256" width="80" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="504" y="226" width="22" height="26" rx="5" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs" x="515.0" y="243" text-anchor="middle" fill="var(--purple)">Δ</text>
+  <rect x="504" y="256" width="22" height="4" rx="2" fill="var(--orangeLine)"/>
+  <text class="xs" x="170" y="276" text-anchor="start">a task changed: one delta, after the newest results</text>
+  <text class="s mono" x="58" y="317" text-anchor="start">turn 2 · step 0</text>
+  <rect x="170" y="300" width="78" height="26" rx="5" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs" x="209.0" y="317" text-anchor="middle">T+S</text>
+  <rect x="170" y="330" width="78" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="252" y="300" width="40" height="26" rx="5" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs" x="272.0" y="317" text-anchor="middle" fill="var(--purple)">full</text>
+  <rect x="252" y="330" width="40" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="296" y="300" width="36" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="314.0" y="317" text-anchor="middle" fill="var(--orange)">ask</text>
+  <rect x="296" y="330" width="36" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="336" y="300" width="190" height="26" rx="5" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs" x="431.0" y="317" text-anchor="middle">turn 1</text>
+  <rect x="336" y="330" width="190" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="530" y="300" width="22" height="26" rx="5" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs" x="541.0" y="317" text-anchor="middle" fill="var(--purple)">Δ</text>
+  <rect x="530" y="330" width="22" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="556" y="300" width="36" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="574.0" y="317" text-anchor="middle" fill="var(--orange)">ask</text>
+  <rect x="556" y="330" width="36" height="4" rx="2" fill="var(--orangeLine)"/>
+  <text class="xs" x="170" y="350" text-anchor="start">a delta before the new input, if state changed</text>
+  <text class="s mono" x="58" y="391" text-anchor="start">turn 3 · cold</text>
+  <rect x="170" y="374" width="78" height="26" rx="5" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs" x="209.0" y="391" text-anchor="middle">T+S</text>
+  <rect x="170" y="404" width="78" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="252" y="374" width="36" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="270.0" y="391" text-anchor="middle" fill="var(--orange)">ask</text>
+  <rect x="252" y="404" width="36" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="292" y="374" width="226" height="26" rx="5" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs" x="405.0" y="391" text-anchor="middle">turns 1–2</text>
+  <rect x="292" y="404" width="226" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="522" y="374" width="40" height="26" rx="5" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs" x="542.0" y="391" text-anchor="middle" fill="var(--purple)">full</text>
+  <rect x="522" y="404" width="40" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="566" y="374" width="36" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="584.0" y="391" text-anchor="middle" fill="var(--orange)">ask</text>
+  <rect x="566" y="404" width="36" height="4" rx="2" fill="var(--orangeLine)"/>
+  <text class="xs" x="170" y="424" text-anchor="start">cache expired: rewriting is free, so the stored blocks collapse into one</text>
+  <text class="s mono" x="58" y="465" text-anchor="start">compaction</text>
+  <rect x="170" y="448" width="78" height="26" rx="5" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs" x="209.0" y="465" text-anchor="middle">T+S</text>
+  <rect x="170" y="478" width="78" height="4" rx="2" fill="var(--blueLine)"/>
+  <rect x="252" y="448" width="36" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="270.0" y="465" text-anchor="middle" fill="var(--orange)">ask</text>
+  <rect x="252" y="478" width="36" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="292" y="448" width="146" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="365.0" y="465" text-anchor="middle" fill="var(--orange)">ladder</text>
+  <rect x="292" y="478" width="146" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="442" y="448" width="40" height="26" rx="5" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs" x="462.0" y="465" text-anchor="middle" fill="var(--purple)">full</text>
+  <rect x="442" y="478" width="40" height="4" rx="2" fill="var(--orangeLine)"/>
+  <rect x="486" y="448" width="36" height="26" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="504.0" y="465" text-anchor="middle" fill="var(--orange)">ask</text>
+  <rect x="486" y="478" width="36" height="4" rx="2" fill="var(--orangeLine)"/>
+  <text class="xs" x="170" y="498" text-anchor="start">at 85 % of the window: superseded blocks go first, then the ladder</text>
+  <text class="band" x="58" y="528">LEGEND</text>
+  <rect x="58" y="540" width="34" height="20" rx="5" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs" x="75" y="554" text-anchor="middle">T+S</text>
+  <text class="xs" x="98" y="554" text-anchor="start">tools and system prompt</text>
+  <rect x="228" y="540" width="34" height="20" rx="5" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs" x="245" y="554" text-anchor="middle" fill="var(--purple)">full</text>
+  <text class="xs" x="268" y="554" text-anchor="start">full dynamic block</text>
+  <rect x="398" y="540" width="34" height="20" rx="5" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs" x="415" y="554" text-anchor="middle" fill="var(--purple)">Δ</text>
+  <text class="xs" x="438" y="554" text-anchor="start">delta block</text>
+  <rect x="568" y="540" width="34" height="20" rx="5" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs" x="585" y="554" text-anchor="middle" fill="var(--orange)">ask</text>
+  <text class="xs" x="608" y="554" text-anchor="start">a turn's input</text>
+  <rect x="738" y="540" width="34" height="20" rx="5" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="xs" x="755" y="554" text-anchor="middle" fill="var(--green)">c+r</text>
+  <text class="xs" x="778" y="554" text-anchor="start">tool call and result</text>
+  <rect x="58" y="570" width="34" height="4" rx="2" fill="var(--blueLine)"/>
+  <text class="xs" x="98" y="575" text-anchor="start">read from the cache</text>
+  <rect x="348" y="570" width="34" height="4" rx="2" fill="var(--orangeLine)"/>
+  <text class="xs" x="388" y="575" text-anchor="start">written to the cache by this request</text>
+  <rect x="58" y="598" width="826" height="112" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="70" y="619" text-anchor="start">Rules</text>
+  <text class="xs" x="70" y="638" text-anchor="start">A block is added only when the rendered state changed, and never moves once sent: every earlier byte stays cached.</text>
+  <text class="xs" x="70" y="653" text-anchor="start">A delta restates only changed sections, and in a list only changed rows. A full block replaces the deltas when the deltas</text>
+  <text class="xs" x="70" y="668" text-anchor="start">since the last full block pass six times its size (KEYFRAME_SHARE, measured 2026-09-24 on glm-5.3: 10 of 10 read-backs).</text>
+  <text class="xs" x="70" y="683" text-anchor="start">Tail markers move to the newest messages each step, so a step reads the whole previous request from the cache.</text>
+  <text class="xs" x="70" y="698" text-anchor="start">Step pruning shrinks the oldest tool output near the window, in quarter-window batches so the cut point holds still.</text>
+</svg>

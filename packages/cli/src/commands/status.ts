@@ -13,10 +13,11 @@ import { ACCENT, DIM, OK, plural, printAgentStatus } from '../display';
 import { resolveAgentTarget } from '../agent-target';
 import { requireLocalAgent } from '../local-target';
 import { getLocalAgentInfo, readLocalNextTurnTier } from '../local-inspection';
+import type { LocalModelResolverOptions } from '../local-model-resolver';
 
 const NO_MODEL = 'none yet (kinu setup picks one)';
 
-export async function statusCommand(name: string): Promise<void> {
+export async function statusCommand(name: string, opts: LocalModelResolverOptions = {}): Promise<void> {
   const target = resolveAgentTarget(name);
 
   if (target.mode === 'cloud') {
@@ -68,7 +69,7 @@ export async function statusCommand(name: string): Promise<void> {
 
   const local = await requireLocalAgent(target.requestedName, { adopt: false });
   const info = getLocalAgentInfo(local.name);
-  const tier = await readLocalNextTurnTier(local.name);
+  const tier = await readLocalNextTurnTier(local.name, opts);
 
   printAgentStatus(info, statSync(local.dbPath).size, {
     conversationCount: info.conversationCount,

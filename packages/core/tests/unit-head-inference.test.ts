@@ -2,15 +2,15 @@
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import { seedTranscriptEntry, createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
-import { createTestWorkspace, conversationsFor } from './helpers';
+import { actorJobsFor, createTestWorkspace, conversationsFor } from './helpers';
 import { buildHeadToolSet } from '../src/heads/head-tools';
-import type { LanguageModel, ModelMessage } from 'ai';
+import { jsonSchema, tool, type LanguageModel, type ModelMessage } from 'ai';
 import { hostedSeatsOver } from './helpers-actor-host';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
 } from '../src/heads/head-inference';
-import type { Decision, Evidence, HeadInput, SerializedMessage } from '../src/heads/types';
+import type { Decision, Evidence, HeadInput, HeadStep, SerializedMessage } from '../src/heads/types';
 import {
   inheritedContextFromHistory, inheritedContextOmissionNote,
   inheritedContextFromTranscript,
@@ -159,6 +159,38 @@ describe('runHeadInference — report assembly', () => {
   });
 });
 
+describe('a head step as the node view reads it', () => {
+  // 2026-10-03 (DUPLICATE-PATHS rank 19): a re-projected step dropped a call's failure and renamed the call, so the node
+  // view drew a failed tool spinning under an invented id while the head's own record held both.
+  test('a failed call reads as failed, under the id the model gave it', async () => {
+    let calls = 0;
+
+    const model = scriptedTurnModel({ doGenerate: () => {
+      const first = calls++ === 0;
+
+      return {
+        content: first ? [{ type: 'tool-call', toolCallId: 'probe-1', toolName: 'probe', input: '{}' }] : [{ type: 'text', text: 'done' }],
+        finishReason: { unified: first ? 'tool-calls' : 'stop', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
+        warnings: [],
+      };
+    } });
+
+    const steps: HeadStep[] = [];
+
+    await runHeadInference(headInput({ inheritedContext: [] }), await deps(model, {
+      tools: { probe: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }), execute: async (): Promise<string> => { throw new Error('the probe broke'); } }) },
+      reportStep: (_seq, step) => { steps.push(step); },
+    }));
+
+    // Each step holds its own parts alone: the call in the first, the answer in the second.
+    expect(steps.map((step) => step.parts)).toEqual([
+      [expect.objectContaining({ type: 'tool-probe', toolCallId: 'probe-1', state: 'output-error', errorText: expect.stringContaining('the probe broke') })],
+      [{ type: 'text', text: 'done', state: 'done' }],
+    ]);
+  });
+});
+
 describe('buildHeadAccumulatorTools', () => {
   test('record_evidence / record_decision push into the shared capture', async () => {
     const capture = new HeadCapture();
@@ -204,7 +236,7 @@ describe('buildHeadAccumulatorTools', () => {
 
     // The head's own surface, as both backends build it.
     const tools = buildHeadToolSet({
-      input, capture, rt, conversations: conversationsFor(rt), codemodeTool: undefined,
+      input, capture, rt, conversations: conversationsFor(rt), codemodeTool: undefined, jobs: actorJobsFor(rt),
       webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
       split: async () => { throw new Error('this head cannot split'); },
     });
@@ -277,7 +309,7 @@ describe('durable delegated turn opening', () => {
       await session.restoreWorkingHistory();
       expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered', 'two', 'two answered']);
       // A block woven against the four-message stream: positioned there, and meaningless anywhere else.
-      session.dynamic.weave(session.history, { mode: { workMode: 'build', planSubmission: false } });
+      session.dynamic.weave(session.history, { mode: { workMode: 'plan', planSubmission: true } });
       expect(session.dynamic.size).toBe(1);
 
       // The host's own idle condition is raised inside the same transaction: nothing moves.

@@ -6,7 +6,6 @@ export type {
   HeadReportStatus,
   HeadUnsettledStatus,
   HeadStep,
-  HeadStepToolCall,
   HeadRunView,
   HeadRunHeadView,
   Evidence,
@@ -57,7 +56,7 @@ export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-sch
 
 export {
   headMergeLLM,
-  type HeadMergeModelBinder, type HeadMergeModelBinding, type HeadMergePolicyDeps,
+  type HeadMergePolicyDeps,
 } from './merge-policy';
 
 export {

@@ -1,9 +1,10 @@
-import type { ModelMessage } from 'ai';
 
 import type { Usage } from '../usage';
 import type { JsonObject, JsonValue } from '../utils/json';
 import type { MissionGovernor } from '../mission-budget';
 import type { ToolOutcome } from '../tools/outcome';
+import type { Struggle } from './struggles';
+import type { TrialTurn } from './trial-rules';
 
 export interface ToolCallRecord {
   toolCallId?: string;
@@ -35,6 +36,12 @@ export interface CompletedTurn {
   /** Mission labels stamped when the turn ended. Carried by the turn because a deferred
      *  review may run with no active scope. Absent = ungoverned; a review must never invent one. */
   missionLabels?: readonly string[];
+  /** Where the turn fought its tools, from its steering detector; absent on turns recorded before. */
+  struggles?: readonly Struggle[];
+  /** The tool lessons its steps listed, at the revision each saw; only these does the turn score. */
+  shownLessons?: readonly { readonly id: string; readonly revision: number }[];
+  /** The live trial's arm the turn ran; its errors and steps are the trial's guardrails. */
+  trial?: TrialTurn;
 }
 
 export interface CompletedSession {
@@ -52,38 +59,14 @@ export interface EvolutionEvent {
 
 export type EvolutionListener = (event: EvolutionEvent) => void;
 
-/** `applied` is the action the gate actually took (a recheck can turn promote into rollback); null = inconclusive. */
-export interface ShadowTrialDrain {
-  readonly trials: number;
-  readonly applied: 'promote' | 'rollback' | null;
-}
-
-/** Every value except `'queued'` is a turn that contributed nothing, named so a caller owing the queueing can tell refusal from failure. */
-export type ShadowTrialQueueOutcome = 'queued' | 'not_sampled' | 'queue_full' | 'failed';
-
-/** Sampling decision made when the turn ended; the stable row identity makes a replay write the same trial. */
-export interface ShadowTrialPlan {
-  readonly pendingVersion: number;
-  readonly id?: string;
-}
-
-export interface ShadowTrialTurn {
-  readonly task: string;
-  readonly currentOutput: string;
-  /** Read synchronously so a later turn's state cannot bleed in; empty when the host held none. */
-  readonly context: readonly ModelMessage[];
-}
-
 /** Session-reflection cadence lives on AgentOrchestrator, not here. */
 export interface EvolutionConfig {
+  /** False for a host whose engine never learns (a facet); elsewhere the agent's `learning` setting decides. */
   enabled: boolean;
   /** Commit a group of writes as one durable unit. The identity default is only atomic
      *  inside a Durable Object; other backends must supply a real transaction. */
   transaction?: (body: () => void) => void;
   lifetimeEvolutionInterval: number;
-  shadowTrialQueue?: (turn: ShadowTrialTurn, plan: ShadowTrialPlan) => ShadowTrialQueueOutcome;
-  /** Absent = this host runs no trials; the durable queue lets another host run them. */
-  shadowTrialRunner?: () => Promise<ShadowTrialDrain>;
   /** Reached only for turns carrying {@link CompletedTurn.missionLabels}. Absent = every review is ungoverned. */
   governor?: MissionGovernor;
 }

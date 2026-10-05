@@ -212,7 +212,8 @@ export class TerminalTransitions {
     this.ledger.prune(sequenceId);
   }
 
-  /** Claimed and never settled; the message id comes back off the call-id suffix. */
+  /** Claimed and never settled; the message id comes back off the call-id suffix. Reads the unsettled claims alone
+   *  (`tool_effect_claims_pending`), however many settled before them. */
   incomplete(): TerminalTransition[] {
     const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
 
@@ -226,19 +227,17 @@ export class TerminalTransitions {
     }));
   }
 
-  /** One indexed LIMIT-1 read that must not materialize the roster. */
-  hasIncomplete(): boolean {
-    const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
+  /** What a wake must recover: unfinished, not this process's to finish, and not waiting on the owner. */
+  private toRecover(): TerminalTransition[] {
+    return this.incomplete().filter((transition) => {
+      const id = this.sequenceId(transition);
 
-    return this.deps.sql<{ present: number }>`
-      SELECT 1 AS present FROM tool_effect_claims c
-      WHERE c.actor_id = ${this.deps.actor.actorId}
-        AND c.normalized_call_id LIKE ${`${prefix}%`} AND c.result_json IS NULL
-        AND NOT EXISTS (SELECT 1 FROM terminal_effects t
-          WHERE t.actor_id = c.actor_id AND t.status = 'parked'
-            AND t.sequence_id = c.turn_id || '/' || substr(c.normalized_call_id, ${prefix.length + 1}))
-      LIMIT 1
-    `.length > 0;
+      return !this.inFlight.has(id) && !this.ledger.waitingOnOwner(id);
+    });
+  }
+
+  hasIncomplete(): boolean {
+    return this.toRecover().length > 0;
   }
 
   /** Every input comes off its row; {@link end} closes only if nothing is still owed. */
@@ -272,7 +271,7 @@ export class TerminalTransitions {
 
   /** Arms the wake without replaying, for a caller that must not await (a fiber-recovery hook runs inside the init gate). {@link resumeAll}'s claim join makes the re-entry safe. */
   async armOwedRecovery(): Promise<void> {
-    const owed = this.incomplete().filter((transition) => !this.ledger.waitingOnOwner(this.sequenceId(transition)));
+    const owed = this.toRecover();
 
     if (owed.length === 0) return;
     // The ledger's own instant when it has one; the base delay otherwise.

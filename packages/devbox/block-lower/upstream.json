@@ -1,7 +1,7 @@
 {
-  "date": "2026-10-02",
-  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:518fa86da51054c0c58d590689ecf46ae2a3b64e43f4dbd43a5d18fe2f70f535",
-  "digest": "sha256:518fa86da51054c0c58d590689ecf46ae2a3b64e43f4dbd43a5d18fe2f70f535",
+  "date": "2026-10-03",
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:b40f5a1720d178e80324f7164903a0d4283e775f6c1e14a8e3053af626103aaf",
+  "digest": "sha256:b40f5a1720d178e80324f7164903a0d4283e775f6c1e14a8e3053af626103aaf",
   "sandboxVersion": "1.0.0",
   "sandbox": "docker.io/cloudflare/sandbox@sha256:5bc187515bad0d9d486a4f1476f7d8ad39fe97c57965f044e4b0a0dcc93eac06",
   "rust": "docker.io/library/rust@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d",
@@ -11,20 +11,22 @@
     "driver": "low-level, unmodified upstream"
   },
   "binaries": {
-    "devbox-block-lower": "ad76e1563916b158ba9f43a73bb784937fdb669893c84bac6bd86ffe79e41b9c",
+    "devbox-block-lower": "55533e69ccacc36cf06c041cae615a264c7c952df668950d77147f700d9715e3",
     "devbox-squashfuse": "2c9f758b480621826d0d40d832512998b74c672fb5e7daaa6205d1e0b030df18",
-    "sandbox-shim": "a2973893e48d9b80c4ea9d763affdb5ea0135c94ed467716c8e3a57add032d97",
-    "sync.js": "d57ec5955a8a19356be69e7ddf42768d75ca6a099066a496a207fd8973843a12"
+    "sandbox-shim": "a2973893e48d9b80c4ea9d763affdb5ea0135c94ed467716c8e3a57add032d97"
   },
   "files": {
     "Cargo.toml": "e1a269141da13953785f1fbaa6a18edb10cf644fdc9a710858ac02f31e426f83",
-    "Dockerfile": "04feef4be4f01504e174d92da8e9b2e9dab7f96059e47bf5d3dccfbe25a7bfcc",
+    "Dockerfile": "b585b92f92b1a05c4cb007981c02682107e0cf84312e3665705f90746cbc0728",
     "Cargo.lock": "42b0f84a3a09ad9cca1e51c35fb750d6fff123ce5c27f99996ced24c98d22109",
-    "src/index.rs": "c4f632c9f0cfcbc54d84194814bdf1d5cfcba5fa170f2599c06e2f02f349c130",
-    "src/main.rs": "e0a36a9ea41001530591292e13d679f5e28467f104300d348f9a48dbef880da7",
-    "src/model.rs": "ce3235af5ba144ebdb8874b19a4dbc35f63d159c581e4f7ddb2983d05e54a19c",
-    "src/probe.rs": "1dad9c88c07a1ac484f2685f61a5274fb0a839fdc90017e65a09d2f390aaaac3",
+    "src/index.rs": "e26e54ebcc3893d7ba84470512bde960e239aec9ea7c89b05dd66992417961d7",
+    "src/main.rs": "3b436f50857187a45ff68f9c5e72366c18c5504a8902b2e2f0dfd81383a0ead6",
+    "src/model.rs": "1a9e2ab5d3e08e47e3b8a79cf03f1128ff81ff2a8df07ec42cdac31896f1831d",
     "src/namespace.rs": "b2f750bea8a1dcae7c8910aba19734615f949e1b9d395e2b4b5274487d68011f",
-    "src/storage.rs": "4a37c4d0187fcf0aa094958c24de13873c798de27ec9f8648a6d584931701666"
+    "src/storage.rs": "39e73d186faabde0724715283eba6c0f2bf2e7132b64e22307351da51ec4d60d"
+  },
+  "tools": {
+    "sha256": "45af1fad415924cf0f5f1156c6df8d1268ef037ea7f19aab244c02670e91384c",
+    "bytes": 100796756
   }
 }

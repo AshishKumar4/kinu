@@ -151,6 +151,4 @@ mount never publishes readiness.
 - copyup_is_file_local: bytes ≤ file size ≤ F; no claim past lifecycle readiness.
 - No full-hook or callback-only O(written-blocks) theorem.
 
-Publication stays covered by SnapshotChain.lean's
-chunked_file_publishes_blocks_and_record and the conditional c3_wire_bound.
 Lean checks the model, not kernel execution or 30-second latency.

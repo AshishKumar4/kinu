@@ -310,7 +310,7 @@ through `LOADER` (`@cloudflare/codemode`). The CLI evaluates in-process through
 | `workspace.editFile` | `(path: string, edits: [{old_text, new_text}]) → {ok, applied} \| {error}` | Exact-match edit, through the same dispatcher (`createFileDispatcher`) and gate as the native `file` tool's `edit` action |
 | `workspace.readdir` | `(path: string) → string[]` | List directory entries |
 | `workspace.exists` | `(path: string) → boolean` | Check whether a path exists |
-| `workspace.exec` | `(command: string) → string` | Run a POSIX shell command (cat, grep, find, sed, ls, etc.) |
+| `workspace.exec` | `(command: string, options?: {cwd, name}) → string` | Run a POSIX shell command (cat, grep, find, sed, ls, etc.): a fresh shell in `cwd` or the home, unless `name` keeps one |
 | `workspace.searchMemory` | `(query: string) → results` | FTS5 search over long-term memory |
 | `workspace.saveNote` | `(content: string) → "ok"` | Append a note to MEMORY.md with FTS indexing |
 | `workspace.listTools` | `() → Array<{name, description, qualityScore}>` | List crafted tools with their EMA scores |
@@ -475,6 +475,19 @@ fallback: an absent runtime returns `runtime_not_provisioned`. Relative paths
 resolve against `WORKSPACE_ROOT`, `/home/main`. Containers receive
 `/workspace`.
 
+Every call is a fresh shell. It starts in `cwd`, else the agent's home (a
+container's `/workspace`, a device's `~`), and a `cd` or `export` lasts only
+that call; calls run side by side. The answer opens with `cwd: <dir>`, where the
+command started. A `name` keeps its directory and exported variables from call
+to call: Nimbus's own named shells, keyed by agent, in the workspace; on the
+sandbox, a device and the CLI's host shell, one bash wrapper
+(`execution/shell-session.ts`) that restores and saves them in a 0600 file under
+`~/.kinu/shells`, `exit 3` included. A name runs one call at a time. One a
+detached job holds answers at once, `shell <name> is busy with job <id> since
+<time>`, until the command ends. Approval judges a named call from the
+directory its last call reported, and a name it has not seen from that saved
+state. The CLI's in-process workspace keeps no named shells and refuses a name.
+
 `shell`, `eval`, and resumable `agents` spawns can run in the background.
 `detachAfterMs` is 30,000 for interactive turns and 300,000 for one-shot
 turns. Detached work has no deadline. Teardown waits `settleGraceMs`: 300,000
@@ -482,6 +495,8 @@ interactive, 120,000 one-shot. Approval checks every runtime first: `deny`
 refuses; `gate` requires `allow_all`.
 
 ## agents swarm: configured search
+
+Swarms are a beta, off for every account until its owner turns on Settings → Beta → "Beta: swarms" (`ProfileCatalog.betaSwarms`, `betaSwarms` in `types/profile.ts`). Off, the `agents` tool's schema and description carry no `swarm` (`agentsActionsFor`), and no account's tool names its catalog's roles or tiers: `role` and `tier` are open strings, the step context lists the choices (`delegationChoices`) and dispatch enforces them. Every such account shares one tool definition, and a `swarm` call is refused `denied`, naming the setting. The Swarms tab and the role editor's "Default swarm preset" are hidden. cf reads the setting from the catalog before it builds a turn's toolset and again after a catalog write, and reads it as it stands before a retry or a re-drive, which no turn read reconciles; the CLI reads it from the catalog its turn resolves against. The eval harness turns it on for the accounts the evals run as (`openPublicSession`).
 
 `runSwarmAction` resolves `preset`, validates its axis tuple, then calls
 `runSwarm`, the only step that spends. `AgentsSwarmDeps` holds the runtime,
@@ -507,9 +522,8 @@ it through the workspace RPC `experienceAction`, which calls core
 to it.
 
 `publish` needs real uses plus an injection score for crafted tools,
-corroborated lessons, confident facts, or a live scaffold with a passing
-`decidePromotion`, `DEFAULT_SHADOW_CONFIG.minTrials` graded turns, and no
-misevolution veto.
+corroborated lessons, confident facts, or a scaffold the owner promoted here
+that has since served 10 rated turns with no misevolution veto.
 
 `import` runs the misevolution gate, records vetoes, and stages survivors in
 `imported_experience`. Only `EvolutionEngine.reviewTurn` promotes entries on

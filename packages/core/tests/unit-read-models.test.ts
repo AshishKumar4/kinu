@@ -11,7 +11,6 @@ import { seedTranscriptEntry, present, testActorHandle } from '@kinu.run/test-ut
 import {
   createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers';
-import { writeSoul } from '../src/identity/soul';
 import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -280,7 +279,7 @@ describe('agent status', () => {
     await seedTranscript(chatStore(w).history, [{ id: 'm1', role: 'user', content: 'hi' }]);
 
     // The row, not a file the main agent may have swapped, answers the owner's soul and mission.
-    await writeSoul(sql, '# Mine\n\n## Mission\n\nread the room and update it', (content) => writeWorkspaceSoul(bundle, content));
+    await writeWorkspaceSoul(bundle, '# Mine\n\n## Mission\n\nread the room and update it');
 
     try {
       await writeText(vfs, 'SOUL.md', 'forged');
@@ -296,6 +295,25 @@ describe('agent status', () => {
       messageCount: 1, scaffoldVersion: 0, reasoningEffort: 'high', forkLineage: null,
       soul: '# Mine\n\n## Mission\n\nread the room and update it', purpose: 'read the room and update it',
     });
+    db.close();
+  });
+
+  test('the scaffold version is the one the actor runs: not a pending proposal, not a rolled-back one', async () => {
+    const { db, sql, actor } = workspace();
+    const shown = async () => (await getAgentStatus({ sql, actor, model: '', reasoningEffort: null, name: 'jarvis', displayName: 'Jarvis' })).scaffoldVersion;
+
+    const version = (n: number, status: string) => {
+      void sql`INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (${actor.actorId}, ${n}, ${n}, ${'test'}, ${status})`;
+    };
+
+    version(0, 'rolled_back');
+    version(1, 'current');
+    version(2, 'pending');
+    expect(await shown()).toBe(1);
+
+    version(0, 'current');
+    version(1, 'rolled_back');
+    expect(await shown()).toBe(0);
     db.close();
   });
 
@@ -629,7 +647,7 @@ describe('executor file plane', () => {
 });
 
 describe('background-job control plane', () => {
-  test('a settled job retries through its stored input on the raw surface', () => {
+  test('a settled job retries through its stored input on the raw surface', async () => {
     const { db, jobs, runner, detached } = jobPlane();
     const seen: JsonValue[] = [];
 
@@ -647,8 +665,8 @@ describe('background-job control plane', () => {
     jobs.create({ id: 'j1', kind: 'search', workMode: 'build', input: JSON.stringify({ q: 'kinu' }), now: 1 });
     jobs.settle('j1', 0, 'old result', 2);
 
-    const retry = retryBackgroundJob({
-      jobs, jobRunner: runner, rawTools: () => tools, logActivity: () => undefined,
+    const retry = await retryBackgroundJob({
+      jobs, jobRunner: runner, rawTools: async () => tools, logActivity: () => undefined,
     }, 'j1');
 
     expect(retry.ok).toBe(true);
@@ -658,22 +676,22 @@ describe('background-job control plane', () => {
     db.close();
   });
 
-  test('retry states the reason it cannot run rather than failing silently', () => {
+  test('retry states the reason it cannot run rather than failing silently', async () => {
     const { db, jobs, runner } = jobPlane();
-    const deps = { jobs, jobRunner: runner, rawTools: (): ToolSet => ({}), logActivity: () => undefined };
+    const deps = { jobs, jobRunner: runner, rawTools: async (): Promise<ToolSet> => ({}), logActivity: () => undefined };
 
-    expect(retryBackgroundJob(deps, 'missing')).toEqual({ ok: false, error: 'job not found' });
+    expect(await retryBackgroundJob(deps, 'missing')).toEqual({ ok: false, error: 'job not found' });
 
     jobs.create({ id: 'running', kind: 'shell', workMode: 'build', input: '{}', now: 1 });
-    expect(retryBackgroundJob(deps, 'running')).toEqual({ ok: false, error: 'job still running' });
+    expect(await retryBackgroundJob(deps, 'running')).toEqual({ ok: false, error: 'job still running' });
 
     jobs.create({ id: 'noinput', kind: 'shell', workMode: 'build', now: 1 });
     jobs.settle('noinput', 0, 'r', 2);
-    expect(retryBackgroundJob(deps, 'noinput')).toEqual({ ok: false, error: 'no stored input to retry' });
+    expect(await retryBackgroundJob(deps, 'noinput')).toEqual({ ok: false, error: 'no stored input to retry' });
 
     jobs.create({ id: 'gone', kind: 'vanished', workMode: 'build', input: '{}', now: 1 });
     jobs.settle('gone', 0, 'r', 2);
-    expect(retryBackgroundJob(deps, 'gone')).toEqual({ ok: false, error: 'tool "vanished" unavailable' });
+    expect(await retryBackgroundJob(deps, 'gone')).toEqual({ ok: false, error: 'tool "vanished" unavailable' });
     db.close();
   });
 
@@ -784,11 +802,11 @@ describe('config plane', () => {
     db.close();
   });
 
-  test('an evolution write answers with the EFFECTIVE config, clamps included', () => {
+  test('an evolution write answers with the EFFECTIVE config; live trials are off until turned on', () => {
     const { db, config } = workspace();
-    const effective = setEvolutionConfig(config, { autoPromoteScaffold: true, gepaEvalBudget: 1_000_000 });
-    expect(effective.autoPromoteScaffold).toBe(true);
-    expect(effective.gepaEvalBudget).toBeLessThan(1_000_000);
+    expect(getEvolutionConfig(config).liveTrials).toBe(false);
+    const effective = setEvolutionConfig(config, { liveTrials: true });
+    expect(effective.liveTrials).toBe(true);
     expect(getEvolutionConfig(config)).toEqual(effective);
     db.close();
   });

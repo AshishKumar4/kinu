@@ -3,13 +3,11 @@
  * `MCPClientManager`. Descriptors are serialized because `execute` closures can't cross DO RPC.
  */
 
-import { sha256Hex } from '@kinu.run/core';
 import {
   JsonArraySchema, JsonObjectSchema,
-  admitMcpDescriptors, describeMcpTool, listMcpToolsLeniently, McpToolSurfaceSchema,
+  describeMcpTool, listMcpToolsLeniently,
   mcpPresetById, MCP_PRESETS,
   type JsonObject, type JsonValue, type ListedMcpTools, type McpPreset, type McpPresetId, type McpToolRefusal,
-  type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, renderCauseChain, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
@@ -19,48 +17,6 @@ import * as v from 'valibot';
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';
 
-
-/**
- * MCP tool cache keyed by a hash of the fetched descriptor content, never a mutation watermark
- * (watermarks reset on cold start while rows survive). `refresh` propagates fetch/parse failures.
- */
-export class McpToolSurfaceCache<Tools> {
-  private key: string | null = null;
-  private built: Tools | null = null;
-  private lastUnavailable: readonly { server: string; reason: string }[] = [];
-
-  constructor(
-    private readonly build: (
-      descriptors: readonly SerializableToolDescriptor[],
-    ) => Promise<Tools>,
-  ) {}
-
-  /** Configured servers that produced no tools in the last served surface. */
-  get unavailable(): readonly { server: string; reason: string }[] {
-    return this.lastUnavailable;
-  }
-
-  /**
-   * Rebuild only when the admitted set would differ; the key includes both budget inputs.
-   * The unavailable list follows every successfully read surface, cached or not.
-   */
-  async refresh(fetchSurface: () => Promise<string>, budget: McpSurfaceBudget): Promise<Tools> {
-    const raw = await fetchSurface();
-    const answer = v.parse(McpToolSurfaceSchema, JSON.parse(raw));
-    const admission = admitMcpDescriptors(answer.descriptors, budget);
-
-    const key = `${await sha256Hex(raw)}:${String(budget.contextWindow)}`
-      + `:${String(budget.modelOutputLimit)}:${String(budget.nativeToolTokens)}`;
-
-    this.lastUnavailable = [...answer.unavailable, ...admission.deferred];
-
-    if (this.built !== null && key === this.key) return this.built;
-    this.built = await this.build(admission.admitted);
-    this.key = key;
-
-    return this.built;
-  }
-}
 
 export interface McpServerInput {
   name: string;

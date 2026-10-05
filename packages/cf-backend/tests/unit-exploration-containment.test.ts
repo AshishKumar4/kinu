@@ -20,7 +20,9 @@ import {
   type MergeOutput,
   type WebSearchProvider,
 } from '@kinu.run/core';
-import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult } from '@kinu.run/core';
+import {
+  BackgroundJobRunner, CONFINED_BACKGROUNDABLE_TOOLS, HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult,
+} from '@kinu.run/core';
 
 function report(id: string): HeadReport {
   return {
@@ -110,6 +112,11 @@ function buildSurface(opts?: {
     conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => stores.history.transcript(sessionId)),
     codemodeTool,
     webSearch: noopWebSearch,
+    jobs: {
+      jobRunner: new BackgroundJobRunner({ store: stores.jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'queued' } }),
+      backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
+      mode: () => 'build',
+    },
     split: opts?.split ?? (async () => ({
       narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0,
     })),
@@ -233,7 +240,7 @@ describe('exploration actors write the workspace journal and acquire only their 
 
     // Unscoped on purpose: a read filtered by the expected actor would pass on a row filed under the wrong owner.
     const rows = workspace.db.prepare<{ actor_id: string; head_id: string; text: string }, []>(
-      'SELECT actor_id, head_id, text FROM head_steps',
+      "SELECT actor_id, head_id, json_extract(parts_json, '$[0].text') AS text FROM head_steps",
     ).all();
 
     expect(rows).toEqual([{ actor_id: root, head_id: workspace.head, text: 'read the parser' }]);

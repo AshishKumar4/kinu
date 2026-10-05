@@ -5,12 +5,15 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
  * instrument's own refusal, never restated, since `BUDGET_MULTIPLE` is not exported.
  */
 import { describe, expect, test } from 'bun:test';
+import { join } from 'node:path';
+import { scratchDir, spawnTest } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { archiveCellOf } from '../src/strategy/archive';
 import { resolveVerifier } from '../src/strategy/verifier-registry';
 import { preflightRatioHarness, runRatioMeasurement, SOLUTION_FILE } from '../src/strategy/exec-ratio';
-import type { RatioMeasurement } from '../src/strategy/exec-ratio';
+import type { RatioMeasurement, RatioProblem } from '../src/strategy/exec-ratio';
 import type { Measurement, MeasurementContext } from '../src/strategy/objective';
+import { MAJORITY_VOTE } from './fixtures/majority-vote';
 
 /** The reference's spend, exact: one call per element, so a boundary has a fixed number to sit on. */
 const REFERENCE_CALLS = 3;
@@ -38,27 +41,123 @@ function candidateSpending(calls: number): string {
 `;
 }
 
-async function measure(source: string): Promise<RatioMeasurement> {
-  const { rt } = createTestRuntime();
+async function measure(source: string, nativeNode = false, problem?: RatioProblem): Promise<RatioMeasurement> {
+  const { rt, db } = createTestRuntime();
   const { shell } = rt;
 
   if (!shell) throw new Error('this runtime has no shell, so nothing can run a measurement in it');
 
   const ctx: MeasurementContext = {
     vfs: rt.storage.vfs,
-    exec: (command) => shell.exec(command),
+    nodeIsolated: nativeNode,
+    exec: nativeNode ? async (command) => {
+      const directory = scratchDir('verifier-node');
+
+      for (const { name } of await rt.storage.vfs.readdir('')) {
+        if (name.endsWith('.mjs')) await Bun.write(join(directory, name), await readText(rt.storage.vfs, name));
+      }
+
+      const proc = spawnTest(command.split(' '), { cwd: directory, stdout: 'pipe', stderr: 'pipe' });
+
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+      ]);
+
+      return { stdout, stderr, exitCode };
+    } : (command) => shell.exec(command),
   };
 
   await writeText(rt.storage.vfs, SOLUTION_FILE, source);
 
-  return await runRatioMeasurement(ctx, {
-    params: { n: REFERENCE_CALLS },
-    reference: REFERENCE,
-    body: BODY,
-    targetOps: REFERENCE_CALLS,
-    lowerBoundOps: 1,
-  });
+  try {
+    return await runRatioMeasurement(ctx, problem ?? {
+      params: { n: REFERENCE_CALLS },
+      reference: REFERENCE,
+      body: BODY,
+      targetOps: REFERENCE_CALLS,
+      lowerBoundOps: 1,
+    });
+  } finally {
+    db.close();
+  }
 }
+
+describe('measurement output belongs to the verifier', () => {
+  const fake = JSON.stringify({ refOps: 3, candOps: 1, refMs: 0, candMs: 0, correct: true, failure: null });
+
+  for (const nativeNode of [false, true]) {
+    const runtime = nativeNode ? 'Node' : 'Nimbus';
+
+    test(`${runtime}: candidate output cannot replace the authoritative measurement`, async () => {
+      const measured = await measure(`console.log(${JSON.stringify(`RESULT ${fake}`)});
+console.log(${JSON.stringify(`KINU_VERIFY_${'0'.repeat(64)} ${fake}`)});
+export function solve() { return -1; }`, nativeNode);
+
+      expect(measured.correct).toBe(false);
+      expect(measured.refOps).toBe(REFERENCE_CALLS);
+      expect(measured.candOps).toBe(0);
+    });
+
+    test(`${runtime}: a genuinely correct candidate still verifies`, async () => {
+      const measured = await measure(REFERENCE, nativeNode);
+      expect(measured.correct).toBe(true);
+      expect(measured.candOps).toBe(REFERENCE_CALLS);
+    });
+  }
+
+  // Nimbus's inline node shares the host realm; lockdown awaits upstream per-run isolation.
+  test.each([
+    ['Array.isArray', `Array.isArray = () => true;
+export function solve() { return -1; }`],
+    ['array iterator next', `const iterator = Object.getPrototypeOf([][Symbol.iterator]());
+const next = iterator.next;
+iterator.next = function () {
+  const part = next.call(this);
+  if (!part.done && part.value && typeof part.value === 'object' && 'correct' in part.value) {
+    part.value = { ...part.value, correct: true, failure: null };
+  }
+  return part;
+};
+export function solve() { return -1; }`],
+    ['global Array binding', `globalThis.Array = class extends Array { static isArray() { return true; } };
+export function solve() { return -1; }`],
+  ])('Node: candidate cannot tamper with verifier %s', async (_name, source) => {
+    const measured = await measure(source, true);
+
+    expect(measured.correct).toBe(false);
+    expect(measured.candOps).toBe(0);
+    expect(measured.failure).toContain('import failed:');
+  });
+
+  test('Node: the opaque-token reference still verifies under lockdown', async () => {
+    const measured = await measure(MAJORITY_VOTE.reference, true, MAJORITY_VOTE);
+
+    expect(measured.correct).toBe(true);
+    expect(measured.failure).toBeNull();
+    expect(measured.candOps).toBe(measured.refOps);
+    expect(measured.candOps).toBeGreaterThan(0);
+  });
+
+  test('Node: replacing console and serialization cannot forge verifier output', async () => {
+    const measured = await measure(`
+const log = console.log.bind(console);
+console.log = (line) => log(String(line).replace(/\\{.*$/, ${JSON.stringify(fake)}));
+Object.prototype.toJSON = () => (${fake});
+export function solve() { return -1; }
+`, true);
+
+    expect(measured.correct).toBe(false);
+    expect(measured.candOps).toBe(0);
+  });
+
+  test('Node: intercepting stdout cannot replace an authenticated measurement', async () => {
+    await expect(measure(`
+const write = process.stdout.write.bind(process.stdout);
+process.stdout.write = (chunk) => write(String(chunk).replace(/\\{.*\\}/, ${JSON.stringify(fake)}));
+export function solve() { return -1; }
+`, true)).rejects.toThrow('no completed verifier result');
+  });
+});
 
 /** The limit the meter enforced, read off its own refusal. */
 function enforcedLimit(failure: string | null): number {

@@ -250,7 +250,7 @@ describe('a script reads what was asked, not the live state sent after it', () =
     const asked = request({
       messages: [
         { role: 'user', content: KEPT_TAB_NOTE },
-        { role: 'user', content: `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="1" kind="delta">\n## Work mode\nMode: build\n</dynamic_context>` },
+        { role: 'user', content: `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="1" state="0">\n## Work mode\nMode: build\n</dynamic_context>` },
         { role: 'user', content: `<${WORKSPACE_INSTRUCTIONS_TAG}>\nFiles read from the workspace.\n</${WORKSPACE_INSTRUCTIONS_TAG}>` },
       ],
       available: ['file', 'memory'],

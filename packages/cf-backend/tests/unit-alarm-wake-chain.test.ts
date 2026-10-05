@@ -110,8 +110,8 @@ describe('a refiner answer stored with no waiter', () => {
     });
 
     workspace.db.prepare(`INSERT INTO actor_subordinates (actor_id, name, status, current_task, created_at, dismissed_at,
-      lifetime, task_event_id, actor_reference, birth_request, delete_requested)
-      VALUES (?, 'ask-refiner-x1', 'working', 'review', ?, NULL, 'task', 'evt-1', ?, NULL, 0)`)
+      task_event_id, actor_reference, birth_request, delete_requested)
+      VALUES (?, 'ask-refiner-x1', 'working', 'review', ?, NULL, 'evt-1', ?, NULL, 0)`)
       .run(actorId, now, JSON.stringify(refiner.actor.reference));
     workspace.db.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
       VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
@@ -229,8 +229,10 @@ describe('the workspace keeps exactly one wake per job', () => {
     expect(held(workspace.db, seededChildFibers)).toBe(0);
   });
 
-  test('a hired child deferred job is restored by the workspace wake', async () => {
-    // The activation classifies (workspace-wide `owedWorkExists`) and arms an immediate wake; the tick dispatches to the child's instant.
+  // Review of 4028013fc, 2026-10-03: the root's runner kept a wake at a hire's deferred instant, yet could never recover a
+  // row that was not its own. A hire has no re-drive, so the wake's sweep settles it through the hire's own runner.
+  test("a hired child's deferred job is settled by the workspace wake, which then keeps no wake for it", async () => {
+    // The activation classifies (workspace-wide `owedWorkExists`) and arms an immediate wake; its pass sweeps every actor.
     const workspace = orchestratorHarness();
 
     const child = await hostedSubordinateHarness(workspace, {
@@ -261,8 +263,8 @@ describe('the workspace keeps exactly one wake per job', () => {
 
     await fireSoonestWake(workspace.agent, workspace.db);
 
-    // Exactly one wake at the job's own instant; the job's wake and the retry's wake collapse.
-    expect(armedAt(workspace.db, TERMINAL_RETRY_JOB)).toEqual([landing(resumeAt)]);
+    expect(workspace.db.query('SELECT status FROM background_jobs WHERE id = ?').get('job-waiting')).toEqual({ status: 'failed' });
+    expect(armedAt(workspace.db, TERMINAL_RETRY_JOB)).not.toContain(landing(resumeAt));
   });
 
   test('a deferred job costs one wake at its instant, not a climbing chain', async () => {
@@ -617,8 +619,8 @@ describe('the workspace keeps exactly one wake per job', () => {
     db.prepare(
       `INSERT INTO actor_subordinates
         (actor_id, name, status, current_task, created_at, dismissed_at,
-         lifetime, task_event_id, actor_reference, birth_request, delete_requested)
-       VALUES (?, 'poisoned-birth', 'idle', NULL, ?, NULL, 'durable', NULL, NULL, '{malformed', 0)`,
+         task_event_id, actor_reference, birth_request, delete_requested)
+       VALUES (?, 'poisoned-birth', 'idle', NULL, ?, NULL, NULL, NULL, '{malformed', 0)`,
     ).run(harnessActorId(db), Date.now());
 
     await expect(agent.terminalRetryPass()).rejects.toThrow('malformed');

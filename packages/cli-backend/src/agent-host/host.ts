@@ -1,4 +1,3 @@
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * LocalAgentHost: the local daemon's durable-agent substrate. One SQLite file per root; every actor
  * beneath it is a `workspace_actors` row there, with its own runtime objects from one {@link ActorHost}.
@@ -35,23 +34,21 @@ import {
   delegationExhausted,
   describeSubordinateHandoff,
   inheritedContextFromTranscript,
-  headAgentName,
+  actorHomeName,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
-  renderSoulMarkdown,
+  publishSubordinateReport,
+  type SubordinateReportLedger,
   mintSubordinateName,
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
   facetHomeReleaser,
   readMission,
-  readSoul,
   recoverSubordinateLifecycles,
-  SOUL_PATH,
-  temporaryRunSettles,
   terminalTaskReport,
   taskAnswerIsLater,
   type ActorHost,
-  type ActorReference, type AgentSignal, type SendOutcome,
+  type ActorReference, type AgentSignal, type JobRetirement, type SendOutcome, type SubordinateDismissal,
   type AgentRuntime,
   type AdmittedSubordinateReport,
   type BoundActor,
@@ -68,7 +65,6 @@ import {
   type PeerMessage,
   type ReceiveResult,
   metadataBroadcastEvent,
-  subordinateAgentName,
   type SqlExec,
   type SubordinateHandoff,
   type SubordinateRuntime,
@@ -204,14 +200,8 @@ interface HostEntry {
   /** Peer mail, roots only: a subordinate could otherwise escape its depth cap via another tree. */
   peers: LocalPeerEndpoint | null;
   children: Map<string, HostEntry>;
-  relay: {
+  relay: SubordinateReportLedger & {
     ownerDriven: boolean;
-    reportedThisTurn: boolean;
-    /**
-     * Whether a run-settling report went out this turn. Distinct from `reportedThisTurn`: a
-     * mid-task `progress` note sets that one, and must not suppress the terminal answer.
-     */
-    settledRun: boolean;
     mode: WorkMode;
   } | null;
 }
@@ -603,9 +593,7 @@ export class LocalAgentHost {
     ws: LocalHostedAgent,
     record: WorkspaceActor,
   ): Promise<void> {
-    const agentName = record.origin === 'swarm'
-      ? headAgentName(record.storageKey)
-      : subordinateAgentName(record.storageKey);
+    const agentName = actorHomeName(record);
 
     if (ref.cwd) {
       cleanupFacetCwdScratch(ref.cwd, agentName);
@@ -694,7 +682,7 @@ export class LocalAgentHost {
       children: new Map(),
       relay: input.parentKey === null
         ? null
-        : { ownerDriven: false, reportedThisTurn: false, settledRun: false, mode: 'build' },
+        : { ownerDriven: false, spoke: false, settled: false, mode: 'build' },
     };
 
     this.entries.set(input.key, entry);
@@ -867,7 +855,7 @@ export class LocalAgentHost {
   private childOpenConfig(parent: HostEntry, binding: LocalActorBinding): CLIOpenConfig & { facet: string } {
     if (!isSubordinateOrigin(binding.origin)) throw new KinuError('denied', 'The roster path is not a subordinate actor.');
 
-    return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: subordinateAgentName(binding.storageKey), actorBinding: binding };
+    return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: actorHomeName(binding), actorBinding: binding };
   }
 
   private buildPeerEndpoint(entry: HostEntry, hubSql: SqlExec): LocalPeerEndpoint {
@@ -1004,8 +992,8 @@ export class LocalAgentHost {
 
     if (!state || event.type !== 'turn-start') return;
     state.ownerDriven = event.kind === 'user';
-    state.reportedThisTurn = false;
-    state.settledRun = false;
+    state.spoke = false;
+    state.settled = false;
     state.mode = event.workMode;
   }
 
@@ -1023,7 +1011,7 @@ export class LocalAgentHost {
         const state = child.relay;
 
         // Suppressed only by a run-settling report, never a progress note.
-        if (state === null || state.settledRun) return null;
+        if (state === null || state.settled) return null;
 
         // A task child always reports its ending, and any child its failure.
         const terminal = await terminalTaskReport({
@@ -1037,7 +1025,7 @@ export class LocalAgentHost {
         if (ending !== 'answered' || child.actor.record.lifetime === 'task') return null;
 
         return subordinateRelaysTurnEnd({
-          reportedThisTurn: state.reportedThisTurn,
+          reportedThisTurn: state.spoke,
           ownerDriven: state.ownerDriven,
           assistantText,
         })
@@ -1046,15 +1034,9 @@ export class LocalAgentHost {
       },
       sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
       send: async ({ text, status, mode, sequenceId, quiet }) => {
-        // Recorded before the send, so a second terminal path on this turn is suppressed.
-        if (child.relay) {
-          child.relay.reportedThisTurn = true;
-          child.relay.settledRun = true;
-        }
-
-        const relayed = await this.relayToParent({
-          child, content: text, mode, status, origin: 'turn_end', sequenceId, ...(quiet === true && { quiet }),
-        });
+        const relayed = await publishSubordinateReport({ mode, reports: child.relay }, {
+          content: text, status, origin: 'turn_end', sequenceId, ...(quiet === true && { quiet }),
+        }, report => this.relayToParent({ child, ...report }));
 
         return relayed.disposition;
       },
@@ -1113,22 +1095,13 @@ export class LocalAgentHost {
   private buildReport(child: HostEntry): ReportToolDeps {
     return {
       report: async ({ status, content, handoff }) => {
-        const relayed = await this.relayToParent({
-          child,
+        const relayed = await publishSubordinateReport({ mode: child.relay?.mode ?? 'build', reports: child.relay }, {
           content,
-          mode: child.relay?.mode ?? 'build',
           status,
           origin: 'report_tool',
           sequenceId: `${child.key}:report:${crypto.randomUUID()}`,
           handoff,
-        });
-
-        // Set here, not off a `tool-call` event: the one seam both the native tool and `report.*` codemode publish through.
-        if (child.relay) {
-          child.relay.reportedThisTurn = true;
-          // Only a run-settling report counts, the same predicate the parent's ingress uses.
-          child.relay.settledRun ||= temporaryRunSettles({ status, origin: 'report_tool' });
-        }
+        }, report => this.relayToParent({ child, ...report }));
 
         return { disposition: relayed.disposition, id: relayed.id };
       },
@@ -1206,9 +1179,7 @@ export class LocalAgentHost {
         child.config.setDisplayNameOrigin(displayName, nameOrigin);
         child.session.host.broadcast({ type: 'workspace_renamed', displayName });
       },
-      dismiss: async (name, { keepHistory, interrupt }, reference) => {
-        await this.removeChild(parentOf(), name, { keepHistory, interrupt }, reference);
-      },
+      dismiss: (name, dismissal, reference) => this.dismissChild(parentOf(), name, dismissal, reference),
     };
   }
 
@@ -1321,16 +1292,6 @@ export class LocalAgentHost {
       const descriptor = subordinateDescriptorSource(config).read();
 
       if (!descriptor) throw new Error(`subordinate "${input.name}" has no readable descriptor after creation`);
-      // SOUL belongs to the agent: with a bound cwd `storage.vfs` is the user's project.
-      const actorFiles = rt.agentStateVfs ?? rt.storage.vfs;
-
-      if (!(await readSoul(actorFiles))) await writeText(actorFiles, SOUL_PATH, [
-          renderSoulMarkdown({ name: descriptor.displayName, mission: input.mission }),
-          '',
-          '## Role',
-          '',
-          `Role: ${descriptor.role}${descriptor.tier ? ` (tier ${descriptor.tier})` : ''}`,
-        ].join('\n'));
       const ws: LocalHostedAgent = { rt, openConfig: this.childOpenConfig(parent, binding) };
 
       if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
@@ -1487,6 +1448,40 @@ export class LocalAgentHost {
     });
 
     this.answerPasses.add(pass);
+  }
+
+  /** Every job in the child's subtree stops first: a refusal removes nobody, and no process outlives the agent it answers. */
+  dismissChild(
+    parent: HostEntry, name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference,
+  ): Promise<SubordinateDismissal> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const retirement = yield* Effect.promise(() => this.retireSubtreeJobs(parent, name, reference));
+
+      if (retirement.refused.length > 0) {
+        return yield* Effect.fail(new KinuError('unavailable', `${name} keeps running: nothing confirmed its job(s) ${retirement.refused.join(', ')} stopped.`));
+      }
+
+      yield* Effect.promise(() => this.removeChild(parent, name, dismissal, reference));
+
+      return { stoppedJobs: retirement.stopped };
+    }));
+  }
+
+  /** The running jobs of the hosted child `name` and of every helper below it that this host holds. */
+  private async retireSubtreeJobs(parent: HostEntry, name: string, reference: ActorReference): Promise<JobRetirement> {
+    const retirement: JobRetirement = { stopped: [], refused: [] };
+    const below = subordinateDescendants(parent.tree.directory.list(), reference.actorId).map((record) => this.byActor.get(record.actorId));
+    const candidate = parent.children.get(name) ?? this.entries.get(`${parent.key}/${name}`);
+
+    for (const entry of [...below, candidate?.ws.rt.actor.actorId === reference.actorId ? candidate : undefined]) {
+      if (entry === undefined) continue;
+      const own = await entry.session.retireJobs();
+
+      retirement.stopped.push(...own.stopped);
+      retirement.refused.push(...own.refused);
+    }
+
+    return retirement;
   }
 
   private async removeDescendants(tree: HostTree, reference: ActorReference, keepHistory: boolean): Promise<void> {

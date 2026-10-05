@@ -5,7 +5,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 import { describe, expect, test } from "bun:test";
-import { CRAFT_NEUTRAL_PRIOR, agentHome, agentTmpRoot, headAgentName, parseActorKey, type AgentRuntime } from '@kinu.run/core';
+import { CRAFT_NEUTRAL_PRIOR, actorHomeName, agentHome, agentTmpRoot, type AgentRuntime } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { unreachableObjects } from "./helpers/bindings";
 import type { KinuDevbox } from "../src/kinu-devbox";
@@ -33,6 +33,7 @@ const sandboxFor = (id: string) => {
       resolveReadiness: async () => ({ kind: 'restored' as const }),
       // A command with no deadline takes the untimed lane; `exec` is the SDK's bounded lane and not what the handle reaches.
       execUntimed: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      releaseUntimed: async () => {},
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       readFile: async () => ({ content: '', exitCode: 0 }),
       writeFile: async () => ({ exitCode: 0 }),
@@ -74,7 +75,7 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1', use
 
   if (!isCFRuntime(rt)) throw new Error('the hosted head did not receive a CF runtime');
 
-  const home = agentHome(headAgentName(parseActorKey(head.actor.record.storageKey).id));
+  const home = agentHome(actorHomeName({ origin: 'swarm', storageKey: head.actor.record.storageKey }));
 
   return { workspace, head, rt, home };
 }
@@ -121,7 +122,7 @@ describe('a head forks its parent workspace', () => {
     const identity = await shell.exec('printf "%s %s" "$HOME" "$TMPDIR"');
     expect(identity.exitCode).toBe(0);
     expect(identity.stdout.split(' '))
-      .toEqual([home, agentTmpRoot(headAgentName(parseActorKey(head.actor.record.storageKey).id))]);
+      .toEqual([home, agentTmpRoot(actorHomeName({ origin: 'swarm', storageKey: head.actor.record.storageKey }))]);
   });
 
   test('exec planes are keyed to the PARENT workspace, not the head actor', async () => {

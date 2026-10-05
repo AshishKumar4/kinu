@@ -5,6 +5,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  * "Inherited context", "Isolation" and "The six axes".
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
+import { getToolName, isToolUIPart } from 'ai';
 import type { MockLanguageModelV3 } from 'ai/test';
 import { scriptedTurnModel, unobservedSearchSeams, unobservedSpend } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
@@ -342,7 +343,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
       // Read per head: the run view carries lifecycle, the journal carries prose.
       const steps = journal.readSteps(head.id);
       expect(steps.length).toBeGreaterThan(0);
-      const toolNames = steps.flatMap((step) => step.toolCalls.map((call) => call.name));
+      const toolNames = steps.flatMap((step) => step.parts.filter(isToolUIPart).map(getToolName));
       expect(toolNames).toContain('report');
       expect(head.status).toBe('completed');
       expect(head.summary ?? '').not.toBe('');
@@ -356,16 +357,16 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
       const head = view.heads.find((candidate) => candidate.id === id);
 
       const fileStep = head && journal.readSteps(head.id).find(
-        (step) => step.toolCalls.some((call) => call.name === 'file'),
+        (step) => step.parts.some((part) => isToolUIPart(part) && getToolName(part) === 'file'),
       );
 
       expect(fileStep).toBeDefined();
-      expect(JSON.stringify(fileStep?.toolCalls)).toContain(REFERENCE_PATH);
+      expect(JSON.stringify(fileStep?.parts)).toContain(REFERENCE_PATH);
     }
 
     const proposals = view.heads.flatMap(
       (head) => journal.readSteps(head.id).flatMap(
-        (step) => step.toolCalls.filter((call) => call.name === PROPOSE_BRANCH_TOOL),
+        (step) => step.parts.filter((part) => isToolUIPart(part) && getToolName(part) === PROPOSE_BRANCH_TOOL),
       ),
     );
 
@@ -517,7 +518,7 @@ describe('the mission ledger a search charges', () => {
     const { model, script } = workingNode({ proposeAtDepth1: true });
 
     const deps: AgentsToolDeps = {
-      mode: 'build',
+      mode: 'build', swarms: true,
       swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, ...unobservedSearchSeams() },
       budget: governor,
     };

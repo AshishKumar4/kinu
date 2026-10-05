@@ -156,6 +156,8 @@ function makeScene(options: {
       calls.push(`dismiss:${name}:${keepHistory}`);
 
       if (options.failRelease) throw new Error('the release failed');
+
+      return { stoppedJobs: [] };
     },
     async rename() { /* not reached by this rung */ },
   };
@@ -193,6 +195,7 @@ function makeScene(options: {
 
   const deps: AgentsToolDeps = {
     mode: 'build' satisfies WorkMode,
+    swarms: true,
     team,
     profile: () => testProfile(),
   };
@@ -582,7 +585,7 @@ describe('a task answer finds its row wherever its hire started', () => {
   // The turn-end relay reports `progress`; `temporaryRunSettles` must treat it as the answer.
   test('a turn_end answer with no waiter releases the row too, not just a terminal report', async () => {
     const scene = makeScene();
-    scene.roster.create({ name: TEMP_NAME, actorReference: scene.hired(TEMP_NAME), birth: null, deleteRequested: false, status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
+    scene.roster.create({ name: TEMP_NAME, actorReference: scene.hired(TEMP_NAME), birth: null, deleteRequested: false, status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, taskEventId: 'evt-1' });
 
     const delivered = await scene.report({
       status: 'progress', origin: 'turn_end', content: 'Totals reconcile.',
@@ -598,7 +601,7 @@ describe('a task answer finds its row wherever its hire started', () => {
 
   test('a task agent stays working until its settling report, even after a turn ends', async () => {
     const scene = makeScene();
-    scene.roster.create({ name: TEMP_NAME, actorReference: scene.hired(TEMP_NAME), birth: null, deleteRequested: false, status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
+    scene.roster.create({ name: TEMP_NAME, actorReference: scene.hired(TEMP_NAME), birth: null, deleteRequested: false, status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, taskEventId: 'evt-1' });
     await scene.report({ status: 'progress', origin: 'report_tool', content: 'Reading March.' });
     scene.roster.finishTurn(TEMP_NAME, 'answered', NOW);
     expect(scene.roster.list()).toMatchObject([{
@@ -803,7 +806,7 @@ describe('the rung is structural, and so is its absence', () => {
       expect(agentsActionsFor(child.deps)).toContain('hire');
     }
 
-    const leaf: AgentsToolDeps = { mode: 'build' };
+    const leaf: AgentsToolDeps = { mode: 'build', swarms: true };
     expect(agentsActionsFor(leaf)).not.toContain('hire');
   });
 

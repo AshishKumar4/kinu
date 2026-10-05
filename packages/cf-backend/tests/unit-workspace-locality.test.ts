@@ -148,7 +148,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       event TEXT NOT NULL, detail TEXT, elapsed_ms INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (actor_id, id))`);
     initWorkspaceActorTable((ddl: string) => { actor.database.exec(ddl); });
-    actor.database.run(`INSERT INTO workspace_identity (id, name, mission) VALUES ('w', 'Atlas', 'Help with testing.')`);
+    actor.database.run(`INSERT INTO workspace_identity (id, name) VALUES ('w', 'Atlas')`);
 
     return () => createHostedWorkspace({
       tasks: HELD_NIMBUS_TASKS,
@@ -255,7 +255,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const restarted = open();
 
-    expect(await settledWorkspaceSoul(restarted.bundle)).toBe(renderSoulMarkdown({ name: 'Atlas', mission: 'Help with testing.' }));
+    expect(await settledWorkspaceSoul(restarted.bundle)).toBe(renderSoulMarkdown({ name: 'Atlas' }));
     expect(await readText(restarted.bundle.vfs, 'SOUL.md.unverified')).toBe('an old soul of mine');
     expect(await soulFile(restarted)).toMatchObject({ uid: 0, mode: 0o444 });
     expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
@@ -282,7 +282,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     actor.database.run('DELETE FROM workspace_soul');
 
     const restarted = open();
-    const birth = renderSoulMarkdown({ name: 'Atlas', mission: 'Help with testing.' });
+    const birth = renderSoulMarkdown({ name: 'Atlas' });
 
     expect(await settledWorkspaceSoul(restarted.bundle)).toBe(birth);
     expect(await soulFile(restarted)).toMatchObject({ text: birth, uid: 0, mode: 0o444 });
@@ -397,6 +397,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect((await root.exec('ls /')).stdout.split(/\s+/)).toContain('shared');
   });
 
+  // A name keys a durable shell within its agent: another agent's same name is another shell, an unnamed call none.
   test('a named durable shell keeps its own cwd, and siblings do not see it', async () => {
     const actor = actorObject();
     const shellState = new Map<string, JsonValue>();
@@ -418,11 +419,14 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const alpha = workspace.box('subordinate:alpha');
     const beta = workspace.box('head:beta');
-    expect(await alpha.exec('cd /home/main/alpha')).toMatchObject({ exitCode: 0 });
-    expect(await alpha.exec('pwd')).toMatchObject({ stdout: '/home/main/alpha\n' });
-    expect(await beta.exec('pwd')).toMatchObject({ stdout: '/home/main\n' });
-    // The box is a view: one got again by name finds the same shell.
-    expect(await workspace.box('subordinate:alpha').exec('pwd')).toMatchObject({ stdout: '/home/main/alpha\n' });
+    const work = { name: 'work' };
+    expect(await alpha.exec('cd /home/main/alpha', work)).toMatchObject({ exitCode: 0 });
+    expect(await alpha.exec('pwd', work)).toMatchObject({ stdout: '/home/main/alpha\n' });
+    expect(await alpha.shellCwd?.('work')).toBe('/home/main/alpha');
+    expect(await beta.exec('pwd', work)).toMatchObject({ stdout: '/home/main\n' });
+    expect(await alpha.exec('pwd', { cwd: '/home/main' })).toMatchObject({ stdout: '/home/main\n' });
+    // The box is a view: one got again by scope finds the same shell.
+    expect(await workspace.box('subordinate:alpha').exec('pwd', work)).toMatchObject({ stdout: '/home/main/alpha\n' });
   });
 
   test('the workspace never reads a session binding out of env', async () => {

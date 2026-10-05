@@ -6,17 +6,24 @@ import * as v from 'valibot';
 import type { SqlExecutor, SqlExec, RawSqlExec, Memory, Executor, LLM, Schedule, Identity, FiberCtx, ExecuteResult, ResolvedProvider } from '../src/types/primitives';
 import type { AgentRuntime, CraftStore } from '../src/types/agent-runtime';
 import type { ActorHandle } from '../src/identity/actor-handle';
+import type { HeadStep } from '../src/heads/types';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 
 import {
-  createInlineMemory, createInlineWorkspace, sqlStorageOver, wrapDatabase,
+  createInlineWorkspace, sqlStorageOver, wrapDatabase,
 } from '../src/identity/inline-primitives';
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
+import { adaptMemory } from '../src/memory/vector-sync';
 import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 import { createWorkspaceForkSource } from '../src/vfs/workspace-planes';
 import type { ForkFileSource } from '../src/identity/fork';
 import { ConversationSearchStore, type ConversationRecall } from '../src/memory/conversation-search';
 import { initActorStateSchema, initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
+import { BackgroundJobRunner } from '../src/jobs/runner';
+import { initBackgroundJobsTable } from '../src/jobs/store';
+import type { ActorJobs } from '../src/jobs/background-wrap';
+import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { WORKSPACE_IDENTITY_DDL, tableExists } from '../src/identity/schema';
@@ -108,9 +115,12 @@ export function createWorkspaceBundle(db: Database) {
   return createInlineWorkspace(db);
 }
 
-/** The same inline Memory the local CLI builds, over the shared `memory_chunks` DDL. */
+/** The Memory every backend builds: MemoryStore through the one adapter, FTS5 alone. */
 export function createMemoryMemory(db: Database, vfs: VFS & Required<Pick<VFS, 'readRange'>>): Memory {
-  return createInlineMemory(db, vfs);
+  const store = new MemoryStore(vfs, wrapDatabase(db).sql);
+  store.ensureSchema();
+
+  return adaptMemory(store, vfs);
 }
 
 export function createMockLLM(responses: Record<string, string> = {}): LLM {
@@ -275,6 +285,19 @@ export function storesFor(rt: AgentRuntime): AgentStores {
   );
 }
 
+/** The runtime's actor's own jobs, as a root chat's: a call that settles inside its window never reaches them. */
+export function actorJobsFor(rt: AgentRuntime): ActorJobs {
+  initBackgroundJobsTable(rt.storage.execRaw);
+
+  return {
+    jobRunner: new BackgroundJobRunner({
+      store: storesFor(rt).jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'queued' },
+    }),
+    backgroundable: BACKGROUNDABLE_TOOLS,
+    mode: () => 'build',
+  };
+}
+
 /** Both console channels for one awaited call; stdout is the CLI's machine stream. */
 export interface ConsoleCapture {
   stdout: string[];
@@ -299,4 +322,14 @@ export async function captureConsole<Result>(fn: () => Promise<Result>): Promise
   }
 
   return { stdout, stderr };
+}
+
+/** A journalled head step that says `text`, as the node view draws it. */
+export function saidStep(text: string): HeadStep {
+  return { parts: [{ type: 'text', text, state: 'done' }] };
+}
+
+/** What a journalled head step says. */
+export function stepText(step: HeadStep): string {
+  return step.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
 }

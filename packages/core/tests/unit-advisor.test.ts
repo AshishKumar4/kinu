@@ -311,7 +311,7 @@ describe('what the model is allowed to answer', () => {
     expect(parseAdvisorReply('{"note":"   ","severity":"concern"}')).toBeNull();
   });
 
-  // An unlabeled class leaves eval-split instances whose kind a judge cannot be told.
+  // An unlabeled class leaves a note whose kind a judge cannot be told.
   const refusedLabels = [
     { name: 'an unknown severity is refused rather than coerced to a default',
       replies: ['{"note":"x","severity":"critical","class":"wrong-work"}', '{"note":"x","class":"wrong-work"}'] },

@@ -145,8 +145,16 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   settled(workspace: string): Promise<void>;
   stopChild(workspace: string): Promise<void>;
   dismissChild(workspace: string): Promise<string>;
+  /** The dismissal's answer, as JSON. */
+  dismissAnswer(workspace: string, name: string): Promise<string>;
   observe(workspace: string): Promise<HireObservation>;
   archiveSections(workspace: string): Promise<import('./hire-shapes').ArchiveSections>;
+  jobWindowArmed(workspace: string, count: number): Promise<void>;
+  outrunJobWindow(workspace: string): Promise<void>;
+  openJobGate(workspace: string): Promise<void>;
+  redeliverJobWake(workspace: string, jobId: string): Promise<void>;
+  loseJobFiber(workspace: string, jobId: string): Promise<number>;
+  jobRows(workspace: string): Promise<import('./hire-shapes').JobRow[]>;
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
@@ -184,6 +192,12 @@ interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
   agentWorkspaceListing(workspace: string, agent: string): Promise<RelayedAnswer<readonly { readonly key: string; readonly kind: string }[]>>;
   slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateCallResult>>;
   programHostAnswer(workspace: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
+  swarmJobNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
+  jobWindowArmed(workspace: string, count: number): Promise<void>;
+  outrunJobWindow(workspace: string): Promise<void>;
+  jobRows(workspace: string): Promise<import('./hire-shapes').JobRow[]>;
+  cancelJob(workspace: string, jobId: string): Promise<{ ok: boolean }>;
+  taskEvents(workspace: string, actorId: string): Promise<number>;
 }
 
 interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
@@ -350,6 +364,7 @@ declare global {
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
       HIRE_PROBE: DurableObjectNamespace<HireProbeRpc>;
+      HIRE_WORKSPACE: DurableObjectNamespace<import('agents').Agent<Cloudflare.Env>>;
       CODEX_EGRESS_PROBE: DurableObjectNamespace<CodexEgressProbeRpc>;
       CODEX_EGRESS_RECORDS: Service<CodexEgressRecordsRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;

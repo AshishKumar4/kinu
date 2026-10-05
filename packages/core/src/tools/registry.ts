@@ -273,7 +273,10 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'shell',
     summary: 'Run a shell command in one runtime and return its output.',
     notes: [
-      'Output holds both streams, labelled when both wrote, and starts with the exit code when it is not zero.',
+      'Every call is a fresh shell starting in `cwd` (default: your home), so a `cd` or `export` lasts only that call; '
+        + 'concurrent calls run side by side. A `name` keeps its directory and exported variables from call to call, '
+        + 'and runs one call at a time.',
+      'Output starts with the directory the command started in, holds both streams, labelled when both wrote, and gives the exit code when it is not zero.',
       'Each runtime keeps its own files; `workspace` is the filesystem the `file` tool reads.',
       'In a container, `nproc` and `free` report the host: size parallelism from the cpus and memory the execution status lists.',
     ],

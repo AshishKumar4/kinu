@@ -93,6 +93,9 @@ function sharedPrefix(earlier: readonly PromptMessage[], later: readonly PromptM
 
 const isBlock = (message: PromptMessage): boolean => message.role === 'user' && messageText(message).startsWith(DYNAMIC_CONTEXT_OPEN_TAG);
 
+/** A delta's open tag also names the state it applies to. */
+const isDelta = (message: PromptMessage): boolean => messageText(message).split('\n', 1)[0]?.includes(' state="') ?? false;
+
 /** No AGENTS.md sits over it, so a request carries the dynamic blocks alone. */
 const WORKSPACE = scratchDir('turn-continuation-workspace');
 
@@ -108,7 +111,8 @@ async function answered(
   { rt, db }: { readonly rt: CLIRuntime; readonly db: Database },
   texts: readonly string[], prompts: PromptMessage[][], beforeNext?: () => Promise<void>,
 ): Promise<void> {
-  const session = new LocalAgentSession({ rt, db, model: scriptedModel(texts.map((text) => answer(`answer to ${text}`)), prompts), noAutoEvolve: true, cwd: WORKSPACE, onEvent: () => {} });
+  rt.actor.config.setLearning(false);
+  const session = new LocalAgentSession({ rt, db, model: scriptedModel(texts.map((text) => answer(`answer to ${text}`)), prompts), cwd: WORKSPACE, onEvent: () => {} });
 
   for (const [index, text] of texts.entries()) {
     if (index > 0) await beforeNext?.();
@@ -136,13 +140,15 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
     const eventsA = new AwaitedList<SessionEvent>();
-    const a = new LocalAgentSession({ rt, db, model: scriptedModel([parked('part-')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
+    rt.actor.config.setLearning(false);
+    const a = new LocalAgentSession({ rt, db, model: scriptedModel([parked('part-')]), cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
     const dying = a.send('continue me', { id: crypto.randomUUID() });
     await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta'));
 
     const eventsB = new AwaitedList<SessionEvent>();
     const promptsB: PromptMessage[][] = [];
-    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('one')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+    rt.actor.config.setLearning(false);
+    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('one')], promptsB), cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
     await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
     await b.end();
     expect(eventsB.items.filter((event) => event.type === 'background' && event.event === 'turn_reopened')).toHaveLength(1);
@@ -154,7 +160,8 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
 
     const eventsC = new AwaitedList<SessionEvent>();
     const promptsC: PromptMessage[][] = [];
-    const c = new LocalAgentSession({ rt, db, model: scriptedModel([answer('never')], promptsC), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsC.push(event) });
+    rt.actor.config.setLearning(false);
+    const c = new LocalAgentSession({ rt, db, model: scriptedModel([answer('never')], promptsC), cwd: WORKSPACE, onEvent: (event) => eventsC.push(event) });
     await c.end();
     expect(eventsC.items.filter((event) => event.type === 'background' && event.event === 'turn_reopened')).toHaveLength(0);
     expect(promptsC).toHaveLength(0);
@@ -174,14 +181,16 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
 
     try {
       const eventsA = new AwaitedList<SessionEvent>();
-      const a = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('call-1'), parked('part-')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
+      rt.actor.config.setLearning(false);
+      const a = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('call-1'), parked('part-')]), cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
       const dying = a.send('keep going', { id: crypto.randomUUID() });
       await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta'));
       // A fresh turn in a live process is not a resume.
       expect(logger.emitted.filter((line) => line.event === 'turn.resumed')).toHaveLength(0);
 
       const eventsB = new AwaitedList<SessionEvent>();
-      const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('done')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+      rt.actor.config.setLearning(false);
+      const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('done')]), cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
       await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
       await b.end();
 
@@ -206,13 +215,15 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     // The dead process keeps one finished step and dies inside the next.
     const promptsA: PromptMessage[][] = [];
     const eventsA = new AwaitedList<SessionEvent>();
-    const a = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('kept'), parked('part-')], promptsA), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
+    rt.actor.config.setLearning(false);
+    const a = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('kept'), parked('part-')], promptsA), cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
     const dying = a.send('/focused remember this', { id: crypto.randomUUID() });
     await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta' && event.delta === 'part-'));
 
     const eventsB = new AwaitedList<SessionEvent>();
     const promptsB: PromptMessage[][] = [];
-    const b = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('resumed'), answer('done')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+    rt.actor.config.setLearning(false);
+    const b = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('resumed'), answer('done')], promptsB), cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
     await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
     await b.end();
     expect(eventsB.items.filter((event) => event.type === 'background' && event.event === 'turn_reopened')).toHaveLength(1);
@@ -223,9 +234,12 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
       const users = prompt.flatMap((message) => message.role === 'user' ? [messageText(message)] : []);
       const activation = users.findIndex((text) => text.includes('- focused: explicit /focused'));
 
-      // The kept steps follow the request; the dynamic block naming the activation rides before it, never after them.
+      // The kept steps follow the request; the dynamic block naming the activation and the turn's skill bodies ride
+      // before it, never after them.
       expect(activation).toBeGreaterThanOrEqual(0);
-      expect(users.slice(activation + 1)).toEqual(['/focused remember this']);
+      expect(users.slice(activation + 1)).toHaveLength(2);
+      expect(users[activation + 1]).toContain('Focus on memory only.');
+      expect(users.at(-1)).toBe('/focused remember this');
       expect(roles.lastIndexOf('user')).toBeLessThan(roles.indexOf('tool'));
     }
 
@@ -255,13 +269,15 @@ async function resumed(cut: Step, finish: Step): Promise<{
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
   const eventsA = new AwaitedList<SessionEvent>();
-  const a = new LocalAgentSession({ rt, db, model: scriptedModel([cut]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
+  rt.actor.config.setLearning(false);
+  const a = new LocalAgentSession({ rt, db, model: scriptedModel([cut]), cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
   const dying = a.send('carry on', { id: crypto.randomUUID() });
   await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta'));
 
   const eventsB = new AwaitedList<SessionEvent>();
   const promptsB: PromptMessage[][] = [];
-  const b = new LocalAgentSession({ rt, db, model: scriptedModel([finish], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+  rt.actor.config.setLearning(false);
+  const b = new LocalAgentSession({ rt, db, model: scriptedModel([finish], promptsB), cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
   await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
   await b.end();
   await Promise.race([dying, Promise.resolve()]);
@@ -310,14 +326,16 @@ describe('RUNTIME CONTEXT SURVIVES A RESTART — where it was woven', () => {
     const promptsA: PromptMessage[][] = [];
     const eventsA = new AwaitedList<SessionEvent>();
     const search = memoryCall('kept', '{"action":"search","query":"invoices"}');
-    const a = new LocalAgentSession({ rt, db, model: scriptedModel([answer('the first answer'), search, parked('part-')], promptsA), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
+    rt.actor.config.setLearning(false);
+    const a = new LocalAgentSession({ rt, db, model: scriptedModel([answer('the first answer'), search, parked('part-')], promptsA), cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
     await a.send('the first question', { id: crypto.randomUUID() });
     const dying = a.send('the second question', { id: crypto.randomUUID() });
     await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta' && event.delta === 'part-'));
 
     const eventsB = new AwaitedList<SessionEvent>();
     const promptsB: PromptMessage[][] = [];
-    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('done')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+    rt.actor.config.setLearning(false);
+    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('done')], promptsB), cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
     await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
     await b.end();
 
@@ -375,7 +393,7 @@ describe('RUNTIME CONTEXT SURVIVES A RESTART — where it was woven', () => {
     const first = present(prompts[0], 'the first request after the expiry');
 
     // Born at the new turn's first step: after the conversation it collapsed, before the request.
-    expect(first.filter(isBlock).map((block) => messageText(block).includes('kind="full"'))).toEqual([true]);
+    expect(first.filter(isBlock).map(isDelta)).toEqual([false]);
     expect(messageText(present(first[first.findIndex(isBlock) - 1], 'the message before the block'))).toBe('answer to the second question');
     expect(renders()).toHaveLength(1);
     expect(renders()).not.toContain(stale[0]);
@@ -402,7 +420,7 @@ describe('RUNTIME CONTEXT SURVIVES A RESTART — where it was woven', () => {
 
     // The first turn's block is gone from after the system prompt; one full block rides before the new request.
     expect(isBlock(present(second[1], 'the message after the system prompt'))).toBe(false);
-    expect(second.filter(isBlock).map((block) => messageText(block).includes('kind="full"'))).toEqual([true]);
+    expect(second.filter(isBlock).map(isDelta)).toEqual([false]);
     expect(messageText(present(second.at(-1), 'the request'))).toBe('the second question');
     db.close();
   });
@@ -414,10 +432,11 @@ describe('RUNTIME CONTEXT SURVIVES A RESTART — where it was woven', () => {
     await answered({ db, rt }, ['the first question', 'the second question'], promptsA, async () => { await appendMemoryNote(rt.memory, 'Parse invoices with the CSV parser.'); });
 
     const delta = present(present(promptsA[1], 'the second turn\u2019s request').filter(isBlock)[1], 'the delta the lesson brought');
-    expect(messageText(delta)).toContain('kind="delta"');
+    expect(isDelta(delta)).toBe(true);
 
     const promptsB: PromptMessage[][] = [];
-    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('the third answer')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: () => {} });
+    rt.actor.config.setLearning(false);
+    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('the third answer')], promptsB), cwd: WORKSPACE, onEvent: () => {} });
     await b.revertConversation(await userEntry(rt, 'the second question'));
     await b.send('the third question', { id: crypto.randomUUID() });
     await b.end();

@@ -2,7 +2,6 @@ import { requireAuthConfig } from '../config';
 import { isReasoningEffort, projectJsonValue, REASONING_EFFORTS, type JsonValue, type ModelMenu, type ReasoningEffort, type TimerTrigger, type TimerTriggerOpts } from '@kinu.run/core';
 import { resolveAgentTarget } from '../agent-target';
 import {
-  cancelLocalJob,
   cancelLocalTrigger,
   createLocalTimerTrigger,
   getLocalToolSurface,
@@ -15,6 +14,7 @@ import {
 import { readDefaultTier } from '../profiles';
 import {
   callAgentRpc,
+  CancelJobSchema,
   CloudBackgroundJobSchema,
   CloudToolDescriptionsSchema,
   CloudTriggerListSchema,
@@ -34,6 +34,8 @@ import {
   type AgentModelMenu,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { cancelLocalJob } from '../local-agent-client';
+import { liveDaemonPid } from './daemon';
 
 interface ControlOpts {
   model?: string;
@@ -60,7 +62,6 @@ const TimerTriggerSchema = v.object({
   id: v.string(), kind: v.picklist(['timer_cron', 'timer_oneshot']), nextFireAt: v.nullable(v.number()),
 });
 
-const CancelJobSchema = v.object({ ok: v.boolean() });
 
 export async function modelCommand(name: string, spec: string | undefined, opts: ControlOpts): Promise<void> {
   const target = resolveAgentTarget(name);
@@ -417,7 +418,7 @@ export async function jobsCommand(name: string, action: string | undefined, id: 
 
   if (normalized === 'cancel') {
     if (!id) throw new Error('job id required');
-    const cancelled = await cancelLocalJob(target.localName, id);
+    const cancelled = await cancelLocalJob(target.localName, id, liveDaemonPid());
     present({ id, ...cancelled }, opts, () =>
       console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
 

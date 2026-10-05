@@ -24,7 +24,7 @@ const DeletedSchema = v.pipe(v.string(), v.parseJson(), v.object({
 
 const ObjectPageSchema = v.object({
   success: v.literal(true),
-  result: v.array(v.object({ key: v.string() })),
+  result: v.array(v.object({ key: v.string(), size: v.optional(v.number()) })),
   // Absent on the last page.
   result_info: v.optional(v.object({ cursor: v.optional(v.string()), is_truncated: v.optional(v.boolean()) })),
 });
@@ -122,4 +122,13 @@ export async function deleteR2Prefix(deletion: PrefixDeletion): Promise<number> 
     if (missed.length > 0) throw new Error(`DELETE ${deletion.bucket} left ${String(missed.length)} of ${String(keys.length)} keys, first ${missed[0] ?? ''}`);
     deleted += keys.length;
   }
+}
+
+/** The size of `key` in a bucket, or undefined when the bucket does not hold it. */
+export async function r2ObjectSize(lookup: Omit<PrefixDeletion, 'prefix'> & { readonly key: string }): Promise<number | undefined> {
+  const token = lookup.token ?? restApiToken();
+  const objects = `${lookup.api ?? API}/accounts/${lookup.accountId}/r2/buckets/${lookup.bucket}/objects`;
+  const page = await restCall({ method: 'GET', url: `${objects}?prefix=${encodeURIComponent(lookup.key)}&per_page=1`, token }, ObjectPageSchema);
+
+  return page.result.find((object) => object.key === lookup.key)?.size;
 }

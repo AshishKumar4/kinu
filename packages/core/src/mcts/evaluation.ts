@@ -2,7 +2,7 @@
  * Grounded branch evaluation: the one search scorer, called by swarm scoring and grounded heads on every backend.
  * Execution picks the band, the judge ensemble (median, unparsed samples dropped) places within it.
  * Band table (WP-A5):
- *   code passed 0.60 + 0.40·j; code failed 0.05 + 0.25·j; code did not parse 0.05 (no judge);
+ *   verified 0.60 + 0.40·j; failed 0.05 + 0.25·j; unverified 0.30 + 0.25·j; unparsed 0.05;
  *   unrunnable language 0.30·j; prose 0.75·j, or 0.30·j when a sibling has code.
  * Thresholds in config.ts are pinned to these band boundaries.
  * All judge samples failing yields the band floor: infrastructure failure must look bad, never neutral.
@@ -26,9 +26,10 @@ const FAIL_CEIL = FAIL_FLOOR + FAIL_SPAN;
 const PROSE_CONFIDENCE = 0.75;
 
 import * as v from 'valibot';
-import type { LLM, Executor } from '../types/primitives';
-import type { EvaluationGrounding } from '../types/evaluation';
+import type { LLM, Executor, ExecuteResult } from '../types/primitives';
+import type { EvaluationGrounding, VerificationStatus } from '../types/evaluation';
 import { fencedBlocks, readProposalCode } from '../execution/code-fence';
+import { verificationToken, verificationReceipt, verifiedPayload } from '../execution/verification';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderThrownChain, tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
@@ -56,8 +57,9 @@ export interface BranchEvaluation {
   grounding: EvaluationGrounding;
   /** Execution verdict. `passedChecks`/`totalChecks` absent means no fraction was measured, not zero. */
   execution?: {
-    passed: boolean;
+    status: VerificationStatus;
     passedChecks?: number;
+    failedChecks?: number;
     totalChecks?: number;
     error?: string;
     assertionsGenerated: boolean;
@@ -108,12 +110,12 @@ async function codeFailedToParse(
   code: string,
   language: string,
 ): Promise<boolean> {
-  if (execution.passed || !execution.error || !isParseFailure(execution.error)) return false;
+  if (!execution.error || !isParseFailure(execution.error)) return false;
 
   if (!execution.assertionsGenerated) return true;
   const bare = await runForVerdict(executor, code, [], language);
 
-  return !bare.passed && bare.error !== undefined && isParseFailure(bare.error);
+  return bare.error !== undefined && isParseFailure(bare.error);
 }
 
 export interface JudgeCallBudget {
@@ -178,7 +180,7 @@ export async function evaluateWithMultiModelJudging(
     // Cascade stage 0: unparsed source has decided its verdict; skip the judge.
     if (await codeFailedToParse(opts.executor, execution, code, language)) {
       return {
-        score: FAIL_FLOOR, grounding: 'execution', execution,
+        score: FAIL_FLOOR, grounding: 'failed', execution,
         judgeSamplesAttempted: 0, judgeSamplesUsed: 0,
       };
     }
@@ -198,12 +200,14 @@ export async function evaluateWithMultiModelJudging(
     // within the pass band, and within the fail band only when no suite ran (test-utils/src/eval-outcome.ts).
     const fraction = checkFraction(execution);
 
-    const score = execution.passed
-      ? PASS_FLOOR + PASS_SPAN * (judgeScore ?? 0)
-      : FAIL_FLOOR + FAIL_SPAN * (fraction ?? judgeScore ?? 0);
+    const scores = {
+      verified: PASS_FLOOR + PASS_SPAN * (judgeScore ?? 0),
+      failed: FAIL_FLOOR + FAIL_SPAN * (fraction ?? judgeScore ?? 0),
+      unverified: FAIL_CEIL + FAIL_SPAN * (judgeScore ?? 0),
+    };
 
     return {
-      score, grounding: 'execution', execution,
+      score: scores[execution.status], grounding: execution.status, execution,
       judgeSamplesAttempted: k, judgeSamplesUsed: parsed.length,
     };
   }
@@ -275,42 +279,56 @@ UNVERIFIABLE`;
     .slice(0, MAX_GENERATED_CHECKS);
 }
 
-/**
- * Run the branch's code against each check separately and count passes. With no checks the run is bare.
- * A throwing executor counts as failed. Known limit: a top-level `return` skips the appended check.
- */
+/** A pass needs the check's per-run receipt; an error fails, and a skipped or bare run is unverified. */
 async function runForVerdict(
   executor: Executor,
   code: string,
   checks: readonly string[],
   language: string,
 ): Promise<NonNullable<BranchEvaluation['execution']>> {
-  const run = async (source: string): Promise<string | null> => {
+  const run = async (source: string): Promise<ExecuteResult> => {
     try {
-      const { error } = await executor.execute(source, [], { language });
-
-      return error ?? null;
+      return await executor.execute(source, [], { language });
     } catch (e) {
-      return renderThrownChain({ cause: e });
+      return { result: undefined, error: renderThrownChain({ cause: e }) };
     }
   };
 
   if (checks.length === 0) {
-    const error = await run(code);
+    const { error } = await run(code);
 
-    return error === null
-      ? { passed: true, assertionsGenerated: false }
-      : { passed: false, error, assertionsGenerated: false };
+    return error === undefined
+      ? { status: 'unverified', assertionsGenerated: false }
+      : { status: 'failed', error, assertionsGenerated: false };
   }
 
-  const errors = await Promise.all(checks.map((check) => run(`${code}\n\n${check}`)));
-  const failures = errors.filter((error): error is string => error !== null);
-  const passedChecks = errors.length - failures.length;
+  const outcomes = await Promise.all(checks.map(async (check) => {
+    const token = verificationToken();
+    const receipt = JSON.stringify(await verificationReceipt(token, 'completed'));
+
+    const source = language === 'javascript' || language === 'typescript'
+      ? `return await (async function () { "use strict";\n${code}\n\n${check}\nreturn ${receipt};\n})();`
+      : `${code}\n\n${check}`;
+
+    const output = await run(source);
+    const receiptResult = v.safeParse(v.string(), output.result);
+
+    return {
+      error: output.error,
+      verified: output.error === undefined && receiptResult.success
+        && await verifiedPayload(receiptResult.output, token) === 'completed',
+    };
+  }));
+
+  const failures = outcomes.flatMap((outcome) => outcome.error === undefined ? [] : [outcome.error]);
+  const passedChecks = outcomes.filter((outcome) => outcome.verified).length;
+  const completed = passedChecks === outcomes.length ? 'verified' : 'unverified';
 
   const verdict: NonNullable<BranchEvaluation['execution']> = {
-    passed: failures.length === 0,
+    status: failures.length > 0 ? 'failed' : completed,
     passedChecks,
-    totalChecks: errors.length,
+    failedChecks: failures.length,
+    totalChecks: outcomes.length,
     assertionsGenerated: true,
   };
 
@@ -322,7 +340,11 @@ async function runForVerdict(
 function executionEvidence(execution: BranchEvaluation['execution']): string {
   if (!execution) return '';
 
-  if (execution.passed) return '\nExecution evidence: the candidate\'s code was run and PASSED.\n';
+  if (execution.status === 'verified') return '\nExecution evidence: the independent checks completed and VERIFIED the candidate.\n';
+
+  if (execution.status === 'unverified') {
+    return '\nExecution evidence: UNVERIFIED; no complete passing suite was witnessed. Normal return is not a passing check.\n';
+  }
 
   const why = evidenceWindow(execution.error ?? 'unknown error', EVIDENCE_BUDGETS.judgeExecutionError);
 

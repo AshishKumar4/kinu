@@ -189,7 +189,7 @@ export function releaseSecrets(
     });
   }
 
-  return rows.sort((left, right) => left.name.localeCompare(right.name));
+  return rows.sort((left, right) => (left.name < right.name ? -1 : 1));
 }
 
 export function releaseVars(config: BindingBlocks): readonly ReleaseVar[] {

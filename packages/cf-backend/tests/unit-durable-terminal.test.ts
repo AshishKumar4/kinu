@@ -16,7 +16,7 @@ import {
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { sqlOver } from '@kinu.run/test-utils';
 import {
-  admittedTurnClaim, chatSessionTurns, declareShadowCandidate, historyOver, ledgerOver, orchestratorHarness,
+  admittedTurnClaim, chatSessionTurns, historyOver, ledgerOver, orchestratorHarness,
   reactivateOrchestratorHarness,
   tapDiagnostics, until, workspaceMainActor, type ActorHarness, type HarnessActorWorld, type HarnessOrchestratorAgent,
   type ScriptedHeadReport,
@@ -256,10 +256,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const owed = effects(harness, 'u-head', 'a-head');
     expect(owed.map((row) => row.effect_key)).toEqual([
       // No `branches` row: branches are claimed per branch id and this turn launched none. No `advisor_review`
-      // row: the harness actor does not review turns.
+      // row: the harness actor does not review turns. No `turn_lessons` row: the turn struggled with nothing.
       'v1:turn_end_extensions:a-head', 'v1:turn_record:a-head',
       'v1:event_drain:a-head', 'v1:improvement_lanes:a-head',
-      'v1:sleep_time:a-head', 'v1:auto_title:a-head', 'v1:auto_gepa:a-head',
+      'v1:sleep_time:a-head', 'v1:auto_title:a-head',
     ]);
     expect(owed.every((row) => row.status === 'pending')).toBe(true);
     // The outer transition stays open, so the next activation gets the suffix.
@@ -342,7 +342,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
   /** One owed effect keeps the whole transition open. */
   test('the outer transition does not settle while any effect is still owed', async () => {
-    const harness = cutAt('auto_gepa', 'before');
+    const harness = cutAt('auto_title', 'before');
     turns(harness).open('u-owed-gate');
 
     await turns(harness).settle({ messageId: 'a-owed-gate' });
@@ -350,7 +350,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
     // Named, not an exact set: the cut lands before sibling effects finish recording.
     expect(effects(harness, 'u-owed-gate', 'a-owed-gate')
-      .some((row) => row.effect_key === 'v1:auto_gepa:a-owed-gate' && row.status === 'pending'))
+      .some((row) => row.effect_key === 'v1:auto_title:a-owed-gate' && row.status === 'pending'))
       .toBe(true);
     expect(disposition(harness, 'u-owed-gate', 'a-owed-gate')).toBe('resumed');
   });
@@ -493,61 +493,23 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     }
   });
 
-  /** Trials run on the live tool surface, so aborted, errored, and Plan turns must not declare one. */
-  test('only a completed build turn declares a shadow trial', async () => {
-    /** A pending candidate every completed build turn samples: the rate is the production switch. */
-    const sampling = (harness: Harness): void => {
-      declareShadowCandidate(harness.db);
-      workspaceMainActor(harness.db).config.setShadowSampleRate(1);
-    };
-
-    // The queue, not the pruned ledger row; scoped to this actor because the queue is per-actor.
-    const queued = (harness: Harness): number => v.parse(
-      v.object({ n: v.number() }),
-      harness.db.query('SELECT COUNT(*) AS n FROM scaffold_trial_queue WHERE actor_id = ?')
-        .get(workspaceMainActor(harness.db).actorId),
-    ).n;
-
-    // Positive control: a completed build turn does owe a trial.
-    const open = orchestratorHarness();
-    sampling(open);
-    turns(open).open('u-shadow-ok');
-    await settleResponse(open, 'u-shadow-ok', 'a-shadow-ok');
-    expect(queued(open)).toBe(1);
-
-    for (const shut of ['error', 'aborted', 'plan'] as const) {
-      const harness = orchestratorHarness();
-      sampling(harness);
-      turns(harness).open(`u-shadow-${shut}`);
-
-      // The mode comes from the driving user message, which `onChatResponse` reads.
-      if (shut === 'plan') harness.agent.harnessDrivingUserMessage('plan it', { kinuMode: 'plan' });
-      await turns(harness).settle({
-        messageId: `a-shadow-${shut}`, text: 'the answer',
-        ...(shut !== 'plan' && { status: shut === 'error' ? 'error' : 'aborted' }),
-      });
-      await joinHarnessFibers();
-      expect(queued(harness)).toBe(0);
-    }
-  });
-
   /** No abandonment: an effect nobody can finish stays owed; convergence is backoff plus the durable wake. */
   test('an effect no activation can finish stays owed rather than being abandoned', async () => {
-    const harness = cutAt('auto_gepa', 'before');
+    const harness = cutAt('auto_title', 'before');
     turns(harness).open('u-stuck');
 
     await turns(harness).settle({ messageId: 'a-stuck' });
     await joinHarnessFibers();
 
-    for (let attempt = 0; attempt < 5; attempt++) await recover(harness, { cut: ['auto_gepa', 'before'] });
+    for (let attempt = 0; attempt < 5; attempt++) await recover(harness, { cut: ['auto_title', 'before'] });
 
-    expect(effects(harness, 'u-stuck', 'a-stuck').find((row) => row.effect_key === 'v1:auto_gepa:a-stuck')?.status).toBe('pending');
+    expect(effects(harness, 'u-stuck', 'a-stuck').find((row) => row.effect_key === 'v1:auto_title:a-stuck')?.status).toBe('pending');
     expect(disposition(harness, 'u-stuck', 'a-stuck')).toBe('resumed');
   });
 
   /** A rejected close must release its sequence, or every later sweep and alarm skips it. */
   test('a close that rejects releases its sequence to the next sweep', async () => {
-    const harness = cutAt('auto_gepa', 'before');
+    const harness = cutAt('auto_title', 'before');
     turns(harness).open('u-rejected-close');
 
     await turns(harness).settle({ messageId: 'a-rejected-close' });

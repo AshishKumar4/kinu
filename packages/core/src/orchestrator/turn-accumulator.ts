@@ -2,6 +2,7 @@
 // Usage arrives already normalized: absence means the provider said nothing, zero means zero.
 
 import type { ModelMessage } from 'ai';
+import type { ChatEvent, StepRecord } from '../chat';
 import type { ToolCallRecord } from '../evolution/types';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget';
 import type { ContextComposition } from '../context-meter';
@@ -32,7 +33,6 @@ export interface StepLike {
   egress?: string | undefined;
   /** The breakdown of the request this step sent. */
   context?: ContextComposition;
-  /** The fallback spec that served this step; absent for the turn's own model. */
   fallback?: string | undefined;
 }
 
@@ -83,6 +83,8 @@ export class TurnAccumulator {
   readonly escalations = new TurnEscalationLedger();
   /** Written by craft-cycle.ts: crafted tools run inside `eval`, never as `toolCalls` names. */
   private readonly craftUsed = new Set<string>();
+  /** The tool lessons a step listed, id to the revision shown. */
+  private readonly lessons = new Map<string, number>();
   /** Messages already durable; a shorter array is a re-drive, resynced without recording the step twice. */
   private durableMessages = 0;
 
@@ -105,7 +107,14 @@ export class TurnAccumulator {
     this.files.reset();
     this.escalations.reset();
     this.craftUsed.clear();
+    this.lessons.clear();
     this.durableMessages = 0;
+  }
+
+  /** Restores totals without charging them again. */
+  resume(steps: number, usage: Usage): void {
+    this.stepCount = steps;
+    this.usage = usage;
   }
 
   noteCraftedToolUse(names: readonly string[]): void {
@@ -114,6 +123,14 @@ export class TurnAccumulator {
 
   craftedToolsUsed(): string[] {
     return [...this.craftUsed];
+  }
+
+  noteLessonsShown(lessons: readonly { readonly id: string; readonly revision: number }[]): void {
+    for (const lesson of lessons) this.lessons.set(lesson.id, lesson.revision);
+  }
+
+  lessonsShown(): { id: string; revision: number }[] {
+    return [...this.lessons].map(([id, revision]) => ({ id, revision }));
   }
 
   /** `undefined` when no step reported anything; a reported zero comes back as one. */
@@ -128,6 +145,35 @@ export class TurnAccumulator {
   }
 
   recordToolCall(c: ToolResultLike): void {
+    this.writeToolCall(c)();
+  }
+
+  recordResult(args: JsonObject, event: Extract<ChatEvent, { type: 'tool-result' }>): void {
+    this.recordToolCall({ input: args, ...event, output: event.output ?? (event.success ? event.result : undefined),
+      error: event.error ?? (event.success ? undefined : event.result) });
+  }
+
+  recordBoundary(event: Extract<ChatEvent, { type: 'step-finish' }>): void {
+    this.recordStep({ ...event, response: { messages: event.responseMessages, modelId: event.modelId } });
+  }
+
+  writeNative(record: StepRecord): () => void {
+    const committed = record.toolResults.map(({ event, args }) => this.writeToolCall({
+      input: args,
+      ...event, output: event.output ?? (event.success ? event.result : undefined), error: event.error ?? (event.success ? undefined : event.result),
+    }));
+
+    if (record.step !== undefined) {
+      const step = record.step;
+      committed.push(this.writeStep({
+        ...step, response: { messages: record.messages, modelId: step.modelId }, request: step.request,
+      }));
+    }
+
+    return () => { for (const commit of committed) commit(); };
+  }
+
+  writeToolCall(c: ToolResultLike): () => void {
     // One failure description for both the core record and the durable event.
     const failure = c.success === false
       ? describeToolFailure({ error: c.error })
@@ -136,12 +182,7 @@ export class TurnAccumulator {
     const recorded = failure !== null ? { error: failure } : c.output;
     const outcome = v.parse(ToolOutcomeSchema, c);
 
-    if (!c.success) this.hadError = true;
-
-    if (citesSpillAddress(c.input)) this.context.noteFollowUp();
     const dur = c.durationMs != null ? ` (${c.durationMs}ms)` : '';
-    this.sinks.logActivity?.('tool_call_end', `${c.toolName}${dur}`);
-    this.toolCalls.push({ toolCallId: c.toolCallId, name: c.toolName, args: c.input ?? {}, result: recorded, outcome });
 
     const event: Omit<Extract<RunEventInput, { type: 'tool_call_end' }>, 'type'> = {
       name: c.toolName,
@@ -162,7 +203,16 @@ export class TurnAccumulator {
     if (failure !== null) event.error = failure;
 
     if (c.durationMs !== undefined) event.durationMs = c.durationMs;
+
     this.sinks.onToolCallEvent?.(event);
+
+    return () => {
+      if (!c.success) this.hadError = true;
+
+      if (citesSpillAddress(c.input)) this.context.noteFollowUp();
+      this.sinks.logActivity?.('tool_call_end', `${c.toolName}${dur}`);
+      this.toolCalls.push({ toolCallId: c.toolCallId, name: c.toolName, args: c.input ?? {}, result: recorded, outcome });
+    };
   }
 
   /** A step that reported nothing leaves the previous value standing; a reported 0 overwrites. */
@@ -177,7 +227,11 @@ export class TurnAccumulator {
   }
 
   recordStep(ctx: StepLike): void {
-    this.stepCount++;
+    this.writeStep(ctx)();
+  }
+
+  writeStep(ctx: StepLike): () => void {
+    const stepCount = this.stepCount + 1;
     const toolCalls = Array.isArray(ctx.toolCalls) ? ctx.toolCalls : [];
     const toolResults = Array.isArray(ctx.toolResults) ? ctx.toolResults : [];
     const toolCallNames = toolCalls.map((tc) => tc?.toolName ?? tc?.name ?? '?').join(',');
@@ -185,12 +239,10 @@ export class TurnAccumulator {
     const textLen = (ctx.text ?? '').length;
     const usage: Usage = ctx.usage ?? {};
     const reported = usageReported(usage);
-    this.usage = addUsage(this.usage, usage);
 
     // Debit only a real report. `cacheRead`/`cacheWrite` are subsets of `input`.
     if (reported) this.budget?.debit(usageTotal(usage) ?? 0, { calls: 1, usage, spec: ctx.fallback });
 
-    this.noteLastRequest(ctx, usage);
 
     // Every reported field, zeros included: `cacheRead=0` is a cold prefix, not silence.
 
@@ -204,27 +256,18 @@ export class TurnAccumulator {
 
     if (ctx.response?.modelId) extras.push(`model=${ctx.response.modelId}`);
     const extrasStr = extras.length > 0 ? ` ${extras.join(' ')}` : '';
-    this.sinks.logActivity?.(
-      'step_finish',
-      `step ${this.stepCount} kind=${derivedStepType} reason=${String(ctx.finishReason)} ` +
-      `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length}` +
-      extrasStr,
-    );
     // An empty array means no response reported (scaffold step boundary); never rewind on it.
     const cumulative = ctx.response?.messages ?? [];
     const produced = cumulative.length > 0 ? cumulative.slice(this.durableMessages) : [];
 
-    if (cumulative.length > 0) this.durableMessages = cumulative.length;
-
     const stepEvent: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0] = {
-      stepIndex: this.stepCount,
+      stepIndex: stepCount,
       account: ctx.account,
       egress: ctx.egress,
     };
 
     if (ctx.finishReason !== undefined) {
       stepEvent.reason = ctx.finishReason;
-      this.lastFinishReason = ctx.finishReason;
     }
 
     if (produced.length > 0) stepEvent.messages = [...produced];
@@ -234,17 +277,30 @@ export class TurnAccumulator {
     // Priced as the mission ledger prices it, at the serving model's rate; no rate means no `usd`.
     if (reported) {
       stepEvent.usage = usage;
-      const pricing = this.budget?.pricing(ctx.fallback) ?? null;
+      const pricing = this.budget?.pricing(ctx.fallback);
       const usd = pricing ? priceCall(usage, pricing) : undefined;
 
       if (usd !== undefined) stepEvent.usd = usd;
 
       const modelId = ctx.response?.modelId;
 
-      if (modelId !== undefined && modelId.length > 0) stepEvent.modelId = modelId;
+      if (modelId) stepEvent.modelId = modelId;
     }
 
 
     this.sinks.onStepEvent?.(stepEvent);
+
+    return () => {
+      this.stepCount = stepCount;
+      this.usage = addUsage(this.usage, usage);
+      this.noteLastRequest(ctx, usage);
+
+      if (cumulative.length > 0) this.durableMessages = cumulative.length;
+
+      if (ctx.finishReason !== undefined) this.lastFinishReason = ctx.finishReason;
+
+      this.sinks.logActivity?.('step_finish', `step ${stepCount} kind=${derivedStepType} reason=${String(ctx.finishReason)} ` +
+        `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length}${extrasStr}`);
+    };
   }
 }

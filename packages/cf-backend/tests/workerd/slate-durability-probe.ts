@@ -11,6 +11,7 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { handleNimbusPreviewHostRequest } from '../../src/nimbus-route';
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
+import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
@@ -75,6 +76,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** One program through this workspace's production `eval` tool, in Build mode; its answer as JSON. */
   async runProgram(code: string): Promise<string> {
     const factory = createCodemodeToolFactory({
+      reach: narrowToolSurface(undefined),
       launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null } : null }), rt: this.rt,
       workspace: this.name, webSearch: createDefaultWebSearchProvider({ fetch, browser: { missing: 'this probe reaches no Browser Run' } }),
       browserSessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} },

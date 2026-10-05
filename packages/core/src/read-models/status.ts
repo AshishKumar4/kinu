@@ -1,10 +1,11 @@
 /** Status, transcript and tool inventory: folds over agent-owned storage, so none is backend-shaped. */
 
 import type { ActorHandle } from '../identity/actor-handle';
+import { getCurrentScaffoldVersion } from '../scaffold/versions';
 import { readSessionTranscript, type SessionTranscriptReader } from '../session/transcript';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
-import { ownerMissionOf, soulReadsSql } from '../identity/soul';
+import { missionOf, soulReadsSql } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
 import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
 import type { CraftStore } from '../types/agent-runtime';
@@ -61,14 +62,11 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
   const { sql, actor } = deps;
   actor.assertCurrent();
   const reads = soulReadsSql(sql);
-  const purpose = ownerMissionOf(reads) ?? '';
+  const purpose = missionOf(reads.soul) ?? '';
 
   const identity = sql<{ name: string; created_at: number }>`
     SELECT name, created_at FROM workspace_identity LIMIT 1`;
 
-  const scaffoldVersion = sql<{ v: number }>`
-    SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions
-    WHERE actor_id = ${actor.actorId}`;
 
   const messageCount = readSessionTranscript(sql, actor, CHAT_SESSION_ID, null).count();
 
@@ -82,7 +80,7 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     purpose,
     soul: reads.soul ?? '',
     createdAt: identity[0]?.created_at ?? 0,
-    scaffoldVersion: scaffoldVersion[0]?.v ?? 0,
+    scaffoldVersion: getCurrentScaffoldVersion(sql, actor) ?? 0,
     searchNodeCount: searchNodes[0]?.c ?? 0,
     messageCount,
     model: deps.model,

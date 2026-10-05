@@ -292,7 +292,7 @@ const ORCHESTRATOR_METHODS = [
   'getEmailIngress',
   'getRunEvents',
   'getRunEventText',
-  'getShadowStatus',
+  'getEvolutionStatus',
   'getToolList',
   'getWorkspaceCapabilityHash',
   'listPeersFromMcp',

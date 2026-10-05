@@ -32,12 +32,9 @@ export interface ProcessRecord {
   readonly exitCode: number | undefined;
 }
 
-// Cloudflare sandbox-sdk rc.1's process-workspace example: file-backed identities survive a DO
-// eviction, native exec starts the wrapper, and a process group carries signals to its children.
-// An exec whose answer is lost may or may not have spawned the wrapper, so one symlink decides the
-// launch: the wrapper makes `launch -> launched` before anything runs, and a caller that finds no pid
-// and no exit makes `launch -> unlaunched`, after which nothing runs (D48). The wrapper enters the cwd
-// itself, so a missing one is the launch's own recorded failure.
+// File-backed identities survive a DO eviction; a process group carries signals. A launch whose exec
+// answer was lost is decided by one symlink: `launched` before anything runs, or `unlaunched` set by
+// a caller finding no pid and no exit (D48). A missing cwd is the launch's own recorded failure.
 const RUN = `dir=$1; cwd=$2; shift 2
 ln -s launched "$dir/launch" 2>/dev/null || exit 0
 if ! cd -- "$cwd" 2>/dev/null; then
@@ -75,6 +72,25 @@ for dir in "$@"; do
   cat "$dir/process.json"; printf '\\n'
 done`;
 
+/** `end_tree PID`: its tree and the groups they lead, gone (D69). Status 3: none was alive. */
+export const END_TREE = `end_tree() {
+  tree() { for c in $(cat /proc/$1/task/$1/children 2>/dev/null); do tree "$c"; done; [ -d /proc/$1 ] && echo "$1"; }
+  first=$(tree "$1")
+  groups=$(ps -o pid=,pgid= -p "$(echo $first | tr ' ' ,)" 2>/dev/null | awk '$1 == $2 { print $1 }')
+  standing() {
+    ps -eo pid=,pgid=,stat= | awk -v pids=" $(echo $first $(tree "$1")) " -v groups=" $(echo $groups) " \\
+      '$3 !~ /^Z/ && (index(pids, " " $1 " ") || index(groups, " " $2 " ")) { print $1 }'
+  }
+  left=$(standing "$1")
+  [ -n "$left" ] || return 3
+  kill -s TERM $left 2>/dev/null
+  waited=0
+  while left=$(standing "$1"); [ -n "$left" ]; do
+    [ "$waited" -ge ${TERM_GRACE_MS / 100} ] && kill -s KILL $left 2>/dev/null
+    sleep 0.1; waited=$((waited + 1))
+  done
+}`;
+
 const directory = (id: string) => attemptSync('invalid-input', () => `${ROOT}/${v.parse(IdSchema, id)}`);
 
 export class Processes {
@@ -111,8 +127,7 @@ export class Processes {
       })));
 
       if (Result.isFailure(launched)) {
-        // Refused, or lost after the spawn: the claim says which, and records a launch that never
-        // ran, so neither a retry nor a kill adopts it as live. Unreadable, the next one decides.
+        // The claim records a launch that never ran, so neither a retry nor a kill adopts it.
         const decided = yield* Effect.result(this.#unlaunched(dir));
 
         return yield* Effect.fail(Result.isSuccess(decided) ? launched.failure : new DevboxError(launched.failure.code,
@@ -154,8 +169,6 @@ export class Processes {
     return settle(Effect.gen({ self: this }, function* () {
       const dir = yield* directory(id);
 
-      // TERM, then KILL whatever of the group outlives the grace; it returns when
-      // the group has exited, not at a deadline. `kill -0 -- -N` is a usage error in dash.
       const ended = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', `dir=$1
 [ -f "$dir/process.json" ] || exit 0
 set -- "$dir"
@@ -164,12 +177,8 @@ while [ ! -f "$dir/pid" ] && [ ! -f "$dir/exit" ]; do sleep 0.1; done
 [ -f "$dir/exit" ] && exit 0
 ${LIVE}
 pid=$(live "$dir") || exit 0
-kill -s TERM -- "-$pid" || exit $?
-waited=0
-while kill -s 0 -- "-$pid" 2>/dev/null; do
-  [ "$waited" -eq ${TERM_GRACE_MS / 100} ] && kill -s KILL -- "-$pid" 2>/dev/null
-  sleep 0.1; waited=$((waited + 1))
-done`, 'devbox-kill', dir]));
+${END_TREE}
+end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir]));
 
       const result = yield* attempt('process', () => ended.output());
 

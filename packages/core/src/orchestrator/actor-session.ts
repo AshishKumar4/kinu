@@ -1,11 +1,12 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
-import { INTERRUPTED_TURN, measureTurnRequest, type ChatEvent, type ChatOptions } from '../chat';
+import { INTERRUPTED_TURN, measureTurnRequest, type ChatEvent, type ChatOptions, type StepRecord } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
 import type { WorkMode } from '../types/turn';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
+import { agentsProfileContext, delegationChoices } from '../delegation/agents-tool';
 import { promptCacheWarm, PromptCacheRouteSchema, type CachedRequest } from '../prompting/cache-breakpoints';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
@@ -20,9 +21,11 @@ import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
 import {
   programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome,
 } from './actor-claims';
+import type { RunEventRecorder } from '../events/recorder';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { ContextEntry, ContextSelection } from '../session/context';
 import type { JsonObject } from '../utils/json';
+import type { Usage } from '../usage';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
 import type { AgentSignal, SendOutcome } from '../types/signals';
@@ -64,6 +67,7 @@ export interface ActorSessionOptions {
   readonly workspace?: string;
   /** Optional: the revision rows are the durable record; no recorder means no event, never a fabricated one. */
   readonly events?: ContextEventRecorder | null;
+  readonly recording?: RunEventRecorder;
   readonly advisor?: ActorAdvisorContext;
   /** The port this actor hires its advisor through; null or absent, its turns are not reviewed. */
   readonly advisorPort?: () => TemporaryAgentPort | null;
@@ -90,13 +94,16 @@ export interface ActorExecutionInput {
   readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   /** The turn's unapproved workspace files as one message, null for none. */
   readonly instructions?: string | null;
+  /** What the turn's input activates (`activatedSkillsBlock`), spliced before it for this turn only. */
+  readonly activated?: string | null;
   readonly scaffoldSpend?: ModelCallSpend;
   /** Re-checked before each model call, for kinds whose liveness is owned elsewhere (heads, swarm nodes). */
   readonly assertActive?: () => void;
   readonly scaffoldStreamOptions?: ScaffoldBridgeOpts['streamOptions'];
   readonly cacheKeptAliveUntil?: number | null;
-  /** Steps a resumed turn keeps from its dead activation's run. */
+  /** Steps a resumed turn keeps from its dead activation's run, and what they reported using. */
   readonly resumedSteps?: number;
+  readonly resumedUsage?: Usage;
   readonly resumedMidStep?: boolean;
 }
 
@@ -153,8 +160,10 @@ interface TurnTally {
   readonly pending: Array<Extract<ChatEvent, { type: 'tool-call' }>>;
 }
 
-function newTurnTally(): TurnTally {
-  return { text: '', answer: null, steps: 0, completed: false, failure: null, admittedMessages: [], pending: [] };
+function newTurnTally(resumedSteps: number): TurnTally {
+  return {
+    text: '', answer: null, steps: resumedSteps, completed: false, failure: null, admittedMessages: [], pending: [],
+  };
 }
 
 export const REVERT_NEEDS_IDLE = 'Stop the turn that is running before you revert the conversation.';
@@ -259,6 +268,13 @@ export class ActorSession {
 
   lastRequestAt(): number | null {
     return this.canonical.requests.lastStep()?.recordedAt ?? null;
+  }
+
+  /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and a live trial's segment both use. */
+  promptCacheCold(keptAliveUntil: number | null): boolean {
+    const last = this.canonical.requests.lastStep();
+
+    return !promptCacheWarm(last === null ? null : cachedRequestOf(last), Date.now(), keptAliveUntil);
   }
   /** A host settles the claim under the outcome it named. */
   get turnClaim(): ActorTurnClaim | null { return this.active?.claim ?? null; }
@@ -659,7 +675,10 @@ export class ActorSession {
 
     if (active.phase !== 'preparing' || active.profile === null) throw new KinuError('denied', 'a profiled actor turn executes once');
     const profile = active.profile;
-    const tally = newTurnTally();
+    const tally = newTurnTally(input.resumedSteps ?? 0);
+
+    // The steps the dead activation finished count once, as their rows did.
+    if (input.resumedSteps !== undefined) this.orchestrator.acc.resume(input.resumedSteps, input.resumedUsage ?? {});
     let program: ActorTurnProgram | null = null;
     let durableOutput: SessionStream | null = null;
 
@@ -687,7 +706,7 @@ export class ActorSession {
 
       for await (const event of events) {
         await stream.observe(event);
-        this.tallyEvent(tally, event, active.abort.signal);
+        this.tallyEvent(tally, event, active.abort.signal, event.source === 'native');
         await emit(event);
       }
     } catch (cause) {
@@ -767,8 +786,17 @@ export class ActorSession {
 
     return measureTurnRequest({
       ...input.chat, tools, history: messages, extensions,
-      dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
+      dynamicContext: { ledger: this.dynamic, snapshot: () => this.stepContext(input.dynamic, profile, tools), instructions: input.instructions },
     });
+  }
+
+  /** A step's live state: the backend's, plus what core owns, the roles and tiers the `agents` tool takes, kept out
+   *  of its bytes so accounts share one definition. */
+  stepContext(dynamic: ActorExecutionInput['dynamic'], profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
+    const context = dynamic(profile, tools);
+    const delegation = tools.agents === undefined ? null : delegationChoices(agentsProfileContext(profile, this.profileInputs));
+
+    return delegation === null ? context : { ...context, delegation };
   }
 
   private turnEvents(turn: {
@@ -798,8 +826,20 @@ export class ActorSession {
         lostToolCall: (call) => lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease.turnId, call),
         measureContext: true, ...(active.trace !== null && { trace: active.trace }),
         persistStreamPart: part => stream.nativePart(part),
-        persistStep: messages => stream.nativeStep(messages),
-        dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
+        persistStep: (record) => stream.nativeStep(record, () => this.recordStep(record)),
+        dynamicContext: {
+          ledger: this.dynamic,
+          snapshot: () => {
+            const context = this.stepContext(input.dynamic, profile, tools);
+
+            // The turn scores only the lessons it was shown.
+            this.orchestrator.acc.noteLessonsShown(context.toolLessons ?? []);
+
+            return context;
+          },
+          instructions: input.instructions,
+          activated: input.activated,
+        },
         stepContext: {
           base: async () => {
             const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null, active.context);
@@ -810,9 +850,8 @@ export class ActorSession {
             // A cold cache makes rewriting free: the stored blocks collapse into one.
             if (!turnOpened) {
               turnOpened = true;
-              const last = this.canonical.requests.lastStep();
 
-              if (!promptCacheWarm(last === null ? null : cachedRequestOf(last), Date.now(), input.cacheKeptAliveUntil ?? null)) this.dynamic.reset();
+              if (this.promptCacheCold(input.cacheKeptAliveUntil ?? null)) this.dynamic.reset();
             }
 
             this.dynamic.adopt(base.rendered.map(render => ({ text: v.parse(v.string(), render.message.content), before: render.before, after: render.after })));
@@ -838,11 +877,18 @@ export class ActorSession {
     }));
   }
 
-  private tallyEvent(tally: TurnTally, event: ChatEvent, abort: AbortSignal): void {
+  private tallyEvent(tally: TurnTally, event: ChatEvent, abort: AbortSignal, native: boolean): void {
     switch (event.type) {
       case 'text-delta': this.orchestrator.acc.onFirstChunk(); tally.text += event.delta; break;
-      case 'tool-call': tally.pending.push(event); break;
-      case 'tool-result': this.recordToolResult(tally.pending, event); break;
+      case 'tool-call':
+        if (!native) tally.pending.push(event);
+        break;
+      case 'tool-result': {
+        if (native) break;
+        const args = this.callArgs(tally.pending, event.toolCallId);
+        this.orchestrator.acc.recordResult(args, event);
+        break;
+      }
 
       // Reasoning is never the turn's answer.
       case 'reasoning-delta':
@@ -852,11 +898,8 @@ export class ActorSession {
 
       case 'step-finish':
         tally.steps += 1;
-        this.orchestrator.acc.recordStep({
-          text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
-          response: { messages: event.responseMessages, modelId: event.modelId }, usage: event.usage,
-          request: event.request, context: event.context, account: event.account, egress: event.egress, fallback: event.fallback,
-        });
+
+        if (!native) this.orchestrator.acc.recordBoundary(event);
         break;
       case 'error': {
         this.orchestrator.acc.hadError = true;
@@ -950,20 +993,21 @@ export class ActorSession {
   }
 
   /** Last-in-first-out match: a later call with the same id already matched and was removed. */
-  private recordToolResult(
-    pending: Array<Extract<ChatEvent, { type: 'tool-call' }>>,
-    event: Extract<ChatEvent, { type: 'tool-result' }>,
-  ): void {
+  private callArgs(pending: Array<Extract<ChatEvent, { type: 'tool-call' }>>, toolCallId: string): JsonObject {
     let index = pending.length - 1;
 
-    while (index >= 0 && pending[index]?.toolCallId !== event.toolCallId) index--;
-    const call = index < 0 ? undefined : pending.splice(index, 1)[0];
-    // The ledger records the returned value; a tool that returned nothing records its rendered text.
-    const timed = event.durationMs === undefined ? {} : { durationMs: event.durationMs };
-    this.orchestrator.acc.recordToolCall(event.success
-      ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.output ?? event.result, ...timed }
-      : { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason, failures: event.failures,
-          execution: event.execution, error: event.error ?? event.result, ...timed });
+    while (index >= 0 && pending[index]?.toolCallId !== toolCallId) index--;
+
+    return (index < 0 ? undefined : pending.splice(index, 1)[0])?.args ?? {};
+  }
+
+  private recordStep(record: StepRecord): () => void {
+    const write = () => this.orchestrator.acc.writeNative(record);
+    const collected = this.options.recording?.collect(write);
+
+    if (collected === undefined) return write();
+
+    return () => { collected.value(); collected.publish(); };
   }
 
   private requireTurn(lease: ActorTurnLease): ActiveTurn {

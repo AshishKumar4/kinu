@@ -696,10 +696,10 @@ describe('native egress constraints — red in every governed direction', () => 
   });
 
   const paths = [
-    [base, 'container.start({ image: inputs.image, instance: instanceOf(inputs.size), enableInternet: this.enableInternet })', 'container.start({ image: inputs.image, instance: instanceOf(inputs.size), enableInternet: true })', 'declared internet policy'],
+    [base, 'container.start({ ...from, entrypoint, instance: instanceOf(inputs.size), enableInternet: this.enableInternet })', 'container.start({ ...from, entrypoint, instance: instanceOf(inputs.size), enableInternet: true })', 'declared internet policy'],
     [router, '.interceptAllOutboundHttp(router)', '.removedHttpRoute(router)', 'HTTP has no total'],
     [router, ".interceptOutboundHttps('*', router)", ".interceptOutboundHttps('api.example.com', router)", 'HTTPS has no total'],
-    [base, 'id: this.ctx.id.toString() }, internet: this.enableInternet', 'id: this.ctx.id.toString() }, internet: true', 'router does not receive'],
+    [base, 'internet: this.enableInternet,', 'internet: true,', 'router does not receive'],
     [router, 'internet: this.host.internet', 'internet: true', 'router does not receive'],
     [kinu, 'outboundPolicy()', 'removedVaultPolicy()', 'does not bind the vault'],
     [kinu, 'this.#nativeExports.KinuEgress({ props: params })', 'this.#nativeExports.KinuEvents({ props: params })', 'does not bind the vault'],

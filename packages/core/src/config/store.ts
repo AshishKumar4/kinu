@@ -43,23 +43,19 @@ export const AGENT_CONFIG_KEYS = {
   /** Comma-separated `<rule>@<executor>` grants; read live at exec time like the mode. */
   shellApprovalGrants: 'shell_approval_grants',
   sleepTimeCompute: 'sleep_time_compute',
-  autoPromoteScaffold: 'auto_promote_scaffold',
-  shadowSampleRate: 'shadow_sample_rate',
-  /** Share of scaffold proposals branching from an archived variant (DGM archive exploration). */
-  scaffoldExploreShare: 'scaffold_explore_share',
+  /** 'true' runs waiting edits as live trials on the main agent; off by default (docs/EVOLUTION-REDESIGN.md §5). */
+  liveTrials: 'live_trials',
+  /** 'false' stops this agent learning from its turns: no ratings, struggles, lessons, proposals or trials. On by default. */
+  learning: 'learning',
   advisorMinSeverity: 'advisor_min_severity',
   /** 'true' enables the turn reviewer; off by default since it costs a model call per turn. */
   advisorEnabled: 'advisor_enabled',
   alwaysActiveSkills: 'always_active_skills',
   /** Executor namespace of the last tool run; UI defaults to it. */
   lastActiveExecutor: 'last_active_executor',
-  /** Auto-GEPA cadence in turns of new traces (0 = off; unset = default). */
-  autoGepaEveryNTurns: 'auto_gepa_every_n_turns',
   /** Epoch ms of the last Evolution Changelog view; newer entries drive the unseen badge. */
   changelogSeenAt: 'changelog_seen_at',
   closedTurnWindows: 'closed_turn_windows',
-  /** See DEFAULT_GEPA_EVAL_BUDGET. */
-  gepaEvalBudget: 'gepa_eval_budget',
   /** 'false' silences owner emails; defaults on. */
   emailNotifications: 'email_notifications',
   /** Lazy Vectorize backfill of chunks indexed before embeddings existed; cursor pages across boots. */
@@ -80,7 +76,7 @@ export const SHELL_APPROVAL_AUTHORITY_KEYS: readonly string[] = [
 export interface AgentConfigStore {
   get(key: string): string | null;
   set(key: string, value: string): void;
-  delete(key: string): void;
+  delete(key: string, ...others: string[]): void;
   /** All rows; used by fork.ts to copy state. */
   all(): Record<string, string>;
 
@@ -120,14 +116,10 @@ export interface AgentConfigStore {
   revokeShellApproval(grants: readonly ApprovalGrant[]): void;
   getSleepTimeComputeEnabled(): boolean;
   setSleepTimeComputeEnabled(enabled: boolean): void;
-  getAutoPromoteScaffold(): boolean;
-  setAutoPromoteScaffold(enabled: boolean): void;
-  /** Fraction of turns shadow-run through the candidate scaffold (default 0.25). */
-  getShadowSampleRate(): number;
-  setShadowSampleRate(rate: number): void;
-  /** Default 0.2. */
-  getScaffoldExploreShare(): number;
-  setScaffoldExploreShare(share: number): void;
+  getLiveTrials(): boolean;
+  setLiveTrials(enabled: boolean): void;
+  getLearning(): boolean;
+  setLearning(enabled: boolean): void;
   getAdvisorEnabled(): boolean;
   setAdvisorEnabled(enabled: boolean): void;
   /** Unset or unknown reads as `concern`. */
@@ -138,39 +130,14 @@ export interface AgentConfigStore {
   getLastActiveExecutor(): string | null;
   /** Ignores values that are not a plausible executor namespace. */
   setLastActiveExecutor(name: string): void;
-  /** 0 = disabled; unset defaults to DEFAULT_AUTO_GEPA_EVERY_N_TURNS. */
-  getAutoGepaEveryNTurns(): number;
-  /** 0 or negative explicitly disables. */
-  setAutoGepaEveryNTurns(n: number): void;
   /** 0 = never seen. */
   getChangelogSeenAt(): number;
   setChangelogSeenAt(ms: number): void;
   countClosedTurnWindow(): number;
   /** Called once per activation; a gap between spans on one `selfPath` is a positive reset signal. */
   countIsolateGeneration(): number;
-  getGepaEvalBudget(): number;
-  /** Clamped, not rejected: the bounds are cost policy. */
-  setGepaEvalBudget(n: number): void;
   getEmailNotificationsEnabled(): boolean;
   setEmailNotificationsEnabled(enabled: boolean): void;
-}
-
-/** Default auto-GEPA cadence: one pass per this many turns of new traces. */
-export const DEFAULT_AUTO_GEPA_EVERY_N_TURNS = 25;
-
-/** Instances per GEPA pass (train + val); the dominant cost knob. CI half-width falls as 1/√n while cost is linear. */
-export const DEFAULT_GEPA_EVAL_BUDGET = 24;
-
-/** Floor keeps a disjoint split possible (2 failures + 2 guards). */
-export function clampGepaEvalBudget(n: number): number {
-  return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 4), 64) : DEFAULT_GEPA_EVAL_BUDGET;
-}
-
-/** Rejects rather than clamps: an out-of-range probability is a caller bug. */
-function unitInterval(key: string, value: number): Effect.Effect<number> {
-  return !Number.isFinite(value) || value < 0 || value > 1
-    ? Effect.die(new Error(`invalid ${key}: ${value} (expected a fraction between 0 and 1)`))
-    : Effect.succeed(value);
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -194,25 +161,20 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     void sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${value})
         ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value`;
 
-    if (key === AGENT_CONFIG_KEYS.autoPromoteScaffold || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
+    if (key === AGENT_CONFIG_KEYS.liveTrials || key === AGENT_CONFIG_KEYS.learning || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
   };
 
-  const remove = (key: string): void => {
+  const remove = (key: string, ...others: string[]): void => {
     authorize();
-    void sql`DELETE FROM actor_config WHERE actor_id = ${actorId} AND key = ${key}`;
+    const keys = [key, ...others];
+    void sql`DELETE FROM actor_config WHERE actor_id = ${actorId}
+      AND key IN (SELECT value FROM json_each(${JSON.stringify(keys)}))`;
 
-    if (key === AGENT_CONFIG_KEYS.autoPromoteScaffold || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
+    if (keys.some((name) => name === AGENT_CONFIG_KEYS.liveTrials || name === AGENT_CONFIG_KEYS.learning || name === AGENT_CONFIG_KEYS.changelogSeenAt)) markStoreChanged(sql);
   };
 
   const setValid = (key: string, value: string, valid: boolean, what: string): Effect.Effect<void> =>
     valid ? Effect.sync(() => set(key, value)) : Effect.die(new Error(`Invalid ${what}: ${value}`));
-
-  const unitIntervalOr = (key: string, fallback: number): number => {
-    const stored = get(key);
-    const n = stored ? Number(stored) : fallback;
-
-    return Number.isFinite(n) && n >= 0 && n <= 1 ? n : fallback;
-  };
 
   /** The read writes nothing, so an unread row stays distinguishable from a stored `task`. */
   const readRoleSelection = (): RoleId => {
@@ -365,16 +327,10 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setSleepTimeComputeEnabled(enabled) {
       set(AGENT_CONFIG_KEYS.sleepTimeCompute, enabled ? 'true' : 'false');
     },
-    getAutoPromoteScaffold() {
-      return get(AGENT_CONFIG_KEYS.autoPromoteScaffold) !== 'false';
-    },
-    setAutoPromoteScaffold(enabled) {
-      set(AGENT_CONFIG_KEYS.autoPromoteScaffold, enabled ? 'true' : 'false');
-    },
-    getShadowSampleRate() { return unitIntervalOr(AGENT_CONFIG_KEYS.shadowSampleRate, 0.25); },
-    setShadowSampleRate(rate) { return settleSync(Effect.map(unitInterval('shadow_sample_rate', rate), (valid) => set(AGENT_CONFIG_KEYS.shadowSampleRate, String(valid)))); },
-    getScaffoldExploreShare() { return unitIntervalOr(AGENT_CONFIG_KEYS.scaffoldExploreShare, 0.2); },
-    setScaffoldExploreShare(share) { return settleSync(Effect.map(unitInterval('scaffold_explore_share', share), (valid) => set(AGENT_CONFIG_KEYS.scaffoldExploreShare, String(valid)))); },
+    getLiveTrials() { return get(AGENT_CONFIG_KEYS.liveTrials) === 'true'; },
+    setLiveTrials(enabled) { set(AGENT_CONFIG_KEYS.liveTrials, String(enabled)); },
+    getLearning() { return get(AGENT_CONFIG_KEYS.learning) !== 'false'; },
+    setLearning(enabled) { set(AGENT_CONFIG_KEYS.learning, String(enabled)); },
     getAdvisorEnabled() { return get(AGENT_CONFIG_KEYS.advisorEnabled) === 'true'; },
     setAdvisorEnabled(enabled) { set(AGENT_CONFIG_KEYS.advisorEnabled, String(enabled)); },
     getAdvisorMinSeverity() {
@@ -403,28 +359,6 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       // Shape check only: executors register dynamically.
       if (/^[a-z0-9_-]{1,32}$/i.test(name)) set(AGENT_CONFIG_KEYS.lastActiveExecutor, name);
     },
-    getAutoGepaEveryNTurns() {
-      const raw = get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns);
-
-      if (raw == null) return DEFAULT_AUTO_GEPA_EVERY_N_TURNS;
-      const n = Math.floor(Number(raw));
-
-      return Number.isFinite(n) && n > 0 ? n : 0;
-    },
-    setAutoGepaEveryNTurns(n) {
-      // Persist 0 explicitly: unset means the default cadence.
-      const value = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
-      set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(value));
-    },
-    getGepaEvalBudget() {
-      const raw = get(AGENT_CONFIG_KEYS.gepaEvalBudget);
-
-      if (raw == null) return DEFAULT_GEPA_EVAL_BUDGET;
-      const n = Number(raw);
-
-      return Number.isFinite(n) ? clampGepaEvalBudget(n) : DEFAULT_GEPA_EVAL_BUDGET;
-    },
-    setGepaEvalBudget(n) { set(AGENT_CONFIG_KEYS.gepaEvalBudget, String(clampGepaEvalBudget(n))); },
     getChangelogSeenAt() {
       const n = Number(get(AGENT_CONFIG_KEYS.changelogSeenAt));
 

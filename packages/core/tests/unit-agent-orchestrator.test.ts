@@ -49,6 +49,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
 
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
+    withTurnLearning: (body) => body(),
     get recordsTurns() { return this.enabled; },
     recoverInterruptedWork: () => {},
     recentAdvisorNotes: () => [],
@@ -66,7 +67,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
     },
     reviewTurn,
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
-    runDueShadowTrials: async () => { trials.push(Date.now()); },
+    runDueEvolution: async () => { trials.push(Date.now()); },
     recordRecovery: () => {},
     // Real store, so deferral and drain run the production path.
     deferTurnReview: (turn, followup, review) => store.enqueueReview(turn, followup, review),
@@ -334,8 +335,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
 });
 
 describe('AgentOrchestrator — the settle’s claimable parts', () => {
-  // The lane verdict and the roster's completed-Build gate are one rule and must agree.
-  test('the lane verdict and the roster’s own gate agree on every (status, mode)', () => {
+  test('the lanes open only on a completed Build turn', () => {
     for (const workMode of ['build', 'plan'] as const) {
       for (const status of RUN_END_REASONS) {
         const { engine } = fakeEngine();
@@ -343,38 +343,18 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
         const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
         orch.beginTurn(Date.now(), { kinuMode: workMode });
 
-        const predicate = orch.improvementLanesOpen(status);
-
-        const owed = declareTerminalRoster({
-          messageId: 'answer-1', status, workMode, continuity: 'conversation',
-          completed: status === 'completed', userText: 'q', assistantText: 'a',
-          scopedTurn: {}, recordedAt: 1, evolutionEnabled: true,
-        }, { autoGepa: true });
-
-        const rosterGate = owed.some((effect) => effect.name === 'auto_gepa');
-
-        expect({ workMode, status, open: rosterGate })
-          .toEqual({ workMode, status, open: predicate });
-        // So an agreeing pair of wrong answers still fails.
-        expect(predicate).toBe(status === 'completed' && workMode === 'build');
+        expect(orch.improvementLanesOpen(status)).toBe(status === 'completed' && workMode === 'build');
       }
     }
   });
 
-  test('the roster decides the shadow trial and the title subject, the same for every backend', () => {
-    const settled = (evolutionEnabled: boolean, mission: string | null) => declareTerminalRoster({
+  test('the roster decides the title subject, the same for every backend', () => {
+    const titleInput = (evolutionEnabled: boolean, mission: string | null) => declareTerminalRoster({
       messageId: 'answer-1', status: 'completed', workMode: 'build', continuity: 'conversation',
       completed: true, userText: 'rotate the staging keys', assistantText: 'a',
       scopedTurn: {}, recordedAt: 1, evolutionEnabled,
-    }, { shadowTrial: { pendingVersion: 2, trialContext: [] }, autoTitle: { mission } });
+    }, { autoTitle: { mission } }).find((effect) => effect.name === 'auto_title')?.input;
 
-    const titleInput = (evolutionEnabled: boolean, mission: string | null) =>
-      settled(evolutionEnabled, mission).find((effect) => effect.name === 'auto_title')?.input;
-
-    // A session with evolution off records no evolution state, so its candidate
-    // is owed no trial either — whether or not its host thought to ask.
-    expect(settled(false, null).map((effect) => effect.name)).not.toContain('shadow_trial');
-    expect(settled(true, null).map((effect) => effect.name)).toContain('shadow_trial');
     // An unset mission leaves the owner's own words to title the workspace.
     expect(titleInput(true, null)).toEqual({ subject: 'rotate the staging keys' });
     expect(titleInput(true, 'Keep the staging keys rotated')).toEqual({ subject: 'Keep the staging keys rotated' });

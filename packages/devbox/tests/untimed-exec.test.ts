@@ -4,11 +4,11 @@ import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnTest } from '@kinu.run/test-utils';
 
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import { devboxFailure } from '../src/errors';
 import { collectExecRecords } from '../src/exec-stream';
+import { CONTAINER_TRUST_ENV } from '../src/processes';
 import { Devbox, gate, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
@@ -28,7 +28,7 @@ class TestBox extends Devbox<unknown> {
 
 /** The runtime's `exec`, as a local process with its output on pipes. */
 const localExec: Container['exec'] = async (argv, options) => {
-  const child = spawnTest(argv, { cwd: options?.cwd, stdout: 'pipe', stderr: 'pipe' });
+  const child = Bun.spawn(argv, { cwd: options?.cwd, env: { ...process.env, ...options?.env }, stdout: 'pipe', stderr: 'pipe' });
   const exitCode = child.exited;
 
   return {
@@ -69,6 +69,16 @@ describe('an untimed command on the runtime\'s exec', () => {
 
     expect(await box.execUntimed('pwd; echo out; echo err >&2; exit 7', { cwd, execId: 'one' }))
       .toEqual({ stdout: `${cwd}\nout\n`, stderr: 'err\n', exitCode: 7 });
+  });
+
+  // 2026-10-03: an untimed exec forced the trust env over the caller's; a raw one did not.
+  test('runs with the box\'s trust environment under the caller\'s own, as a raw exec does', async () => {
+    const box = await readyBox();
+    const cwd = mkdtempSync(join(root, 'env-'));
+    const env = { REQUESTS_CA_BUNDLE: join(cwd, 'bundle.pem') };
+
+    expect(await box.execUntimed('printf "%s %s" "$REQUESTS_CA_BUNDLE" "$NODE_EXTRA_CA_CERTS"', { cwd, execId: 'env', env }))
+      .toEqual({ stdout: `${env.REQUESTS_CA_BUNDLE} ${CONTAINER_TRUST_ENV.NODE_EXTRA_CA_CERTS}`, stderr: '', exitCode: 0 });
   });
 
   test('ending it ends what it started, and a command already gone is not ended again', async () => {
@@ -154,6 +164,28 @@ function releaseFifo(cwd: string): string {
 }
 
 // 2026-10-02: a sandbox job's output reached no one until its command ended.
+describe('one launch per id', () => {
+  test('a repeated id reads its launch\'s answer, an id with nothing kept is never launched again, and a released id is free', async () => {
+    const box = await readyBox();
+    const cwd = mkdtempSync(join(root, 'once-'));
+    const command = 'echo ran >> effects; echo done';
+    const effects = () => readFileSync(join(cwd, 'effects'), 'utf8');
+
+    const first = await box.execUntimed(command, { cwd, execId: 'once' });
+
+    expect(await box.execUntimed(command, { cwd, execId: 'once' })).toEqual(first);
+    expect(effects()).toBe('ran\n');
+
+    await collectExecRecords(await box.execUntimedStream(command, { cwd, execId: 'streamed' }), () => {});
+    await expect(box.execUntimed(command, { cwd, execId: 'streamed' })).rejects.toMatchObject({ code: 'indeterminate' });
+    expect(effects()).toBe('ran\nran\n');
+
+    await box.releaseUntimed('once');
+    await box.execUntimed(command, { cwd, execId: 'once' });
+    expect(effects()).toBe('ran\nran\nran\n');
+  });
+});
+
 describe('a streamed untimed command', () => {
   test('hands over what it printed while it still runs, and its exit code ends the stream', async () => {
     const box = await readyBox();

@@ -82,7 +82,7 @@ async function stalledChild(): Promise<{ first: Workspace; gateway: StubbedAiBin
 
   rosterOver(first.db).create({
     name: 'stalled-child', actorReference: child.reference, birth: null, deleteRequested: false,
-    status: 'working', currentTask: TASK, createdAt: Date.now(), dismissedAt: null, lifetime: 'task', taskEventId: null,
+    status: 'working', currentTask: TASK, createdAt: Date.now(), dismissedAt: null, taskEventId: null,
   });
 
   return { first, gateway, runs, actorId: child.reference.actorId };

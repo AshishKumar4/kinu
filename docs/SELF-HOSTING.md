@@ -15,27 +15,62 @@ Nothing here can create these for you:
 
 Then name your deployment. Every value lives in `packages/cf-backend/wrangler.jsonc`: set your `account_id`, your `routes`, your `CLI_PUBLIC_ORIGIN`, and the KV namespace id that `wrangler kv namespace create kinu-auth` prints. `scripts/deploy.sh` reads the deploy account from `CLOUDFLARE_ACCOUNT_ID`, which defaults to the kinu.run account, so export your own. Commit the configuration. The deploy refuses a dirty checkout, so the build stamp always names the exact bytes that shipped.
 
-The full prerequisite table, with the reason nothing here can create each item, is in [DEPLOYMENT.md](DEPLOYMENT.md#before-you-start). `bun run infra:provision` prints the same worklist on every run.
+The full prerequisite table, with the reason nothing here can create each item, is in [DEPLOYMENT.md](DEPLOYMENT.md#before-you-start). `bun run infra:provision staging` prints staging's worklist; `bun run infra:provision production` prints production's.
 
-## Step two: provision, deploy, provision
+## Release signing
+
+Before the first build, I give the self-host its own release-signing key. The installer, CLI updater and device daemon refuse unsigned downloads and releases signed by a key they do not trust. The private key stays on the build machine, never in the Worker, Wrangler secrets, or the repository. One key signs the artifacts staging builds and production promotes.
+
+From the repository root:
 
 ```bash
-bun run infra:provision      # the R2 buckets and the Vectorize indexes
-bun run deploy               # the Worker, its DO namespaces, container, routes, cron
-bun run infra:provision      # the secrets; `wrangler secret put` needs the Worker to exist
+bun scripts/release-signing-key.ts
 ```
 
-Provisioning runs twice because `wrangler secret put` refuses on a Worker that does not exist yet. The first run says so, and the second creates nothing the first created. `bun run deploy` runs its required gates before it builds anything. Preflight runs first, the source gates run concurrently, and the two that need the machine or the account to themselves (`gate:hammer`, `gate:infra`) run alone at the end, in that order. A failed gate exits before Wrangler runs.
+The command writes the Ed25519 private key as PKCS#8 base64 to `~/.config/kinu/release-signing.key`, with mode `0600`, and prints only its path and `RELEASE_SIGNING_PUBLIC_KEY=<64 hex characters>`. It refuses to overwrite an existing key. For another location, set `KINU_RELEASE_SIGNING_KEY_FILE` before generating the key and keep that variable set for every build. I back up the private key outside the checkout.
+
+I copy the printed hex value into both `RELEASE_SIGNING_PUBLIC_KEY` constants:
+
+- `packages/core/src/http/release-signing.ts`, used by the installer launcher and CLI;
+- `packages/pc-agent/src/update.js`, used by the device daemon.
+
+Then I check the key against the source pin:
+
+```bash
+unset KINU_RELEASE_SIGNING_PUBLIC_KEY
+bun scripts/sign-release.ts --check
+```
+
+I commit both public pins with the deployment configuration and push that revision before deploying. Setting only `KINU_RELEASE_SIGNING_PUBLIC_KEY` on the build machine does not put the key into shipped clients: that override is for an operator-controlled fixture, not the self-host bootstrap. Existing clients keep trusting the key they shipped with; this procedure starts a new self-host, not a rotation for those clients.
+
+For a build runner with no key file, `KINU_RELEASE_SIGNING_KEY` can supply the same PKCS#8 base64 private key through its secret store. It takes precedence over the file. `scripts/build-cli-dist.sh` runs the signing check before bundling or creating the output directory, and the signer checks the final artifact manifest again. A missing key, missing pin, or mismatched key refuses the build with setup instructions.
+
+## Step two: provision, deploy
+
+```bash
+bun run infra:provision staging   # staging's R2 buckets, Vectorize indexes and secrets
+bun run deploy --bootstrap        # staging's Worker, DO namespaces, container, routes, cron
+```
+
+With no Worker yet, `wrangler secret put` makes a placeholder Worker to hold the secrets, and the first deploy replaces it. That deploy passes `--bootstrap` because it creates everything only a deploy can; later deploys drop the flag. `bun run deploy` runs its required gates before it builds anything. Preflight runs first, the source gates run concurrently, and the two that need the machine or the account to themselves (`gate:hammer`, `gate:infra`) run alone at the end, in that order. A failed gate exits before Wrangler runs.
 
 A fresh deployment has no hosted Python, Bash, Ruby, or Clang until someone supplies a Nimbus runtime catalog. The base workspace and the Cloudflare container still work. I don't promise runtime parity for a fresh self-host until a seed command and a content check exist.
 
 ## Step three: prove the account
 
 ```bash
-bun run gate:infra
+bun run gate:infra staging
 ```
 
 The gate checks that every resource `wrangler.jsonc` declares exists and that the deployed Worker is bound to it. It gives one verdict per resource and exits non-zero on any failure. Anything no CLI can observe is declared with its manual check instead of skipped. `scripts/infra-verify.ts` carries the reasoning.
+
+Production takes the build staging verified:
+
+```bash
+bun run infra:provision production
+bun run deploy --promote --bootstrap   # production, from staging's verified build
+bun run gate:infra production
+```
 
 ## Sign-in
 
@@ -45,7 +80,7 @@ A provider appears on `/login` only when both its client id and its client secre
 https://<your-host>/auth/<provider>/callback
 ```
 
-Client ids are plain vars in `wrangler.jsonc`. Client secrets are Wrangler secrets, and the second provisioning run prompts for them. The Cloudflare provider is the one worth having: signing in with it also connects the user's own Workers AI, so their chat bills their account rather than yours. The exact scopes and grant types are in [DEPLOYMENT.md](DEPLOYMENT.md#oauth-setup).
+Client ids are plain vars in `wrangler.jsonc`. Client secrets are Wrangler secrets, and provisioning prompts for them. The Cloudflare provider is the one worth having: signing in with it also connects the user's own Workers AI, so their chat bills their account rather than yours. The exact scopes and grant types are in [DEPLOYMENT.md](DEPLOYMENT.md#oauth-setup).
 
 ## What works when
 

@@ -481,6 +481,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Events hub | `agent_log`, `reply_channels`, `triggers` | `core/src/events/hub/schema.ts` |
 | Run-event log | `run_events` | `core/src/events/recorder.ts` |
 | Turn ratings | `turn_ratings` | `core/src/evolution/ratings.ts` |
+| Struggles and tool lessons | `turn_struggles`, `tool_lessons` | `core/src/evolution/struggles.ts` |
 | Lessons | `lessons`, `pattern_extractions` | `core/src/evolution/lessons.ts` |
 | Refinement | `refinement_requests` | `core/src/evolution/refinement.ts` |
 | GEPA | `gepa_runs`, `gepa_candidates` | `core/src/evolution/gepa/persistence.ts` |
@@ -489,7 +490,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Alternate takes | `alternate_takes` (a settled `/branch` redirect) | `core/src/mcts/takes.ts` |
 | Swarm leaderboard | `exploration_records` (cumulative across runs) | `core/src/strategy/records.ts` |
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
-| Scaffold shadow mode | `scaffold_evaluations`, `scaffold_trial_queue` | `core/src/scaffold/shadow.ts` |
+| Live trials | `artifact_trials`, `trial_turns` | `core/src/evolution/trials.ts` |
 | Turn lifecycle | `actor_turn_claims` and the session tables above | `core/src/orchestrator/actor-claims.ts` |
 | Once-only effects | `tool_effect_claims`, `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
 | Facts | `agent_facts` | `core/src/memory/facts.ts` |
@@ -502,7 +503,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
 | Compaction | `compaction_state`, `compaction_archive` | `core/src/state/workspace-schema.ts` (the DDL lives in core because `@kinu.run/compaction` sits above it in the dependency graph) |
 | Typed config | `actor_config` | `core/src/config/store.ts` |
-| Prompt sections | `prompt_section_versions` | `core/src/prompting/section-store.ts` |
+| Evolved text (prompt sections, tool descriptions and field text) | `artifact_versions` | `core/src/evolution/artifacts.ts` |
 | Slates | `slates`, `slate_versions`, `slate_publications` and the other `slate_*` tables | `core/src/state/workspace-schema.ts`, `core/src/slates/` |
 
 These are created outside that pass, by the root that owns each:

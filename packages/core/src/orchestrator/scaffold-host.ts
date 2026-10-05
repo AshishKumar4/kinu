@@ -53,7 +53,7 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
 
 export function createScaffoldDefaultInference(
   opts: ScaffoldBridgeOpts,
-  frame: Pick<ChatOptions, 'system' | 'history' | 'modelContext'>,
+  frame: Pick<ChatOptions, 'system' | 'history' | 'modelContext' | 'dynamicContext'>,
 ): NonNullable<ScaffoldRunOptions['defaultInference']> {
   return async function* () {
     for await (const event of streamScaffoldChat(opts, { ...frame, tools: opts.tools() })) {
@@ -64,7 +64,7 @@ export function createScaffoldDefaultInference(
 
 async function* streamScaffoldChat(
   opts: ScaffoldBridgeOpts,
-  frame: Pick<ChatOptions, 'system' | 'history' | 'tools' | 'modelContext'>,
+  frame: Pick<ChatOptions, 'system' | 'history' | 'tools' | 'modelContext' | 'dynamicContext'>,
 ): ReturnType<ScaffoldRunOptions['llmStream']> {
   assertScaffoldActive(opts);
   const spend = opts.spend;
@@ -92,9 +92,9 @@ async function* streamScaffoldChat(
         outputs.set(part.toolCallId, { type: 'tool-output-available', toolCallId: part.toolCallId,
           output: part.output, preliminary: part.preliminary });
       },
-      onStep: async step => {
+      onStep: async (step, record) => {
         modelId = step.response.modelId;
-        await opts.streamOptions?.onStep?.(step);
+        await opts.streamOptions?.onStep?.(step, record);
       },
     })) {
       if (event.type === 'step-finish' && event.usage) usage = addUsage(usage, event.usage);

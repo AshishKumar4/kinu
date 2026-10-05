@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { codemodeSurface, storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -18,8 +18,9 @@ import {
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
-  activePromptSectionOverrides,
-  agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
+  artifactOverrides, currentArtifacts,
+  agentsActionsFor, agentsProfileContext, betaSwarms, assignedTurnFraming, buildActorTools, BACKGROUNDABLE_TOOLS,
+  invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
   mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
@@ -60,12 +61,12 @@ import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
-  reportSettlesRun, hostedTaskEnding, reclaimSettledExplorationActors,
+  admitHostedTask, hostedDelegationBudget, hostedRetryTools, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
+  hostedTaskEnding, reclaimSettledExplorationActors,
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
-import type { ReportToolDeps } from "@kinu.run/core";
+import { publishSubordinateReport, temporaryRunSettles, type ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
@@ -104,20 +105,18 @@ import {
   type SlateBindingCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
-  applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
-  previewScaffoldLive, runScaffoldGepaOptimization,
-  advancePromptSectionLane,
+  applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
+  previewScaffoldLive, runOptimization,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
-  type GepaOptimizationResult, type ScaffoldDecisionResult,
-  type ScaffoldVersionView, type ShadowStatus,
-  getPendingScaffold,
-  readScaffoldVersion, readShadowVerdict, type ShadowVerdict,
+  type ProposerOutcome, type ScaffoldDecisionResult,
+  type ScaffoldVersionView, type EvolutionStatus,
+  readScaffoldVersion,
   type RunEvent, type RunEventQuery, type StoredRunEvent,
-  AGENT_CONFIG_KEYS,
+
   listProposedTasks, updateProposedTaskStatus,
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore,
@@ -138,18 +137,17 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
-  readMission, summarizeSoul, writeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
+  readMission, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore, deviceFileCheckpoints,
-  CommandResultSchema,
   type CheckpointAvailability, type FileCheckpointListing, type FileCheckpointReads,
   type FileRestorePlan, type FileRestoreResult,
   runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type SleepTimeUpdate, type SleepTimeWindow,
-  effectAlreadyDone, recordEffectDone, oncePerTick,
+  effectAlreadyDone, recordEffectDone,
   // Core owns the ingress gates; this actor owns the transports in front of them
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
@@ -257,7 +255,7 @@ import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
 import {
-  terminalEffect, keyedScope, declareTerminalRoster, owesShadowTrial, isDefinitiveTerminalFailure,
+  terminalEffect, chatTurnParts, declareTerminalRoster, isDefinitiveTerminalFailure,
   branchesTerminalEffect,
   type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnFacts,
   type TerminalTurnParts,
@@ -276,10 +274,6 @@ const LeasedRowSchema = v.object({ id: v.string() });
 
 /** Tombstone scope marking a turn's sleep-time window consumed, by an update or a definitive failure. */
 const SLEEP_TIME_PROCESSED = 'sleep_time';
-
-/** Tombstone scope for the prompt-section lane: separate from the GEPA pass so
- *  replaying the tick does not rotate the section twice. */
-const PROMPT_SECTION_LANE = 'prompt_section_lane';
 
 /** Millisecond instants in `actor_config`. `settledAt` present means an unprocessed
  *  completed turn awaits a run; `closedAt` is when the last client connection closed. */
@@ -702,7 +696,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sql: this.boundSql,
       seams: () => this.hostedSeams(),
       deliver: async (reference, task) => { await (await this.agentCalls(reference.actorId)).deliver(this.agentSnapshot(reference.actorId), task); },
-      interrupt: async (reference, turnId) => { await (await this.agentCalls(reference.actorId)).interrupt(this.agentSnapshot(reference.actorId), turnId); },
+      interrupt: async (reference, turnId) => {
+        for (const call of this.jobAuthorities.live(reference.actorId)?.runner.foreground ?? []) call.abort(new Error('cancelled by operator'));
+        await (await this.agentCalls(reference.actorId)).interrupt(this.agentSnapshot(reference.actorId), turnId);
+      },
       holds: async (reference, turnId) => await (await this.agentCalls(reference.actorId)).holds(turnId),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       pricing: (spec) => this.modelCatalog.pricing(spec),
@@ -905,6 +902,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       reportModelCall: (report) => { this.reportModelCall(report); },
       refusals: (actor) => this.refusalNoticesFor(actor),
       liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
+      servingMoved: () => this.servingMoved(),
+      boxUse: this.boxUse,
       modelOperations: this.modelOperations,
       pricing: (spec) => this.modelCatalog.pricing(spec),
       hostedModel: (actor) => this.hostedModelOf(actor),
@@ -938,6 +937,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   ): Promise<EnqueueTurnResult> {
     const admitted = await admitHostedTask(this.hostedSeams(), actor.reference, {
       kind: 'message', body: input.text, mode: workModeForTurnMetadata(input.metadata),
+      // A message id says the row is open.
+      ...(input.idempotencyKey !== undefined && { idempotencyKey: input.idempotencyKey }),
     });
 
     return { status: admitted.admitted ? 'queued' : 'skipped' };
@@ -976,6 +977,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.armDurableWake();
       },
       armWake: () => { this.armDelegationWake(); },
+      jobSeat: (actorId) => ({ ports: this.workspaceJobPorts(actorId), attach: (authority) => this.jobAuthorities.attach(authority) }),
+      retireJobs: (actorId) => this.jobAuthorities.retire(actorId),
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
       rederiveWake: () => { this.armDurableWake(); },
       oweAdvice: (actor) => this.advice.owe(actor.reference.actorId),
@@ -997,14 +1000,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The host's own provisioner, the one every hosted runtime is built over, so the node's
       // disclosed boundary and its real credential are the same fact.
       nodeHome: (actor) => this.actorHomes.require(actor.record, actor.reference),
-      codemodeTool: (runtime, webSearch) => {
-        const factory = createCodemodeToolFactory({
-          launch: this.codemodeLaunch(runtime.actor.actorId), rt: runtime,
-          workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(runtime.actor.actorId),
-        });
-
-        return (finished) => factory.toolFor(codemodeSurface(runtime, finished));
-      },
+      codemodeTool: (runtime, webSearch) => (finished: ToolSet, reach: ToolSurfaceNarrowing) => createCodemodeToolFactory({
+        launch: this.codemodeLaunch(runtime.actor.actorId), rt: runtime, reach,
+        workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(runtime.actor.actorId),
+      }).toolFor(codemodeSurface(runtime, finished)),
       recordStep: async (headId, seq, step) => { await this.recordHeadStep(headId, seq, step); },
       publishDelta: (kind, delta) => { this.publishHeadStreamFrame({ headId: '', kind, delta }); },
       mission: (input) => {
@@ -1036,6 +1035,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const factory = createCodemodeToolFactory({
       launch: this.codemodeLaunch(turn.runtime.actor.actorId), rt: turn.runtime,
+      // The role's own list: this profile was resolved before the tools it would intersect existed.
+      reach: narrowToolSurface(effectiveRoleCatalog(turn.profile.inputs.envelope.catalog)[turn.profile.profile.role.id]?.allowedTools),
       workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
       // A thunk, so it reads the `report` deps declared below rather than a construction-time copy.
       extraProviders: () => [createReportCodemodeProvider(() => report)],
@@ -1043,18 +1044,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const report: ReportToolDeps = {
       report: async (input) => {
-        // A run-settling report is the answer.
-        const settles = reportSettlesRun(input.status, 'report_tool');
-
-        const relayed = await relayHostedReport(this.hostedSeams(), turn.actor, {
+        const relayed = await publishSubordinateReport({ mode: turn.input.mode, reports: turn.reports }, {
           status: input.status, content: input.content, origin: 'report_tool',
-          mode: 'build', sequenceId: `live:${turn.actor.record.name}:${nanoid()}`,
-          handoff: input.handoff,
-          ...(settles && { answers: turn.turnId }),
-        });
-
-        turn.reports.spoke = true;
-        turn.reports.settled ||= settles;
+          sequenceId: `live:${turn.actor.record.name}:${nanoid()}`, handoff: input.handoff,
+        }, (published) => relayHostedReport(this.hostedSeams(), turn.actor, {
+          // A run-settling report is the answer.
+          ...published, ...(temporaryRunSettles({ status: published.status, origin: published.origin }) && { answers: turn.turnId }),
+        }));
 
         return { id: relayed.id, disposition: relayed.disposition };
       },
@@ -1081,15 +1077,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       vectorStore: turn.runtime.vectorStore,
       facts: turn.actor.stores.facts,
       webSearch,
+      jobs: this.hireJobs(turn.actor, turn.input.mode),
     };
 
     // `report` belongs only to a parent-driven turn; an owner chat with this actor must not carry it.
     deps.report = report;
-    const tools = withHeadCaptureRecording(buildActorTools(deps), turn.capture);
+    const built = buildActorTools(deps);
+    const tools = withHeadCaptureRecording(built.turn, turn.capture);
 
     // Framing is rendered from these exact tool names; `report` among them makes core's
     // `state/delegation` section name this actor as a hire.
-    return { tools, framing: await this.hostedTaskFraming(turn, tools, agents) };
+    return { tools, raw: built.raw, framing: await this.hostedTaskFraming(turn, tools, agents) };
   }
 
   /**
@@ -1112,8 +1110,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         backend: 'cf',
         roleSection: turn.profile.profile.role,
         model: { id: turn.profile.profile.tier.model },
-        currentDate: currentDateForPrompt(),
-        sectionOverrides: activePromptSectionOverrides(this.boundSql, turn.actor.handle),
+        sectionOverrides: artifactOverrides(currentArtifacts(this.boundSql, turn.actor.handle)).sections,
         // Makes the prompt address it as a named agent of this workspace, not the workspace's own chat.
         identity: {
           ...(await this.promptIdentity()),
@@ -1133,6 +1130,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const deps: AgentsToolDeps = {
       mode: turn.input.mode,
       swarm,
+      swarms: turn.profile.inputs !== null && betaSwarms(turn.profile.inputs.envelope.catalog),
       budget: this.budget,
     };
 
@@ -1183,6 +1181,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       stores: actor.stores,
       profile,
       tools,
+      runtime: { backend: 'cf', model: { id: profile.tier.model }, date: currentDateForPrompt() },
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(
@@ -1462,9 +1461,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** A waiting hired agent holds no transcript; its rows reopen it. */
+  /** A waiting hired agent holds no transcript; its rows reopen it. A running job keeps its runtime to the settle's turn. */
   private releaseIdleHosted(reference: ActorReference): void {
-    if (this.actorHost().hosted(reference) !== null && !this.hostedTurnInFlight(reference)) this.actorHost().release(reference);
+    if (this.actorHost().hosted(reference) === null || this.hostedTurnInFlight(reference)) return;
+
+    if ((this.jobAuthorities.live(reference.actorId)?.runner.inFlight ?? 0) > 0) return;
+    this.actorHost().release(reference);
   }
 
   private hostedReactionsDueAt(now: number): number | null {
@@ -1555,7 +1557,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
               });
             }
 
-            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: crypto.randomUUID(), userTurn: true, carried: [] });
+            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: crypto.randomUUID(), userTurn: true, carried: [], finishedSteps: 0 });
           },
           ended: async (end) => {
             if (hostedTaskEnding(end) === 'errored') await room?.deliver({ type: 'error', message: end.errorMessage ?? end.summary });
@@ -1915,9 +1917,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
-        // Replay-eval rollout runs the live scaffold with the real LLM and tool bridges.
-        // Promotion-gate evidence runs on the cadence lane so rollouts don't block the chat queue.
-        ...this.shadowTrialPorts,
       });
       this._engine.onEvent((event) => {
         if (event.type !== 'changelog_digest') return;
@@ -2138,7 +2137,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
 
     return {
-      resumes: false,
+      turnOwed: () => this.currentTurnOf(reference) !== null,
+      // A hosted turn opens its room at step 0 in each activation (`drainActorAssignments`): its relay holds every step the room restates.
+      steps: () => [],
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
       history: (limit) => this.agentStores(actorId).history(limit),
@@ -2350,26 +2351,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       evolutionEnabled: this._turnEvolutionEnabled,
     };
 
-    // Keyed on the turn, not rolled: `queueTurnShadowTrial` re-reads the pending version,
-    // so a replay would otherwise score this turn against a candidate not under trial then.
-    const sampledVersion = owesShadowTrial(facts) ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
-
-    return declareTerminalRoster(facts, this.rosterParts(input, sampledVersion, readMission(this.boundSql)));
+    return declareTerminalRoster(facts, this.rosterParts(input, readMission(this.boundSql)));
   }
 
-  private rosterParts(
-    input: OwedTerminalEffectsInput, sampledVersion: number | null, mission: string | null,
-  ): TerminalTurnParts {
+  private rosterParts(input: OwedTerminalEffectsInput, mission: string | null): TerminalTurnParts {
     const parts: TerminalTurnParts = {
       // Over the row the transcript is about to persist, so a cut turn's announcement replays from it.
       turnEndExtensions: true,
-      credited: input.credited,
+      ...chatTurnParts(input),
       craftedToolsUsed: this.acc.craftedToolsUsed(),
       eventReplies: { answered: input.answeredDeliveries, requestId: input.messageId },
       branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
-      overflowRetry: input.overflowRetry,
-      outputContinuation: input.outputContinuation,
-      taskReminder: input.taskReminder ?? undefined,
       // Owed only when the actor reviews turns, as the lane it replaced was started only then.
       advisor: this.actorSession.reviewsTurns
         ? projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) })
@@ -2378,15 +2370,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The genesis turn owes the naming: the create stored a stand-in title, and no
       // other turn replaces one.
       autoTitle: { mission, standIn: input.event === WORKSPACE_CREATED_EVENT },
-      autoGepa: true,
-      shadowTrial: sampledVersion === null ? undefined : {
-        pendingVersion: sampledVersion,
-        // Bounded at declaration: an oversized recorded input fails its SQLite insert partway through
-        // a claimed sequence, leaving a prefix recovery reads as the whole roster.
-        trialContext: projectJsonValue({
-          value: trimTrialContext([...input.trialContext]),
-        }),
-      },
     };
 
     return parts;
@@ -2470,17 +2453,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           if (unreachable !== null) return { status: 'owed', detail: unreachable };
           await this.applyAutoTitle(subject, standIn === true);
-
-          return { status: 'completed' };
-        },
-      }),
-
-      auto_gepa: terminalEffect({
-        input: v.object({}),
-        // Awaited so eviction cannot cancel the model work without a pending row. The cadence is a
-        // durable turn count, so a replay either runs the owed run or does nothing.
-        run: async (_input, scope) => {
-          await this.maybeRunAutoGepa(keyedScope(scope));
 
           return { status: 'completed' };
         },
@@ -2690,8 +2662,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private finishSleepTimeWindow(key: string): void {
     recordEffectDone(this.boundSql, this.actorHandle(), { scope: SLEEP_TIME_PROCESSED, key });
     void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
-    this.config.delete(SLEEP_TIME_SETTLED_AT);
-    this.config.delete(SLEEP_TIME_CLOSED_AT);
+    this.config.delete(SLEEP_TIME_SETTLED_AT, SLEEP_TIME_CLOSED_AT);
   }
 
   /** The update a previous attempt already paid for, so a replay applies it without a new call. */
@@ -2822,14 +2793,31 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Background jobs (#173): lifecycle lives in core BackgroundJobRunner; below is the @callable transport.
 
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    return jobResult(this.jobs, jobId);
+    return jobResult(this.jobAuthorities.owning(jobId)?.store ?? this.jobs, jobId);
   }
 
   @callable()
   async listBackgroundJobs(limit = 20, actor?: string): Promise<ListedBackgroundJob[]> {
-    if (actor !== undefined) return listBackgroundJobs(this.hostedChild(actor).child.stores.jobs, limit);
+    const { store, actorId } = actor === undefined
+      ? { store: this.jobs, actorId: this.actorHandle().actorId }
+      : (({ child }) => ({ store: child.stores.jobs, actorId: child.reference.actorId }))(this.hostedChild(actor));
 
-    return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
+    const live = this.jobAuthorities.live(actorId);
+
+    return listBackgroundJobs(store, limit, (jobId) => live?.runner.output.tail(jobId));
+  }
+
+  /** A pane naming `actor` acts on its jobs alone. */
+  private jobOperation<Outcome extends { ok: boolean }>(
+    operation: string, jobId: string, actor: string | undefined, run: (authority: JobAuthority) => Promise<Outcome> | Outcome,
+  ): Effect.Effect<Outcome, KinuError> {
+    const authority = this.jobAuthorities.owning(jobId) ?? this.jobAuthorities.root();
+
+    if (actor !== undefined && authority.actorId !== this.hostedChild(actor).child.reference.actorId) {
+      return Effect.fail(new KinuError('denied', `Job ${jobId} is not ${actor}'s.`));
+    }
+
+    return Effect.promise(async () => this.countJobOperation(operation, await run(authority)));
   }
 
   /** Wrapped at one boundary so the retry ratio is visible across all four sites.
@@ -2855,23 +2843,82 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return this.countJobOperation('cancel', await cancelBackgroundJob(this.jobRunner, jobId));
+  async cancelBackgroundJob(jobId: string, actor?: string): Promise<{ ok: boolean }> {
+    return await settle(this.jobOperation('cancel', jobId, actor, (authority) => cancelBackgroundJob(authority.runner, jobId)));
   }
 
   @callable()
-  async retryBackgroundJob(jobId: string): Promise<RetryOutcome> {
-    return this.countJobOperation('retry', await retryBackgroundJob({
-      jobs: this.jobs,
-      jobRunner: this.jobRunner,
-      rawTools: (mode) => this.getRawToolsForWorkMode(mode),
-      logActivity: (event, detail) => this.logActivity(event, detail),
-    }, jobId));
+  async retryBackgroundJob(jobId: string, actor?: string): Promise<RetryOutcome> {
+    return await settle(this.jobOperation('retry', jobId, actor, (authority) => this.retryJob(authority, jobId)));
+  }
+
+  /** On its owner's raw tools and runner: a hire's job runs again as the hire, and its settle wakes the hire. */
+  private async retryJob(authority: JobAuthority, jobId: string): Promise<RetryOutcome> {
+    if (authority.kind === 'step-loop') return { ok: false, error: "a swarm node's job ends with its run" };
+
+    const rawTools = authority.kind === 'root'
+      ? async (mode: WorkMode) => {
+        await this.currentAccountSwarms();
+
+        return this.getRawToolsForWorkMode(mode);
+      }
+      : (mode: WorkMode) => hostedRetryTools(this.hostedSeams(), actorReferenceOf(this.liveAgentOf(authority.actorId)), mode, `retry:${jobId}`);
+
+    return await retryBackgroundJob({
+      jobs: authority.store, jobRunner: authority.runner, rawTools, logActivity: (event, detail) => this.logActivity(event, detail),
+    }, jobId);
   }
 
   @callable()
-  async dismissBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return this.countJobOperation('dismiss', await dismissBackgroundJob(this.jobs, jobId));
+  async dismissBackgroundJob(jobId: string, actor?: string): Promise<{ ok: boolean }> {
+    return await settle(this.jobOperation('dismiss', jobId, actor, (authority) => dismissBackgroundJob(authority.store, jobId)));
+  }
+
+  /** A hire's own jobs; a settle wakes it with a message. */
+  private hireJobs(actor: BoundActor, mode: WorkMode): ActorJobs {
+    const authority = this.jobAuthorities.live(actor.reference.actorId) ?? this.hireJobAuthority(actor.reference);
+
+    return { jobRunner: authority.runner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => mode };
+  }
+
+  protected override reviveJobAuthority(actorId: string): JobAuthority | null {
+    const record = this.actorDirectoryStore().retained(actorId);
+
+    if (record === null || record.retiringAt !== null || record.deletedAt !== null) return null;
+
+    if (isSubordinateOrigin(record.origin)) return this.hireJobAuthority(actorReferenceOf(record));
+
+    return record.origin === 'swarm' ? endedStepLoopJobs({
+      actorId, store: this.actorHost().bindStores(actorReferenceOf(record)).stores.jobs,
+      ports: this.workspaceJobPorts(actorId), fiber: (name, fn) => this.rt.schedule.fiber(name, fn),
+    }) : null;
+  }
+
+  /** Over stores bound for it alone: its turn's are released once it idles. */
+  private hireJobAuthority(reference: ActorReference): JobAuthority {
+    const actor = this.actorHost().bindStores(reference);
+    const store = actor.stores.jobs;
+
+    const runner = this.actorJobRunner(actor.reference.actorId, {
+      store,
+      // Unwatched, but woken by a message.
+      policy: () => invocationBackgroundPolicy('interactive', true),
+      fiber: (name, fn) => this.rt.schedule.fiber(name, fn),
+      // Its durable queue; a repeated wake is one message.
+      inbox: inlineResultInbox(store, {
+        send: async ({ text, metadata, idempotencyKey }) => {
+          await this.enqueueHostedTurn(actor, { text, ...(metadata !== undefined && { metadata: { ...metadata } }), ...(idempotencyKey !== undefined && { idempotencyKey }) });
+
+          return 'queued';
+        },
+      }),
+    });
+
+    const authority = { kind: 'hire', actorId: actor.reference.actorId, store, runner } as const;
+
+    this.jobAuthorities.attach(authority);
+
+    return authority;
   }
 
   @callable()
@@ -3219,7 +3266,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Runs the resumed loop re-opened are live and must not be sealed as wreckage.
         liveRuns: () => this.chatLoop.drivenRuns(),
         resume: jobRedriveResumeGate({
-          recoverOrphans: () => this.jobRunner.recoverOrphans(),
+          // Every actor's: some jobs have no fiber row.
+          recoverOrphans: () => this.jobAuthorities.recoverOrphans(),
           inputOf: (jobId) => this.jobs.getInput(jobId),
           rootsForTask: (task) => resumableForkRoots(
             { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
@@ -3708,22 +3756,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return scaffoldRunReport(await runScaffoldOnce(this.scaffoldControl, task, opts));
   }
 
-  async getShadowStatus(): Promise<ShadowStatus> {
-    return getShadowStatus(this.boundSql, this.rt.actor);
+  async getEvolutionStatus(): Promise<EvolutionStatus> {
+    return getEvolutionStatus(this.boundSql, this.rt.actor);
   }
 
-  /** `auto` acts on decidePromotion only when its decision != 'continue'; others force the action. */
+  /** The owner's decision on the pending scaffold proposal. */
   @callable()
-  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
+  async applyScaffoldDecision(mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
     return applyScaffoldDecision(this.scaffoldControl, mode);
-  }
-
-  /** Reads `scaffold_evaluations`, regressions first. */
-  @callable()
-  async getShadowVerdict(version?: number): Promise<ShadowVerdict> {
-    const pendingVersion = version ?? getPendingScaffold(this.boundSql, this.rt.actor)?.version ?? null;
-
-    return readShadowVerdict(this.boundSql, this.rt.actor, pendingVersion);
   }
 
   /**
@@ -3888,14 +3928,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listScaffoldVersions(this.boundSql, this.rt.actor, limit);
   }
 
-  /** GEPA optimisation pass; see `runScaffoldGepaOptimization` in evolution/control.ts for cost. */
+  /** One search of the proposer on `target` (default the scaffold); see `runOptimization` in evolution/control.ts. */
   @callable()
-  async runScaffoldGepaOptimization(opts?: {
-    maxIterations?: number;
-    evalSize?: number;
-    maxMetricCalls?: number;
-  }): Promise<GepaOptimizationResult> {
-    return runScaffoldGepaOptimization(this.scaffoldControl, opts);
+  async runOptimization(target?: string): Promise<ProposerOutcome> {
+    return runOptimization(this.scaffoldControl, target);
   }
 
   @callable()
@@ -4818,7 +4854,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         work: workspaceWork, pending: pendingActions, jobs,
         changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''),
       }),
-      explorations: listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
+      // Hidden with swarms off.
+      explorations: await this.readAccountSwarms() && listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
     };
   }
 
@@ -4931,7 +4968,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       pendingActions: this.pendingActions(),
       pendingConsents,
       activePlan,
-      scaffoldAutoApply: this.config.getAutoPromoteScaffold(),
       slates: listing.slates.map((slate) => ({
         id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null, bindings: slate.bindings.length,
       })),
@@ -5049,47 +5085,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable() async executeInExecutor(executorId: string, command: string, device?: string) {
-    const provider = this.rt.executionRouter?.getProvider(executorId);
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    const run = await runOnExecutor(this.rt.executionRouter, executorId, command, device);
 
-    if (!provider) return { error: `Executor "${executorId}" not found`,
-      refusal: refusalOf(new KinuError('missing', `Executor "${executorId}" not found`)) };
+    if (run.kind === 'refused') return { error: run.error, refusal: run.refusal };
 
-    if (!provider.isAvailable()) return { error: `Executor "${executorId}" is not available`,
-      refusal: refusalOf(new KinuError('unavailable', `Executor "${executorId}" is not available`)) };
+    const output = run.kind === 'ran'
+      ? { stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode, ...(run.refusal && { refusal: run.refusal }) }
+      : { stdout: '', stderr: run.error, exitCode: 1, refusal: run.refusal };
 
-    const execTool = provider.tools.exec;
+    this.recordExecutorOutput(executorId, command, run.kind === 'ran' ? output : { stdout: null, stderr: run.error, exitCode: 1 });
+    // The UI terminal renders only from broadcasts, so a failure is broadcast too.
+    this.broadcast(JSON.stringify({ type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now() }));
 
-    if (!execTool) return { error: `Executor "${executorId}" has no exec tool`,
-      refusal: refusalOf(new KinuError('unsupported', `Executor "${executorId}" has no exec tool`)) };
-
-    // Device rides as tool context read by readDeviceSelection (docs/EXECUTION-LAYER-SPEC.md
-    // "The user's account is a fleet"); with none, the call keeps the unnamed default.
-    try {
-      const result = v.parse(CommandResultSchema, device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device }));
-
-      const output = v.is(v.string(), result)
-        ? { stdout: result, stderr: '', exitCode: 0 }
-        : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
-
-      this.recordExecutorOutput(executorId, command, output);
-
-      this.broadcast(JSON.stringify({
-        type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now(),
-      }));
-
-      return output;
-    } catch (err) {
-      const refusal = refusalOf(toKinuError({ doing: 'execute on ' + executorId, cause: err, otherwise: 'io' }));
-      const errMsg = refusal.error;
-      this.recordExecutorOutput(executorId, command, { stdout: null, stderr: errMsg, exitCode: 1 });
-      // Broadcast errors too: the UI terminal renders only from broadcasts. (STABILITY-AUDIT §B4.)
-      this.broadcast(JSON.stringify({
-        type: 'executor-output', executor: executorId, command, stdout: '',
-        stderr: errMsg, exitCode: 1, refusal, timestamp: Date.now(),
-      }));
-
-      return { error: errMsg, exitCode: 1, refusal };
-    }
+    return run.kind === 'ran' ? output : { error: run.error, exitCode: 1, refusal: run.refusal };
   }
 
   /** Directory listing read off each executor's own raw handle, in that environment's paths. */
@@ -5380,7 +5389,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const ownerUserId = this.getOwnerUserId();
 
     if (!ownerUserId) throw new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
-    await writeSoul(this.boundSql, text, (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content));
+    await writeWorkspaceSoul(this.hostedWorkspace().bundle, text);
     // The next turn re-reads the soul from its row.
     this._cachedSoulText = null;
 
@@ -5605,73 +5614,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null;
   }> {
     return await createTimerTrigger(this.triggerRegistry, opts, Date.now());
-  }
-
-  /**
-   * Auto-GEPA tick, once per completed turn. Counts completed non-plan turns from durable
-   * `turn_end` rows (survives eviction); runs when the cadence is due and no pending is mid-shadow.
-   */
-  protected async maybeRunAutoGepa(
-    /** Stable tick identity keying the prompt-section lane so a replay finds it advanced.
-     * Absent when no durable obligation backs the call; then nothing is keyed. */
-    tick?: string,
-  ): Promise<void> {
-    const everyN = this.config.getAutoGepaEveryNTurns();
-
-    if (everyN <= 0) return;
-
-    // An absent key is indistinguishable from an old disable; pin the default and record it.
-    if (this.config.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns) == null) {
-      this.config.setAutoGepaEveryNTurns(everyN);
-      void this.sql`INSERT INTO evolution_events (actor_id, type, message, created_at)
-        VALUES (${this.actorHandle().actorId}, 'reflection', ${
-          `Auto-GEPA enabled by the autonomous default (every ${everyN} turns of new traces). ` +
-          `A disable set before autonomy defaults flipped on was stored as "unset" and is ` +
-          `superseded by this default: run setAutoGepa(0) to disable again.`
-        }, ${Date.now()})`;
-    }
-
-    // One cadence pass at a time per activation; concurrent passes would race proposals.
-    // Per-tick tombstones cannot separate an interrupted run from this activation's live one.
-    if (this._gepaTickRunning) return;
-    const recent = listGepaRuns(this.boundSql, this.actorHandle(), 1)[0];
-
-    // A `running` row is an interrupted pass that is owed, not a cadence watermark.
-    if (recent?.status !== 'running') {
-      const sinceTs = recent ? new Date(recent.startedAt).toISOString() : null;
-
-      if (this.eventRecorder.completedWorkTurns(sinceTs) < everyN) return;
-    }
-
-    // Prompt sections are the only automatic lane: the chat turn does not run `scaffold/agent.js`.
-    // Scaffold GEPA runs only via the manual `runScaffoldGepaOptimization` RPC.
-    const lane = tick === undefined ? undefined : `${this.name}:${tick}`;
-    this._gepaTickRunning = true;
-
-    try {
-      await oncePerTick(this.boundSql, this.actorHandle(), { scope: PROMPT_SECTION_LANE, tick: lane, workspace: this.name },
-        () => this.advancePromptSections());
-    } finally {
-      this._gepaTickRunning = false;
-    }
-  }
-
-  /** Cadence pass live in this activation; eviction clears it and the durable `running` row remains. */
-  private _gepaTickRunning = false;
-
-  /** Advance the evolved-prompt-section loop one step; policy lives in core's `advancePromptSectionLane`. */
-  protected async advancePromptSections(): Promise<void> {
-    // Awaited so the cadence effect holds its row open; a detached lane could be cancelled by eviction.
-    // Failure is absorbed: the lane is opportunistic and the next cadence tick retries it.
-    try {
-      await advancePromptSectionLane(this.scaffoldControl);
-    } catch (err) {
-      diagnostics.failure('prompt_section.lane_failed', toKinuError({
-        doing: 'advancing the prompt-section evolution lane',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    }
   }
 
   /**
