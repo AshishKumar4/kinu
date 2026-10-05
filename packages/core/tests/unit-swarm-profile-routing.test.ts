@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createJSONLLM, createTestRuntime, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { hostedSeatsOver } from './helpers-actor-host';
-import type { MockLanguageModelV3 } from 'ai/test';
+import type { MockLanguageModelV4 } from 'ai/test';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
 import { RESUME_REDRIVE_OPTION } from '../src/jobs/index';
@@ -67,7 +67,7 @@ function envelopeOf(tiers: TierAssignments, version: number): ProfileCatalogEnve
 }
 
 interface CountingModel {
-  readonly model: MockLanguageModelV3;
+  readonly model: MockLanguageModelV4;
   readonly calls: () => number;
 }
 

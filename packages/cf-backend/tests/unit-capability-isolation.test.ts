@@ -9,7 +9,7 @@
  * deployed build.
  */
 import { describe, expect, test } from 'bun:test';
-import type { MockLanguageModelV3 } from 'ai/test';
+import type { MockLanguageModelV4 } from 'ai/test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { catalogTurn, chatSessionTurns, gatewayWorkspace, orchestratorHarness } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
@@ -20,7 +20,7 @@ const METADATA = 'http://169.254.169.254/latest/meta-data/iam/security-credentia
 const REFUSED = 'blocked private/internal address: 169.254.169.254';
 
 /** A model that asks its `web` tool for the metadata service once, then stops. */
-function modelFetchingMetadata(): MockLanguageModelV3 {
+function modelFetchingMetadata(): MockLanguageModelV4 {
   return scriptedTurnModel({ doGenerate: (options) => {
     const call = !options.prompt.some((message) => message.role === 'tool');
 
@@ -37,7 +37,7 @@ function modelFetchingMetadata(): MockLanguageModelV3 {
 }
 
 /** What the model was handed back for its `web` call, as its next request carries it; the loop names the call anew. */
-function webAnswer(model: MockLanguageModelV3): string {
+function webAnswer(model: MockLanguageModelV4): string {
   const next = model.doStreamCalls.find((call) => call.prompt.some((message) => message.role === 'tool'));
 
   const call = next?.prompt.flatMap((message) => message.role === 'assistant' ? message.content : [])

@@ -61,7 +61,7 @@ function namespacedCall(message: LanguageModelV4Message, functions: ReadonlySet<
 }
 
 const PLAN_REQUEST: LanguageModelMiddleware = {
-  specificationVersion: 'v3',
+  specificationVersion: 'v4',
   transformParams: async ({ params }): Promise<LanguageModelV4CallOptions> => {
     const openai: JSONObject = { ...params.providerOptions?.openai, systemMessageMode: 'developer' };
     const functions = new Set(params.tools?.flatMap((tool) => (tool.type === 'function' ? [tool.name] : [])));

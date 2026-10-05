@@ -4,9 +4,9 @@
  * "A node is an agent" and "No self-grading".
  */
 import { describe, expect, test } from 'bun:test';
-import type { MockLanguageModelV3 } from 'ai/test';
+import type { MockLanguageModelV4 } from 'ai/test';
 import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
-import type { LanguageModelV3Prompt } from '@ai-sdk/provider';
+import type { LanguageModelV4Prompt } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
@@ -105,11 +105,11 @@ function resolved(): ResolvedSwarm {
 
 
 /** Keyed off the prompt, not arrival order: both nodes share one model concurrently. */
-function isBranch(prompt: LanguageModelV3Prompt, index: number): boolean {
+function isBranch(prompt: LanguageModelV4Prompt, index: number): boolean {
   return JSON.stringify(prompt).includes(`Your angle: ${diversityAngle(index, 2)}`);
 }
 
-function ownTurns(prompt: LanguageModelV3Prompt): number {
+function ownTurns(prompt: LanguageModelV4Prompt): number {
   let lastUser = -1;
 
   for (const [index, message] of prompt.entries()) {
@@ -131,7 +131,7 @@ interface Outcome {
 function scriptedNodes(
   outcomes: readonly [Outcome, Outcome],
   cancel: AbortController,
-): MockLanguageModelV3 {
+): MockLanguageModelV4 {
   const usage = {
     inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined },
     outputTokens: { total: 7, text: 7, reasoning: undefined },

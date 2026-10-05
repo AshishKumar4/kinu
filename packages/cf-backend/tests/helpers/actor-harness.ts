@@ -12,7 +12,7 @@ import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResul
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
-import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
+import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, Clock, ModelInfo, ModelRouteResolution, ActorToolsets } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
@@ -1147,7 +1147,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     const textOf = (scripted: ScriptedAnswer): string =>
       scripted.text ?? scripted.parts?.flatMap((part) => part.type === 'text' ? [part.text] : []).join('') ?? '';
 
-    return new MockLanguageModelV3({
+    return new MockLanguageModelV4({
       provider: 'fake',
       modelId: 'fake-model',
       doGenerate: async (options) => {
