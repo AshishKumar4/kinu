@@ -3895,6 +3895,46 @@ image, and sees a click turn the screen; it fails without the box's
 `Origin`. `tools-image.test.ts` runs the start script with no network, so it
 fails without `-publicIP`, and opens the menu's browser as root.
 
+D71. The desktop stays on KasmVNC; Media over QUIC through Cloudflare's relay
+is rejected (2026-10-05). Probe only (`/mnt/local/kinu/tmp/moq-probe-save`):
+throwaway Medium boxes on integration 0b367f089's image, n=3 boxes, each
+publishing its X display (ffmpeg x11grab, libx264 ultrafast zerolatency,
+1280x800 at 30 fps, fMP4 into moq-rs's `moq-pub`, draft-14 branch) to the
+public draft-14 relay, played by moq-js main (WebTransport and WebCodecs).
+Every client ran with TLS verification off: the relay's certificate expired
+2026-10-04 20:33:59 UTC. All boxes, Workers and buckets were deleted.
+
+| | MoQ | KasmVNC (D70) |
+|---|---|---|
+| reaches the relay from a box | yes, QUIC/UDP | |
+| a viewer on another box or this host sees it | 0 of 12 | |
+| encode, % of one core: a strip changes / full-screen motion | 22 / 30 | |
+| bitrate, Mb/s | 0.11 a strip changes, 11.3-11.9 motion | 0 idle, 21-24 scrolling |
+| click to screen, ms (p50) | 124, in the box | 66, from this host |
+| glass to glass, ms (p50) | 109, in the box | |
+
+The relay delivers only within one relay server. A box read its own
+publication back 6 of 6; a second box in the same colo (DFW, the same egress
+IP) read 0 of 3; this host (DFW) read nothing in either direction, 0 of 9,
+while host to host worked 6 of 6, and the same ffmpeg stream from a local
+container played on this host. So the latency was measured with the player in
+the box: both clocks are the box's, and the figures exclude the viewer's
+network and the input path (`xdotool` in the box), where KasmVNC's 66 ms is
+the whole path through the Worker and the Durable Object. The box p50s were
+92, 109 and 137 ms glass to glass (p90 up to 360, n=1,366 frames) and 123, 124
+and 161 ms click to frame (97 to 213, n=60), on a box also running the encoder
+and the decoder. moq-pub takes 0.5 to 2.3% of a core; the motion's software
+rendering in Chromium takes 108 to 116%, so a two-core box is full. The
+motion and KasmVNC's scrolling are different content, so the bitrates
+compare only roughly.
+
+Authorization is from the documentation, unmeasured (no token with the MoQ
+permission): a token is relay-wide, publishes or subscribes or both, expires
+within a year, and travels in the URL path, so it reaches access logs; there
+is no namespace scope. A workspace of its own means a relay of its own. Chrome's
+WebTransport over this host's WARP tunnel (MTU 1280) failed with a packet
+write error until its QUIC packets were capped at 1200 bytes.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
