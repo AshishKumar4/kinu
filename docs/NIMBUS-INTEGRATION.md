@@ -50,6 +50,16 @@ when core 0.15.1 ships the fix with a worker built from it; the browser-surface
 case in `packages/cf-backend/tests/workerd/slate-process.test.ts` holds the
 behaviour.
 
+The worker patch also gives each Durable Object its own build-facet isolate
+(NIMBUS-ASKS #20, 2026-10-05). Worker 0.13.1 loads the build facet's code under
+one id per isolate, so every workspace in an isolate builds on one rolldown
+binding, whose event-loop pump, started by one workspace's build, ran another's
+plugin calls in the first one's context: "Cannot perform I/O on behalf of a
+different Durable Object", in 2 of 5 runs of `slate-durability.test.ts` and
+`slate-process.test.ts` in one process. `dist/facets/build-facet.js` adds the
+object's id to the loader id. It goes when a worker release keeps the binding
+from crossing objects.
+
 Core 0.12.0 and worker 0.10.0 carry what the earlier patches held: the
 read-only-open guards in core's `src/vfs/sqlite-vfs.ts` (D21, D22),
 `NPM_REGISTRY` passed from the command's environment to the installer

@@ -1,3 +1,18 @@
+diff --git a/dist/facets/build-facet.js b/dist/facets/build-facet.js
+index 683befcf2b80ce6c5fbe1cb482f97106c074cf17..b16ad9c33a4cc5af74ddcdaf669678eb9bb7baa2 100644
+--- a/dist/facets/build-facet.js
++++ b/dist/facets/build-facet.js
+@@ -156,7 +156,9 @@ async function buildFacet(ctx, env, id) {
+     const assets = Reflect.get(Object(env), 'ASSETS');
+     if (!assets || typeof assets.fetch !== 'function')
+         throw new Error('Nimbus: env.ASSETS unavailable for the build facet');
+-    const worker = await loader.get(id, async () => buildFacetWorkerCode(await fetchBuildFacetParts({ ASSETS: assets })));
++    // One isolate per Durable Object (Kinu patch, NIMBUS-ASKS #20): the binding is the isolate's, and its pump ran
++    // one object's plugin calls in another's context ("Cannot perform I/O on behalf of a different Durable Object").
++    const worker = await loader.get(`${id}:${ctx.id.toString()}`, async () => buildFacetWorkerCode(await fetchBuildFacetParts({ ASSETS: assets })));
+     const facetClass = worker.getDurableObjectClass('BuildFacet');
+     return ctx.facets.get(id, async () => ({ class: facetClass }));
+ }
 diff --git a/dist/rolldown-facet-artifact.generated.js b/dist/rolldown-facet-artifact.generated.js
 index ea4b9939a1c678a4dc1d8fd7d828c93513cf5611..4643269681de2852aa3e095abb08144e79501b0a 100644
 --- a/dist/rolldown-facet-artifact.generated.js
