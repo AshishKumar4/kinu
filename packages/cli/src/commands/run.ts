@@ -126,12 +126,36 @@ function resolveExecWorkspaceName(explicit?: string): string {
     : `Multiple workspaces configured. Pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
 }
 
+/** A run's one failure boundary: a workspace that will not open fails as a turn does, so --json still prints one error line. */
 async function runOneShot(
   target: AgentTarget,
   rawPrompt: string,
   opts: AgentClientFlags & TranscriptFlags,
   surface: { json: boolean; headless: boolean },
 ): Promise<boolean> {
+  const run = { ...surface, failed: false };
+
+  try {
+    await oneShotTurn(target, rawPrompt, opts, run);
+  } catch (err) {
+    // An error event already printed this failure.
+    if (!run.failed) {
+      if (run.json) process.stdout.write(`${JSON.stringify({ type: 'error', message: describeProviderError({ cause: err }) })}\n`);
+      else printFailure({ cause: err });
+    }
+
+    run.failed = true;
+  }
+
+  return run.failed;
+}
+
+async function oneShotTurn(
+  target: AgentTarget,
+  rawPrompt: string,
+  opts: AgentClientFlags & TranscriptFlags,
+  run: { json: boolean; headless: boolean; failed: boolean },
+): Promise<void> {
   // A one-shot run never starts the evolution pass it cannot finish; the daemon runs it (see AgentOrchestrator's exit contract).
   if (target.mode === 'local') ensureLocalDaemonRunning();
 
@@ -146,11 +170,10 @@ async function runOneShot(
 
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
-  let failed = false;
-  const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;
+  const render = run.json ? createJsonEventWriter(client) : renderRunEvent;
 
   const unsubscribe = client.subscribe((event) => {
-    if (event.type === 'error') failed = true;
+    if (event.type === 'error') run.failed = true;
     render(event);
   });
 
@@ -159,11 +182,11 @@ async function runOneShot(
 
     if (!consents) return null;
 
-    if (surface.headless) {
-      return watchHeadlessConsents(consents, client.agentName, { json: surface.json, onDenied: () => { failed = true; } });
+    if (run.headless) {
+      return watchHeadlessConsents(consents, client.agentName, { json: run.json, onDenied: () => { run.failed = true; } });
     }
 
-    if (surface.json) return null;
+    if (run.json) return null;
 
     return watchTerminalConsents(consents, client.agentName, askLineOnce);
   }
@@ -178,24 +201,14 @@ async function runOneShot(
       { cwd: process.cwd() },
     );
 
-    if (result.landed === 'turn' && result.hadError) failed = true;
+    if (result.landed === 'turn' && result.hadError) run.failed = true;
     // A detached tool's wake turn or the completion gate's confirming turn may follow; drain while the subscription is live.
     await client.settleBackgroundWork?.();
-  } catch (err) {
-    const alreadyReported = failed;
-    failed = true;
-
-    if (!alreadyReported) {
-      if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', message: describeProviderError({ cause: err }) })}\n`);
-      else printFailure({ cause: err });
-    }
   } finally {
     consentWatch?.stop();
     unsubscribe();
     await client.close();
   }
-
-  return failed;
 }
 
 function transcriptOptions(opts: TranscriptFlags): CliSessionOptions {

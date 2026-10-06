@@ -203,10 +203,10 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
       });
     }
 
-    // Checkpoint and leave WAL before publishing: the rename drops the sidecars, and a WAL db without `-shm`
-    // fails to open (SQLITE_IOERR_SHORT_READ / SQLITE_IOERR_VNODE). `openWorkspaceCLI` restores WAL.
+    // Checkpoint before publishing; the close below then removes the empty sidecars, so the rename moves one file
+    // and the next open makes fresh ones. It stays WAL: a DELETE file had the daemon's first open and the command's
+    // race to switch it, and SQLite answers that race with BUSY without waiting out the busy timeout.
     db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
-    db.exec('PRAGMA journal_mode = DELETE');
   } catch (error) {
     db.close();
 
@@ -227,7 +227,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   db.close();
   // Publication. A crash before the ref below is written leaves a database with no folder, which every open refuses.
   renameSync(partial, dbPath);
-  // The checkpointed (empty) sidecars belong to a name that no longer exists.
+  // Any sidecar left under the partial name belongs to a name that no longer exists.
   discardPartialWorkspace(partial);
 
   await placeLocalWorkspace({ name, cwd, workspaceId, alias: input.alias === '' ? undefined : input.alias });
