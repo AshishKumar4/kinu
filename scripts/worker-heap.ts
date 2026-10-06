@@ -608,6 +608,15 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`a ${String(LONG_TURN.steps)}-step turn peaks at ${mb(measured.longTurnPeak)} used, over ${mb(LONG_TURN_PEAK_BOUND_BYTES)}`);
   }
 
+  // Every figure, red or green, so two runs compare.
+  console.log(`${GATE}: ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
+    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
+    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
+    + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
+    + `own hire ${mb(measured.waitingParentLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
+    + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
+  console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
+
   if (findings.length > 0) {
     console.error(`${GATE}: ${String(findings.length)} finding(s)\n`);
 
@@ -616,13 +625,7 @@ async function main(args: readonly string[]): Promise<number> {
     return 1;
   }
 
-  console.log(`${GATE}: ok — ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
-    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
-    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
-    + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
-    + `own hire ${mb(measured.waitingParentLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
-    + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
-  console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
+  console.log(`${GATE}: ok`);
 
   return 0;
 }
