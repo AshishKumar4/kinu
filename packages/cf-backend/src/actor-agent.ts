@@ -215,7 +215,7 @@ import type { UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import type { WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
-import { sha256Hex } from '@kinu.run/core';
+import { CLEAR_NEEDS_IDLE, sha256Hex } from '@kinu.run/core';
 import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { openAnalyticsWindow } from "@kinu.run/core/analytics";
 import {
@@ -1843,7 +1843,6 @@ export abstract class ActorAgent extends Agent<Env> {
         this.chatLoop.interrupt();
         this.stopSubtree(this.actorHandle().actorId);
       },
-      clear: () => this.clearConversation(),
     });
 
     return this._chatTransport;
@@ -4108,10 +4107,14 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  /** Clears transcript, working history, dynamic ledger and compaction plan. */
-  private async clearConversation(): Promise<void> {
+  /**
+   * Main's Clear, answered: transcript, working history, dynamic ledger and compaction plan, refused while a turn
+   * runs. Only once the stores are empty is every window told to empty, so no page drops what the server still holds.
+   */
+  @callable()
+  async clearConversation(): Promise<void> {
     this.stores.history.clearConversation(CHAT_SESSION_ID, () => this._chatLoop?.turnInFlight() === true || this._actorSession?.inFlight === true
-      ? Effect.fail(new KinuError('denied', 'Stop the active turn before clearing its conversation'))
+      ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE))
       : Effect.void);
     this.actorSession.dynamic.reset();
 
@@ -4119,8 +4122,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const unmeasured = await this.chatLoop.measureCleared();
 
-    // The clear frame has no answer; the failure is recorded where the operator's diagnostics read it.
+    // The clear stands without its measure; the failure is recorded where the operator's diagnostics read it.
     if (unmeasured !== null) diagnostics.failure('context.clear_measure_failed', unmeasured, { workspace: this.name });
+    this.broadcastToActor(null, JSON.stringify({ type: MessageType.CF_AGENT_CHAT_CLEAR }));
   }
 
   /** Awaited ahead of `orch.beginTurn`: the turn is not in flight until these reads are back,

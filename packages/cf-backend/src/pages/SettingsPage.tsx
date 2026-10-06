@@ -18,7 +18,6 @@ import {
 import { executorLabel } from "@kinu.run/core";
 import type { AgentStatus, ConnectionStatus, WorkspaceNotice } from "@/hooks/use-kinu";
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
-import { Modal } from "@/components/ui/Modal";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -119,7 +118,6 @@ export interface SettingsSource {
   readonly agentStatus: AgentStatus | null;
   readonly error: WorkspaceNotice | null;
   readonly retryLoad: () => void;
-  readonly clearHistory: () => void;
 }
 
 function LogoField({ title, logo, rpc }: { title: string; logo: string | null | undefined; rpc: Rpc }) {
@@ -149,12 +147,12 @@ function LogoField({ title, logo, rpc }: { title: string; logo: string | null | 
   );
 }
 
-export function WorkspaceSettings({ workspace: agentId, title, logo, state }: {
-  workspace: string; title: string; logo: string | null | undefined; state: SettingsSource;
+/** `clearMain` asks the one Clear Main dialog the chat tab's × opens. */
+export function WorkspaceSettings({ workspace: agentId, title, logo, state, clearMain }: {
+  workspace: string; title: string; logo: string | null | undefined; state: SettingsSource; clearMain: () => void;
 }) {
   // Stable pieces only: `state` is a fresh object every render, and depending on it loops refetches that clobber edits.
-  const { rpc, connectionStatus, agentStatus, error: snapshotError, retryLoad, clearHistory } = state;
-  const [clearing, setClearing] = useState(false);
+  const { rpc, connectionStatus, agentStatus, error: snapshotError, retryLoad } = state;
 
   const displayName = useSettingField<string>();
   const soul = useSettingField<string>();
@@ -381,26 +379,11 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state }: {
         <Card title="Main's conversation" icon={ChatsCircleIcon}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="p-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
-            <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={() => setClearing(true)}>Clear history</Button>
+            <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={clearMain}>Clear history</Button>
           </div>
         </Card>
         </div>
       </div>
-      {clearing && (
-        <Modal
-          title="Clear conversation history"
-          icon={<TrashIcon size={18} className="p-danger" />}
-          onClose={() => setClearing(false)}
-          footer={<>
-            <Button size="sm" variant="ghost" onClick={() => setClearing(false)}>Cancel</Button>
-            <FilledButton danger onClick={() => { clearHistory(); setClearing(false); }}>Clear history</FilledButton>
-          </>}
-        >
-          <p className="text-xs p-text-2 leading-relaxed">
-            This cannot be undone. Memory, SOUL.md, learned tools, and evolution stay unchanged.
-          </p>
-        </Modal>
-      )}
     </div>
   );
 }

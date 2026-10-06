@@ -537,7 +537,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
         extensions,
         dynamic: { ledger: this.actorSession.dynamic, snapshot: () => this.actorSession.stepContext(dynamic, profile, this._preparedTools) },
         // The destination provider a cross-provider replay is re-keyed at.
-        destinationProviderId: this.promptModelContext().provider,
+        destination: { providerId: this.promptModelContext().provider, modelId: this.promptModelContext().id },
       },
       { stepNumber, messages: [...messages], steps: [] },
     );

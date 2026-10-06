@@ -298,6 +298,8 @@ export const SLEPT_TURN_ASK = 'Sleep probe: take your steps, then wait.';
 
 export const WATCHED_SLEPT_TURN_ASK = 'Watched sleep probe: take your steps, then wait mid-answer.';
 
+export const CLEARED_TURN_ASK = 'Clear probe: take your steps, then wait.';
+
 export const ANSWERED_TURN_ASK = 'Answer probe: take your steps, then wait.';
 
 export const WATCHED_ANSWER_TURN_ASK = 'Watched answer probe: take your steps, then wait.';

@@ -4,7 +4,7 @@ import type { LanguageModel } from 'ai';
 import { type ModelProvider, type ModelInfo, type ProviderDeps } from './types';
 import { authCacheKey, cloneModelInfos, settleModelList, StaleModelList } from './util';
 import { listModelsDevProviderModels } from './models-dev';
-import { ANTHROPIC_AUTHOR, createWireModel, gatewayOpenAIModel, OPENAI_AUTHOR } from './wire-model';
+import { createWireModel, gatewayWire, OPENAI_AUTHOR } from './wire-model';
 import { asFetchFunction } from './fetch-shim';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from './cloudflare-oauth';
 import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
@@ -120,20 +120,15 @@ export interface GatewayTransport {
   readonly headers?: Record<string, string>;
 }
 
-/** Each author's own API where the gateway serves one (`/responses`, `/messages`), else its unified chat API. */
 export function gatewayWireModel(name: string, modelId: string, transport: GatewayTransport): LanguageModel {
-  const own = gatewayOpenAIModel(modelId);
+  const wire = gatewayWire(modelId);
+  const send = transport.fetch ?? fetch;
+  const model = { name, ...transport, modelId: wire.modelId, protocol: wire.protocol, reasoning: false };
 
-  if (modelId.startsWith(ANTHROPIC_AUTHOR)) {
-    // The SDK reads limits by Anthropic's own id.
-    const claude = modelId.slice(ANTHROPIC_AUTHOR.length).replaceAll('.', '-');
+  // Each SDK names the model its own way; the gateway takes the authored id.
+  if (wire.protocol === 'messages') return createWireModel({ ...model, fetch: claudeForGateway(send, modelId) });
 
-    return createWireModel({ name, modelId: claude, ...transport, fetch: claudeForGateway(transport.fetch ?? fetch, modelId), protocol: 'messages', reasoning: false });
-  }
-
-  if (own === null) return createWireModel({ name, modelId, ...transport, protocol: 'chat-completions', reasoning: false });
-
-  return createWireModel({ name, modelId: own, ...transport, fetch: authored(transport.fetch ?? fetch), protocol: 'responses', reasoning: false });
+  return createWireModel(wire.protocol === 'responses' ? { ...model, fetch: authored(send) } : model);
 }
 
 const MessagesBodySchema = v.looseObject({ system: v.optional(v.array(v.looseObject({ text: v.string() }))) });

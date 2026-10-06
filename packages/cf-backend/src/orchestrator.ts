@@ -2124,7 +2124,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));
         this.stopSubtree(actorId);
       },
-      clear: async () => { await (await facet()).clear(snapshot()); },
     };
   }
 

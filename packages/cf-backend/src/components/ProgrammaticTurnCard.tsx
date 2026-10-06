@@ -52,6 +52,8 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
       type="button"
       onClick={() => setExpanded(!expanded)}
       className="w-full rounded-md px-2 py-2 text-left transition-colors hover:p-elevated"
+      data-drained-event={event.variant}
+      data-reply-expected={event.replyExpected || undefined}
     >
       <div className="flex items-center gap-1.5 p-row-text">
         <span className="shrink-0 font-medium p-text-2">{eventVariantLabel(event.variant)}</span>
@@ -174,15 +176,21 @@ function AdvisorCard({ severity, text, state }: {
   );
 }
 
-export function ProgrammaticTurnCard({ turn, text, state }: {
+interface TurnCardProps {
   turn: ClassifiedProgrammaticTurn; text: string; state: CardState;
-}) {
-  if (turn.kind === "workspace_created") return null;
+}
 
+/** The workspace's own opening turn is provenance and draws nothing; every other card says where its signal is. */
+export function ProgrammaticTurnCard(props: TurnCardProps) {
+  if (props.turn.kind === "workspace_created") return null;
+
+  return <div data-signal-card={props.state}><TurnCard {...props} /></div>;
+}
+
+function TurnCard({ turn, text, state }: TurnCardProps) {
   if (turn.kind === "background_job") {
     return <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />;
   }
-
 
   if (turn.kind === "deferred_approval") {
     return <DeferredApprovalCard decision={turn.decision} count={turn.count} state={state} />;

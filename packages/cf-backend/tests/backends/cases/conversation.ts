@@ -2,7 +2,7 @@ import { seedTranscriptEntry } from '@kinu.run/test-utils';
 /** The conversation itself: what the owner sends, and taking it back. */
 import { expect } from 'bun:test';
 import { Effect } from 'effect';
-import { CHAT_SESSION_ID, type ActorHandle, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
+import { CHAT_SESSION_ID, CLEAR_NEEDS_IDLE, type ActorHandle, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { SharedCase } from '../cases';
 
@@ -59,6 +59,24 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
       await surface.revertConversation('q-2');
       expect(await spoken(history)).toEqual([['user', 'Name the release.'], ['assistant', 'Aurora.']]);
       await expect(surface.revertConversation('q-9')).rejects.toThrow('conversation entry does not exist');
+    },
+  },
+  {
+    title: 'a clear while a turn runs is refused and keeps the conversation; once idle it empties it',
+    covers: ['clearConversation'],
+    async run({ surface, history, holdTurn }) {
+      await exchange(history, 'q-1', 'Name the release.', 'Aurora.');
+      const running = await holdTurn('Shorter.', 'build');
+
+      try {
+        await expect(surface.clearConversation()).rejects.toThrow(CLEAR_NEEDS_IDLE);
+        expect((await spoken(history)).slice(0, 2)).toEqual([['user', 'Name the release.'], ['assistant', 'Aurora.']]);
+      } finally {
+        await running.release();
+      }
+
+      await surface.clearConversation();
+      expect(await spoken(history)).toEqual([]);
     },
   },
   {

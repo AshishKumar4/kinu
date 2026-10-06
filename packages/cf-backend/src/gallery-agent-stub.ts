@@ -61,17 +61,24 @@ export function seededGalleryChatRows(): number {
 	return seededChats.get("")?.length ?? 0;
 }
 
-/** Only ids are read: a walk-back redraw names rows the client already holds and adds none. */
-const TranscriptFrameSchema = v.object({
-	type: v.literal("cf_agent_chat_messages"),
-	messages: v.array(v.looseObject({ id: v.string() })),
-});
+/** Only ids are read: a walk-back redraw names rows the client already holds and adds none; a clear empties them. */
+const TranscriptFrameSchema = v.variant("type", [
+	v.object({ type: v.literal("cf_agent_chat_messages"), messages: v.array(v.looseObject({ id: v.string() })) }),
+	v.object({ type: v.literal("cf_agent_chat_clear") }),
+]);
 
 const live = new Set<GalleryAgent>();
 
 /** Deliver one raw server frame to every open connection; parses nothing, so malformed frames can be pushed. */
 export function galleryServerPush(raw: string): void {
 	for (const agent of live) agent.deliver(raw);
+}
+
+/** As the server answers a clear: the chat at `path` is emptied, then every window on it is told to empty. */
+export function galleryClearChat(path: string): void {
+	seededChats.delete(path);
+
+	for (const agent of live) if (agent.path === path) agent.deliver(JSON.stringify({ type: "cf_agent_chat_clear" }));
 }
 
 /** A connection whose calls resolve from the frame fixture; terminal mode never opens. */
@@ -161,6 +168,13 @@ export function useAgentChat(options: { agent: GalleryAgent }) {
 				: null);
 
 			if (!frame.success) return;
+
+			if (frame.output.type === "cf_agent_chat_clear") {
+				setMessages([]);
+
+				return;
+			}
+
 			const named = new Set(frame.output.messages.map((message) => message.id));
 			setMessages((current) => current.filter((message) => named.has(message.id)));
 		};
@@ -182,7 +196,6 @@ export function useAgentChat(options: { agent: GalleryAgent }) {
 			return new Promise<void>(() => {});
 		},
 		regenerate: () => Promise.resolve(),
-		clearHistory: () => { setMessages([]); },
 		stop: () => {},
 		isStreaming: false as const,
 		status: "ready" as const,

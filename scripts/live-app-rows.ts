@@ -27,7 +27,7 @@ import {
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import {
   KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER,
-  ANSWERED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK,
+  ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK,
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
@@ -198,6 +198,7 @@ export interface TierVerdicts {
   chatScroll: ChatScrollVerdict | null;
   midThought: MidThoughtVerdict | null;
   droppedFile: DroppedFileVerdict | null;
+  cleared: ClearedVerdict | null;
   state: StateVerdict | null;
 }
 
@@ -1396,6 +1397,87 @@ async function measureDroppedFile(newPage: LiveApp['newPage'], origin: string): 
   }
 }
 
+/** Main's conversation as the page shows it, at each step of a clear. */
+interface ClearedVerdict {
+  /** The dialog's alert after Clear was pressed while a turn ran; null if the dialog closed without one. */
+  readonly refusal: string | null;
+  /** Whether the ask was still in the chat after the refusal, and after a reload once the turn had ended. */
+  readonly keptAfterRefusal: boolean;
+  readonly keptAfterReload: boolean;
+  /** Whether the dialog closed once the turn had ended, the ask gone as it closed, and still gone after a reload. */
+  readonly closedWhenIdle: boolean;
+  readonly emptiedWhenIdle: boolean;
+  readonly emptyAfterReload: boolean;
+}
+
+const CLEAR_ANSWERED = `document.querySelector('[role="dialog"] [role="alert"]') !== null || document.querySelector('[role="dialog"]') === null`;
+
+const CHAT_HOLDS_ASK = `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(CLEARED_TURN_ASK)})`;
+
+async function pressInDialog(page: Page, words: string): Promise<void> {
+  await page.$$eval('[role="dialog"] button', (buttons, label) => {
+    const button = buttons.find((each) => each.textContent?.trim() === label);
+
+    if (button instanceof HTMLElement) button.click();
+  }, words);
+}
+
+/** Presses Clear Main and Clear, and reads the dialog once the server has answered: its alert, or null once it
+ *  closed. A refused dialog is then cancelled, since a notice left standing ends every later wait. */
+async function pressClearMain(page: Page): Promise<string | null> {
+  await page.hover('nav[aria-label="Chats"] [data-agent-tab="main"] a');
+  await page.click('nav[aria-label="Chats"] [data-agent-tab="main"] button[aria-label="Clear Main"]');
+  await until(page, 'the Clear Main dialog', `document.querySelector('[role="dialog"]') !== null`);
+  await pressInDialog(page, 'Clear');
+  await page.waitForFunction(CLEAR_ANSWERED);
+  const refusal = v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] [role="alert"]')?.textContent ?? null`));
+
+  if (refusal !== null) {
+    await pressInDialog(page, 'Cancel');
+    await page.waitForFunction(`document.querySelector('[role="dialog"]') === null`);
+  }
+
+  return refusal;
+}
+
+/** Reloads and reads whether the chat holds the ask once the socket's transcript has come in. */
+async function reloadHoldsAsk(page: Page): Promise<boolean> {
+  await page.reload({ waitUntil: 'load' });
+  await until(page, 'the transcript after the reload', 'window.__transcripts > 0');
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+  await painted(page);
+
+  return v.parse(v.boolean(), await page.evaluate(CHAT_HOLDS_ASK));
+}
+
+/** Release-1 review F4: Clear Main while a turn runs is refused in its dialog and keeps every message, reload or not;
+ *  once the turn has ended it empties Main, and a reload finds it empty. */
+async function measureCleared(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<ClearedVerdict> {
+  const workspace = await createWorkspace(origin, { name: `live-row-clear-${RUN_ID}`, purpose: 'clear probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openRecorded(newPage, origin, workspace);
+
+  try {
+    await sendInChat(page, CLEARED_TURN_ASK);
+    await answerMidTurn(page);
+    const refusal = await pressClearMain(page);
+    const keptAfterRefusal = v.parse(v.boolean(), await page.evaluate(CHAT_HOLDS_ASK));
+
+    held.release();
+    await until(page, 'the turn to end', TURN_ANSWERED);
+    const keptAfterReload = await reloadHoldsAsk(page);
+    const closedWhenIdle = await pressClearMain(page) === null;
+
+    // The server's clear frame comes ahead of its answer on the one socket, so the chat is empty as the dialog closes.
+    await painted(page);
+    const emptiedWhenIdle = !v.parse(v.boolean(), await page.evaluate(CHAT_HOLDS_ASK));
+
+    return { refusal, keptAfterRefusal, keptAfterReload, closedWhenIdle, emptiedWhenIdle, emptyAfterReload: !await reloadHoldsAsk(page) };
+  } finally {
+    held.release();
+    await page.close();
+  }
+}
+
 /** Row 7: the run's own state directory, measured on the LOCAL server in both
  *  modes — the question is what the harness booted on, not what a deployment
  *  holds. The roster read goes through UserDO, so its namespace directory is
@@ -1414,7 +1496,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 /** A row a file can run, by the name its log line carries, in the order the suite ran them. */
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
-  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'state',
+  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -1436,7 +1518,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null, planTabs: null, geometry: null,
-    controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, state: null,
+    controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -1454,6 +1536,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const watchedSleptHeld = heldCall();
     const watchedAnswerHeld = heldCall();
     const unsentHeld = heldCall();
+    const clearedHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
 
     // The watched turn follows the answered one in its conversation, so it is matched first, by the latest ask.
@@ -1462,7 +1545,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
       ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
-      ?? unsentFirstTurn(request, unsentHeld)
+      ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
       ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
@@ -1492,6 +1575,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'chat-scroll': async () => { observed.chatScroll = await attempt('chat-scroll', () => measureChatScroll(newPage, origin)); },
         'mid-thought': async () => { observed.midThought = await attempt('mid-thought', () => measureMidThought(newPage, origin)); },
         'dropped-file': async () => { observed.droppedFile = await attempt('dropped-file', () => measureDroppedFile(newPage, origin)); },
+        'cleared': async () => { observed.cleared = await attempt('cleared', () => measureCleared(newPage, origin, clearedHeld)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
       };
 

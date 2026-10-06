@@ -6,6 +6,7 @@
 
 import type { AssistantContent, AssistantModelMessage, ModelMessage, ToolModelMessage } from 'ai';
 import { toolCallIdFor } from '../providers/tool-call-id';
+import { routeProtocol } from '../providers/wire-model';
 import { StableCopies } from './stable-copies';
 import * as v from 'valibot';
 
@@ -35,17 +36,24 @@ const AnthropicReasoningOptionsSchema = v.object({
 
 const replayed = new StableCopies();
 
+/** The provider and model a request goes to; the model decides the wire where the provider serves several. */
+export interface ReplayDestination {
+  readonly providerId?: string | undefined;
+  readonly modelId?: string | undefined;
+}
+
 export function normalizeReplayForDestination(
   messages: readonly ModelMessage[],
-  destinationProviderId: string | undefined,
+  destination: ReplayDestination | undefined,
 ): ModelMessage[] | undefined {
   // No resolved destination: preserve the prepare-step no-op contract.
-  if (!destinationProviderId) return undefined;
+  if (!destination?.providerId) return undefined;
   // One map spans every message so the result half cannot drift from its call.
   const ids = new Map<string, string>();
   let calls = 0;
   let changed = false;
-  const destinationIsAnthropic = destinationProviderId === 'anthropic' || destinationProviderId === 'claude';
+  // Signed reasoning goes back only over Anthropic's own Messages API, whoever relays it.
+  const destinationIsAnthropic = routeProtocol(destination.providerId, destination.modelId) === 'messages';
 
   const rekeyed = (callId: string): string | null => {
     const id = ids.get(callId);

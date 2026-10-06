@@ -1,4 +1,4 @@
-import { Effect, Cause } from 'effect';
+import { Effect } from 'effect';
 import { useState, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -12,10 +12,11 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
+import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc } from "@kinu.run/core";
 import * as v from "valibot";
-import { renderThrownChain, showing, detach } from '@kinu.run/core/obs';
+import { showing, detach } from '@kinu.run/core/obs';
 
 const TriggerRowSchema = v.object({
   id: v.string(),
@@ -40,7 +41,6 @@ const AuthModeSchema = v.picklist(["hmac", "bearer", "mtls"]);
 export function WorkspaceAutomations({ rpc, workspace }: { rpc: Rpc; workspace: string }) {
   const [showCreate, setShowCreate] = useState(false);
   const [created, setCreated] = useState<CreateWebhookResult | null>(null);
-  const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const result = await rpc("listTriggers", []);
@@ -51,15 +51,12 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: Rpc; workspace: 
   const { resource, reload } = useAsyncResource(load);
   const triggers = lastValue(resource);
 
-  const revoke = useCallback((triggerId: string) => detach(Effect.gen(function* () {
-    if (!confirm("Revoke this automation? It stops firing, and a webhook's URL stops working.")) return;
-    setErr(null);
+  const { ask, dialog } = useConfirmation();
 
-    yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => cancelTrigger(workspace, triggerId)); }), (failed) => Effect.sync(() => {
-      const e = Cause.squash(failed); setErr(renderThrownChain({ cause: e })); }));
-
-    reload();
-  })), [workspace, reload]);
+  const revoke = useCallback((triggerId: string) => ask({
+    title: "Revoke this automation?", body: "It stops firing, and a webhook's URL stops working.", action: "Revoke",
+    failed: "Could not revoke it", run: async () => { await cancelTrigger(workspace, triggerId); reload(); },
+  }), [ask, workspace, reload]);
 
   const active = (triggers ?? []).filter((t) => t.state === "active").length;
 
@@ -70,6 +67,7 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: Rpc; workspace: 
 
   return (
     <section className="min-w-0">
+      {dialog}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <LightningIcon size={16} className="p-accent" />
         <h2 className="text-sm font-semibold p-text">Automations</h2>
@@ -79,7 +77,6 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: Rpc; workspace: 
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>
       </div>
       <p className="text-xs p-text-3 mb-3">Webhooks and timers: what wakes this workspace's agent from outside.</p>
-      {err && <div className="text-xs p-danger mb-2">{err}</div>}
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
       {triggers === null && (resource.status === "error"
         ? <LoadFailure what="automations" message={resource.message} onRetry={reload} />
@@ -233,6 +230,15 @@ export function NewWebhookCard({ result, onDismiss }: {
 }
 
 /* Creating a webhook requires a fresh (≤5 min) Kinu session; the step-up 401 sends the user through login and back. */
+/** Back through sign-in to this page, for a step that needs a fresh one. */
+function signInAgain(): void {
+  const login = new URL("/login", window.location.origin);
+
+  login.searchParams.set("prompt", "login");
+  login.searchParams.set("return_to", window.location.pathname + window.location.search);
+  window.location.href = login.toString();
+}
+
 export function CreateWebhookModal({ agentName, onClose, onCreated }: {
   agentName: string;
   onClose: () => void;
@@ -243,6 +249,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
   const [secret, setSecret] = useState("");
   const [contentType, setContentType] = useState("application/json");
   const [submitting, setSubmitting] = useState(false);
+  const [stepUp, setStepUp] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const submit = useCallback(() => detach(Effect.gen(function* () {
@@ -266,12 +273,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
       onCreated(r);
     }), showing((msg) => {
       if (msg.includes("step-up")) {
-        if (confirm("Creating a webhook needs a sign-in from the last five minutes. Sign in again now?")) {
-          const login = new URL("/login", window.location.origin);
-          login.searchParams.set("prompt", "login");
-          login.searchParams.set("return_to", window.location.pathname + window.location.search);
-          window.location.href = login.toString();
-        }
+        setStepUp(true);
       } else {
         setErr(msg);
       }
@@ -322,6 +324,12 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
         </label>
       </div>
       {err && <div className="text-xs p-danger">{err}</div>}
+      {stepUp && (
+        <div role="status" className="flex items-center gap-2 text-xs p-text-2">
+          <span className="min-w-0 flex-1">Creating a webhook needs a sign-in from the last five minutes.</span>
+          <Button size="sm" variant="secondary" onClick={signInAgain}>Sign in again</Button>
+        </div>
+      )}
       <p className="p-meta p-text-3 flex items-start gap-1.5">
         <WarningIcon size={11} className="mt-0.5 shrink-0" />
         <span>Creating a webhook needs a sign-in from the last five minutes. Sign in again if it fails.</span>

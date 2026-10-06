@@ -40,7 +40,6 @@ export interface ChatWire {
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
   retry(claim: (turnId: string) => void): Promise<SendLanding>;
   interrupt(): void;
-  clear(): Promise<void>;
 }
 
 export interface ChatRoom {
@@ -319,14 +318,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         return;
 
-      case 'clear': {
-        this.pendingResume.clear();
-        await this.wire.clear();
-        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_CLEAR }), [connection.id]);
-
-        return;
-      }
-
+      // The SDK's clear is a frame with no answer; Main's Clear is the `clearConversation` RPC, refused while a turn runs.
+      case 'clear':
       case 'tool-result':
       case 'tool-approval':
       case 'messages':

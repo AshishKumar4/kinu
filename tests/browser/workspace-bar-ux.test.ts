@@ -146,6 +146,47 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     });
   });
 
+  // Release-1 review F4: the clear was a frame nobody answered, so a refused one closed the dialog and the messages came
+  // back on reload. It is answered now, from the tab and from Settings alike.
+  test('Settings asks the tab\'s own Clear Main, and a clear the server refuses stays in the dialog over every message', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openWorkspacePage(newPage, origin, '&transcript=revert&clear=refused');
+      const main = `${CHATS} [data-agent-tab="main"]`;
+      const chatText = () => page.$eval('#chat', (column) => column.textContent ?? '');
+
+      await page.waitForFunction(() => (document.querySelector('#chat')?.textContent ?? '').length > 300);
+      const before = await chatText();
+
+      await page.hover(`${main} a`);
+      await page.click(`${main} button[aria-label="Clear Main"]`);
+      await page.waitForSelector('[role="dialog"]');
+      const asked = await page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '');
+
+      expect(await clearRefused(page)).toBe(true);
+      expect(await chatText()).toBe(before);
+      await clickDialogButton(page, 'Cancel');
+
+      expect(await clearFromSettings(page)).toBe(asked);
+      expect(await clearRefused(page)).toBe(true);
+      await clickDialogButton(page, 'Cancel');
+      await page.click(`${main} a`);
+      await page.waitForFunction((was) => document.querySelector('#chat')?.textContent === was, {}, before);
+
+      // Answered, the same press from Settings empties Main.
+      const answered = await openWorkspacePage(newPage, origin, '&transcript=revert');
+
+      await answered.waitForFunction(() => (document.querySelector('#chat')?.textContent ?? '').length > 300);
+      const full = await answered.$eval('#chat', (column) => column.textContent ?? '');
+
+      await clearFromSettings(answered);
+      await clickDialogButton(answered, 'Clear');
+      await answered.click(`${main} a`);
+      await answered.waitForFunction((was) => (document.querySelector('#chat')?.textContent ?? '').length < was * 0.6, {}, full.length);
+      await answered.close();
+      await page.close();
+    });
+  });
+
   test('Main takes a title of its own, which its tab shows', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
@@ -348,14 +389,36 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
 });
 
 /** Presses a dialog's button by its words. */
-async function clickDialogButton(page: Page, words: string): Promise<void> {
+async function pressInDialog(page: Page, words: string): Promise<void> {
   await page.evaluate((label) => {
     const button = [...document.querySelectorAll('[role="dialog"] button')].find((node) => (node.textContent ?? '').trim() === label);
 
     if (!(button instanceof HTMLButtonElement)) throw new Error(`${label} absent in the dialog`);
     button.click();
   }, words);
+}
+
+async function clickDialogButton(page: Page, words: string): Promise<void> {
+  await pressInDialog(page, words);
   await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
+}
+
+/** Presses Clear and waits for the answer: whether the dialog stayed open over the server's refusal. */
+async function clearRefused(page: Page): Promise<boolean> {
+  await pressInDialog(page, 'Clear');
+  await page.waitForFunction(() => document.querySelector('[role="dialog"] [role="alert"]') !== null || document.querySelector('[role="dialog"]') === null);
+
+  return page.evaluate(() => document.querySelector('[role="dialog"] [role="alert"]') !== null);
+}
+
+/** Settings' own Clear history button, which asks what the tab's × asks. */
+async function clearFromSettings(page: Page): Promise<string> {
+  await page.click('a[aria-label="Workspace settings"]');
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === 'Clear history'));
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Clear history')?.click());
+  await page.waitForSelector('[role="dialog"]');
+
+  return page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '');
 }
 
 

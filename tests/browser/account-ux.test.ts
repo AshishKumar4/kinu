@@ -680,3 +680,59 @@ describe('account panels', () => {
     });
   });
 });
+
+/** A machine's Sandbox switch is its setting: turning it off drops the GPU line and survives a reload, and a machine
+ *  linked from / cannot claim a sandbox it does not have. */
+describe('a machine\'s Sandbox switch on the Devices page', () => {
+  test('it turns off, takes the GPU with it, stays off after a reload; a whole-machine link cannot turn it on', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'devices', 'dark', 'desktop');
+      const workstation = 'button[role="switch"][aria-label="Sandbox on Workstation"]';
+
+      const row = () => page.$eval(workstation, (button) => ({
+        on: button.getAttribute('aria-checked'),
+        gpu: (button.closest('li, [data-device]') ?? button.parentElement?.parentElement?.parentElement)?.textContent?.includes('GPU:') ?? false,
+      }));
+
+      try {
+        await page.evaluate(() => localStorage.removeItem('gallery-device-tier'));
+        await page.reload({ waitUntil: 'load' });
+        await page.waitForSelector(workstation);
+        expect(await row()).toEqual({ on: 'true', gpu: true });
+
+        // Turning it off is asked first, in the page: the agent would run as the person, with full access.
+        await page.click(workstation);
+        await page.waitForSelector('[role="dialog"]');
+        expect(await page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '')).toContain('full access');
+        await clickByText(page, '[role="dialog"] button', 'Turn off');
+        await page.waitForFunction((at) => document.querySelector(at)?.getAttribute('aria-checked') === 'false', {}, workstation);
+        expect(await row()).toEqual({ on: 'false', gpu: false });
+
+        await page.reload({ waitUntil: 'load' });
+        await page.waitForSelector(workstation);
+        expect((await row()).on).toBe('false');
+
+        expect(await page.$eval('button[role="switch"][aria-label="Sandbox on Owner laptop"]', (button) => button instanceof HTMLButtonElement && button.disabled)).toBe(true);
+      } finally {
+        await page.evaluate(() => localStorage.removeItem('gallery-device-tier'));
+        await page.close();
+      }
+    });
+  });
+});
+
+describe('what the Devices page says about a machine\'s history', () => {
+  test('a refused update names its reason, and a machine listed before sandboxes were recorded still lists, switch on', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'devices&devices=history', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('button[role="switch"][aria-label="Sandbox on Old box"]');
+        expect(await page.evaluate(() => document.body.innerText)).toContain('Bun 1.4.2 install failed: permission denied');
+        expect(await page.$eval('button[role="switch"][aria-label="Sandbox on Old box"]', (button) => button.getAttribute('aria-checked'))).toBe('true');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+});
