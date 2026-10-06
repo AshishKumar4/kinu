@@ -46,7 +46,7 @@ import { renderToolResult, synthesizeToolFallback } from './utils/evidence-windo
 import * as v from 'valibot';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
 import { answeredPromptTokens, normalizeUsage, usageReported, type Usage } from './usage';
-import { PROVIDER_RETRIES_HEADER } from './providers/rate-limit-retry';
+import { PROVIDER_RETRIES_HEADER, PROVIDER_STREAM_HEADER } from './providers/rate-limit-retry';
 import type { FallbackCooldowns } from './providers/fallback-cooldown';
 import { FallbackRoute, type CallFailure } from './providers/fallback-route';
 import { callAccountOf, type CallAccount } from './providers/quota';
@@ -875,7 +875,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
       experimental_repairToolCall: repairToolCall(),
       abortSignal: signal,
-      headers: { [PROVIDER_RETRIES_HEADER]: String(route.callRetries) },
+      headers: { [PROVIDER_RETRIES_HEADER]: String(route.callRetries), [PROVIDER_STREAM_HEADER]: '1' },
       include: { requestBody: false },
       // The SDK default console.error dumped raw provider payloads; the rethrow below is the one place failures read.
       onError: ({ error }) => { call.streamError = error; },

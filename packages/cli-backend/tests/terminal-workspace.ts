@@ -20,6 +20,8 @@ const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 /** The workspace over the named database file, in a fresh folder; a child process reopens the same file. */
 export function openTerminalWorkspace(dbPath: string) {
   const db = new Database(dbPath);
+  // As `kinu create` publishes one: in WAL a commit waits on no fsync, so a turn's many small writes cost no disk flush.
+  db.exec('PRAGMA journal_mode = WAL');
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   initSearchTables(rt.storage.execRaw);

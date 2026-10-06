@@ -53,7 +53,7 @@ function activityEvents(db: Database): string[] {
 describe('the workspace takes its own first turn', () => {
   test('a mission becomes a queued agent turn with no user input', async () => {
     const harness = orchestratorHarness();
-    seedMission(harness.db, MISSION);
+    await seedMission(harness, MISSION);
     const turns = chatSessionTurns(harness.agent);
     const next = turns.park();
 
@@ -73,7 +73,7 @@ describe('the workspace takes its own first turn', () => {
 
   test('the mission is not quoted into the turn — it is already the system prompt', async () => {
     const harness = orchestratorHarness();
-    seedMission(harness.db, MISSION);
+    await seedMission(harness, MISSION);
     const turns = chatSessionTurns(harness.agent);
     const next = turns.park();
 
@@ -89,7 +89,7 @@ describe('the workspace takes its own first turn', () => {
 
   test('a workspace created without a mission gets no turn to take', async () => {
     const harness = orchestratorHarness();
-    seedMission(harness.db, PLACEHOLDER_MISSION);
+    await seedMission(harness, PLACEHOLDER_MISSION);
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: false });
     expect((await turnsRun(harness))).toEqual([]);
@@ -98,7 +98,7 @@ describe('the workspace takes its own first turn', () => {
 
   test('creation does not wait for the turn it started', async () => {
     const harness = orchestratorHarness();
-    seedMission(harness.db, MISSION);
+    await seedMission(harness, MISSION);
     const turns = chatSessionTurns(harness.agent);
     const next = turns.park();
 
@@ -112,7 +112,7 @@ describe('the workspace takes its own first turn', () => {
 
   test('a message admitted before the genesis slot opens IS the first turn', async () => {
     const harness = orchestratorHarness();
-    seedMission(harness.db, MISSION);
+    await seedMission(harness, MISSION);
     const { promise: cardWithdrawn, resolve: cardGone } = Promise.withResolvers<void>();
 
     Reflect.set(harness.agent, 'broadcast', (payload: string) => {
@@ -143,7 +143,7 @@ describe('the workspace takes its own first turn', () => {
 
   test('a workspace with nobody speaking runs the offer as its first turn', async () => {
     const harness = orchestratorHarness();
-    seedMission(harness.db, MISSION);
+    await seedMission(harness, MISSION);
     const turns = chatSessionTurns(harness.agent);
     const next = turns.park();
 
@@ -161,7 +161,7 @@ describe('the workspace takes its own first turn', () => {
 
   test('an owner prompt sent while the start measure holds the first turn rides genesis, never replaces it', async () => {
     const harness = orchestratorHarness();
-    seedMission(harness.db, MISSION);
+    await seedMission(harness, MISSION);
     const turns = chatSessionTurns(harness.agent);
     const held = Promise.withResolvers<void>();
     // The start measure is held open; genesis and the prompt both arrive inside it.
@@ -185,7 +185,7 @@ describe('the workspace takes its own first turn', () => {
 
   test('a message admitted after the genesis slot opened is the next turn', async () => {
     const harness = orchestratorHarness();
-    seedMission(harness.db, MISSION);
+    await seedMission(harness, MISSION);
     const turns = chatSessionTurns(harness.agent);
     const genesis = turns.park();
 

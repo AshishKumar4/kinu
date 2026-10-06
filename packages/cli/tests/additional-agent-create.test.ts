@@ -12,11 +12,11 @@ describe('local additional-agent creation', () => {
   test('inherits the stored placeholder mission when the workspace has no custom mission', async () => {
     // config.ts binds KINU_HOME at module load; a subprocess makes the isolated home authoritative.
     const scenario = `
-      import { Database } from 'bun:sqlite';
       import { createCliAgent, createLocalPeerAgent } from './packages/cli/src/agent-create.ts';
       import { agentDbPath } from './packages/cli/src/config.ts';
-      import { makeSql } from './packages/cli-backend/src/index.ts';
-      import { readMission } from './packages/core/src/index.ts';
+      import { soulIn } from './packages/cli-backend/src/index.ts';
+      import { missionOf } from './packages/core/src/index.ts';
+      import { dirname } from 'node:path';
       await createCliAgent({
         name: 'workspace-root', displayName: 'Workspace root', nameOrigin: 'auto',
         purpose: 'Help the user with the work they assign.', mode: 'local',
@@ -25,9 +25,7 @@ describe('local additional-agent creation', () => {
       const created = await createLocalPeerAgent({
         cwd: ${JSON.stringify(PROJECT)}, workspaceId: 'placeholder-workspace',
       });
-      const db = new Database(agentDbPath(created.name), { readonly: true });
-      console.log(readMission(makeSql(db)));
-      db.close();
+      console.log(missionOf(soulIn(dirname(agentDbPath(created.name)))));
     `;
 
     const result = await runToExit(['bun', '-e', scenario], {

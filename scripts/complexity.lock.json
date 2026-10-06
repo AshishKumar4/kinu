@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-06",
-  "files": 3003,
-  "functions": 78314,
+  "files": 2997,
+  "functions": 78258,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -319,10 +319,6 @@
     },
     {
       "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
-      "complexity": 27
-    },
-    {
-      "key": "packages/cf-backend/tests/workerd/fork-probe.ts#ForkSourceProbeDO.deliver",
       "complexity": 27
     },
     {

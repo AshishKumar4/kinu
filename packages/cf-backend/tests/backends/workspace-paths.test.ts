@@ -33,7 +33,7 @@ async function publicPlane(name: 'cf' | 'cli') {
         await files.writeFile(path, new TextEncoder().encode(text));
       },
       // The own home is the Nimbus tree's, and a relative path starts there.
-      home: '/home/main', workdir: '/home/main',
+      home: '/home/main', workdir: '/home/main', space: '',
       hostFile: null,
     };
   }
@@ -46,6 +46,8 @@ async function publicPlane(name: 'cf' | 'cli') {
   mkdirSync(space);
 
   const db = new Database(join(space, 'agent.db'));
+  // As `kinu create` publishes one: in WAL a commit waits on no fsync.
+  db.exec('PRAGMA journal_mode = WAL');
   const rt = createCLIRuntime(db, { llm: null, cwd });
 
   return {
@@ -62,7 +64,7 @@ async function publicPlane(name: 'cf' | 'cli') {
     shell: present(rt.shell, 'the local shell'),
     write: async (path: string, text: string) => { await rt.storage.vfs.writeFile(path, new TextEncoder().encode(text)); },
     end: () => db.close(),
-    home: join(space, 'home', 'main'), workdir: cwd,
+    home: join(space, 'home', 'main'), workdir: cwd, space,
     hostFile: (path: string) => readFileSync(path, 'utf8'),
   };
 }
@@ -73,23 +75,24 @@ for (const name of testBackends()) {
       const plane = await publicPlane(name);
 
       try {
-        await plane.write('/home/main/notes/item.txt', 'one');
+        // The home's own path: `/home/main` on the cloud, its real directory locally, as each one's shell names it.
+        const home = plane.home.replace(/^\//u, '');
+        await plane.write(`${plane.home}/notes/item.txt`, 'one');
 
         for (const path of [
-          '/home/main/notes/item.txt', '/home//main/notes/item.txt', '/home/main/notes/./item.txt', '/home/main/notes/item.txt/',
-          `${plane.home}/notes/item.txt`,
+          `${plane.home}/notes/item.txt`, `/${home.replace('/', '//')}/notes/item.txt`, `${plane.home}/notes/./item.txt`, `${plane.home}/notes/item.txt/`,
         ]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
 
         await plane.write(`${plane.home}/notes/./item.txt`, 'two');
-        expect(await plane.read('/home/main/notes/item.txt')).toMatchObject({ content: 'two' });
+        expect(await plane.read(`${plane.home}/notes/item.txt`)).toMatchObject({ content: 'two' });
+        // `vfs://` names it on both, as the file tool prints it.
+        expect(await plane.file({ action: 'read', path: 'vfs://home/main/notes/item.txt' })).toContain('two');
 
         if (plane.hostFile !== null) expect(plane.hostFile(`${plane.home}/notes/item.txt`)).toBe('two');
 
-        for (const path of ['/home/main/', `${plane.home}/`]) {
-          expect((await plane.list(path)).map((entry) => entry.name)).toContain('notes');
-        }
+        expect((await plane.list(`${plane.home}/`)).map((entry) => entry.name)).toContain('notes');
 
         expect((await plane.read('/workspace/notes/item.txt')).error).toBeDefined();
       } finally {
@@ -102,13 +105,13 @@ for (const name of testBackends()) {
 
       try {
         await plane.write('item.txt', 'one');
-        await plane.write('/slates/project/item.txt', 'slate');
+        await plane.write(`${plane.space}/slates/project/item.txt`, 'slate');
 
         for (const path of ['./item.txt', './dir/../item.txt', `${plane.workdir}/x/../item.txt`, `${plane.workdir}//./item.txt`]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
 
-        expect(await plane.read('/home/main/../../slates/project/./item.txt')).toMatchObject({ content: 'slate' });
+        expect(await plane.read(`${plane.home}/../../slates/project/./item.txt`)).toMatchObject({ content: 'slate' });
 
         if (plane.hostFile !== null) {
           expect(plane.hostFile(`${plane.workdir}/item.txt`)).toBe('one');
@@ -176,9 +179,11 @@ for (const name of testBackends()) {
         await plane.write('shared/item.txt', 'local shared spelling');
         expect(await plane.read('pc/studio/item.txt')).toMatchObject({ content: 'local device spelling' });
         expect(await plane.read('shared/item.txt')).toMatchObject({ content: 'local shared spelling' });
-        expect((await plane.read('/shared/item.txt')).error).toContain('ENXIO');
         // `..` climbs lexically on both backends, as POSIX does: out of a mount it lands beside the mount point.
         expect((await plane.read('/shared/../item.txt')).error).toContain('no such file or directory');
+
+        // Locally the owner's Drive is never bound, so `/shared` is no mount: a path there is only absent.
+        expect((await plane.read('/shared/item.txt')).error).toContain(name === 'cf' ? 'ENXIO' : 'no such file or directory');
 
         if (name === 'cf') {
           expect((await plane.read('/pc/studio/item.txt')).error).toContain('ENXIO');

@@ -492,7 +492,7 @@ describe('the workspace shell on a machine confined to one directory', () => {
     router.register(provider);
     const bundle = createWorkspaceBundle(new Database(':memory:'));
 
-    bundle.mountTable(withMountTable(bundle.vfs, standardMounts((name) => router.getProvider(name))));
+    bundle.mountTable(standardMounts((name) => router.getProvider(name)));
 
     return bundle.shell;
   }

@@ -52,7 +52,8 @@ import {
   type RenderSection,
 } from './prompting/section-templates';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
-import { DEVICE_PREFIX, VFS_PREFIX, type PathPlanes } from './vfs/resolve';
+import { DEVICE_PREFIX, VFS_PREFIX, realPath, type PathPlanes } from './vfs/resolve';
+import { SKILLS_VIEW, WORKSPACE_SKILLS_DIR } from './skills/types';
 import { PLATFORM_CATALOG } from './platform-catalog';
 import { sandboxSizeLabel } from './execution/sandbox';
 import type { SandboxSizes } from './execution/types';
@@ -223,8 +224,13 @@ function renderPlanesSection(planes: PathPlanes, render: RenderSection): string 
     : `\`${row.prefix}://\` is ${long(row.subtree)}`));
 
   const mounts = planes.mounts.map((mount) => `${long(mount.subtree)} is \`${mount.at}\``);
+  const views = planes.views.map((name) => long(name));
+  // Only a view's own plane has a real directory for what it lists; the skills view lists the workspace's own too.
+  const ownSkills = planes.views.includes(SKILLS_VIEW.slice(1)) ? realPath(WORKSPACE_SKILLS_DIR, planes) : '';
 
-  return render(PLANES_SECTION, { aliases: listed(aliases), mounts: listed(mounts) });
+  return render(PLANES_SECTION, {
+    aliases: listed(aliases), mounts: listed(mounts), views: listed(views), hasViews: views.length > 0, ownSkills, hasOwnSkills: ownSkills !== '',
+  });
 }
 
 function listed(items: readonly string[]): string {

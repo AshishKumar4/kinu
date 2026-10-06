@@ -68,7 +68,7 @@ function fileToolOverTheFleet(written: JsonValue = { success: true }, gated = fa
   const plane = withMountTable(rt.storage.vfs, standardMounts((name) => router.getProvider(name)));
 
   const toolFiles = gated
-    ? withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, OWNER_ALLOWS)
+    ? withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow) => plane.resolve(path, { follow }), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, OWNER_ALLOWS)
     : plane;
 
   const tools = buildBuiltinTools({

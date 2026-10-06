@@ -55,8 +55,8 @@ describe('a fork transfer interrupted by a real eviction', () => {
 
     const files = await source(name).deliver({ target: name, from: rows.position, stop: 'commit' });
     expect(files.refusal).toBeNull();
-    // SOUL.md, then the one import (memory): its page is wanted first, then taken after its chunks.
-    expect(files.wanted).toBe(1);
+    // Two imports, SOUL.md and memory: each page is wanted first, then taken after its chunks.
+    expect(files.wanted).toBe(2);
     expect(files.staged).toBe(files.sent - files.wanted);
 
     const beforeCommit = await target(name).state();
@@ -64,7 +64,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(beforeCommit.lineage).toBeNull();
     expect(beforeCommit.markers).toBe(0);
     expect(beforeCommit.displayName).toBeNull();
-    // The mission is read off the soul, so it is the fork's from the moment its SOUL.md lands.
+    // The mission is read off SOUL.md, so it is the fork's from the moment that file lands.
     expect(beforeCommit.identity?.mission).toBe(PROBE_SOUL_MISSION);
     expect(await target(name).cursor()).toMatchObject({
       expectedSeq: files.nextSeq, stream: files.stream, published: false, importing: null,

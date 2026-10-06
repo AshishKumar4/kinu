@@ -779,8 +779,10 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
 
 describe('a head reports the files IT changed, with concurrent siblings on the same plane', () => {
   test('two heads writing at the same time do not smear into each other', async () => {
+    const parent = makeParent();
+
     const runtime = createCLIHeadRuntime(headDeps(
-      sharedWorkspaceProbeModel(barrier(2, () => {})),
+      sharedWorkspaceProbeModel(barrier(2, () => {})), { parentRuntime: parent },
     ));
 
     const [alpha, beta] = await Promise.all([
@@ -788,11 +790,12 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
       (await runtime.spawnHead(aHeadInput({ id: 'beta', task: 'beta' }))).run(),
     ]);
 
+    // Each change is named where it landed, as the parent's shell names it.
     expect(alpha.fileChanges).toEqual([
-      { path: 'alpha.ts', status: 'added', added: 3, removed: 0 },
+      { path: join(parent.cwd, 'alpha.ts'), status: 'added', added: 3, removed: 0 },
     ]);
     expect(beta.fileChanges).toEqual([
-      { path: 'beta.ts', status: 'added', added: 3, removed: 0 },
+      { path: join(parent.cwd, 'beta.ts'), status: 'added', added: 3, removed: 0 },
     ]);
   });
 

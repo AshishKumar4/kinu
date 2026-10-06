@@ -2121,15 +2121,11 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
   });
 
   test('a custom SOUL.md reaches the model request, re-read each turn', async () => {
-    // The soul is read per turn from its row, so an owner edit lands next request.
+    // SOUL.md is read per turn from its file, so an edit lands next request.
     const { db, rt } = workspaceRuntime();
+    const edit = (markdown: string): Promise<void> => writeText(rt.ownFiles, '/home/main/SOUL.md', markdown);
 
-    const ownerEdit = (markdown: string): void => {
-      db.exec('CREATE TABLE IF NOT EXISTS workspace_soul (id INTEGER PRIMARY KEY CHECK (id = 1), markdown TEXT NOT NULL)');
-      db.prepare('INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown').run(markdown);
-    };
-
-    ownerEdit('# Soul\n\nYou are Atlas. Hold the owner\'s stated intent above the letter of the ask.');
+    await edit('# Soul\n\nYou are Atlas. Hold the owner\'s stated intent above the letter of the ask.');
     let system = '';
 
     rt.actor.config.setLearning(false);
@@ -2142,7 +2138,7 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
     await session.send('first turn', { id: crypto.randomUUID() });
     expect(system).toContain('You are Atlas.');
 
-    ownerEdit('# Soul\n\nYou are Rhea. Prefer deleting code over adding it.');
+    await edit('# Soul\n\nYou are Rhea. Prefer deleting code over adding it.');
     await session.send('second turn', { id: crypto.randomUUID() });
     expect(system).toContain('You are Rhea.');
     expect(system).not.toContain('You are Atlas.');
@@ -2235,7 +2231,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
       return { stream: new ReadableStream<LanguageModelV2StreamPart>({
         start(controller) {
           controller.enqueue({ type: 'stream-start', warnings: [] });
-          controller.enqueue({ type: 'tool-call', toolCallId: 'file-' + current, toolName: 'file', input: JSON.stringify({ action: 'write', path: '/home/main/queued-build.txt', content: 'authorized Build' }) });
+          controller.enqueue({ type: 'tool-call', toolCallId: 'file-' + current, toolName: 'file', input: JSON.stringify({ action: 'write', path: 'vfs://home/main/queued-build.txt', content: 'authorized Build' }) });
           controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 } });
           controller.close();
         },
@@ -2251,7 +2247,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
   release.resolve();
   await plan;
   await session.send('Now implement the change.', { id: crypto.randomUUID() });
-  expect(await readText(rt.storage.vfs, '/home/main/queued-build.txt')).toBe('authorized Build');
+  expect(await readText(rt.ownFiles, '/home/main/queued-build.txt')).toBe('authorized Build');
   const writes = events.items.filter((event) => event.type === 'tool-result' && event.toolName === 'file');
   expect(writes).toHaveLength(2);
   expect(writes[0]).toMatchObject({ success: false, reason: 'denied' });

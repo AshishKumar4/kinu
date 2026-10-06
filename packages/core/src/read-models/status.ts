@@ -5,7 +5,7 @@ import { getCurrentScaffoldVersion } from '../scaffold/versions';
 import { readSessionTranscript, type SessionTranscriptReader } from '../session/transcript';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
-import { missionOf, soulReadsSql } from '../identity/soul';
+import { missionOf } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
 import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
 import type { CraftStore } from '../types/agent-runtime';
@@ -42,6 +42,8 @@ export interface ToolListEntry {
 
 export interface AgentStatusDeps {
   readonly sql: SqlExecutor;
+  /** SOUL.md, whose mission the status names. */
+  readonly soul: () => Promise<string | null>;
   /** The scaffold pointer is per-actor, so the status reports this actor's version. */
   readonly actor: ActorHandle;
   /** The spec the next turn runs (claimed tier's model, else the stored spec); never the stored override
@@ -61,8 +63,8 @@ function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
 export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus> {
   const { sql, actor } = deps;
   actor.assertCurrent();
-  const reads = soulReadsSql(sql);
-  const purpose = missionOf(reads.soul) ?? '';
+  const soul = await deps.soul();
+  const purpose = missionOf(soul) ?? '';
 
   const identity = sql<{ name: string; created_at: number }>`
     SELECT name, created_at FROM workspace_identity LIMIT 1`;
@@ -78,7 +80,7 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     name: identity[0]?.name ?? deps.name,
     displayName: deps.displayName,
     purpose,
-    soul: reads.soul ?? '',
+    soul: soul ?? '',
     createdAt: identity[0]?.created_at ?? 0,
     scaffoldVersion: getCurrentScaffoldVersion(sql, actor) ?? 0,
     searchNodeCount: searchNodes[0]?.c ?? 0,

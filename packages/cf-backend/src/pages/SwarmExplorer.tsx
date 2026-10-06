@@ -192,10 +192,10 @@ function ExplorerBody({
       </div>
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-5 py-2.5 border-t p-border">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
-          <span className="p-text-2">Branches: <span className="p-text font-medium">{Math.max(0, (stats?.nodes ?? 1) - 1)}</span></span>
-          <span className="p-text-2">Depth: <span className="p-text font-medium">{stats?.depth ?? 0}</span></span>
+          <span className="p-text-2">Branches: <span className="p-text font-medium" data-tree-branches>{Math.max(0, (stats?.nodes ?? 1) - 1)}</span></span>
+          <span className="p-text-2">Depth: <span className="p-text font-medium" data-tree-depth>{stats?.depth ?? 0}</span></span>
           {winner?.value != null && (
-            <span className="p-text-2">Winner: <span className="p-success font-medium">{formatScore(winner.value)}</span></span>
+            <span className="p-text-2">Winner: <span className="p-success font-medium" data-tree-winner>{formatScore(winner.value)}</span></span>
           )}
           {frontier !== null && (
             <span className="p-text-2">Front: <span className="p-text font-medium">{frontier.candidates.length} {frontier.candidates.length === 1 ? "candidate" : "candidates"}</span></span>

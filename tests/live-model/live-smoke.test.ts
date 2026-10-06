@@ -49,7 +49,7 @@ import { initWorkspaceSchema, openWorkspaceMainActor, type LLMProviderConfig } f
 import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { LocalAgentSession, type SessionEvent } from '../../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
+import { makeSql, makeWorkspaceSchemaSql, workspaceHome } from '../../packages/cli-backend/src/runtime';
 import {
   ActivitySpendSchema, callAgentRpc, createCloudAgent, deleteCloudAgent,
 } from '../../packages/cli/src/cloud-api';
@@ -506,6 +506,7 @@ describe('Live Smoke — one real turn per backend', () => {
         name: 'live-smoke',
         purpose: 'A precise assistant that uses its tools rather than answering from memory.',
         llm: LLM_CONFIG,
+        home: workspaceHome(db),
       });
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
       // The episode's own scratch folder, for the reason tests/live-model/harness.ts

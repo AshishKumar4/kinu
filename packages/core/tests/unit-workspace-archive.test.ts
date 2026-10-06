@@ -22,7 +22,6 @@ import {
   type SqlValue,
 } from '../src/index';
 import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql } from './helpers';
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
@@ -261,21 +260,16 @@ describe('workspace archive', () => {
 
 const OWNER_TEXT = '# the owner wrote this\n';
 
-  test('a restore carries the owner\'s soul, not a file swapped since the seal', async () => {
+  test('a restore carries SOUL.md as the workspace\'s agents left it', async () => {
     const source = await seeded();
     await writeWorkspaceSoul(source.bundle, OWNER_TEXT);
-    // A mid-turn swap (the file's bytes, not the row): the restore must still read the row.
-    const kernel = (await source.bundle.session()).vfs.as(CRED_KERNEL);
-    kernel.unlink('/home/main/SOUL.md');
-    kernel.writeFile('/home/main/SOUL.md', 'forged');
-    kernel.chown('/home/main/SOUL.md', 1000, 1000);
-    kernel.chmod('/home/main/SOUL.md', 0o644);
+    await writeText(source.vfs, 'SOUL.md', '# an agent edited this\n');
 
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', store: workspaceArchiveStore(source.bundle) });
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, lines, { store: () => workspaceArchiveTarget(target.bundle) });
 
-    expect(await readText(target.vfs, 'SOUL.md')).toBe(OWNER_TEXT);
+    expect(await readText(target.vfs, 'SOUL.md')).toBe('# an agent edited this\n');
   });
 
   test('external workspace files page in the same stream and restore byte-exactly', async () => {

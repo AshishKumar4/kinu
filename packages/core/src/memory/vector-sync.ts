@@ -1,4 +1,5 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { direntTypeOfStat } from '@nimbus-sh/core/vfs/dirent-type.js';
 /** Keeps the Vectorize index in step with the FTS5 memory store; separate from runtime.ts to stay dependency-light. */
 
 import { Effect } from 'effect';
@@ -8,7 +9,8 @@ import { type VectorStore } from './vector-store';
 
 import { AGENT_CONFIG_KEYS } from '../config/store';
 import { readTailWithVfsOps } from '../vfs/mounts';
-import type { MemoryStore } from "@kinu.run/agent-utils/memory";
+import { MEMORY_DIR } from './note';
+import type { MemoryStore, NoteStamp } from "@kinu.run/agent-utils/memory";
 import { diagnostics, settle, toKinuError } from "../obs/index";
 
 /** Clearing the completeness marker and cursor hands the repair to the idempotent backfill. */
@@ -31,16 +33,24 @@ export interface MemoryVectors {
 export function adaptMemory(
   store: MemoryStore, files: VFS & Required<Pick<VFS, 'readRange'>>, vectors?: MemoryVectors,
 ): Memory {
-  return {
+  /** Every note new to the index, changed under it, or gone from it, indexed again. */
+  const refresh = async (): Promise<void> => {
+    const stamps = store.stamps();
+    const known = [...stamps.keys()].filter((path) => path.startsWith(MEMORY_DIR));
+
+    for (const path of new Set([...await notePaths(files), ...known])) {
+      if (await stale(files, path, stamps.get(path))) await memory.index(path);
+    }
+  };
+
+  const memory: Memory = {
     write: (path, content) => store.writeFile(path, content),
     append: (path, content) => store.appendToFile(path, content),
     index(path) {
       return settle(Effect.gen(function* () {
-        const content = yield* Effect.promise(() => store.readFile(path));
-
-        // Only a missing file is skipped: an emptied one indexes to no chunks, and its old ones leave.
-        if (content === null) return;
-        const delta = yield* Effect.promise(() => store.indexFile(path, content));
+        const note = yield* Effect.promise(() => settledNote(store, files, path));
+        // A note that is gone, or is no file, leaves the index with its chunks; an emptied one indexes to none.
+        const delta = yield* Effect.promise(() => (note === null ? store.forgetFile(path) : store.indexFile(path, note.content, note.stamp)));
 
         if (vectors === undefined || !vectors.store.available) return;
         const vectorStore = vectors.store;
@@ -58,10 +68,84 @@ export function adaptMemory(
         })));
       }));
     },
-    search: (query, limit) => Promise.resolve(store.search(query, limit)),
-    read: (path) => store.readFile(path),
+    // A shell edits notes beside the memory tool: a search first re-indexes every note that moved, so its new words are found.
+    async search(query, limit) {
+      await refresh();
+
+      return store.search(query, limit, async (path) => memory.index(path));
+    },
+    async read(path) {
+      const content = await store.readFile(path);
+
+      if (await stale(files, path, store.stampOf(path))) await memory.index(path);
+
+      return content;
+    },
     tail: (path, bytes) => readTailWithVfsOps(files, path, bytes),
   };
+
+  return memory;
+}
+
+/** A stamp is trusted once its file's last change is this far past: within it, a second change may keep every stamp field. */
+const RACY_MS = 2_000;
+
+/** Reads of a note that changed under each of them before it is indexed unstamped. */
+const SETTLE_ATTEMPTS = 3;
+
+/** The file's identity: its backend's revision, else git's racy-clean stat (inode, size, mtime, and ctime, which no caller sets). */
+function stampOf(stat: VfsStat): string {
+  return stat.revision === undefined ? `${stat.ino ?? 0}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs ?? ''}` : `r${stat.revision}`;
+}
+
+/** A regular file: a link, a directory, a FIFO or a device at a note's path is no note. */
+function regular(stat: VfsStat | null): stat is VfsStat {
+  return stat !== null && direntTypeOfStat(stat) === 'file';
+}
+
+/** Whether the index holds `path` other than as it stands: new to it, changed under it, untrusted, or no file now. */
+async function stale(files: VFS, path: string, indexed: NoteStamp | undefined): Promise<boolean> {
+  const stat = await files.stat(path, { follow: false });
+
+  return regular(stat) ? indexed !== stampOf(stat) : indexed !== undefined;
+}
+
+/**
+ * The note as one file held it, its stamp taken before the read and checked after: a write between them reads it again,
+ * and a note still changing, or changed within RACY_MS, is indexed unstamped so the next search reads it again. Null when
+ * no regular file is there.
+ */
+async function settledNote(store: MemoryStore, files: VFS, path: string): Promise<{ readonly content: string; readonly stamp: NoteStamp } | null> {
+  for (let attempt = 1; ; attempt += 1) {
+    const before = await files.stat(path, { follow: false });
+
+    if (!regular(before)) return null;
+    const content = await store.readFile(path);
+    const after = await files.stat(path, { follow: false });
+
+    if (content !== null && regular(after) && stampOf(after) === stampOf(before)) {
+      const changedAt = Math.max(after.mtimeMs, after.ctimeMs ?? after.mtimeMs);
+
+      return { content, stamp: after.revision !== undefined || changedAt < Date.now() - RACY_MS ? stampOf(after) : null };
+    }
+
+    if (attempt === SETTLE_ATTEMPTS) return content === null ? null : { content, stamp: null };
+  }
+}
+
+/** Every markdown note under the memory directory, by its relative path. */
+async function notePaths(files: VFS, dir = MEMORY_DIR.slice(0, -1)): Promise<string[]> {
+  if (!await exists(files, dir)) return [];
+  const out: string[] = [];
+
+  for (const entry of await files.readdir(dir)) {
+    const path = `${dir}/${entry.name}`;
+
+    if (entry.type === 'directory') out.push(...await notePaths(files, path));
+    else if (entry.type === 'file' && path.endsWith('.md')) out.push(path);
+  }
+
+  return out;
 }
 
 /** Bounded so a large memory table embeds across several boots. */
@@ -79,18 +163,15 @@ export async function backfillMemoryVectors(
   if (config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillDone) === 'true') return;
 
   const cursor = config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor) ?? '';
-  const chunks = store.allChunksAfter(cursor, cap);
+  const page = await store.allChunksAfter(cursor, cap);
 
-  if (chunks.length === 0) {
+  if (page.chunks.length > 0) await vectorStore.upsertChunks(page.chunks);
+
+  if (page.next === null) {
     config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
 
     return;
   }
 
-  await vectorStore.upsertChunks(chunks);
-  config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor, chunks[chunks.length - 1].id);
-
-  if (chunks.length < cap) {
-    config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
-  }
+  config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor, page.next);
 }

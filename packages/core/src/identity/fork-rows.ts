@@ -58,14 +58,6 @@ export const ForkContextMemberRowSchema = v.object({
 });
 
 /** One row of the FTS content table behind memory search. */
-export const ForkMemoryChunkRowSchema = v.object({
-  id: v.string(),
-  path: v.string(),
-  start_line: v.number(),
-  end_line: v.number(),
-  hash: v.string(),
-  text: v.string(),
-});
 
 /** One crafted tool, snapshotted; the fork evolves it independently. */
 export const ForkCraftedToolRowSchema = v.object({
@@ -89,7 +81,6 @@ export type ForkConversationEntryPartRow = v.InferOutput<typeof ForkConversation
 
 export type ForkContextMemberRow = v.InferOutput<typeof ForkContextMemberRowSchema>;
 
-export type ForkMemoryChunkRow = v.InferOutput<typeof ForkMemoryChunkRowSchema>;
 
 export type ForkCraftedToolRow = v.InferOutput<typeof ForkCraftedToolRowSchema>;
 

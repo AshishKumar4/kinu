@@ -8,7 +8,7 @@ import {
 } from '../src/index';
 import { APICallError } from 'ai';
 import { asFetchFunction } from '../src/providers/fetch-shim';
-import { PROVIDER_RETRIES_HEADER, withRateLimitRetry } from '../src/providers/rate-limit-retry';
+import { PROVIDER_RETRIES_HEADER, PROVIDER_STREAM_HEADER, withRateLimitRetry } from '../src/providers/rate-limit-retry';
 import type { ProviderWaitInfo } from '../src/providers/types';
 import { fmtSpan } from '../src/utils/format';
 
@@ -83,7 +83,7 @@ function turnOver(primary: ScriptedStream) {
 }
 
 const streamedRequest = (wrapped: typeof globalThis.fetch, retries: number) => wrapped('https://stub.invalid/v1/chat/completions', {
-  method: 'POST', body: JSON.stringify({ model: 'm', stream: true }), headers: { [PROVIDER_RETRIES_HEADER]: String(retries) },
+  method: 'POST', body: JSON.stringify({ model: 'm', stream: true }), headers: { [PROVIDER_RETRIES_HEADER]: String(retries), [PROVIDER_STREAM_HEADER]: '1' },
 });
 
 afterEach(() => { jest.useRealTimers(); });

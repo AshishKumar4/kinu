@@ -1,10 +1,10 @@
 import { Effect } from 'effect';
 import type { LLMProviderConfig } from '@kinu.run/core';
 import {
-  initWorkspaceSchema, initActorStateSchema, readSoul, summarizeSoul,
+  initWorkspaceSchema, initActorStateSchema, summarizeSoul,
   getCurrentScaffoldVersion, memoryBytes,
 } from '@kinu.run/core';
-import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, waitOnSharedWrites, type CLIRuntime } from './runtime';
+import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, soulIn, waitOnSharedWrites, type CLIRuntime } from './runtime';
 import type { LocalCloudSession, LocalProviderCredentials } from './model-resolver';
 import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
@@ -64,10 +64,8 @@ export function openWorkspaceCLI(
 
     const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
 
-    // SOUL belongs to the agent, not to the shared physical project directory.
-    const soul = yield* Effect.promise(async () => (rt.ownerSoul?.() ?? readSoul(rt.agentStateVfs ?? rt.storage.vfs)));
-
-    if (!soul) return yield* Effect.die(new Error('No SOUL.md found. Database may be corrupted.'));
+    // The workspace's SOUL.md, in its own space: its agents edit it, and may have emptied it.
+    const soul = soulIn(rt.space) ?? '';
 
     // The live version, scoped to `rt.actor`: a facet opens as its own actor, and
     // the scaffold pointer is per-actor.

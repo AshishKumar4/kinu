@@ -1,4 +1,4 @@
-import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * `kinu export` / `kinu import` end to end: a cloud workspace exported over the paged
  * RPC restores through the same `kinu import` as a local export.
@@ -18,6 +18,7 @@ import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/co
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { stampSchemaGenesis } from '@kinu.run/cli-backend';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -282,14 +283,18 @@ describe('kinu export / import', () => {
   test('a cloud export restarts at page zero once a restart ended its snapshot, and imports the files as they then were', async () => {
     const db = new Database(':memory:');
 
-    const runtime = await createWorkspace(db, {
+    await createWorkspace(db, {
       name: 'skywriter', purpose: 'archive restart proof',
       llm: { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' },
+      // In memory, a workspace has no space: its home is a map.
+      home: createMemoryVfs().vfs,
     });
 
-    await writeText(runtime.storage.vfs, 'version.txt', 'before restart');
-    await writeText(runtime.storage.vfs, 'memory/MEMORY.md', '- kept as agent state');
     let bundle = createInlineWorkspace(db);
+    // The cloud's files live in its Nimbus store, as a hosted workspace's do.
+    await writeText(bundle.vfs, 'version.txt', 'before restart');
+    await bundle.vfs.mkdir('memory', { recursive: true });
+    await writeText(bundle.vfs, 'memory/MEMORY.md', '- kept as agent state');
     let restarted = false;
     let starts = 0;
     const sql = archiveSqlFromDatabase(db);
@@ -335,13 +340,13 @@ describe('kinu export / import', () => {
 
       expect(imported.exitCode).toBe(0);
 
-      // Its own-space files land in the local own space, as a local archive's do; agent state stays in the database.
+      // Locally every file is a real one: its own-space files and its agent state land in the own space.
       expect(readFileSync(join(home, 'after-restart', 'home', 'main', 'version.txt'), 'utf8')).toBe('after restart');
-      expect(existsSync(join(home, 'after-restart', 'home', 'main', 'memory'))).toBe(false);
+      expect(readFileSync(join(home, 'after-restart', 'home', 'main', 'memory', 'MEMORY.md'), 'utf8')).toBe('- kept as agent state');
       const restored = new Database(join(home, 'after-restart', 'agent.db'));
       const { vfs } = createInlineWorkspace(restored);
 
-      expect([await readText(vfs, 'memory/MEMORY.md'), await exists(vfs, 'version.txt')]).toEqual(['- kept as agent state', false]);
+      expect([await exists(vfs, 'memory/MEMORY.md'), await exists(vfs, 'version.txt')]).toEqual([false, false]);
       restored.close();
     } finally {
       await server.stop(true);
@@ -381,6 +386,23 @@ describe('kinu export / import', () => {
     expect(existsSync(join(home, 'oldbot', 'agent.db'))).toBe(false);
   });
 
+  // An archive carries the notes and no index: `kinu memory` builds it from them, the first time it is asked.
+  test('`kinu memory` finds an imported archive\'s notes by their words, before any turn has run', async () => {
+    const { home } = placedWorkspace();
+    const notes = join(home, 'scout', 'home', 'main', 'memory');
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, 'MEMORY.md'), 'the wrangler deploy goes to staging\n');
+    const archive = join(scratch('kinu-export-notes-'), 'scout.kinu.jsonl');
+
+    expect((await result(runCli(home, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
+    expect((await result(runCli(home, ['import', archive, '--name', 'restored-notes']))).exitCode).toBe(0);
+    const found = await result(runCli(home, ['memory', 'restored-notes', 'wrangler', '--json']));
+
+    expect(found.stderr).toBe('');
+    expect(found.exitCode).toBe(0);
+    expect(v.parse(v.array(v.object({ path: v.string() })), JSON.parse(found.stdout)).map((hit) => hit.path)).toEqual(['memory/MEMORY.md']);
+  });
+
   test('a database or an archive an older Kinu made is refused by name, and no workspace is written', async () => {
     const { home } = placedWorkspace();
     const out = scratch('kinu-export-genesis-out-');
@@ -402,7 +424,12 @@ describe('kinu export / import', () => {
     agedHere.exec('PRAGMA user_version = 0');
     agedHere.close();
 
-    for (const args of [['import', archive, '--name', 'from-archive'], ['import', older], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')]]) {
+    const commands = [
+      ['import', archive, '--name', 'from-archive'], ['import', older], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')],
+      ['memory', 'scout', 'wrangler'],
+    ];
+
+    for (const args of commands) {
       const refused = await result(runCli(home, args));
 
       expect(refused.exitCode).toBe(1);
@@ -412,6 +439,10 @@ describe('kinu export / import', () => {
 
     expect(() => restoredDb(home, 'from-archive')).toThrow('unable to open database file');
     expect(() => restoredDb(home, 'older')).toThrow('unable to open database file');
+    // Refused before the search could build an index into it.
+    const kept = restoredDb(home, 'scout');
+    expect(kept.query(`SELECT name FROM sqlite_master WHERE name LIKE 'memory_note%'`).all()).toEqual([]);
+    kept.close();
   });
 
   test('a truncated archive leaves no workspace behind', async () => {

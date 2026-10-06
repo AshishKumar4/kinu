@@ -1,6 +1,7 @@
 // The cf memory index keeps the vector index in sync with FTS5: embeds on write, drops stale
 // ranges, and backfills pre-existing chunks exactly once.
 import { describe, test, expect, setSystemTime } from 'bun:test';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, createTestActor, makeExecRaw, makeSql } from '../../core/tests/helpers';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
@@ -105,7 +106,7 @@ describe('adaptMemory — semantic index sync on write', () => {
 
     const vs = fakeVectorStore();
     await backfillMemoryVectors(store, config, vs.store);
-    expect(vs.upserted.length).toBe(store.allChunksAfter('', 10000).length);
+    expect(vs.upserted.length).toBe((await store.allChunksAfter('', 10000)).chunks.length);
     expect(config.get('memory_vector_backfill_done')).toBe('true');
   });
 
@@ -130,12 +131,72 @@ describe('adaptMemory — semantic index sync on write', () => {
   });
 });
 
+// A note is the text's only copy, and a shell may change it beside the memory tool.
+describe('adaptMemory — a note changed under its index', () => {
+  test('is re-chunked when it is read, and its vectors follow', async () => {
+    const { store, files, config } = createStore();
+    const vs = fakeVectorStore();
+    const memory = adaptMemory(store, files, { store: vs.store, config });
+    await memory.write(PATH, 'wrangler staging deploy succeeded');
+    await memory.index(PATH);
+    await writeText(files, PATH, 'kubernetes ingress now fronts staging');
+
+    expect(await memory.read(PATH)).toBe('kubernetes ingress now fronts staging');
+    expect([...vs.live.values()].map((chunk) => chunk.text)).toEqual(['kubernetes ingress now fronts staging']);
+    expect((await memory.search('kubernetes', 5)).map((hit) => hit.snippet)).toEqual(['kubernetes ingress now fronts staging']);
+  });
+
+  test('is re-chunked when a search finds it, and the stale hit is never served', async () => {
+    const { store, files, config } = createStore();
+    const vs = fakeVectorStore();
+    const memory = adaptMemory(store, files, { store: vs.store, config });
+    await memory.write(PATH, 'wrangler staging deploy succeeded');
+    await memory.index(PATH);
+    await writeText(files, PATH, 'kubernetes ingress now fronts staging');
+
+    expect(await memory.search('wrangler', 5)).toEqual([]);
+    expect([...vs.live.values()].map((chunk) => chunk.text)).toEqual(['kubernetes ingress now fronts staging']);
+  });
+
+  test('a note no index row names yet is found by the next search, however much else is indexed', async () => {
+    const { store, files, config } = createStore();
+    const vs = fakeVectorStore();
+    const memory = adaptMemory(store, files, { store: vs.store, config });
+
+    // A restore that stopped partway: one note indexed, the other only on disk.
+    await memory.write(PATH, 'wrangler staging deploy succeeded');
+    await memory.index(PATH);
+    await writeText(files, 'memory/2026-10-07.md', 'kubernetes ingress now fronts staging');
+
+    expect((await memory.search('kubernetes', 5)).map((hit) => hit.path)).toEqual(['memory/2026-10-07.md']);
+    expect([...vs.live.values()].map((chunk) => chunk.text).sort()).toEqual(['kubernetes ingress now fronts staging', 'wrangler staging deploy succeeded']);
+  });
+
+  test('a note a shell removed or renamed leaves no hit and no vector under its old name', async () => {
+    const { store, files, config } = createStore();
+    const vs = fakeVectorStore();
+    const memory = adaptMemory(store, files, { store: vs.store, config });
+    await memory.write(PATH, 'wrangler staging deploy succeeded');
+    await memory.write('memory/gone.md', 'postgres replica lag alert');
+    await memory.index(PATH);
+    await memory.index('memory/gone.md');
+
+    await files.rename(PATH, 'memory/deploys.md');
+    await files.unlink('memory/gone.md');
+
+    expect(await memory.search('postgres', 5)).toEqual([]);
+    expect((await memory.search('wrangler', 5)).map((hit) => hit.path)).toEqual(['memory/deploys.md']);
+    expect([...vs.live.keys()].every((id) => id.startsWith('memory/deploys.md:'))).toBe(true);
+  });
+});
+
 describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () => {
   test('embeds every existing chunk once, sets the marker, 2nd run no-ops', async () => {
     const { store, config } = createStore();
     // Seed FTS5 directly: the pre-Vectorize state.
+    await store.writeFile(PATH, doc(60));
     await store.indexFile(PATH, doc(60));
-    const total = store.allChunksAfter('', 10000).length;
+    const total = (await store.allChunksAfter('', 10000)).chunks.length;
     expect(total).toBeGreaterThan(1);
 
     const vs = fakeVectorStore();
@@ -149,8 +210,9 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
 
   test('pages a table larger than the cap across boots without re-embedding', async () => {
     const { store, config } = createStore();
+    await store.writeFile(PATH, doc(60));
     await store.indexFile(PATH, doc(60));
-    const all = store.allChunksAfter('', 10000);
+    const all = (await store.allChunksAfter('', 10000)).chunks;
     expect(all.length).toBeGreaterThanOrEqual(3);
 
     const vs = fakeVectorStore();
@@ -171,8 +233,9 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
 
   test('a failed page holds the cursor and never marks itself done', async () => {
     const { store, config } = createStore();
+    await store.writeFile(PATH, doc(60));
     await store.indexFile(PATH, doc(60));
-    const all = store.allChunksAfter('', 10000);
+    const all = (await store.allChunksAfter('', 10000)).chunks;
     expect(all.length).toBeGreaterThanOrEqual(3);
 
     // A down Vectorize index must not advance the cursor or set the marker.
@@ -230,6 +293,7 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
 
   test('does nothing when the vector store is unavailable', async () => {
     const { store, config } = createStore();
+    await store.writeFile(PATH, doc(60));
     await store.indexFile(PATH, doc(60));
     const vs = fakeVectorStore(false);
     await backfillMemoryVectors(store, config, vs.store);

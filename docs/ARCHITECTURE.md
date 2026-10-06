@@ -582,12 +582,12 @@ the work: reflection and memory compression take `low`, and scaffold mutation ta
 ## Storage and formal models
 
 Two authorities own workspace state. The Nimbus session owns files, including
-`SOUL.md`, memory markdown, and scaffolds. The soul is the owner's: its authority
-is the `workspace_soul` row, written only by `writeWorkspaceSoul` (birth, fork,
-settings, a Drive save of `SOUL.md`). Prompts read the row; the file is a kernel
-444 view, compared and resealed from the row at every boot and turn start, so a
-file the main agent swaps (it owns the root) never reaches a prompt. It enters the
-prompt as one `<soul>` block no text inside can close. The actor SQLite owns relational
+`SOUL.md`, memory markdown, and scaffolds. `SOUL.md` is the soul and its only copy:
+an ordinary file of main's home (1000:1000, 0664) that the owner sets from
+Settings and every agent of the workspace edits, from its file tool or its shell.
+Each turn reads it, and listings read the mission off it. Locally it is a real
+file of the workspace's own space, `~/.kinu/<workspace>/home/main/SOUL.md`. It
+enters the prompt as one `<soul>` block no text inside can close. The actor SQLite owns relational
 state: plans, messages, memory and craft indexes, swarm search records,
 evolution, and event logs. Schema and boundaries are in
 [STORAGE.md](./STORAGE.md). The vendored filesystem is in

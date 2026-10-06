@@ -574,6 +574,12 @@ const decisionEnabled = (page: Page, label: string) => page.evaluate((name) => {
   return button !== undefined && !button.disabled;
 }, label);
 
+/** Waits until the decision named `label` can be pressed. */
+async function decisionOpens(page: Page, label: string): Promise<void> {
+  await page.waitForFunction((name) => [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')]
+    .some((button) => button.textContent?.includes(name) === true && !button.disabled), {}, label);
+}
+
 const landedSaves = async (page: Page) => v.parse(v.array(v.array(v.string())),
   JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryAnnotationsSaved ?? '[]')));
 
@@ -596,7 +602,7 @@ describe('annotating a plan', () => {
         await page.waitForFunction((count) => JSON.parse(document.documentElement.dataset.galleryAnnotationsSaved ?? '[]').length === count, {}, landed);
       }
 
-      await page.waitForFunction(() => [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].some((button) => button.textContent?.includes('Request changes') && !button.disabled));
+      await decisionOpens(page, 'Request changes');
 
       const saves = await landedSaves(page);
 
@@ -630,6 +636,123 @@ describe('annotating a plan', () => {
       expect(await landedSaves(page)).toEqual([['Cover the guest cart first', 'Keep the refusal shape']]);
       expect(await page.evaluate(() => document.body.innerText.includes('the plan store is busy'))).toBe(false);
       await page.close();
+    });
+  });
+});
+
+/** The main composer's turn mode: the button pressed, and whether every mode can be chosen. */
+function turnMode(page: Page): Promise<{ pressed: string | null; open: boolean }> {
+  return page.$$eval('[data-composer-root] [role="group"][aria-label="Turn mode"] button', (buttons) => ({
+    pressed: buttons.find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent?.trim() ?? null,
+    open: buttons.every((button) => !(button instanceof HTMLButtonElement) || !button.disabled),
+  }));
+}
+
+async function chooseMode(page: Page, mode: string): Promise<void> {
+  await page.$$eval('[data-composer-root] [role="group"][aria-label="Turn mode"] button', (buttons, label) => {
+    const button = buttons.find((each) => each.textContent?.trim() === label);
+
+    if (!(button instanceof HTMLElement)) throw new Error(`no ${label} mode`);
+    button.click();
+  }, mode);
+  await page.waitForFunction((label) => [...document.querySelectorAll('[data-composer-root] [role="group"][aria-label="Turn mode"] button')]
+    .some((button) => button.getAttribute('aria-pressed') === 'true' && button.textContent?.trim() === label), {}, mode);
+}
+
+/** Opens the workspace's pending plan from the Work tab and presses one of its controls; the server then says the plan moved. */
+async function decidePlan(page: Page, control: string, landed: string): Promise<void> {
+  await page.click('.p-tabstrip button[aria-label="Work"]');
+  await page.waitForSelector('[data-plan-review-root]');
+  await page.$$eval('[data-plan-review-root] button', (buttons, label) => {
+    const button = buttons.find((each) => each.textContent?.includes(label));
+
+    if (!(button instanceof HTMLElement)) throw new Error(`no ${label} on the plan`);
+    button.click();
+  }, control);
+  await page.waitForFunction((key) => document.documentElement.dataset[key] !== undefined, {}, landed);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: { type: 'reads_changed', reads: ['getActivePlanReview'] } })));
+}
+
+/**
+ * The composer under a plan: while it waits for a decision, or once dismissed, the turn mode is the one the owner
+ * chose and every mode stays open; an approval hands the work to a build turn, so a Plan composer returns to Auto.
+ */
+describe('the composer under the workspace plan', () => {
+  test('a pending or dismissed plan leaves the chosen mode, and an approval returns a Plan composer to Auto', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const open = async () => {
+        const page = await newPage();
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-composer-root] [role="group"][aria-label="Turn mode"]');
+
+        return page;
+      };
+
+      const approved = await open();
+      expect(await turnMode(approved)).toEqual({ pressed: 'Auto', open: true });
+      await chooseMode(approved, 'Plan');
+      await decidePlan(approved, 'Approve', 'galleryPlanFeedback');
+      await approved.waitForFunction(() => [...document.querySelectorAll('[data-composer-root] [role="group"][aria-label="Turn mode"] button')]
+        .some((button) => button.getAttribute('aria-pressed') === 'true' && button.textContent?.trim() === 'Auto'));
+      await approved.close();
+
+      const dismissed = await open();
+      await chooseMode(dismissed, 'Plan');
+      await decidePlan(dismissed, 'Dismiss', 'galleryPlanDismissed');
+      await dismissed.waitForFunction(() => document.querySelector('[data-plan-decisions]') === null);
+      expect(await turnMode(dismissed)).toEqual({ pressed: 'Plan', open: true });
+      await dismissed.close();
+    });
+  });
+});
+
+const decisions = (page: Page): Promise<number> => page.evaluate(() => Number(document.documentElement.dataset.galleryDecisions ?? '0'));
+
+const pressApprove = (page: Page): Promise<void> => page.evaluate(() => {
+  [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].find((button) => button.textContent?.includes('Approve'))?.click();
+});
+
+/**
+ * A decision is one at a time: pressed twice before it answers, it is sent once, and the plan's controls hold until it
+ * answers. A decision that fails says why and can be taken again.
+ */
+describe('deciding a plan', () => {
+  test('a decision is sent once however often it is pressed, and a failed one can be taken again', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const open = (decision: string) => openFrame(newPage, origin, {
+        frame: 'planreview', mode: 'dark', viewport: { width: 1280, height: 900 }, params: { decision },
+      });
+
+      const held = await open('held');
+      await held.waitForSelector('[data-plan-decisions]');
+      // Both presses in one task, before React can draw the first one's busy state.
+      await held.evaluate(() => {
+        const approve = [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].find((button) => button.textContent?.includes('Approve'));
+
+        approve?.click();
+        approve?.click();
+      });
+      await held.waitForFunction(() => document.documentElement.dataset.galleryDecisions === '1');
+      expect(await decisionEnabled(held, 'Approve')).toBe(false);
+      await held.evaluate(() => window.dispatchEvent(new CustomEvent('gallery:decision-answer', { detail: null })));
+      // Answered: the plan settles and Approve goes, or Approve comes back; either way the second press sent nothing.
+      await held.waitForFunction(() => {
+        const approve = [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].find((button) => button.textContent?.includes('Approve'));
+
+        return approve === undefined || !approve.disabled;
+      });
+      expect(await decisions(held)).toBe(1);
+      await held.close();
+
+      const failing = await open('fail-first');
+      await failing.waitForSelector('[data-plan-decisions]');
+      await pressApprove(failing);
+      await failing.waitForFunction(() => document.body.textContent?.includes('review-fixture-rpc-failed'));
+      await decisionOpens(failing, 'Approve');
+      await pressApprove(failing);
+      await failing.waitForFunction(() => document.documentElement.dataset.galleryDecisions === '2');
+      await failing.close();
     });
   });
 });

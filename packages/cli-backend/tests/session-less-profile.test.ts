@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // A workspace opened without a LocalAgentSession still routes its model lanes (`kinu evolve` via `openWorkspaceCLI`).
 // The lanes are the ones the MCTS engine reads: `explorer: rt.llm` and `judge: rt.judgeModel`.
 import { scratchDir } from '../../test-utils/src/scratch';
@@ -9,7 +10,7 @@ import type { LLM, LLMProviderConfig, ModelRouteResolution } from '@kinu.run/cor
 import { captureOperationProfile, runOperationProfile, operationProfileStream, currentOperationProfile,
   WORKSPACE_RUN_ID } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
-import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
+import { createCLIRuntime, type CLIRuntime, workspaceHome } from '../src/runtime';
 import { STATIC_MODEL_SPEC, staticModelPlane } from '../src/profile-authority';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -35,9 +36,8 @@ async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: 
   const dbPath = join(dir, 'agent.db');
   const db = new Database(dbPath);
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM, agentName: 'jarvis' });
-  // The owner's soul, as `writeWorkspaceSoul` records it; the next turn reseals the file from it.
-  db.exec('CREATE TABLE IF NOT EXISTS workspace_soul (id INTEGER PRIMARY KEY CHECK (id = 1), markdown TEXT NOT NULL)');
-  db.prepare('INSERT INTO workspace_soul (id, markdown) VALUES (1, ?)').run('# jarvis\n\n## Mission\n\nRun the lab.');
+  // SOUL.md where the workspace keeps it, a real file of its own space.
+  await writeText(workspaceHome(db), 'SOUL.md', '# jarvis\n\n## Mission\n\nRun the lab.');
 
   if (storedModel !== undefined) rt.actor.config.setModel(storedModel);
 

@@ -6,7 +6,7 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { describe, test, expect } from 'bun:test';
 import {
-  readForkLineage, readMission, SOUL_PATH, summarizeSoul, createWorkspaceForkSink,
+  readForkLineage, SOUL_PATH, createWorkspaceForkSink, workspaceSoul,
   ForkTargetWriter, ForkTransferReceiver, forkTransferFrames, sealForkFrame,
   FORK_TRANSFER_VERSION, FORK_STREAM_SEED, foldForkStream,
   type ForkFileSink, type ForkFileSource, type ForkFrameReply,
@@ -28,7 +28,7 @@ const OWNER: ForkWriteTarget = {
 
 /** No rows and no files. */
 const EMPTY_COUNTS: ForkSectionCounts = {
-  agentConfig: 0, craftedTools: 0, memoryChunks: 0,
+  agentConfig: 0, craftedTools: 0,
   sessionMessages: 0, conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
   files: 0,
 };
@@ -39,7 +39,7 @@ type FrameBody = UnsealedForkFrame extends infer Frame
     : never
   : never;
 
-type RowSections = Pick<ForkContent, 'agentConfig' | 'craftedTools' | 'memoryChunks' | 'sessionMessages'
+type RowSections = Pick<ForkContent, 'agentConfig' | 'craftedTools' | 'sessionMessages'
   | 'conversationEntries' | 'conversationEntryParts' | 'contextMembers'>;
 
 /** A source workspace with a three-turn conversation, seeded through the production writers. */
@@ -92,7 +92,6 @@ function framesFor(recorded: readonly ForkFrame[], opts: {
       ...begin.counts,
       agentConfig: rows.agentConfig.length,
       craftedTools: rows.craftedTools.length,
-      memoryChunks: rows.memoryChunks.length,
       sessionMessages: rows.sessionMessages.length,
       conversationEntries: rows.conversationEntries.length,
       conversationEntryParts: rows.conversationEntryParts.length,
@@ -113,8 +112,6 @@ function framesFor(recorded: readonly ForkFrame[], opts: {
 
   for (const batch of batches(rows.craftedTools)) push({ kind: 'craftedTools', rows: batch });
 
-  for (const batch of batches(rows.memoryChunks)) push({ kind: 'memoryChunks', rows: batch });
-
   for (const batch of batches(rows.sessionMessages)) push({ kind: 'sessionMessages', rows: batch });
 
   for (const batch of batches(rows.conversationEntries)) push({ kind: 'conversationEntries', rows: batch });
@@ -133,8 +130,6 @@ function framesFor(recorded: readonly ForkFrame[], opts: {
   const pages = new Set<string>();
 
   for (const frame of recorded) {
-    if (frame.kind === 'soul') push({ kind: 'soul', bytes: frame.bytes });
-
     if (frame.kind !== 'page') continue;
     const key = `${JSON.stringify(frame.target)}|${frame.page.after ?? ''}`;
 
@@ -238,7 +233,6 @@ describe('fork transfer receiver', () => {
       members: ws.sql<{ entry_id: string; position: number; message_id: string }>`
         SELECT entry_id, position, message_id FROM context_memberships WHERE to_revision IS NULL ORDER BY position`,
       tools: ws.sql<{ name: string }>`SELECT name FROM crafted_tools ORDER BY name`,
-      chunks: ws.sql<{ id: string; text: string }>`SELECT id, text FROM memory_chunks ORDER BY id`,
       config: ws.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config ORDER BY key`,
       lineage: readForkLineage(ws.sql),
     });
@@ -313,21 +307,17 @@ describe('fork transfer receiver', () => {
     expect(await readText(tgt.vfs, '.nimbusrc')).toBe('the source\'s own settings\n');
   });
 
-  test('SOUL.md lands through the owner\'s protected write, and its mission is the fork\'s', async () => {
+  // SOUL.md is a file of main's home, carried as every other one, and left editable by the fork's agents.
+  test("SOUL.md crosses as a file of the home, and the fork's agents may edit it", async () => {
     const src = await source();
     const tgt = fresh();
-    const recorded = await sourceFrames(src, 'm3');
-    const soul = recorded.find((frame) => frame.kind === 'soul');
-
-    if (soul?.kind !== 'soul') throw new Error('expected the source to carry SOUL.md');
-    await drain(receiverFor(tgt), framesFor(recorded));
+    const sourceSoul = await workspaceSoul(src.bundle);
+    await drain(receiverFor(tgt), framesFor(await sourceFrames(src, 'm3')));
 
     const kernel = (await tgt.bundle.session()).vfs.as(CRED_SESSION_USER);
     const stat = kernel.lstat(`${WORKSPACE_ROOT}/${SOUL_PATH}`);
-    // Kernel-owned and read-only, as the owner's write seals it: never the session user's.
-    expect({ uid: stat.uid, mode: stat.mode & 0o777 }).toEqual({ uid: 0, mode: 0o444 });
-    expect(new TextDecoder().decode(kernel.readFile(`${WORKSPACE_ROOT}/${SOUL_PATH}`))).toBe(new TextDecoder().decode(soul.bytes));
-    expect(readMission(tgt.sql)).toBe(summarizeSoul(new TextDecoder().decode(soul.bytes)));
+    expect({ uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777 }).toEqual({ uid: 1000, gid: 1000, mode: 0o664 });
+    expect(await workspaceSoul(tgt.bundle)).toBe(sourceSoul);
   });
 
   test('an import of a name under the home the fork does not carry is refused, and nothing lands', async () => {
@@ -337,7 +327,7 @@ describe('fork transfer receiver', () => {
 
     if (page?.kind !== 'page') throw new Error('expected a page under the home');
 
-    for (const name of [SOUL_PATH, 'scaffold', '.kinu', '.nimbus']) {
+    for (const name of ['scaffold', '.kinu', '.nimbus']) {
       const tgt = fresh();
       const receiver = receiverFor(tgt);
       const at = frames.indexOf(page);
@@ -454,7 +444,7 @@ describe('fork transfer receiver', () => {
     if (begin?.kind !== 'begin') throw new Error('expected a begin frame');
     // Counts and digest agree with this shortened stream: only the incomplete import can prevent publication.
     const imports = new Set(prefix.flatMap(frame => frame.kind === 'page' || frame.kind === 'chunks' ? [JSON.stringify(frame.target)] : []));
-    const files = imports.size + prefix.filter(frame => frame.kind === 'soul').length;
+    const files = imports.size;
     const prepared = renumber([{ ...begin, counts: { ...begin.counts, files } }, ...rest]);
     await drain(receiver, prepared.frames);
     expect(await exists(tgt.vfs, 'memory/n000.md')).toBe(true);
@@ -889,7 +879,6 @@ describe('a fork holds one frame, never a whole file', () => {
 
         return { want, done: want.length === 0 };
       },
-      async publishSoul() {},
       async remove() {},
       stored: () => stored.size,
     };

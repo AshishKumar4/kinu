@@ -14,6 +14,8 @@ import { present, scratchDir, scratchPath } from '@kinu.run/test-utils';
 
 function freshRuntime(cwd = scratchDir('mount-plane-folder')) {
   const db = new Database(scratchPath('mount-plane', 'agent.db'), { create: true });
+  // As `kinu create` publishes one: in WAL a commit waits on no fsync.
+  db.exec('PRAGMA journal_mode = WAL');
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' }, cwd,

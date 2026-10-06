@@ -28,6 +28,8 @@ export interface GalleryAgent {
 	removeEventListener(type: string, listener: EventListener): void;
 	close(): void;
 	reopen(): void;
+	/** A forced redial: a fresh socket, so the calls a dead one would have failed are served again. */
+	reconnect(): void;
 	/** A server-initiated frame, delivered raw so `useKinu`'s own parse and gates run. */
 	deliver(raw: string): void;
 	readonly path: string;
@@ -74,11 +76,33 @@ export function galleryServerPush(raw: string): void {
 	for (const agent of live) agent.deliver(raw);
 }
 
+const windows = new Map<string, Set<(messages: readonly UIMessage[]) => void>>();
+
+/** As the server's `cf_agent_chat_messages` frame lands: every window on the chat at `path` now shows `messages`. */
+export function galleryChatWindow(path: string, messages: readonly UIMessage[]): void {
+	for (const show of windows.get(path) ?? []) show(messages);
+}
+
 /** As the server answers a clear: the chat at `path` is emptied, then every window on it is told to empty. */
 export function galleryClearChat(path: string): void {
 	seededChats.delete(path);
 
 	for (const agent of live) if (agent.path === path) agent.deliver(JSON.stringify({ type: "cf_agent_chat_clear" }));
+}
+
+/**
+ * `data-gallery-socket`: `dead`, every workspace-socket call times out with the SDK's own rejection until a redial, as
+ * an open socket whose peer is gone does; `refusing`, every call is refused at once, as a live origin does.
+ * `data-gallery-failed-calls` counts the calls failed either way.
+ */
+function socketFailure(method: string): Error | null {
+	const root = document.documentElement.dataset;
+	const mode = root.gallerySocket;
+
+	if (mode !== "dead" && mode !== "refusing") return null;
+	root.galleryFailedCalls = String(Number(root.galleryFailedCalls ?? "0") + 1);
+
+	return mode === "dead" ? new Error(`RPC call to ${method} timed out after 30000ms`) : new Error("the origin refused the call");
 }
 
 /** A connection whose calls resolve from the frame fixture; terminal mode never opens. */
@@ -96,15 +120,24 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 	const agent = useMemo<GalleryAgent>(() => {
 		const listeners = new Map<string, Set<EventListener>>();
 
+		const reopen = () => {
+			handlers.current.onClose?.(new CloseEvent("close", { code: 1006 }));
+			handlers.current.onOpen?.(new Event("open"));
+
+			for (const listener of listeners.get("open") ?? []) listener(new Event("open"));
+		};
+
 		return {
 			path: options.path ?? "",
 			readyState: 1,
 			connectionError: terminalClose,
-			call: <T,>(method: string, args: unknown[] = []): Promise<T> => (
-				served === null
-					? Promise.reject(new Error(`gallery: no fixture serves ${method}`))
-					: served<T>(method, args)
-			),
+			call: <T,>(method: string, args: unknown[] = []): Promise<T> => {
+				const failure = options.path === undefined || options.path === "" ? socketFailure(method) : null;
+
+				if (failure === null && served !== null) return served<T>(method, args);
+
+				return Promise.reject(failure ?? new Error(`gallery: no fixture serves ${method}`));
+			},
 			send: () => {},
 			addEventListener: (type, listener) => {
 				const set = listeners.get(type) ?? new Set<EventListener>();
@@ -113,11 +146,15 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 			},
 			removeEventListener: (type, listener) => { listeners.get(type)?.delete(listener); },
 			close: () => { listeners.clear(); },
-			reopen: () => {
-				handlers.current.onClose?.(new CloseEvent("close", { code: 1006 }));
-				handlers.current.onOpen?.(new Event("open"));
+			reopen,
+			reconnect: () => {
+				const root = document.documentElement.dataset;
 
-				for (const listener of listeners.get("open") ?? []) listener(new Event("open"));
+				root.galleryRedials = String(Number(root.galleryRedials ?? "0") + 1);
+
+				// A fresh socket reaches the peer a dead one lost.
+				if (root.gallerySocket === "dead") delete root.gallerySocket;
+				reopen();
 			},
 			deliver: (raw) => {
 				const message = new MessageEvent("message", { data: raw });
@@ -196,6 +233,14 @@ export function useAgentChat(options: { agent: GalleryAgent }) {
 
 		return () => { window.removeEventListener("gallery:settle-send", settle); };
 	}, []);
+
+	useEffect(() => {
+		const shown = windows.get(agent.path) ?? new Set();
+
+		windows.set(agent.path, shown.add(setMessages));
+
+		return () => { shown.delete(setMessages); };
+	}, [agent.path]);
 
 	useEffect(() => {
 		const onMessage = (event: Event) => {

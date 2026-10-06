@@ -50,20 +50,20 @@ export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS, type 
 
 export {
   DEFAULT_SOUL_MD,
+  SOUL_FILE,
   SOUL_PATH,
   WORKSPACE_CREATED_EVENT,
   UNTITLED_WORKSPACE_NAME,
   isPlaceholderMission,
   workspaceGenesisSignal,
   readSoul,
-  storeDurableSoulDb,
-  readMission,
+  missionOf,
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
 } from './identity/soul';
 
-export { WORKSPACE_IDENTITY_DDL, WORKSPACE_SOUL_DDL } from './identity/schema';
+export { WORKSPACE_IDENTITY_DDL } from './identity/schema';
 
 export { validateSwarmProfileSnapshot } from './profiles';
 
@@ -76,7 +76,7 @@ export {
 } from './identity/fork';
 
 export {
-  type ForkSnapshotHead, type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow,
+  type ForkSnapshotHead, type ForkCraftedToolRow, type ForkConfigRow,
 } from './identity/fork-rows';
 
 export {
@@ -1037,12 +1037,12 @@ export type {
 } from './vfs/nimbus-workspace';
 
 export {
-  settledWorkspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
+  workspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
   workspaceArchiveStore, workspaceArchiveTarget, archiveFileTree,
 } from './vfs/workspace-planes';
 
 
-export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
+export { observeNamespace, type WriteEvent, type WriteObserver } from './vfs/write-events';
 
 export { isNimbusTable } from './vfs/nimbus-tables';
 
@@ -1052,7 +1052,6 @@ export { oneAtATime } from './utils/one-at-a-time';
 
 export { markStoreChanged, storeRevision } from '@kinu.run/agent-utils';
 
-export { searchMemoryChunks } from '@kinu.run/agent-utils/memory';
 
 export { ISOLATED_BUN_FLAGS, isolatedBunArgs } from './utils/bun-isolation';
 
@@ -1073,9 +1072,9 @@ export {
 } from './skills/drive';
 
 export {
-  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
+  withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
-  type VfsMount, type MountableProvider, type MountedVfs,
+  type VfsMount, type MountableProvider, type MountedVfs, type WorkspacePrincipal,
   type VfsListedEntry,
 } from './vfs/mounts';
 
@@ -1126,7 +1125,6 @@ export {
 // Memory writes
 export { memoryBytes } from './memory/note';
 
-export { AGENT_STATE_PATHS, agentViewMount, isAgentStatePath } from './vfs/agent-view';
 
 export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
 
@@ -1698,7 +1696,7 @@ export {
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
   unionAllowedTools, toolAllowedBySkills, trustedActiveSkills,
-  SKILLS_VIEW, WORKSPACE_SKILLS_DIR, SKILL_FOLDER_FILE, skillViewPath,
+  SKILLS_VIEW, WORKSPACE_SKILLS_DIR, SKILL_FOLDER_FILE, skillReference, skillViewPath,
 } from './skills/index';
 
 export type {

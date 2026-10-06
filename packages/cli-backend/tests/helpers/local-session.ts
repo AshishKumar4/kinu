@@ -519,9 +519,10 @@ export const FOCUSED_SKILL =
 
 export const FOCUSED_PATH = workspaceSkillPath('focused');
 
+/** Written where core names a workspace skill, its `vfs://` path in the space. */
 export async function writeFocusedSkill(rt: CLIRuntime): Promise<void> {
-  await rt.storage.vfs.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
-  await writeText(rt.storage.vfs, FOCUSED_PATH, FOCUSED_SKILL);
+  await rt.ownFiles.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
+  await writeText(rt.ownFiles, FOCUSED_PATH, FOCUSED_SKILL);
 }
 
 export function messageText(message: PromptMessage): string {

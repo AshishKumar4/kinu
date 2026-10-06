@@ -178,7 +178,7 @@ describe("the card line is the person's own words", () => {
 
   test('never the first turn the harness takes, and the words the owner sends, however they arrive', async () => {
     const { agent, db } = orchestratorHarness();
-    seedMission(db, MISSION);
+    await seedMission({ agent, db }, MISSION);
     const turns = chatSessionTurns(agent);
     const genesis = turns.park();
 

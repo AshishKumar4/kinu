@@ -11,7 +11,7 @@ import { seedTranscriptEntry, present, testActorHandle } from '@kinu.run/test-ut
 import {
   createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers';
-import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
+import { workspaceSoul, writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
@@ -278,17 +278,12 @@ describe('agent status', () => {
     void sql`UPDATE workspace_identity SET name = 'jarvis', created_at = 42`;
     await seedTranscript(chatStore(w).history, [{ id: 'm1', role: 'user', content: 'hi' }]);
 
-    // The row, not a file the main agent may have swapped, answers the owner's soul and mission.
-    await writeWorkspaceSoul(bundle, '# Mine\n\n## Mission\n\nread the room and update it');
-
-    try {
-      await writeText(vfs, 'SOUL.md', 'forged');
-    } catch (cause) {
-      expect(String(cause)).toContain('EACCES');
-    }
+    // SOUL.md as its agents left it answers the soul and mission: the owner's, then the main agent's edit.
+    await writeWorkspaceSoul(bundle, '# Mine\n\n## Mission\n\nread the room');
+    await writeText(vfs, 'SOUL.md', '# Mine\n\n## Mission\n\nread the room and update it');
 
     expect(await getAgentStatus({
-      sql, actor, model: 'anthropic/claude-opus-5', reasoningEffort: 'high', name: 'fallback-name',
+      sql, soul: () => workspaceSoul(bundle), actor, model: 'anthropic/claude-opus-5', reasoningEffort: 'high', name: 'fallback-name',
       displayName: 'Jarvis',
     })).toMatchObject({
       name: 'jarvis', displayName: 'Jarvis', createdAt: 42, model: 'anthropic/claude-opus-5',
@@ -300,7 +295,7 @@ describe('agent status', () => {
 
   test('the scaffold version is the one the actor runs: not a pending proposal, not a rolled-back one', async () => {
     const { db, sql, actor } = workspace();
-    const shown = async () => (await getAgentStatus({ sql, actor, model: '', reasoningEffort: null, name: 'jarvis', displayName: 'Jarvis' })).scaffoldVersion;
+    const shown = async () => (await getAgentStatus({ sql, soul: async () => null, actor, model: '', reasoningEffort: null, name: 'jarvis', displayName: 'Jarvis' })).scaffoldVersion;
 
     const version = (n: number, status: string) => {
       void sql`INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (${actor.actorId}, ${n}, ${n}, ${'test'}, ${status})`;
@@ -322,7 +317,7 @@ describe('agent status', () => {
     const sql = makeSql(db);
     const other = workspace();
     await expect(getAgentStatus({
-      sql,
+      sql, soul: async () => null,
       actor: other.actor, model: '', reasoningEffort: null, name: 'agent-7',
       displayName: 'ignored',
     })).rejects.toThrow(/no such table/);
