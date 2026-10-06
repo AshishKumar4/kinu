@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import type { Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
 
 
@@ -130,3 +131,87 @@ test('a delayed snapshot cannot overwrite any surface refreshed after it was adm
   });
 });
 
+
+/** The gallery socket's record of what the page did: forced redials, failures still scripted when it redialled, snapshot reads. */
+function socketRecord(page: Page): Promise<{ redials: number; redialAt: number | null; snapshotReads: number; scripted: number }> {
+  return page.evaluate(() => {
+    const root = document.documentElement.dataset;
+
+    return {
+      redials: Number(root.galleryRedials ?? '0'),
+      redialAt: root.galleryRedialAt === undefined ? null : Number(root.galleryRedialAt),
+      snapshotReads: Number(root.gallerySnapshotReads ?? '0'),
+      scripted: (root.galleryRpcFailures ?? '').split(',').filter(Boolean).length,
+    };
+  });
+}
+
+/**
+ * A socket that still claims to be open but answers nothing is only noticed by its calls timing out. Three timeouts in
+ * a row condemn it and the page redials once, then re-reads what it shows; a fast refusal in between is proof the
+ * origin is alive and starts the count again.
+ */
+test('a socket open but answering nothing is redialled after three timeouts in a row, and the page re-reads', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1920, height: 1100 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&workspaceFault=1`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-composer-root]');
+    await page.click('button[title="Files"]');
+    await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('before.txt'));
+
+    // Two timeouts, a refusal, then three timeouts: only the last three are in a row.
+    await page.evaluate(() => {
+      document.documentElement.dataset.workspaceRevision = 'current';
+      document.documentElement.dataset.galleryRpcFailures = 'timeout,timeout,fast,timeout,timeout,timeout';
+    });
+
+    for (let presses = 0; (await socketRecord(page)).scripted > 0; presses += 1) {
+      if (presses > 12) throw new Error(`Refresh drained no scripted failure: ${JSON.stringify(await socketRecord(page))}`);
+      const before = (await socketRecord(page)).scripted;
+
+      await page.click('[aria-label="Refresh"]');
+      await page.waitForFunction((was) => (document.documentElement.dataset.galleryRpcFailures ?? '').split(',').filter(Boolean).length < was, {}, before);
+    }
+
+    await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('current.txt'));
+    const record = await socketRecord(page);
+
+    // One redial, made on the last timeout and not before.
+    expect({ redials: record.redials, redialAt: record.redialAt }).toEqual({ redials: 1, redialAt: 0 });
+    await page.close();
+  });
+});
+
+async function pressButton(page: Page, words: string): Promise<void> {
+  await page.$$eval('button', (buttons, label) => {
+    const button = buttons.find((each) => each.textContent?.trim() === label);
+
+    if (!(button instanceof HTMLElement)) throw new Error(`no ${label} on the page`);
+    button.click();
+  }, words);
+}
+
+/** Retry re-reads; on a socket the SDK has given up on, it redials first. */
+test('Retry re-reads the workspace, and redials first only when the socket was closed for good', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&snapshot=failed`, { waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => document.body.textContent?.includes('Could not open this workspace'));
+    const failed = await socketRecord(page);
+
+    await pressButton(page, 'Retry');
+    await page.waitForFunction((was) => Number(document.documentElement.dataset.gallerySnapshotReads ?? '0') > was, {}, failed.snapshotReads);
+    expect((await socketRecord(page)).redials).toBe(0);
+
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&terminal=denied`, { waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => document.body.textContent?.includes('Access to this workspace was denied'));
+    const denied = await socketRecord(page);
+
+    await pressButton(page, 'Try again');
+    await page.waitForFunction((was) => Number(document.documentElement.dataset.gallerySnapshotReads ?? '0') > was, {}, denied.snapshotReads);
+    expect((await socketRecord(page)).redials).toBe(1);
+    await page.close();
+  });
+});

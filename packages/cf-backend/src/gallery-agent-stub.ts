@@ -28,6 +28,8 @@ export interface GalleryAgent {
 	removeEventListener(type: string, listener: EventListener): void;
 	close(): void;
 	reopen(): void;
+	/** A forced redial: a fresh socket, so the calls a dead one would have failed are served again. */
+	reconnect(): void;
 	/** A server-initiated frame, delivered raw so `useKinu`'s own parse and gates run. */
 	deliver(raw: string): void;
 	readonly path: string;
@@ -88,6 +90,20 @@ export function galleryClearChat(path: string): void {
 	for (const agent of live) if (agent.path === path) agent.deliver(JSON.stringify({ type: "cf_agent_chat_clear" }));
 }
 
+/**
+ * `data-gallery-rpc-failures`: the workspace socket's next calls fail in order, one entry each, as a dead-but-open
+ * socket's do (`timeout`, the SDK's own rejection) or as a live origin refusing (`fast`).
+ */
+function nextCallFailure(method: string): Error | null {
+	const root = document.documentElement.dataset;
+	const [next, ...rest] = (root.galleryRpcFailures ?? "").split(",").filter(Boolean);
+
+	if (next === undefined) return null;
+	root.galleryRpcFailures = rest.join(",");
+
+	return next === "timeout" ? new Error(`RPC call to ${method} timed out after 30000ms`) : new Error("the origin refused the call");
+}
+
 /** A connection whose calls resolve from the frame fixture; terminal mode never opens. */
 export function useAgent(options: AgentHandlers): GalleryAgent {
 	const handlers = useRef(options);
@@ -103,15 +119,24 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 	const agent = useMemo<GalleryAgent>(() => {
 		const listeners = new Map<string, Set<EventListener>>();
 
+		const reopen = () => {
+			handlers.current.onClose?.(new CloseEvent("close", { code: 1006 }));
+			handlers.current.onOpen?.(new Event("open"));
+
+			for (const listener of listeners.get("open") ?? []) listener(new Event("open"));
+		};
+
 		return {
 			path: options.path ?? "",
 			readyState: 1,
 			connectionError: terminalClose,
-			call: <T,>(method: string, args: unknown[] = []): Promise<T> => (
-				served === null
-					? Promise.reject(new Error(`gallery: no fixture serves ${method}`))
-					: served<T>(method, args)
-			),
+			call: <T,>(method: string, args: unknown[] = []): Promise<T> => {
+				const failure = options.path === undefined || options.path === "" ? nextCallFailure(method) : null;
+
+				if (failure === null && served !== null) return served<T>(method, args);
+
+				return Promise.reject(failure ?? new Error(`gallery: no fixture serves ${method}`));
+			},
 			send: () => {},
 			addEventListener: (type, listener) => {
 				const set = listeners.get(type) ?? new Set<EventListener>();
@@ -120,11 +145,14 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 			},
 			removeEventListener: (type, listener) => { listeners.get(type)?.delete(listener); },
 			close: () => { listeners.clear(); },
-			reopen: () => {
-				handlers.current.onClose?.(new CloseEvent("close", { code: 1006 }));
-				handlers.current.onOpen?.(new Event("open"));
+			reopen,
+			reconnect: () => {
+				const root = document.documentElement.dataset;
 
-				for (const listener of listeners.get("open") ?? []) listener(new Event("open"));
+				root.galleryRedials = String(Number(root.galleryRedials ?? "0") + 1);
+				// How many scripted failures were still to come when the page gave up on the socket.
+				root.galleryRedialAt = String((root.galleryRpcFailures ?? "").split(",").filter(Boolean).length);
+				reopen();
 			},
 			deliver: (raw) => {
 				const message = new MessageEvent("message", { data: raw });

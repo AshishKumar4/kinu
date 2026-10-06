@@ -2193,6 +2193,9 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
 /** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
 async function snapshotGate(): Promise<void> {
   const query = new URLSearchParams(location.search);
+  const asks = document.documentElement.dataset;
+
+  asks.gallerySnapshotReads = String(Number(asks.gallerySnapshotReads ?? "0") + 1);
 
   if (query.get("terminal") === "denied") await new Promise<never>(() => {});
 
