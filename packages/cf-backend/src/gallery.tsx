@@ -369,9 +369,7 @@ function chatgptFixture(path: string, method: string, body: BodyInit | null | un
     return fixtureJson({ outcome: "signed_in", email: "owner@example.com" });
   }
 
-  if (path === "/api/user/devices" && method === "POST") {
-    return fixtureJson({ origin: location.origin, installCommand: `curl -fsSL ${location.origin}/install.sh | sh -s -- --connect kd_9f2c71a4` });
-  }
+  if (path === "/api/user/devices" && method === "POST") return galleryRegister(body);
 
   return null;
 }
@@ -584,9 +582,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
     return fixtureJson({ ok: true });
   }
 
-  if (path === "/api/user/devices" && method === "POST") {
-    return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND }, 201);
-  }
+  if (path === "/api/user/devices" && method === "POST") return galleryRegister(body);
 
   if (path === "/api/user/devices") {
     if (frame === "devices-empty") return fixtureJson([]);
@@ -683,22 +679,31 @@ const connectFixtureMode = new URLSearchParams(location.search).get("connect");
 
 const connectFixtureActive = connectFixtureMode !== null;
 
+/** Every registration asked, by the name it carried; `&connect=fail-first` refuses the first. */
+const galleryRegistrations: string[] = [];
+
 let connectRegistrations = 0;
 
 let connectRosterReads = 0;
 
-function deviceConnectFixture(path: string, method: string): Response | null {
-  if (path === "/api/user/devices" && method === "POST") {
-    connectRegistrations += 1;
+/** The one registration answer every surface's connect panel reaches. */
+function galleryRegister(body: BodyInit | null | undefined): Response {
+  galleryRegistrations.push(v.parse(v.object({ label: v.optional(v.string()) }), JSON.parse(v.parse(v.string(), body))).label ?? "");
+  document.documentElement.dataset.galleryRegistrations = JSON.stringify(galleryRegistrations);
 
-    return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND }, 201);
-  }
+  if (connectFixtureMode === "fail-first" && galleryRegistrations.length === 1) return fixtureJson({ error: "the hub is busy" }, 503);
+  connectRegistrations += 1;
+
+  return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND }, 201);
+}
+
+function deviceConnectFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (path === "/api/user/devices" && method === "POST") return galleryRegister(body);
 
   if (path === "/api/user/devices" && method === "GET") {
     connectRosterReads += 1;
     // On the document, not `window`: `dataset` is a typed string map, a global is not.
     document.documentElement.dataset.galleryRosterReads = String(connectRosterReads);
-    document.documentElement.dataset.galleryRegistrations = String(connectRegistrations);
 
     return fixtureJson(connectRegistrations === 0 ? [] : [{
       id: "dev-arrived", label: "Owner PC", os: "darwin", hostname: "owner-mac",
@@ -915,7 +920,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   }
 
   if (connectFixtureActive && path.startsWith("/api/user/devices")) {
-    const answer = deviceConnectFixture(path, method);
+    const answer = deviceConnectFixture(path, method, init?.body);
 
     if (answer !== null) return Promise.resolve(answer);
   }

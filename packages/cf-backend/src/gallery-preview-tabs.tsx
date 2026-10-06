@@ -47,6 +47,9 @@ type ReplyValue = JsonValue | PlanReview | readonly ReplyValue[] | { readonly [k
 /** A connected machine, raised by `data-add-machine`; its git diff is one added line. */
 const MACHINE: ExecutorInfo = { name: 'device', kind: 'device', capabilities: [], available: true, configured: true, active: true, status: 'active' };
 
+/** A sandbox that could run but is asleep, raised by `data-add-idle-sandbox`: reading it would wake it. */
+const IDLE_SANDBOX: ExecutorInfo = { name: 'sandbox', kind: 'sandbox', capabilities: [], available: true, configured: true, active: false, status: 'idle' };
+
 const MACHINE_DIFF = { mode: 'git', files: [{ path: 'src/device.ts', status: 'added', added: 1, removed: 0,
   lines: [{ kind: 'hunk', text: '@@ -0,0 +1 @@' }, { kind: 'add', text: 'export const onDevice = true;' }] }] };
 
@@ -77,6 +80,7 @@ export function PreviewTabsGallery() {
   const [edited, setEdited] = useState<typeof EDITED | null>(null);
   const [broken, setBroken] = useState(false);
   const [machine, setMachine] = useState(false);
+  const [idleSandbox, setIdleSandbox] = useState(false);
   const [starting, setStarting] = useState(false);
   const [narrow, setNarrow] = useState(false);
   const keptNotes = useRef<JsonValue[]>([]);
@@ -90,7 +94,10 @@ export function PreviewTabsGallery() {
     const reply = (value: ReplyValue): Effect.Effect<T> => Effect.promise(() => new Response(JSON.stringify(value)).json<T>());
 
     if (method === 'previewSlate') return yield* reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
-    else if (method === 'getExecutorDiff' && broken) return yield* reply({ mode: 'vfs-baseline', files: [], error: 'the change-set read failed' });
+
+    if (method === 'getExecutorDiff') document.documentElement.dataset.galleryDiffReads = `${document.documentElement.dataset.galleryDiffReads ?? ''} ${String(args?.[0])}`.trim();
+
+    if (method === 'getExecutorDiff' && broken) return yield* reply({ mode: 'vfs-baseline', files: [], error: 'the change-set read failed' });
     else if (method === 'getExecutorDiff' && args?.[0] === MACHINE.name) return yield* reply(MACHINE_DIFF);
     else if (method === 'getExecutorDiff') return yield* reply({ mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: edited ?? [] });
     else if (method === 'getChangeNotes') return yield* reply(keptNotes.current);
@@ -176,6 +183,7 @@ export function PreviewTabsGallery() {
       <button data-revert-diff onClick={() => setEdited(null)}>Revert file</button>
       <button data-break-diff onClick={() => setBroken(true)}>Break read</button>
       <button data-add-machine onClick={() => setMachine(true)}>Connect a machine</button>
+      <button data-add-idle-sandbox onClick={() => setIdleSandbox(true)}>Idle sandbox</button>
       <button data-narrow-pane onClick={() => setNarrow(on => !on)}>Narrow pane</button>
       <button data-sandbox-starting onClick={() => setStarting(on => !on)}>Sandbox starting</button>
       <button data-notify-plan onClick={() => notify(ARRIVAL_REFERENCE)}>Notify courier plan</button>
@@ -189,7 +197,7 @@ export function PreviewTabsGallery() {
         slates={slates} slateReloads={new Map(slates.map(item => [item.id, reload]))}
         previewError={null} previewStarting={starting ? ['sandbox'] : []} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
         memory={[]} memoryContent="" onSearchMemory={NOTHING} mctsTrees={new Map()} headActivity={new Map()} isStreaming={false}
-        executors={machine ? [MACHINE] : []} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} onRefreshJobs={NOTHING} pendingActions={[]}
+        executors={[...machine ? [MACHINE] : [], ...idleSandbox ? [IDLE_SANDBOX] : []]} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} onRefreshJobs={NOTHING} pendingActions={[]}
         tabPresence={{ explorations: false, work: true }} rpc={rpc} />
     </div>
   </div>;

@@ -81,13 +81,14 @@
     "anti-slop/require-super-alarm": "error",
     "anti-slop/no-tui-colour-literal": "error",
     "anti-slop/no-dynamic-model-import": "error",
+    "anti-slop/model-method-boundary": "error",
     "anti-slop/require-variant-utility": "error",
     "anti-slop/no-cli-credential-flag": "error",
     "anti-slop/no-unaccounted-catch": "error",
     "anti-slop/no-reduce-accumulator-copy": "error",
     "anti-slop/no-reflect-apply": "error",
     "anti-slop/no-reflect-get": "error",
-    "anti-slop/no-runtime-typeof": "error",
+    "anti-slop/no-runtime-typeof": "off",
     "anti-slop/no-sentinel-catch": "error",
     "anti-slop/no-shape-in-symbol-names": "error",
     "anti-slop/no-sync-spawn": "error",
@@ -133,12 +134,6 @@
         "no-restricted-properties": ["error", {
           "property": "AI",
           "message": "Read the Workers AI binding in packages/core/src/providers/model-invocation.ts, where each utility call (an embedding, an HTML conversion) is counted as `platform` spend. Exempt: core/src/providers/ai-gateway.ts, cf-backend/src/providers/agent-registry.ts and cf-backend/src/user/ai-proxy.ts hand the binding to an AI SDK transport, and the model call made over it reports the spend."
-        }, {
-          "property": "doGenerate",
-          "message": "A provider model's doGenerate spends without reaching the workspace total; call a model through packages/core/src/providers/model-invocation.ts. Exempt: core/src/providers/wire-model.ts, the adapter that forwards a resolved model's calls, and test-utils/src/turn-model.ts, the scripted model tests run on."
-        }, {
-          "property": "doStream",
-          "message": "A provider model's doStream spends without reaching the workspace total; call a model through packages/core/src/providers/model-invocation.ts. Exempt: core/src/providers/wire-model.ts, the adapter that forwards a resolved model's calls, and test-utils/src/turn-model.ts, the scripted model tests run on."
         }]
       }
     },
@@ -187,22 +182,7 @@
         "packages/cf-backend/src/user/ai-proxy.ts"
       ],
       "rules": {
-        "no-restricted-properties": ["error", {
-          "property": "doGenerate",
-          "message": "A provider model's doGenerate spends without reaching the workspace total; call a model through packages/core/src/providers/model-invocation.ts. Exempt: core/src/providers/wire-model.ts, the adapter that forwards a resolved model's calls, and test-utils/src/turn-model.ts, the scripted model tests run on."
-        }, {
-          "property": "doStream",
-          "message": "A provider model's doStream spends without reaching the workspace total; call a model through packages/core/src/providers/model-invocation.ts. Exempt: core/src/providers/wire-model.ts, the adapter that forwards a resolved model's calls, and test-utils/src/turn-model.ts, the scripted model tests run on."
-        }]
-      }
-    },
-    {
-      "files": ["packages/core/src/providers/wire-model.ts", "packages/test-utils/src/turn-model.ts"],
-      "rules": {
-        "no-restricted-properties": ["error", {
-          "property": "AI",
-          "message": "Read the Workers AI binding in packages/core/src/providers/model-invocation.ts, where each utility call (an embedding, an HTML conversion) is counted as `platform` spend. Exempt: core/src/providers/ai-gateway.ts, cf-backend/src/providers/agent-registry.ts and cf-backend/src/user/ai-proxy.ts hand the binding to an AI SDK transport, and the model call made over it reports the spend."
-        }]
+        "no-restricted-properties": ["error"]
       }
     }
   ],

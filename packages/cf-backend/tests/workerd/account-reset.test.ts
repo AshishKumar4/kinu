@@ -19,8 +19,19 @@ describe('deleting an account on real workerd', () => {
 
     const before = await probe().counts();
     expect(before).toMatchObject({
-      user_workspaces: 2, user_shares_received: 1, user_mcp_servers: 1, user_credentials: 1, device_consent: 1, user_profile: 1,
+      user_workspaces: 2, user_shares_received: 2, user_mcp_servers: 1, user_credentials: 1, device_consent: 1, user_profile: 1,
     });
+
+    // Sam deletes their own account: only the share Sam gave is forgotten here.
+    await probe().ownerDeleted('f'.repeat(32));
+    expect(await probe().receivedFrom()).toEqual(['ana@example.test']);
+
+    // A workspace that will not stop stops the delete: its row stays marked, the account stays for the retry.
+    await probe().refuseTeardownOf('ws-alpha', true);
+    expect(await probe().resetRefused()).toContain('container refused to stop');
+    expect({ pending: await probe().pendingDeletes(), profile: (await probe().counts()).user_profile })
+      .toEqual({ pending: ['ws-alpha'], profile: 1 });
+    await probe().refuseTeardownOf('ws-alpha', false);
 
     // The SDK's destroy aborts a tick after resolving, so the answer or the `destroyed` sentinel both count.
     let outcome: { kind: 'answered'; answer: { ok: true; workspaces: number } } | { kind: 'rejected'; message: string };

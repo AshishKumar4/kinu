@@ -182,6 +182,11 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   hashes(): Promise<Record<'ws-alpha' | 'ws-beta', string | null>>;
   reset(): Promise<{ ok: true; workspaces: number }>;
   freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null; workspaceCount: number } | null>;
+  refuseTeardownOf(workspace: string, refuse: boolean): Promise<void>;
+  pendingDeletes(): Promise<string[]>;
+  receivedFrom(): Promise<string[]>;
+  ownerDeleted(ownerUserId: string): Promise<void>;
+  resetRefused(): Promise<string>;
 }
 
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {

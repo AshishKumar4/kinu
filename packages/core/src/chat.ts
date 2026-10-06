@@ -6,6 +6,7 @@ import {
   InvalidResponseDataError,
   NoOutputGeneratedError,
   streamText,
+  wrapLanguageModel,
   type ModelMessage,
   type ToolSet,
   type LanguageModel,
@@ -324,10 +325,26 @@ class ProviderCall {
   /** When the step's request left (`prepareStep`): a cache warm counts its TTL from there
    *  (docs/research/harness/anthropic-sources.md §2). */
   private stepSentAt = Date.now();
+  private requestBody: unknown;
   /** A finished step whose record or hook failed; the SDK drops a step-callback throw (ai 6.0.214 `notify`). */
   stepFailure: { readonly doing: string; readonly cause: unknown } | null = null;
 
   constructor(private readonly fallback: string | undefined) {}
+
+  /** The seal consumes the wire body for cache warming; SDK step and stream replay retain none. */
+  model(model: LanguageModel): LanguageModel {
+    if (typeof model === 'string') return model;
+
+    return wrapLanguageModel({ model, middleware: {
+      specificationVersion: 'v4',
+      wrapStream: async ({ doStream }) => {
+        const { request, ...answer } = await doStream();
+        this.requestBody = request?.body;
+
+        return answer;
+      },
+    } });
+  }
 
   /** Each step's request starts from the call's input and the seal's answers: ai 7 would carry the last step's
    *  rewrite (markers, weave) and its raw tool outputs into the next one. */
@@ -358,9 +375,8 @@ class ProviderCall {
     const account = callAccountOf(step.response);
     const egress = step.response.headers?.[EGRESS_ROUTE_HEADER];
     const { modelId } = step.response;
-    const { body } = step.request;
-    // The SDK keeps each step record until the call ends; left there, each body is a copy of the transcript.
-    Reflect.deleteProperty(step.request, 'body');
+    const body = this.requestBody;
+    this.requestBody = undefined;
     const calls = new Map(step.content.flatMap((part) => (part.type === 'tool-call' ? [[part.toolCallId, part] as const] : [])));
 
     const toolResults = step.content.flatMap((part) => {
@@ -849,7 +865,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const attempt = cache;
 
     const result = streamText({
-      model: current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts),
+      model: call.model(current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts)),
       instructions: attempt.system,
       maxRetries: route.callRetries,
       messages: await narrowedFor(request),
@@ -860,8 +876,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       experimental_repairToolCall: repairToolCall(),
       abortSignal: signal,
       headers: { [PROVIDER_RETRIES_HEADER]: String(route.callRetries) },
-      // A cache warm replays a step's request body, which ai 7 leaves out unless asked.
-      include: { requestBody: true },
+      include: { requestBody: false },
       // The SDK default console.error dumped raw provider payloads; the rethrow below is the one place failures read.
       onError: ({ error }) => { call.streamError = error; },
       onToolExecutionStart: ({ toolCall }) => { call.dispatched(toolCall); },
