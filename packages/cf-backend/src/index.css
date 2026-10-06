@@ -1658,12 +1658,16 @@ body > .annotation-toolbar {
   pointer-events: none;
   transition: opacity var(--dur-fast) ease-out;
 }
-.p-bar-tab:is(:hover, :focus-within) .p-bar-actions { opacity: 1; pointer-events: auto; }
-.p-bar-tab:is(:hover, :focus-within):has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
-.p-bar-tab:is(:hover, :focus-within):has(.p-bar-action:only-child) .p-bar-link { padding-right: calc(var(--flare) + 32px); }
+/* A tap is no hover: on touch, only the open chat's tab carries its actions, so a tap meant for a name never lands
+   on a pencil or a cross that appeared under it. The workspace renames in its settings there. */
+@media (hover: hover) {
+  .p-bar-tab:is(:hover, :focus-within) .p-bar-actions { opacity: 1; pointer-events: auto; }
+  .p-bar-tab:is(:hover, :focus-within):has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
+  .p-bar-tab:is(:hover, :focus-within):has(.p-bar-action:only-child) .p-bar-link { padding-right: calc(var(--flare) + 32px); }
+}
 @media (hover: none) {
-  .p-bar-tab[data-active] .p-bar-actions { opacity: 1; pointer-events: auto; }
-  .p-bar-tab[data-active]:has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
+  .p-bar-tab[data-active]:not([data-title]) .p-bar-actions { opacity: 1; pointer-events: auto; }
+  .p-bar-tab[data-active]:not([data-title]):has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
 }
 .p-bar-action {
   display: flex;

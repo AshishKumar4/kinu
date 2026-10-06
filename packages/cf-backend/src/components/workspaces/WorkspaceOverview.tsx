@@ -2,14 +2,14 @@
  * The workspace's own page: one line on where things stand, its GitHub work, and every agent's tasks on one board.
  * Each section reads a real source or says plainly that none exists yet.
  */
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
-import { GitBranchIcon, GitPullRequestIcon } from "@phosphor-icons/react";
 import type { AgentTaskTree, PanelAgent, Rpc, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { ForkLineage, ReadMoves } from "@/hooks/use-kinu";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { AgentStatusMark } from "@/components/AgentStatus";
+import { GitHubSection } from "@/components/workspaces/GitHubSection";
 
 type Lane = "todo" | "doing" | "waiting" | "done";
 
@@ -112,12 +112,7 @@ export function WorkspaceOverview({ workspace, title, rpc, readMoves, lineage, a
 
         <section aria-labelledby="overview-github" className="flex flex-col gap-3">
           <h2 id="overview-github" className="p-eyebrow">GitHub</h2>
-          <div className="grid gap-3 md:grid-cols-2">
-            <Quiet icon={<GitBranchIcon size={15} />} title="Repositories"
-              text="Linking a GitHub repository to a workspace is not available yet. Branches, pushes and CI will show here once it is." />
-            <Quiet icon={<GitPullRequestIcon size={15} />} title="Issues and pull requests"
-              text="Kinu does not yet record the issues and pull requests its agents open or touch." />
-          </div>
+          <GitHubSection rpc={rpc} readMoves={readMoves} agents={agents} />
         </section>
 
         <section aria-labelledby="overview-tasks" className="flex flex-col gap-3">
@@ -126,18 +121,6 @@ export function WorkspaceOverview({ workspace, title, rpc, readMoves, lineage, a
             ? <LoadFailure what="this workspace's tasks" message={resource.message} onRetry={reload} />
             : <Board cards={cards} workspace={workspace} loaded={work !== null} open={open} />}
         </section>
-      </div>
-    </div>
-  );
-}
-
-function Quiet({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
-  return (
-    <div className="flex gap-3 rounded-xl border border-dashed p-border px-4 py-3.5">
-      <span className="mt-0.5 p-text-3">{icon}</span>
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <span className="text-[13.5px] font-medium p-text-2">{title}</span>
-        <span className="text-[12.5px] leading-[18px] p-text-3">{text}</span>
       </div>
     </div>
   );

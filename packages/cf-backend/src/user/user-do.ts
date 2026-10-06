@@ -125,7 +125,7 @@ import {
   type PutEgressSecretInput,
   revocationEndpointFor, revokeOAuthGrant, type UnrevokedGrant,
 } from '@kinu.run/core';
-import { compareCodeUnits, initAccessTokenTable } from '@kinu.run/core';
+import { compareCodeUnits, GITHUB_MCP_PRESET, initAccessTokenTable } from '@kinu.run/core';
 import {
   addSkill, ChunkedUpload, deleteDriveEntry, driveFailure, DriveUploadTargetSchema, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
   listDrive, makeDriveFolder, markAsSkill, normalizeDrivePath, packDriveFolder, receiveDriveUpload, renameDriveEntry,
@@ -5486,8 +5486,8 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
   async userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
     await this.requireTier(caller, 'mcp.tools');
 
-    const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null }>(
-      `SELECT id, name, allowed_tools FROM user_mcp_servers`,
+    const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null; preset_id: string | null }>(
+      `SELECT s.id, s.name, s.allowed_tools, p.preset_id FROM user_mcp_servers s LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id`,
     );
 
     if (rows.length === 0) return JSON.stringify({ descriptors: [], unavailable: [] } satisfies McpToolSurface);
@@ -5535,7 +5535,7 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
         if (allowed && !allowed.has(tool.name)) continue;
         const described = describeMcpTool({ id, name: meta.name }, tool);
 
-        if ('admitted' in described) out.push(described.admitted);
+        if ('admitted' in described) out.push(meta.preset_id === null ? described.admitted : { ...described.admitted, presetId: meta.preset_id });
         else refused.push(described.refused);
       }
 
@@ -5578,6 +5578,24 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     } finally {
       this._mcpCalls.delete(call.id);
     }
+  }
+
+  /** Server-side only, for the overview's refresh; null without a GitHub connection. */
+  async userMcp_githubAuthorization(caller: UserCaller): Promise<string | null> {
+    await this.requireTier(caller, 'mcp.tools');
+
+    const row = this.sqlx<{ id: string }>(
+      `SELECT s.id FROM user_mcp_servers s JOIN user_mcp_server_presets p ON p.server_id = s.id WHERE p.preset_id = ? LIMIT 1`, GITHUB_MCP_PRESET,
+    )[0];
+
+    if (!row) return null;
+    const sealed = Object.entries((await this.openMcpHeaderMap(row.id)) ?? {}).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
+
+    if (sealed !== undefined) return sealed;
+    await this.hydrateUserMcp();
+    const tokens = await this.mcp.mcpConnections[row.id]?.options.transport.authProvider?.tokens();
+
+    return tokens?.access_token === undefined ? null : `Bearer ${tokens.access_token}`;
   }
 
   /** Stops a call `userMcp_callTool` is making: the server is told the request is cancelled, and the call settles. */

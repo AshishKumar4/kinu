@@ -7,7 +7,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { threadLiveTail, type PanelAgent, type TurnLiveness, requestUrl } from "@kinu.run/core";
+import { threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
 import { followJobOutput, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
@@ -1683,6 +1683,12 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   listWorkspaceAgents: galleryWorkspaceAgents,
+  getWorkspaceGitHub: (args?: unknown[]) => {
+    const root = document.documentElement;
+    root.dataset.galleryGitHubReads = `${root.dataset.galleryGitHubReads ?? ""}${v.parse(v.tuple([v.boolean()]), args)[0] ? "R" : "r"}`;
+
+    return GALLERY_GITHUB;
+  },
   getShellApprovalGrants: () => ({ grants: SHELL_GRANTS }),
   renameMainChat: (args?: unknown[]) => {
     GALLERY_MAIN_TITLE.value = v.parse(v.tuple([v.string()]), args)[0];
@@ -1893,6 +1899,24 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
 }
 
 /** `&agents=panel`: chats, hires nested two deep, a swarm and a helper. */
+const GALLERY_GITHUB: WorkspaceGitHubView = {
+  repos: [
+    { repo: "acme/storefront", remote: true, lastPush: { ref: "refs/heads/fix/coupon-guard", at: NOW - 2 * 36e5 }, fetchedAt: NOW - 3 * 36e5,
+      branch: "fix/coupon-guard", ci: { state: "failure", at: NOW - 90 * 60e3 } },
+    { repo: "acme/storefront-docs", remote: true, lastPush: null, fetchedAt: NOW - 864e5, branch: "main", ci: { state: "success", at: NOW - 864e5 } },
+  ],
+  items: [
+    { subject: "pr", repo: "acme/storefront", number: 482, title: "Guard archived coupons before the discount applies", url: "https://github.com/acme/storefront/pull/482",
+      state: "open", actors: [galleryActorId(WORKSPACE_PAGE_NAME), galleryActorId("coupon-auditor")], unattributed: false, lastAt: NOW - 2 * 36e5 },
+    { subject: "issue", repo: "acme/storefront", number: 477, title: "SAVE20 returns a 500 at checkout", url: "https://github.com/acme/storefront/issues/477",
+      state: "closed", actors: [], unattributed: true, lastAt: NOW - 3 * 36e5 },
+    { subject: "pr", repo: "acme/storefront-docs", number: 61, title: "Document the coupon kinds", url: "https://github.com/acme/storefront-docs/pull/61",
+      state: "merged", actors: [galleryActorId(WORKSPACE_PAGE_NAME)], unattributed: false, lastAt: NOW - 864e5 },
+  ],
+  observedAt: NOW - 3 * 60e3,
+  refresh: "refreshed",
+};
+
 const GALLERY_AGENTS: PanelAgent[] = [
   { key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
     actorId: galleryActorId(WORKSPACE_PAGE_NAME), figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } },

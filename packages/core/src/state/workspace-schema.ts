@@ -33,6 +33,7 @@ import { initDeferredApprovalsTable } from '../safety/deferred-approval';
 import { initDeviceConsentRequestsTable } from '../safety/device-consent';
 import { initInstructionApprovalsTable } from '../safety/instruction-trust';
 import { initPlanReviewTable } from '../plans/review';
+import { initGitHubActivityTable } from '../github/activity';
 import { initAlternateTakesTable } from '../mcts/takes';
 import { initMctsSearchTable } from '../mcts/search-store';
 import { initFactsTable } from '../memory/facts';
@@ -157,6 +158,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initDeferredApprovalsTable(execRaw);
   initDeviceConsentRequestsTable(execRaw);
   initPlanReviewTable(execRaw);
+  initGitHubActivityTable(execRaw);
   // KINU-N028. A missing table must not fail open.
   initInstructionApprovalsTable(execRaw);
   initTaskListTable(execRaw);

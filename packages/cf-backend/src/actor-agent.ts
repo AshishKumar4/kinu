@@ -165,7 +165,7 @@ import {
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
-  toolSurfaceTokens, McpToolSurfaceSchema,
+  toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsForInvocation, withTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
@@ -2256,6 +2256,11 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Rendered into the turn's dynamic context so missing MCP servers are legible. */
   private _mcpUnavailable: MissingCapability[] = [];
 
+  private noteGitHubCall(descriptor: Pick<SerializableToolDescriptor, 'presetId' | 'name'>, args: JsonObject, result: string, actorId: string | null): void {
+    if (descriptor.presetId !== GITHUB_MCP_PRESET) return;
+    recordGitHubActivity(this.boundSql, recognizeGitHubMcp(descriptor.name, args, result), { actorId, source: 'mcp', at: Date.now() });
+  }
+
   private get mcpToolsCache(): McpToolSurfaceCache<ToolSet> {
     this._mcpToolsCache ??= new McpToolSurfaceCache<ToolSet>(async (descriptors) =>
       // `buildMcpToolSet` puts every non-readOnly tool behind the same durable claim as natives,
@@ -2263,6 +2268,8 @@ export abstract class ActorAgent extends Agent<Env> {
       buildMcpToolSet(descriptors, {
         call: async (d, args, options) => {
           const rawResult = await callUserMcpTool({ stub: this.requireOwnerUserDO(), caller: await this.userCaller() }, d, args, options.abortSignal);
+
+          this.noteGitHubCall(d, args, rawResult, this.actorHandle().actorId);
 
           const response = v.parse(JsonValueSchema, JSON.parse(rawResult));
 
@@ -3063,7 +3070,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (!reach.allowsTool(descriptor.toolKey)) return yield* new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
 
-          return v.parse(JsonValueSchema, JSON.parse(yield* Effect.promise(async () => callUserMcpTool({ stub, caller }, descriptor, route.args, undefined))));
+          const answered = yield* Effect.promise(async () => callUserMcpTool({ stub, caller }, descriptor, route.args, undefined));
+
+          // A slate calls on its viewer's behalf, not any agent's.
+          this.noteGitHubCall(descriptor, route.args, answered, null);
+
+          return v.parse(JsonValueSchema, JSON.parse(answered));
         }
 
         case 'agent': {

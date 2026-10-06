@@ -143,7 +143,7 @@ function TriggerLine({ trigger, onRevoke }: {
   );
 }
 
-/** Split at the credential so it renders through `SecretValue`; a secret in a template string lands in screenshots. */
+/** Split at the credential: it renders through `SecretValue`, never a template string. */
 interface CurlCommand {
   readonly before: string;
   readonly secret: string | null;

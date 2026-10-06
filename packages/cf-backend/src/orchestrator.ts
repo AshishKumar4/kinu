@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { GitHubFactSchema, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, refreshGitHub, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -2913,6 +2913,45 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
   @callable()
+  /** The devbox egress cannot name the agent, so nobody's. Never `@callable`. */
+  async recordGitHubEgress(facts: readonly GitHubFact[]): Promise<void> {
+    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId: null, source: 'egress', at: Date.now() });
+  }
+
+  @callable() getWorkspaceGitHub(refresh = false): Promise<WorkspaceGitHubView> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const remotes = yield* Effect.promise(async () => readGitHubRemotes(this.rt.localVfs, WORKSPACE_ROOT));
+      const outcome = refresh ? yield* this.refreshGitHub(readGitHubActivity(this.boundSql, remotes)) : 'skipped';
+
+      return { ...readGitHubActivity(this.boundSql, remotes), refresh: outcome };
+    }));
+  }
+
+  private refreshGitHub(activity: WorkspaceGitHub): Effect.Effect<WorkspaceGitHubView['refresh']> {
+    return Effect.gen({ self: this }, function* () {
+      const authorization = yield* attempt({ doing: 'finding the account\'s GitHub token', otherwise: 'unavailable' }, async () => this.githubAuthorization());
+
+      if (authorization === null) return 'no-token' as const;
+      const refreshed = yield* refreshGitHub({ authorization, activity, fetch: async (url, init) => fetch(url, init) });
+
+      recordGitHubObservations(this.boundSql, refreshed.observed, Date.now());
+
+      return refreshed.outcome;
+    }).pipe(Effect.catch((failed) => Effect.sync(() => {
+      diagnostics.failure('github.refresh_failed', failed);
+
+      return 'unreachable' as const;
+    })));
+  }
+
+  private async githubAuthorization(): Promise<string | null> {
+    const { stub, caller } = await this.userHub();
+    const vault = await stub.getAuthHeaders(caller, 'github');
+    const header = Object.entries(vault ?? {}).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
+
+    return header ?? stub.userMcp_githubAuthorization(caller);
+  }
+
   async listWorkspaceWork(): Promise<WorkspaceWork> {
     return readWorkspaceWork(
       this.boundSql,

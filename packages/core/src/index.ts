@@ -1568,6 +1568,19 @@ export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSche
 
 export { agentTitle, nestedAgent, type AgentLinkIds } from './subordinates/nested-agent';
 
+export { recognizeGitHubHttp, recognizeGitHubMcp, GitHubFactSchema, GITHUB_MCP_PRESET, type GitHubFact } from './github/recognize';
+
+export { observeGitHub, type GitHubRecorder } from './github/observe';
+
+export {
+  readGitHubActivity, recordGitHubActivity, recordGitHubObservations,
+  type GitHubCi, type GitHubItem, type GitHubRepo, type WorkspaceGitHub,
+} from './github/activity';
+
+export { refreshGitHub, type GitHubRefreshOutcome, type WorkspaceGitHubView } from './github/refresh';
+
+export { readGitHubRemotes } from './github/remotes';
+
 export {
   readWorkspaceAgents,
   type PanelAgent, type AgentCategory, type AgentActivity, type AgentOpening,

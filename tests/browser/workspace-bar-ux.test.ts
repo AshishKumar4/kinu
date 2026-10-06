@@ -178,6 +178,35 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     });
   });
 
+  test('the overview shows what GitHub last said of the workspace\'s repositories and the work its agents touched', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspaceshell&agents=panel`, { waitUntil: 'networkidle0' });
+      await page.click('.p-bar-tab[data-title] .p-bar-link');
+      await page.waitForSelector('[data-overview-github] [data-github-item]');
+
+      const shown = await page.evaluate(() => ({
+        repos: [...document.querySelectorAll('[data-github-repo]')].map((row) => row.textContent?.replace(/\s+/g, ' ').trim()),
+        items: [...document.querySelectorAll('[data-github-item]')].map((row) => [row.getAttribute('data-github-item'), row.querySelector('a')?.getAttribute('href'), row.textContent?.includes('an agent') ?? false]),
+        checked: document.querySelector('[data-github-checked]')?.getAttribute('data-github-checked'),
+        reads: document.documentElement.dataset.galleryGitHubReads,
+      }));
+
+      expect(shown.repos[0]).toContain('fix/coupon-guard');
+      expect(shown.repos[0]).toContain('failing');
+      expect(shown.items).toEqual([
+        ['acme/storefront#482', 'https://github.com/acme/storefront/pull/482', false],
+        ['acme/storefront#477', 'https://github.com/acme/storefront/issues/477', true],
+        ['acme/storefront-docs#61', 'https://github.com/acme/storefront-docs/pull/61', false],
+      ]);
+      expect(shown.checked).toBe('refreshed');
+      // Opening the overview asks GitHub once, first; any later read takes the record as it stands.
+      expect(shown.reads).toMatch(/^Rr*$/);
+      await page.close();
+    });
+  });
+
   test('a file attached in the new-chat box goes out with the opening message', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);

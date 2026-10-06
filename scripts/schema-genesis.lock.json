@@ -696,6 +696,21 @@
     "iterations INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY (actor_id, run_id)"
   ],
+  "github_activity@packages/core/src/github/activity.ts": [
+    "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "at INTEGER NOT NULL",
+    "actor_id TEXT",
+    "source TEXT NOT NULL",
+    "action TEXT NOT NULL",
+    "subject TEXT NOT NULL",
+    "repo TEXT NOT NULL",
+    "number INTEGER",
+    "url TEXT",
+    "title TEXT",
+    "ref TEXT",
+    "state TEXT",
+    "ci TEXT"
+  ],
   "head_journal@packages/core/src/heads/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
