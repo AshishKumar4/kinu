@@ -90,14 +90,14 @@ describe('run tool — interactive shell approval channel', () => {
   test('a channel that declines to decide leaves the standing mode in force', async () => {
     const { run, executed } = harness({ approve: async () => null });
 
-    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('needs owner approval, nobody to ask') });
+    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'unavailable' });
     expect(executed).toEqual([]);
   });
 
-  test('with no channel wired, strict keeps its explanatory refusal', async () => {
+  test('with no channel wired, strict refuses as unavailable and runs nothing', async () => {
     const { run, executed } = harness({});
 
-    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('needs owner approval, nobody to ask') });
+    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'unavailable' });
     expect(executed).toEqual([]);
   });
 

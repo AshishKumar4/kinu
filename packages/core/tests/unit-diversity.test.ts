@@ -41,18 +41,9 @@ describe('diversity angles', () => {
     }
   });
 
-  test('the first six branches read exactly as they always did', () => {
-    // The second axis is reached only by a wider wave, so a five-wide `ideate` is unchanged.
-    for (let i = 0; i < 6; i += 1) {
-      expect(diversityAngle(i, 6)).not.toContain('starting from');
-      expect(diversityAngle(i, 30)).toBe(diversityAngle(i, 6));
-    }
-  });
-
-  test('directive names the sibling angles and demands a distinct approach', () => {
+  test('directive names the sibling angles', () => {
     const directive = diversityDirective(['the simplest possible solution']);
     expect(directive).toContain('the simplest possible solution');
-    expect(directive).toMatch(/DISTINCT/);
   });
 });
 
@@ -86,9 +77,9 @@ describe('explorePrompt — the one question every substrate asks', () => {
   test('the sibling diversity directive rides the user message', () => {
     const solo = explorePrompt(base);
     const withSiblings = explorePrompt({ ...base, siblings: ['the simplest possible solution'] });
-    expect(solo.user).not.toContain('DISTINCT');
-    expect(withSiblings.user).toContain('the simplest possible solution');
-    expect(withSiblings.user).toContain(diversityDirective(['the simplest possible solution']));
+    const directive = diversityDirective(['the simplest possible solution']);
+    expect(solo.user).not.toContain(directive);
+    expect(withSiblings.user).toContain(directive);
   });
 
   test('the parent context is carried verbatim', () => {

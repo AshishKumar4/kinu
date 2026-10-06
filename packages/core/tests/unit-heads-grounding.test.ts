@@ -285,6 +285,38 @@ describe('k-sample median merge', () => {
     expect(result.mergedNarrative).toBe('CAND-mid');
   });
 
+  test('a judge that writes its score in exponent form is read as that score', async () => {
+    const { journal } = newJournal();
+
+    // Valid JSON: 5e-1 is 0.5, so the middle candidate is the median, not 1 (a misread "5").
+    const exponentJudge: LLM = {
+      async *stream() { yield ''; },
+      async complete(prompt: string) {
+        if (!prompt.includes('Synthesized answer:')) return JSON.stringify({ score: 0.5 });
+
+        if (prompt.includes('CAND-low')) return '{"score": 0.2}';
+
+        return prompt.includes('CAND-high') ? '{"score": 0.8}' : '{"score": 5e-1}';
+      },
+    };
+
+    const runtime = buildRuntime({
+      reports: { a: report('h-a'), b: report('h-b') },
+      grounding: grounding({ judge: exponentJudge, explorer: exponentJudge, mergeSamples: 3 }),
+      mergeNarratives: ['CAND-low', 'CAND-mid', 'CAND-high'],
+      mergePrompts: [],
+    });
+
+    const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
+      parentHeadId: null, inheritedContext: ctx,
+      request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
+    });
+
+    expect(result.mergedNarrative).toBe('CAND-mid');
+  });
+
   test('a merge judge the provider cannot answer costs the ensemble, not the merge', async () => {
     const { journal } = newJournal();
     const mergePrompts: string[] = [];

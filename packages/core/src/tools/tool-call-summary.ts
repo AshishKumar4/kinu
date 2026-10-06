@@ -4,6 +4,7 @@
  */
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { redactSecrets } from '../events/hub/visibility';
+import { NATIVE_ACTION_EFFECTS, type SlateMemberEffect } from '../slates/members';
 import * as v from 'valibot';
 
 /** Chip budget: must fit one line beside the name, runtime badge and duration. */
@@ -18,22 +19,6 @@ function str(input: JsonObject, key: string): string {
 
 export type ToolCallEffect = 'read' | 'mutate' | 'unknown';
 
-const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['file', new Set(['write', 'edit'])],
-  ['tasks', new Set(['add', 'update'])],
-  ['memory', new Set(['save', 'remember', 'forget'])],
-  ['agents', new Set(['swarm', 'hire', 'msg', 'dismiss'])],
-  ['web', new Set(['fetch', 'screenshot'])],
-]);
-
-const READING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['file', new Set(['read', 'list', 'stat', 'search'])],
-  ['tasks', new Set(['list'])],
-  ['memory', new Set(['search', 'recall', 'conversations'])],
-  ['agents', new Set(['list'])],
-  ['web', new Set(['search'])],
-]);
-
 /** Only declared native operations are classified; shell and codemode programs have no effect receipt. */
 export function toolCallEffect(toolName: string, input: JsonValue | undefined): ToolCallEffect {
   const parsed = v.safeParse(JsonObjectSchema, input);
@@ -45,11 +30,9 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined): 
     return str(parsed.output, 'role') ? 'mutate' : 'read';
   }
 
-  if (MUTATING_ACTIONS.get(toolName)?.has(action) === true) return 'mutate';
+  const actions: Readonly<Record<string, SlateMemberEffect>> | undefined = Object.entries(NATIVE_ACTION_EFFECTS).find(([name]) => name === toolName)?.[1];
 
-  if (READING_ACTIONS.get(toolName)?.has(action) === true) return 'read';
-
-  return 'unknown';
+  return actions !== undefined && Object.hasOwn(actions, action) ? actions[action] : 'unknown';
 }
 
 /** Collapse whitespace and clip, marking the clip. */

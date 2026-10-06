@@ -775,6 +775,25 @@ describe('an eval that returns an image', () => {
   });
 });
 
+describe('an eval that returns a native tool\'s image', () => {
+  test('shows the model the image a nested screenshot carried, not its base64 as text, and keeps the failures', async () => {
+    const failure = { success: false as const, tool: 'web', action: 'fetch', reason: 'denied' as const, error: 'blocked private/internal address: 10.0.0.1' };
+    // `return await tools.web({ action: 'screenshot', … })`: the native tool's carrier, nested under the program's result.
+    const shot = { output: 'Screenshot of https://example.com/', images: [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }] };
+    const program = { result: { shot }, logs: [], failures: [failure] };
+    const evalTool = withClampedToolResult(tool({ inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => program }), { producer: 'eval', images: true });
+    const output = await toolExecute<{ code: string }, JsonValue>(evalTool)({ code: '' });
+    const model = await evalTool.toModelOutput?.({ toolCallId: 'c1', input: { code: '' }, output });
+
+    expect(successfulToolOutcome('eval', { output })).toEqual({ success: true, failures: [failure] });
+    expect(model).toMatchObject({
+      type: 'content',
+      value: [{ type: 'text', text: expect.stringContaining('Screenshot of https://example.com/') }, { type: 'file', data: { type: 'data', data: 'iVBORw0KGgo=' }, mediaType: 'image/png' }],
+    });
+    expect(JSON.stringify(model)).not.toContain('"images"');
+  });
+});
+
 describe('web on a shared slate', () => {
   /** Every path under the workspace home, as the tree a visitor must leave alone. */
   async function tree(vfs: ReturnType<typeof createTestRuntime>['rt']['storage']['vfs'], dir = '.'): Promise<string[]> {

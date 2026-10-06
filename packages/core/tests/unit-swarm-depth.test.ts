@@ -531,6 +531,40 @@ async function run(input: {
   return { logger, nodes, result, prompts };
 }
 
+describe('a verifier whose artifact cannot be written', () => {
+  test('refuses the run, closes its ledger row, and a fresh search runs after it', async () => {
+    const { rt } = createTestRuntime();
+    const { vfs } = rt.storage;
+    const write = vfs.writeFile.bind(vfs);
+    let writable = false;
+
+    // The scalar verifier's artifact write is its first act; a disk that refuses it faults the instrument.
+    Object.defineProperty(vfs, 'writeFile', {
+      configurable: true,
+      value: async (...args: Parameters<typeof vfs.writeFile>) => {
+        if (!writable && args[0] === SOLUTION_FILE) throw new Error('ENOSPC: no space left on device');
+
+        return write(...args);
+      },
+    });
+
+    const faulted = await runSwarm(
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build' },
+      resolved({ depth: 1, branches: 1 }),
+    );
+
+    expect(faulted).toMatchObject({ error: expect.stringContaining('ENOSPC') });
+    writable = true;
+
+    const fresh = await runSwarm(
+      { reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build' },
+      resolved({ depth: 1, branches: 1 }),
+    );
+
+    expect('reason' in fresh).toBe(false);
+  });
+});
+
 describe('a thought node\'s call is swarm spend', () => {
   test('every node the search expanded lands in the workspace ledger once, measured', async () => {
     const { rt } = createTestRuntime();

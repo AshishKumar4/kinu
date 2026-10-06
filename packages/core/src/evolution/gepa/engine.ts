@@ -60,6 +60,17 @@ export function runGepa<I = unknown, E = unknown>(
     const pool: GepaCandidate[] = [seed];
     const history: GepaCandidate[] = [seed];
 
+    // The front and the best change only when the pool grows, so a run of rejections reuses one reading.
+    let standing: { readonly size: number; readonly paretoFront: GepaCandidate[]; readonly bestSoFar: GepaCandidate } | null = null;
+
+    const standingOf = () => {
+      if (standing?.size !== pool.length) {
+        standing = { size: pool.length, paretoFront: computeParetoFront(pool, instanceIds).front, bestSoFar: bestAggregate(pool) };
+      }
+
+      return { paretoFront: standing.paretoFront, bestSoFar: standing.bestSoFar };
+    };
+
     let stopReason: GepaResult['stopReason'] = 'iterations_exhausted';
     let mergeInvocations = 0;
     const REJECTION_GIVE_UP = 5;
@@ -102,8 +113,7 @@ export function runGepa<I = unknown, E = unknown>(
     let consecutiveRejections = 0;
 
     const recordRejection = (iter: number, reason: string): Effect.Effect<boolean> => Effect.map(emitIteration(config.onIteration, {
-      iteration: iter, pool, paretoFront: computeParetoFront(pool, instanceIds).front,
-      bestSoFar: bestAggregate(pool), metricCallsUsed, accepted: false,
+      iteration: iter, pool, ...standingOf(), metricCallsUsed, accepted: false,
       rejectionReason: reason,
     }), () => ++consecutiveRejections >= REJECTION_GIVE_UP);
 
@@ -171,18 +181,17 @@ export function runGepa<I = unknown, E = unknown>(
       yield* emitIteration(config.onIteration, {
         iteration: iter,
         pool,
-        paretoFront: computeParetoFront(pool, instanceIds).front,
-        bestSoFar: bestAggregate(pool),
+        ...standingOf(),
         metricCallsUsed,
         accepted: true,
       });
     }
 
-    const front = computeParetoFront(pool, instanceIds).front;
+    const final = standingOf();
 
     const result: GepaResult = {
-      winner: bestAggregate(pool),
-      paretoFront: front,
+      winner: final.bestSoFar,
+      paretoFront: final.paretoFront,
       history,
       metricCallsUsed,
       iterationsRun,

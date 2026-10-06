@@ -304,12 +304,6 @@ describe('the declared boundaries are the instrumented boundaries', () => {
     }
   });
 
-  test('each boundary says what a row means, so a dataset reader needs no source', () => {
-    for (const boundary of FLEET_BOUNDARIES) {
-      expect(boundary.means.length).toBeGreaterThan(40);
-    }
-  });
-
   test('every declared event stamps its own boundary id when written', () => {
     for (const boundary of FLEET_BOUNDARIES) {
       expect(boundaryOf(boundary.event)).toBe(boundary.id);

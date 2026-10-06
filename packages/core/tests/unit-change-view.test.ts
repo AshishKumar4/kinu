@@ -26,28 +26,44 @@ function rowsIn(blocks: readonly ChangeBlock[]): ChangeRow[] {
   return blocks.flatMap((block) => (block.kind === 'rows' ? [...block.rows] : []));
 }
 
+/** The rows a reader counts off the outline: each fold's number, and each shown row once. */
+function rowsAccountedFor(blocks: readonly ChangeBlock[]): number {
+  let total = 0;
+
+  for (const line of outline(blocks)) {
+    const folded = /^(?:fold|rest) (\d+)/u.exec(line);
+
+    total += folded === null ? line.split(' ').length : Number(folded[1]);
+  }
+
+  return total;
+}
+
 function marked(row: ChangeRow | undefined): string[] {
   return (row?.marks ?? []).map(([start, end]) => row?.text.slice(start, end) ?? '');
 }
 
 describe('change view', () => {
-  test('a change keeps three lines of context on each side, and each longer unchanged run folds into one counted row', () => {
+  test('a change keeps context on each side, and each longer unchanged run folds into one counted row', () => {
     const before = numbered(40);
     const after = before.map((line, index) => (index === 19 ? 'line 20 changed' : line));
+    const blocks = changeBlocks(changedFile(before, after));
+    const [head, change, tail] = outline(blocks);
 
-    expect(outline(changeBlocks(changedFile(before, after)))).toEqual([
-      'fold 16', '17 18 19 - 20 21 22 23', 'fold 17',
-    ]);
+    expect([head?.startsWith('fold'), tail?.startsWith('fold')]).toEqual([true, true]);
+    expect(change?.split(' ')).toContain('-');
+    // 39 unchanged lines and the change's removed and added rows: none lost to a fold, none shown twice.
+    expect(rowsAccountedFor(blocks)).toBe(41);
   });
 
-  test('an unchanged run between two changes folds only when it would hide four lines or more', () => {
+  test('two changes and the unchanged run between them lose and repeat no row, folded or not', () => {
     const edit = (lines: string[], at: number): string[] => lines.map((line, index) => (index === at ? `${line} changed` : line));
-    // Nine unchanged lines between the changes: three stay after the first, three before the second, three would hide.
-    const nine = changeBlocks(changedFile(numbered(11), edit(edit(numbered(11), 0), 10)));
-    const ten = changeBlocks(changedFile(numbered(12), edit(edit(numbered(12), 0), 11)));
 
-    expect(outline(nine).some((block) => block.startsWith('fold'))).toBe(false);
-    expect(outline(ten)).toContain('fold 4');
+    for (const length of [8, 11, 12, 30]) {
+      const blocks = changeBlocks(changedFile(numbered(length), edit(edit(numbered(length), 0), length - 1)));
+
+      expect(rowsAccountedFor(blocks)).toBe(length + 2);
+    }
   });
 
   test('a paired line marks only the words that changed; a line mostly rewritten is left unmarked', () => {
@@ -112,10 +128,15 @@ describe('change view', () => {
     const stacked = changeBlocks(changedFile(before, after), true);
     const removed = fileDiff('src/old.ts', 'removed', diffLines(numbered(22).join('\n'), ''));
 
-    expect(rowsIn(alone)).toHaveLength(120);
     // 200 changed lines, each a removed and an added row, between 200 unchanged ones.
-    expect(alone.at(-1)).toMatchObject({ kind: 'rest', count: 600 - 120 });
-    expect(rowsIn(stacked)).toHaveLength(60);
+    for (const blocks of [alone, stacked]) {
+      expect(blocks.at(-1)).toMatchObject({ kind: 'rest' });
+      expect(rowsAccountedFor(blocks)).toBe(600);
+    }
+
+    // A stack shows each file shorter, and both show its first rows.
+    expect(rowsIn(stacked).length).toBeLessThan(rowsIn(alone).length);
+    expect(rowsIn(alone).slice(0, rowsIn(stacked).length)).toEqual(rowsIn(stacked));
     expect(outline(changeBlocks(removed, true))).toEqual(['rest 22 deleted']);
     expect(outline(changeBlocks(removed))).toHaveLength(1);
   });

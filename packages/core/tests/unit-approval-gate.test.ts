@@ -330,7 +330,7 @@ function harness(executor: GatedExecutor, policy: ShellApprovalPolicy) {
 
       return `ran:${cmd}`;
     },
-    (message) => `blocked:${message.message}`,
+    (refusal) => `blocked:${refusal.code}:${refusal.message}`,
     executor,
     { policy },
   );
@@ -404,7 +404,7 @@ describe('gateExec', () => {
     const h = harness(DEVICE, { mode: () => 'strict' });
     const result = await h.run('sudo something');
     expect(h.ran).toEqual([]);
-    expect(result).toContain('needs owner approval, nobody to ask');
+    expect(result).toStartWith('blocked:unavailable:');
   });
 });
 
