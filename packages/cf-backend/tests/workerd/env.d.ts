@@ -186,6 +186,7 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
+  deletedWorkspaceFacet(workspace: string): Promise<{ readonly before: string[]; readonly after: string[] }>;
   onePlane(workspace: string, agent: string): Promise<OnePlaneObservation>;
   swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
   craftedFromNode(workspace: string): Promise<CraftedFromNodeObservation>;
@@ -370,6 +371,7 @@ declare global {
       CODEX_EGRESS_RECORDS: Service<CodexEgressRecordsRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
+      DELETE_ALL_PROBE: DurableObjectNamespace<import('./delete-all-probe').DeleteAllProbeDO>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;

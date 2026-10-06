@@ -266,6 +266,19 @@ second. Pinned by `unit-activation-boot-failure` (the ask waited on the start
 and failed with the boot's cause; now it answers false). Superseded
 2026-10-01 by devbox D56: the box no longer asks; it rests on its own use.
 
+W3. A workspace delete is the object's own storage wipe (`destroy()`, whose
+`deleteAll()` takes every agent facet's database with the workspace's), with
+no per-facet delete before it (m1924). Decided 2026-10-06. Reversed:
+`wipeStorage` called `ctx.facets.delete` for each hosted agent first, on the
+belief that `deleteAll` missed facet storage. Measured on workerd
+1.20260811.1, compatibility date 2026-09-30, by `tests/workerd/delete-all.test.ts`:
+a facet restarted with no wipe reads its row; after the parent's `deleteAll()`
+it reads none, and the parent's tables and alarm are gone; and a hired agent's
+own SQLite row is gone after the shipped `destroyAgent`. That last case fails
+when the wipe skips the storage, so it pins the decision. Not measured on the
+edge: Cloudflare's facet docs say the facets' databases are stored with the
+parent's, and do not name `deleteAll`.
+
 ## Chat loop
 
 C1. The stored assistant row holds the turn's answer. The runner selects it

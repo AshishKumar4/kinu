@@ -4120,14 +4120,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private wipe: { readonly ownerUserId: string | null; readonly done: Promise<void> } | undefined;
 
   private async wipeStorage(): Promise<void> {
-    // deleteAll misses facet storage.
-    if (this.storageRefusal === undefined && this.ctx.storage.sql.exec('SELECT 1 FROM workspace_identity').toArray().length > 0) {
-      for (const record of this.actorDirectoryStore().list({ retired: true })) {
-        if (hostedActorPlacement(record).homeName !== null) this.dropAgentFacet(record.storageKey);
-      }
-    }
-
-    // Drops SDK tables, alarms and storage; the isolate resets later, so a concurrent delete joins `wipe`.
+    // Drops SDK tables, alarms and storage, every agent facet's included (measured in tests/workerd/delete-all.test.ts,
+    // m1924); the isolate resets later, so a concurrent delete joins `wipe`.
     const name = this.name;
     await this.destroy();
     this.ctx.storage.kv.put(PERSISTED_NAME_KEY, name);
