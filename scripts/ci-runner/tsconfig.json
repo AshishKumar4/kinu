@@ -1,0 +1,11 @@
+{
+  "//": "The CI runner Worker runs on workerd, so it compiles with @cloudflare/workers-types rather than the scripts project's [bun, node]. contract.ts is compiled by both.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2024"],
+    "types": ["@cloudflare/workers-types"],
+    "moduleDetection": "force"
+  },
+  "include": ["*.ts"]
+}

@@ -33,6 +33,16 @@ export function readHostedCosts(): HostedCosts {
   return v.parse(HostedCostsSchema, JSON.parse(readFileSync(new URL('./ci-cost.json', import.meta.url), 'utf8')));
 }
 
+/** A costs file in the hosted shape, such as the container runner's own measurements. */
+export function parseHostedCosts(text: string): HostedCosts {
+  return v.parse(HostedCostsSchema, JSON.parse(text));
+}
+
+/** The hosted costs with a container run's measurements over them: a row or file the runner timed takes its time. */
+export function withRunnerCosts(hosted: HostedCosts, measured: HostedCosts): HostedCosts {
+  return { ...measured, seconds: { ...hosted.seconds, ...measured.seconds }, files: { ...hosted.files, ...measured.files } };
+}
+
 /** Bun's first-party --timings/--update-timings report, measured per file rather than inferred from its console. */
 export function readFileTimings(path: string): Record<string, number> | undefined {
   if (!existsSync(path)) return undefined;

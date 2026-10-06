@@ -27,7 +27,7 @@ import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   ciParts, localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate,
+  HAMMER_REPEATS, ciUnits, ciWidth, changedTestGate, splitCIGate, type Gate,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -38,7 +38,8 @@ import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
-import { checkCoverage, checkFileCoverage, pushRun, readFileTimings, requireCIGreen } from './ci-verdicts';
+import { checkCoverage, checkFileCoverage, pushRun, readFileTimings, readHostedCosts, requireCIGreen, withRunnerCosts } from './ci-verdicts';
+import { environmentKey, installInput, medians, recordSamples, SAMPLES } from './ci-runner/contract';
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 
@@ -1210,6 +1211,26 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
     expect(reportCIVerdicts({ sha, part: 'all', rows: [{ run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'https://github.com/o/r/actions/runs/17', '')).toBe(false);
   });
 
+  // The container runner (scripts/ci-runner/) cuts the same units to its own width, sized from what it measured.
+  test('a container plan covers every CI row once at any width, sized from the runner\'s timings over the hosted ones', () => {
+    const hosted = readHostedCosts();
+    const expected = ciUnits(hosted).map((unit) => unit.gate.run).sort();
+    const label = ciUnits(hosted).find((unit) => unit.gate.phase !== 'hammer' && unit.gate.phase !== 'upload' && unit.gate.phase !== 'preflight')?.gate.label ?? '';
+    const measured = withRunnerCosts(hosted, { ...hosted, runUrl: 'kinu-ci-runner run', seconds: { [label]: 1e6 }, files: {} });
+
+    for (const width of [1, 13, 40]) {
+      const runs = ciParts(hosted, width).flatMap((part) => part.runs);
+
+      expect({ width, runs: [...runs].sort(), unique: new Set(runs).size }).toEqual({ width, runs: expected, unique: runs.length });
+    }
+
+    expect(ciParts(hosted, 13).filter((part) => part.name.startsWith('source-'))).toHaveLength(13);
+    expect(ciWidth(hosted, 1e9)).toBe(1);
+    // A row the runner timed at a million seconds outweighs every hosted estimate, so it alone needs that many parts.
+    expect(ciWidth(measured, 300)).toBeGreaterThan(1e6 / 300);
+    expect(measured.seconds[label]).toBe(1e6);
+  });
+
   test('all six contended runs have independent runners instead of a sequential hammer tail', () => {
     const parts = ciParts();
 
@@ -1313,5 +1334,28 @@ test('the second suite keeps its real provider', () => {
       expect(observed.total).toBe(1);
       expect(observed.failed.length).toBe(exit);
     }
+  });
+});
+
+describe('the container runner\'s contract', () => {
+  test('an environment is keyed by the install inputs alone, in any order, and moves when one of them does', async () => {
+    const paths = ['bun.lock', 'package.json', 'packages/core/package.json', 'patches/agents@0.26.0.patch', 'third_party/mossaic/sdk/src/index.ts', 'scripts/mossaic-sdk.ts', 'bunfig.toml'];
+    const ignored = ['packages/core/src/index.ts', 'scripts/ladder.ts', 'packages/core/tests/fixtures/package.json', 'README.md'];
+    const id = (digit: string) => digit.repeat(40);
+    const manifest = paths.map((path, index) => ({ path, id: id(String(index)) }));
+
+    expect({ inputs: paths.filter(installInput), ignored: ignored.filter(installInput) }).toEqual({ inputs: paths, ignored: [] });
+    expect(await environmentKey([...manifest].reverse())).toBe(await environmentKey(manifest));
+    expect(await environmentKey([{ ...manifest[0] ?? { path: 'bun.lock', id: id('0') }, id: id('9') }, ...manifest.slice(1)])).not.toBe(await environmentKey(manifest));
+  });
+
+  test('a row\'s estimate is the median of its last few green runs, so one slow run moves nothing', () => {
+    let history: Record<string, number[]> = {};
+
+    for (const seconds of [100, 100, 900, 100, 100, 100, 100]) history = recordSamples(history, { row: seconds, [`only-${String(seconds)}`]: seconds });
+
+    expect(history['row']).toHaveLength(SAMPLES);
+    expect(medians(history)).toMatchObject({ row: 100, 'only-900': 900 });
+    expect(medians({ even: [1, 2, 3, 10] })).toEqual({ even: 2.5 });
   });
 });

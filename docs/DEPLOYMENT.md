@@ -562,6 +562,20 @@ Source CI (`ci.yml`) runs the ladder's CI tier on pushes to `main` and `integrat
 
 `scripts/release-config.test.ts` (required gate) holds these properties. Every workflow declares its token permissions. Every credential-bearing job names an environment. No pull request can start a credential-bearing job. No workflow pipes a download into a shell. No action is used from a moving ref.
 
+### The container CI runner
+
+`bun scripts/ci-remote.ts <commit|worktree>` runs the same CI tier on Cloudflare Containers for any commit, pushed or not, and prints every red row with its output's tail. It exits 0 when every planned row ran once and passed, 1 when one was red, and 2 when the run could not grade the commit. A worktree must be committed first. The release gate stays GitHub CI: `deploy.sh` reads GitHub's verdict for the pushed SHA. The runner keeps each graded verdict file, in the same schema, under `verdicts/<sha>/all.json` in its bucket, so switching the gate later changes only where `scripts/ci-verdicts.ts` reads it from.
+
+How a run goes (`scripts/ci-runner/`, the `kinu-ci-runner` Worker):
+
+- The commit travels as a one-commit pack (`git rev-list --objects --no-walk`), checked out at its own SHA as a shallow root, because the ladder grades only a clean tree at the full SHA. The containers hold no credential.
+- Its install inputs (`installInput` in `contract.ts`: the lock, the workspaces' manifests, the patches and the vendored SDK) key an environment. An environment is a container snapshot of Cloudflare's managed `cloudflare/debian-trixie` (DEVBOX-DECISIONS D72) holding the GitHub runner's tools, Google Chrome, bubblewrap, ffmpeg and that locked install. The first run with new inputs waits while one is prepared; every later shard starts from the snapshot and only checks out its commit.
+- A `plan` piece runs `ladder.ts --ci-plan` on the commit, so its own ladder is the only list of rows. Each CI part then runs in its own `standard-4` container (4 vCPU, 12 GiB), on the `durable_object` scheduling policy as devboxes are (D50). It runs `ladder.ts --tier=ci --ci-part=<name>`, the command a GitHub runner runs, as an unprivileged user.
+- Parts are cut to about `--target` seconds (300 by default) from the runner's own timings: the median of each row's last five green runs, laid over `scripts/ci-cost.json`. A piece the infrastructure failed is retried once; a red row never is.
+- The client grades the part verdict files with `collectVerdicts` and `checkFileCoverage`, the code GitHub's collect job runs. The report goes to `~/.local/state/kinu/ci-runs/`.
+
+Deploy with `bun scripts/ci-runner-deploy.ts`, using this machine's wrangler login. It creates the `kinu-ci-artifacts` bucket, where packs and runs expire after 7 days, and a bearer token in `~/.config/kinu/ci-token`, which is also the Worker's `CI_TOKEN`. It deploys the Worker and writes its URL to `~/.config/kinu/ci-url`. There is no image to build or roll out. `bun scripts/ci-remote.ts --prune [--keep=3]` deletes the snapshots of all but the most recently used environments; it needs `KINU_CLOUDFLARE_API_TOKEN` for the registry.
+
 ### Eval preflight
 
 Before an eval spends, I check that kinu.run runs the revision I am measuring:
