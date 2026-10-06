@@ -59,13 +59,13 @@ function encodeValue(value: NativeValue): StoredValue {
   if (isNativeArray(value)) return value.map(encodeValue);
 
   if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
-  const mapped: Record<string, StoredValue> = {};
 
-  for (const key of Object.keys(value)) {
+  // fromEntries defines each key, so a key named `__proto__` stays data and never sets the prototype.
+  const mapped: Record<string, StoredValue> = Object.fromEntries(Object.keys(value).flatMap((key) => {
     const item = value[key];
 
-    if (item !== undefined) mapped[key] = encodeValue(item);
-  }
+    return item === undefined ? [] : [[key, encodeValue(item)]];
+  }));
 
   return RESERVED.some((key) => Object.hasOwn(value, key)) ? { $plain: mapped } : mapped;
 }
@@ -98,15 +98,12 @@ function decodeValue(value: StoredValue, truncated: Truncation[]): NativeValue {
   if (url?.success === true) return new URL(url.output.$url);
   const plain = value.$plain;
   const inner = plain !== undefined && isParsedJsonObject(plain) ? plain : value;
-  const mapped: Record<string, NativeValue> = {};
 
-  for (const key of Object.keys(inner)) {
+  return Object.fromEntries(Object.keys(inner).flatMap((key) => {
     const item = inner[key];
 
-    if (item !== undefined) mapped[key] = decodeValue(item, truncated);
-  }
-
-  return mapped;
+    return item === undefined ? [] : [[key, decodeValue(item, truncated)]];
+  }));
 }
 
 /** Runs on write and read: stored revisions are always valid requests; corrupt rows are named. */

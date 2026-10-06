@@ -12,12 +12,15 @@ import {
   createWorkersAIProvider,
   DynamicContextLedger, type DynamicContext,
   TurnAccumulator, ExtensionHost,
+  CacheWarmStore, CacheWarmingLane, initCacheWarmTable, warmUsage,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY, CODEX_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue, type KinuExtension, type Usage,
   type ModelCallDeps, type AuthResolution,
 } from '../src/index';
-import { createMockFetch, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
+import { Database } from 'bun:sqlite';
+import { createMockFetch, testActorHandle, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
+import { makeExecRaw, makeSql } from './helpers';
 
 interface WireView {
   /** The cache route (prompt-cache key or affinity header); a different route sees an empty cache. */
@@ -461,6 +464,9 @@ interface TurnResult {
   steps: Usage[];
   /** The turn's accumulated usage, from the real TurnAccumulator. */
   total: Usage;
+  /** The last step's request as the accumulator carries it to a cache warm. */
+  lastRequest: TurnAccumulator['lastRequest'];
+  oracle: PrefixCacheOracle;
 }
 
 /** One three-step turn (tool call, tool call, answer) against the provider's mocked cache. `durable` re-reads the
@@ -514,11 +520,11 @@ async function driveTurn(
   })) {
     if (event.type === 'step-finish') {
       steps.push(event.usage ?? {});
-      acc.recordStep({ response: { messages: event.responseMessages }, usage: event.usage });
+      acc.recordBoundary(event);
     }
   }
 
-  return { mock, steps, total: acc.reportedUsage() ?? {} };
+  return { mock, steps, total: acc.reportedUsage() ?? {}, lastRequest: acc.lastRequest, oracle };
 }
 
 /** Strip `cache_control` everywhere and re-place one breakpoint on the first message, inside the stored prefix. */
@@ -623,6 +629,44 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
 
     console.log(`cache-hit gate, per provider:\n${lines.join('\n')}`);
     console.log(`blind spots:\n${BLIND_SPOTS.map((s) => `- ${s}`).join('\n')}`);
+  });
+
+  test('an Anthropic turn arms a warm whose request reads the prefix the turn cached', async () => {
+    const entry = CACHING_PROVIDERS[0];
+
+    if (entry?.dialect !== 'anthropic') throw new Error('the first caching provider is Anthropic');
+    const { lastRequest, oracle } = await driveTurn(entry);
+    const db = new Database(':memory:');
+    initCacheWarmTable(makeExecRaw(db));
+    const sql = makeSql(db);
+    const warms: Usage[] = [];
+    let clock = (lastRequest?.sentAt ?? 0) + 1_000;
+
+    const lane = new CacheWarmingLane({
+      store: new CacheWarmStore(sql, testActorHandle(sql)),
+      wake: () => {},
+      // The warm reaches the same provider cache the turn wrote: a hit means its prefix is the turn's, byte for byte.
+      send: async ({ body }) => {
+        const usage = warmUsage(anthropicUsage(oracle.submit(anthropicView(body)), false));
+        warms.push(usage);
+
+        return { usage };
+      },
+      spend: () => {},
+      now: () => clock,
+    });
+
+    // The adapter's own body, `undefined` fields included; the usage stands in for a last step that wrote nothing.
+    const due = lane.armAfterTurn({
+      modelSpec: { provider: 'anthropic', modelId: entry.modelId }, retention: 'short',
+      lastRequest: lastRequest === undefined ? undefined : { ...lastRequest, usage: { input: 40_004, cacheRead: 40_000, cacheWrite: 0 } },
+    });
+
+    expect(due).not.toBeNull();
+    clock = due ?? clock;
+    await lane.runDue(clock);
+    expect(warms).toHaveLength(1);
+    expect(warms[0]?.cacheRead ?? 0).toBeGreaterThan(0);
   });
 
   test('a provider the map gives nothing leaves the request unaddressed and reads 0', async () => {

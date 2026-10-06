@@ -5,7 +5,7 @@ import * as v from 'valibot';
 
 import { KinuError } from '../obs/error';
 import { sha256Hex } from '../safety/argument-digest';
-import { parseJsonValue, JsonObjectSchema, type JsonValue, type JsonObject } from '../utils/json';
+import { JsonObjectSchema, type JsonValue, type JsonObject } from '../utils/json';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { SPILL_DIRS } from '../context-budget';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -33,6 +33,19 @@ const StringAttachmentReference = v.object({ $sessionStringAttachment: v.object(
 
 const AttachmentReference = v.object({ $sessionAttachment: v.object({ path: v.string(), digest: v.string(), bytes: v.number(), buffer: v.optional(v.boolean()) }) });
 
+/** A restored archive can hold a literal past float range (`1e400`); it parses to Infinity, which no JSON value holds. */
+function storedJson(text: string): Effect.Effect<JsonValue, KinuError> {
+  let outOfRange = false;
+
+  const value: JsonValue = JSON.parse(text, (_key, item: JsonValue) => {
+    if (typeof item === 'number' && !Number.isFinite(item)) outOfRange = true;
+
+    return item;
+  });
+
+  return outOfRange ? Effect.fail(new KinuError('bad_input', 'a stored message holds a number out of JSON range')) : Effect.succeed(value);
+}
+
 export class SessionPayloadReader {
   /** `null`: no file plane, so spilled payloads are unreadable; check {@link readsFiles} first. */
   constructor(private readonly readableFiles: (() => Promise<Pick<VFS, 'readFile'>>) | null) {}
@@ -50,9 +63,9 @@ export class SessionPayloadReader {
   }
 
   private readJson(payload: SessionPayload): Effect.Effect<JsonValue, KinuError> {
-    if (payload.json !== null) return Effect.sync(() => parseJsonValue(payload.json ?? ''));
+    if (payload.json !== null) return Effect.suspend(() => storedJson(payload.json ?? ''));
 
-    return Effect.map(this.readBytes(payload.path, payload.digest), (bytes) => parseJsonValue(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+    return Effect.flatMap(this.readBytes(payload.path, payload.digest), (bytes) => storedJson(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
   }
 
   resolveMedia(descriptor: JsonObject): Promise<JsonObject> {

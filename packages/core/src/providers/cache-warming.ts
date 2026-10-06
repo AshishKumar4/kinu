@@ -12,7 +12,7 @@ import type { CallAccount } from './quota';
 import { Effect } from 'effect';
 import { settle, toKinuError } from '../obs/index';
 import * as v from 'valibot';
-import { isJsonObject, JsonObjectSchema, parseJsonObject, type JsonObject } from '../utils/json';
+import { isJsonObject, parseJsonObject, readJsonObjectText, type JsonObject } from '../utils/json';
 
 /** Only the direct provider: through a gateway the cache entry is not Anthropic's to refresh. */
 const WARMABLE_PROVIDER = 'anthropic';
@@ -299,9 +299,11 @@ export class CacheWarmingLane {
     readonly retention: CacheRetention;
     readonly lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage } | undefined;
   }): number | null {
-    const body = v.safeParse(JsonObjectSchema, input.lastRequest?.body);
+    // The captured body is the adapter's native arguments, `undefined` fields included; the wire sent their JSON form.
+    const sent = input.lastRequest?.body;
+    const body = sent === undefined ? null : readJsonObjectText(JSON.stringify(sent));
 
-    if (input.lastRequest === undefined || !body.success) {
+    if (input.lastRequest === undefined || body === null) {
       this.seams.store.retire();
 
       return null;
@@ -325,7 +327,7 @@ export class CacheWarmingLane {
       return null;
     }
 
-    if (!this.seams.store.arm({ at: plan.at, modelSpec: input.modelSpec, retention: input.retention, body: body.output })) {
+    if (!this.seams.store.arm({ at: plan.at, modelSpec: input.modelSpec, retention: input.retention, body })) {
       return null;
     }
 
