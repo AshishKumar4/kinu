@@ -162,6 +162,14 @@ async function oneShotTurn(
     'one-shot',
   );
 
+  try {
+    await turnOnClient(client, rawPrompt, run);
+  } finally {
+    await client.close();
+  }
+}
+
+async function turnOnClient(client: AgentClient, rawPrompt: string, run: { json: boolean; headless: boolean; failed: boolean }): Promise<void> {
   // Resolved after the client exists: it reports the backend's inline cap.
   const prompt = await resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
 
@@ -204,7 +212,6 @@ async function oneShotTurn(
   } finally {
     consentWatch?.stop();
     unsubscribe();
-    await client.close();
   }
 }
 
