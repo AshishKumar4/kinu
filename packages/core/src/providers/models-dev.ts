@@ -120,6 +120,9 @@ const ModelsDevCatalogSchema = v.record(v.string(), ModelsDevProviderSchema);
 
 let cache: ModelsDevCache | null = null;
 
+/** The read in flight: listings that find the cache cold share it rather than each downloading the catalog. */
+let reading: { readonly fetchFn: typeof fetch; readonly read: Effect.Effect<Record<string, ModelsDevProvider>, CatalogUnread> } | null = null;
+
 export interface ModelsDevListOptions {
   fallback?: readonly ModelInfo[];
   preferredIds?: readonly string[];
@@ -264,6 +267,22 @@ function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: number): 
 
     if (cache && cache.fetchFn === fetchImpl && Date.now() - cache.at < ttlMs) return cache.data;
 
+    if (reading?.fetchFn !== fetchImpl) {
+      const read = yield* Effect.cached(readModelsDevCatalog(fetchImpl).pipe(Effect.ensuring(Effect.sync(() => {
+        if (reading?.read === read) reading = null;
+      }))));
+
+      reading = { fetchFn: fetchImpl, read };
+    }
+
+    const shared = reading;
+
+    return yield* shared.read;
+  });
+}
+
+function readModelsDevCatalog(fetchImpl: typeof fetch): Effect.Effect<Record<string, ModelsDevProvider>, CatalogUnread> {
+  return Effect.gen(function* () {
     const response = yield* Effect.tryPromise({
       try: () => fetchImpl(MODELS_DEV_URL, { headers: { accept: 'application/json' } }),
       catch: (cause) => ({ cause }),
