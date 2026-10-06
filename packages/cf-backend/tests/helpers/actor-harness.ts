@@ -1528,6 +1528,8 @@ export interface HarnessActorWorld {
   versionId?: string;
   /** The `send_email` binding at `env.EMAIL`; unset, the workspace has no mail route. */
   email?: SendEmail;
+  /** The Analytics Engine datasets the object's turns, tools and jobs write rows to (`helpers/analytics-engine.ts`). */
+  analytics?: Pick<Env, 'AGENT_METRICS' | 'CONTROL_PLANE_OPS'>;
   /** The container binding at `env.KinuDevbox`: the runtime registers the sandbox executor over it.
    *  Unset, the workspace has no container. */
   container?: boolean;
@@ -1582,6 +1584,7 @@ export function makeEnv(
     ...platformGatewayEnv(world?.aiGateway),
     ...(world?.versionId !== undefined && { CF_VERSION_METADATA: { id: world.versionId, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
+    ...world?.analytics,
     ...(world?.previewHostSuffix !== undefined && { PREVIEW_HOST_SUFFIX: world.previewHostSuffix }),
     ...(world?.container === true && {
       KinuDevbox: {
