@@ -9,6 +9,7 @@ import { BUILTIN_PROFILE_CATALOG, type JsonValue, type UserCaller } from '@kinu.
 import { SLEEP_TIME_PROMPT_OPENING } from '../../core/src/utils/prompt-sections';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { ProfileCatalogWriteResult } from '../src/user/profile';
+import type { ChatGptPlanStatus } from '../src/user/chatgpt-sign-in';
 import type { AuthIdentity } from '../src/auth/session';
 import { serveFamily } from './helpers/api';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
@@ -24,7 +25,11 @@ const IDENTITY: AuthIdentity = { userId: '0123456789abcdef0123456789abcdef', ema
 const UPDATE = { upserts: [{ key: 'deploy.region', value: 'eu-west', confidence: 0.9, rationale: 'the owner said so twice' }], decay: [] };
 
 /** The owner's account changes, each through its own route; `parks` names the one the account refuses. */
-interface AccountChange { readonly what: string; readonly path: string; readonly method: string; readonly body?: JsonValue; readonly parks?: true }
+interface AccountChange {
+  readonly what: string; readonly path: string; readonly method: string; readonly body?: JsonValue; readonly parks?: true;
+  /** What the account's ChatGPT plan read answers: a machine's sign-in reaches the web only through that read (SIWC-08). */
+  readonly planChanged?: boolean;
+}
 
 const CHANGES: AccountChange[] = [
   { what: 'a credential is set', path: '/credentials/openai.api', method: 'POST', body: { kind: 'bearer', token: 'sk-new' } },
@@ -33,6 +38,8 @@ const CHANGES: AccountChange[] = [
   { what: 'a profile catalog write is refused', path: '/profile-catalog', method: 'PUT', body: { catalog: {}, expectedVersion: 27 }, parks: true },
   { what: 'Codex is disconnected', path: '/codex', method: 'DELETE' },
   { what: 'a Codex sign-in completes', path: '/codex/poll', method: 'POST', body: {} },
+  { what: 'the web first sees a ChatGPT sign-in made on a machine', path: '/chatgpt', method: 'GET', planChanged: true },
+  { what: 'the web reads a ChatGPT plan that has not changed', path: '/chatgpt', method: 'GET', planChanged: false, parks: true },
 ];
 
 test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the owner must fix resumes or stays parked', async (change) => {
@@ -76,6 +83,13 @@ test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the own
           : { ok: false, kind: 'conflict', currentVersion: 28, currentDigest: 'd' };
       },
       async listActiveWorkspaces() { return [{ name: 'harness-parent', displayName: 'Harness', createdAt: 1, nameOrigin: 'user' as const }]; },
+      async chatgptPlan(): Promise<ChatGptPlanStatus> {
+        return {
+          device: { id: 'dev-1', label: 'studio' },
+          status: { signedIn: true, email: 'owner@example.com', planEnabled: true, planDeclined: false, pending: false, lastFailure: null, firstSignIn: true },
+          account: null, machineSignIn: null, changed: change.planChanged === true,
+        };
+      },
     }) },
     OrchestratorAgent: {
       idFromName: (name) => name,
@@ -95,7 +109,8 @@ test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the own
   await workspace.agent.terminalRetryPass();
 
   if (change.parks === true) {
-    expect({ status: answered?.status, effect: effect(), fact: fact() }).toEqual({ status: 409, effect: ['parked'], fact: null });
+    expect({ status: answered?.status, effect: effect(), fact: fact() })
+      .toEqual({ status: change.planChanged === false ? 200 : 409, effect: ['parked'], fact: null });
 
     return;
   }
