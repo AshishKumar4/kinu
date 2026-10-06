@@ -464,12 +464,14 @@ describe('AI proxy model listing', () => {
       }
 
       if (url.includes('/provider_configs')) {
-        return Response.json({ success: true, result: [{ id: 'pc-0', provider_slug: 'openai' }] });
+        return Response.json({ success: true, result: [{ id: 'pc-0', provider_slug: 'openai', alias: 'default' }] });
       }
 
       if (url.includes('/billing/credit-balance')) {
         return Response.json({ success: true, result: { balance: 0 } });
       }
+
+      if (url.endsWith('/ai-gateway/gateways/byok-gw')) return Response.json({ success: true, result: { id: 'byok-gw' } });
 
       throw new Error(`unexpected fetch: ${url}`);
     });

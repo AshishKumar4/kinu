@@ -163,15 +163,25 @@ describe('my-gateway model discovery', () => {
         'xai/grok-4.7': { id: 'xai/grok-4.7', name: 'Grok 4.7', tool_call: true, limit: { context: 256000 } },
       },
     },
-    // OpenAI's and Google's own ids are REST ids too, and these rows are absent from the gateway's.
-    openai: { id: 'openai', npm: '@ai-sdk/openai', models: { 'gpt-6.1-sol': { id: 'gpt-6.1-sol', name: 'GPT 6.1 Sol', tool_call: true } } },
-    google: { id: 'google', npm: '@ai-sdk/google', models: { 'gemini-2.5-pro': { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tool_call: true } } },
+    // OpenAI's and Google's own ids are REST ids too, and these rows are absent from the gateway's. A realtime or
+    // live model answers in audio over another API, so no REST endpoint serves it.
+    openai: { id: 'openai', npm: '@ai-sdk/openai', models: {
+      'gpt-6.1-sol': { id: 'gpt-6.1-sol', name: 'GPT 6.1 Sol', tool_call: true, modalities: { input: ['text', 'image'], output: ['text'] } },
+      'gpt-realtime-2.1': { id: 'gpt-realtime-2.1', name: 'GPT-Realtime-2.1', tool_call: true, modalities: { input: ['text', 'audio'], output: ['text', 'audio'] } },
+    } },
+    google: { id: 'google', npm: '@ai-sdk/google', models: {
+      'gemini-2.5-pro': { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tool_call: true },
+      'gemini-3.1-flash-live-preview': { id: 'gemini-3.1-flash-live-preview', name: 'Gemini 3.1 Flash Live', tool_call: true, modalities: { input: ['audio'], output: ['text', 'audio'] } },
+    } },
     anthropic: { id: 'anthropic', npm: '@ai-sdk/anthropic', models: { 'claude-sonnet-4-5': { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', tool_call: true } } },
   });
 
+  /** The account's management API: keys stored under `default` (`slugs`) or another alias, its credits and its policy. */
   function discoveryFetch(opts: {
     slugs: string[];
+    otherAlias?: string[];
     balance?: number | 'denied';
+    byokOnly?: boolean;
     onRequest?: (url: string) => void;
   }): typeof fetch {
     return asFetchFunction(async (input: RequestInfo | URL) => {
@@ -183,11 +193,15 @@ describe('my-gateway model discovery', () => {
       }
 
       if (url.includes('/provider_configs')) {
-        return new Response(JSON.stringify({
+        const stored = [...opts.slugs.map((slug) => [slug, 'default']), ...(opts.otherAlias ?? []).map((slug) => [slug, 'production'])];
+
+        return Response.json({
           success: true,
-          result: opts.slugs.map((slug, i) => ({ id: `pc-${i}`, provider_slug: slug, alias: 'default', default_config: true })),
-        }), { headers: { 'content-type': 'application/json' } });
+          result: stored.map(([slug, alias], i) => ({ id: `pc-${String(i)}`, provider_slug: slug, alias, default_config: alias === 'default' })),
+        });
       }
+
+      if (/\/ai-gateway\/gateways\/[^/?]+$/.test(url)) return Response.json({ success: true, result: { id: 'gw', byok_only: opts.byokOnly ?? false } });
 
       if (url.includes('/billing/credit-balance')) {
         if (opts.balance === 'denied') {
@@ -205,24 +219,36 @@ describe('my-gateway model discovery', () => {
     });
   }
 
-  test('with no credits, lists the catalog rows of authors with a stored key, in the ids the gateway takes', async () => {
-    const urls: string[] = [];
+  // The REST API pays with an author's key stored under `default`, else with credits unless the gateway requires keys
+  // (developers.cloudflare.com/ai-gateway/features/unified-billing). A Google key is stored as `google-ai-studio` and an
+  // xAI key as `grok`, while their REST ids are authored `google/` and `xai/`.
+  test('the menu follows what the account pays with: default keys by author, then credits, then keys only', async () => {
+    const account = { slugs: ['google-ai-studio', 'grok', 'workers-ai'], otherAlias: ['openai'], balance: 0, byokOnly: false };
+    const reg = createAgentProviderRegistry({ env: {}, userDO: gatewayStub({ gatewayId: 'byok-gw', token: `t-${Math.random()}` }), fetch: discoveryFetch(account) });
+    const provider = present(reg.registry.get('my-gateway'), 'the my-gateway provider');
+    const menu = async () => (await provider.listModels(reg.deps)).map((model) => model.id).sort();
 
-    const reg = createAgentProviderRegistry({
-      env: {},
-      userDO: gatewayStub({ gatewayId: 'byok-gw', token: `t-${Math.random()}` }),
-      fetch: discoveryFetch({ slugs: ['openai', 'google-ai-studio', 'workers-ai'], onRequest: (u) => urls.push(u) }),
-    });
+    try {
+      const keyed = await menu();
+      account.balance = 12.5;
+      setSystemTime(new Date(Date.now() + 61_000));
+      const billed = await menu();
+      account.byokOnly = true;
+      setSystemTime(new Date(Date.now() + 61_000));
+      const keysOnly = await menu();
 
-    const models = await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
-    const ids = models.map((m) => m.id).sort();
-    // No catalog row is authored `google-ai-studio` or `workers-ai`; Workers AI is its own provider.
-    expect(ids).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
-    expect(models.find((m) => m.id === 'openai/gpt-4.1')?.contextWindow).toBe(1047576);
-    expect(urls.some((u) => u.includes('/ai-gateway/gateways/byok-gw/provider_configs'))).toBe(true);
+      expect({ keyed, billed, keysOnly }).toEqual({
+        keyed: ['google/gemini-2.5-pro', 'xai/grok-4.7'],
+        // Anthropic's own `claude-sonnet-4-5` is no REST id; the gateway's row is.
+        billed: ['anthropic/claude-sonnet-4.5', 'google/gemini-2.5-pro', 'openai/gpt-4.1', 'openai/gpt-6.1-sol', 'xai/grok-4.7'],
+        keysOnly: ['google/gemini-2.5-pro', 'xai/grok-4.7'],
+      });
+    } finally {
+      setSystemTime();
+    }
   });
 
-  test('the two management reads are in flight together, not one after the other', async () => {
+  test('the management reads are in flight together, not one after the other', async () => {
     let creditAsked = false;
     let overlapped = false;
     const answer = discoveryFetch({ slugs: ['openai'], balance: 0 });
@@ -250,18 +276,6 @@ describe('my-gateway model discovery', () => {
 
     await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
     expect(overlapped).toBe(true);
-  });
-
-  test('a positive Unified Billing balance pays for every row of the gateway\'s catalog', async () => {
-    const reg = createAgentProviderRegistry({
-      env: {},
-      userDO: gatewayStub({ gatewayId: 'credits-gw', token: `t-${Math.random()}` }),
-      fetch: discoveryFetch({ slugs: [], balance: 12.5 }),
-    });
-
-    const models = await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
-    // Anthropic's own `claude-sonnet-4-5` is no REST id; the gateway's row is.
-    expect(models.map((m) => m.id).sort()).toEqual(['anthropic/claude-sonnet-4.5', 'google/gemini-2.5-pro', 'openai/gpt-4.1', 'openai/gpt-6.1-sol', 'xai/grok-4.7']);
   });
 
   test('denied management reads narrow the menu to empty instead of throwing', async () => {
@@ -302,7 +316,7 @@ describe('my-gateway model discovery', () => {
         if (upstream === 'down') return new Response('upstream is unwell', { status: 500 });
 
         if (url.includes('/provider_configs')) {
-          return new Response(JSON.stringify({ success: true, result: [{ provider_slug: 'openai' }] }), {
+          return new Response(JSON.stringify({ success: true, result: [{ provider_slug: 'openai', alias: 'default' }] }), {
             headers: { 'content-type': 'application/json' },
           });
         }

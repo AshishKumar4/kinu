@@ -20,9 +20,17 @@ const GATEWAY_CATALOG_ID = 'cloudflare-ai-gateway';
 /** Own ids that are REST ids too (`openai/gpt-6.1-sol`, `google/gemini-2.5-pro`: 200, 2026-10-06); not Anthropic's or xAI's. */
 const NATIVE_ID_PROVIDERS = ['openai', 'google'] as const;
 
+/** A stored key's provider slug where it differs from the author its REST ids name. */
+const AUTHOR_OF_SLUG: ReadonlyMap<string, string> = new Map([['google-ai-studio', 'google'], ['grok', 'xai']]);
+
+/** The REST API consults only the key stored under this alias; any other falls through to credits. */
+const REST_KEY_ALIAS = 'default';
+
 const ProviderConfigsSchema = v.object({
-  result: v.optional(v.array(v.object({ provider_slug: v.optional(v.string()) }))),
+  result: v.optional(v.array(v.object({ provider_slug: v.optional(v.string()), alias: v.optional(v.string()) }))),
 });
+
+const GatewaySettingsSchema = v.object({ result: v.optional(v.object({ byok_only: v.optional(v.boolean()) })) });
 
 const CreditBalanceSchema = v.object({
   result: v.optional(v.object({ balance: v.optional(v.number()) })),
@@ -74,7 +82,7 @@ export function createMyGatewayProvider(): ModelProvider {
         const stale: StaleModelList[] = [];
 
         for (const source of [GATEWAY_CATALOG_ID, ...NATIVE_ID_PROVIDERS]) {
-          const listed = yield* Effect.promise(() => settleModelList(listModelsDevProviderModels(source, deps)));
+          const listed = yield* Effect.promise(() => settleModelList(listModelsDevProviderModels(source, deps, { textOnly: true })));
 
           if (listed.stale !== null) stale.push(listed.stale);
 
@@ -182,7 +190,10 @@ async function readGatewayManagement(
   return { kind: 'transient', reason: `AI Gateway management answered HTTP ${String(response.status)}` };
 }
 
-/** Credits pay for every row, a stored key (BYOK) for its author's. */
+/**
+ * Who pays for an author's REST requests: its key stored under `default`, else credits, unless the gateway requires
+ * stored keys (developers.cloudflare.com/ai-gateway/features/unified-billing, credential precedence).
+ */
 async function servableAuthors(
   baseURL: string,
   authHeaders: Record<string, string>,
@@ -196,25 +207,28 @@ async function servableAuthors(
   const headers = { ...authHeaders, accept: 'application/json' };
   const keyed = new Set<string>();
 
+  const gateway = `${account}/ai-gateway/gateways/${encodeURIComponent(gatewayId)}`;
+
   // Independent reads, so together: each is a Cloudflare API round trip.
-  const [configs, credit] = await Promise.all([
-    readGatewayManagement(fetchImpl, `${account}/ai-gateway/gateways/${encodeURIComponent(gatewayId)}/provider_configs?per_page=100`, headers),
+  const [configs, credit, settings] = await Promise.all([
+    readGatewayManagement(fetchImpl, `${gateway}/provider_configs?per_page=100`, headers),
     readGatewayManagement(fetchImpl, `${account}/ai-gateway/billing/credit-balance`, headers),
+    readGatewayManagement(fetchImpl, gateway, headers),
   ]);
 
-  if (configs.kind === 'transient') return { authoritative: false, reason: configs.reason };
+  const transient = [configs, credit, settings].find((read) => read.kind === 'transient');
+
+  if (transient?.kind === 'transient') return { authoritative: false, reason: transient.reason };
 
   if (configs.kind === 'observed') {
-    const body = v.parse(ProviderConfigsSchema, configs.body);
-
-    for (const row of body.result ?? []) {
-      if (row.provider_slug !== undefined) keyed.add(row.provider_slug);
+    for (const row of v.parse(ProviderConfigsSchema, configs.body).result ?? []) {
+      if (row.provider_slug !== undefined && row.alias === REST_KEY_ALIAS) keyed.add(AUTHOR_OF_SLUG.get(row.provider_slug) ?? row.provider_slug);
     }
   }
 
-  if (credit.kind === 'transient') return { authoritative: false, reason: credit.reason };
-
   const balance = credit.kind === 'observed' ? v.parse(CreditBalanceSchema, credit.body).result?.balance : undefined;
+  // A settings read refused says nothing of the policy; credits then count as they did before it was read.
+  const keysOnly = settings.kind === 'observed' && v.parse(GatewaySettingsSchema, settings.body).result?.byok_only === true;
 
-  return { authoritative: true, billed: balance !== undefined && balance > 0, keyed };
+  return { authoritative: true, billed: !keysOnly && balance !== undefined && balance > 0, keyed };
 }

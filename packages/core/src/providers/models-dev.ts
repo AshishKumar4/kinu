@@ -130,6 +130,8 @@ export interface ModelsDevListOptions {
   preferredIds?: readonly string[];
   ttlMs?: number;
   toolCallOnly?: boolean;
+  /** Only models that answer in text alone: a realtime, live, speech or image model needs another API. */
+  textOnly?: boolean;
 }
 
 export async function listModelsDevProviderModels(
@@ -159,7 +161,8 @@ export async function listModelsDevProviderModels(
     const out: ModelInfo[] = [];
 
     for (const [key, model] of Object.entries(models)) {
-      const info = modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
+      const audioOrImage = model.modalities?.output?.some((modality) => modality !== 'text') ?? false;
+      const info = opts.textOnly === true && audioOrImage ? null : modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
 
       if (info) out.push(info);
     }
