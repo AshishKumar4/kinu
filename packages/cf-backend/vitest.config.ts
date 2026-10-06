@@ -585,7 +585,7 @@ const sharedTestOptions = {
       // `TransactionDO`'s async-body arm throws after commit, with no owner (worker.ts:258, :289).
       if (error.message.includes('unknown subordinate "relay"')) return false;
 
-      // `deploy-ledger.test.ts` aborts a DeployRunDO mid-plan on purpose.
+      // `deploy-lifecycle.test.ts` aborts a DeployRunDO mid-plan on purpose.
       if (error.message.includes('probe: the object died mid-plan')) return false;
     },
 } satisfies NonNullable<UserConfig['test']>;

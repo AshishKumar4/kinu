@@ -344,7 +344,7 @@ export interface DeployFakeState {
   readonly refreshes: number;
   /** Calls presenting an already-expired token, each answered 401 as Cloudflare does. */
   readonly expiredCalls: number;
-  /** Bytes really served and received for one release (footprint row in `deploy-ledger.test.ts`). */
+  /** Bytes really served and received for one release (the release footprint in `deploy-lifecycle.test.ts`). */
   readonly footprint: DeployFakeFootprint;
 }
 
