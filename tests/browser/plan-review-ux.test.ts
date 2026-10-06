@@ -633,3 +633,70 @@ describe('annotating a plan', () => {
     });
   });
 });
+
+/** The main composer's turn mode: the button pressed, and whether every mode can be chosen. */
+function turnMode(page: Page): Promise<{ pressed: string | null; open: boolean }> {
+  return page.$$eval('[data-composer-root] [role="group"][aria-label="Turn mode"] button', (buttons) => ({
+    pressed: buttons.find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent?.trim() ?? null,
+    open: buttons.every((button) => !(button instanceof HTMLButtonElement) || !button.disabled),
+  }));
+}
+
+async function chooseMode(page: Page, mode: string): Promise<void> {
+  await page.$$eval('[data-composer-root] [role="group"][aria-label="Turn mode"] button', (buttons, label) => {
+    const button = buttons.find((each) => each.textContent?.trim() === label);
+
+    if (!(button instanceof HTMLElement)) throw new Error(`no ${label} mode`);
+    button.click();
+  }, mode);
+  await page.waitForFunction((label) => [...document.querySelectorAll('[data-composer-root] [role="group"][aria-label="Turn mode"] button')]
+    .some((button) => button.getAttribute('aria-pressed') === 'true' && button.textContent?.trim() === label), {}, mode);
+}
+
+/** Opens the workspace's pending plan from the Work tab and presses one of its controls; the server then says the plan moved. */
+async function decidePlan(page: Page, control: string, landed: string): Promise<void> {
+  await page.click('.p-tabstrip button[aria-label="Work"]');
+  await page.waitForSelector('[data-plan-review-root]');
+  await page.$$eval('[data-plan-review-root] button', (buttons, label) => {
+    const button = buttons.find((each) => each.textContent?.includes(label));
+
+    if (!(button instanceof HTMLElement)) throw new Error(`no ${label} on the plan`);
+    button.click();
+  }, control);
+  await page.waitForFunction((key) => document.documentElement.dataset[key] !== undefined, {}, landed);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: { type: 'reads_changed', reads: ['getActivePlanReview'] } })));
+}
+
+/**
+ * The composer under a plan: while it waits for a decision, or once dismissed, the turn mode is the one the owner
+ * chose and every mode stays open; an approval hands the work to a build turn, so a Plan composer returns to Auto.
+ */
+describe('the composer under the workspace plan', () => {
+  test('a pending or dismissed plan leaves the chosen mode, and an approval returns a Plan composer to Auto', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const open = async () => {
+        const page = await newPage();
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-composer-root] [role="group"][aria-label="Turn mode"]');
+
+        return page;
+      };
+
+      const approved = await open();
+      expect(await turnMode(approved)).toEqual({ pressed: 'Auto', open: true });
+      await chooseMode(approved, 'Plan');
+      await decidePlan(approved, 'Approve', 'galleryPlanFeedback');
+      await approved.waitForFunction(() => [...document.querySelectorAll('[data-composer-root] [role="group"][aria-label="Turn mode"] button')]
+        .some((button) => button.getAttribute('aria-pressed') === 'true' && button.textContent?.trim() === 'Auto'));
+      await approved.close();
+
+      const dismissed = await open();
+      await chooseMode(dismissed, 'Plan');
+      await decidePlan(dismissed, 'Dismiss', 'galleryPlanDismissed');
+      await dismissed.waitForFunction(() => document.querySelector('[data-plan-decisions]') === null);
+      expect(await turnMode(dismissed)).toEqual({ pressed: 'Plan', open: true });
+      await dismissed.close();
+    });
+  });
+});

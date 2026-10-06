@@ -1894,6 +1894,13 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
     return { value: galleryPlanInspection(v.parse(SubordinateInspectionRequestSchema, args?.[0]), [galleryAgentPlan]) };
   }
 
+  if (method === "dismissPlanReview") {
+    document.documentElement.dataset.galleryPlanDismissed = "1";
+    galleryAgentPlan = { ...galleryAgentPlan, status: "dismissed", updatedAt: Date.now() };
+
+    return { value: { ok: true, plan: galleryAgentPlan } };
+  }
+
   if (method !== "decidePlanReview") return null;
 
   const [, , decision, feedback] = v.parse(
