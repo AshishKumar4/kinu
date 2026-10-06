@@ -48,7 +48,7 @@ import {
   bindActorHandle, CacheWarmStore, CacheWarmingLane, initCacheWarmTable,
   type SqlExecutor, type SqlValue,
 } from '@kinu.run/core';
-import { KinuError, renderThrownChain, settleSync } from '@kinu.run/core/obs';
+import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 
 /** Parsed, not probed: fails on a body that is not a replay. */
 const ReplayBodySchema = v.looseObject({ max_tokens: v.number(), stream: v.optional(v.boolean()) });
@@ -168,91 +168,6 @@ export class GatedDO extends DurableObject<Cloudflare.Env> {
   /** The same read, with whether the init it waited for had ended before its stall settled. */
   pingAfterInit() {
     return { answer: this.ping(), initOutranStall: this.initOutranStall };
-  }
-}
-
-/**
- * `ctx.storage.transactionSync` atomicity, which `receiveSubordinateEvent` and a fork's publication
- * rely on. The bun arm runs the body directly with no atomicity; `runDirectly` is that control.
- */
-export class TransactionDO extends DurableObject<Cloudflare.Env> {
-  private ensureSchema(): void {
-    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS event_log (id TEXT PRIMARY KEY)');
-    this.ctx.storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS actor_subordinates (
-         name TEXT PRIMARY KEY, status TEXT NOT NULL
-       )`,
-    );
-    this.ctx.storage.sql.exec(
-      "INSERT OR IGNORE INTO actor_subordinates (name, status) VALUES ('relay', 'working')",
-    );
-  }
-
-  /** `failRoster` throws after the event row lands, the only order that can orphan it. */
-  private admitBody(id: string, failRoster: boolean): void {
-    this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
-
-    if (failRoster) throw new Error('unknown subordinate "relay"');
-    this.ctx.storage.sql.exec(
-      "UPDATE actor_subordinates SET status = 'idle' WHERE name = 'relay'",
-    );
-  }
-
-  /** Shipped shape. */
-  admitAtomically(id: string, failRoster: boolean): void {
-    this.ensureSchema();
-    this.ctx.storage.transactionSync(() => { this.admitBody(id, failRoster); });
-  }
-
-  admitNested(id: string, failOuter: boolean): void {
-    this.ensureSchema();
-    this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.transactionSync(() => { this.admitBody(id, false); });
-
-      if (failOuter) throw new Error('outer transaction failed');
-    });
-  }
-
-  /** A fence as core's stores run one: yielded mid-body, its failure thrown by `settleSync` as the rollback. */
-  admitFenced(id: string, refuse: boolean): void {
-    this.ensureSchema();
-    this.ctx.storage.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
-      this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
-      yield* refuse ? Effect.fail(new KinuError('denied', 'a turn started mid-revert')) : Effect.void;
-      this.ctx.storage.sql.exec("UPDATE actor_subordinates SET status = 'idle' WHERE name = 'relay'");
-    })));
-  }
-
-  /** The bun arm: same body, same failure, no atomicity. */
-  runDirectly(id: string, failRoster: boolean): void {
-    this.ensureSchema();
-    this.admitBody(id, failRoster);
-  }
-
-  /**
-   * Why the seam is `transaction<T>(body: () => T): T`: `transactionSync` commits when the callback
-   * returns, so an `async` body commits at its first `await` and a later throw rolls nothing back.
-   */
-  async admitViaAsyncBody(id: string): Promise<void> {
-    this.ensureSchema();
-    await this.ctx.storage.transactionSync(async () => {
-      this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
-      await scheduler.wait(1);
-      throw new Error('unknown subordinate "relay"');
-    });
-  }
-
-  async admitted(): Promise<{ events: number; rosterStatus: string }> {
-    this.ensureSchema();
-
-    return {
-      events: this.ctx.storage.sql.exec<{ n: number }>(
-        'SELECT COUNT(*) AS n FROM event_log',
-      ).one().n,
-      rosterStatus: this.ctx.storage.sql.exec<{ status: string }>(
-        "SELECT status FROM actor_subordinates WHERE name = 'relay'",
-      ).one().status,
-    };
   }
 }
 

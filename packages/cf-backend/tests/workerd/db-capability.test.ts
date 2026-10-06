@@ -171,6 +171,22 @@ describe('the db capability on Durable Object SQLite', () => {
     expect(run.tables.some((name) => name.includes('DROP'))).toBe(false);
   });
 
+  test('a batch inside a caller\'s transaction goes with it: a fence or the caller refusing after it leaves neither rows nor evidence', async () => {
+    for (const [id, refusal, said] of [['outer-fence', 'fence', 'mid-revert'], ['outer-caller', 'caller', 'outer transaction failed']] as const) {
+      const run = await probe(id).outerBatch(refusal);
+
+      expect(run.reason).toContain(said);
+      expect({ rows: run.rows, evidence: run.evidence }).toEqual({ rows: [], evidence: ['createTable:ledger:actor:0:null'] });
+    }
+
+    // The denominator: the same batch, with nothing refusing after it, lands with its evidence.
+    const landed = await probe('outer-ok').outerBatch('none');
+
+    expect(landed.reason).toBeNull();
+    expect(landed.rows.map((row) => row.key)).toEqual(['a', 'b']);
+    expect(landed.evidence).toEqual(['createTable:ledger:actor:0:null', 'insert:ledger:actor:1:2', 'insert:ledger:actor:1:2']);
+  });
+
   test('a binding that is no longer current is refused before its statement', async () => {
     expect(await probe('stale').staleActor()).toContain('no longer bound');
   });

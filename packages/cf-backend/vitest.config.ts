@@ -465,7 +465,6 @@ const runnerOptions = {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
           NEIGHBOUR: { className: 'NeighbourDO', useSQLite: true },
           GATED: { className: 'GatedDO', useSQLite: true },
-          TRANSACTION: { className: 'TransactionDO', useSQLite: true },
           ALARMED: { className: 'AlarmDO', useSQLite: true },
           CACHE_WARM_PROBE: { className: 'CacheWarmProbeDO', useSQLite: true },
           EVICTION_PROBE: { className: 'EvictionProbeDO', useSQLite: true },
@@ -581,9 +580,6 @@ const sharedTestOptions = {
     onUnhandledError(error) {
       // `AlarmDO.alarm` rethrows so the runtime owns redelivery (worker.ts:503-506).
       if (error.message.includes('alarm-body-failed')) return false;
-
-      // `TransactionDO`'s async-body arm throws after commit, with no owner (worker.ts:258, :289).
-      if (error.message.includes('unknown subordinate "relay"')) return false;
 
       // `deploy-lifecycle.test.ts` aborts a DeployRunDO mid-plan on purpose.
       if (error.message.includes('probe: the object died mid-plan')) return false;
