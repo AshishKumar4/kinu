@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-06",
-  "files": 3041,
-  "functions": 78615,
+  "files": 3003,
+  "functions": 78314,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -311,10 +311,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/ui/BrandMark.tsx#providerBrand",
-      "complexity": 27
-    },
-    {
-      "key": "packages/cf-backend/src/gallery.tsx#workspacePageRpc",
       "complexity": 27
     },
     {
