@@ -438,12 +438,4 @@ export class AgentDatabase {
     return created;
   }
 
-  clear(): void {
-    const reference = this.reference();
-
-    this.actorHost().bindStores(reference).stores.history.clearConversation(CHAT_SESSION_ID, () => this.actorHost().hosted(reference)?.session.inFlight === true
-      ? Effect.fail(new KinuError('denied', 'Stop the active turn before clearing its conversation'))
-      : Effect.void);
-  }
-
 }

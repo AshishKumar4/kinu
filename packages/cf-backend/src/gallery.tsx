@@ -80,7 +80,7 @@ import UserSettingsPage from "@/pages/UserSettingsPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
-  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, workspaceGenesisSignal,
+  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
@@ -104,7 +104,7 @@ import type {
 import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
-import { galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -2193,6 +2193,14 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 
   if (method === "revertConversation") {
     galleryRevertConversation(v.parse(v.string(), args?.[0]));
+
+    return rpcResult(null).json<T>();
+  }
+
+  // `&clear=refused`: a turn is running, so the server refuses and keeps every message.
+  if (method === "clearConversation") {
+    if (new URLSearchParams(location.search).get("clear") === "refused") throw new Error(CLEAR_NEEDS_IDLE);
+    galleryClearChat("");
 
     return rpcResult(null).json<T>();
   }
