@@ -4,6 +4,7 @@ import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from "bun:test";
 import { Database } from 'bun:sqlite';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { present } from "@kinu.run/test-utils";
 import { ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, deleteExecutorPathOp, renameExecutorPathOp, statExecutorFile, writeExecutorFileOp } from "@kinu.run/core";
 import { createWorkspaceBundle } from './helpers';
@@ -220,6 +221,25 @@ describe("the owner's SOUL.md is set, not moved or deleted", () => {
       .toMatchObject({ error: expect.stringContaining("Settings") });
     expect(await deleteExecutorPathOp(plane.router, "workspace", "/home/main/SOUL.md"))
       .toMatchObject({ error: expect.stringContaining("Settings") });
+  });
+});
+
+describe("deleting a directory", () => {
+  // A native removal may report what it kept rather than throw (Nimbus's VfsRemoval); the delete must not read as done.
+  test("a removal that kept anything is refused, naming what went and what is left", async () => {
+    const { router, vfs } = makePlane();
+
+    vfs.stat = async () => ({ size: 0, mtimeMs: 0, type: 'directory' });
+    vfs.removeRecursive = async () => ({
+      removed: ['/build/gone.js'],
+      kept: ['/build/kept.js', '/build'],
+      failures: [{ path: '/build/kept.js', error: new VfsError('EACCES', 'held open', '/build/kept.js') }],
+    });
+
+    expect(await deleteExecutorPathOp(router, 'workspace', '/build')).toMatchObject({
+      error: expect.stringContaining('still present [/build/kept.js, /build]'),
+      removed: ['/build/gone.js'],
+    });
   });
 });
 

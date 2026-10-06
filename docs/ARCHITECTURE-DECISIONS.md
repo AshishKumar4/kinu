@@ -274,9 +274,10 @@ shenanigans"). Reversed: Kinu's own mount router (`withMountTable` in
 mount-point mutations and refused renames across mounts itself. Also
 reversed: the shell's mounts (`shellMounts`) walked a mounted path one
 component at a time. Measured with `unit-vfs-mounts`'s counting backend: one
-`cat /pc/home/me/a/b/c.txt` asked the backend 36 times, 34 of them a `stat`
-of an ancestor. Now `cat` asks only about the file it names, and the file
-plane reads with one call. The same is pinned for `/sandbox` and `/shared`.
+`cat /pc/home/me/a/b/c.txt` asked the backend 35 times, 25 of them a `stat`
+of one of its five ancestors. Now it asks 5 times, each about the file it
+names; the file plane's read was and stays one call. The same holds for
+`/sandbox` and `/shared`.
 The walk was also wrong: a device that shows nothing above its consented
 directory refused the walk's `stat('/home')`, so a consented file could not
 be read from the shell. "a consented file is read though the device refuses

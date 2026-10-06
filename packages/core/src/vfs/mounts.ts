@@ -1,4 +1,4 @@
-import { type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { type Awaitable, type VFS, type VfsRemoval, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Workspace plane mount table: the durable workspace tree extended by `/pc` (device tunnel) and `/sandbox`
  * (container), each read through that executor's own `files` VFS so its boundaries still apply.
@@ -210,12 +210,26 @@ export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<Tr
 }
 
 /** Shared by the composite plane's throw and the file manager's error value. */
-export function partialTreeRemovalMessage(path: string, removal: Extract<TreeRemoval, { ok: false }>): string {
+export function partialTreeRemovalMessage(path: string, removal: PartialRemoval): string {
 	const gone = removal.removed.length === 0 ? 'none' : removal.removed.join(', ');
 	const left = removal.remaining.join(', ');
 
 	return `removing ${removal.failed.path} failed (${renderThrownChain({ cause: removal.failed.cause })}), `
 		+ `so ${path} was only partly removed: gone [${gone}]; still present [${left}]`;
+}
+
+export type PartialRemoval = Omit<Extract<TreeRemoval, { ok: false }>, 'ok'>;
+
+/** What a removal kept, walked or reported (Nimbus reports, never throws); null: all of it went. */
+export function keptByRemoval(removal: TreeRemoval | VfsRemoval | void): PartialRemoval | null {
+	if (removal === undefined || 'ok' in removal) return removal?.ok === false ? removal : null;
+	const failed = removal.failures[0];
+
+	return failed === undefined ? null : { removed: removal.removed, remaining: removal.kept, failed: { path: failed.path, cause: failed.error } };
+}
+
+function refuseKept(path: string, kept: PartialRemoval | null): void {
+	if (kept !== null) throw new VfsError(isVfsError(kept.failed.cause) ? kept.failed.cause.code : 'EIO', partialTreeRemovalMessage(path, kept), path);
 }
 
 /** What the workspace shell reads to serve this table. */
@@ -312,18 +326,16 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 			const routed = routeOf(path);
 			const files = routed?.mount.files() ?? null;
 
-			// A mounted tree without its own removal is removed entry by entry, its partial record on the error.
+			// A mounted tree without its own removal is walked here, up to its first refusal.
 			if (routed === null || files === null || files.removeRecursive !== undefined || routed.native === '/' || routed.mount.readOnly === true) {
-				await on(path).removeRecursive?.(path);
+				const plane = on(path);
+
+				refuseKept(path, keptByRemoval(await (plane.removeRecursive === undefined ? removeTreeWithVfsOps(plane, path) : plane.removeRecursive(path))));
 
 				return;
 			}
 
-			const removal = await removeTreeWithVfsOps(files, routed.native);
-
-			if (!removal.ok) {
-				throw new VfsError(isVfsError(removal.failed.cause) ? removal.failed.cause.code : 'EIO', partialTreeRemovalMessage(routed.native, removal), routed.native);
-			}
+			refuseKept(routed.native, keptByRemoval(await removeTreeWithVfsOps(files, routed.native)));
 		},
 		// A plane with no ranged read refuses rather than whole-reading; only `readBoundedWithVfsOps` may whole-read.
 		readRange: (path, offset, length) => settle(optional(path, 'this plane serves no ranged read', (plane) => {

@@ -13,6 +13,7 @@ import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
 import { createWorkspaceBundle } from './helpers';
+import type { JsonValue } from '../src/utils/json';
 import { agentCred, agentHome, agentTmpRoot, confineAgentTmp, provisionAgentHome } from '../src/vfs/agent-home';
 
 /** Dirents and stats distinguish directories; a miss throws the VfsError the real backends throw. */
@@ -493,6 +494,32 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(removed).toEqual(['/node_modules']);
 	});
 
+	// A removal reported, not thrown (Nimbus's VfsRemoval), still fails the call on every route: the base walk and a native one.
+	test('a removal that kept anything rejects, whether the plane walked it or its backend reported it', async () => {
+		const base = fakeTree({ '/build/out.js': 'x', '/build/kept.js': 'y' });
+		const realUnlink = base.unlink.bind(base);
+
+		base.unlink = async (path) => {
+			if (path === '/build/kept.js') throw new VfsError('EACCES', 'held open', path);
+
+			return realUnlink(path);
+		};
+
+		const kept = { removed: ['/home/dev/build/out.js'], kept: ['/home/dev/build/kept.js', '/home/dev/build'], failures: [
+			{ path: '/home/dev/build/kept.js', error: new VfsError('EACCES', 'held open', '/home/dev/build/kept.js') },
+		] };
+
+		const device = { ...fakeTree({ '/home/dev/build/kept.js': 'y' }), removeRecursive: async () => kept };
+		const mounted = withMountTable(base, [mountOf('pc', device)]);
+
+		await expect(mounted.removeRecursive('/build')).rejects.toMatchObject({ code: 'EACCES', message: expect.stringContaining('removing /build/kept.js failed') });
+		expect(await exists(base, '/build/kept.js')).toBe(true);
+		await expect(mounted.removeRecursive('/pc/home/dev/build')).rejects.toMatchObject({
+			code: 'EACCES',
+			message: expect.stringContaining('still present [/pc/home/dev/build/kept.js, /pc/home/dev/build]'),
+		});
+	});
+
 	test('removeRecursive on a mount without native support removes the tree entry by entry', async () => {
 		const device = fakeTree({ '/home/dev/build/out.js': 'x', '/home/dev/build/deep/two.js': 'y' });
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
@@ -693,7 +720,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 			const table = withMountTable(bundle.vfs, [mountOf(name, backend)]);
 			bundle.mountTable(table);
 
-			// Walked a component at a time, this `cat` asked the backend 36 times (34 of them a stat of an ancestor); now
+			// Walked a component at a time, this `cat` asked the backend 35 times (25 of them a stat of an ancestor); now
 			// `cat` asks only of the file it names, as it would of a local one.
 			expect(await bundle.shell.exec(`cat /${name}/home/me/a/b/c.txt`)).toMatchObject({ stdout: 'deep', exitCode: 0 });
 			expect(calls.filter((call) => !call.endsWith(' /home/me/a/b/c.txt'))).toEqual([]);
@@ -723,6 +750,42 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 
 		expect(await bundle.shell.exec('cat /pc/home/me/project/notes.md')).toMatchObject({ stdout: 'consented', exitCode: 0 });
 		expect((await bundle.shell.exec('cat /pc/etc/passwd')).exitCode).not.toBe(0);
+	});
+
+	test("from the shell, the device's consent refuses what lies outside its root, `..` included", async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const machine = { '/home/dev/notes.txt': 'consented', '/etc/secrets.key': 'outside' };
+
+		const transport: DeviceTransport = {
+			status: () => ({ connected: true, registered: true, toolchain: null }),
+			refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+			rpc: async (method, params): Promise<JsonValue> => {
+				const path = v.parse(v.string(), params[0]);
+				const content = Object.entries(machine).find(([file]) => file === path)?.[1];
+
+				if (method === 'statPath') return content === undefined ? null : { size: content.length, mtimeMs: 0, isDir: false };
+
+				// A range past the end is empty: the shell reads to end of file.
+				if (method === 'readRange' && content !== undefined) {
+					const [offset, length] = [v.parse(v.number(), params[1]), v.parse(v.number(), params[2])];
+
+					return { encoding: 'base64', content: Buffer.from(content).subarray(offset, offset + length).toString('base64') };
+				}
+
+				if (method === 'exists') return content !== undefined;
+				throw new Error(`ENOENT: ${path}`);
+			},
+		};
+
+		const view = deviceFiles(transport, { consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', scope: async () => 'root' });
+		bundle.mountTable(withMountTable(bundle.vfs, [mountOf('pc', view)]));
+
+		expect(await bundle.shell.exec('cat /pc/home/dev/notes.txt')).toMatchObject({ stdout: 'consented', exitCode: 0 });
+
+		for (const path of ['/pc/etc/secrets.key', '/pc/home/dev/../../etc/secrets.key']) {
+			const read = await bundle.shell.exec(`cat ${path}`);
+			expect([read.exitCode, read.stdout, read.stderr]).toEqual([1, '', expect.stringContaining('outside the consented device directory')]);
+		}
 	});
 
 	test('a read-only mount refuses every write from the shell and the file plane, and keeps its bytes', async () => {
