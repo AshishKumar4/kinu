@@ -592,7 +592,7 @@ export const FIRST_RUN_DEFECTS = {
     provedRedAt: null,
     redDirection: 'A build carrying a planted hole fails the deploy\'s own source gates, so it reaches neither staging nor '
       + 'production. The red direction is proved at each enforcement point on the tier that hosts it: `assertSafeUrl` skipped in '
-      + '`web/provider.ts` turns packages/cf-backend/tests/unit-capability-isolation.test.ts red on '
+      + '`web/provider.ts` turns tests/first-run/capability-isolation.first-run.ts red on '
       + 'both web paths, and `refusedHostname` skipped in `codemode-egress.ts` turns the workerd '
       + 'codemode-sandbox and slate-egress rows red.',
   },

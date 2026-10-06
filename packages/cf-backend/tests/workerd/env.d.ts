@@ -2,7 +2,7 @@
 // Augments `Cloudflare.Env`, which `cloudflare:test` and `cloudflare:workers` both read.
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type {
-  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, StreamLifecycleDO, TransactionDO,
+  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, StreamLifecycleDO, TransactionDO,
 } from './worker';
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
@@ -31,7 +31,6 @@ import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { CodemodeLauncher } from '../../src/codemode-sandbox';
-import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
@@ -339,7 +338,6 @@ declare global {
       NEIGHBOUR: DurableObjectNamespace<NeighbourDO>;
       GATED: DurableObjectNamespace<GatedDO>;
       TRANSACTION: DurableObjectNamespace<TransactionDO>;
-      SOCKET: DurableObjectNamespace<SocketDO>;
       ALARMED: DurableObjectNamespace<AlarmDO>;
       CACHE_WARM_PROBE: DurableObjectNamespace<CacheWarmProbeDO>;
       EVICTION_PROBE: DurableObjectNamespace<EvictionProbeDO>;
@@ -379,7 +377,6 @@ declare global {
       ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
       SEALED_ORCHESTRATOR: DurableObjectNamespace<SealedOrchestratorRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
-  DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       LOADER: WorkerLoader;
       /** The production Worker entry hosted by `public-surface-probe`, WebSocket upgrades included. */
       PUBLIC_SURFACE: Fetcher;

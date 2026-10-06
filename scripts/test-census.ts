@@ -367,9 +367,7 @@ const SOURCE_HELPERS: ReadonlySet<string> = new Set(['memberBody', 'anchor', 'be
  * `isParseable` OR `isStylesheet`, AND NOT `isTestFile`, rather than
  * `isProductSource`: this census's own gate reads `scripts/ladder.ts`, and a
  * test reading a gate program off disk is the same coupling as one reading a
- * package's `src`. `unit-public-shell.test.ts` asserts the font order inside
- * the shipped `src/index.css`, which is the same coupling again over a file
- * `isTextSource` deliberately excludes. A test reading ANOTHER TEST is not —
+ * package's `src`. A test reading ANOTHER TEST is not —
  * that is a fixture, and the suites that check a fixture's own text are doing
  * something else.
  */

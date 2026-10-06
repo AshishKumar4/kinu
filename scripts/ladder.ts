@@ -1739,10 +1739,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'It renders the WORKER-built pages in a local browser, never the deployed '
       + 'edge — a stale cached object at Cloudflare (measured on staging 2026-08-21) '
       + 'passes here and serves anyway. No pixel is compared, so a legible-but-ugly '
-      + 'regression passes, and copy quality is unread beyond those landmark labels. '
-      + 'The old product name is not grepped here at all: that gate is '
-      + 'packages/cf-backend/tests/unit-public-shell.test.ts, over the worker-built '
-      + 'documents rather than the rendered page.',
+      + 'regression passes, and copy quality is unread beyond those landmark labels.',
     inputs: CLIENT_BUILD,
   },
   {

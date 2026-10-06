@@ -7,9 +7,8 @@
  * would be, and following the overview read model through idle, working and
  * the attention a waiting decision earns.
  *
- * What it cannot see, it leaves to the unit tiers: the tissue's own numbers
- * (packages/core/tests/unit-connectome.test.ts) and the renderers' reads of
- * them (packages/cf-backend/tests/unit-connectome-renderers.test.ts).
+ * What it cannot see, it leaves to the unit tier: the tissue's own numbers
+ * (packages/core/tests/unit-connectome.test.ts).
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
