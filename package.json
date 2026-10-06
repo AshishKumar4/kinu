@@ -196,11 +196,13 @@
   "//overrides:miniflare": "Direct Miniflare pins stay at 5.20260926.0-alpha until the routing smoke in kinu-logs/miniflare-upstream/ISSUE-2026-09-30.md passes on Bun: 5.20260930.0-alpha bypasses dispatchFetch's dispatcher there. The held release pins vulnerable undici 7.29.0, so its subtree stays on 7.29.1; the latest Cloudflare plugins' nested Miniflare already pins 7.29.1. Lift this hold on the first Miniflare release that passes that smoke.",
   "//overrides:lodash-es": "lodash-es is pinned here because @plannotator/ui 0.46.1 brought mermaid -> dagre-d3-es, and the resolve landed lodash-es 4.17.23, which carries GHSA-r5fr-rjxr-66jc (code injection through `_.template` import names) and GHSA-f23m-r3pf-42rh (prototype pollution through `_.unset`), both fixed in 4.18.0. dagre-d3-es declares `^4.17.21`, so ^4.18.1 satisfies it and moves the one copy onto the patched line. Delete it once the resolve lands at 4.18.0 or later without it.",
   "//overrides:fast-uri": "fast-uri is pinned here because ajv declares `^3.0.1`, and a lock that satisfies it keeps an old copy: 3.1.7 carries GHSA-hrr3-gc8f-f4qj, fixed in 3.1.8, and the install scanner refuses it. Delete it once ajv's own range starts at 3.1.8 or later.",
+  "//overrides:katex": "katex is pinned here because mermaid 12.0.0 and @plannotator/ui 0.46.1 both declare `^0.16.47`, and every 0.16.x carries GHSA-238p-pmpm-9mq7 (prototype pollution in settings that can bypass `trust` restrictions), fixed in 0.18.2. The override moves their copies onto cf-backend's own ^0.18.11, so one KaTeX renders plan math and mermaid labels alike. Delete it once both declare 0.18.2 or later.",
   "//overrides:basic-ftp": "basic-ftp is pinned here because puppeteer -> @puppeteer/browsers -> proxy-agent -> pac-proxy-agent -> get-uri declares `^5.3.1`, and every 5.x carries GHSA-c475-qrg2-pj4r (quadratic CPU in Client.list() parsing a hostile directory listing), fixed only in 6.2.1; the install scanner refuses it. The pin crosses get-uri's major: its ftp: path runs only for a PAC file served over FTP, which nothing here uses. Delete it once get-uri's range reaches 6.2.1.",
   "overrides": {
     "basic-ftp": "^6.2.1",
     "fast-uri": "^3.1.8",
     "hono": "4.13.7",
+    "katex": "^0.18.11",
     "lodash-es": "^4.18.1",
     "miniflare": {
       "undici": "7.29.1"

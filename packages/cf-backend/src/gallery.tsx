@@ -1528,7 +1528,11 @@ Move the eligibility check in \`packages/core/src/checkout/apply-coupon.ts:42\` 
 
 \`\`\`mermaid
 graph TD; A-->B
-\`\`\``;
+\`\`\`
+
+$$
+\\frac{\\text{saved}}{\\text{cart}} \\le 0.2 \\quad \\href{javascript:alert(1)}{\\text{off}}
+$$`;
 
 const GALLERY_PLAN_CONTENTS = new Map([
   ["late-heading", GALLERY_PLAN_LATE_HEADING],
