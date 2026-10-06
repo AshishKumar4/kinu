@@ -83,6 +83,8 @@ interface CodePathHover {
   readonly cells: readonly string[];
   readonly numberedItems: readonly string[];
   readonly codeBlocks: readonly string[];
+  /** The display math as drawn: KaTeX's rendering, the TeX it keeps, and any link inside it. */
+  readonly math: { readonly rendered: boolean; readonly tex: string | null; readonly links: number };
 }
 
 interface SettledPlan {
@@ -403,6 +405,11 @@ async function observeCodePath(newPage: Gallery['newPage'], origin: string): Pro
         .map((block) => block.textContent?.replace(/\s+/g, '').trim() ?? '')
         .filter((text) => text.includes('Firstoperation') || text.includes('Secondoperation'))),
       codeBlocks: await page.$$eval('[data-plan-document] pre code', (blocks) => blocks.map((block) => block.textContent?.trim() ?? '')),
+      math: await page.$eval('[data-plan-document] [data-math-display]', (block) => ({
+        rendered: block.querySelector('.katex-html') !== null && block.querySelector('math') !== null,
+        tex: block.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim() ?? null,
+        links: block.querySelectorAll('a').length,
+      })),
     };
   } finally {
     await page.close();
@@ -539,5 +546,11 @@ describe('a plan review sends nothing of its own', () => {
 
   test('a diagram fence remains the agent\'s code, not an executable diagram', () => {
     expect(observed.codePath.codeBlocks).toEqual(['graph TD; A-->B']);
+  });
+
+  // GHSA-238p-pmpm-9mq7 moved KaTeX to 0.18: display math still draws, and with `trust: false` an \href in it stays text.
+  test('display math draws through KaTeX, and a link inside it is never a control', () => {
+    expect(observed.codePath.math).toMatchObject({ rendered: true, links: 0 });
+    expect(observed.codePath.math.tex).toContain('\\frac{\\text{saved}}');
   });
 });

@@ -118,7 +118,7 @@ describe('the workspace sidebar names a workspace and addresses it separately', 
 
   test('a titled workspace is untouched — it shows its own name', () => {
     const titled = rows.find((row) => row.href === '/workspace/checkout-fixes');
-    expect(titled?.text).toContain('Checkout coupon bug');
+    expect(titled?.text).toContain('Storefront');
     expect(titled?.text).not.toContain(UNTITLED);
   });
 });
@@ -158,13 +158,11 @@ describe('the workspace frame names an untitled workspace the same way', () => {
         return { headerText: document.body.innerText.replace(/\s+/g, ' '), headerLabels: labels };
       });
 
-      // The blank rename field hints the shared untitled label: click the
-      // title button and read the input it opens. Static markup never
+      // The blank rename field hints the shared untitled label: press the
+      // name's pencil and read the input it opens. Static markup never
       // opens it, so only the browser can pin this half of the contract.
-      await page.evaluate((untitled: string) => {
-        const title = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes(untitled));
-        title?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      }, UNTITLED);
+      await page.hover('.p-bar-tab[data-title] a');
+      await page.click(`button[aria-label="Rename ${UNTITLED}"]`);
       await page.waitForSelector('input[placeholder]');
       const placeholder = await page.$eval('input[placeholder]', (input) => input.getAttribute('placeholder'));
 

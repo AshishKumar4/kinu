@@ -16,7 +16,7 @@ export function DisplayNameField({ value, onChange, saving }: {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={saving === true}
-        placeholder="Your name"
+        placeholder="What should Kinu call you?"
         autoComplete="name"
       />
     </Field>

@@ -345,7 +345,7 @@ async function runWith(
   const logger = createRecordingLogger();
 
   const result = await runSwarm(
-    { reportModelCall: unobservedSpend, rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger, clock },
+    { reportModelCall: unobservedSpend, rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: () => model, mode: 'build', logger, clock },
     call,
   );
 

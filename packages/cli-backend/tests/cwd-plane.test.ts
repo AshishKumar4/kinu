@@ -341,6 +341,32 @@ describe('addressing the bound directory', () => {
     expect(asked).toHaveLength(3);
   });
 
+  // Release review, 2026-10-05: the own space's physical spelling of the folder, <space>/local/..., reached the folder
+  // through its mount while the approval judged it as the own space, so a write through the folder's link went outside unasked.
+  test('every spelling of a path through the folder\'s link is asked where it lands, and a plain one lands in the folder', async () => {
+    const { state, project } = roots('cwd-plane-spellings');
+    const outside = join(dirname(project), 'outside');
+    mkdirSync(outside);
+    const rt = agentRuntime(state, 'solo', project);
+    const space = join(state, 'solo');
+    symlinkSync(outside, join(project, 'linked'));
+    const { file, asked } = agentTools(rt, () => 'deny');
+    const spellings = ['local://linked/a.txt', 'vfs://local/linked/a.txt', join(space, 'local', 'linked', 'a.txt'), join(project, 'linked', 'a.txt'), 'linked/a.txt'];
+
+    for (const path of spellings) {
+      await expect(file({ action: 'write', path, content: 'escaped' })).rejects.toMatchObject({ code: 'denied' });
+    }
+
+    expect(asked).toEqual(spellings.map(() => `file write ${join(realpathSync(outside), 'a.txt')}`));
+    expect(readdirSync(outside)).toEqual([]);
+
+    await file({ action: 'write', path: join(space, 'local', 'plain.txt'), content: 'in the folder' });
+    expect([readFileSync(join(project, 'plain.txt'), 'utf8'), existsSync(join(space, 'local'))]).toEqual(['in the folder', false]);
+
+    await rt.toolFiles.unlink(join(space, 'local', 'linked'));
+    expect([existsSync(join(project, 'linked')), existsSync(outside), asked.length]).toEqual([false, true, spellings.length]);
+  });
+
   test('with nobody to ask, the agent\'s change outside the directory is refused, never parked, while a shell command parks', async () => {
     const { state, project } = roots('cwd-plane-outside-unattended');
     const created = join(dirname(project), 'created.txt');

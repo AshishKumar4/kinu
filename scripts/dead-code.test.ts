@@ -17,10 +17,10 @@
  *     outside its root entry globs, so the suite's imports did not count, and
  *     adopting knip's answer would have deleted a live declaration. The root
  *     workspace's knip config now names `evals/` as entry and project.
- *   - knip alone SPARED four this census reports on nothing but its own
- *     reading: `oxlint-tsgolint`, `typescript`, `just-bash` and
- *     `@rolldown/plugin-babel` — all four peer-required by a package declared
- *     in the same manifest, which is what {@link peerRequirers} exists to see.
+ *   - knip alone SPARED three this census reports on nothing but its own
+ *     reading: `oxlint-tsgolint`, `typescript` and `@rolldown/plugin-babel` —
+ *     all three peer-required by a package declared in the same manifest,
+ *     which is what {@link peerRequirers} exists to see.
  *     They are equal again once that rule runs, and this suite pins the rule.
  */
 
@@ -290,8 +290,7 @@ describe('this repository', () => {
     expect(installed.binaries.get('@kinu.run/core')).toBeUndefined();
   });
 
-  test('the peer scan sees the contracts that keep four declarations alive', () => {
-    expect(installed.peerRequirers.get('just-bash') ?? []).toContain('agents');
+  test('the peer scan sees the contracts that keep three declarations alive', () => {
     // A linked workspace's peers are read from the lock's workspaces block.
     expect(installed.peerRequirers.get('y-protocols') ?? []).toContain('@mossaic/sdk');
     expect(installed.peerRequirers.get('oxlint-tsgolint') ?? []).toContain('oxlint');

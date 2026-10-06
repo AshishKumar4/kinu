@@ -1,10 +1,11 @@
 /**
- * Gallery account frames: `setupmodal&panel=`, `workspaces[&view=list]`, `plugins`, `welcome&step=0..2`.
+ * Gallery account frames: `setupmodal&panel=`, `workspaces[&view=list]`, `plugins`, `welcome&step=0..4`.
  * The `welcome` profile fixture answers `onboardedAt: null`, which makes the account new.
  */
 import { lazy, Suspense, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
 import * as v from "valibot";
+import { ONBOARDING_STEPS } from "@kinu.run/core";
 import Sidebar from "@/components/Sidebar";
 import { ACCOUNT_PANELS, AccountPanelModal } from "@/components/account/AccountPanelModal";
 
@@ -49,7 +50,7 @@ export function DevicesFrame() {
 
 const AccountPanelParam = v.picklist(ACCOUNT_PANELS);
 
-const WelcomeStepParam = v.picklist(["0", "1", "2"]);
+const WelcomeStepParam = v.picklist(ONBOARDING_STEPS.map((_, index) => String(index)));
 
 export function WelcomeFrame() {
   const parsed = v.safeParse(WelcomeStepParam, new URLSearchParams(location.search).get("step"));

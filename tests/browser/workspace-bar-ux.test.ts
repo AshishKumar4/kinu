@@ -178,6 +178,104 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     });
   });
 
+  test('the overview shows what GitHub last said of the workspace\'s repositories and the work its agents touched', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspaceshell&agents=panel`, { waitUntil: 'networkidle0' });
+      await page.click('.p-bar-tab[data-title] .p-bar-link');
+      await page.waitForSelector('[data-overview-github] [data-github-item]');
+
+      const shown = await page.evaluate(() => ({
+        repos: [...document.querySelectorAll('[data-github-repo]')].map((row) => row.textContent?.replace(/\s+/g, ' ').trim()),
+        items: [...document.querySelectorAll('[data-github-item]')].map((row) => [row.getAttribute('data-github-item'), row.querySelector('a')?.getAttribute('href'), row.textContent?.includes('an agent') ?? false]),
+        checked: document.querySelector('[data-github-checked]')?.getAttribute('data-github-checked'),
+        reads: document.documentElement.dataset.galleryGitHubReads,
+      }));
+
+      expect(shown.repos[0]).toContain('fix/coupon-guard');
+      expect(shown.repos[0]).toContain('failing');
+      expect(shown.items).toEqual([
+        ['acme/storefront#482', 'https://github.com/acme/storefront/pull/482', false],
+        ['acme/storefront#477', 'https://github.com/acme/storefront/issues/477', true],
+        ['acme/storefront-docs#61', 'https://github.com/acme/storefront-docs/pull/61', false],
+      ]);
+      expect(shown.checked).toBe('refreshed');
+      // Opening the overview asks GitHub once, first; any later read takes the record as it stands.
+      expect(shown.reads).toMatch(/^Rr*$/);
+      await page.close();
+    });
+  });
+
+  test('a file attached in the new-chat box goes out with the opening message', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openWorkspacePage(newPage, origin);
+
+      await page.click(`${CHATS} a[aria-label="New chat"]`);
+      await page.waitForSelector('[data-new-chat] textarea');
+      await page.$eval('[data-new-chat] form', (form) => {
+        const files = new DataTransfer();
+        files.items.add(new File(['sku,qty\nSAVE20,1\n'], 'cart.csv', { type: 'text/csv' }));
+        form.dispatchEvent(new DragEvent('dragover', { dataTransfer: files, bubbles: true, cancelable: true }));
+        form.dispatchEvent(new DragEvent('drop', { dataTransfer: files, bubbles: true, cancelable: true }));
+      });
+      await page.waitForFunction(() => (document.querySelector('[data-new-chat] [data-attachments]')?.textContent ?? '').includes('cart.csv'));
+      await page.type('[data-new-chat] textarea', 'Why does this cart 500?');
+      await page.click('[data-new-chat] button[type="submit"]');
+      await waitForNewChatOpen(page);
+      await page.waitForFunction(() => document.documentElement.dataset.galleryChatSent !== undefined);
+
+      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:cart.csv', 'text:Why does this cart 500?']);
+      await page.close();
+    });
+  });
+
+  test('a task card opens the agent that owns it, a swarm worker\'s included', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspaceshell&agents=panel`, { waitUntil: 'networkidle0' });
+      await page.click(`${CHATS} [data-title] a`);
+      await page.waitForSelector('[data-workspace-overview] [data-task-card]');
+
+      await page.evaluate(() => {
+        const card = [...document.querySelectorAll('[data-task-card]')].find((node) => (node.textContent ?? '').includes('Serialize gift-card lines'));
+
+        if (!(card instanceof HTMLElement)) throw new Error('no swarm-owned task card');
+        card.click();
+      });
+      await page.waitForSelector('[data-view-only]');
+      await page.close();
+    });
+  });
+
+  // 2026-10-05, production: a tab left on a deleted workspace asked for it every ~7 s, forever, and each answer was a 404.
+  test('a workspace the registry no longer holds says so once, links home, and stops asking', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 800 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&gone=1`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-workspace-gone] a[href="/"]');
+
+      // Nothing is left that would ask again: the page, its reads and its socket are gone.
+      expect(await page.$('[data-composer-root]')).toBeNull();
+      expect(await page.evaluate(() => document.documentElement.dataset.galleryAgentsOpen)).toBe('0');
+      await page.close();
+    });
+  });
+
+  test('on a phone, a workspace that cannot connect still offers the menu', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+      await page.goto(`${origin}/gallery.html?frame=workspaceshell&terminal=denied`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-bar-menu button');
+      await page.tap('.p-bar-menu button');
+      await page.waitForSelector('[data-drawer]');
+      await page.close();
+    });
+  });
+
   test('each conversation keeps its own draft across tab switches', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
@@ -300,3 +398,36 @@ describe('the open tab, as the browser paints it', () => {
   });
 });
 
+/**
+ * Status a reader takes in at a glance: a working chat's name carries a moving light, one that needs the person
+ * breathes a red glow, a failed one holds a still red mark. With reduced motion asked for, nothing moves.
+ */
+describe('a chat\'s status, as the bar paints it', () => {
+  const motion = (page: Page) => page.$$eval('[data-tab-strip="main"] .p-bar-tab[data-status]', (tabs) => Object.fromEntries(tabs.map((tab) => [
+    tab.getAttribute('data-status') ?? '',
+    {
+      label: getComputedStyle(tab.querySelector('.p-status-label') ?? tab).animationName,
+      halo: getComputedStyle(tab, '::after').animationName,
+      mark: tab.querySelector('[role="img"]')?.getAttribute('aria-label') ?? null,
+    },
+  ])));
+
+  test('working shimmers, needing you glows, failed holds still; reduced motion stops both', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      for (const reduce of [false, true]) {
+        const page = await newPage();
+        await page.setViewport({ width: 900, height: 700 });
+        await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: reduce ? 'reduce' : 'no-preference' }]);
+        await page.goto(`${origin}/gallery.html?frame=tabs`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-tab-strip="main"] .p-bar-tab[data-status="waiting"]');
+
+        const seen = await motion(page);
+
+        expect(seen.working).toEqual({ label: reduce ? 'none' : 'p-shimmer', halo: 'none', mark: 'Working' });
+        expect(seen.waiting).toEqual({ label: 'none', halo: reduce ? 'none' : 'p-attention', mark: 'Needs you' });
+        expect(seen.failed).toEqual({ label: 'none', halo: 'none', mark: 'Last turn failed' });
+        await page.close();
+      }
+    });
+  });
+});

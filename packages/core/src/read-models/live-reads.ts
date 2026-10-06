@@ -4,7 +4,7 @@ import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
   'getMemoryContent', 'getExecutors', 'listBackgroundJobs', 'getWorkspaceTabPresence', 'getActivePlanReview',
-  'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates', 'getQuality',
+  'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates', 'getQuality', 'getWorkspaceGitHub',
 ] as const;
 
 export type LiveRead = typeof LIVE_READS[number];
@@ -31,6 +31,7 @@ export const ROSTER_READS: readonly LiveRead[] = [...AGENTS, 'listSubordinates']
 /** Every write to one of these tables moves the reads that select from it. */
 const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string, readonly LiveRead[]>([
   ['agent_facts', LEDGER],
+  ['github_activity', ['getWorkspaceGitHub']],
   ['crafted_tools', ['getToolDescriptions', ...LEDGER]],
   ['gepa_runs', LEDGER],
   ['artifact_versions', LEDGER],
@@ -41,6 +42,7 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   // A review's `turn_complete` is the quality read's count of turns.
   ['evolution_events', ['getQuality']],
   ['deferred_approvals', [...QUEUE, ...AGENTS]],
+  ['device_consent_requests', AGENTS],
   ['proposed_tasks', QUEUE],
   ['plan_reviews', ['getActivePlanReview', 'getToolDescriptions', ...QUEUE, 'listWorkspaceWork', ...AGENTS]],
   ['background_jobs', ['listBackgroundJobs', 'getWorkspaceTabPresence']],

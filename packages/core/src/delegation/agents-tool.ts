@@ -254,7 +254,8 @@ export interface AgentsSwarmDeps {
   /** The caller's runtime, not any node's. */
   rt: AgentRuntime;
   hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
-  model: LanguageModel;
+  /** Read when a swarm starts, so it is the model the caller's turn runs on, not the one at toolset build. */
+  model: () => LanguageModel;
   /** Every model call a search makes bills here. */
   reportModelCall: ModelCallSink;
   nodeCodemode: NodeCodemode;

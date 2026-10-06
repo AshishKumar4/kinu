@@ -8,7 +8,7 @@ import { Cause, Effect, Result } from "effect";
 import { routeAgentRequest } from "agents";
 import { tracing, WorkerEntrypoint } from 'cloudflare:workers';
 import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
-import { containerEventResolver, handleContainerEgress, handleContainerEvent, parseEgressParams, type KinuEgressParams } from './egress/outbound';
+import { containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, parseEgressParams, type KinuEgressParams } from './egress/outbound';
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
@@ -68,7 +68,9 @@ export { DevboxOutbound, DevboxStoreGateway } from '@kinu.run/devbox';
 
 export class KinuEgress extends WorkerEntrypoint<Env, KinuEgressParams> {
   override fetch(request: Request): Promise<Response> {
-    return handleContainerEgress(request, this.env, parseEgressParams(this.ctx));
+    const params = parseEgressParams(this.ctx);
+
+    return handleContainerEgress(request, this.env, params, params && new GitHubEgressRecorder(this.env, this.ctx, params.workspaceName));
   }
 }
 

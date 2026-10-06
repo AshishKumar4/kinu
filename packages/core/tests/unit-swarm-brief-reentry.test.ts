@@ -50,7 +50,7 @@ describe('a node keeps its assigned question across re-entry', () => {
     // A real actor per node over the one workspace database.
     const result = await runSwarm({
       reportModelCall: unobservedSpend,
-      rt, model: model(), mode: 'build', logger: createRecordingLogger(),
+      rt, model: () => model(), mode: 'build', logger: createRecordingLogger(),
       hostNode: hostedSeatsOver({ rt, db }).hostNode,
     }, resolved());
 

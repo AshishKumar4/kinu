@@ -415,6 +415,20 @@ export class AgentDatabase {
     return this.readable().transcript.has(id);
   }
 
+  reopen(id: string): void {
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const transcript = this.transcript();
+      const opening = transcript.read(id);
+
+      if (opening === null || transcript.newestUserId() !== id) return yield* Effect.fail(new KinuError('bad_input', 'Only the newest message can be retried.'));
+      const answer = transcript.at(opening.position + 1);
+
+      if (answer?.role === 'assistant' && answer.parts.length === 0 && transcript.count() === answer.position + 1) {
+        this.storage.transactionSync(() => transcript.truncate(answer.position));
+      }
+    }));
+  }
+
   interrupt(turnId: string): void {
     this.stop(turnId).abort();
   }

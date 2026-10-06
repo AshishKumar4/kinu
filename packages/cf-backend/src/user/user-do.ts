@@ -125,7 +125,7 @@ import {
   type PutEgressSecretInput,
   revocationEndpointFor, revokeOAuthGrant, type UnrevokedGrant,
 } from '@kinu.run/core';
-import { compareCodeUnits, initAccessTokenTable } from '@kinu.run/core';
+import { compareCodeUnits, GITHUB_MCP_PRESET, initAccessTokenTable } from '@kinu.run/core';
 import {
   addSkill, ChunkedUpload, deleteDriveEntry, driveFailure, DriveUploadTargetSchema, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
   listDrive, makeDriveFolder, markAsSkill, normalizeDrivePath, packDriveFolder, receiveDriveUpload, renameDriveEntry,
@@ -734,6 +734,11 @@ export interface McpToolCall {
   readonly id: string;
 }
 
+interface McpCallInFlight {
+  readonly stop: AbortController;
+  workspace: string | null;
+}
+
 export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -762,7 +767,7 @@ export class UserDO extends Agent<Env> {
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
   /** MCP tool calls in flight, by the id each caller sent: `userMcp_cancelCall` stops one. */
-  private readonly _mcpCalls = new Map<string, AbortController>();
+  private readonly _mcpCalls = new Map<string, McpCallInFlight>();
 
 
   /** Once per activation, from the constructor. Claims live in isolate memory, so any claim in storage
@@ -1341,12 +1346,13 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * Mark and revoke in one synchronous turn before the destroy await, so a dying workspace keeps no
-   * authority. Destroy the DO before dropping the row; on failure the marked row stays and the
-   * revoke is not undone.
+   * Mark, stop its MCP calls and revoke in one synchronous turn before the destroy await, so a dying
+   * workspace keeps no authority. Destroy the DO before dropping the row; on failure the marked row
+   * stays and the revoke is not undone.
    */
   private async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
     this.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
+    this.stopWorkspaceMcpCalls(name);
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
     this.rosterChanged(name);
     // Grants are read by name, so a surviving row would grant full_filesystem to a same-name recreate.
@@ -5486,8 +5492,8 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
   async userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
     await this.requireTier(caller, 'mcp.tools');
 
-    const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null }>(
-      `SELECT id, name, allowed_tools FROM user_mcp_servers`,
+    const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null; preset_id: string | null }>(
+      `SELECT s.id, s.name, s.allowed_tools, p.preset_id FROM user_mcp_servers s LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id`,
     );
 
     if (rows.length === 0) return JSON.stringify({ descriptors: [], unavailable: [] } satisfies McpToolSurface);
@@ -5535,7 +5541,7 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
         if (allowed && !allowed.has(tool.name)) continue;
         const described = describeMcpTool({ id, name: meta.name }, tool);
 
-        if ('admitted' in described) out.push(described.admitted);
+        if ('admitted' in described) out.push(meta.preset_id === null ? described.admitted : { ...described.admitted, presetId: meta.preset_id });
         else refused.push(described.refused);
       }
 
@@ -5570,27 +5576,53 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
   /** Called over RPC by the orchestrator's per-tool closure; the result must be JSON-serializable. */
   async userMcp_callTool(caller: UserCaller, call: McpToolCall): Promise<string> {
     // Before any wait, so a cancel that arrives while this call is still being checked finds it.
-    const stopped = new AbortController();
-    this._mcpCalls.set(call.id, stopped);
+    const inFlight: McpCallInFlight = { stop: new AbortController(), workspace: null };
+    this._mcpCalls.set(call.id, inFlight);
 
     try {
-      return await this.callUserMcpTool(caller, call, stopped.signal);
+      // Caller identity comes from the capability token, not an argument, so no agent name can be spoofed.
+      const principal = await this.requireTier(caller, 'mcp.tools');
+      inFlight.workspace = principal.kind === 'workspace' ? principal.workspace : null;
+      const { signal } = inFlight.stop;
+
+      return await settle(Effect.promise(() => this.callUserMcpTool(call, signal)), { signal, interrupted: 'The MCP tool call stopped before its server answered.' });
     } finally {
       this._mcpCalls.delete(call.id);
     }
   }
 
+  /** Server-side only, for the overview's refresh; null without a GitHub connection. */
+  async userMcp_githubAuthorization(caller: UserCaller): Promise<string | null> {
+    await this.requireTier(caller, 'mcp.tools');
+
+    const row = this.sqlx<{ id: string }>(
+      `SELECT s.id FROM user_mcp_servers s JOIN user_mcp_server_presets p ON p.server_id = s.id WHERE p.preset_id = ? LIMIT 1`, GITHUB_MCP_PRESET,
+    )[0];
+
+    if (!row) return null;
+    const sealed = Object.entries((await this.openMcpHeaderMap(row.id)) ?? {}).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
+
+    if (sealed !== undefined) return sealed;
+    await this.hydrateUserMcp();
+    const tokens = await this.mcp.mcpConnections[row.id]?.options.transport.authProvider?.tokens();
+
+    return tokens?.access_token === undefined ? null : `Bearer ${tokens.access_token}`;
+  }
+
   /** Stops a call `userMcp_callTool` is making: the server is told the request is cancelled, and the call settles. */
   async userMcp_cancelCall(caller: UserCaller, callId: string): Promise<void> {
     await this.requireTier(caller, 'mcp.tools');
-    this._mcpCalls.get(callId)?.abort(new KinuError('cancelled', 'Its caller stopped the MCP tool call.'));
+    this._mcpCalls.get(callId)?.stop.abort(new KinuError('cancelled', 'Its caller stopped the MCP tool call.'));
   }
 
-  private async callUserMcpTool(caller: UserCaller, call: { serverId: string; name: string; args: JsonObject }, signal: AbortSignal): Promise<string> {
-    const { serverId, name, args } = call;
+  private stopWorkspaceMcpCalls(workspace: string): void {
+    for (const inFlight of this._mcpCalls.values()) {
+      if (inFlight.workspace === workspace) inFlight.stop.abort(new KinuError('cancelled', `Workspace "${workspace}" was deleted, so its MCP tool calls stop.`));
+    }
+  }
 
-    // Caller identity comes from the capability token, not an argument, so no agent name can be spoofed.
-    await this.requireTier(caller, 'mcp.tools');
+  private async callUserMcpTool(call: { serverId: string; name: string; args: JsonObject }, signal: AbortSignal): Promise<string> {
+    const { serverId, name, args } = call;
     const manager = this.mcp;
 
     if (!this._userMcpHydrated) {

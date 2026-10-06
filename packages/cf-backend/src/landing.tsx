@@ -4,6 +4,7 @@ import * as v from 'valibot';
 import { buildCliInstallCommand, requestUrl } from '@kinu.run/core';
 import { LANDING_PROFILE, LANDING_ROSTER } from '@/components/landing/landing-fixtures';
 import { LandingPage } from '@/components/landing/LandingPage';
+import "virtual:kinu-theme.css";
 import './index.css';
 
 // The static landing serves no `/api/user/*`; stub only the two reads the real `Sidebar` makes.

@@ -73,7 +73,7 @@ function swarmDeps(
   model: CapturingModel,
   overrides: Partial<AgentsSwarmDeps> = {},
 ): AgentsSwarmDeps {
-  return { rt: world.rt, hostNode: hostedSeatsOver(world).hostNode, model, ...unobservedSearchSeams(), ...overrides };
+  return { rt: world.rt, hostNode: hostedSeatsOver(world).hostNode, model: () => model, ...unobservedSearchSeams(), ...overrides };
 }
 
 function agentsTool(deps: AgentsToolDeps) {

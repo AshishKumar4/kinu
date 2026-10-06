@@ -1,8 +1,7 @@
 // Per-agent provider registry over core's (`createModelRegistry`); auth goes through the UserDO stub.
 import {
-  AI_GATEWAY_PROVIDER_ID, DEFAULT_WORKERS_AI_MODEL_SPEC,
   createAIGatewayProvider, createChatGptProvider, createCodexProvider, createModelRegistry, createMyGatewayProvider,
-  createWorkersAIProvider, normalizeModelSpec, resolvePlatformGateway, retryTransientDO,
+  createWorkersAIProvider, normalizeModelSpec, retryTransientDO,
   bindingDecisionRun, restDecisionRun, type DecisionRun,
   type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type ProviderDeps, type ProviderEnv,
   type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
@@ -52,8 +51,8 @@ export interface AgentProviderRegistry {
   deps: ProviderDeps;
   /** `conversation`: the affinity key (`agentAffinityKey`) the calls are routed and cached under. */
   resolveModel(spec: string, conversation: string): LanguageModel;
-  /** Empty input is the platform default (native Workers AI), never a survey of stored BYO credentials. Also accepts bare `@cf/...` and bare model ids. */
-  normalizeSpecSync(specOrNull?: string | null): string;
+  /** A `provider/model` spec, or a bare `@cf/...` Workers AI id. */
+  normalizeSpecSync(spec: string): string;
 }
 
 async function resolveCaller(source: UserCredentialSource): Promise<UserCaller> {
@@ -150,15 +149,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     accountFor: opts.accountFor,
   };
 
-  // Without a UserDO stub, workers-ai is a guaranteed 401, so the default falls back to the env-bound ai-gateway.
-  const platform = resolvePlatformGateway(opts.env);
-  const gatewayDefault = 'reason' in platform ? null : `${AI_GATEWAY_PROVIDER_ID}/${DEFAULT_WORKERS_AI_MODEL_SPEC}`;
-
-  const fallback: SpecDefault = {
-    spec: source === null ? gatewayDefault : DEFAULT_WORKERS_AI_MODEL_SPEC,
-    missing: 'No default provider available (need a UserDO credential stub for workers-ai, '
-      + `or a usable platform gateway: ${'reason' in platform ? platform.reason : ''})`,
-  };
+  const fallback: SpecDefault = { spec: null, missing: 'A model spec names its provider ("provider/model"); an unpinned actor runs on its profile\'s tier model.' };
 
   return {
     registry,
@@ -168,6 +159,6 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
       return registry.resolve(spec, { ...deps, sessionAffinity: conversation });
     },
 
-    normalizeSpecSync: (specOrNull) => normalizeModelSpec(specOrNull, registry, fallback),
+    normalizeSpecSync: (spec) => normalizeModelSpec(spec, registry, fallback),
   };
 }

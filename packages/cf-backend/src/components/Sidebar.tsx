@@ -328,11 +328,11 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
     <ul className="p-nest mb-1 ml-[26px] mr-2 mt-0.5 space-y-px" aria-label="Chats">
       {chats.map((chat: PanelAgent) => (
         <li key={chat.key}>
-          <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key}
+          <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
             aria-current={panel.shown === chat.key ? "page" : undefined}
-            className={`flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(panel.shown === chat.key)}`}>
+            className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(panel.shown === chat.key)}`}>
             <span className="flex w-[13px] shrink-0 justify-center"><AgentStatusMark activity={chat.activity} /></span>
-            <span className="min-w-0 flex-1 truncate p-row-text">{chat.label}</span>
+            <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{chat.label}</span>
           </button>
         </li>
       ))}

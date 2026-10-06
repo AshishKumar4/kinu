@@ -93,7 +93,7 @@ export interface WorkSurfaceProps {
   readMoves?: ReadMoves;
   /** Absent in fixture frames, which keeps every tab visible: unknown is not empty. */
   tabPresence?: TabPresence;
-  /** The workspace's presence read has not answered: no tab is marked until it has or the reader picks one. */
+  /** Presence unread: no tab is marked until it answers or the reader picks. */
   presencePending?: boolean;
   rpc: Rpc;
   slateBody?: (slate: SlateSummary) => ReactNode;
@@ -107,16 +107,30 @@ export interface WorkSurfaceProps {
 function useSelectedTabInView(strip: RefObject<HTMLDivElement | null>, surface: SurfaceKind | null): void {
   useEffect(() => {
     const container = strip.current;
-    const selected = container?.querySelector('[aria-current="true"]');
 
-    if (!container || !selected) return;
-    const viewport = container.getBoundingClientRect();
-    const tab = selected.getBoundingClientRect();
-    const left = viewport.left + container.clientLeft;
-    const right = left + container.clientWidth;
+    if (!container) return;
 
-    if (tab.left < left) container.scrollLeft += tab.left - left;
-    else if (tab.right > right) container.scrollLeft += tab.right - right;
+    const reveal = () => {
+      const selected = container.querySelector('[aria-current="true"]');
+
+      if (!selected) return;
+      const viewport = container.getBoundingClientRect();
+      const tab = selected.getBoundingClientRect();
+
+      // Not laid out yet; scrolling now strands the strip.
+      if (container.clientWidth < tab.width) return;
+      const left = viewport.left + container.clientLeft;
+      const right = left + container.clientWidth;
+
+      if (tab.left < left) container.scrollLeft += tab.left - left;
+      else if (tab.right > right) container.scrollLeft += tab.right - right;
+    };
+
+    reveal();
+    const resized = new ResizeObserver(reveal);
+    resized.observe(container);
+
+    return () => resized.disconnect();
   }, [strip, surface]);
 }
 
@@ -214,7 +228,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
     ? undefined
     : props.slates?.find((slate) => slate.id === openSlate);
 
-  // One connect dialog for the three surfaces in this column that ask for it: only one is mounted at a time.
+  // One connect dialog for the column's three surfaces; one is mounted at a time.
   const [connecting, setConnecting] = useState(false);
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);

@@ -6,11 +6,12 @@ import react from "@vitejs/plugin-react";
 import { wgslVitePlugin } from "@vgpu/wgsl/loader-vite";
 import { defineConfig } from "vite";
 import { promptText } from "./vite-prompt-text";
+import { kinuTheme } from './vite-theme';
 
 const galleryRoot = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  plugins: [promptText(), wgslVitePlugin(), react(), tailwindcss()],
+  plugins: [kinuTheme(), promptText(), wgslVitePlugin(), react(), tailwindcss()],
   // UMD-only, so it has no `default` export when served raw; prebundle it.
   optimizeDeps: {
     include: ["@plannotator/web-highlighter"],

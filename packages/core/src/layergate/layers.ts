@@ -683,6 +683,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           modelId: 'gpt-5.5',
           system: 'SYSTEM',
           messages: shortHistory(),
+          tools: {},
           sessionKey: 'agent-42',
         }),
       },

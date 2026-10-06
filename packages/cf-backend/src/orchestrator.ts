@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { GitHubFactSchema, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, refreshGitHub, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -61,7 +61,7 @@ import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  admitHostedTask, hostedDelegationBudget, hostedRetryTools, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
+  admitHostedTask, hostedDelegationBudget, hostedRetryTools, hostedSubordinateRuntime, relayHostedReport, retireStalledTask, retryHostedMessage,
   hostedTaskEnding, reclaimSettledExplorationActors,
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
@@ -918,7 +918,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       contextTree: (actorId, editor) => this.agentStores(actorId).contextTree(editor),
       // Same profile authority an actor chat resolves through, so a role restriction narrows
       // a chat and a head identically; branches under an unresolved profile are unreproducible.
-      resolveProfile: (input) => this.hostedActorProfile(input),
+      resolveProfile: (input) => this.actorProfile(input),
       reportModelCall: (report) => { this.reportModelCall(report); },
       refusals: (actor) => this.refusalNoticesFor(actor),
       liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -978,7 +978,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       vfs: () => this.rt.storage.vfs,
       // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
       // surface are framed from it.
-      profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
+      profile: (input) => this.actorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
       priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       suggestTitle: (mission) => this.suggestTitle(mission),
@@ -1145,7 +1145,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * hire/ask/send/list/dismiss vanish from the enum rather than refusing.
    */
   private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
-    const swarm = this.swarmDeps(turn.runtime, turn.model);
+    const swarm = this.swarmDeps(turn.runtime, () => turn.model);
 
     const deps: AgentsToolDeps = {
       mode: turn.input.mode,
@@ -2129,6 +2129,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       history: (limit) => this.agentStores(actorId).history(limit),
       admitted: (id) => this.agentStores(actorId).admitted(id),
       send: (input) => whenActorTakesInput(this.boundSql, actorId, () => sendNow(input)),
+      retry: (id) => whenActorTakesInput(this.boundSql, actorId, () => retryHostedMessage(this.hostedSeams(), reference, {
+        messageId: id, reopen: async () => { await (await facet()).reopen(snapshot(), id); },
+      })),
       interrupt: () => {
         this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));
         this.stopSubtree(actorId);
@@ -2385,7 +2388,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         input: v.object({
           drainTurnId: v.string(), answer: v.string(), requestId: v.string(),
         }),
-        // Replayable: the outbound-email intent log stamps a deterministic Message-ID per channel.
+        // Replayable: the outbound-email outbox sends each channel's key once.
         // A batch with an open channel reports `owed`, keeping its lease and row for recovery.
         run: async ({ drainTurnId, answer }) => {
           const closed = await this.completeEventBatch(drainTurnId, answer);
@@ -2913,6 +2916,45 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
   @callable()
+  /** The devbox egress cannot name the agent, so nobody's. Never `@callable`. */
+  async recordGitHubEgress(facts: readonly GitHubFact[]): Promise<void> {
+    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId: null, source: 'egress', at: Date.now() });
+  }
+
+  @callable() getWorkspaceGitHub(refresh = false): Promise<WorkspaceGitHubView> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const remotes = yield* Effect.promise(async () => readGitHubRemotes(this.rt.localVfs, WORKSPACE_ROOT));
+      const outcome = refresh ? yield* this.refreshGitHub(readGitHubActivity(this.boundSql, remotes)) : 'skipped';
+
+      return { ...readGitHubActivity(this.boundSql, remotes), refresh: outcome };
+    }));
+  }
+
+  private refreshGitHub(activity: WorkspaceGitHub): Effect.Effect<WorkspaceGitHubView['refresh']> {
+    return Effect.gen({ self: this }, function* () {
+      const authorization = yield* attempt({ doing: 'finding the account\'s GitHub token', otherwise: 'unavailable' }, async () => this.githubAuthorization());
+
+      if (authorization === null) return 'no-token' as const;
+      const refreshed = yield* refreshGitHub({ authorization, activity, fetch: async (url, init) => fetch(url, init) });
+
+      recordGitHubObservations(this.boundSql, refreshed.observed, Date.now());
+
+      return refreshed.outcome;
+    }).pipe(Effect.catch((failed) => Effect.sync(() => {
+      diagnostics.failure('github.refresh_failed', failed);
+
+      return 'unreachable' as const;
+    })));
+  }
+
+  private async githubAuthorization(): Promise<string | null> {
+    const { stub, caller } = await this.userHub();
+    const vault = await stub.getAuthHeaders(caller, 'github');
+    const header = Object.entries(vault ?? {}).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
+
+    return header ?? stub.userMcp_githubAuthorization(caller);
+  }
+
   async listWorkspaceWork(): Promise<WorkspaceWork> {
     return readWorkspaceWork(
       this.boundSql,
@@ -3346,7 +3388,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }),
       )));
 
-      // Re-drive `pending` outbound email; the stored Message-ID makes re-send idempotent (SPEC §7.4).
+      // Re-drive `pending` outbound email (SPEC §7.4).
       await tick.span('alarm.email_reconcile', (span) => settle(Effect.catchCause(
         Effect.promise(async () => {
           if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
@@ -3415,23 +3457,32 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async getAgentStatus() {
-    const profile = this.resolvedTurnProfile();
+    return settle(Effect.gen({ self: this }, function* () {
+      // A workspace not yet holding its capability cannot read the catalog; it reports only its pins.
+      const profile = yield* attempt({ doing: 'resolving the profile the next turn runs on', otherwise: 'unavailable' }, () => this.currentProfile()).pipe(
+        Effect.catch((failure) => Effect.sync(() => {
+          diagnostics.failure('actor.status_profile_unresolved', failure);
 
-    const status = await getAgentStatus({
-      sql: this.boundSql,
-      actor: this.rt.actor,
-      model: this.effectiveModelSpec(),
-      reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
-      name: this.name,
-      displayName: await this.workspaceTitle() ?? '',
-    });
+          return null;
+        })),
+      );
 
-    return {
-      ...status,
-      roleId: profile?.role.id ?? this.activeRoleLabel(),
-      tierId: profile?.tier.id ?? 'default',
-      context: this.contextFill(),
-    };
+      const status = yield* Effect.promise(async () => getAgentStatus({
+        sql: this.boundSql,
+        actor: this.rt.actor,
+        model: this.effectiveModelSpec(),
+        reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
+        name: this.name,
+        displayName: await this.workspaceTitle() ?? '',
+      }));
+
+      return {
+        ...status,
+        roleId: profile?.role.id ?? this.activeRoleLabel(),
+        tierId: profile?.tier.id ?? 'default',
+        context: this.contextFill(),
+      };
+    }));
   }
 
   private contextFill(): ContextFill | null {
@@ -4188,7 +4239,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const { entry, child } = yield* this.hostedChild(name);
 
       // The effective model: the actor's own pin, else the workspace's, else its tier's, with its source.
-      const { profile } = yield* Effect.promise(async () => this.hostedActorProfile({
+      const { profile } = yield* Effect.promise(async () => this.actorProfile({
         actor: child.handle, availableTools: [], workMode: 'build',
       }));
 

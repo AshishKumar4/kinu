@@ -1,13 +1,12 @@
 // Prompt-cache markers on the wire: runChat through each real provider with a mocked fetch, asserting
 // the HTTP body carries that provider's cache addressing.
 import { describe, test, expect } from 'bun:test';
-import { isStepCount, tool, type ToolSet } from 'ai';
+import { isStepCount, tool, type ModelMessage, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
   runChat,
-  createAnthropicProvider, createOpenAIProvider, createOpenRouterProvider, createOpenAICompatProvider,
-  markLastToolForAnthropicCache,
+  createAnthropicProvider, createOpenAIProvider, createOpenRouterProvider, createOpenAICompatProvider, createClaudeProvider, CLAUDE_CRED_KEY,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue,
@@ -27,19 +26,15 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
   };
 }
 
-function chatTools(retention?: CacheRetention): ToolSet {
-  const tools: ToolSet = {
+/** Unmarked, as both backends build it: the request's cache plan places the tool breakpoint. */
+function chatTools(): ToolSet {
+  return {
     echo: tool({
       description: 'echo back',
       inputSchema: z.object({ x: z.number() }),
       execute: async ({ x }) => `echo:${x}`,
     }),
   };
-
-  // Both backends mark the tool surface at build time.
-  markLastToolForAnthropicCache(tools, retention);
-
-  return tools;
 }
 
 const HISTORY = [
@@ -157,7 +152,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
       model,
       system: 'You are Kinu.',
       history: [...HISTORY],
-      tools: chatTools(retention),
+      tools: chatTools(),
       stopWhen: isStepCount(3),
       cache: {
         providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-test',
@@ -226,6 +221,48 @@ describe('Anthropic cache breakpoints on the wire', () => {
     expect(countCacheControl(body)).toBe(0);
     const system = field(body, 'system', SystemBlocksSchema);
     expect(system.every((block) => block.cache_control === undefined)).toBe(true);
+  });
+});
+
+// Anthropic refuses a request whose breakpoints raise their TTL along tools → system → messages (production,
+// 2026-10-05: Claude Opus 5.5 after GPT turns, "a ttl='1h' cache_control block must not come after a ttl='5m'").
+describe('one TTL per request, in the order Anthropic reads it', () => {
+  const GPT_THEN_CLAUDE: ModelMessage[] = [
+    { role: 'user', content: 'hello' },
+    { role: 'assistant', content: [{ type: 'reasoning', text: 'Planning a greeting.', providerOptions: { openai: { itemId: 'rs_1', reasoningEncryptedContent: 'ENC' } } }, { type: 'text', text: 'Hello! What first?', providerOptions: { openai: { itemId: 'msg_1' } } }] },
+    { role: 'user', content: 'onboard yourself on this project' },
+  ];
+
+  const ttlOf = (block: JsonValue | undefined): string => {
+    const parsed = v.safeParse(v.object({ cache_control: v.object({ ttl: v.optional(v.string()) }) }), block);
+
+    return parsed.success ? parsed.output.cache_control.ttl ?? '5m' : '';
+  };
+
+  /** Every breakpoint's TTL in the order the API processes them: tools, system, then each message's blocks. */
+  const breakpointTtls = (body: JsonObject): string[] => [
+    ...v.parse(v.array(JsonValueSchema), body.tools ?? []),
+    ...v.parse(v.array(JsonValueSchema), body.system ?? []),
+    ...v.parse(v.array(v.looseObject({ content: v.array(JsonValueSchema) })), body.messages).flatMap((message) => message.content),
+  ].map(ttlOf).filter((ttl) => ttl !== '');
+
+  test.each([
+    ['claude', 'short'], ['claude', 'long'], ['anthropic', 'short'], ['anthropic', 'long'],
+  ] as const)('the %s route at %s retention marks tools, system and tail with one TTL', async (route, retention) => {
+    const mock = createMockFetch([{ match: 'api.anthropic.com', respond: () => ({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: ANTHROPIC_TEXT_SSE }) }]);
+    const credKey = route === 'claude' ? CLAUDE_CRED_KEY : ANTHROPIC_CRED_KEY;
+    const deps = makeDeps({ [credKey]: { headers: route === 'claude' ? { Authorization: 'Bearer sk-ant-oat01-test' } : { 'x-api-key': 'sk-ant-test' }, credentialKey: credKey } }, mock.fetch);
+    const provider = route === 'claude' ? createClaudeProvider() : createAnthropicProvider();
+
+    await drain({
+      model: provider.createModel('claude-opus-5-5', deps), system: 'You are Kinu.', history: GPT_THEN_CLAUDE,
+      tools: chatTools(), cache: { providerId: route, modelId: 'claude-opus-5-5', sessionKey: 'kinu-test', retention },
+    });
+
+    const ttls = breakpointTtls(bodyOf(mock, 0));
+
+    expect(ttls.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(ttls).size).toBe(1);
   });
 });
 

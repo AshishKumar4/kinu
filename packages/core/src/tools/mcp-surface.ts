@@ -28,6 +28,8 @@ export interface SerializableToolDescriptor {
   /** JSON Schema (not Zod) so it survives RPC serialization. */
   inputSchema?: JsonObject;
   readOnly?: true;
+  /** The catalog entry the server was added from, so a seam can know its server by what it is, not by its name. */
+  presetId?: string;
 }
 
 const SerializableToolDescriptorSchema = v.object({
@@ -39,6 +41,7 @@ const SerializableToolDescriptorSchema = v.object({
   title: v.optional(v.string()),
   inputSchema: v.optional(JsonObjectSchema),
   readOnly: v.optional(v.literal(true)),
+  presetId: v.optional(v.string()),
 });
 
 export const McpToolSurfaceSchema = v.object({

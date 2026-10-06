@@ -12,18 +12,17 @@ import { listModelsDevProviderModels } from './models-dev';
 import { mapModelList } from './util';
 import { withRateLimitRetry } from './rate-limit-retry';
 import {
-  WORKERS_AI_FALLBACK_MODEL_CATALOG,
   WORKERS_AI_PREFERRED_MODEL_IDS,
 } from './workers-ai-catalog';
 
-export const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
+const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
 
 /** How to reach the platform gateway, or why not: the one predicate every availability check uses. */
 export type PlatformGateway =
   | { target: GatewayTarget; binding: WorkersAIBinding }
   | { reason: string };
 
-export function resolvePlatformGateway(env: ProviderEnv): PlatformGateway {
+function resolvePlatformGateway(env: ProviderEnv): PlatformGateway {
   const target = parseGatewayTarget(env.AI_GATEWAY_URL);
 
   if ('reason' in target) return target;
@@ -49,7 +48,7 @@ export function createAIGatewayProvider(): ModelProvider {
     },
     async listModels(deps): Promise<ModelInfo[]> {
       return mapModelList(listModelsDevProviderModels('cloudflare-workers-ai', deps, {
-        fallback: WORKERS_AI_FALLBACK_MODEL_CATALOG,
+        required: true,
         preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
       }), (models) => models.map((model) => ({
         ...model,

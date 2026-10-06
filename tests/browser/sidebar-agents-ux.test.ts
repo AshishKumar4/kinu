@@ -43,7 +43,7 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       await still(page);
 
       const top = await page.$$eval(`${LIST} nav > ul > li > [data-agent-row]`, (rows) => rows.map((row) => row.textContent));
-      expect(top).toEqual(['Main', 'Release notes', 'Perf pass on checkout', 'Currency formatting']);
+      expect(top).toEqual(['Main', 'Fix SAVE20 coupon 500s', 'Should checkout support gift cards?', 'Speed up cart render', 'Review: payments refactor']);
 
       // A hire sits under the chat or agent that hired it, never beside the person's chats.
       const parentOf = (key: string) => page.$eval(`${LIST} [data-agent-row="${key}"]`, (row) => row.parentElement?.parentElement?.closest('li')?.querySelector('[data-agent-row]')?.getAttribute('data-agent-row'));
@@ -51,9 +51,10 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       expect(await parentOf('a-check')).toBe('a-scout');
       expect(await parentOf('a-copy')).toBe('actor-docs');
 
-      // Swarms and helpers are their own groups, folded until asked for.
+      // Swarms and helpers are their own groups, folded until asked for; a helper's own hires nest under it there.
       const groups = await page.$$eval(`${LIST} section`, (all) => all.map((section) => [section.getAttribute('aria-label'), section.querySelector('[aria-expanded]')?.getAttribute('aria-expanded')]));
       expect(groups).toEqual([['Swarms', 'false'], ['Background', 'false']]);
+      expect(await parentOf('a-sampler')).toBe('a-refine');
 
       await page.click(`${LIST} [data-agent-row="a-scout"]`);
       await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/coupon-auditor"]');
@@ -62,6 +63,16 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       await page.click(`${LIST} [data-agents-back]`);
       await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') !== null, {}, LIST);
       expect(await page.evaluate(() => document.activeElement?.hasAttribute('data-agents-counter'))).toBe(true);
+      await page.close();
+    });
+  });
+
+  test('the bar\'s agents button opens the same list', async () => {
+    await withGallery(async (gallery) => {
+      const page = await shell(gallery, 1280);
+      await page.waitForSelector('.p-bar button[aria-label="All agents"]');
+      await page.click('.p-bar button[aria-label="All agents"]');
+      await page.waitForFunction(() => document.querySelector('[data-sidebar-agents]')?.closest('[inert]') === null);
       await page.close();
     });
   });

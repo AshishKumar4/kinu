@@ -2,15 +2,11 @@
 // measured models; anything else is a marked stand-in no gate may spend as a fact.
 import { describe, test, expect } from "bun:test";
 import type { ModelMessage } from "ai";
-import { userCredentialSource } from './helpers/user-credentials';
-import { createAgentProviderRegistry } from "../src/providers/agent-registry";
-import { WORKERS_AI_FALLBACK_MODEL_CATALOG } from "@kinu.run/core";
 import {
   assembleTurnMessages,
   catalogModelInfo,
   classifyTurnFailure,
   contextWindowForModel,
-  DEFAULT_WORKERS_AI_MODEL_SPEC,
   ModelCatalogSession,
   stepContextLimit,
   type ModelProvider,
@@ -18,17 +14,6 @@ import {
 } from "@kinu.run/core";
 
 describe("contextWindowForModel", () => {
-  test("the offline Workers AI catalog keeps DeepSeek V4 Pro as the first default", () => {
-    expect(WORKERS_AI_FALLBACK_MODEL_CATALOG[0]).toEqual({
-      id: "@cf/zai-org/glm-5.3",
-      label: "GLM 5.3",
-      capabilities: ["tools", "streaming", "reasoning"],
-      contextWindow: 1_048_576,
-      inputModalities: ["text"],
-      reasoningEfforts: ["low", "medium", "high"],
-    });
-  });
-
   test("matches known model families on their spec", () => {
     expect(contextWindowForModel("minimax/m3").window).toBe(1_000_000);
     expect(contextWindowForModel("workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813").window).toBe(1_048_576);
@@ -60,20 +45,6 @@ describe("contextWindowForModel", () => {
   test("an unmeasured spec says so instead of reporting a window as a fact", () => {
     expect(contextWindowForModel("")).toEqual({ measured: false, window: 128_000 });
     expect(contextWindowForModel("some/unknown-model")).toEqual({ measured: false, window: 128_000 });
-  });
-
-  test("a default-configured agent resolves to the real DeepSeek V4 Pro window", () => {
-    // C3: size from the effective spec (normalizeSpecSync, as getModel() uses), not the raw stored one.
-    const userDOStub = userCredentialSource({
-      getAuthHeaders: async () => null,
-      listCredentials: async () => [],
-      getCredentialBaseURL: async () => null,
-    });
-
-    const reg = createAgentProviderRegistry({ env: {}, userDO: userDOStub });
-    const effectiveSpec = reg.normalizeSpecSync(null);
-    expect(effectiveSpec).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
-    expect(contextWindowForModel(effectiveSpec)).toEqual({ measured: true, window: 1_048_576 });
   });
 });
 

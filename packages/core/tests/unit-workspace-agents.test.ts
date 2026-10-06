@@ -20,6 +20,7 @@ import { EventLog, initEventsHubTables, type EmailPayload } from '../src/events/
 import { admitSubordinateTask } from '../src/subordinates/support';
 import { initDeferredApprovalsTable } from '../src/safety/deferred-approval';
 import { initPlanReviewTable } from '../src/plans/review';
+import { initDeviceConsentRequestsTable } from '../src/safety/device-consent';
 
 const EMAIL: EmailPayload = {
   from: 'owner@example.com', to: 'kinu@agents.example.com', subject: 'Status?', body_text: 'Is staging green?',
@@ -204,6 +205,20 @@ describe('the Agents panel lists every agent in the workspace', () => {
 
     db.query(`UPDATE actor_turn_claims SET outcome = 'completed' WHERE turn_id = 't2'`).run();
     expect((await activity()).scout).toBe('idle');
+  });
+
+  test('a device asking the person to approve a command makes Main need them, until the request lapses', async () => {
+    const { db, read } = workspace();
+    const main = async () => (await read()).find((agent) => agent.key === 'main')?.activity;
+
+    initDeviceConsentRequestsTable(makeExecRaw(db));
+    db.query(`INSERT INTO device_consent_requests (consent_id, device_id, device_label, method, command, workspace_name, created_at, expires_at)
+      VALUES ('c1', 'd1', 'laptop', 'exec', 'bun test', 'kiln', ?, ?)`).run(Date.now(), Date.now() + 60_000);
+
+    expect(await main()).toBe('waiting');
+
+    db.query(`UPDATE device_consent_requests SET expires_at = ?`).run(Date.now() - 1);
+    expect(await main()).toBe('idle');
   });
 
   test('a worker still running in an old swarm stays listed past the newest twenty runs', async () => {

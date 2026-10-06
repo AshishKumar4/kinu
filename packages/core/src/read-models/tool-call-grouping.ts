@@ -1,7 +1,7 @@
 /** Every tool call is its own row; only the middle of a run of {@link FOLD_MIN} or more adjacent settled
  *  read-only calls folds. */
 import { isToolUIPart, getToolName } from "ai";
-import type { DynamicToolUIPart, ToolUIPart, UIMessage } from "ai";
+import type { DynamicToolUIPart, ReasoningUIPart, ToolUIPart, UIMessage } from "ai";
 import * as v from "valibot";
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
 import { toolCallEffect } from '../tools/tool-call-summary';
@@ -14,9 +14,11 @@ type Part = UIMessage["parts"][number];
 /** A crafted or MCP tool arrives as the dynamic variant; the chat draws both the same way. */
 export type AnyToolPart = ToolUIPart | DynamicToolUIPart;
 
+/** `reasoning`: a run of thinking, across steps. */
 export type PartBlock =
   | { kind: "part"; part: Part }
-  | { kind: "fold"; parts: AnyToolPart[] };
+  | { kind: "fold"; parts: AnyToolPart[] }
+  | { kind: "reasoning"; parts: ReasoningUIPart[] };
 
 function isFinished(part: AnyToolPart): boolean {
   return part.state === "output-available" || part.state === "output-error";
@@ -44,7 +46,11 @@ export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
     }
 
     flush();
-    blocks.push({ kind: "part", part });
+    const last = blocks.at(-1);
+
+    if (part.type === "reasoning" && last?.kind === "reasoning") last.parts.push(part);
+    else if (part.type === "reasoning") blocks.push({ kind: "reasoning", parts: [part] });
+    else blocks.push({ kind: "part", part });
   }
 
   flush();

@@ -553,27 +553,35 @@ describe('ProviderListingCache — complete listings only, guarded by generation
   });
 });
 
+const NONE_FAILED: ReadonlySet<string> = new Set();
+
 describe('defaultSpecFor — never the first thing in the menu', () => {
+  test('a model whose provider\'s listing failed is unconfirmed, not absent, and is served', () => {
+    expect(defaultSpecFor('openai/gpt-5.5', [], new Set(['openai']))).toBe('openai/gpt-5.5');
+    expect(defaultSpecFor(null, [], new Set(['workers-ai']))).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+    expect(defaultSpecFor('openai/gpt-5.5', [], new Set(['anthropic']))).toBeNull();
+  });
+
   test('a configured choice the account can serve wins', () => {
-    expect(defaultSpecFor('paid/x', ['paid/x', DEFAULT_WORKERS_AI_MODEL_SPEC])).toBe('paid/x');
+    expect(defaultSpecFor('paid/x', ['paid/x', DEFAULT_WORKERS_AI_MODEL_SPEC], NONE_FAILED)).toBe('paid/x');
   });
 
   // A default naming a provider whose key was revoked would fail on its first call.
   test('a configured choice the account cannot serve is refused, not honoured', () => {
-    expect(defaultSpecFor('paid/gone', [DEFAULT_WORKERS_AI_MODEL_SPEC]))
+    expect(defaultSpecFor('paid/gone', [DEFAULT_WORKERS_AI_MODEL_SPEC], NONE_FAILED))
       .toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   test('with no choice, the native default is the only automatic answer', () => {
-    expect(defaultSpecFor(null, ['paid/x', DEFAULT_WORKERS_AI_MODEL_SPEC]))
+    expect(defaultSpecFor(null, ['paid/x', DEFAULT_WORKERS_AI_MODEL_SPEC], NONE_FAILED))
       .toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   // Falling through to menu[0] would silently sign new workspaces up to a paid BYO provider.
   test('never falls through to whatever happened to be first', () => {
-    expect(defaultSpecFor(null, ['paid/x', 'paid/y'])).toBeNull();
-    expect(defaultSpecFor('', ['paid/x'])).toBeNull();
-    expect(defaultSpecFor(undefined, [])).toBeNull();
+    expect(defaultSpecFor(null, ['paid/x', 'paid/y'], NONE_FAILED)).toBeNull();
+    expect(defaultSpecFor('', ['paid/x'], NONE_FAILED)).toBeNull();
+    expect(defaultSpecFor(undefined, [], NONE_FAILED)).toBeNull();
   });
 
   test('workersAiSpec qualifies a bare id and is idempotent', () => {

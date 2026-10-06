@@ -246,7 +246,6 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		byName.set(mount.name, mount);
 	}
 
-	// The workspace's own tree resolves its own paths too, as it did before it was composed: one call, no walk.
 	const composite = new CompositeVFS(base, { resolvesPaths: true });
 
 	for (const mount of mounts) {

@@ -4,7 +4,8 @@
  * (`nodeCount` always 0). Coordinates are view-normalised; nothing is drawn under keep-out boxes.
  */
 
-import { type ArtFrame, clamp, grown, viewDistance, type KeepOut, PULSE_STRIDE, seededRandom, STROKE_STRIDE, TONE_ACCENT, TONE_BRIGHT } from './art';
+import { type ArtFrame, clamp, grown, viewDistance, type KeepOut, PULSE_STRIDE, STROKE_STRIDE, TONE_ACCENT, TONE_BRIGHT } from './art';
+import { seededRandom } from '../utils/stats';
 import { movePulse, type Pulse, pulseTail, writePulse } from './pulse';
 
 export interface ConnectomeOptions {

@@ -4,7 +4,7 @@ import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } 
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, GearIcon, ListIcon,
+  ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, GearIcon, ListIcon, UsersThreeIcon,
   ClockIcon, WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
   ClockCounterClockwiseIcon, UserPlusIcon, type Icon,
 } from "@phosphor-icons/react";
@@ -17,7 +17,6 @@ import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
-import { HistoryReserve, historyBoundaryError, useReservedScroll } from "@/hooks/use-history-reserve";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
@@ -31,7 +30,8 @@ import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
-import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
+import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, SteerBubble } from "@/components/MessageView";
+import { ProgrammaticTurnCard } from "@/components/ProgrammaticTurnCard";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { cloudPlanes, filesFocusOf, hasComparableTakes, referencePrefixes, WORKSPACE_ROOT, type FilesFocus } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
@@ -42,7 +42,8 @@ import { ChatSlates } from "@/components/slates/InlineSlate";
 import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent, type SurfaceKind } from "@kinu.run/core";
 import { ViewOnlyBar } from "@/components/ViewOnlyBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
-import { ConversationStartBoundary, FileLinkContext, HistoryBoundary } from "@/components/surfaces/shared";
+import { FileLinkContext } from "@/components/surfaces/shared";
+import { TranscriptViewport } from "@/components/TranscriptViewport";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { KeptChatColumn } from "@/components/KeptChatColumn";
 import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
@@ -56,7 +57,7 @@ import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNoti
 import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
-import { useOpeningMessage } from "@/components/workspaces/NewChatView";
+import { useCarriedAttachments, useOpeningMessage } from "@/components/workspaces/NewChatView";
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
@@ -536,22 +537,12 @@ function SubordinateChatColumn({
   const setInput = ui.setDraft;
   usePlanApprovedMode(state.activePlan, ui.setMode);
 
-  const { history, transcript, thread, reserves } = useChatThread({
+  const chat = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded,
     steerRuns: state.steerRuns, actor: state.paneActorId,
   });
 
-  const { ref: messagesRef, rowPx } = useReservedScroll({
-    grows: "up",
-    content: transcript,
-    fetched: history.entries,
-    loading: history.loading,
-    onReachEdge: history.loadMore,
-    onReserve: history.read,
-    initialScroll: ui.savedScroll,
-    onScrollPosition: ui.rememberScroll,
-    settled: state.transcriptSeeded,
-  });
+  const { thread } = chat;
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -565,7 +556,7 @@ function SubordinateChatColumn({
     steerRuns: state.steerRuns,
   });
 
-  useOpeningMessage(state.connectionStatus === "connected", (text) => { state.sendChat(text, [], ui.mode); });
+  useOpeningMessage(state.connectionStatus === "connected", (text, files) => { state.sendChat(text, [...files], ui.mode); });
 
   if (state.terminalClose && !state.agentStatus) {
     return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
@@ -588,41 +579,21 @@ function SubordinateChatColumn({
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
-        <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column pt-5 pb-12 space-y-5">
-          <HistoryReserve range={reserves.top} rowPx={rowPx} history={history} />
-          {thread.entries.length > 0 && (
-            <HistoryBoundary
-              loading={history.loading}
-              error={historyBoundaryError(history)}
-              exhausted={history.exhausted}
-              onRetry={history.retry}
-            />
-          )}
-          <ConversationStartBoundary
-            hasEntries={thread.entries.length > 0}
-            streaming={live}
-            error={historyBoundaryError(history)}
-            exhausted={history.exhausted}
-            onRetry={history.retry}
-            pending={<ConversationSkeleton />}
-            empty={
-              <div className="flex h-full flex-col items-center justify-center text-center">
-                <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
-                <p className="text-sm p-text-3">This agent's conversation starts here.</p>
-              </div>
-            }
-          />
-          {thread.entries.map(({ message: msg, steers }, i) => (
+        <TranscriptViewport chat={chat} live={live} padClass="pt-5 pb-12"
+          scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
+          pending={<ConversationSkeleton />}
+          empty={
+            <div className="flex h-full flex-col items-center justify-center text-center">
+              <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
+              <p className="text-sm p-text-3">This agent's conversation starts here.</p>
+            </div>
+          }
+          rows={(before) => thread.entries.map(({ message: msg, steers }, i) => (
             <Fragment key={msg.id}>
-              <HistoryReserve range={reserves.before.get(msg.id)} rowPx={rowPx} history={history} />
-              <MessageView
-                message={msg}
-                steers={steers}
-                liveTail={i === thread.entries.length - 1 ? tail : null}
-              />
+              {before(msg.id)}
+              <MessageView message={msg} steers={steers} liveTail={i === thread.entries.length - 1 ? tail : null} />
             </Fragment>
-          ))}
-          <HistoryReserve range={reserves.tail} rowPx={rowPx} history={history} />
+          ))}>
           <ChatLiveTail tail={tail} />
           {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
           {state.chatError && (
@@ -634,7 +605,7 @@ function SubordinateChatColumn({
               onDismiss={state.clearChatError}
             />
           )}
-        </div>
+        </TranscriptViewport>
       </ErrorBoundary>
 
       {!takesInput && <ViewOnlyBar running={live} onStop={stop} />}
@@ -709,6 +680,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
 }) {
   const navigate = useNavigate();
   const drawer = useLayoutDrawer();
+  const agentsNav = useAgentsNav();
   const [removing, setRemoving] = useState(false);
   const [deleting, setDeleting] = useState<{ title: string; path: string } | null>(null);
 
@@ -730,6 +702,9 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
         newChat={`/workspace/${workspace}/new`}
         leading={drawer && <button type="button" onClick={drawer} className="p-bar-icon" aria-label="Open menu"><ListIcon size={18} /></button>}
         trailing={<>
+          <button type="button" onClick={() => agentsNav.enter(workspace)} className="p-bar-icon" aria-label="All agents" title="All agents">
+            <UsersThreeIcon size={16} />
+          </button>
           <Link to={`/workspace/${workspace}/settings`} className="p-bar-icon" aria-current={view === "settings" ? "page" : undefined}
             aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
           {view === undefined && inspector && <InspectorToggle control={inspector} />}
@@ -749,22 +724,43 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
 }
 
 /** The workspace's own pages, under the bar the chats share. */
-function WorkspaceView({ view, workspace, title, state, agents }: {
+function WorkspaceView({ view, workspace, title, state, agents, open }: {
   view: string;
   workspace: string;
   title: string;
   state: WorkspaceState;
   agents: readonly PanelAgent[];
+  open: (agent: PanelAgent) => void;
 }) {
   if (view === "settings") return <WorkspaceSettings workspace={workspace} state={state} />;
 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
 
   return <WorkspaceOverview workspace={workspace} title={title} rpc={state.rpc} readMoves={state.readMoves}
-    lineage={state.agentStatus?.forkLineage ?? null} agents={agents} />;
+    lineage={state.agentStatus?.forkLineage ?? null} agents={agents} open={open} />;
+}
+
+function GoneWorkspace() {
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-2 px-6 text-center" data-workspace-gone>
+      <p className="text-sm p-text">This workspace no longer exists</p>
+      <p className="p-meta p-text-3">It was deleted, here or somewhere else.</p>
+      <Link to="/" className="mt-1 text-xs p-accent hover:underline">Back to your workspaces</Link>
+    </div>
+  );
 }
 
 export default function WorkspacePage() {
+  const { agentId } = useParams();
+  const [gone, setGone] = useState<string | null>(null);
+
+  if (agentId !== undefined && gone === agentId) return <GoneWorkspace />;
+
+  // Unmounting closes its socket and every read it polls.
+  return <OpenWorkspace key={agentId} onGone={setGone} />;
+}
+
+function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const params = useParams();
   const { agentId } = params;
   const subName = routedAgentPath(params);
@@ -872,39 +868,34 @@ export default function WorkspacePage() {
   const [forkFor, setForkFor] = useState<string | null>(null);
 
   // `state.messages` is the SDK's newest window with streamed messages; older history pages from storage.
-  const { history, transcript, thread, reserves, positions } = useChatThread({
+  const chat = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, steerRuns: state.steerRuns,
     total: state.agentStatus?.messageCount,
   });
 
-  const { ref: messagesRef, rowPx } = useReservedScroll({
-    grows: "up",
-    content: transcript,
-    fetched: history.entries,
-    loading: history.loading,
-    onReachEdge: history.loadMore,
-    onReserve: history.read,
-    initialScroll: ui.savedScroll,
-    onScrollPosition: ui.rememberScroll,
-    settled: state.transcriptSeeded,
-  });
+  const { history, thread, positions, transcript } = chat;
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // The hook spends the per-message aggregate cap (one DO row, see core/cloud-wire) inside its
   // reducer, so concurrent additions cannot reserve the same remaining capacity.
   const attachments = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
+  useCarriedAttachments(attachments.offer);
   const { dragOver, handlers: chatDrop } = useFileDrop(attachments.add);
 
   useAutogrow(chatInputRef, chatInput);
 
+  // A visit the roster does not take is a gone workspace; asked again when the socket drops.
+  const dropped = state.connectionStatus === "disconnected";
+
   useEffect(() => {
     if (!agentId) return;
     startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      // A visit the roster did not take is a gone workspace, which the page's own missing state already shows.
-      yield* Effect.promise(async () => touchWorkspace(agentId));
+      const taken = yield* Effect.promise(async () => touchWorkspace(agentId));
+
+      if (!taken) onGone(agentId);
       reportSide("visit", null);
     }), sideFailed("visit"))));
-  }, [agentId, reportSide, sideFailed]);
+  }, [agentId, dropped, onGone, reportSide, sideFailed]);
 
   // Steer-as-Branch: runs the draft as a parallel head while the live turn continues.
   const [branchNotice, setBranchNotice] = useState<string | null>(null);
@@ -1037,15 +1028,6 @@ export default function WorkspacePage() {
   const panelSlate = (control: InspectorControl): string | null =>
     control.beside && !control.collapsed && surface.startsWith(SLATE_PREFIX) ? surface.slice(SLATE_PREFIX.length) : null;
 
-  // Never unmount on transient WS errors.
-  if (state.connectionStatus === "connecting" && !state.agentStatus) return (
-    <div className="h-full flex items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
-  );
-
-  if (state.terminalClose && !state.agentStatus) {
-    return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
-  }
-
   if (!agentId) return null;
 
   const as = state.agentStatus;
@@ -1054,6 +1036,23 @@ export default function WorkspacePage() {
   const statusTitle = as?.displayName;
   const storedTitle = statusTitle === undefined || statusTitle === "" ? rosterTitle : statusTitle;
   const shownTitle = workspaceDisplayTitle({ name: agentId, displayName: storedTitle });
+
+  const bar = (
+    <WorkspaceBar workspace={agentId} title={shownTitle} editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
+      state={state} agents={agentsPanel.list} shown={shownAgent} view={view} subName={subName} inspector={inspectorControl} />
+  );
+
+  // Never unmount on transient WS errors.
+  if (state.connectionStatus === "connecting" && !state.agentStatus) return (
+    <div className="h-full flex flex-col">
+      {bar}
+      <div className="flex flex-1 items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
+    </div>
+  );
+
+  if (state.terminalClose && !state.agentStatus) {
+    return <div className="h-full flex flex-col">{bar}<div className="min-h-0 flex-1"><TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} /></div></div>;
+  }
 
 
   return (
@@ -1079,10 +1078,10 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      <WorkspaceBar workspace={agentId} title={shownTitle} editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
-        state={state} agents={agentsPanel.list} shown={shownAgent} view={view} subName={subName} inspector={inspectorControl} />
+      {bar}
 
-      {view !== undefined && <WorkspaceView view={view} workspace={agentId} title={shownTitle} state={state} agents={agentsPanel.list} />}
+      {view !== undefined && <WorkspaceView view={view} workspace={agentId} title={shownTitle} state={state} agents={agentsPanel.list}
+        open={(agent) => { detach(Effect.promise(async () => agentsPanel.open(agent))); }} />}
       {view === undefined && (
       <WorkbenchPanels
         ref={workbench}
@@ -1108,29 +1107,17 @@ export default function WorkspacePage() {
               </div>
             )}
             <ErrorBoundary label="Chat">
-            <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column pt-7 pb-12 space-y-5">
-              <ConversationStartBoundary
-                hasEntries={thread.entries.length > 0}
-                streaming={live}
-                error={historyBoundaryError(history)}
-                exhausted={history.exhausted}
-                onRetry={history.retry}
-                pending={<ConversationSkeleton />}
-                empty={<EmptyConversation mission={as?.purpose ?? ""} />}
-              />
-              <HistoryReserve range={reserves.top} rowPx={rowPx} history={history} />
-              {thread.entries.length > 0 && (
-                <HistoryBoundary
-                  loading={history.loading} error={historyBoundaryError(history)}
-                  exhausted={history.exhausted} onRetry={history.retry} />
-              )}
-              {thread.entries.map(({ message: msg, steers }, i) => {
+            <TranscriptViewport chat={chat} live={live} startFirst padClass="pt-7 pb-12"
+              scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
+              pending={<ConversationSkeleton />}
+              empty={<EmptyConversation mission={as?.purpose ?? ""} />}
+              rows={(before) => thread.entries.map(({ message: msg, steers }, i) => {
                 const takes = takesByTurn[msg.id];
                 const signalId = messageSignalId({ metadata: msg.metadata });
 
                 return (
                   <Fragment key={msg.id}>
-                    <HistoryReserve range={reserves.before.get(msg.id)} rowPx={rowPx} history={history} />
+                    {before(msg.id)}
                     <MessageView
                       message={msg}
                       steers={steers}
@@ -1147,8 +1134,7 @@ export default function WorkspacePage() {
                     />
                   </Fragment>
                 );
-              })}
-              <HistoryReserve range={reserves.tail} rowPx={rowPx} history={history} />
+              })}>
               <ChatLiveTail tail={mainTail} />
               {looseCards.map(({ card, turn }) => (
                 <ProgrammaticTurnCard key={card.id} turn={turn} text={card.text} state={card.state} />
@@ -1180,7 +1166,7 @@ export default function WorkspacePage() {
                   onDismiss={state.clearChatError}
                 />
               )}
-            </div>
+            </TranscriptViewport>
             </ErrorBoundary>
 
             {state.pendingConsents.length > 0 && (

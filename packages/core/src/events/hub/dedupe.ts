@@ -13,7 +13,12 @@ function subordinateTaskDedupeKey(payload: SubordinateTaskPayload): string | nul
 
   if (payload.idempotency_key !== undefined) return `subordinate-signal:${payload.idempotency_key}`;
 
-  return payload.message_id === undefined ? null : `subordinate-message:${payload.message_id}`;
+  return payload.message_id === undefined ? null : subordinateMessageDedupeKey(payload.message_id);
+}
+
+/** The key a chat message's assignment is admitted under: one assignment per message. */
+export function subordinateMessageDedupeKey(messageId: string): string {
+  return `subordinate-message:${messageId}`;
 }
 
 export function dedupeKeyFor(event: KinuEvent): string | null {

@@ -556,41 +556,36 @@ export function resolveReentry(input: {
  * caller's model, which would misstate provenance and spend.
  */
 export function resolveNodeModel(input: {
-  readonly model: LanguageModel;
+  readonly model: () => LanguageModel;
   readonly resolveModel: ((spec: string) => LanguageModel) | undefined;
   readonly runProfile: SwarmProfileSnapshot | null;
 }): { readonly model: LanguageModel; readonly spec: string | undefined } | Refusal {
   return settleSync(Effect.catch(Effect.gen(function* () {
-    let nodeModel = input.model;
-    let modelSpec: string | undefined;
+    if (input.runProfile === null) return { model: input.model(), spec: undefined };
+    const spec = input.runProfile.profile.tier.model;
+    const tier = input.runProfile.profile.tier.id;
+    const resolveModel = input.resolveModel;
 
-    if (input.runProfile) {
-      const spec = input.runProfile.profile.tier.model;
-      const tier = input.runProfile.profile.tier.id;
-      const resolveModel = input.resolveModel;
-
-      if (!resolveModel) {
-        return unsupported(
-          `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, but no model `
-          + 'resolver is wired in this runner, so its nodes could only run the caller\'s own '
-          + 'model while the run records the tier\'s. Wire AgentsSwarmDeps.resolveModel on this '
-          + 'backend.',
-        );
-      }
-
-      nodeModel = yield* Effect.try({
-        try: () => resolveModel(spec),
-        catch: (error) => refusalOf(new KinuError('unavailable',
-          `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, and this `
-          + 'runtime cannot build that model, so the tier it was routed to is unreachable here. '
-          + 'Point the tier at a model this session can resolve, or give the session a resolver '
-          + 'that can.',
-          { cause: error })),
-      });
-      modelSpec = spec;
+    if (!resolveModel) {
+      return unsupported(
+        `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, but no model `
+        + 'resolver is wired in this runner, so its nodes could only run the caller\'s own '
+        + 'model while the run records the tier\'s. Wire AgentsSwarmDeps.resolveModel on this '
+        + 'backend.',
+      );
     }
 
-    return { model: nodeModel, spec: modelSpec };
+    const nodeModel = yield* Effect.try({
+      try: () => resolveModel(spec),
+      catch: (error) => refusalOf(new KinuError('unavailable',
+        `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, and this `
+        + 'runtime cannot build that model, so the tier it was routed to is unreachable here. '
+        + 'Point the tier at a model this session can resolve, or give the session a resolver '
+        + 'that can.',
+        { cause: error })),
+    });
+
+    return { model: nodeModel, spec };
   }), (refusal) => Effect.succeed(refusal)));
 }
 

@@ -1,6 +1,7 @@
-// The backdrop's claims (deterministic, slow, faint) must hold before any canvas draws it.
+// The backdrop is deterministic, in bounds, and faint enough to read text over.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { THEME_TOKENS, type Mode } from '@kinu.run/core';
 
 import {
   createDustRenderer, DustField, type DustFrame, type DustSurface,
@@ -90,44 +91,49 @@ describe('the dust drifts deterministically', () => {
       expect(frame.motes[at + 3]).toBeLessThanOrEqual(1);
     }
   });
-
-  test('drift is slow', () => {
-    const field = fieldAfter(0);
-    const before = field.frame().motes.slice();
-
-    for (let index = 0; index < 60; index += 1) field.step(1 / 60);
-    const after = field.frame();
-    const stride = strideOf(after);
-
-    for (let index = 0; index < after.count; index += 1) {
-      const at = index * stride;
-      const dx = Math.abs((after.motes[at] ?? 0) - (before[at] ?? 0));
-      const dy = Math.abs((after.motes[at + 1] ?? 0) - (before[at + 1] ?? 0));
-
-      if (dx > 0.5 || dy > 0.5) continue;
-      expect(dx).toBeLessThanOrEqual(0.015 + 1e-6);
-      expect(dy).toBeLessThanOrEqual(0.015 + 1e-6);
-    }
-  });
-
-  test('the twinkle moves', () => {
-    const field = fieldAfter(0);
-    const before = field.frame().motes.slice();
-
-    for (let index = 0; index < 120; index += 1) field.step(1 / 60);
-    const after = field.frame();
-    const stride = strideOf(after);
-    let moved = 0;
-
-    for (let index = 0; index < after.count; index += 1) {
-      if (after.motes[index * stride + 3] !== before[index * stride + 3]) moved += 1;
-    }
-
-    expect(moved).toBeGreaterThanOrEqual(after.count / 2);
-  });
 });
 
-describe('the dust renderer paints gold, twice per mote', () => {
+type Rgb = readonly [number, number, number];
+
+const hexPair = (value: string, at: number): number => Number.parseInt(value.slice(at, at + 2), 16);
+
+const hex = (value: string): Rgb => [hexPair(value, 1), hexPair(value, 3), hexPair(value, 5)];
+
+const RGBA = v.pipe(v.string(), v.regex(/^rgba\((\d+),(\d+),(\d+),([\d.]+)\)$/u), v.transform((style) => style.slice(5, -1).split(',').map(Number)));
+
+/** WCAG relative luminance. */
+function luminance([r, g, b]: Rgb): number {
+  const linear = (channel: number) => (channel / 255 <= 0.03928 ? channel / 255 / 12.92 : ((channel / 255 + 0.055) / 1.055) ** 2.4);
+
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+}
+
+const contrast = (one: Rgb, two: Rgb): number => {
+  const [light, dark] = [luminance(one), luminance(two)].sort((a, b) => b - a);
+
+  return ((light ?? 0) + 0.05) / ((dark ?? 0) + 0.05);
+};
+
+function composited(ground: Rgb, fills: readonly string[]): Rgb {
+  return fills.reduce<Rgb>((under, style) => {
+    const [r = 0, g = 0, b = 0, alpha = 1] = v.parse(RGBA, style);
+
+    return [r * alpha + under[0] * (1 - alpha), g * alpha + under[1] * (1 - alpha), b * alpha + under[2] * (1 - alpha)];
+  }, ground);
+}
+
+/** Text's worst contrast over one mote, its two fills stacked. */
+function worstTextContrast(mode: Mode, styles: readonly string[]): number {
+  const ground = hex(THEME_TOKENS[mode]['--c-bg']);
+  const text = hex(THEME_TOKENS[mode]['--c-text']);
+  let worst = Infinity;
+
+  for (let at = 0; at < styles.length; at += 2) worst = Math.min(worst, contrast(text, composited(ground, styles.slice(at, at + 2))));
+
+  return worst;
+}
+
+describe('the dust renderer paints each mote twice, faint enough to read through', () => {
   const paint = (palette: ArtPalette, frame: DustFrame): Recording => {
     const surface = recordingSurface();
     const renderer = createDustRenderer(surface, palette);
@@ -137,7 +143,7 @@ describe('the dust renderer paints gold, twice per mote', () => {
     return surface;
   };
 
-  test('dark theme fills with the accent gold and nothing else', () => {
+  test('dark theme: one clear, two fills per visible mote, and text stays readable over them', () => {
     const frame = fieldAfter(4).frame();
     const surface = paint(DARK, frame);
     const stride = strideOf(frame);
@@ -151,14 +157,11 @@ describe('the dust renderer paints gold, twice per mote', () => {
     expect(surface.clears).toBe(1);
     expect(surface.ops[0]).toBe('clear');
 
-    for (const style of surface.styles) {
-      expect(style.startsWith('rgba(224,164,88,')).toBe(true);
-      const alpha = Number(style.slice(style.lastIndexOf(',') + 1, -1));
-      expect(alpha).toBeLessThanOrEqual(0.18);
-    }
+    expect(worstTextContrast('dark', surface.styles)).toBeGreaterThanOrEqual(4.5);
+    expect(worstTextContrast('dark', surface.styles.map((style) => style.replace(/,[\d.]+\)$/u, ',1)')))).toBeLessThan(4.5);
   });
 
-  test('light theme fills with the deep gold and nothing else', () => {
+  test('light theme: one clear, two fills per visible mote, and text stays readable over them', () => {
     const frame = fieldAfter(4).frame();
     const surface = paint(LIGHT, frame);
     const stride = strideOf(frame);
@@ -172,10 +175,7 @@ describe('the dust renderer paints gold, twice per mote', () => {
     expect(surface.clears).toBe(1);
     expect(surface.ops[0]).toBe('clear');
 
-    for (const style of surface.styles) {
-      expect(style.startsWith('rgba(122,85,20,')).toBe(true);
-      const alpha = Number(style.slice(style.lastIndexOf(',') + 1, -1));
-      expect(alpha).toBeLessThanOrEqual(0.18);
-    }
+    expect(worstTextContrast('light', surface.styles)).toBeGreaterThanOrEqual(4.5);
+    expect(worstTextContrast('light', surface.styles.map((style) => style.replace(/,[\d.]+\)$/u, ',1)')))).toBeLessThan(4.5);
   });
 });

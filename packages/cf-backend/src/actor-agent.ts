@@ -165,7 +165,7 @@ import {
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
-  toolSurfaceTokens, McpToolSurfaceSchema,
+  toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsForInvocation, withTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
@@ -205,7 +205,6 @@ import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import type { AgentStoreBroker } from "./agent-facets";
-import { markLastToolForAnthropicCache } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
@@ -1834,6 +1833,7 @@ export abstract class ActorAgent extends Agent<Env> {
       history: (limit) => this.chatTranscript.history(limit),
       admitted: async (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
+      retry: (id) => this.chatLoop.retry(id),
       interrupt: () => {
         this.chatLoop.interrupt();
         this.stopSubtree(this.actorHandle().actorId);
@@ -2256,6 +2256,11 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Rendered into the turn's dynamic context so missing MCP servers are legible. */
   private _mcpUnavailable: MissingCapability[] = [];
 
+  private noteGitHubCall(descriptor: Pick<SerializableToolDescriptor, 'presetId' | 'name'>, args: JsonObject, result: string, actorId: string | null): void {
+    if (descriptor.presetId !== GITHUB_MCP_PRESET) return;
+    recordGitHubActivity(this.boundSql, recognizeGitHubMcp(descriptor.name, args, result), { actorId, source: 'mcp', at: Date.now() });
+  }
+
   private get mcpToolsCache(): McpToolSurfaceCache<ToolSet> {
     this._mcpToolsCache ??= new McpToolSurfaceCache<ToolSet>(async (descriptors) =>
       // `buildMcpToolSet` puts every non-readOnly tool behind the same durable claim as natives,
@@ -2263,6 +2268,8 @@ export abstract class ActorAgent extends Agent<Env> {
       buildMcpToolSet(descriptors, {
         call: async (d, args, options) => {
           const rawResult = await callUserMcpTool({ stub: this.requireOwnerUserDO(), caller: await this.userCaller() }, d, args, options.abortSignal);
+
+          this.noteGitHubCall(d, args, rawResult, this.actorHandle().actorId);
 
           const response = v.parse(JsonValueSchema, JSON.parse(rawResult));
 
@@ -2667,7 +2674,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.stores.config;
   }
 
-  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: LanguageModel, originContext?: AgentsSwarmDeps['originContext'], compactShared?: AgentsSwarmDeps['compactShared']): AgentsSwarmDeps {
+  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext?: AgentsSwarmDeps['originContext'], compactShared?: AgentsSwarmDeps['compactShared']): AgentsSwarmDeps {
     const seams = this.hostedSeams();
 
     return {
@@ -2689,7 +2696,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
 
-    const swarm = this.swarmDeps(this.rt, this.getModel(), () => this.turnOriginContext(), createSharedPrefixCompactor({
+    const swarm = this.swarmDeps(this.rt, () => this.getModel(), () => this.turnOriginContext(), createSharedPrefixCompactor({
         ports: {
           transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
           plans: this.compactionState.plans,
@@ -2735,6 +2742,25 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private operationProfile(): OperationProfile | null {
     return currentOperationProfile(this.actorHandle()) ?? (this._inFlight ? this._turnOperation : null);
+  }
+
+  /** The last profile a turn or a status read resolved. */
+  private _settledProfile: ResolvedTurnProfile | null = null;
+
+  /** The profile this actor runs on now: its operation's, else the one its next turn resolves. */
+  protected async currentProfile(): Promise<ResolvedTurnProfile> {
+    const live = this.operationProfile()?.profile;
+
+    if (live !== undefined) return live;
+    const { profile } = await this.actorProfile({ actor: this.actorHandle(), availableTools: [], workMode: 'build' });
+
+    this._settledProfile = profile;
+
+    return profile;
+  }
+
+  private runningProfile(): ResolvedTurnProfile | null {
+    return this.operationProfile()?.profile ?? this._settledProfile;
   }
   /** Built in beforeTurn; read by the per-step dynamic context. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
@@ -3063,7 +3089,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (!reach.allowsTool(descriptor.toolKey)) return yield* new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
 
-          return v.parse(JsonValueSchema, JSON.parse(yield* Effect.promise(async () => callUserMcpTool({ stub, caller }, descriptor, route.args, undefined))));
+          const answered = yield* Effect.promise(async () => callUserMcpTool({ stub, caller }, descriptor, route.args, undefined));
+
+          // A slate calls on its viewer's behalf, not any agent's.
+          this.noteGitHubCall(descriptor, route.args, answered, null);
+
+          return v.parse(JsonValueSchema, JSON.parse(answered));
         }
 
         case 'agent': {
@@ -3108,20 +3139,9 @@ export abstract class ActorAgent extends Agent<Env> {
     let profile: ResolvedTurnProfile;
 
     try {
-      if (actor === undefined) {
-        profile = resolveAgentTurnProfile({
-          ...(await this.profileInputs()),
-          activeRoleId: this.activeRoleLabel(),
-          workMode: 'build',
-          availableTools: [],
-          activeSkills: [],
-          explicitTier: route.tier ?? this.config.getAssignedTier() ?? undefined,
-        });
-      } else {
-        profile = (await this.hostedActorProfile({
-          actor, workMode: 'build', availableTools: [], explicitTier: route.tier,
-        })).profile;
-      }
+      profile = (await this.actorProfile({
+        actor: actor ?? this.actorHandle(), workMode: 'build', availableTools: [], explicitTier: route.tier,
+      })).profile;
     } catch (cause) {
       // The resolver reports bad tiers as plain Errors; surface them as bad input.
       if (cause instanceof Error && /invalid explicit tier|unknown tier/.test(cause.message)) {
@@ -3184,13 +3204,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (operation) return narrowToolSurface(operation.profile.allowedTools);
 
-    const profile = resolveAgentTurnProfile({
-      ...(await this.profileInputs()),
-      activeRoleId: this.activeRoleLabel(),
+    const { profile } = await this.actorProfile({
+      actor: this.actorHandle(),
       workMode: 'build',
       availableTools: [...actorActiveTools(this.actorToolDeps()), ...mcpToolKeys, ...codemodeCapabilitiesFor(providers)],
-      activeSkills: [],
-      explicitTier: this.config.getAssignedTier() ?? undefined,
     });
 
     return narrowToolSurface(profile.allowedTools);
@@ -3203,7 +3220,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async hostedSlateReach(
     actor: HostedActor, providers: readonly CodemodeProvider[], native: readonly string[],
   ): Promise<ToolSurfaceNarrowing> {
-    const { profile } = await this.hostedActorProfile({
+    const { profile } = await this.actorProfile({
       actor: actor.handle,
       availableTools: [...native, ...codemodeCapabilitiesFor(providers)],
       workMode: 'build',
@@ -3547,9 +3564,11 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Model for auxiliary calls and compaction. */
   getModel(): LanguageModel {
     this.actorHandle();
-    const spec = this.operationProfile()?.profile.tier.model ?? this.getStoredModelId();
+    const spec = this.runningProfile()?.tier.model ?? this.getStoredModelId();
 
-    return this.ownedModelServices.resolveModel(spec);
+    return settleSync(spec === null
+      ? Effect.fail(new KinuError('missing', 'this agent has resolved no profile yet and pins no model'))
+      : Effect.sync(() => this.ownedModelServices.resolveModel(spec)));
   }
 
   /** Cached SOUL.md text, refreshed at turn start and invalidated by setSoul(). */
@@ -3753,11 +3772,6 @@ export abstract class ActorAgent extends Agent<Env> {
       if (mode === 'plan' && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
       const toolsets = buildActorTools(builtinDeps);
 
-      // One Anthropic cache breakpoint on the last tool caches the whole tool surface;
-      // inert for non-Anthropic providers.
-      markLastToolForAnthropicCache(toolsets.raw, this.config.getCacheRetention());
-      markLastToolForAnthropicCache(toolsets.turn, this.config.getCacheRetention());
-
       if (claimScope === undefined) {
         this._cachedTools = toolsets;
         this._cachedToolsKey = cacheKey;
@@ -3906,9 +3920,9 @@ export abstract class ActorAgent extends Agent<Env> {
    *  Protected: a hosted actor's search prices its estimate against this resolution. */
   protected effectiveModelSpec(): string {
     return resolveEffectiveModelSpec({
-      live: () => this.operationProfile()?.profile.tier.model,
+      live: () => this.runningProfile()?.tier.model,
       stored: () => this.getStoredModelId(),
-      normalize: (spec) => this.providerRegistry().normalizeSpecSync(spec),
+      normalize: (spec) => (spec === null ? '' : this.providerRegistry().normalizeSpecSync(spec)),
     });
   }
 
@@ -4226,6 +4240,8 @@ export abstract class ActorAgent extends Agent<Env> {
       activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
     });
 
+    this._settledProfile = profile;
+
     const operation = captureOperationProfile({
       actor: this.actorHandle(), profile, inputs: profileInputs,
       runId: this._currentRunId || WORKSPACE_RUN_ID, turnId: this.durableTurnId() ?? this._currentRunId,
@@ -4488,11 +4504,8 @@ export abstract class ActorAgent extends Agent<Env> {
       },
     });
   }
-  /**
-   * Routing profile resolved for one hosted actor, not the root: role comes from the actor's own handle.
-   * Workspace inputs and pinned model still apply, so an unpublished role narrows to nothing.
-   */
-  protected async hostedActorProfile(input: {
+  /** Resolved now, as this root's or hosted actor's next turn would. */
+  protected async actorProfile(input: {
     readonly actor: ActorHandle;
     readonly availableTools: readonly string[];
     readonly workMode: WorkMode;
@@ -4504,7 +4517,9 @@ export abstract class ActorAgent extends Agent<Env> {
     return {
       profile: resolveAgentTurnProfile({
         ...inputs,
-        ...ownProfileChoices(input.actor.config, inputs, this.ancestorProfiles(input.actor), { explicitTier: input.explicitTier }),
+        ...ownProfileChoices(input.actor.config, inputs, input.actor.actorId === this.actorHandle().actorId ? undefined : this.ancestorProfiles(input.actor), {
+          explicitTier: input.explicitTier,
+        }),
         workMode: input.workMode,
         availableTools: [...input.availableTools],
         activeSkills: [],
@@ -4701,6 +4716,8 @@ export abstract class ActorAgent extends Agent<Env> {
     signal: AbortSignal,
   ): Promise<JsonValue | undefined> {
     await this.currentAccountSwarms();
+    // Work outside a turn runs on the profile the actor resolves now.
+    await this.currentProfile();
 
     return await resumeBackgroundJob({
       rawTools: (resumeMode) => this.getRawToolsForWorkMode(resumeMode),

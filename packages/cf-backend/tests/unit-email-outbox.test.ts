@@ -1,6 +1,6 @@
 /**
  * EmailOutbox write-ahead intent and idempotency (agent-core SPEC §7.4), over the shared
- * `outbox_email` rows: `dedupe_key` is the idempotency key; Message-ID rides the stored headers.
+ * `outbox_email` rows: `dedupe_key` is the idempotency key.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -9,6 +9,7 @@ import * as v from 'valibot';
 import { EmailOutbox, type OutboundEmailMessage } from '@kinu.run/core';
 import type { SqlExec } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
+import { refuseUnlistedHeaders } from './helpers/email-service';
 
 function makeSql() {
   const db = new Database(':memory:');
@@ -47,6 +48,7 @@ function fakeBinding(onSend?: (m: Sent) => void) {
   async function send(outgoing: EmailMessage | SendEmailBuilder): Promise<EmailSendResult> {
     const parsed = v.parse(SentSchema, outgoing);
     onSend?.(parsed);
+    refuseUnlistedHeaders(parsed.headers);
     sent.push(parsed);
 
     return { messageId: `ack-${sent.length}` };
@@ -73,20 +75,12 @@ function outbox() {
   return { box: new EmailOutbox(sql), sql };
 }
 
-/** Every intent is stamped before queueing, so a missing Message-ID is a defect. */
 function rowFor(sql: SqlExec, key: string) {
   const row = sql.exec(
     `SELECT state, message, attempt_count, next_attempt_at FROM outbox_email WHERE dedupe_key = ?`, key,
   ).toArray()[0];
 
-  if (row === undefined) return undefined;
-  const parsed = v.parse(OutboxTestRowSchema, row);
-  const stored = v.parse(SentSchema, JSON.parse(parsed.message));
-  const messageId = stored.headers?.['Message-ID'];
-
-  if (messageId === undefined) throw new Error(`stored intent ${key} carries no Message-ID`);
-
-  return { ...parsed, messageId };
+  return row === undefined ? undefined : v.parse(OutboxTestRowSchema, row);
 }
 
 describe('EmailOutbox — write-ahead intent', () => {
@@ -106,8 +100,6 @@ describe('EmailOutbox — write-ahead intent', () => {
 
     if (!row) throw new Error('expected persisted outbox row');
     expect(row.state).toBe('sent');
-    expect(row.messageId).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
-    expect(result.messageId).toBe(row.messageId);
   });
 });
 
@@ -121,7 +113,6 @@ describe('EmailOutbox — idempotency key', () => {
 
     expect(first.status).toBe('sent');
     expect(second.status).toBe('deduped');
-    expect(second.messageId).toBe(first.messageId);
     expect(sent).toHaveLength(1);
   });
 
@@ -138,15 +129,14 @@ describe('EmailOutbox — idempotency key', () => {
     expect(rowFor(sql, 'dup')?.attempt_count).toBe(1);
   });
 
-  test('distinct keys each send and get distinct Message-IDs', async () => {
+  test('distinct keys each send', async () => {
     const { box } = outbox();
     const { binding, sent } = fakeBinding();
 
-    const a = await box.send(binding, 'a', message(), 1_000);
-    const b = await box.send(binding, 'b', message(), 1_000);
+    await box.send(binding, 'a', message(), 1_000);
+    await box.send(binding, 'b', message(), 1_000);
 
     expect(sent).toHaveLength(2);
-    expect(a.messageId).not.toBe(b.messageId);
   });
 });
 
@@ -178,7 +168,7 @@ describe('EmailOutbox — retry backoff', () => {
 });
 
 describe('EmailOutbox — reconciliation of an indeterminate', () => {
-  test('a send that crashed mid-flight stays pending and is re-driven with the SAME Message-ID', async () => {
+  test('a send that failed stays pending and is re-driven once', async () => {
     const { box, sql } = outbox();
 
     const failing = fakeBinding(() => { throw new Error('E_SENDER_NOT_VERIFIED'); });
@@ -190,16 +180,12 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     if (!pending) throw new Error('expected pending outbox row');
     expect(pending.state).toBe('pending');          // indeterminate, not lost
     expect(pending.attempt_count).toBe(1);
-    const boundMessageId = pending.messageId;
 
     const ok = fakeBinding();
     const reconciled = await box.reconcile(ok.binding, 10_000_000);
 
     expect(reconciled).toBe(1);
     expect(ok.sent).toHaveLength(1);
-    // The original Message-ID makes this a safe re-send.
-    expect(ok.sent[0].headers?.['Message-ID']).toBe(boundMessageId);
-    expect(first.messageId).toBe(boundMessageId);
     expect(rowFor(sql, 'recon')?.state).toBe('sent');
   });
 

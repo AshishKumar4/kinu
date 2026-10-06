@@ -16,17 +16,15 @@ export interface WorkbenchPanelsProps {
   readonly inspector: ReactNode;
   /** The bar above draws the toggle: on a phone it switches the one pane shown. */
   readonly onInspector?: (control: InspectorControl | null) => void;
-  /** Lets the page bring the inspector into view, where a surface it opens would otherwise stay hidden. */
+  /** Brings the inspector into view for a surface it opens. */
   readonly ref?: Ref<WorkbenchHandle>;
 }
 
 export interface WorkbenchHandle {
-  /** A collapsed inspector opens; on a phone, the Workspace pane replaces the chat. */
   readonly reveal: () => void;
   readonly showChat: () => void;
 }
 
-/** `beside`: the inspector shares the screen with the chat, as it never does on a phone. */
 export interface InspectorControl {
   readonly collapsed: boolean;
   readonly toggle: () => void;
@@ -34,7 +32,7 @@ export interface InspectorControl {
   readonly waiting: number;
 }
 
-/** Beside the chat it shows or hides the inspector; on a phone it swaps the chat for the workspace and back. */
+/** Shows or hides the inspector; on a phone, swaps the chat for the workspace. */
 function toggleLabel({ collapsed, beside }: InspectorControl): string {
   if (beside) return collapsed ? "Show inspector" : "Hide inspector";
 

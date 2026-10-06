@@ -100,29 +100,29 @@ describe('the home workspace cards', () => {
         const list = await cards(page);
 
         expect(list.map((card) => card.title)).toEqual([
-          'Checkout coupon bug', 'Perf audit — landing', 'Email triage automation',
-          'Design system v2', 'Untitled workspace',
+          'Storefront', 'Dew', 'Support inbox',
+          'Kinu website', 'Untitled workspace',
         ]);
 
         // One chip per line, the shared headline: a waiting decision outranks
         // the live turn beside it, and its count rides the label.
-        const coupon = cardNamed(list, 'Checkout coupon bug');
+        const coupon = cardNamed(list, 'Storefront');
         expect(coupon.chip).toBe('Needs you · 2');
         expect(coupon.chipClass).toContain('p-warning');
         expect(coupon.task).toBe('Investigate intermittent checkout failures in the coupon migration');
 
-        expect(cardNamed(list, 'Perf audit — landing').chip).toBe('Working');
+        expect(cardNamed(list, 'Dew').chip).toBe('Working');
 
         // A sealed run with unread updates: the chip says so, and no run word
         // decorates the line.
-        const triage = cardNamed(list, 'Email triage automation');
+        const triage = cardNamed(list, 'Support inbox');
         expect(triage.chip).toBe('Updated');
-        expect(triage.task).toBe("Sort this week's receipts into the ledger");
+        expect(triage.task).toBe("Answer this week's refund requests");
 
         // A sealed error outranks the durable leftovers beside it; and the
         // task that IS the title (a workspace titled by its first prompt)
         // is not repeated under it.
-        const design = cardNamed(list, 'Design system v2');
+        const design = cardNamed(list, 'Kinu website');
         expect(design.chip).toBe('Last run failed');
         expect(design.chipClass).toContain('p-danger');
         expect(design.task).toBeNull();
@@ -150,18 +150,18 @@ describe('the home workspace cards', () => {
 
         await setOverview(page, 'email-triage', {
           activity: 'working', decisionsWaiting: 0, hasUpdates: false,
-          latestRun: { status: null, task: "Sort this week's receipts into the ledger" }, slates: [],
+          latestRun: { status: null, task: "Answer this week's refund requests" }, slates: [],
         });
         await page.waitForFunction(
           () => [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
-            .some((row) => (row.textContent ?? '').includes('Email triage automation') && (row.textContent ?? '').includes('Working')),
+            .some((row) => (row.textContent ?? '').includes('Support inbox') && (row.textContent ?? '').includes('Working')),
         );
 
         const list = await cards(page);
 
-        expect(cardNamed(list, 'Email triage automation').chip).toBe('Working');
+        expect(cardNamed(list, 'Support inbox').chip).toBe('Working');
         // The line kept its place, and the change cost the page no request.
-        expect(list.map((card) => card.title)[2]).toBe('Email triage automation');
+        expect(list.map((card) => card.title)[2]).toBe('Support inbox');
         expect(await asked(page)).toHaveLength(readsBefore);
       } finally {
         await page.close();
@@ -219,16 +219,16 @@ describe('the home workspace cards', () => {
       const page = await freshPage(gallery, 'dark', { width: 390, height: 844 });
 
       try {
-        const card = cardNamed(await cards(page), 'Email triage automation');
+        const card = cardNamed(await cards(page), 'Support inbox');
 
         expect(card.chip).toBe('Updated');
-        expect(card.task).toBe("Sort this week's receipts into the ledger");
+        expect(card.task).toBe("Answer this week's refund requests");
 
         // The line's rule at 390px: the title and task keep to one line
         // each, and the visible chip does not push past the line's box.
         const boxes = await page.evaluate((texts) => {
           const line = [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
-            .find((node) => (node.textContent ?? '').includes('Email triage automation'));
+            .find((node) => (node.textContent ?? '').includes('Support inbox'));
 
           const chip = line?.querySelector('[data-overview-chip]');
 
@@ -243,7 +243,7 @@ describe('the home workspace cards', () => {
             chipRight: chip?.getBoundingClientRect().right ?? -1,
             lineRight: line?.getBoundingClientRect().right ?? -1,
           };
-        }, ['Email triage automation', card.task]);
+        }, ['Support inbox', card.task]);
 
         expect(boxes.oneLine).toEqual([true, true]);
         expect(boxes.chipRight).toBeLessThanOrEqual(boxes.lineRight);

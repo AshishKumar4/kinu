@@ -21,9 +21,9 @@ import type { OrchestratorAgent } from '../orchestrator';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
-import { kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
+import { kinuUserAgent, observeGitHub, reoriginateRequest, type GitHubFact, type GitHubRecorder } from '@kinu.run/core';
 import {
-  classifyErrorCode, diagnostics, renderThrownChain, toKinuError, tolerateAsync, KinuError, type Refusal, settle,
+  classifyErrorCode, diagnostics, logged, renderThrownChain, toKinuError, tolerateAsync, KinuError, type Refusal, settle,
 } from '@kinu.run/core/obs';
 
 /** `.internal` resolves nowhere publicly, so a lapse in interception fails to connect rather than leaking activity. */
@@ -87,11 +87,29 @@ export const containerEventResolver = (env: Env): ContainerEventResolver =>
     env.OrchestratorAgent, workspaceName,
   );
 
+export class GitHubEgressRecorder implements GitHubRecorder {
+  constructor(private readonly env: Env, private readonly execution: ExecutionContext, private readonly workspaceName: string) {}
+
+  waitUntil(work: Promise<unknown>): void {
+    this.execution.waitUntil(work);
+  }
+
+  record(facts: readonly GitHubFact[]): Promise<void> {
+    return settle(logged('egress.github_record_failed', { doing: 'recording GitHub work in its workspace', otherwise: 'unavailable' }, async () => {
+      if (facts.length === 0) return;
+      const agent = await getAgentByName<Env, OrchestratorAgent>(this.env.OrchestratorAgent, this.workspaceName);
+
+      await agent.recordGitHubEgress(facts);
+    }));
+  }
+}
+
 /** Catch-all for every host except the event channel. Only a request that carries a placeholder pays for substitution. */
 export function handleContainerEgress<Id>(
   request: Request,
   env: ContainerEgressEnv<Id>,
   params: KinuEgressParams | undefined,
+  github?: GitHubRecorder,
 ): Promise<Response> {
   return settle(Effect.gen(function* () {
     if (!params) {
@@ -125,8 +143,10 @@ export function handleContainerEgress<Id>(
     if ('refused' in resolved) return resolved.refused;
 
     if (resolved.answer.kind === 'refuse') return refusal(resolved.answer.status, resolved.answer.reason);
+    const observed = yield* observeGitHub(request, url, github);
+    const answer = yield* forwardUpstream(observed?.request ?? request, url, resolved.answer.substitutions);
 
-    return yield* forwardUpstream(request, url, resolved.answer.substitutions);
+    return observed === null ? answer : observed.answered(answer);
   }));
 }
 

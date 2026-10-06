@@ -168,11 +168,11 @@ async function servableProviderSlugs(
   const headers = { ...authHeaders, accept: 'application/json' };
   const slugs = new Set<string>();
 
-  const configs = await readGatewayManagement(
-    fetchImpl,
-    `${account}/ai-gateway/gateways/${encodeURIComponent(gatewayId)}/provider_configs?per_page=100`,
-    headers,
-  );
+  // Independent reads, so together: each is a Cloudflare API round trip.
+  const [configs, credit] = await Promise.all([
+    readGatewayManagement(fetchImpl, `${account}/ai-gateway/gateways/${encodeURIComponent(gatewayId)}/provider_configs?per_page=100`, headers),
+    readGatewayManagement(fetchImpl, `${account}/ai-gateway/billing/credit-balance`, headers),
+  ]);
 
   if (configs.kind === 'transient') return { authoritative: false, reason: configs.reason };
 
@@ -183,10 +183,6 @@ async function servableProviderSlugs(
       if (row.provider_slug !== undefined) slugs.add(row.provider_slug);
     }
   }
-
-  const credit = await readGatewayManagement(
-    fetchImpl, `${account}/ai-gateway/billing/credit-balance`, headers,
-  );
 
   if (credit.kind === 'transient') return { authoritative: false, reason: credit.reason };
 

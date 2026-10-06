@@ -78,10 +78,10 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
   const [editing, setEditing] = useState(false);
 
   return (
-    <li className="p-bar-tab" data-key={item.key} data-agent-tab={item.tab} data-active={active ? "" : undefined}
+    <li className="p-bar-tab p-halo" data-key={item.key} data-agent-tab={item.tab} data-status={item.activity} data-active={active ? "" : undefined}
       data-after-active={afterActive ? "" : undefined} data-title={item.title === true ? "" : undefined}>
       {editing && item.rename ? (
-        <RenameField value={item.rename.value} subject={item.title ? "Workspace name" : "Chat name"} save={item.rename.save} done={() => setEditing(false)} />
+        <RenameField value={item.rename.value} hint={item.label} subject={item.title ? "Workspace name" : "Chat name"} save={item.rename.save} done={() => setEditing(false)} />
       ) : (
         <>
           {/* Sizes the tab to its label at rest, so revealing the actions ellipsizes the label instead of moving the strip. */}
@@ -92,7 +92,7 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
           <Link to={item.to} className="p-bar-link" aria-current={active ? "page" : undefined}
             title={item.title ? "Workspace overview" : undefined}>
             {item.activity && <AgentStatusMark activity={item.activity} />}
-            <span className="truncate">{item.label}</span>
+            <span className="p-status-label truncate">{item.label}</span>
           </Link>
           {(item.rename !== undefined || item.remove !== undefined) && (
             <span className="p-bar-actions">
@@ -112,7 +112,7 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
   );
 }
 
-function RenameField({ value, subject, save, done }: { value: string; subject: string; save: Rename; done: () => void }) {
+function RenameField({ value, hint, subject, save, done }: { value: string; hint: string; subject: string; save: Rename; done: () => void }) {
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState<string | null>(null);
   const saving = useRef(false);
@@ -138,7 +138,7 @@ function RenameField({ value, subject, save, done }: { value: string; subject: s
 
   return (
     <span className="p-bar-rename">
-      <input autoFocus value={draft} maxLength={60} aria-label={subject} size={Math.max(draft.length, 6)}
+      <input autoFocus value={draft} maxLength={60} aria-label={subject} placeholder={hint} size={Math.max(draft.length, hint.length, 6)}
         onFocus={(event) => event.currentTarget.select()}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}

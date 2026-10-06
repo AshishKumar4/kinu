@@ -1028,9 +1028,13 @@ describe('CLI TUI layout', () => {
       import { CONFIG_PATH } from './packages/cli/src/config.ts';
       import { HomeApp } from './packages/cli/src/tui/home-app.tsx';
 
-      globalThis.fetch = async () => new Response('{}', {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
+      // models.dev, the OpenAI key's only model list: a failed read lists nothing to pick.
+      const openai = (id, name) => ({
+        id, name, tool_call: true, reasoning: true, limit: { context: 1050000 },
+        reasoning_options: [{ type: 'effort', values: ['none', 'low', 'medium', 'high', 'xhigh'] }],
+      });
+      globalThis.fetch = async () => Response.json({
+        openai: { models: { 'gpt-5.5': openai('gpt-5.5', 'GPT-5.5'), 'gpt-5.4': openai('gpt-5.4', 'GPT-5.4') } },
       });
       const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
         width: 100,
