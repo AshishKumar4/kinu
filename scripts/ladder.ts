@@ -3459,7 +3459,7 @@ function printMatrix(): void {
 function recordProof(
   plan: Extract<Plan, { kind: 'miss' }>,
   gate: GateCacheRequest,
-  result: { readonly seconds: number; readonly revision: string; readonly execution?: string },
+  result: { readonly seconds: number; readonly revision: string; readonly execution?: string; readonly timings?: Record<string, number> },
 ): boolean {
   const refused = recordGreen(plan, gate, result);
 
@@ -3985,6 +3985,12 @@ if (import.meta.main) {
     const plan = caching && !nativeChanged ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
 
     if (plan?.kind === 'hit') {
+      // A reused CI verdict names the revision that proved it, and carries the file walls that proof measured.
+      if (verdictPath !== undefined) {
+        ciRows.push({ run: gate.run, exitCode: 0, seconds: plan.entry.seconds, output: '', timings: plan.entry.timings, cached: plan.entry.revision });
+        writeVerdicts(verdictPath, { sha: revision, part: ciPart ?? 'all', rows: ciRows });
+      }
+
       console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
       console.log(
         `skip  ${gate.run}  hit ${plan.key.slice(0, 12)}, proved green on ${plan.entry.revision} `
@@ -4061,6 +4067,9 @@ if (import.meta.main) {
     return false;
   };
 
+  /** A CI row's file walls, which its recorded proof keeps for a later hit's coverage. */
+  const ciTimings = (path: string) => (ciPart === undefined ? undefined : readFileTimings(path));
+
   const runPending = async (entry: (typeof pending)[number]): Promise<void> => {
     const { index, gate, plan, closure, proofs } = entry;
     const header = `\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`;
@@ -4128,7 +4137,7 @@ if (import.meta.main) {
       const proofRecorded = plan?.kind === 'miss' && recordProof(
         plan,
         { run: gate.run, inputs: gate.inputs, repo: repoAt(root, (run, files) => claims(run, files)), tools, store },
-        { seconds, revision },
+        { seconds, revision, timings: ciTimings(timingPath) },
       );
 
       if (proofRecorded) recorded.push(gate.run);

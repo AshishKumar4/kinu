@@ -88,8 +88,26 @@ jobs:
           sudo apt-get install --yes --no-install-recommends -o Dir::Cache::Archives="$HOME/apt-archives" bubblewrap ffmpeg
           # Ubuntu 24.04 otherwise refuses the sandbox suite's namespaces.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Green row proofs by content key (scripts/ladder-cache.ts): an unchanged row is not proved again. A part's own
+      # store first, else any part's, since a rebalance can move a row; a hammer run never reuses one.
+      - name: Restore ladder proofs
+        if: ${{ !startsWith(matrix.part, 'hammer-') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/kinu-ladder
+          key: ladder-${{ runner.os }}-${{ matrix.part }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            ladder-${{ runner.os }}-${{ matrix.part }}-
+            ladder-${{ runner.os }}-
       - name: Gate ladder — CI part
         run: bun scripts/ladder.ts --tier=ci --ci-part=${{ matrix.part }} --verdicts=bench-artifacts/ci/verdicts.json
+      # Only green rows are recorded, so a red part still keeps the proofs its green rows earned.
+      - name: Save ladder proofs
+        if: ${{ always() && !startsWith(matrix.part, 'hammer-') }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/kinu-ladder
+          key: ladder-${{ runner.os }}-${{ matrix.part }}-${{ github.sha }}-${{ github.run_attempt }}
       - name: Publish row verdicts, red or green
         if: always()
         uses: actions/upload-artifact@v4

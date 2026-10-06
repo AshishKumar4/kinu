@@ -49,8 +49,10 @@ const ToolVersionsSchema = v.object({
 
 export type ToolVersions = v.InferOutput<typeof ToolVersionsSchema>;
 
+/** A CI part reuses its own store too (`.github/workflows/ci.yml` carries it between runs); a hammer run never does,
+ *  since repeating the suite under contention is all it is for. */
 export function cacheEnabled(options: { readonly changedFrom?: string; readonly ciPart?: string; readonly noCache: boolean }): boolean {
-  return options.ciPart === undefined && !options.noCache;
+  return !options.noCache && options.ciPart?.startsWith('hammer-') !== true;
 }
 
 const PackageVersion = v.object({ version: v.string() });
@@ -87,7 +89,8 @@ export function toolVersions(root: string, node: string): ToolVersions {
     oxlint: installed('oxlint'),
     wrangler: installed('wrangler'),
     vitest: installed('vitest'),
-    platform: `${process.platform}-${process.arch}`,
+    // A hosted runner names its image, whose browsers and system packages a row may run.
+    platform: [process.platform, process.arch, process.env['ImageOS'], process.env['ImageVersion']].filter(Boolean).join('-'),
   };
 }
 
@@ -100,6 +103,8 @@ const EntrySchema = v.object({
   recordedAt: v.string(),
   closureSize: v.number(),
   tools: ToolVersionsSchema,
+  /** A test row's per-file walls, so a reused CI verdict still proves its split's file coverage. */
+  timings: v.optional(v.record(v.string(), v.number())),
 });
 
 export type Entry = v.InferOutput<typeof EntrySchema>;
@@ -300,7 +305,7 @@ export function planGate(gate: GateCacheRequest): Plan {
 export function recordGreen(
   plan: Extract<Plan, { kind: 'miss' }>,
   gate: GateCacheRequest,
-  result: { readonly seconds: number; readonly revision: string; readonly execution?: string },
+  result: { readonly seconds: number; readonly revision: string; readonly execution?: string; readonly timings?: Record<string, number> },
 ): string | undefined {
   const after = deriveClosure(gate.run, gate.inputs, gate.repo);
 
@@ -317,6 +322,7 @@ export function recordGreen(
     recordedAt: new Date().toISOString(),
     closureSize: after.files.length,
     tools: gate.tools,
+    ...(result.timings !== undefined && { timings: result.timings }),
   });
 
   return undefined;
