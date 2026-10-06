@@ -54,7 +54,7 @@ type SameCall =
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
   | 'listRefinements' | 'showRefinement' | 'decideRefinement'
-  | 'revertConversation' | 'runOptimization' | 'branchTurn';
+  | 'revertConversation' | 'clearConversation' | 'runOptimization' | 'branchTurn';
 
 /** The cf signature, answered asynchronously: the CLI's synchronous answers are awaited the same way. */
 type Answer<K extends SameCall> = OrchestratorAgent[K] extends (...args: infer A) => infer R
@@ -222,6 +222,7 @@ async function cloudflare(): Promise<SharedBackend> {
       requestRefinement: (opts) => agent.requestRefinement(opts),
       decideRefinement: (input) => agent.decideRefinement(input),
       revertConversation: (entryId) => agent.revertConversation(entryId),
+      clearConversation: () => agent.clearConversation(),
       runOptimization: (target) => agent.runOptimization(target),
       send: (text, id) => sentTurn(agent, text, id ?? crypto.randomUUID()),
       branchTurn: (text) => agent.branchTurn(text),
@@ -364,6 +365,8 @@ async function cli(): Promise<SharedBackend> {
       requestRefinement: (opts) => session.requestRefinement(opts),
       decideRefinement: (input) => session.decideRefinement(input),
       revertConversation: (entryId) => session.revertConversation(entryId),
+      // The clear's answer is the emptied request's measure, which cf records instead of returning.
+      clearConversation: async () => { await session.clearConversation(); },
       runOptimization: (target) => session.runOptimization(target),
       send: async (text, id) => { await session.send(text, { id: id ?? crypto.randomUUID() }); },
       branchTurn: async (text) => session.branchTurn(text),

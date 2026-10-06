@@ -13,10 +13,11 @@ import {
   type McpServerInput, type McpServerSummary,
 } from "@/lib/user-api";
 import { inputCls } from "@/components/ui/form";
+import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
 import { PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
-import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
+import { renderThrownChain, detach } from "@kinu.run/core/obs";
 
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
@@ -139,22 +140,22 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
     }
   };
 
-  const remove = () => Effect.gen(function* () {
+  const { ask, dialog } = useConfirmation();
+
+  const remove = () => {
     if (!server) return;
-
-    if (!confirm(`Remove "${server.name}"? All workspaces will lose access to its tools.`)) return;
-
-    setErr(null);
-
-    return yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => removeMcpServer(server.id)); onChanged(); }), showing(setErr));
-  });
+    ask({
+      title: `Remove "${server.name}"?`, body: "All workspaces will lose access to its tools.", action: "Remove", failed: "Could not remove it",
+      run: async () => { await removeMcpServer(server.id); onChanged(); },
+    });
+  };
 
   const asking = openToken && !added;
 
   let trailing: ReactNode;
 
   if (added) {
-    trailing = <PresetMenu preset={preset} word={word} dot={dot} onRemove={() => detach(remove())} />;
+    trailing = <PresetMenu preset={preset} word={word} dot={dot} onRemove={remove} />;
   } else if (asking) {
     trailing = (
       <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}
@@ -173,6 +174,8 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
   }
 
   return (
+    <>
+    {dialog}
     <PluginRow source={preset.id} state={word}
       name={preset.title} description={preset.description}
       tile={<BrandMark brand={brand} size={22} />}
@@ -201,6 +204,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
         </div>
       ) : undefined}
     />
+    </>
   );
 }
 

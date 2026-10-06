@@ -82,7 +82,6 @@ export interface AgentFacetCalls {
   admitted(snapshot: AgentSnapshot, id: string): Promise<boolean>;
   reopen(snapshot: AgentSnapshot): Promise<string>;
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
-  clear(snapshot: AgentSnapshot): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
   deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
@@ -211,10 +210,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void> {
     this.open(snapshot).interrupt(turnId);
-  }
-
-  async clear(snapshot: AgentSnapshot): Promise<void> {
-    await this.open(snapshot).clear();
   }
 
   async recover(snapshot: AgentSnapshot): Promise<AgentRecovery> {

@@ -12,7 +12,8 @@ import { lastValue, useAsyncResource, type Revalidate } from "@/hooks/use-async-
 import { DEVICE_ROSTER_POLL_MS, useDeviceRoster } from "@/hooks/use-device-roster";
 import { ConnectDevicePanel, DeviceConnectFlow } from "@/components/ConnectDevicePanel";
 import { DeviceRow } from "@/components/devices/DeviceRow";
-import { showing, detach, settle } from "@kinu.run/core/obs";
+import { useConfirmation } from "@/components/ui/ConfirmDialog";
+import { showing, settle } from "@kinu.run/core/obs";
 
 /** Grants share the roster's cadence: a revoke changes both, so one clock keeps them consistent. */
 const keepPollingGrants: Revalidate<DeviceConsent[]> = () => DEVICE_ROSTER_POLL_MS;
@@ -35,22 +36,17 @@ export function DevicesCard() {
     onConnected: reloadDevices,
   }));
 
-  const revoke = useCallback((id: string, label: string) => detach(Effect.gen(function* () {
-    if (!confirm(`Revoke "${label}"? Agents will lose access.`)) return;
-    setErr(null);
+  const { ask, dialog } = useConfirmation();
 
-    yield* Effect.catchCause(Effect.gen(function* () {
-      const result = yield* Effect.promise(async () => revokeDevice(id));
+  const revoke = useCallback((id: string, label: string) => ask({
+    title: `Revoke "${label}"?`, body: "Agents will lose access.", action: "Revoke", failed: "Could not revoke device",
+    run: async () => {
+      const result = await revokeDevice(id);
 
-      if (result.unstoppedCommands > 0) {
-        setUnstoppedCounts((current) => new Map(current).set(id, result.unstoppedCommands));
-      }
-    }), showing((chain) => {
-      setErr(`Could not revoke device: ${chain}`);
-    }));
-
-    reloadDevices();
-  })), [reloadDevices]);
+      if (result.unstoppedCommands > 0) setUnstoppedCounts((current) => new Map(current).set(id, result.unstoppedCommands));
+      reloadDevices();
+    },
+  }), [ask, reloadDevices]);
 
   const acknowledgeIncident = useCallback((id: string) => settle(Effect.gen(function* () {
     setErr(null);
@@ -108,6 +104,7 @@ export function DevicesCard() {
       <Card title="Connect a machine" icon={PlugIcon}>
         <ConnectDevicePanel flow={flow} devices={lastValue(roster.resource)} />
       </Card>
+      {dialog}
     </>
   );
 }

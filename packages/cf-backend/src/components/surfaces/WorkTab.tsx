@@ -659,7 +659,7 @@ type JournalRow =
   | { key: string; at: number; chips: readonly JournalFilter[]; kind: "self"; entry: ChangelogEntry };
 
 /** Exported for its test: the ordering is the feature. Every row answers to `All`, a no-change self-review included, because the queue counts it as unseen. */
-export function buildJournal(
+function buildJournal(
   jobs: readonly BackgroundJob[],
   tasks: readonly WorkTaskRow[],
   entries: readonly ChangelogEntry[],

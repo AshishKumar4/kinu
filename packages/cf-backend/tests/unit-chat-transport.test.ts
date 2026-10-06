@@ -37,7 +37,6 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   const reserved = new Set<string>();
   const sent = new AwaitedList<{ text: string; files: readonly { url: string }[]; id: string; mode: string }>();
   let interrupts = 0;
-  let clears = 0;
   /** Whether the ledger holds a turn no activation has opened here yet: one an eviction left open. */
   let owed = false;
   /** The open turn's finished steps as the ledger records them, drawn. */
@@ -81,12 +80,6 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
     },
     retry: () => Promise.reject(new KinuError('unavailable', 'this fake does not retry')),
     interrupt: () => { interrupts += 1; },
-    clear: () => {
-      clears += 1;
-      history.length = 0;
-
-      return Promise.resolve();
-    },
   };
 
   const transport = new ChatWireTransport(wire);
@@ -100,7 +93,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
       return new ChatWireTransport(wire);
     },
     transport, broadcasts, history, reserved, recorded, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, db,
-    interrupts: () => interrupts, clears: () => clears,
+    interrupts: () => interrupts,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
     connectionFrames: (id: string): string[] => frames.get(id) ?? [],
     received: (id: string): string[] => received.get(id) ?? [],
@@ -840,14 +833,14 @@ describe('ChatWireTransport', () => {
     expect(failed.responses().at(-1)).toEqual(errors[0]);
   });
 
-  test('cancel interrupts the loop; clear resets the store and tells the other tabs', async () => {
+  test('cancel interrupts the loop; the unanswered clear frame changes nothing and tells no tab', async () => {
     const h = harness('turn');
     const conn = h.connection('c1');
     await h.transport.onMessage(conn, JSON.stringify({ type: 'cf_agent_chat_request_cancel', id: 'req-1' }));
     expect(h.interrupts()).toBe(1);
+    const told = h.broadcasts.length;
     await h.transport.onMessage(conn, JSON.stringify({ type: 'cf_agent_chat_clear' }));
-    expect(h.clears()).toBe(1);
-    expect(h.broadcasts.at(-1)).toEqual({ frame: { type: 'cf_agent_chat_clear' }, exclude: ['c1'] });
+    expect(h.broadcasts.length).toBe(told);
     expect(await h.transport.onMessage(conn, JSON.stringify({ type: 'rpc', id: 'x', method: 'getAgentStatus' }))).toBe(false);
   });
 });

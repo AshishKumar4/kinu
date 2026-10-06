@@ -80,12 +80,12 @@ import UserSettingsPage from "@/pages/UserSettingsPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
-  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
+  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
-  type AdvisorSeverity, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
+  type AdvisorSeverity, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc } from "@kinu.run/core";
@@ -104,7 +104,7 @@ import type {
 import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
-import { galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -603,6 +603,16 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
           capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
         },
       },
+      // `&devices=history`: a machine that refused an update, and one written before the registry recorded a sandbox.
+      ...(new URLSearchParams(location.search).get("devices") === "history" ? [{
+        id: "dev-3", label: "Lab box", os: "linux", hostname: "lab", connected: true, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
+        replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+        sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+        version: "0.2.0+older", servedVersion: "0.3.0+served", update: "refused", updateRefusal: "Bun 1.4.2 install failed: permission denied",
+      }, {
+        id: "dev-old", label: "Old box", os: "linux", hostname: "old", connected: false, createdAt: NOW - 90 * 864e5, lastSeenAt: null, expiresAt: null,
+        replacedAt: null, revokedAt: null, unstoppedAt: null,
+      }] : []),
       ...(frame === "devices" ? [{
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
@@ -1863,8 +1873,10 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
   }),
   // `&consent=waiting`: a device command already waiting.
-  listPendingConsents: () => (new URLSearchParams(location.search).get("consent") === "waiting"
-    ? [{ consentId: "c-1", deviceLabel: "studio", method: "exec", command: "git push origin main", createdAt: 1 }]
+  // `&consent=spoofed`: a command whose bidi and zero-width characters would show a reader a different command.
+  listPendingConsents: () => (["waiting", "spoofed"].includes(new URLSearchParams(location.search).get("consent") ?? "")
+    ? [{ consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1,
+      command: new URLSearchParams(location.search).get("consent") === "spoofed" ? "rm -rf ./build \u202E\u2066gpj.x\u200B" : "git push origin main" }]
     : []),
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
@@ -2181,6 +2193,14 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 
   if (method === "revertConversation") {
     galleryRevertConversation(v.parse(v.string(), args?.[0]));
+
+    return rpcResult(null).json<T>();
+  }
+
+  // `&clear=refused`: a turn is running, so the server refuses and keeps every message.
+  if (method === "clearConversation") {
+    if (new URLSearchParams(location.search).get("clear") === "refused") throw new Error(CLEAR_NEEDS_IDLE);
+    galleryClearChat("");
 
     return rpcResult(null).json<T>();
   }
@@ -4586,10 +4606,11 @@ const BUILD_LINES = [
 
 const BUILD_JOB_ID = "bgjob-4e1a77c0";
 
-function buildTail(lines: number, lost: number): JobOutputTail {
+/** `lost[n]` is the bytes the sender dropped just before line n. */
+function buildTail(lines: number, lost: readonly number[]): JobOutputTail {
   return BUILD_LINES.slice(0, lines).reduce<JobOutputTail | undefined>((tail, line, at) => followJobOutput(tail, {
-    type: JOB_OUTPUT_EVENT, jobId: BUILD_JOB_ID, seq: at + 1, dropped: at === 0 ? lost : 0,
-    chunks: [{ stream: line.startsWith("warn:") ? "stderr" : "stdout", text: `${line}\n`, ...(at === 0 && lost > 0 && { omitted: lost }) }],
+    type: JOB_OUTPUT_EVENT, jobId: BUILD_JOB_ID, seq: at + 1, dropped: lost[at] ?? 0,
+    chunks: [{ stream: line.startsWith("warn:") ? "stderr" : "stdout", text: `${line}\n`, ...((lost[at] ?? 0) > 0 && { omitted: lost[at] }) }],
   }), undefined) ?? { seq: 0, chunks: [], omitted: 0 };
 }
 
@@ -4603,7 +4624,7 @@ function buildingJob(output: JobOutputTail): BackgroundJob {
 function useBuildingJob(): BackgroundJob {
   const params = new URLSearchParams(location.search);
   const live = params.get("live") === "1";
-  const lost = Math.max(Number(params.get("lost") ?? 0) || 0, 0);
+  const lost = (params.get("lost") ?? "").split(",").map((bytes) => Math.max(Number(bytes) || 0, 0));
   const [lines, setLines] = useState(Math.min(Math.max(Number(params.get("lines") ?? 4) || 4, 1), BUILD_LINES.length));
 
   useEffect(() => {
@@ -5485,15 +5506,75 @@ const ADVISOR_NOTES = {
   blocker: "The migration drops coupons.kind while the old worker is still deployed. Roll the worker first or every checkout 500s.",
 } satisfies Record<AdvisorSeverity, string>;
 
-/** Core's rank order; metadata is the pair `classifyProgrammaticTurn` reads, taken from core. Held to the classifier in `tests/unit-background-event.test.ts`. */
+/** Core's rank order; metadata is the pair `classifyProgrammaticTurn` reads, taken from core. */
 const ADVISOR_MESSAGES: UIMessage[] = ADVISOR_SEVERITIES.map((severity) => msg({
   id: `adv-${severity}`, role: "user",
   metadata: { kinuEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: severity },
   parts: [{ type: "text", text: ADVISOR_NOTES[severity] }],
 }));
 
-function AdvisorFrame() {
-  return <MessageColumn messages={ADVISOR_MESSAGES} />;
+const DRAINED_EVENT = {
+  trace_id: "trace-1", caused_by: null, trust: "external", priority: "background", payload_visibility: "full",
+  received_at: 0, reply_channel: null, dedupe_key: null,
+} as const;
+
+/** Core's own drain text, so the card reads what the agent was given. Plan and Build never share a batch, so delegated work and the rest are two. */
+const DRAIN_BATCHES = {
+  delegated: [
+    {
+      ...DRAINED_EVENT, id: "ev-report", ingress: "subordinate", variant: "subordinate_report",
+      payload: { from_subordinate: "cli-auditor", status: "completed", content: "Report line one.\nReport line two.", sequence_id: "seq-1", kinu_mode: "build" },
+    },
+    {
+      ...DRAINED_EVENT, id: "ev-ask", ingress: "peer_async", variant: "peer_agent",
+      payload: {
+        from_agent_name: "atlas", from_user_id: "u1", topic: "schema", body: "which shape?", sender_event_id: "out-1",
+        reply_expected: true, kinu_mode: "build",
+      },
+    },
+  ],
+  idle: [
+    { ...DRAINED_EVENT, id: "ev-timer", ingress: "timer_alarm", variant: "timer", payload: { label: "background-job-wake:job-7", trigger_id: "x", scheduled_fire_at: 0 } },
+    {
+      ...DRAINED_EVENT, id: "ev-mail", ingress: "email_inbound", variant: "email",
+      payload: {
+        from: "ops@example.com", to: "agent@example.com", subject: "Deploy failed", body_text: "exit 1",
+        message_id: null, in_reply_to: null, references: null, attachments: [],
+      },
+    },
+  ],
+} satisfies Record<string, KinuEvent[]>;
+
+const said = (text: string) => [{ type: "text" as const, text }];
+
+const GENESIS = workspaceGenesisSignal("Audit the OAuth callback flow.");
+
+/** Every way a turn reaches the transcript, each under its own id: what the person said keeps their bubble, and nothing else does. */
+const PROVENANCE_MESSAGES: UIMessage[] = [
+  msg({ id: "genesis", role: "user", metadata: { kinuEvent: GENESIS?.kind ?? "", signalId: "sig-genesis" }, parts: said(GENESIS?.text ?? "") }),
+  msg({ id: "typed", role: "user", parts: said("Audit the checkout flow.") }),
+  msg({ id: "mcp", role: "user", metadata: { kinuEvent: "mcp", kinuAuthor: "operator" }, parts: said("Run the release checklist.") }),
+  msg({ id: "programmatic:steer", role: "user", metadata: { kinuAuthor: "operator" }, parts: said("Use the staging database instead.") }),
+  msg({ id: "job", role: "user", metadata: { kinuEvent: "background_job", kind: "research", status: "failed" }, parts: said("background job failed") }),
+  msg({ id: "job-bare", role: "user", metadata: { kinuEvent: "background_job" }, parts: said("background job finished") }),
+  msg({ id: "invented", role: "user", metadata: { kinuEvent: "a_kind_invented_tomorrow" }, parts: said("Something new happened.") }),
+  msg({ id: "harness", role: "user", metadata: { kinuAuthor: "harness" }, parts: said("[Runtime check] The tree is clean.") }),
+  ...ADVISOR_MESSAGES,
+  ...Object.entries(DRAIN_BATCHES).map(([id, events]) => msg({
+    id: `drain-${id}`, role: "user", metadata: { kinuEvent: "event_drain" }, parts: said(buildDrainBatch(events)?.text ?? ""),
+  })),
+];
+
+function ProvenanceFrame() {
+  return (
+    <div className="flex justify-center p-bg p-text min-h-screen">
+      <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
+        {PROVENANCE_MESSAGES.map((message) => (
+          <div key={message.id} data-chat-row={message.id}><MessageView message={message} onFork={() => {}} /></div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 const BRAIN_MEMORY = "## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n"
@@ -6465,7 +6546,7 @@ async function mount() {
   else if (frame === "qualityretry") node = <QualityRetryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "toolrun") node = <ToolRunScaleFrame secrets={new URLSearchParams(location.search).get("secrets") === "1"} />;
-  else if (frame === "advisor") node = <AdvisorFrame />;
+  else if (frame === "provenance") node = <ProvenanceFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;
