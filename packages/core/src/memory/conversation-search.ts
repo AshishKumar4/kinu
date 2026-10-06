@@ -4,7 +4,7 @@
  * text is projected by `SessionTranscriptReader.project`.
  */
 
-import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from '@kinu.run/agent-utils/memory';
+import { searchFts } from '@kinu.run/agent-utils/memory';
 import { Deferred, Effect } from 'effect';
 import * as v from 'valibot';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
@@ -117,7 +117,7 @@ export class ConversationSearchStore implements ConversationRecall {
     this.actorId = actor.actorId;
   }
 
-  /** Strict all-term page, then ranked partial matches until full ({@link fillToCapacity}). */
+  /** Strict all-term page, then ranked partial matches until full. */
   search(query: string, limit = 5): Promise<ConversationSearchHit[]> {
     return settle(Effect.map(this.ensure(), () => this.searchIndexed(query, limit)));
   }
@@ -133,13 +133,7 @@ export class ConversationSearchStore implements ConversationRecall {
   private searchIndexed(query: string, limit: number): ConversationSearchHit[] {
     if (!query.trim()) return [];
     const capacity = boundedInt(limit, 1, 1, 10);
-    const safe = sanitizeFtsQuery(query);
-    const strict = this.runFtsQuery(safe, capacity);
-    const relaxed = strict.length >= capacity ? null : relaxFtsQuery(safe);
-
-    const rows = relaxed === null
-      ? strict
-      : fillToCapacity(strict, this.runFtsQuery(relaxed, capacity), capacity, (row) => row.msg_id);
+    const rows = searchFts(query, capacity, (match, size) => this.runFtsQuery(match, size), (row) => row.msg_id);
 
     return rows.map(toHit);
   }

@@ -23,7 +23,7 @@ const CHATS: ChatTab[] = [
 
 function bar(active: string | null): string {
   return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(WorkspaceHeader, {
-    workspace: { title: 'Fix the kiln', to: '/workspace/kiln/overview', editValue: 'Fix the kiln', rename: async () => {}, remove: () => {} },
+    workspace: { name: 'kiln', title: 'Fix the kiln', to: '/workspace/kiln/overview', editValue: 'Fix the kiln', rename: async () => {}, remove: () => {} },
     chats: CHATS, active, newChat: '/workspace/kiln/new',
   })));
 }

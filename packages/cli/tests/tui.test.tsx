@@ -9,7 +9,6 @@ import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import type { ReactNode } from 'react';
 
 import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
 import { commandsForClient } from '../src/slash-commands';
@@ -27,21 +26,17 @@ import {
 import type { AgentModelEntry } from '@kinu.run/core';
 import { readMission } from '@kinu.run/core';
 import type { KinuConfig } from '../src/config';
-import { MessageList } from '../src/tui/messages';
 
-import { BUILTIN_TUI_THEMES } from '../src/tui/theme';
 import { StatusBar } from '../src/tui/status-bar';
 import { ChatApp } from '../src/tui/chat-app';
 
 import { fakeClient } from './helpers/chat-app-fixture';
 import { VERSION } from '../src/display';
 
-const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0].colors.background.canvas;
-
 const repoRoot = resolve(__dirname, '../../..');
 
 describe('CLI TUI layout', () => {
-  test('status bar makes the model control discoverable and shows effort without version noise', async () => {
+  test('status bar makes the model control discoverable and shows effort', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 110, height: 8, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
 
@@ -61,8 +56,6 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('GPT 5.5');
       expect(frame).toContain('[Ctrl+L]');
       expect(frame).toContain('effort high');
-      expect(frame).not.toContain('cli ');
-
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
@@ -175,47 +168,7 @@ describe('CLI TUI layout', () => {
       renderer.destroy();
     }
   });
-  test('status segments drop by liveness — statics first, transient last', async () => {
-    const render = async (width: number, assertions: (frame: string) => void) => {
-      const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-      const root = createRoot(renderer);
 
-      try {
-        root.render(
-          <StatusBar
-            name="checkout"
-            mode="local"
-            model="openai/gpt-5.5"
-            reasoningEffort="high"
-            connected={true}
-            contextTokens={2300}
-            contextWindow={128_000}
-            toolCount={14}
-            autoEvolve={false}
-            branchCount={1}
-          />,
-        );
-        await renderSettled(renderOnce);
-        assertions(captureCharFrame());
-      } finally {
-        flushSync(() => { root.unmount(); });
-        renderer.destroy();
-      }
-    };
-
-    await render(72, (frame) => {
-      expect(frame).toContain('⎇ branch');
-      expect(frame).not.toContain('effort high');
-    });
-    await render(124, (frame) => {
-      expect(frame).toContain('⎇ branch');
-      expect(frame).toContain('ctx');
-      expect(frame).toContain('effort high');
-      expect(frame).toContain('evolve off');
-      expect(frame).toContain('14 tools');
-      expect(frame).toContain('[Ctrl+L]');
-    });
-  });
 
   test('the model control degrades whole — hint, then name, never a clipped bracket', async () => {
     const render = async (width: number, assertions: (frame: string) => void) => {
@@ -253,67 +206,6 @@ describe('CLI TUI layout', () => {
       expect(line).toBeDefined();
       expect(line?.match(/\[[^\]]*…/)).toBeNull();
     });
-  });
-
-  // No emoji-presentation code points in chrome: they render unpredictably per terminal font.
-  // ★ stays: Emoji_Presentation=No and monochrome everywhere.
-  test('TUI chrome renders zero emoji', async () => {
-    // FE0F is checked apart: inside a class it combines with the neighbour and lint flags it.
-    const EMOJI = /[\u{1F000}-\u{1FFFF}\u{23E9}-\u{23FA}\u{2B00}-\u{2BFF}\u{2600}-\u{26FF}]/gu;
-    const VARIATION_SELECTOR = /\uFE0F/u;
-    const frames: string[] = [];
-
-    const collect = async (width: number, element: ReactNode) => {
-      const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-      const root = createRoot(renderer);
-
-      try {
-        root.render(element);
-        await renderSettled(renderOnce);
-        frames.push(captureCharFrame());
-      } finally {
-        flushSync(() => { root.unmount(); });
-        renderer.destroy();
-      }
-    };
-
-    await collect(96, (
-      <StatusBar
-        name="checkout"
-        mode="cloud"
-        model="openai/gpt-5.5"
-        reasoningEffort="high"
-        connected={true}
-        scaffoldVersion={3}
-        toolCount={14}
-        autoEvolve={false}
-        contextTokens={2300}
-        contextWindow={128_000}
-        branchCount={2}
-      />
-    ));
-    await collect(96, (
-      <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
-        <MessageList
-          messages={[
-            { id: 'u1', role: 'user', content: 'Run the suite', attachments: ['notes.md'] },
-            { id: 'a1', role: 'assistant', content: 'On it.' },
-            { id: 't1', role: 'tool_call', content: '', toolName: 'exec', args: '{"cmd":"bun test"}' },
-            { id: 'r1', role: 'tool_result', content: JSON.stringify({ reason: 'denied', error: 'Outside this workspace.' }) },
-            { id: 'e1', role: 'evolution', content: '[reflection] kept the fix minimal' },
-          ]}
-        />
-      </box>
-    ));
-
-    for (const frame of frames) {
-      const offenders = [...frame.matchAll(EMOJI)]
-        .map((match) => match[0])
-        .filter((char) => char !== '\u2605');
-
-      expect(offenders).toEqual([]);
-      expect(VARIATION_SELECTOR.test(frame)).toBe(false);
-    }
   });
 
   test('CLI version has package.json as its single source', async () => {

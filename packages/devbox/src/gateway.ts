@@ -7,7 +7,7 @@ import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { TRUST } from './processes';
 import type { GatewayBindings } from './contracts';
 import type { DevboxStore } from './storage';
-import { createResourceLane } from './lifecycle';
+import { createResourceLane } from './operation-lanes';
 import { STORE_MOUNT as CHAIN_STORE_MOUNT, STORE_PUBLISH_ROUTE, storeRouteHost, storeSource } from './store-gateway';
 
 export interface OutboundPolicy {

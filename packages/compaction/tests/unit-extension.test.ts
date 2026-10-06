@@ -6,13 +6,12 @@ import {
   type TransformContext,
 } from '@kinu.run/core';
 import { createMockFetch } from '@kinu.run/test-utils';
+import { DEFAULT_CUSTOM_COMPACTION, type CompactionProfile } from '@better-compact/core';
 import {
   createCompactionExtension,
   kinuCodec,
-  DEFAULT_CUSTOM_COMPACTION,
   type CompactionExtensionDeps,
   type CompactionOutcomeEvent,
-  type CompactionProfile,
 } from '../src/index';
 import {
   assistant, history, memoryArchive, memoryPorts, toolCall, toolMessage, toolResult, user,

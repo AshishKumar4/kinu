@@ -78,14 +78,6 @@ export interface NativeMessage {
   readonly calls?: ToolCallIndex;
 }
 
-function payloadOf(json: string | null, path: string | null, digest: string | null): SessionPayload {
-  if (json !== null && path === null && digest === null) return { json, path: null, digest: null };
-
-  if (json === null && path !== null && digest !== null) return { json: null, path, digest };
-
-  throw new KinuError('io', 'invalid session payload reference');
-}
-
 // Never splits a surrogate pair.
 function* segmented(text: string): Generator<string> {
   let at = 0;
@@ -164,7 +156,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
         continue;
       }
 
-      const value = descriptorObject(await this.payloads.read(payloadOf(row.descriptor_json, row.descriptor_path, row.descriptor_digest)));
+      const value = descriptorObject(await this.payloads.readStored(row.descriptor_json, row.descriptor_path, row.descriptor_digest));
 
       if (row.kind === 'text' || row.kind === 'reasoning' || row.text !== '') value.text = row.text;
       parts.push({ partNo: row.part_no, kind: row.kind, streamOrder: row.stream_order, replyTo: null, value });
@@ -189,7 +181,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     const row = this.row(reference.messageId);
 
     if (row.sealed_at === null) return { row, parts: await this.streamed(reference.messageId) };
-    const parts = storedParts(await this.payloads.read(payloadOf(row.content_json, row.content_path, row.content_digest)));
+    const parts = storedParts(await this.payloads.readStored(row.content_json, row.content_path, row.content_digest));
     this.actor.assertCurrent();
 
     return { row, parts };
@@ -207,7 +199,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     for (const row of rows) {
       parts.set(row.message_id, row.sealed_at === null
         ? await this.streamed(row.message_id)
-        : storedParts(await this.payloads.read(payloadOf(row.content_json, row.content_path, row.content_digest))));
+        : storedParts(await this.payloads.readStored(row.content_json, row.content_path, row.content_digest)));
     }
 
     this.actor.assertCurrent();

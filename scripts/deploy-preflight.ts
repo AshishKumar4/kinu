@@ -29,7 +29,7 @@
 import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 
-import { EVAL_DEPLOYMENT_ORIGIN, evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
+import { evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
 
 /** `/api/health`'s build stamp, as this reads it off the wire. Only the fields
  *  the comparison uses — the feature counts and endpoint map are the health
@@ -141,13 +141,10 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const allowStale = args.includes('--allow-stale');
 
-  const origin = (args.find((arg) => !arg.startsWith('--')) ?? EVAL_DEPLOYMENT_ORIGIN)
-    .trim().replace(/\/+$/, '');
-
   // The same allowlist every other eval entry point is held to. A preflight that
   // would happily interrogate production teaches whoever reads it that the origin
   // is negotiable, and this script's answer is what gates a spending run.
-  const allowed = evalTargetVerdict(origin);
+  const allowed = evalTargetVerdict(args.find((arg) => !arg.startsWith('--')));
 
   if (allowed.kind === 'refused') {
     console.error(`deploy-preflight: REFUSED — ${allowed.reason}`);

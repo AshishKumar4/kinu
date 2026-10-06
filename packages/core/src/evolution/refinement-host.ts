@@ -1,11 +1,11 @@
 /** Host-facing refinement calls, shared by both backends; the lane is refinement-lane.ts. */
 
 import {
-  advanceRefinementLane, refinementDebt, refinementDebtRequest, requestRefinement,
+  advanceRefinementLane, refinementDebtRequest, requestRefinement,
   type RefinementLaneStep, type RequestRefinementInput,
 } from './refinement-lane';
 import {
-  createRefinementStore, holdRefinementLane, nextEvolutionAnswerAt, refinementRequestView, releaseRefinementLane,
+  createRefinementStore, evolutionDebt, holdRefinementLane, nextEvolutionAnswerAt, refinementRequestView, releaseRefinementLane,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
 } from './refinement';
 import { Effect } from 'effect';
@@ -25,7 +25,7 @@ export function requestOwnerRefinement(
 export function listRefinements(deps: RefinementDeps, limit = 20) {
   return {
     requests: createRefinementStore(deps.control.sql, deps.control.rt.actor).list(limit).map(refinementRequestView),
-    debt: refinementDebt(deps),
+    debt: evolutionDebt(deps.control.sql, deps.control.rt.actor),
   };
 }
 

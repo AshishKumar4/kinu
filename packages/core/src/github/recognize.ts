@@ -1,16 +1,17 @@
 /** What an agent did on GitHub, from a write GitHub answered with success, by egress or MCP alike. A read, a refusal or another host is nothing. */
 import * as v from 'valibot';
 import type { McpPresetId } from '../mcp/presets';
-import type { JsonObject } from '../utils/json';
+import { isJsonObject, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 
 /** github/github-mcp-server: the only MCP calls read as GitHub work. */
 export const GITHUB_MCP_PRESET = 'github' satisfies McpPresetId;
 
-export type GitHubAction = 'opened' | 'touched' | 'closed' | 'merged' | 'pushed' | 'fetched';
+/** `identified`: a lookup named a node id, for a later write by id alone. */
+export type GitHubAction = 'opened' | 'touched' | 'closed' | 'merged' | 'pushed' | 'fetched' | 'identified';
 
 export type GitHubSubject = 'issue' | 'pr' | 'repo';
 
-export interface GitHubFact {
+export interface GitHubSubjectFact {
   readonly action: GitHubAction;
   readonly subject: GitHubSubject;
   /** `owner/name`. */
@@ -22,19 +23,36 @@ export interface GitHubFact {
   /** A branch: the one pushed, or a pull request's head. */
   readonly ref?: string;
   readonly state?: string;
+  readonly node?: string;
 }
 
+/** A write answered with a node id only. */
+export interface GitHubNodeFact {
+  readonly action: GitHubAction;
+  readonly subject: 'issue' | 'pr';
+  readonly node: string;
+  readonly state?: string;
+}
+
+export type GitHubFact = GitHubSubjectFact | GitHubNodeFact;
+
+const ACTIONS = ['opened', 'touched', 'closed', 'merged', 'pushed', 'fetched', 'identified'] as const;
+
 /** Parsed again at the workspace object, never trusted as typed. */
-export const GitHubFactSchema = v.object({
-  action: v.picklist(['opened', 'touched', 'closed', 'merged', 'pushed', 'fetched']),
-  subject: v.picklist(['issue', 'pr', 'repo']),
-  repo: v.pipe(v.string(), v.regex(/^[^/\s]+\/[^/\s]+$/u)),
-  number: v.optional(v.pipe(v.number(), v.integer())),
-  url: v.optional(v.string()),
-  title: v.optional(v.string()),
-  ref: v.optional(v.string()),
-  state: v.optional(v.string()),
-}) satisfies v.GenericSchema<unknown, GitHubFact>;
+export const GitHubFactSchema = v.union([
+  v.object({
+    action: v.picklist(ACTIONS),
+    subject: v.picklist(['issue', 'pr', 'repo']),
+    repo: v.pipe(v.string(), v.regex(/^[^/\s]+\/[^/\s]+$/u)),
+    number: v.optional(v.pipe(v.number(), v.integer())),
+    url: v.optional(v.string()),
+    title: v.optional(v.string()),
+    ref: v.optional(v.string()),
+    state: v.optional(v.string()),
+    node: v.optional(v.string()),
+  }),
+  v.object({ action: v.picklist(ACTIONS), subject: v.picklist(['issue', 'pr']), node: v.string(), state: v.optional(v.string()) }),
+]) satisfies v.GenericSchema<unknown, GitHubFact>;
 
 export interface GitHubHttpRequest {
   readonly method: string;
@@ -71,16 +89,16 @@ function pageOf(url: string | undefined): Page | null {
   };
 }
 
-type FactFields = Pick<GitHubFact, 'action' | 'subject' | 'repo'> & {
-  readonly [K in Exclude<keyof GitHubFact, 'action' | 'subject' | 'repo'>]?: GitHubFact[K] | undefined
+type FactFields = Pick<GitHubSubjectFact, 'action' | 'subject' | 'repo'> & {
+  readonly [K in Exclude<keyof GitHubSubjectFact, 'action' | 'subject' | 'repo'>]?: GitHubSubjectFact[K] | undefined
 };
 
 /** Drops absent fields, so a fact holds only what GitHub said. */
-function fact({ action, subject, repo, number, url, title, ref, state }: FactFields): GitHubFact {
+function fact({ action, subject, repo, number, url, title, ref, state, node }: FactFields): GitHubSubjectFact {
   return {
     action, subject, repo,
     ...(number !== undefined && { number }), ...(url !== undefined && { url }), ...(title !== undefined && { title }),
-    ...(ref !== undefined && { ref }), ...(state !== undefined && { state }),
+    ...(ref !== undefined && { ref }), ...(state !== undefined && { state }), ...(node !== undefined && { node }),
   };
 }
 
@@ -160,35 +178,82 @@ const GraphQlRequest = v.pipe(v.string(), v.parseJson(), v.looseObject({
   })),
 }));
 
-/** Each mutation's payload as JSON text, searched in document order. */
-const GraphQlAnswer = v.pipe(v.string(), v.parseJson(), v.looseObject({
-  data: v.record(v.string(), v.pipe(v.unknown(), v.transform((payload) => JSON.stringify(payload) ?? ''))),
-}));
+const GraphQlAnswer = v.pipe(v.string(), v.parseJson(), v.looseObject({ data: JsonObjectSchema }));
 
-const PAGE_IN_JSON = /"(https:\/\/github\.com\/[^"\s/]+\/[^"\s/]+\/(?:issues|pull)\/\d+(?:#[^"\s]*)?)"/u;
+/** Its own `url` and `id` fields, never text inside a title. */
+const GraphQlNode = v.looseObject({ id: v.optional(v.string()), url: v.optional(v.string()) });
 
-/** The first issue or pull request page anywhere in a mutation's answer. */
-const firstPage = (payload: string): Page | null => pageOf(PAGE_IN_JSON.exec(payload)?.[1]);
+const NodeOf = (field: string) => v.looseObject({ [field]: GraphQlNode });
+
+const PAYLOAD_SUBJECT = [
+  v.pipe(NodeOf('issue'), v.transform((payload) => ({ node: payload.issue, subject: 'issue' as const }))),
+  v.pipe(NodeOf('pullRequest'), v.transform((payload) => ({ node: payload.pullRequest, subject: 'pr' as const }))),
+  v.pipe(NodeOf('pullRequestReview'), v.transform((payload) => ({ node: payload.pullRequestReview, subject: 'pr' as const }))),
+  v.pipe(v.looseObject({ commentEdge: v.looseObject({ node: GraphQlNode }) }), v.transform((payload) => ({ node: payload.commentEdge.node, subject: 'issue' as const }))),
+];
+
+function payloadSubject(payload: JsonValue) {
+  for (const schema of PAYLOAD_SUBJECT) {
+    const parsed = v.safeParse(schema, payload);
+
+    if (parsed.success) return parsed.output;
+  }
+
+  return null;
+}
+
+function namedNodes(value: JsonValue, found: GitHubSubjectFact[] = []): GitHubSubjectFact[] {
+  if (Array.isArray(value)) {
+    for (const entry of value) namedNodes(entry, found);
+  } else if (isJsonObject(value)) {
+    const node = v.safeParse(GraphQlNode, value);
+    const page = node.success ? pageOf(node.output.url) : null;
+
+    if (node.success && node.output.id !== undefined && page?.url !== undefined) {
+      found.push(fact({ action: 'identified', subject: page.subject, repo: page.repo, number: page.number, node: node.output.id }));
+    }
+
+    for (const entry of Object.values(value)) namedNodes(entry, found);
+  }
+
+  return found;
+}
+
+function mutationFact(action: GitHubAction, payload: JsonValue, input: v.InferOutput<typeof GraphQlRequest>['variables']): GitHubFact | null {
+  const named = payloadSubject(payload);
+
+  if (named === null) return null;
+  const page = pageOf(named.node.url);
+  const state = action === 'merged' || action === 'closed' ? action : undefined;
+
+  if (page === null) {
+    if (named.node.id === undefined || named.node.url !== undefined) return null;
+
+    return { action, subject: named.subject, node: named.node.id, ...(state !== undefined && { state }) };
+  }
+
+  const opened = action === 'opened';
+
+  return fact({
+    action, subject: page.subject, repo: page.repo, number: page.number, url: page.url,
+    title: opened ? input?.input?.title : undefined, ref: opened && page.subject === 'pr' ? input?.input?.headRefName : undefined,
+    state,
+  });
+}
 
 function graphQlFacts(request: string | undefined, answer: string | undefined): GitHubFact[] {
   const sent = v.safeParse(GraphQlRequest, request);
   const got = v.safeParse(GraphQlAnswer, answer);
 
-  if (!sent.success || !got.success || !/^\s*mutation\b/u.test(sent.output.query)) return [];
-  const input = sent.output.variables?.input;
+  if (!sent.success || !got.success) return [];
+
+  if (!/^\s*mutation\b/u.test(sent.output.query)) return namedNodes(got.output.data);
 
   return Object.entries(got.output.data).flatMap(([field, payload]) => {
     const action = MUTATIONS.get(field);
-    const page = action === undefined ? null : firstPage(payload);
+    const made = action === undefined ? null : mutationFact(action, payload, sent.output.variables);
 
-    if (action === undefined || page === null) return [];
-    const opened = action === 'opened';
-
-    return [fact({
-      action, subject: page.subject, repo: page.repo, number: page.number, url: page.url,
-      title: opened ? input?.title : undefined, ref: opened && page.subject === 'pr' ? input?.headRefName : undefined,
-      state: action === 'merged' ? 'merged' : undefined,
-    })];
+    return made === null ? [] : [made];
   });
 }
 

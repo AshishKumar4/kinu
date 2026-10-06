@@ -15,7 +15,6 @@ import {
   headMergeLLM, spawnSeatedHead,
   localMissionScope, type ToolSurfaceNarrowing,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { CLIRuntime } from './runtime';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 
@@ -26,9 +25,8 @@ export interface CLIHeadRuntimeDeps {
   /** Profile the merge's `judge` route resolves against; read per merge. */
   profile: () => Promise<ResolvedTurnProfile>;
   bindMergeModel: RouteModelBinder;
-  /** Per-head model spec resolver. Absent or unresolvable falls back to `model`:
-   *  one fork's bad spec should not fail the whole split. */
-  resolveModel?: (spec: string) => LanguageModel;
+  /** The model a head that names one runs on; a spec it cannot resolve fails that head. */
+  resolveModel: (spec: string) => LanguageModel;
   parentRuntime: CLIRuntime;
   webSearch: WebSearchProvider;
   /** Extra codemode namespaces, without `agents.*`/`agent.*`: a head never inherits authority to delegate. */
@@ -76,25 +74,9 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   return deps.grounding ? { ...runtime, grounding: deps.grounding } : runtime;
 }
 
-/** A bad spec degrades to the session model (spec null) rather than failing the head. */
+/** A head that names no model runs on the session's. */
 function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps) {
-  if (!input.model || !deps.resolveModel) return { model: deps.model(), spec: null };
-
-  try {
-    return { model: deps.resolveModel(input.model), spec: input.model };
-  } catch (err) {
-    diagnostics.failure(
-      'head.model_resolve_failed',
-      toKinuError({
-        doing: "resolving the model this head named, so it runs on the session's model instead",
-        cause: err,
-        otherwise: 'bad_input',
-      }),
-      { headId: input.id, model: input.model },
-    );
-
-    return { model: deps.model(), spec: null };
-  }
+  return input.model ? { model: deps.resolveModel(input.model), spec: input.model } : { model: deps.model(), spec: null };
 }
 
 /**

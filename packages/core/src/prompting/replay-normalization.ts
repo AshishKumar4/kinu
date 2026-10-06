@@ -47,6 +47,12 @@ export function normalizeReplayForDestination(
   let changed = false;
   const destinationIsAnthropic = destinationProviderId === 'anthropic' || destinationProviderId === 'claude';
 
+  const rekeyed = (callId: string): string | null => {
+    const id = ids.get(callId);
+
+    return id === undefined || id === callId ? null : id;
+  };
+
   const normalized = messages.map((message): ModelMessage => {
     if (message.role === 'assistant' && Array.isArray(message.content)) {
       const parts = message.content;
@@ -57,6 +63,9 @@ export function normalizeReplayForDestination(
 
           return crossing === 'unchanged' ? null : crossing;
         }
+
+        // A provider-run result rides beside its call.
+        if (part.type === 'tool-result') return rekeyed(part.toolCallId);
 
         if (part.type !== 'tool-call') return null;
         const id = ids.get(part.toolCallId) ?? toolCallIdFor({ scope: 'kinu', index: calls++ });
@@ -77,7 +86,7 @@ export function normalizeReplayForDestination(
           if (step === null) content.push(part);
           else if (part.type === 'reasoning') {
             if (step === 'as-text') content.push({ type: 'text', text: part.text });
-          } else if (part.type === 'tool-call') content.push({ ...part, toolCallId: step });
+          } else if (part.type === 'tool-call' || part.type === 'tool-result') content.push({ ...part, toolCallId: step });
         }
 
         return { ...message, content } satisfies AssistantModelMessage;
@@ -87,12 +96,7 @@ export function normalizeReplayForDestination(
     if (message.role === 'tool') {
       const parts = message.content;
 
-      const rewrite = parts.map((part): string | null => {
-        if (part.type !== 'tool-result') return null;
-        const id = ids.get(part.toolCallId);
-
-        return id === undefined || id === part.toolCallId ? null : id;
-      });
+      const rewrite = parts.map((part): string | null => (part.type === 'tool-result' ? rekeyed(part.toolCallId) : null));
 
       if (rewrite.every((id) => id === null)) return message;
       changed = true;

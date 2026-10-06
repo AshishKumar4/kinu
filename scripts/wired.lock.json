@@ -154,7 +154,6 @@
   "packages/core/src/layergate/faults.ts#LOCALIZATION_OTHER_MAX_PP (unreached-export)",
   "packages/core/src/layergate/faults.ts#LOCALIZATION_OWN_MIN_PP (unreached-export)",
   "packages/core/src/layergate/subjects.ts#SUBJECT_SOURCE (unreached-export)",
-  "packages/core/src/llm.ts#collectStepText (unreached-export)",
   "packages/core/src/mcts/evaluation.ts#isParseFailure (unreached-export)",
   "packages/core/src/mcts/evaluation.ts#judgeCallBudget (unreached-export)",
   "packages/core/src/memory/note.ts#MEMORY_TAIL_MAX_CHARS (unreached-export)",
@@ -278,14 +277,12 @@
   "packages/core/src/vfs/agent-home.ts#SESSION_UID (unreached-export)",
   "packages/core/src/web/provider.ts#DefaultWebSearchProviderDeps.htmlToMarkdown (unsupplied-field)",
   "packages/core/src/workspace-birth.ts#WorkspaceBirthConfig.scaffold (unsupplied-field)",
-  "packages/devbox/src/durability/contracts.ts#PublishWorkSchema (unreached-export)",
-  "packages/devbox/src/durability/contracts.ts#RestoreWorkSchema (unreached-export)",
+
   "packages/devbox/src/incidents.ts#INCIDENT_LEDGER_MAX_ROWS (unreached-export)",
   "packages/devbox/src/incidents.ts#reapDeliveredIncidents (unreached-export)",
   "packages/devbox/src/lifecycle.ts#INCIDENT_STAGES (unreached-export)",
-  "packages/devbox/src/lifecycle.ts#PORT_TOKEN_ALPHABET (unreached-export)",
-  "packages/devbox/src/lifecycle.ts#canonicalPath (unreached-export)",
+  "packages/devbox/src/operation-lanes.ts#canonicalPath (unreached-export)",
   "packages/devbox/src/lifecycle.ts#healthProbeCommand (unreached-export)",
-  "packages/devbox/src/lifecycle.ts#scopesOverlap (unreached-export)",
+  "packages/devbox/src/operation-lanes.ts#scopesOverlap (unreached-export)",
   "packages/devbox/src/storage.ts#ATTACH_OUTCOME_KINDS (unreached-export)"
 ]

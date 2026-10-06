@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-10-02",
+  "measuredAt": "2026-10-06",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
   "method": "each row alone under `setsid /usr/bin/time -v bun scripts/ladder.ts --gate <run> --no-cache`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN); a post-publish row against the deployment `--deployment=<origin>` named, with KINU_ORIGIN and KINU_EVAL_ORIGIN set to it",
   "rows": {
@@ -916,17 +916,6 @@
       "loadAtStart": 6.9,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-e2e.test.ts": {
-      "wallSeconds": 9.27,
-      "cpuSeconds": 10.39,
-      "peakRssMb": 509.33,
-      "peakRunnable": 11,
-      "peakCpuThreads": 2.69,
-      "meanThreads": 1.12,
-      "samples": 76,
-      "loadAtStart": 6.56,
-      "exit": 0
-    },
     "bun test --timeout=0 --isolate tests/browser/account-ux.test.ts tests/browser/drive-ux.test.ts tests/browser/slate-preview-ux.test.ts tests/browser/slate-sharing-ux.test.ts": {
       "wallSeconds": 112.03,
       "cpuSeconds": 80.39,
@@ -1013,6 +1002,17 @@
       "meanThreads": 0.93,
       "samples": 765,
       "loadAtStart": 8.56,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-container-tier.test.ts": {
+      "wallSeconds": 62.83,
+      "cpuSeconds": 27.97,
+      "peakRssMb": 450.05,
+      "peakRunnable": 25,
+      "peakCpuThreads": 1.7,
+      "meanThreads": 0.45,
+      "samples": 176,
+      "loadAtStart": 76.44,
       "exit": 0
     }
   }

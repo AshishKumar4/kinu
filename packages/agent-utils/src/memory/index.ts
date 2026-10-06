@@ -6,6 +6,6 @@ export { chunkMarkdown } from "./chunker";
 
 export type { Chunk } from "./chunker";
 
-export { sanitizeFtsQuery, relaxFtsQuery, fillToCapacity, ftsQueryTerms } from "./query";
+export { searchFts, ftsQueryTerms } from "./query";
 
 export type { MemorySearchResult } from "./query";

@@ -174,8 +174,8 @@ export async function getLocalAgentState(name: string): Promise<LocalAgentState>
     status: getLocalStatus(db),
     tools: getLocalToolSummary(db),
     memoryContent,
-    mcts: listLocalMcts(name),
-    timeline: listLocalTimeline(name, 250),
+    mcts: localMcts(db),
+    timeline: localTimeline(db, 250),
     executors: listLocalExecutors(),
   }));
 }
@@ -280,107 +280,111 @@ export function listLocalRunEvents(
 
 /** Local peer of core's `getRunTimeline`, sharing its ceiling; `limit` is user input bound to raw `LIMIT ?`. */
 export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
+  return withLocalDb(name, (db) => localTimeline(db, limit));
+}
+
+function localTimeline(db: SqliteDb, limit: number): JsonObject[] {
   const window = boundedInt(limit, 100, 1, RUN_TIMELINE_MAX);
 
-  return withLocalDb(name, (db) => {
-    // Every rail is actor-scoped; this reports the main actor.
-    const actor = mainActor(db);
-    const rows: JsonObject[] = [];
+  // Every rail is actor-scoped; this reports the main actor.
+  const actor = mainActor(db);
+  const rows: JsonObject[] = [];
 
-    if (tableExists(db, 'run_events')) {
-      const sql = makeSql(db);
-      const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
-      const latest = listRuns(recorder, null, 1).items[0];
+  if (tableExists(db, 'run_events')) {
+    const sql = makeSql(db);
+    const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
+    const latest = listRuns(recorder, null, 1).items[0];
 
-      if (latest) {
-        rows.push(...recorder.read(latest.runId, { limit: window }).map((e) => ({
-          id: `${e.runId}:${e.eventIndex}`,
-          kind: `run:${e.type}`,
-          runId: e.runId,
-          payload: decodeJsonValue({ value: e }),
-          ts: Date.parse(e.timestamp) || 0,
-        })));
-      }
-    }
-
-    if (tableExists(db, 'agent_log')) {
-      rows.push(...all<{
-        id: string; kind: string; turn_id: string | null; step_idx: number | null; payload: string; received_at: number;
-      }>(
-        db,
-        `SELECT id, kind, turn_id, step_idx, payload, received_at
-         FROM agent_log
-         ORDER BY received_at DESC
-         LIMIT ?`,
-        window,
-      ).map((row) => ({
-        id: row.id,
-        kind: row.kind,
-        turnId: row.turn_id,
-        stepIdx: row.step_idx,
-        payload: parseJson(row.payload),
-        ts: row.received_at,
+    if (latest) {
+      rows.push(...recorder.read(latest.runId, { limit: window }).map((e) => ({
+        id: `${e.runId}:${e.eventIndex}`,
+        kind: `run:${e.type}`,
+        runId: e.runId,
+        payload: decodeJsonValue({ value: e }),
+        ts: Date.parse(e.timestamp) || 0,
       })));
     }
+  }
 
-    if (actor && tableExists(db, 'evolution_events')) {
-      rows.push(...all<{ id: string; type: string; message: string; data: string | null; created_at: number }>(
-        db,
-        `SELECT id, type, message, data, created_at
-         FROM evolution_events
-         WHERE actor_id = ?
-         ORDER BY created_at DESC
-         LIMIT ?`,
-        actor.actorId, window,
-      ).map((row) => ({
-        id: row.id,
-        kind: `evolution:${row.type}`,
-        message: row.message,
-        data: parseJson(row.data),
-        ts: row.created_at,
-      })));
-    }
+  if (tableExists(db, 'agent_log')) {
+    rows.push(...all<{
+      id: string; kind: string; turn_id: string | null; step_idx: number | null; payload: string; received_at: number;
+    }>(
+      db,
+      `SELECT id, kind, turn_id, step_idx, payload, received_at
+       FROM agent_log
+       ORDER BY received_at DESC
+       LIMIT ?`,
+      window,
+    ).map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      turnId: row.turn_id,
+      stepIdx: row.step_idx,
+      payload: parseJson(row.payload),
+      ts: row.received_at,
+    })));
+  }
 
-    if (actor && tableExists(db, 'search_nodes')) {
-      rows.push(...all<{ id: string; action: string; value: number; status: string; created_at: number }>(
-        db,
-        `SELECT id, action, value, status, created_at
-         FROM search_nodes
-         WHERE actor_id = ?
-         ORDER BY created_at DESC
-         LIMIT ?`,
-        actor.actorId, window,
-      ).map((row) => ({
-        id: row.id,
-        kind: 'swarm',
-        label: row.action,
-        value: row.value,
-        status: row.status,
-        ts: row.created_at,
-      })));
-    }
+  if (actor && tableExists(db, 'evolution_events')) {
+    rows.push(...all<{ id: string; type: string; message: string; data: string | null; created_at: number }>(
+      db,
+      `SELECT id, type, message, data, created_at
+       FROM evolution_events
+       WHERE actor_id = ?
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      actor.actorId, window,
+    ).map((row) => ({
+      id: row.id,
+      kind: `evolution:${row.type}`,
+      message: row.message,
+      data: parseJson(row.data),
+      ts: row.created_at,
+    })));
+  }
 
-    return rows.sort((a, b) => timestampOf(b) - timestampOf(a)).slice(0, window);
-  });
+  if (actor && tableExists(db, 'search_nodes')) {
+    rows.push(...all<{ id: string; action: string; value: number; status: string; created_at: number }>(
+      db,
+      `SELECT id, action, value, status, created_at
+       FROM search_nodes
+       WHERE actor_id = ?
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      actor.actorId, window,
+    ).map((row) => ({
+      id: row.id,
+      kind: 'swarm',
+      label: row.action,
+      value: row.value,
+      status: row.status,
+      ts: row.created_at,
+    })));
+  }
+
+  return rows.sort((a, b) => timestampOf(b) - timestampOf(a)).slice(0, window);
 }
 
 /** Every search, deliberately; core's projections answer one. */
 export function listLocalMcts(name: string): SearchNode[] {
-  return withLocalDb(name, (db) => {
-    const actor = mainActor(db);
+  return withLocalDb(name, localMcts);
+}
 
-    if (!actor || !tableExists(db, 'search_nodes')) return [];
+function localMcts(db: SqliteDb): SearchNode[] {
+  const actor = mainActor(db);
 
-    return all<SearchNode>(
-      db,
-      `SELECT id, parent_id, root_id, task, action, observation, visits, value, depth,
-              status, created_at
-       FROM search_nodes
-       WHERE actor_id = ?
-       ORDER BY depth, created_at`,
-      actor.actorId,
-    );
-  });
+  if (!actor || !tableExists(db, 'search_nodes')) return [];
+
+  return all<SearchNode>(
+    db,
+    `SELECT id, parent_id, root_id, task, action, observation, visits, value, depth,
+            status, created_at
+     FROM search_nodes
+     WHERE actor_id = ?
+     ORDER BY depth, created_at`,
+    actor.actorId,
+  );
 }
 
 export function listLocalMctsSearchRuns(name: string, limit = 20): MctsSearchRunSummary[] {
@@ -564,44 +568,44 @@ export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
 }
 
 export async function cancelLocalTrigger(name: string, id: string): Promise<{ changed: boolean }> {
-  return withLocalWritableDb(name, (db) => {
+  return withLocalDbAsync(name, (db) => {
     const actor = mainActor(db);
 
     if (!actor || !tableExists(db, 'triggers')) return { changed: false };
 
     return { changed: new TriggerRegistry(makeSqlExec(db), actor, NOOP_ALARM).revoke(id, Date.now()) };
-  });
+  }, 'write');
 }
 
 export async function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): Promise<TimerTrigger> {
-  return withLocalWritableDb(name, (db) => {
+  return withLocalDbAsync(name, (db) => {
     initEventsHubTables(makeSqlExec(db));
     const actor = openWorkspaceMainActor(makeSql(db));
 
     return createTimerTrigger(new TriggerRegistry(makeSqlExec(db), actor, NOOP_ALARM), { ...input, trust: 'owner' }, Date.now());
-  });
+  }, 'write');
 }
 
 export async function setLocalWorkspaceModel(name: string, spec: string): Promise<{ spec: string }> {
   const { resolver } = createConfiguredLocalModelResolver();
 
-  return withLocalWritableDb(name, (db) => setModel({
+  return withLocalDbAsync(name, (db) => setModel({
     config: openWorkspaceMainActor(makeSql(db)).config,
     normalize: (value) => resolver.normalizeSpecSync(value),
     onChanged: () => {},
-  }, spec));
+  }, spec), 'write');
 }
 
 export async function setLocalWorkspaceReasoningEffort(name: string, effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
-  return withLocalWritableDb(name, (db) => setReasoningEffort(openWorkspaceMainActor(makeSql(db)).config, effort));
+  return withLocalDbAsync(name, (db) => setReasoningEffort(openWorkspaceMainActor(makeSql(db)).config, effort), 'write');
 }
 
 export async function readLocalWorkspacePins(name: string): Promise<{ model: string | null; reasoningEffort: ReasoningEffort | null }> {
-  return withLocalWritableDb(name, (db) => {
+  return withLocalDbAsync(name, (db) => {
     const config = openWorkspaceMainActor(makeSql(db)).config;
 
     return { model: config.getModel(), reasoningEffort: config.getReasoningEffort() };
-  });
+  }, 'write');
 }
 
 export function listLocalJobs(name: string, limit = 20): BackgroundJob[] {
@@ -616,12 +620,8 @@ export function localJobRunning(name: string, id: string): boolean {
 
 /** The addressed workspace's own registered executor runs the command, as the cloud's executeInExecutor does. */
 export async function executeLocalExecutor(name: string, executorId: string, command: string): Promise<LocalExecResult> {
-  ensureLocalAgent(name);
-  const dbPath = agentDbPath(name);
-  const db = new Database(dbPath);
-
-  try {
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: null, cwd: resolveLocalAgent(name).cwd });
+  return withLocalDbAsync(name, async (db) => {
+    const { rt } = await openWorkspaceCLI(db, agentDbPath(name), { llm: null, cwd: resolveLocalAgent(name).cwd });
 
     const run = rt.executionRouter
       ? await runOnExecutor(rt.executionRouter, executorId, command)
@@ -630,17 +630,19 @@ export async function executeLocalExecutor(name: string, executorId: string, com
     return run.kind === 'ran'
       ? { executor: executorId, command, stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode }
       : { executor: executorId, command, stdout: '', stderr: '', exitCode: 1, error: run.error };
-  } finally {
-    db.close();
-  }
+  }, 'write');
 }
 
-function openLocalDb(name: string): SqliteDb {
+/** A read refuses a database another schema genesis wrote; a write opens it as it stands. */
+type DbMode = 'read' | 'write';
+
+function openLocalDb(name: string, mode: DbMode): SqliteDb {
   const dbPath = agentDbPath(name);
 
   if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
+  const db = mode === 'read' ? new Database(dbPath, { readonly: true }) : new Database(dbPath);
 
-  const db = new Database(dbPath, { readonly: true });
+  if (mode === 'write') return db;
   const genesis = schemaGenesisOf(db);
 
   if (genesis !== SCHEMA_GENESIS.slice(0, 7)) db.close();
@@ -659,7 +661,7 @@ function readMainActorTable<T>(name: string, table: string, absent: T, read: (sq
 }
 
 function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
-  const db = openLocalDb(name);
+  const db = openLocalDb(name, 'read');
 
   try {
     return fn(db);
@@ -668,34 +670,15 @@ function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
   }
 }
 
-async function withLocalDbAsync<T>(name: string, fn: (db: SqliteDb) => Promise<T>): Promise<T> {
-  const db = openLocalDb(name);
-
-  try {
-    return await fn(db);
-  } finally {
-    db.close();
-  }
-}
-
 /** Closes only after the callback settles: `TriggerRegistry` mutators await the alarm seam. */
-async function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Promise<T>): Promise<T> {
-  const dbPath = agentDbPath(name);
-
-  if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
-  const db = new Database(dbPath);
+async function withLocalDbAsync<T>(name: string, fn: (db: SqliteDb) => T | Promise<T>, mode: DbMode = 'read'): Promise<T> {
+  const db = openLocalDb(name, mode);
 
   try {
     return await fn(db);
   } finally {
     db.close();
   }
-}
-
-function ensureLocalAgent(name: string): void {
-  const dbPath = agentDbPath(name);
-
-  if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
 }
 
 function all<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T[] {

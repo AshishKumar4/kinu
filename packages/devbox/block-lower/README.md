@@ -20,16 +20,17 @@ mounts. Startup reads only the manifests and probes the newer layers' trees
 for the records' paths.
 
 Build: `cargo build --release --locked`. Test: `cargo test --locked`.
-The image build uses the pinned Rust Alpine image to produce a static musl
-binary that runs on the pinned upstream Sandbox image without a libc upgrade.
-
-The image is built from this directory alone and pinned in `upstream.json`:
+The tools stage uses the pinned Rust Alpine builder to produce a static musl
+binary for the official trixie base. It also builds the deterministic offline
+tools tarball pinned in `upstream.json` (D66). No local runtime image is built:
 
 ```sh
-docker build -t kinu-devbox-native:<date> packages/devbox/block-lower
+bun scripts/devbox-tools.ts build
 ```
 
-The runtime image pins the Bun version in the root `package.json`.
+The golden installs that tarball into a real `cloudflare/debian-trixie`
+container and snapshots it. The tarball separately pins Bun 1.4.2; the host's
+test runtime does not change a container's tools.
 
 ## Format and reads
 

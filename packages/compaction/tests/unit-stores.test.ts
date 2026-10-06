@@ -4,12 +4,12 @@ import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { initWorkspaceSchema, type SqlExec, type SqlExecRow, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 import { createTestActorsOver } from '@kinu.run/test-utils';
+import type { PlanSnapshot } from '@better-compact/core';
 import {
   compactionTranscriptPath,
   createCompactionStateStore,
   createVfsTranscriptStore,
   type ArchiveRange,
-  type PlanSnapshot,
 } from '../src/index';
 
 /** Uses core's workspace-schema entry point so the tables match production. */

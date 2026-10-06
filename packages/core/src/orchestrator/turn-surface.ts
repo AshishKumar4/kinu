@@ -137,32 +137,27 @@ async function admitTurnSkills(
   };
 }
 
-/** The trusted active skills' allowed_tools union bounds the surface (empty = no restriction).
- *  No tool is exempt, `eval` included. Untrusted skills set no policy (KINU-N028). */
+/** Trusted active skills' allowed_tools union, `eval` included; null when empty. */
+function skillToolBound(activeSkills: ActiveSkillSet | undefined): ((name: string) => boolean) | null {
+  if (!activeSkills) return null;
+  const allowedUnion = unionAllowedTools(trustedActiveSkills(activeSkills));
+
+  return allowedUnion.length === 0 ? null : (name) => toolAllowedBySkills(name, allowedUnion);
+}
+
 export function filterToolNamesBySkills<T extends string>(
   names: readonly T[],
   activeSkills: ActiveSkillSet | undefined,
 ): T[] {
-  if (!activeSkills) return [...names];
-  const allowedUnion = unionAllowedTools(trustedActiveSkills(activeSkills));
+  const allowed = skillToolBound(activeSkills);
 
-  if (allowedUnion.length === 0) return [...names];
-
-  return names.filter((name) => toolAllowedBySkills(name, allowedUnion));
+  return allowed === null ? [...names] : names.filter(allowed);
 }
 
 export function filterToolSetBySkills(tools: ToolSet, activeSkills: ActiveSkillSet | undefined): ToolSet {
-  if (!activeSkills) return tools;
-  const allowedUnion = unionAllowedTools(trustedActiveSkills(activeSkills));
+  const allowed = skillToolBound(activeSkills);
 
-  if (allowedUnion.length === 0) return tools;
-  const filtered: ToolSet = {};
-
-  for (const [name, t] of Object.entries(tools)) {
-    if (toolAllowedBySkills(name, allowedUnion)) filtered[name] = t;
-  }
-
-  return filtered;
+  return allowed === null ? tools : Object.fromEntries(Object.entries(tools).filter(([name]) => allowed(name)));
 }
 
 /** Rendered fresh each turn so it never enters the cacheable prefix. */

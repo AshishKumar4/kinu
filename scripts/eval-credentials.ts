@@ -36,7 +36,6 @@
 // here, by the same allowlist, before an origin is printed.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import {
-  EVAL_DEPLOYMENT_ORIGIN,
   EVAL_IDENTITY_ENV,
   evalAccount,
   evalSessionPath,
@@ -55,13 +54,14 @@ const PersistedEvalIdentitySchema = v.object({
 
 const account = evalAccount();
 
-// The deployment the bearer is for; an origin set to blank names none, so it reads as absent, as the mint reads it.
-const namedOrigin = process.env[EVAL_IDENTITY_ENV.origin]?.trim();
+const target = evalTargetVerdict(process.env[EVAL_IDENTITY_ENV.origin]);
 
-const target = evalTargetVerdict(namedOrigin === undefined || namedOrigin === '' ? EVAL_DEPLOYMENT_ORIGIN : namedOrigin);
+if (target.kind === 'refused') {
+  console.error(`eval-credentials: REFUSED — ${target.reason}`);
+  process.exit(1);
+}
 
-// A refused target has no session to read; `resolveEvalIdentity` names the refusal below.
-const persistedPath = target.kind === 'allowed' ? evalSessionPath(target.origin, account) : undefined;
+const persistedPath = evalSessionPath(target.origin, account);
 
 const identityEnv: NodeJS.ProcessEnv = { ...process.env };
 

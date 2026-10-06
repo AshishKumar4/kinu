@@ -1,6 +1,4 @@
 /** @jsxImportSource @opentui/react */
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { KeyEvent, ScrollBoxRenderable, TextareaRenderable } from '@opentui/core';
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
@@ -25,8 +23,6 @@ import {
 
 const ROOT = canonicalProjectRoot();
 
-const FRAME_DIR = process.env.TUI_FRAME_DIR ?? '/tmp/grouped-tui-frames';
-
 /** The cloud roster reuses the name `audit`: the duplicate the grouping must keep apart. */
 const GROUPED_ITEMS: readonly TuiAgentSummary[] = [
   {
@@ -44,12 +40,6 @@ const pageOf = (items: readonly TuiAgentSummary[], nextCursor: string | null = n
   total: items.length,
   nextCursor,
 });
-
-function saveFrame(name: string, frame: string): void {
-  mkdirSync(FRAME_DIR, { recursive: true });
-  writeFileSync(join(FRAME_DIR, `${name}.txt`), `${frame}\n`);
-}
-
 
 let probeTextarea: TextareaRenderable | null = null;
 
@@ -160,12 +150,11 @@ async function mountProbe(options: {
 
 describe('grouped workspace navigator', () => {
   test('wide layouts pin the grouped sidebar with peers, nesting, and a collapsed cloud section (desktop frames at 160 and 120)', async () => {
-    for (const [width, label] of [[160, 'desktop-160'], [120, 'desktop-120']] as const) {
+    for (const width of [160, 120]) {
       const probe = await mountProbe({ width, page: pageOf(GROUPED_ITEMS) });
 
       try {
         const frame = probe.frame();
-        saveFrame(`chat-${label}`, frame);
         expect(frame).toContain('shop · 2');
         expect(frame).toContain('docs · 1');
         expect(frame).toContain('Cloud · 2');
@@ -227,7 +216,6 @@ describe('grouped workspace navigator', () => {
       await probe.settle();
       expect(probe.frame()).toContain('Workspaces · Esc close');
       expect(probeTextarea?.focused).toBe(false);
-      saveFrame('chat-overlay-80', probe.frame());
 
       probe.mockInput.pressArrow('up');
       probe.mockInput.pressEnter();
@@ -377,7 +365,6 @@ describe('grouped workspace navigator', () => {
     try {
       probeSetNavigationOpen?.(true);
       await probe.settle();
-      saveFrame('chat-overlay-mobile-40', probe.frame());
       expect(probe.frame()).toContain('13 of 40');
 
       probe.mockInput.pressKey('\u001B[6~');

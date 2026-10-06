@@ -3,7 +3,6 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
-import { synthesizeToolFallback } from './utils/evidence-window';
 import type { LLM } from './types/primitives';
 import type { ModelCallSpend } from './events/model-call';
 import { generateReported, streamTextReported } from './providers/model-invocation';
@@ -56,33 +55,6 @@ export function admissionBytes(tokens: number): number {
 
 export function estimateUsdCost(tokens: number): number {
   return (tokens / 1000) * BLENDED_USD_PER_1K_TOKENS;
-}
-
-/**
- * Collect text from a generateText result. Some models (e.g. Kimi K2.5) end on a tool-call step with no trailing
- * text, and AI SDK v6 puts only the final step's text in `result.text`.
- */
-export function collectStepText(result: {
-  text: string;
-  steps: ReadonlyArray<{
-    text: string;
-    toolResults: ReadonlyArray<{ toolName: string; output: unknown }>;
-  }>;
-}): string {
-  if (result.text) return result.text;
-
-  const textParts: string[] = [];
-
-  for (const step of result.steps) {
-    if (step.text) textParts.push(step.text);
-  }
-
-  if (textParts.length > 0) return textParts.join('\n\n');
-
-  // No text in any step — synthesize from tool results
-  const fallback = synthesizeToolFallback(result.steps);
-
-  return fallback ? fallback : '(no response)';
 }
 
 /** Chat-model factory for the CLI's endpoint-configured models; for an `LLM` (`.stream`/`.complete`), use

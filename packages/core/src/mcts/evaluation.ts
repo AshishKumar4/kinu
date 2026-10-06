@@ -387,7 +387,11 @@ const JudgeScoreSchema = v.object({ score: v.union([v.number(), v.string()]) });
 
 /** One judge sample; unparseable text is dropped (null), never scored 0. A failed call propagates. */
 async function sampleJudgeScore(judge: LLM, prompt: string): Promise<number | null> {
-  const text = await judge.complete(prompt);
+  return judgeScoreOf(await judge.complete(prompt));
+}
+
+/** A judge's `{"score": …}` in [0, 1], or null when the text carries none */
+export function judgeScoreOf(text: string): number | null {
   const json = tolerate(() => extractJsonObject(text), 'malformed-input');
 
   if (json === undefined) return null;

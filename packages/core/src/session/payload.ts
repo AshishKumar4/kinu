@@ -16,6 +16,14 @@ export type SessionPayload =
 
 export interface SessionFilePlane { readonly vfs: VFS; readonly artifactDirectory: string }
 
+export function storedPayload(json: string | null, path: string | null, digest: string | null): Effect.Effect<SessionPayload, KinuError> {
+  if (json !== null && path === null && digest === null) return Effect.succeed({ json, path: null, digest: null });
+
+  if (json === null && path !== null && digest !== null) return Effect.succeed({ json: null, path, digest });
+
+  return Effect.fail(new KinuError('io', 'invalid session payload reference'));
+}
+
 // Payload leaves half the platform row bound for keys/metadata; independent of model token policy.
 const INLINE_BYTES = Math.floor(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 2);
 
@@ -35,6 +43,10 @@ export class SessionPayloadReader {
 
   read(payload: SessionPayload): Promise<JsonValue> {
     return settle(this.readJson(payload));
+  }
+
+  readStored(json: string | null, path: string | null, digest: string | null): Promise<JsonValue> {
+    return settle(Effect.flatMap(storedPayload(json, path, digest), (payload) => this.readJson(payload)));
   }
 
   private readJson(payload: SessionPayload): Effect.Effect<JsonValue, KinuError> {

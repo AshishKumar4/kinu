@@ -27,7 +27,7 @@ import {
 import type { HeadSplitRequest, HeadSplitResult } from './head-tools';
 import { headProducedFindings } from './head-summary';
 import { MergeOutputSchema, type MergeOutput } from './merge-schema';
-import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation';
+import { evaluateWithMultiModelJudging, judgeScoreOf, median } from '../mcts/evaluation';
 import { DEFAULT_CONFIG } from '../config';
 import type { LLM, Executor } from '../types/primitives';
 import type { WorkMode } from '../types/turn';
@@ -211,22 +211,7 @@ export class HeadController {
         if (spawnRecorded !== undefined) yield* Effect.promise(() => spawnRecorded);
 
         return yield* Effect.catchCause(Effect.promise((): Promise<SpawnedHead | HeadReport> => this.runtime.spawnHead(input)), (spawnFailed) => Effect.gen({ self: this }, function* () {
-          // Nothing ran: usage is unknown (`{}`), and the reason travels in `errorMessage`.
-          const failed: HeadReport = {
-            id,
-            status: 'errored',
-            summary: 'Head failed to spawn before producing a report.',
-            evidence: [],
-            decisions: [],
-            artifactRefs: [],
-            fileChanges: [],
-            childHeadIds: [],
-            toolCalls: [],
-            stepCount: 0,
-            usage: {},
-            wallClockMs: 0,
-            errorMessage: renderThrownChain({ cause: Cause.squash(spawnFailed) }),
-          };
+          const failed = unreportedHead(id, 'Head failed to spawn before producing a report.', 0, spawnFailed);
 
           yield* Effect.promise(async () => this.journal.recordReport(failed));
 
@@ -261,21 +246,7 @@ export class HeadController {
 
           return report;
         }), (runFailed) => Effect.gen({ self: this }, function* () {
-          const failed: HeadReport = {
-            id: h.id,
-            status: 'errored',
-            summary: 'Head failed before producing a report.',
-            evidence: [],
-            decisions: [],
-            artifactRefs: [],
-            fileChanges: [],
-            childHeadIds: [],
-            toolCalls: [], stepCount: 0,
-            // The head never reported, so its usage is unknown: `{}`, not zeros.
-            usage: {},
-            wallClockMs: this.clock.now() - startedAt,
-            errorMessage: renderThrownChain({ cause: Cause.squash(runFailed) }),
-          };
+          const failed = unreportedHead(h.id, 'Head failed before producing a report.', this.clock.now() - startedAt, runFailed);
 
           yield* Effect.promise(async () => this.journal.recordReport(failed));
 
@@ -595,6 +566,14 @@ function headTrajectory(r: HeadReport): string {
   return parts.join('\n').trim();
 }
 
+/** A head that never reported: usage `{}` (unknown), reason in `errorMessage`. */
+function unreportedHead(id: string, summary: string, wallClockMs: number, failed: Cause.Cause<unknown>): HeadReport {
+  return {
+    id, status: 'errored', summary, evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
+    toolCalls: [], stepCount: 0, usage: {}, wallClockMs, errorMessage: renderThrownChain({ cause: Cause.squash(failed) }),
+  };
+}
+
 /** No score in the text: null (dropped, never 0). A failing judge propagates rather than looking unscoreable. */
 async function scoreMergeNarrative(judge: LLM, rationale: string, narrative: string): Promise<number | null> {
   const prompt = `You are scoring how well a synthesized answer resolves a task that was explored by several parallel reasoning heads.
@@ -610,13 +589,7 @@ JSON shape:
 {"score": <float 0.0-1.0>, "rationale": "<15 words max>"}
 ${jsonObjectOnlyInstruction()}`;
 
-  const text = await judge.complete(prompt);
-  const match = text.match(/"score"\s*:\s*(-?\d+(?:\.\d+)?)/);
-
-  if (!match) return null;
-  const score = Number(match[1]);
-
-  return Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : null;
+  return judgeScoreOf(await judge.complete(prompt));
 }
 
 function fallbackNarrative(reports: readonly HeadReport[], rationale: string, errMsg: string): string {

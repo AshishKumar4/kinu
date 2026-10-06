@@ -1,7 +1,5 @@
-/**
- * The workspace's one bar: its name, then a browser-style tab for each chat the person opened, then +. One hairline
- * draws the whole bottom rule and the open tab's silhouette, and glides to the next tab when the selection moves.
- */
+/** The workspace's bar: its name, a browser-style tab per chat the person opened, then +. One hairline draws the
+ *  bottom rule and the open tab's silhouette, and glides between tabs. */
 import { Effect } from "effect";
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Link } from "react-router-dom";
@@ -9,16 +7,18 @@ import { PencilSimpleIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import type { PanelAgent } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { composing } from "@/components/ui/form";
-import { AgentStatusMark } from "./AgentStatus";
+import { ChatMascot, WorkspaceLogo, mascotSeed } from "./Marks";
 
 type Rename = (name: string) => Promise<void>;
 
-/** `rename` absent: the item keeps its name. `remove` absent: it cannot be deleted. */
+/** Without `rename` an item keeps its name; without `remove` it stays. */
 interface BarItem {
   readonly key: string;
   readonly label: string;
   readonly to: string;
   readonly activity?: PanelAgent["activity"];
+  readonly mascot?: string;
+  readonly logo?: string | null;
   readonly rename?: { readonly value: string; readonly save: Rename };
   readonly remove?: () => void;
   readonly title?: boolean;
@@ -34,7 +34,7 @@ export interface ChatTab {
 }
 
 export interface WorkspaceHeaderProps {
-  readonly workspace: { readonly title: string; readonly to: string; readonly rename: Rename; readonly editValue: string; readonly remove: () => void };
+  readonly workspace: { readonly name: string; readonly title: string; readonly logo?: string | null; readonly to: string; readonly rename: Rename; readonly editValue: string; readonly remove: () => void };
   readonly chats: readonly ChatTab[];
   /** `overview` for the workspace's own page; null when the shown chat has no tab. */
   readonly active: string | null;
@@ -45,9 +45,9 @@ export interface WorkspaceHeaderProps {
 
 export function WorkspaceHeader({ workspace, chats, active, newChat, leading, trailing }: WorkspaceHeaderProps) {
   const items: BarItem[] = [
-    { key: "overview", label: workspace.title, to: workspace.to, title: true, rename: { value: workspace.editValue, save: workspace.rename }, remove: workspace.remove },
+    { key: "overview", label: workspace.title, logo: workspace.logo ?? null, to: workspace.to, title: true, rename: { value: workspace.editValue, save: workspace.rename }, remove: workspace.remove },
     ...chats.map(({ agent, to, rename, remove }) => ({
-      key: agent.key, label: agent.label, to, activity: agent.activity, rename: { value: agent.label, save: rename }, ...(remove && { remove }),
+      key: agent.key, label: agent.label, to, activity: agent.activity, mascot: mascotSeed(workspace.name, agent.key), rename: { value: agent.label, save: rename }, ...(remove && { remove }),
       tab: agent.open.kind === "chat" ? agent.open.path ?? "main" : agent.key,
     })),
   ];
@@ -86,12 +86,13 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
         <>
           {/* Sizes the tab to its label at rest, so revealing the actions ellipsizes the label instead of moving the strip. */}
           <span className="p-bar-sizer" aria-hidden>
-            {item.activity && <span className="p-agent-status" />}
+            {(item.mascot !== undefined || item.title === true) && <span className="p-mascot" />}
             {item.label}
           </span>
           <Link to={item.to} className="p-bar-link" aria-current={active ? "page" : undefined}
             title={item.title ? "Workspace overview" : undefined}>
-            {item.activity && <AgentStatusMark activity={item.activity} />}
+            {item.mascot !== undefined && <ChatMascot seed={item.mascot} activity={item.activity} />}
+            {item.title === true && <WorkspaceLogo title={item.label} logo={item.logo} />}
             <span className="p-status-label truncate">{item.label}</span>
           </Link>
           {(item.rename !== undefined || item.remove !== undefined) && (

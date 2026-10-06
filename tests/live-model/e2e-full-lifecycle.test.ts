@@ -16,7 +16,6 @@ import * as v from 'valibot';
 
 import {
   BUILTIN_TOOLS,
-  collectStepText,
   createFactsStore,
   extractJsonObject,
   openWorkspaceMainActor,
@@ -30,9 +29,7 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   makeSql, type CLIRuntime,
 } from '../../packages/cli-backend/src/runtime';
-import {
-  buildEvalAgentSurface, createStepToolCallLog,
-} from './harness';
+import { buildEvalAgentSurface, collectStepText, createStepToolCallLog } from './harness';
 import { localTargetFolder, provisionLocalTarget } from './target-local';
 import { seedTranscriptEntry, finalIntegerAnswer,
 liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,

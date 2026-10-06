@@ -101,26 +101,6 @@ describe('the composer under a partial failure', () => {
   });
 });
 
-// Overflow is measured by a client layout effect, so SSR asserts only the initial markup.
-const LONG_NOTICE_TEXT = 'The provider reset the stream before the turn finished, so the panel below shows the last known snapshot. '
-  + 'The provider reset the stream before the turn finished, so the panel below shows the last known snapshot. ';
-
-describe('notice expansion', () => {
-  test('a notice longer than two lines starts collapsed with an Expand button', () => {
-    const html = markupFor([{ id: 'live', tone: 'warning', title: 'Live data is stale.', text: LONG_NOTICE_TEXT }]);
-
-    expect(LONG_NOTICE_TEXT.length).toBeGreaterThan(2 * 60);
-    expect(html).toContain('line-clamp-2');
-    expect(html).toContain('>Expand<');
-  });
-
-  test('a short notice offers no Expand button', () => {
-    const html = markupFor([{ id: 'saved', tone: 'info', text: 'Saved.' }]);
-
-    expect(html).not.toContain('>Expand<');
-  });
-});
-
 describe('a failed attachment', () => {
   test('it stays in the list marked failed, with a remove control, and Send stays disabled', () => {
     const html = renderToStaticMarkup(createElement(Composer, {

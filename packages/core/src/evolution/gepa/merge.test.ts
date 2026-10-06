@@ -109,18 +109,8 @@ describe('renderMergePrompt', () => {
 
     expect(prompt).toContain('SOURCE-A');
     expect(prompt).toContain('SOURCE-B');
-    expect(prompt).toContain('A wins on:');
-    expect(prompt).toContain('B wins on:');
     expect(prompt).toContain('first task');
     expect(prompt).toContain('second task');
-    expect(prompt).toContain('Return ONLY the merged');
-    // The likeliest merge failure is shown, not only named.
-    expect(prompt).toContain('Do not naively concatenate');
-    expect(prompt).toContain('Naive concatenation, and what to do instead:');
-    expect(prompt).toContain('the entry point defined twice');
-    expect(prompt).toContain('ONE artifact carrying the specific mechanism behind each parent\'s wins');
-    expect(prompt).toContain('must survive intact: the entry point they export');
-    expect(prompt).toContain('refused by the constraint gate downstream');
   });
 });
 

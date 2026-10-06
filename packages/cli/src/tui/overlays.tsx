@@ -2,7 +2,7 @@ import type { SelectOption, SelectRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { filterModels, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
-import { CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, clipText, literalText } from '@kinu.run/core/tui';
+import { CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, clipText, literalText, SPINNER_FRAMES, meterText, type TurnMeter } from '@kinu.run/core/tui';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
@@ -1206,20 +1206,6 @@ function PaletteLine(props: { text: string; width: number; color: string; accent
       </text>
     </box>
   );
-}
-
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-export interface TurnMeter {
-  readonly startedAt: number;
-  streamedChars: number;
-}
-
-function meterText(meter: TurnMeter, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - meter.startedAt) / 1000));
-  const tokens = Math.ceil(meter.streamedChars / 4);
-
-  return tokens === 0 ? ` · ${String(seconds)}s` : ` · ${String(seconds)}s · ~${String(tokens)} tokens`;
 }
 
 export function PhaseLine({ label, meter }: { label: string | null; meter?: { readonly current: TurnMeter | null } }) {

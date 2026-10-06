@@ -1,7 +1,7 @@
 import { markStoreChanged } from "./changes";
 import type { SqlExecutor, SqlRow } from "../types";
 import type { CraftedTool } from "../codemode/builder";
-import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from "../memory/query";
+import { searchFts } from "../memory/query";
 
 type CraftedToolRow = SqlRow<{
 	name: string;
@@ -107,13 +107,7 @@ export class CraftStore {
 
 	/** All terms first, then any term to fill `limit`, as memory recall does. */
 	search(query: string, limit = 10): CraftedTool[] {
-		const strictQuery = sanitizeFtsQuery(query);
-		const strict = this.matching(strictQuery, limit);
-		const relaxed = strict.length >= limit ? null : relaxFtsQuery(strictQuery);
-
-		const rows = relaxed === null
-			? strict
-			: fillToCapacity(strict, this.matching(relaxed, limit), limit, (row) => row.name);
+		const rows = searchFts(query, limit, (match, capacity) => this.matching(match, capacity), (row) => row.name);
 
 		return rows.map(rowToTool);
 	}

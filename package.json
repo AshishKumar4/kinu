@@ -1,7 +1,7 @@
 {
   "name": "kinu",
   "private": true,
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@canary",
   "description": "Kinu gives AI agents a durable computer of their own. It adapts and improves with use, runs locally or fully in the cloud, and solves hard tasks by exploring multiple approaches and letting executable checks choose the winner.",
   "license": "MIT",
   "keywords": [
@@ -90,7 +90,7 @@
     "gate:commit-message": "bun scripts/commit-hygiene.ts",
     "gate:agents-fields": "bun scripts/agents-fields.ts",
     "gate:infra": "bun scripts/infra-verify.ts",
-    "gate:devbox-e2e": "bun scripts/devbox-e2e.ts",
+    "gate:devbox-e2e": "bun scripts/devbox-container-tier.ts",
     "infra:provision": "bun scripts/infra-provision.ts",
     "infra:teardown": "bun scripts/infra-teardown.ts",
     "evals": "bun evals/scripts/sweep.ts && bun --bun vitest run --config evals/vitest.config.ts --reporter=./evals/src/reporter.ts --reporter=json",
@@ -151,6 +151,7 @@
     "valibot": "^1.4.1",
     "zod": "^4.3.6"
   },
+  "//devDependencies:bun": "Canary 9bd19c98e contains oven-sh/bun#44279 for retired-realm crashes, but not spawnSync fix #44581 (13a98b0dbd). Use the newest canary, then return to latest stable once both fixes ship.",
   "devDependencies": {
     "@earendil-works/pi-ai": "0.87.1",
     "@earendil-works/pi-coding-agent": "0.87.1",
@@ -166,7 +167,7 @@
     "@vitest/coverage-istanbul": "^4.1.11",
     "agents": "^0.24.0",
     "aws4fetch": "^1.0.20",
-    "bun": "1.4.2",
+    "bun": "canary",
     "chess.js": "1.4.0",
     "effect": "4.0.0-rc.117",
     "esbuild": "^0.28.1",

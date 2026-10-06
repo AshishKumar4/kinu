@@ -1,11 +1,11 @@
 // A stale restore attempt must not write its boot id into a successor's container: the file
 // and durable row would disagree, and the heartbeat would count a phantom replacement.
+import { TestDevbox } from './support/test-devbox';
 import { describe, expect, test } from 'bun:test';
 
 import * as v from 'valibot';
 
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
-import { Devbox, gate, harness } from './support/devbox-harness';
+import { gate, harness } from './support/devbox-harness';
 
 const BOOT_ID_KEY = 'devbox:boot-id';
 
@@ -22,10 +22,7 @@ const stamps = (container: { readonly execs: readonly string[] }): readonly stri
 
 /** Shipped policy with a short port probe so a parked attempt resolves fast; this is the
  *  production box, not a budget box. */
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class TestBox extends TestDevbox<unknown> {
 
   protected override get previewHost(): string | undefined {
     return 'preview.example';

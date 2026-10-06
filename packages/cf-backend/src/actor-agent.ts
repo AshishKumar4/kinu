@@ -1833,7 +1833,7 @@ export abstract class ActorAgent extends Agent<Env> {
       history: (limit) => this.chatTranscript.history(limit),
       admitted: async (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
-      retry: (id) => this.chatLoop.retry(id),
+      retry: (claim) => this.chatLoop.retry(claim),
       interrupt: () => {
         this.chatLoop.interrupt();
         this.stopSubtree(this.actorHandle().actorId);
@@ -2674,7 +2674,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.stores.config;
   }
 
-  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext?: AgentsSwarmDeps['originContext'], compactShared?: AgentsSwarmDeps['compactShared']): AgentsSwarmDeps {
+  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext: NonNullable<AgentsSwarmDeps['originContext']>, compactShared?: AgentsSwarmDeps['compactShared']): AgentsSwarmDeps {
     const seams = this.hostedSeams();
 
     return {
@@ -3643,15 +3643,19 @@ export abstract class ActorAgent extends Agent<Env> {
    * fast tier's chain like every fixed-tier call ({@link completeOnRoute}).
    */
   protected async suggestTitle(mission: string): Promise<string | null> {
-    const route = resolveModelRoute('fast', await this.routingProfile());
+    return suggestWorkspaceTitle(await this.oneShotOn('fast'), mission);
+  }
 
-    return suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
+  protected async oneShotOn(source: 'fast' | 'logo'): Promise<(system: string, prompt: string) => Promise<string>> {
+    const route = resolveModelRoute(source, await this.routingProfile());
+
+    return (system, prompt) => completeOnRoute(route, {
       llm: (resolution) => routedLlm((serving) => this.modelForResolution(serving), resolution, {
         report: (report) => this.reportModelCall(report), operations: this.modelOperations,
       }, system),
       credentialOf: (spec) => this.ownedModelServices.credentialFor(spec),
       refusals: this.tierRefusals,
-    }, prompt), mission);
+    }, prompt);
   }
 
   private refusalNotices: TierRefusals | null = null;

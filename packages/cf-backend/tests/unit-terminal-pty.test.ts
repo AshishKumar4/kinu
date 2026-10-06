@@ -194,7 +194,6 @@ describe('attaching a terminal', () => {
         cookie: '__Host-kinu_session=s3cr3t; other=v',
         authorization: 'Bearer pta_notyours',
         'x-kinu-user-id': 'u_1',
-        'x-kinu-auth-time': '1700000000000',
       },
     });
 

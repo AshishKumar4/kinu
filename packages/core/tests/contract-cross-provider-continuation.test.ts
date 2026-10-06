@@ -474,3 +474,47 @@ describe('reasoning replay from an OpenAI-compatible model to Anthropic', () => 
     expect(executions()).toBe(1);
   });
 });
+
+/** A turn whose one search the provider ran itself: its call and result both ride the assistant message. */
+const ANTHROPIC_SERVER_SEARCH = sse([
+  ['message_start', { type: 'message_start', message: { id: 'msg_s', type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: ANTHROPIC_USAGE } }],
+  ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'server_tool_use', id: 'srvtoolu_01SourceMinted', name: 'web_search', input: {} } }],
+  ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"query":"release date"}' } }],
+  ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+  ['content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_01SourceMinted', content: [
+    { type: 'web_search_result', url: 'https://example.com/release', title: 'Release', encrypted_content: 'opaque', page_age: null },
+  ] } }],
+  ['content_block_stop', { type: 'content_block_stop', index: 1 }],
+  ['content_block_start', { type: 'content_block_start', index: 2, content_block: { type: 'text', text: '' } }],
+  ['content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: 'It ships Thursday.' } }],
+  ['content_block_stop', { type: 'content_block_stop', index: 2 }],
+  ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 6 } }],
+  ['message_stop', { type: 'message_stop' }],
+]);
+
+describe('a search the provider ran itself, replayed', () => {
+  test('its result is handed back under the same id as its call', async () => {
+    const mock = createMockFetch([{ match: 'api.anthropic.com', respond: replayingScripts([ANTHROPIC_SERVER_SEARCH]) }]);
+
+    const deps = makeDeps({
+      [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
+    }, mock.fetch);
+
+    const first = doneOf(await drain({
+      model: createAnthropicProvider().createModel('claude-opus-4-7', deps),
+      system: 'sys',
+      history: [{ role: 'user', content: 'when does it ship' }],
+      tools: {},
+      cache: { providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-xprov' },
+    }));
+
+    const replayed = v.parse(AnthropicMessagesSchema, bodyOf(await replayOnAnthropic(first.responseMessages, {}), 0).messages);
+    const parts = replayed.flatMap((message) => Array.isArray(message.content) ? message.content : []);
+    const calls = parts.flatMap((part) => part.type === 'server_tool_use' && part.id !== undefined ? [part.id] : []);
+    const results = parts.flatMap((part) => part.type === 'web_search_tool_result' && part.tool_use_id !== undefined ? [part.tool_use_id] : []);
+
+    expect(calls).toHaveLength(1);
+    expect(results).toEqual(calls);
+  });
+});
+

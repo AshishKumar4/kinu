@@ -2,12 +2,12 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { KinuError, toKinuError } from '../obs/error';
+import { carriesCauseCode, KinuError, toKinuError } from '../obs/error';
 import { detach, diagnostics } from '../obs/log';
 import { settle, settleSync, tolerate } from '../obs/effect';
 import { nanoid } from '../utils/nanoid';
 import { every, REAL_CLOCK, type Clock } from '../types/clock';
-import { DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, deviceFailure, isDeviceFailure } from './device-protocol';
+import { DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, deviceFailure } from './device-protocol';
 
 export interface TunnelSocket {
   send(data: string): void;
@@ -89,19 +89,19 @@ export const DEVICE_CANCEL_MISPAIRED = 'device answered a cancellation for anoth
 export const DEVICE_DUPLICATE_REQUEST = 'device RPC id is already in flight';
 
 export function isDeviceNotConnectedError(input: { cause: unknown }): boolean {
-  return isDeviceFailure(input, DEVICE_ERRORS.disconnected, DEVICE_ERRORS.noOwner);
+  return carriesCauseCode(input, DEVICE_ERRORS.disconnected, DEVICE_ERRORS.noOwner);
 }
 
 export function isWorkspaceUnattachedError(input: { cause: unknown }): boolean {
-  return isDeviceFailure(input, DEVICE_ERRORS.noOwner);
+  return carriesCauseCode(input, DEVICE_ERRORS.noOwner);
 }
 
 export function isDeviceAmbiguityError(input: { cause: unknown }): boolean {
-  return isDeviceFailure(input, DEVICE_ERRORS.ambiguous);
+  return carriesCauseCode(input, DEVICE_ERRORS.ambiguous);
 }
 
 export function isSandboxUnavailableError(input: { cause: unknown }): boolean {
-  return isDeviceFailure(input, DEVICE_ERRORS.sandboxUnavailable);
+  return carriesCauseCode(input, DEVICE_ERRORS.sandboxUnavailable);
 }
 
 export const DeviceCancelResultSchema = v.object({

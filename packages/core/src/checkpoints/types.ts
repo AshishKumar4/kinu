@@ -4,11 +4,6 @@ import { KinuError, settleSync } from '../obs/index';
 // Shadow-git snapshots of a working directory before each turn's first mutation, for /undo. Covers only
 // the user's device plane: `workspace` and `@sandbox` turns have no checkpoint (see FileCheckpointListing).
 
-/** Checkpoints kept per working directory. */
-export const DEFAULT_CHECKPOINT_KEEP = 50;
-
-export const CHECKPOINTS_UNAVAILABLE_NO_GIT = 'checkpoints unavailable: git not found';
-
 export const CHECKPOINTS_NO_DEVICE = 'no device connected: connect one with `kinu connect`';
 
 export interface CheckpointTurnMeta {

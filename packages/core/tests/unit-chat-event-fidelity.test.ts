@@ -5,7 +5,7 @@ import { isStepCount, tool, type LanguageModel, type ModelMessage, type ToolSet 
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
-import { runChat, collectStepText, ExtensionHost, createAgentsTool, createAgentsCodemodeProvider, type ChatEvent, type KinuExtension, type Usage } from '../src/index';
+import { runChat, ExtensionHost, createAgentsTool, createAgentsCodemodeProvider, type ChatEvent, type KinuExtension, type Usage } from '../src/index';
 import { synthesizeToolFallback } from '../src/utils/evidence-window';
 import { isFailingToolResult } from '../src/orchestrator/turn-steering';
 import { buildBuiltinTools } from '../src/tools/builtins';
@@ -354,20 +354,12 @@ describe('ChatEvent usage fidelity', () => {
 });
 
 describe('tool-only no-text fallback', () => {
-  test('identical tool-only steps read the same through both paths', () => {
-    const steps = [{ text: '', toolResults: [{ toolName: 'read', output: 'x'.repeat(2000) }] }];
-    const viaCollector = collectStepText({ text: '', steps });
-    expect(viaCollector).toBe(synthesizeToolFallback(steps));
-  });
-
   test('a long tool result keeps its tail, and a missing output stays empty', () => {
     const body = `OPENING${'-'.repeat(2000)}CLOSING`;
-    const steps = [{ text: '', toolResults: [{ toolName: 'read', output: body }] }];
-    const text = collectStepText({ text: '', steps });
+    const text = synthesizeToolFallback([{ toolResults: [{ toolName: 'read', output: body }] }]);
     expect(text.startsWith('[read] OPENING')).toBe(true);
     expect(text.endsWith('CLOSING')).toBe(true);
     expect(text).toContain('chars omitted from the middle');
-    const missing = collectStepText({ text: '', steps: [{ text: '', toolResults: [{ toolName: 't', output: null }] }] });
-    expect(missing).toBe('[t] ');
+    expect(synthesizeToolFallback([{ toolResults: [{ toolName: 't', output: null }] }])).toBe('[t] ');
   });
 });

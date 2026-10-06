@@ -116,6 +116,7 @@ function headDeps(
     },
     reportModelCall: () => {},
     webSearch: stubWeb, codemodeExtras: () => [],
+    resolveModel: () => model,
     governor: () => governor, journal: () => journal, ...over,
   };
 }
@@ -943,26 +944,16 @@ describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
     expect(seen).toEqual(['vendor-a/big', 'vendor-b/big', 'session']);
   });
 
-  test('a session with no resolver still runs every fork on its own model', async () => {
-    const seen: string[] = [];
-    const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen)));
-
-    await (await runtime.spawnHead(aHeadInput({ id: 'h-a', model: 'vendor-a/big' }))).run();
-
-    expect(seen).toEqual(['session']);
-  });
-
-  test('an unresolvable spec degrades to the session model instead of failing the fork', async () => {
+  test('a head whose model will not resolve fails, and never runs on the session model', async () => {
     const seen: string[] = [];
 
     const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen), {
-      resolveModel: (spec: string) => { throw new Error(`no such provider for ${spec}`); },
+      resolveModel: (spec: string) => { throw new Error(`Unknown provider in model spec "${spec}"`); },
     }));
 
-    const report = await (await runtime.spawnHead(aHeadInput({ id: 'h-a', model: 'nope/nope' }))).run();
-
-    expect(report.status).toBe('completed');
-    expect(seen).toEqual(['session']);
+    await expect((await runtime.spawnHead(aHeadInput({ id: 'h-a', model: 'Qwen/Qwen3-8B' }))).run())
+      .rejects.toThrow('Unknown provider in model spec "Qwen/Qwen3-8B"');
+    expect(seen).toEqual([]);
   });
 });
 

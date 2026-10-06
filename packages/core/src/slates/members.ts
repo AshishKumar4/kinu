@@ -1,6 +1,6 @@
 /**
  * Read-only versus mutating per (binding, member); unnamed members are mutating (fail closed).
- * `tool` rows restate `toolCallEffect`/`replayPolicyFor`, which this layer cannot import; a test pins them.
+ * `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
  */
 import * as v from 'valibot';
 import type { JsonObject } from '../utils/json';
@@ -22,17 +22,26 @@ export const TASKS_MEMBER_EFFECTS = {
   list: 'read', add: 'mutate', update: 'mutate', mode: 'mutate',
 } as const satisfies Readonly<Record<string, SlateMemberEffect>>;
 
-/** A slate's web members; browser sessions are eval's (a slate has no socket to drive one). */
+/** The `web` namespace's members write nothing. */
 export const WEB_MEMBER_EFFECTS = {
   search: 'read', fetch: 'read', screenshot: 'read',
 } as const satisfies Readonly<Record<string, SlateMemberEffect>>;
 
-/** Tools with one undifferentiated `call` member have no read shape, so `call` is mutating. */
-export const TOOL_ACTION_EFFECTS = {
+/** Per native action; the native web tool writes (a spilled page, a screenshot). */
+export const NATIVE_ACTION_EFFECTS = {
   file: { read: 'read', list: 'read', stat: 'read', search: 'read', write: 'mutate', edit: 'mutate' },
   memory: MEMORY_MEMBER_EFFECTS,
   tasks: TASKS_MEMBER_EFFECTS,
-  web: WEB_MEMBER_EFFECTS,
+  web: { search: 'read', fetch: 'mutate', screenshot: 'mutate' },
+  agents: { list: 'read', swarm: 'mutate', hire: 'mutate', msg: 'mutate', dismiss: 'mutate' },
+} as const satisfies Readonly<Record<string, Readonly<Record<string, SlateMemberEffect>>>>;
+
+/** Tools with one undifferentiated `call` member have no read shape, so `call` is mutating. */
+export const TOOL_ACTION_EFFECTS = {
+  file: NATIVE_ACTION_EFFECTS.file,
+  memory: NATIVE_ACTION_EFFECTS.memory,
+  tasks: NATIVE_ACTION_EFFECTS.tasks,
+  web: NATIVE_ACTION_EFFECTS.web,
   run: { call: 'mutate' },
   eval: { call: 'mutate' },
   report: { call: 'mutate' },

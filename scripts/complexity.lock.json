@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-10-05",
-  "files": 3000,
-  "functions": 77949,
+  "measuredAt": "2026-10-06",
+  "files": 3030,
+  "functions": 78517,
   "ceiling": 87,
-  "line": 28,
+  "line": 27,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -100,10 +100,6 @@
     {
       "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
       "complexity": 34
-    },
-    {
-      "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput",
-      "complexity": 33
     },
     {
       "key": "scripts/wired.ts#findEntrypoints>walk#2",
@@ -312,6 +308,110 @@
     {
       "key": "scripts/syntax.ts#importUses>visit",
       "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/components/MessageView.tsx#MessageView",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cf-backend/src/components/ui/BrandMark.tsx#providerBrand",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#workspacePageRpc",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cf-backend/src/pages/DrivePage.tsx#DrivePage",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cf-backend/tests/workerd/fork-probe.ts#ForkSourceProbeDO.deliver",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cli/src/commands/debug.ts#summarizeRun",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#28",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cli/src/tui/overlays.tsx#ModelListOverlay",
+      "complexity": 27
+    },
+    {
+      "key": "packages/compaction/src/extension.ts#createCompactionExtension>transformContext",
+      "complexity": 27
+    },
+    {
+      "key": "packages/core/src/chat.ts#ProviderCall.consume",
+      "complexity": 27
+    },
+    {
+      "key": "packages/core/src/chat.ts#runChat>callModelOnce",
+      "complexity": 27
+    },
+    {
+      "key": "packages/core/src/orchestrator/session-stream.ts#SessionStream.writePart",
+      "complexity": 27
+    },
+    {
+      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.writeStep",
+      "complexity": 27
+    },
+    {
+      "key": "packages/core/src/prompting/prepare-step.ts#finishPrepareStep",
+      "complexity": 27
+    },
+    {
+      "key": "packages/core/src/vfs/context-plane.ts#localContextTree>document",
+      "complexity": 27
+    },
+    {
+      "key": "packages/devbox/src/store-gateway.ts#serveStore>gen",
+      "complexity": 27
+    },
+    {
+      "key": "packages/devbox/tests/support/devbox-harness.ts#FakeSandbox.native",
+      "complexity": 27
+    },
+    {
+      "key": "scripts/capability-parity.ts#findAsymmetries",
+      "complexity": 27
+    },
+    {
+      "key": "scripts/error-model.ts#bridgeSites>walk#2",
+      "complexity": 27
+    },
+    {
+      "key": "scripts/module-edges.ts#moduleEdges>walk",
+      "complexity": 27
+    },
+    {
+      "key": "scripts/pattern-inventory.ts#patternToken",
+      "complexity": 27
+    },
+    {
+      "key": "scripts/promote.ts#main",
+      "complexity": 27
+    },
+    {
+      "key": "scripts/workflow-expressions.ts#tokenize",
+      "complexity": 27
+    },
+    {
+      "key": "tests/first-run/workspace-settings.first-run.ts#describe>liveTest>run",
+      "complexity": 27
+    },
+    {
+      "key": "tools/oxlint/anti-slop/rules/no-widen-then-assert.ts#knownValueEvidence",
+      "complexity": 27
     }
   ]
 }

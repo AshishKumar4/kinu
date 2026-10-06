@@ -23,6 +23,7 @@ import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { WorkspaceLogo } from "@/components/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import type { Rpc } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -121,7 +122,36 @@ export interface SettingsSource {
   readonly clearHistory: () => void;
 }
 
-export function WorkspaceSettings({ workspace: agentId, state }: { workspace: string; state: SettingsSource }) {
+function LogoField({ title, logo, rpc }: { title: string; logo: string | null | undefined; rpc: Rpc }) {
+  const [drawing, setDrawing] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const redraw = useCallback(() => {
+    setDrawing(true);
+    setNote(null);
+    detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const { drawn, refusal } = yield* Effect.promise(() => rpc<{ drawn: boolean; refusal: string | null }>("regenerateWorkspaceLogo", []));
+
+      if (!drawn) setNote(refusal ?? "The model's drawing could not be used; the monogram stays. Try again.");
+    }), showing(setNote)), Effect.sync(() => setDrawing(false))));
+  }, [rpc]);
+
+  return (
+    <Field label="Logo">
+      <div className="flex items-center gap-3" data-logo-field>
+        <WorkspaceLogo title={title} logo={logo} size={40} />
+        <button type="button" onClick={redraw} disabled={drawing} className="p-btn-quiet inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs">
+          {drawing ? <><Loader size="sm" /> Drawing…</> : "Draw a new one"}
+        </button>
+      </div>
+      {note && <p className="text-xs p-text-3">{note}</p>}
+    </Field>
+  );
+}
+
+export function WorkspaceSettings({ workspace: agentId, title, logo, state }: {
+  workspace: string; title: string; logo: string | null | undefined; state: SettingsSource;
+}) {
   // Stable pieces only: `state` is a fresh object every render, and depending on it loops refetches that clobber edits.
   const { rpc, connectionStatus, agentStatus, error: snapshotError, retryLoad, clearHistory } = state;
   const [clearing, setClearing] = useState(false);
@@ -262,6 +292,7 @@ export function WorkspaceSettings({ workspace: agentId, state }: { workspace: st
 
         <div className="space-y-5">
         <Card title="Identity" icon={BrainIcon}>
+          <LogoField title={title} logo={logo} rpc={rpc} />
           <Field label="Display name">
             <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
               {(value) => (

@@ -19,6 +19,7 @@ import {
 import { HealthAnswerSchema } from './update';
 import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
+import { bytesToBase64 } from '../utils/base64';
 import type { ReleaseBinding, ReleaseManifest } from './manifest';
 
 export interface DeployStep {
@@ -408,7 +409,7 @@ function secretsStep(manifest: ReleaseManifest): DeployStep {
           const bytes = new Uint8Array(32);
 
           crypto.getRandomValues(bytes);
-          yield* Effect.promise(async () => context.vault.write(name, base64(bytes)));
+          yield* Effect.promise(async () => context.vault.write(name, bytesToBase64(bytes)));
         }
 
         const supplied = context.inputs.providerKeyNames.length;
@@ -1045,9 +1046,4 @@ function extensionOf(path: string): string {
   const dot = path.lastIndexOf('.');
 
   return dot === -1 ? '' : path.slice(dot + 1).toLowerCase();
-}
-
-// Only for the 32-byte minted secrets; assets use `base64Member`.
-function base64(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes));
 }

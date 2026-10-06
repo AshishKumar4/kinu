@@ -4,8 +4,9 @@ import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver, createTestRuntime, createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import {
-  chatSessionTurns, gatewayWorkspace, orchestratorHarness, rpcReachableFrom, workspaceMainActor,
+  chatSessionTurns, gatewayWorkspace, orchestratorHarness, workspaceMainActor,
 } from './helpers/actor-harness';
+import { rpcReachableFrom } from './helpers/platform-context';
 import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 import { ConversationSearchStore, isAgentRpcMethod } from '@kinu.run/core';
 import {
@@ -70,7 +71,7 @@ async function branchHeadRun(gateway: StubbedAiBinding) {
   await turns.openInFlight('u-live', 'a-live');
   const branch = await workspace.agent.branchTurn('read the parser');
 
-  if (branch.branchId === undefined) throw new Error(`the branch was refused: ${branch.reason ?? 'no reason'}`);
+  if (!branch.accepted) throw new Error(`the branch was refused: ${branch.reason}`);
   await turns.settle({ messageId: 'a-live', text: 'the answer' });
   await workspace.agent.harnessJoinDetachedFibers();
 

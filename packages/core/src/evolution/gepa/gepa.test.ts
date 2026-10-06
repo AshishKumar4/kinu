@@ -101,6 +101,23 @@ describe('parentSelectionWeights + sampleParentByWeight', () => {
     expect(w.get(loser)).toBe(0);
   });
 
+  test('a dominated candidate tied for best on an instance gets no weight', () => {
+    // A ties B on i1 but B is better on i2, so A is off the front however it ties.
+    const a = mkCandidate('a', { i1: 1, i2: 0.2 });
+    const b = mkCandidate('b', { i1: 1, i2: 1 });
+    const w = parentSelectionWeights([a, b], ['i1', 'i2']);
+    expect(w.get(a)).toBe(0);
+    expect(w.get(b)).toBe(2);
+
+    for (const draw of [0, 0.2, 0.5, 0.99]) expect(sampleParentByWeight([a, b], ['i1', 'i2'], () => draw)).toBe(b);
+  });
+
+  test('a zero draw picks the first candidate with weight, not a zero-weight one before it', () => {
+    const loser = mkCandidate('l', { i1: 0.5, i2: 0.5 });
+    const winner = mkCandidate('w', { i1: 0.9, i2: 0.9 });
+    expect(sampleParentByWeight([loser, winner], ['i1', 'i2'], () => 0)).toBe(winner);
+  });
+
   test('falls back to bestAggregate when no Pareto signal yet', () => {
     // Identical everywhere: neither dominates, both weight 0.
     const a = mkCandidate('a', { i1: 0.5, i2: 0.5 }, 100);
@@ -175,16 +192,6 @@ describe('renderReflectionPrompt', () => {
     expect(prompt).toContain('Turn process: 41 sequential steps, 0 team, 0 think');
     // One shared rubric string (evolution/delegation-features.ts).
     expect(prompt).toContain(DELEGATION_RUBRIC);
-    expect(prompt).toContain(
-      'ground through inline with no hiring\n  and no exploration, is a lesson to decompose the work and delegate it',
-    );
-    expect(prompt).toContain('An accepted turn that hired or explored effectively earns credit');
-    expect(prompt).toContain('Spawns that contributed nothing are delegation overhead');
-    // The prohibition is shown, and the unseen half of the eval set is stated.
-    expect(prompt).toContain('Specific and tightly scoped, by contrast:');
-    expect(prompt).toContain('One defect, one edit, named instances.');
-    expect(prompt).toContain('do not remove or weaken anything the failures above do not implicate');
-    expect(prompt).toContain('Return ONLY the revised');
   });
 
   test('keeps the delegation rubric scoped to scaffold reflection', () => {

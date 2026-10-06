@@ -11,7 +11,6 @@ import {
   createAgentsCodemodeProvider,
   createAgentsTool,
   delegationChoices,
-  decodeJsonValue,
   parseAgentsToolInput,
 
   resolveTurnProfile,
@@ -20,15 +19,10 @@ import {
   BUILTIN_PROFILE_CATALOG,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   type CodemodeProvider,
-  type JsonValue,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type AgentsSwarmDeps,
   type AgentsToolDeps,
-  type PeersToolDeps,
-  type SubordinateRosterEntry,
-  type TeamToolDeps,
-  type SubordinateDelivery, type SubordinateHandoff,
 } from '../src/index';
 import {
   AGENTS_ACTION_FIELDS as ACTION_FIELDS,
@@ -36,10 +30,8 @@ import {
   agentsActionInputVariantsFor,
   dispatchAgentsAction,
 } from '../src/delegation/agents-tool';
-import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../src/strategy/swarm';
-
-interface Call { action: string; input: JsonValue }
+import { makeTeam, makePeers, rosterEntry } from './helpers-agents';
 
 const ErrorResultSchema = v.object({ error: v.string() });
 
@@ -90,24 +82,6 @@ function member(tools: CodemodeProvider['tools'], name: string) {
   return descriptor;
 }
 
-function recordCall(calls: Call[], action: string, call: { input: unknown }): void {
-  calls.push({ action, input: decodeJsonValue({ value: call.input }) });
-}
-
-interface HandoffEcho {
-  action: string;
-  input: { name: string };
-  delivery: SubordinateDelivery;
-  busy: boolean;
-}
-
-/** Record the call and answer with the handoff its action reports. */
-function echoHandoff(calls: Call[], echo: HandoffEcho) {
-  recordCall(calls, echo.action, { input: echo.input });
-
-  return { ok: true as const, name: echo.input.name, ...handoff(echo.delivery, echo.busy) };
-}
-
 /** `swarms` defaults on: these suites pin the tool as it stands with "Beta: swarms" turned on. */
 type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode' | 'swarms'> & Partial<Pick<AgentsToolDeps, 'mode' | 'swarms'>>;
 
@@ -129,112 +103,6 @@ function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     ...unobservedSearchSeams(),
     ...overrides,
-  };
-}
-
-const rosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'agent', status: 'idle', currentTask: null, createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null };
-
-const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
-  eventId: `evt-${delivery}`,
-  delivery,
-  phase: { busy, lastActivityAt: 1234, workingOn: busy ? 'reading src/auth.ts' : null },
-});
-
-function makeTeam() {
-  const calls: Call[] = [];
-
-  return {
-    calls,
-    deps: {
-      delegation: ROOT_DELEGATION_BUDGET,
-      temporary: {
-        start: async () => ({
-          status: 'working' as const,
-          agent: 'ask-auditor-x',
-          lifetime: 'task' as const,
-          role: 'auditor',
-          answer: 'answered',
-          transcript: 'kept' as const,
-        }),
-        release: () => {},
-        reclaim: () => null,
-        answered: () => [],
-        forget: () => {},
-      },
-      snapshot: () => [rosterEntry],
-      list: async () => [rosterEntry],
-      create: async (input) => ({
-        name: input.name ?? 'researcher',
-        displayName: 'Researcher',
-        subordinate: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
-      }),
-      rename: async (input) => {
-        recordCall(calls, 'rename', { input });
-
-        return {
-          ok: true, name: input.name, displayName: input.displayName,
-          subordinate: { ...rosterEntry, name: input.name, displayName: input.displayName },
-        };
-      },
-      recordTitle: async (input) => {
-        recordCall(calls, 'recordTitle', { input });
-
-        return { ok: true, name: input.name, displayName: input.displayName, applied: true };
-      },
-      spawn: async (input) => {
-        recordCall(calls, 'spawn', { input });
-
-        return { name: input.name ?? 'researcher', displayName: 'Researcher' };
-      },
-      assign: async (input) => echoHandoff(calls, {
-        action: 'assign', input, delivery: 'queued', busy: true,
-      }),
-      knows: async () => true,
-      status: async (input) => {
-        recordCall(calls, 'status', { input });
-
-        return { roster: [rosterEntry] };
-      },
-      message: async (input) => echoHandoff(calls, {
-        action: 'message', input, delivery: 'starts_now', busy: false,
-      }),
-      dismiss: async (input) => {
-        recordCall(calls, 'dismiss', { input });
-
-        return { ok: true, name: input.name, historyKept: input.keepHistory ?? false, stoppedJobs: [] };
-      },
-    } satisfies TeamToolDeps,
-  };
-}
-
-function makePeers() {
-  const calls: Call[] = [];
-
-  return {
-    calls,
-    deps: {
-      listPeers: async () => [{ name: 'scout', displayName: 'Scout' }],
-      ask: async (input) => {
-        recordCall(calls, 'ask', { input });
-
-        return { status: 'replied', from: input.agent, reply: 'answer' };
-      },
-      send: async (input) => {
-        recordCall(calls, 'send', { input });
-
-        return { status: 'delivered', message_id: 'ox1' };
-      },
-      reply: async (input) => {
-        recordCall(calls, 'reply', { input });
-
-        return { ok: true };
-      },
-      spawnWorkspace: async (input) => {
-        recordCall(calls, 'spawn_workspace', { input });
-
-        return { agent: input.name ?? 'specialist', created: true, status: 'replied', from: 'specialist', reply: 'done' };
-      },
-    } satisfies PeersToolDeps,
   };
 }
 

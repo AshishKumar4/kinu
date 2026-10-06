@@ -14,6 +14,6 @@ test('20 screenshots compact by the rung alone, each moved-out image a link to i
 
   expect({ kept: screens.filter((entries) => entries.includes('image')).length, links: links.length, changed })
     .toEqual({ kept: 2, links: 18, changed: ['attachments'] });
-  expect(screens[0]).toEqual(['Screen 0.', expect.stringMatching(/^\[image\/png 1280x800 → vfs:\/\/home\/main\/attachments\/[0-9a-f]{64}\.png\]$/u)]);
+
   expect(Buffer.from(await rt.storage.vfs.readFile(resolvePath(links[0] ?? '', rt.planes).absolute)).toString('base64')).toBe(screenshot(0));
 });

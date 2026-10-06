@@ -12,11 +12,14 @@ import type { ReasoningEffort, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { KinuError } from '@kinu.run/core/obs';
+import { ownedByAnotherAccount } from '../src/user/workspace-ownership';
 
 // `agents` reaches `cloudflare:email`: mock first, then the harness.
 mockAgentsSdk();
 
-const { orchestratorHarness, stubOf } = await import('./helpers/actor-harness');
+const { orchestratorHarness } = await import('./helpers/actor-harness');
+
+const { stubOf } = await import('./helpers/platform-context');
 
 const cli = serveFamily(cliRoutes);
 
@@ -389,8 +392,8 @@ describe('CLI control routes', () => {
 });
 
 describe('shared ownership claim status mapping', () => {
-  function envWithClaimFailure(message: string) {
-    const workspace = workspaceObject({ claimOwner: () => { throw new Error(message); } });
+  function envWithClaimFailure(failure: Error) {
+    const workspace = workspaceObject({ claimOwner: () => { throw failure; } });
 
     return testEnv(tokenHolderUserDO(), { idFromName: (n) => n, get: () => workspace });
   }
@@ -399,19 +402,19 @@ describe('shared ownership claim status mapping', () => {
   const claimFailures = [
     {
       name: 'cross-user collision → 403',
-      message: 'Agent owned by a different user (stored=aaaa…, caller=bbbb…)',
+      failure: ownedByAnotherAccount('Agent owned by a different user (stored=aaaa…, caller=bbbb…)'),
       status: 403,
     },
     {
       name: 'infra failure during claim → 500, not 403',
-      message: 'SQLITE_ERROR: no such table: workspace_identity',
+      failure: new Error('SQLITE_ERROR: no such table: workspace_identity'),
       status: 500,
     },
   ];
 
-  for (const { name, message, status } of claimFailures) {
+  for (const { name, failure, status } of claimFailures) {
     test(name, async () => {
-      const res = await cli(rpcRequest('getAgentStatus'), envWithClaimFailure(message));
+      const res = await cli(rpcRequest('getAgentStatus'), envWithClaimFailure(failure));
       expect(res?.status).toBe(status);
     });
   }

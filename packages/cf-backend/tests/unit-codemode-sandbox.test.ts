@@ -102,46 +102,39 @@ describe("selectInjectableCraftedTools — one policy with core", () => {
 });
 
 describe("renderToolsPrelude — one guarded definition per crafted tool", () => {
-  test("defines require, env and every crafted tool on the tools namespace", () => {
-    const prelude = renderToolsPrelude(
-      [{ name: "double", code: "async (n) => n * 2", description: "" }],
-      { cwd: WORKSPACE_ROOT, workspace: "hardy-stone-a905df14" },
-    );
+  const AsyncProgram = Object.getPrototypeOf(async () => {}).constructor;
 
-    expect(prelude).toContain(`await import("./${KINU_NODE_MODULE_NAME}")`);
-    expect(prelude).toContain("const require = __kinu.createRequire(");
-    expect(prelude).toContain('workspace: "hardy-stone-a905df14"');
-    expect(prelude).toContain('"double": __kinu.defineCrafted("double", async () => (\nasync (n) => n * 2\n), tools["double"])');
-    expect(prelude).toContain("Object.assign(tools, {");
-  });
+  /** The crafted tools a prelude defines, run as the sandbox runs them: over the shim, on a `tools` namespace. */
+  async function craftedTools(prelude: string): Promise<Record<string, () => Promise<JsonValue>>> {
+    const tools: Record<string, () => Promise<JsonValue>> = {};
+    await new AsyncProgram("tools", "__kinu", prelude.slice(prelude.indexOf("Object.assign(tools, {")))(tools, shim);
 
-  test("a stored body that does not parse becomes a definition that throws the parse error, and nothing else", () => {
+    return tools;
+  }
+
+  test("a stored body that does not parse throws its parse error on call, and its sibling still runs", async () => {
     // A body stored verbatim was a SyntaxError for every program; the factory throws on call and the prelude parses.
-    const prelude = renderToolsPrelude(
+    const tools = await craftedTools(renderToolsPrelude(
       [
         { name: "broken", code: "const broken = async () => 1", description: "" },
         { name: "fine", code: "async () => 2", description: "" },
       ],
       { cwd: WORKSPACE_ROOT, workspace: "w" },
-    );
+    ));
 
-    expect(prelude).toContain('"broken": __kinu.defineCrafted("broken", () => { throw new Error("stored source does not parse:');
-    expect(prelude).toContain('"fine": __kinu.defineCrafted("fine", async () => (\nasync () => 2\n), tools["fine"])');
-    const block = prelude.slice(prelude.indexOf("Object.assign(tools, {"));
-    expect(() => new Function("tools", "__kinu", block)).not.toThrow();
+    expect((await rejectionOf(tools.broken())).message).toContain("stored source does not parse");
+    expect(await tools.fine()).toBe(2);
   });
 
-  test("a top-level await body compiles in the factory instead of poisoning the prelude", () => {
+  test("a top-level await body fails on its own call instead of poisoning the prelude", async () => {
     // `await foo()` passes the host parse gate (allowAwaitOutsideFunction) but a sync factory is a SyntaxError in the
     // compiled prelude, denying every tool; the async wrapper keeps failure at call time.
-    const prelude = renderToolsPrelude(
+    const tools = await craftedTools(renderToolsPrelude(
       [{ name: "waiter", code: "await foo()", description: "" }],
       { cwd: WORKSPACE_ROOT, workspace: "w" },
-    );
+    ));
 
-    expect(prelude).toContain('"waiter": __kinu.defineCrafted("waiter", async () => (\nawait foo()\n), tools["waiter"])');
-    const block = prelude.slice(prelude.indexOf("Object.assign(tools, {"));
-    expect(() => new Function("tools", "__kinu", block)).not.toThrow();
+    expect((await rejectionOf(tools.waiter())).message).toContain("foo is not defined");
   });
 });
 

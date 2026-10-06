@@ -80,7 +80,7 @@ export interface AgentFacetCalls {
   scrollConversation(snapshot: AgentSnapshot, around: string, window?: number, maxChars?: number): Promise<ConversationScrollResult | null>;
   browseConversations(snapshot: AgentSnapshot, limit?: number): Promise<ConversationSummary[]>;
   admitted(snapshot: AgentSnapshot, id: string): Promise<boolean>;
-  reopen(snapshot: AgentSnapshot, id: string): Promise<void>;
+  reopen(snapshot: AgentSnapshot): Promise<string>;
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   clear(snapshot: AgentSnapshot): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
@@ -205,8 +205,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.open(snapshot).admitted(id);
   }
 
-  async reopen(snapshot: AgentSnapshot, id: string): Promise<void> {
-    this.open(snapshot).reopen(id);
+  async reopen(snapshot: AgentSnapshot): Promise<string> {
+    return this.open(snapshot).reopen();
   }
 
   async interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void> {

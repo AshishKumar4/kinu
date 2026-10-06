@@ -40,4 +40,15 @@ export const CHECKPOINT_CASES: readonly SharedCase[] = [
       expect(existsSync(join(project, 'created.txt'))).toBe(false);
     },
   },
+  {
+    title: 'a session id carrying a carriage return still files the snapshot under its turn',
+    covers: ['listFileCheckpoints'],
+    async run({ surface, snapshot }) {
+      const project = scratchDir('shared-checkpoint-carriage-return');
+      writeFileSync(join(project, 'notes.txt'), 'before the turn');
+
+      await snapshot(project, { turnId: 'turn-1', sessionId: 'session\r1' });
+      expect((await surface.listFileCheckpoints(10, 'turn-1')).entries).toEqual([expect.objectContaining({ dir: project, turnId: 'turn-1' })]);
+    },
+  },
 ];

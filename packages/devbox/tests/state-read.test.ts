@@ -1,13 +1,10 @@
 // A read of a box's state starts nothing and arms nothing: `devboxState()` armed the startup, so reading a
 // box at rest restarted its container within a second, and every bench poll after a rest woke the box it asked about.
+import { TestDevbox } from './support/test-devbox';
 import { expect, test } from 'bun:test';
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
-import { Devbox, harness } from './support/devbox-harness';
+import { harness } from './support/devbox-harness';
 
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class TestBox extends TestDevbox<unknown> {
 
   protected override get ambientCheckpoints(): boolean {
     return false;

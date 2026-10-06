@@ -25,7 +25,7 @@ import "virtual:kinu-theme.css";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
-import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema } from "@kinu.run/core";
+import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { ParkedWriteReview, ReasoningEffort } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
@@ -726,6 +726,19 @@ const STOCK_OVERVIEWS = new Map(Object.entries({
 /** A sixth entry whose last run is quiet, so 'Unfinished' can headline; the home roster's pins keep it off the stock five. */
 const EXTRA_WORKSPACE = new URLSearchParams(location.search).get("extraWorkspace") === "1";
 
+const GALLERY_LOGO = sanitizeWorkspaceLogoSvg(
+  "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='a' x1='0' y1='0' x2='1' y2"
+  + "='1'><stop offset='0' stop-color='#2dd4bf'/><stop offset='1' stop-color='#0f766e'/></linearGradient><linearGradi"
+  + "ent id='b' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#fcd34d'/><stop offset='1' stop-color='#d977"
+  + "06'/></linearGradient></defs><rect x='4' y='8' width='56' height='12' rx='6' fill='url(#a)'/><g><animateTransfor"
+  + "m attributeName='transform' type='translate' values='0 -2;0 8;0 -2' dur='4s' repeatCount='indefinite' calcMode='"
+  + "spline' keySplines='.45 0 .55 1;.45 0 .55 1'/><path d='M12 14h40v40a4 4 0 0 1-4 4H16a4 4 0 0 1-4-4z' fill='#f8fa"
+  + "fc' stroke='#0f766e' stroke-width='3'/><rect x='18' y='24' width='28' height='5' rx='2.5' fill='#94a3b8'/><rect "
+  + "x='18' y='33' width='18' height='5' rx='2.5' fill='#94a3b8'/><circle cx='42' cy='46' r='7' fill='url(#b)'><anima"
+  + "te attributeName='r' values='6;7.5;6' dur='4s' repeatCount='indefinite'/></circle></g><rect x='4' y='8' width='5"
+  + "6' height='7' rx='3.5' fill='#115e59'/></svg>",
+);
+
 const galleryRoster: RosterEntry[] = [
   ...GALLERY_ROSTER.entries,
   ...(EXTRA_WORKSPACE ? [{
@@ -734,7 +747,7 @@ const galleryRoster: RosterEntry[] = [
 ].map((entry) => {
   const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
 
-  return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0 };
+  return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0, logo: entry.name === "checkout-fixes" ? GALLERY_LOGO : null };
 });
 
 function galleryRosterCounts(): RosterCounts {
@@ -1327,6 +1340,7 @@ const MESSAGES: UIMessage[] = [
   msg({
     id: "a2", role: "assistant", createdAt: NOW - 3 * 60e3,
     parts: [
+      { type: "reasoning", text: "The edit failed because old_text no longer matched after the formatter ran, so the file on disk is not the one I read; I should re-read it, apply the change against what is there now, then run the migration twice against a scratch database to prove it is idempotent, because staging already ran the first half of it on Tuesday and a second run must not double the backfill or touch the fixed-amount coupons it already set." },
       { type: "text", text: "The edit above didn't take — re-reading before I retry, then confirming the migration is idempotent before I let it near staging." },
       // Its own row (a lone text part on either side stops it folding into a run) so its expanded state is inspectable.
       {
@@ -1695,6 +1709,12 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     return GALLERY_GITHUB;
   },
   getShellApprovalGrants: () => ({ grants: SHELL_GRANTS }),
+  regenerateWorkspaceLogo: () => {
+    const root = document.documentElement;
+    root.dataset.galleryLogoDraws = String(Number(root.dataset.galleryLogoDraws ?? "0") + 1);
+
+    return { drawn: true, refusal: null };
+  },
   renameMainChat: (args?: unknown[]) => {
     GALLERY_MAIN_TITLE.value = v.parse(v.tuple([v.string()]), args)[0];
     rosterMoved();
@@ -3002,7 +3022,7 @@ const GALLERY_CHATS: readonly PanelAgent[] = [
 function GalleryWorkspaceHeader({ active = "main" }: { active?: string }) {
   return (
     <WorkspaceHeader
-      workspace={{ title: "Storefront", to: "/workspace/checkout-fixes/overview", editValue: "Storefront", rename: async () => {}, remove: () => {} }}
+      workspace={{ name: "checkout-fixes", title: "Storefront", to: "/workspace/checkout-fixes/overview", editValue: "Storefront", rename: async () => {}, remove: () => {} }}
       chats={GALLERY_CHATS.map((agent): ChatTab => (agent.key === "main"
         ? { agent, to: "/workspace/checkout-fixes", rename: async () => {} }
         : { agent, to: "/workspace/checkout-fixes", rename: async () => {}, remove: () => {} }))}

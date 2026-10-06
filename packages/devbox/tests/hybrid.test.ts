@@ -1,5 +1,5 @@
 // D55's hybrid at the box boundary: a rest's snapshot is the next wake, and a wake that cannot use it
-// recovers from the chain and says so. The chain is chain-box's model; disk-chain-image.test.ts runs the real one.
+// recovers from the chain and says so. The chain is chain-box's model; the deploy tier runs the real one.
 import { afterEach, expect, jest, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
 import { DiskChainStateSchema } from '../src/disk-chain';

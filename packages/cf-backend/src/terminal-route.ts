@@ -24,7 +24,13 @@ const WORKSPACE_EXECUTOR = "workspace";
 
 const SANDBOX_EXECUTOR = "sandbox";
 
-const NOT_READY = { terminal: "terminal.not_ready", desktop: "desktop.not_ready" } as const;
+/** Each lane's report when its executor is not ready for an attach. */
+const NOT_READY = {
+  device: { event: "terminal.not_ready", doing: "reaching this workspace's machine for a terminal" },
+  workspace: { event: "terminal.workspace_not_ready", doing: "composing this workspace's runtime for a terminal" },
+  terminal: { event: "terminal.not_ready", doing: "preparing this workspace's container for a terminal" },
+  desktop: { event: "desktop.not_ready", doing: "preparing this workspace's container for a desktop" },
+} as const;
 
 const PREFLIGHT_FAILED = { terminal: "terminal.preflight_failed", desktop: "desktop.preflight_failed" } as const;
 
@@ -128,6 +134,18 @@ interface TerminalCall {
   readonly scope: { readonly workspace: string; readonly executor: string };
 }
 
+/** The workspace once its executor is ready for a terminal, or the 503 saying why not. */
+async function readyWorkspace(call: TerminalCall, lane: keyof typeof NOT_READY): Promise<TerminalWorkspace | Response> {
+  const agent = await call.deps.resolveWorkspace(call.agentName);
+  const ready = await agent.prepareTerminal(call.executor);
+
+  if (!("error" in ready)) return agent;
+  const notReady = NOT_READY[lane];
+  diagnostics.failure(notReady.event, toKinuError({ doing: notReady.doing, cause: ready.error, otherwise: "unavailable" }), call.scope);
+
+  return err(503, ready.error);
+}
+
 function notAnUpgrade({ request, surface }: TerminalCall): Response | null {
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
     return err(400, `the ${surface} endpoint is a WebSocket; send an Upgrade: websocket request`);
@@ -138,7 +156,7 @@ function notAnUpgrade({ request, surface }: TerminalCall): Response | null {
 
 /** The shell runs on the owner's machine: the upgrade is handed to the DO holding its outbound socket. */
 async function deviceTerminal(call: TerminalCall): Promise<Response> {
-  const { request, url, deps, agentName, executor, scope } = call;
+  const { request, url, deps, scope } = call;
 
   // Guards only: they keep a device request off the container path, which would beat a foreign lease.
   if (call.verb !== "attach") {
@@ -154,19 +172,9 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
   let opened: { session: string; user: string } | { error: string };
 
   try {
-    const agent = await deps.resolveWorkspace(agentName);
-    const ready = await agent.prepareTerminal(executor);
+    const agent = await readyWorkspace(call, "device");
 
-    if ("error" in ready) {
-      diagnostics.failure("terminal.not_ready", toKinuError({
-        doing: "reaching this workspace's machine for a terminal",
-        cause: ready.error,
-        otherwise: "unavailable",
-      }), scope);
-
-      return err(503, ready.error);
-    }
-
+    if (agent instanceof Response) return agent;
     opened = await agent.openDeviceTerminal(paneWindow(url));
   } catch (cause) {
     const error = toKinuError({
@@ -203,7 +211,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
 
 /** The shell is the runtime's, inside the workspace object; keepalive/reset are guards as for a device. */
 async function workspaceTerminal(call: TerminalCall): Promise<Response> {
-  const { request, deps, agentName, executor, scope } = call;
+  const { request, scope } = call;
 
   if (call.verb !== "attach") {
     if (request.method !== "POST") return err(405, "use POST");
@@ -216,18 +224,9 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
   if (refused !== null) return refused;
 
   try {
-    const agent = await deps.resolveWorkspace(agentName);
-    const ready = await agent.prepareTerminal(executor);
+    const agent = await readyWorkspace(call, "workspace");
 
-    if ("error" in ready) {
-      diagnostics.failure("terminal.workspace_not_ready", toKinuError({
-        doing: "composing this workspace's runtime for a terminal",
-        cause: ready.error,
-        otherwise: "unavailable",
-      }), scope);
-
-      return err(503, ready.error);
-    }
+    if (agent instanceof Response) return agent;
 
     if (request.signal.aborted) return abandonedAttach(call.surface);
     // The gate's identity headers ride along: one revocation closes chat and socket.
@@ -275,21 +274,12 @@ async function sandboxCommand(
  * scope. Not fenced by cancellation: the start is shared and idempotent.
  */
 async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
-  const { deps, agentName, executor, scope, surface } = call;
+  const { scope, surface } = call;
 
   try {
-    const agent = await deps.resolveWorkspace(agentName);
-    const ready = await agent.prepareTerminal(executor);
+    const agent = await readyWorkspace(call, surface);
 
-    if ("error" in ready) {
-      diagnostics.failure(NOT_READY[surface], toKinuError({
-        doing: `preparing this workspace's container for a ${surface}`,
-        cause: ready.error,
-        otherwise: "unavailable",
-      }), scope);
-
-      return err(503, ready.error);
-    }
+    if (agent instanceof Response) return agent;
   } catch (cause) {
     const error = toKinuError({
       doing: `reaching this workspace to prepare a ${surface}`,
