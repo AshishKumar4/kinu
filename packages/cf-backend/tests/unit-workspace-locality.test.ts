@@ -3,14 +3,14 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
  * Nimbus is a library in the Durable Object that owns the workspace, over its own `ctx.storage.sql`; no second
  * object per workspace. Built via `createCFRuntime`; env is a Proxy that throws on any unnamed binding.
  */
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
 import {
-  agentCred, agentIdentity, mossaicVfs, provisionAgentHome, sharedDriveMount, workspaceSoul, workspaceFilePlane, WORKSPACE_ROOT,
+  agentCred, agentIdentity, mossaicVfs, nimbusSessionFiles, provisionAgentHome, sharedDriveMount, workspaceSoul, workspaceFilePlane, WORKSPACE_ROOT,
   initWorkspaceActorTable, WORKSPACE_IDENTITY_DDL, writeWorkspaceSoul, type JsonValue,
 } from '@kinu.run/core';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -134,6 +134,24 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     expect(await readText(workspace.bundle.vfs, 'memory/MEMORY.md'))
       .toBe('the bytes are here\n');
+
+    // A memory note is stamped by its change time: a same-length rewrite with its mtime restored still moves it.
+    const plane = nimbusSessionFiles(workspace.box('main'), { home: WORKSPACE_ROOT });
+    const before = await plane.stat('memory/MEMORY.md', { follow: false });
+    setSystemTime(Date.now() + 5_000);
+
+    try {
+      await writeText(workspace.bundle.vfs, 'memory/MEMORY.md', 'the bytes are HERE\n');
+      (await workspace.bundle.session()).vfs.as(CRED_KERNEL).utimes(`${WORKSPACE_ROOT}/memory/MEMORY.md`, before?.mtimeMs ?? 0, before?.mtimeMs ?? 0);
+    } finally {
+      setSystemTime();
+    }
+
+    const after = await plane.stat('memory/MEMORY.md', { follow: false });
+    expect(after?.size).toBe(before?.size);
+    expect(after?.mtimeMs).toBe(before?.mtimeMs);
+    expect(after?.ctimeMs).toBeNumber();
+    expect(after?.ctimeMs).not.toBe(before?.ctimeMs);
   });
 
   const OWNER_SOUL = '# the owner wrote this\n';

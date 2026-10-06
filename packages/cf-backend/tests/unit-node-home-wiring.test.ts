@@ -432,14 +432,6 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     expect(nimbus.calls.map((call) => call.options.cred)).toEqual([cred, cred, cred]);
   });
 
-  test('a stat carries the change time the SDK gives, which a memory note is stamped by', async () => {
-    const box = nimbusBox(new RootExecNimbus());
-    box.files.lstat = async () => ({ type: 'file', size: 3, mtime: 1_000, ctime: 2_000, mode: 0o100644 });
-
-    expect(await nimbusSessionFiles(box, { home: WORKSPACE_ROOT }).stat('memory/MEMORY.md', { follow: false }))
-      .toEqual({ type: 'file', size: 3, mtimeMs: 1_000, ctimeMs: 2_000 });
-  });
-
   test('a handle with no credential-bound plane refuses to act as a node, by name', () => {
     const box = nimbusBox(new RootExecNimbus());
     const cred: VfsCred = { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 };
