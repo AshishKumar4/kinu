@@ -3,7 +3,6 @@
 import type { VfsExportChunk, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { isSystemManaged } from '../vfs/workspace-path';
 import type { SqlExecutor } from '../types/primitives';
-import { SOUL_PATH } from './soul';
 
 export interface ForkLineageRow {
   sourceWorkspaceId: string;
@@ -62,8 +61,8 @@ export interface ForkFileSource {
   pin(name: string): Promise<ForkPinnedFiles>;
 }
 
-/** Re-bootstrapped at v0 in the fork, or published through its own protected write. */
-const NOT_CARRIED: ReadonlySet<string> = new Set(['scaffold', SOUL_PATH]);
+/** Re-bootstrapped at v0 in the fork. */
+const NOT_CARRIED: ReadonlySet<string> = new Set(['scaffold']);
 
 /**
  * Whether a name directly under the home crosses as a tree of its own. The home's own platform directories (Nimbus's

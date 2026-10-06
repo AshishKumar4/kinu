@@ -31,7 +31,6 @@ interface ForkStagingRow {
   head_cut_created_at: number;
   staged_agent_config: number;
   staged_crafted_tools: number;
-  staged_memory_chunks: number;
   staged_session_messages: number;
   staged_conversation_entries: number;
   staged_conversation_entry_parts: number;
@@ -44,7 +43,6 @@ interface ForkStagingRow {
   import_path: string | null;
   want_agent_config: number;
   want_crafted_tools: number;
-  want_memory_chunks: number;
   want_session_messages: number;
   want_conversation_entries: number;
   want_conversation_entry_parts: number;
@@ -65,12 +63,12 @@ export class ForkStagingState {
     const row = this.sql<ForkStagingRow>`
       SELECT head_declared, head_source_id, head_source_name,
              head_cut_message_id, head_cut_created_at,
-             staged_agent_config, staged_crafted_tools, staged_memory_chunks,
+             staged_agent_config, staged_crafted_tools,
              staged_session_messages,
              staged_conversation_entries, staged_conversation_entry_parts, staged_context_members,
              (SELECT COUNT(*) FROM fork_staged_files) AS staged_files,
              transfer_id, expected_seq, section_cursor, stream, import_path,
-             want_agent_config, want_crafted_tools, want_memory_chunks,
+             want_agent_config, want_crafted_tools,
              want_session_messages,
              want_conversation_entries, want_conversation_entry_parts, want_context_members,
              want_files, published
@@ -87,7 +85,6 @@ export class ForkStagingState {
       staged: {
         agentConfig: row.staged_agent_config,
         craftedTools: row.staged_crafted_tools,
-        memoryChunks: row.staged_memory_chunks,
         sessionMessages: row.staged_session_messages,
         conversationEntries: row.staged_conversation_entries,
         conversationEntryParts: row.staged_conversation_entry_parts,
@@ -102,7 +99,6 @@ export class ForkStagingState {
       declared: {
         agentConfig: row.want_agent_config,
         craftedTools: row.want_crafted_tools,
-        memoryChunks: row.want_memory_chunks,
         sessionMessages: row.want_session_messages,
         conversationEntries: row.want_conversation_entries,
         conversationEntryParts: row.want_conversation_entry_parts,
@@ -126,7 +122,6 @@ export class ForkStagingState {
     void this.sql`UPDATE fork_transfer SET
       transfer_id = ${input.transferId}, expected_seq = ${input.expectedSeq}, stream = ${input.stream},
       want_agent_config = ${input.declared.agentConfig}, want_crafted_tools = ${input.declared.craftedTools},
-      want_memory_chunks = ${input.declared.memoryChunks},
       want_session_messages = ${input.declared.sessionMessages},
       want_conversation_entries = ${input.declared.conversationEntries},
       want_conversation_entry_parts = ${input.declared.conversationEntryParts},
@@ -151,7 +146,6 @@ export class ForkStagingState {
     void this.sql`UPDATE fork_transfer SET
       staged_agent_config             = staged_agent_config             + ${delta.agentConfig ?? 0},
       staged_crafted_tools            = staged_crafted_tools            + ${delta.craftedTools ?? 0},
-      staged_memory_chunks            = staged_memory_chunks            + ${delta.memoryChunks ?? 0},
       staged_session_messages         = staged_session_messages         + ${delta.sessionMessages ?? 0},
       staged_conversation_entries     = staged_conversation_entries     + ${delta.conversationEntries ?? 0},
       staged_conversation_entry_parts = staged_conversation_entry_parts + ${delta.conversationEntryParts ?? 0},

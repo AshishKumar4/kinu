@@ -88,6 +88,11 @@ export function withApprovalGatedShell(
 export interface FileReach {
   /** Every path is resolved here first, so the gate and the plane see the one the agent named. */
   readonly planes: PathPlanes;
+  /**
+   * Then through the plane's own lookup, its links followed (the last one unless `follow` is false): the gate decides on
+   * the path the operation reaches, and the operation runs there, so a link cannot turn the user's file into the agent's.
+   */
+  readonly resolve: ((path: string, follow: boolean) => Promise<string>) | null;
   readonly userRoots: () => readonly string[];
   /** Where `op` on `path` lands on the machine, and whether that is past the agent's own files. */
   readonly locate: ((path: string, op: FileAccess['op']) => { readonly hostPath: string; readonly outside: boolean }) | null;
@@ -118,19 +123,23 @@ export function withApprovalGatedFiles(
     yield* approveFileAccess({ op, path, hostPath, reaches, replaces }, executor, policy, write);
   });
 
-  const at = (path: string) => Effect.map(resolvedPath(path, reach.planes), (resolved) => resolved.absolute);
+  // A removal acts on the entry itself, so its own name is not followed; every other op reaches what a link names.
+  const at = (path: string, follow = true) => Effect.flatMap(resolvedPath(path, reach.planes), ({ absolute }) => (reach.resolve === null
+    ? Effect.succeed(absolute)
+    : Effect.tryPromise({ try: async () => reach.resolve?.(absolute, follow) ?? absolute, catch: (cause) => cause }).pipe(Effect.orDie)));
 
   /** The path the agent named, asked for as `op`, then run there. */
   const asked = <T>(op: FileAccess['op'], written: string, run: (path: string) => Awaitable<T>, bytes?: string | Uint8Array) =>
-    Effect.flatMap(at(written), (path) => Effect.andThen(approve(op, path, bytes), Effect.promise(async () => run(path))));
+    Effect.flatMap(at(written, op !== 'delete'), (path) => Effect.andThen(approve(op, path, bytes), Effect.promise(async () => run(path))));
 
-  const unasked = <T>(written: string, run: (path: string) => Awaitable<T>) => Effect.flatMap(at(written), (path) => Effect.promise(async () => run(path)));
+  const unasked = <T>(written: string, run: (path: string) => Awaitable<T>, follow = true) =>
+    Effect.flatMap(at(written, follow), (path) => Effect.promise(async () => run(path)));
 
   const gated: VFS & CheckpointFiles = {
     readFile: (path) => settle(asked('read', path, (absolute) => vfs.readFile(absolute))),
     writeFile: (path, data) => settle(asked('write', path, (absolute) => vfs.writeFile(absolute, data), data)),
     readdir: (path) => settle(unasked(path, (absolute) => vfs.readdir(absolute))),
-    stat: (path, options) => settle(unasked(path, (absolute) => vfs.stat(absolute, options))),
+    stat: (path, options) => settle(unasked(path, (absolute) => vfs.stat(absolute, options), options?.follow !== false)),
     unlink: (path) => settle(asked('delete', path, (absolute) => vfs.unlink(absolute))),
     // An existing one changes nothing; the file tool makes each write's parent.
     mkdir: (written, opts) => settle(Effect.flatMap(at(written), (path) => Effect.andThen(
@@ -158,7 +167,7 @@ export function withApprovalGatedFiles(
   if (readRange) gated.readRange = (path, offset, length) => settle(asked('read', path, (absolute) => readRange(absolute, offset, length)));
 
   if (rename) {
-    gated.rename = (writtenFrom, writtenTo) => settle(Effect.flatMap(Effect.all([at(writtenFrom), at(writtenTo)]), ([from, to]) => Effect.andThen(
+    gated.rename = (writtenFrom, writtenTo) => settle(Effect.flatMap(Effect.all([at(writtenFrom, false), at(writtenTo, false)]), ([from, to]) => Effect.andThen(
       Effect.andThen(approve('delete', from), approve('write', to)),
       Effect.promise(async () => rename(from, to)),
     )));

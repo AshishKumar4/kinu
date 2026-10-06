@@ -29,10 +29,9 @@ import {
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
-  readSoul,
 } from '../../packages/core/src/index';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { buildEvalAgentSurface, collectStepText, createStepToolCallLog } from './harness';
 import { localTargetFolder, provisionLocalTarget, type LocalTarget } from './target-local';
 import { seedTranscriptEntry, EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
@@ -123,7 +122,7 @@ interface ChatTurn {
 async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
   const { history, model, rt, tools, userMessage } = turn;
   const start = Date.now();
-  const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
+  const soul = soulIn(rt.space) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
   const log = createStepToolCallLog();
 
@@ -223,10 +222,10 @@ describe('E2E Lifecycle', () => {
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     ).all().map(t => t.name);
 
-    expect(tables).toContain('vfs_inodes');
+    expect(tables).toContain('memory_note_files');
     expect(tables).toContain('conversation_entries');
     expect(tables).toContain('search_nodes');
-    const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
+    const soul = soulIn(rt.space) ?? '';
     expect(soul).toContain('TypeScript');
   });
 

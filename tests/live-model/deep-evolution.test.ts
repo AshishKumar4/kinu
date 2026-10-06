@@ -12,12 +12,11 @@ import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepR
 
 import {
   EvolutionEngine,
-  readSoul,
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
 } from '../../packages/core/src/index';
-import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import {
   buildEvalAgentSurface, createStepToolCallLog,
 } from './harness';
@@ -64,7 +63,7 @@ async function solveProblem(
   problem: Problem,
 ): Promise<{ response: string; turn: CompletedTurn; toolNames: string[] }> {
   const start = Date.now();
-  const soul = await readSoul(rt.storage.vfs) ?? '';
+  const soul = soulIn(rt.space) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
   const log = createStepToolCallLog();

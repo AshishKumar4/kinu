@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createAgentConfigStore, initWorkspaceSchema, SubordinateRosterStore, WorkspaceActorDirectory, type LLMProviderConfig } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { makeSql, makeSqlExec, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { makeSql, makeSqlExec, makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
 import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 import { placeLocalWorkspace } from './helpers/local-refs';
@@ -44,7 +44,7 @@ async function workspaceThatHired(home: string, name: string, subagent: { name: 
   const db = new Database(join(dir, 'agent.db'));
 
   try {
-    await createWorkspace(db, { name, purpose: 'Keep the shop running', llm: BIRTH_LLM });
+    await createWorkspace(db, { name, purpose: 'Keep the shop running', llm: BIRTH_LLM, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const identity = db.query<{ id: string; owner_user_id: string | null }, []>('SELECT id, owner_user_id FROM workspace_identity').get();
 

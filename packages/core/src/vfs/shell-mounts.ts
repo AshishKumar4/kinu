@@ -5,27 +5,25 @@
  */
 import type { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import type { Principal } from '@nimbus-sh/core/vfs/composite.js';
-import type { VFS, VfsCred } from '@nimbus-sh/core/vfs/vfs.js';
-import type { MountedVfs, VfsMount } from './mounts';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VfsMount } from './mounts';
 
-export type ShellMountTable = (cred: Readonly<VfsCred>) => MountedVfs | null;
+export type ShellMountTable = (principal: Principal) => readonly VfsMount[] | null;
 
-/** Mounts a plane's names on the workspace namespace; a name already mounted is left as it is. */
+/** A name already mounted is left as it is. */
 export interface ShellMounts {
-  add(plane: MountedVfs): void;
+  add(mounts: readonly VfsMount[]): void;
 }
 
 /** Mounts every name a principal's table has at `/<name>`, answered at each call by that principal's table. */
 export function shellMounts(filesystem: ProcessFiles, table: ShellMountTable): ShellMounts {
   const mounted = new Set<string>();
 
-  const mountFor = (principal: Principal, name: string): VfsMount | undefined => (
-    principal.cred === null ? undefined : table(principal.cred)?.mounts().find((mount) => mount.name === name)
-  );
+  const mountFor = (principal: Principal, name: string): VfsMount | undefined => table(principal)?.find((mount) => mount.name === name);
 
   return {
-    add(plane) {
-      for (const { name, readOnly } of plane.mounts()) {
+    add(mounts) {
+      for (const { name, readOnly } of mounts) {
         if (mounted.has(name)) continue;
         mounted.add(name);
         const described = new WeakSet<VFS>();

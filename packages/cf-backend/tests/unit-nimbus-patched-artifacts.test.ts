@@ -91,54 +91,45 @@ describe('installed Nimbus dependency integrity', () => {
     db.close();
   });
 
-  // The installed filesystem keeps the main agent at home: the root is 1000:1000 0755, and SOUL.md is a
-  // kernel-owned 444 view of the workspace_soul row, resealed from it at every boot and turn start.
-  test('a forged SOUL.md never reaches a prompt: the next turn start reseals it from the row', async () => {
+  // SOUL.md is an ordinary file of the workspace: the main agent's shell edit is the soul the next turn and the status read.
+  test("the main agent's edit of SOUL.md from its shell is the soul the next turn's prompt and the status carry", async () => {
     const { agent } = orchestratorHarness();
-    const soul = '# Checkout\n\n## Mission\n\nAudit the checkout flow.';
+    await agent.setSoul('# Checkout\n\n## Mission\n\nAudit the checkout flow.');
 
-    await agent.setSoul(soul);
+    const edited = '# Checkout\n\n## Mission\n\nAudit the refunds flow.\n';
+    const edit = await agent.execWorkspaceCommand(`printf '${edited.replaceAll('\n', '\\n')}' > /home/main/SOUL.md; echo "exit=$?"`);
 
-    // The root is the main agent's own directory, so its rm and its rewrite land.
-    const removed = await agent.execWorkspaceCommand('rm -f /home/main/SOUL.md; echo "exit=$?"');
+    expect(edit.stdout.trim()).toBe('exit=0');
+    const prompts: string[] = [];
 
-    expect(removed.stdout.trim()).toBe('exit=0');
+    agent.harnessSupplyTurnModel(scriptedTurnModel({ doGenerate: ({ prompt }) => {
+      prompts.push(JSON.stringify(prompt));
 
-    const rewritten = await agent.execWorkspaceCommand('echo rewritten > /home/main/SOUL.md; echo "exit=$?"');
-
-    expect(rewritten.stdout.trim()).toBe('exit=0');
-
-    // The next turn start reseals the file from the row: kernel 444, the owner's bytes.
-    agent.harnessSupplyTurnModel(scriptedTurnModel({ doGenerate: () => ({
-      content: [{ type: 'text', text: 'noted' }], finishReason: { unified: 'stop', raw: undefined },
-      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-    }) }));
+      return {
+        content: [{ type: 'text', text: 'noted' }], finishReason: { unified: 'stop', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+      };
+    } }));
     const gate = agent.harnessChatGate();
     const { wire, sent, frame } = connection(agent);
 
     await gate(wire, chatRequest('req-soul', 'hello'));
     await frame((frames) => doneFrames(frames).length > 0);
     expect(doneFrames(sent)).toEqual([{ id: 'req-soul' }]);
-    const kept = await agent.execWorkspaceCommand('cat /home/main/SOUL.md; stat -c %a /home/main/SOUL.md');
+    expect(prompts.join('\n')).toContain('Audit the refunds flow.');
 
-    expect(kept.stdout).toBe(`${soul}444\n`);
-
-    // Neither the prompt's soul nor the status read ever sees the forged text.
     const status = await agent.getAgentStatus();
 
-    expect(status.soul).toBe(soul);
-    expect(status.purpose).toBe('Audit the checkout flow.');
+    expect(status.soul).toBe(edited);
+    expect(status.purpose).toBe('Audit the refunds flow.');
   });
 
-  test("an owner's Drive save of SOUL.md updates the row; a Drive delete is refused", async () => {
+  test("an owner's Drive save of SOUL.md writes the file, and a Drive delete removes it", async () => {
     const { agent } = orchestratorHarness();
-    const soul = '# Checkout\n\n## Mission\n\nAudit the checkout flow.';
-
-    await agent.setSoul(soul);
+    await agent.setSoul('# Checkout\n\n## Mission\n\nAudit the checkout flow.');
 
     const revised = '# Checkout\n\n## Mission\n\nAudit the refunds flow.';
-
 
     const saved = await agent.writeExecutorFileChunk({
       executorId: 'workspace', path: 'SOUL.md', transferId: 'soul-save', offset: 0,
@@ -147,10 +138,7 @@ describe('installed Nimbus dependency integrity', () => {
 
     expect(saved).toEqual({ ok: true });
     expect((await agent.getAgentStatus()).soul).toBe(revised);
-
-    const deleted = await agent.deleteExecutorFile('workspace', 'SOUL.md');
-
-    expect(deleted).toMatchObject({ error: expect.stringContaining('Settings') });
-    expect((await agent.getAgentStatus()).soul).toBe(revised);
+    expect(await agent.deleteExecutorFile('workspace', 'SOUL.md')).toEqual({ ok: true });
+    expect((await agent.getAgentStatus()).soul).toBe('');
   });
 });

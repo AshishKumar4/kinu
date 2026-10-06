@@ -103,7 +103,7 @@ describe('ast duplication gate', () => {
         ['packages/core/src/b.ts', getter(b)],
       ]), 20);
 
-      expect(over('crafted_tools', 'memory_chunks')).toEqual([]);
+      expect(over('crafted_tools', 'memory_note_chunks')).toEqual([]);
       // The same query twice is a copy, so the silence above is the query's doing.
       expect(over('crafted_tools', 'crafted_tools')).toHaveLength(1);
     }

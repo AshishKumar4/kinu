@@ -1,20 +1,20 @@
 import { exists, readText as nimbusReadText, type Awaitable, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Workspace plane bound to a physical directory: peers share canonical files on disk while identity stays in each agent's database. */
 
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync, readlinkSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import type { AgentRuntime, DeferredApprovalChannel, LLMProviderConfig, ShellApprovalOutcome, WriteEvent, WriteObserver } from '@kinu.run/core';
-import { ConversationSearchStore, buildBuiltinTools, discoverSkills, initWorkspaceSchema, readSoul, reviewCommand, SLATES_ROOT, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
+import { ConversationSearchStore, buildBuiltinTools, discoverSkills, initWorkspaceSchema, reviewCommand, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { present, scratchDir, spawnTest, toolExecute } from '@kinu.run/test-utils';
 import {
   createCLIRuntime, createHostShell, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
-  type CLIRuntime,
+  type CLIRuntime, workspaceHome, soulIn,
 } from '../src/runtime';
 import { createHeadRuntime } from './actor-fixture';
 import { registerLocalActor } from '@kinu.run/core';
@@ -45,6 +45,14 @@ function roots(label: string) {
 
 type LocalAgent = CLIRuntime & { readonly db: Database; readonly dbPath: string };
 
+/** A workspace's database as `kinu create` publishes it: in WAL a commit waits on no fsync. */
+function published(dbPath: string): Database {
+  const db = new Database(dbPath);
+  db.exec('PRAGMA journal_mode = WAL');
+
+  return db;
+}
+
 function agentRuntime(state: string, name: string, cwd: string): LocalAgent {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -53,7 +61,7 @@ function agentRuntime(state: string, name: string, cwd: string): LocalAgent {
     llm: DUMMY_LLM, agentName: name, cwd,
   };
 
-  const db = new Database(dbPath);
+  const db = published(dbPath);
 
   return Object.assign(createCLIRuntime(db, config), { db, dbPath });
 }
@@ -62,8 +70,8 @@ function agentRuntime(state: string, name: string, cwd: string): LocalAgent {
 async function openedWorkspace(state: string, name: string, cwd: string) {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
-  await createWorkspace(db, { name, purpose: `Test agent ${name}`, llm: DUMMY_LLM });
+  const db = published(dbPath);
+  await createWorkspace(db, { name, purpose: `Test agent ${name}`, llm: DUMMY_LLM, home: workspaceHome(db) });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   return openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd });
@@ -173,8 +181,8 @@ describe('a fork over the bound directory', () => {
     expect(readFileSync(join(project, 'head-output.md'), 'utf8')).toBe('what the head found');
     expect(await readText(parent, 'head-output.md')).toBe('what the head found');
 
-    // The split reports this head's changes only if the observer wraps the plane it writes through.
-    expect(written.map((event) => event.path)).toEqual(['head-output.md']);
+    // The split hears this head's changes where they land, named as the shell names them.
+    expect(written.map((event) => event.path)).toEqual([join(project, 'head-output.md')]);
 
     const headShell = head.shell;
 
@@ -219,11 +227,13 @@ describe('addressing the bound directory', () => {
     const removeTree = present(rt.storage.vfs.removeRecursive?.bind(rt.storage.vfs), 'the mounted removal route');
     await writeText(rt.storage.vfs, 'keep.txt', 'the project survives');
 
-    for (const anchor of [project, space]) {
-      await expect(rename(anchor, join(state, 'renamed'))).rejects.toMatchObject({ code: 'EACCES' });
-      await expect(rt.storage.vfs.unlink(anchor)).rejects.toMatchObject({ code: 'EACCES' });
-      await expect(removeTree(anchor)).rejects.toMatchObject({ code: 'EACCES' });
-    }
+    await expect(rename(project, join(state, 'renamed'))).rejects.toMatchObject({ code: 'EACCES' });
+    await expect(rt.storage.vfs.unlink(project)).rejects.toMatchObject({ code: 'EACCES' });
+    await expect(removeTree(project)).rejects.toMatchObject({ code: 'EACCES' });
+    // The own space is a mount point of the one namespace, which answers as POSIX does one.
+    await expect(rename(space, join(state, 'renamed'))).rejects.toMatchObject({ code: 'EBUSY' });
+    await expect(rt.storage.vfs.unlink(space)).rejects.toMatchObject({ code: 'EISDIR' });
+    await expect(removeTree(space)).rejects.toMatchObject({ code: 'EBUSY' });
 
     expect(readFileSync(join(project, 'keep.txt'), 'utf8')).toBe('the project survives');
     expect(existsSync(join(space, 'agent.db'))).toBe(true);
@@ -231,19 +241,20 @@ describe('addressing the bound directory', () => {
     expect(readdirSync(state).filter((entry) => entry.startsWith('.nimbus-move-') || entry === 'renamed')).toEqual([]);
   });
 
-  test('a relative path and the real path name the folder\'s file; the own space\'s spellings name its own', async () => {
+  // One namespace, the shell's: an absolute path is the machine's, so the own space is its real path or `vfs://`.
+  test('a relative path and the real path name the folder\'s file; the own space is its real path or vfs://', async () => {
     const { state, project } = roots('cwd-plane-addresses');
     const rt = agentRuntime(state, 'solo', project);
     const space = join(state, 'solo');
 
     await writeText(rt.storage.vfs, 'notes/one.md', 'one');
-    await writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/notes/own.md`, 'own');
+    await writeText(rt.toolFiles, 'vfs://home/main/notes/own.md', 'own');
 
     expect(await readText(rt, 'notes/one.md')).toBe('one');
     expect(await readText(rt, join(project, 'notes/one.md'))).toBe('one');
     expect(await readText(rt, join(space, 'home/main/notes/own.md'))).toBe('own');
     expect(readdirSync(join(project, 'notes'))).toEqual(['one.md']);
-    expect((await rt.storage.vfs.readdir(WORKSPACE_ROOT)).map(({ name }) => name)).toEqual(['notes']);
+    expect(await refusalOf(() => rt.storage.vfs.readdir(`${WORKSPACE_ROOT}/notes`))).toBe('ENOENT');
   });
 
   /** The agent's `file` tool and codemode's `workspace.writeFile`, with a user who answers `answer`. */
@@ -361,7 +372,8 @@ describe('addressing the bound directory', () => {
     expect(readdirSync(outside)).toEqual([]);
 
     await file({ action: 'write', path: join(space, 'local', 'plain.txt'), content: 'in the folder' });
-    expect([readFileSync(join(project, 'plain.txt'), 'utf8'), existsSync(join(space, 'local'))]).toEqual(['in the folder', false]);
+    // `<space>/local` is the folder's link, so the shell follows it as the file tool does.
+    expect([readFileSync(join(project, 'plain.txt'), 'utf8'), readlinkSync(join(space, 'local'))]).toEqual(['in the folder', project]);
 
     await rt.toolFiles.unlink(join(space, 'local', 'linked'));
     expect([existsSync(join(project, 'linked')), existsSync(outside), asked.length]).toEqual([false, true, spellings.length]);
@@ -436,7 +448,7 @@ describe('addressing the bound directory', () => {
     writeFileSync(join(state, 'solo', 'home', 'main', 'skills', 'review.md'), '---\nname: review\ndescription: Review a change\n---\nName every risk.\n');
     const rt = agentRuntime(state, 'solo', project);
 
-    const found = await discoverSkills(rt.storage.vfs, { admissionTokens: 100_000 });
+    const found = await discoverSkills(rt.ownFiles, { admissionTokens: 100_000 });
 
     expect(found.skills.find((skill) => skill.name === 'review')?.source).toBe('vfs');
   });
@@ -576,11 +588,10 @@ describe('the shell over the bound directory', () => {
 });
 
 describe('what an opened workspace puts where', () => {
-  test('SOUL and memory are read from the agent plane and never appear in the directory', async () => {
+  test('SOUL.md, the memory notes and the scaffold are files of main\'s home; the folder holds none of them', async () => {
     const { state, project } = roots('cwd-plane-opened');
     const { rt, info } = await openedWorkspace(state, 'jarvis', project);
 
-    // Both come off the private plane; a shared directory holds neither.
     expect(info.soul).toContain('jarvis');
     expect(info.purpose).toBe('Test agent jarvis');
     expect(info.memorySize).toBeGreaterThan(0);
@@ -594,34 +605,30 @@ describe('what an opened workspace puts where', () => {
     expect(await exists(rt.storage.vfs, 'memory/MEMORY.md')).toBe(false);
     expect(await exists(rt.storage.vfs, 'scaffold/agent.js')).toBe(false);
 
-    const agentState = rt.agentStateVfs;
+    const home = join(state, 'jarvis', 'home', 'main');
 
-    if (!agentState) throw new Error('an opened workspace must expose its own state plane');
-    expect(await exists(agentState, 'SOUL.md')).toBe(true);
-    expect(await exists(agentState, 'memory/MEMORY.md')).toBe(true);
-    expect(await exists(agentState, 'scaffold/agent.js')).toBe(true);
+    expect(readFileSync(join(home, 'memory/MEMORY.md'), 'utf8')).toContain('learned something');
+    expect(readFileSync(join(home, 'scaffold/agent.js'), 'utf8')).toBe('// evolved\n');
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe(info.soul);
   });
 });
 
 describe('the agent\'s own state in a placed workspace', () => {
-  test('memory, SOUL.md and the scaffold read at /agent, and nothing writes through it', async () => {
-    const { state, project } = roots('cwd-plane-agent-view');
+  // A note changes through the memory tool and a loop through its versioned writer; the file tool only reads them.
+  test('the file tool reads the memory notes and the scaffold where they are, and never writes them', async () => {
+    const { state, project } = roots('cwd-plane-agent-state');
     const { rt } = await openedWorkspace(state, 'jarvis', project);
     await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
     await rt.identity.scaffold.write('// evolved\n');
-    const soul = String(await nimbusReadText(present(rt.agentStateVfs, 'the agent state plane'), 'SOUL.md'));
+    const home = join(state, 'jarvis', 'home', 'main');
 
-    expect((await rt.storage.vfs.readdir('/agent')).map(({ name }) => name).sort()).toEqual(['SOUL.md', 'memory', 'scaffold']);
-    expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
-    expect(await readText(rt, '/agent/memory/MEMORY.md')).toContain('learned something');
-    expect(await readText(rt, '/agent/scaffold/agent.js')).toBe('// evolved\n');
-    expect(await exists(rt.storage.vfs, '/agent/workspace.db')).toBe(false);
+    expect(await readText(rt, join(home, 'memory/MEMORY.md'))).toContain('learned something');
+    expect(await nimbusReadText(rt.toolFiles, 'vfs://home/main/scaffold/agent.js')).toBe('// evolved\n');
 
-    expect(await refusalOf(() => writeText(rt.storage.vfs, '/agent/memory/MEMORY.md', 'forged'))).toBe('EROFS');
-    expect(await refusalOf(() => writeText(rt.storage.vfs, '/agent/SOUL.md', 'forged'))).toBe('EROFS');
-    expect(await refusalOf(() => rt.storage.vfs.unlink('/agent/scaffold/agent.js'))).toBe('EROFS');
-    expect(await refusalOf(() => rt.storage.vfs.mkdir('/agent/memory/more', { recursive: true }))).toBe('EROFS');
-    expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
+    expect(await refusalOf(() => writeText(rt.toolFiles, 'vfs://home/main/memory/MEMORY.md', 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.unlink(join(home, 'scaffold/agent.js')))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.mkdir(join(home, 'memory/more'), { recursive: true }))).toBe('EROFS');
+    expect(readFileSync(join(home, 'memory/MEMORY.md'), 'utf8')).toContain('learned something');
     expect(readdirSync(project)).toEqual([]);
   });
 });
@@ -674,8 +681,8 @@ test('the agent\'s own space is real files beside its database, and only its wor
   const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
 
   expect(await file({ action: 'write', path: 'vfs://slates/board/index.ts', content: 'board' })).toMatchObject({ reference: 'vfs://slates/board/index.ts' });
-  expect(await file({ action: 'write', path: `${SLATES_ROOT}/widgets/package.json`, content: '{}' })).toMatchObject({ ok: true });
-  expect(await file({ action: 'write', path: `${WORKSPACE_ROOT}/notes.md`, content: 'scratch' })).toMatchObject({ ok: true });
+  expect(await file({ action: 'write', path: join(space, 'slates/widgets/package.json'), content: '{}' })).toMatchObject({ ok: true });
+  expect(await file({ action: 'write', path: 'vfs://home/main/notes.md', content: 'scratch' })).toMatchObject({ ok: true });
   expect(await file({ action: 'write', path: 'src/app.ts', content: 'work' })).toMatchObject({ reference: 'local://src/app.ts' });
 
   expect(readFileSync(join(space, 'slates/board/index.ts'), 'utf8')).toBe('board');
@@ -706,30 +713,154 @@ test('the file tool shows the agent a screenshot the rung moved out, from the li
   });
 });
 
-describe('SOUL.md is the owner\'s', () => {
-  const forgeries = ['printf forged > SOUL.md', 'rm -f SOUL.md', 'mv SOUL.md gone.md', 'chmod 666 SOUL.md', 'printf forged > f && mv -f f SOUL.md'];
+// The notes and the scaffold are real files now, so nothing on the machine's side may reach past their read-only mounts.
+describe('main\'s state keeps its writer, whatever path reaches it', () => {
+  test('a link in the folder to the memory notes reads them, and a write or removal through it is refused', async () => {
+    const { state, project } = roots('cwd-plane-state-link');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
+    const memory = join(state, 'jarvis', 'home', 'main', 'memory');
+    symlinkSync(memory, join(project, 'notes-link'));
+    const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
 
-  // The soul is the agent's state, read-only at /agent; a SOUL.md in the folder or the own space is just a file.
-  test('no agent file or shell forgery reaches the next turn', async () => {
+    expect(await file({ action: 'read', path: 'notes-link/MEMORY.md' })).toContain('learned something');
+    await expect(file({ action: 'write', path: 'notes-link/MEMORY.md', content: 'forged' })).rejects.toThrow('EROFS');
+    expect(await refusalOf(() => writeText(rt.storage.vfs, join(project, 'notes-link/MEMORY.md'), 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.unlink(join(project, 'notes-link/MEMORY.md')))).toBe('EROFS');
+    expect(readFileSync(join(memory, 'MEMORY.md'), 'utf8')).toContain('learned something');
+  });
+
+  test('removing or moving main\'s home is refused before any of its notes or its scaffold goes', async () => {
+    const { state, project } = roots('cwd-plane-state-remove');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    const home = join(state, 'jarvis', 'home', 'main');
+
+    const plane = present(rt.storage.vfs.removeRecursive && rt.storage.vfs.rename ? rt.storage.vfs : undefined, 'a plane that removes and moves');
+
+    expect(await refusalOf(() => plane.removeRecursive?.(home))).toBe('EBUSY');
+    expect(await refusalOf(() => plane.rename?.(join(home, 'memory'), join(project, 'stolen')))).toBe('EBUSY');
+    expect(existsSync(join(home, 'memory/MEMORY.md'))).toBe(true);
+    expect(existsSync(join(home, 'scaffold/agent.js'))).toBe(true);
+  });
+
+  test('a link that points at itself is read and removed as the link, never followed', async () => {
+    const { state, project } = roots('cwd-plane-link-loop');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    const loop = join(project, 'loop');
+    symlinkSync('loop', loop);
+
+    expect(await rt.storage.vfs.readlink?.(loop)).toBe('loop');
+    await rt.storage.vfs.unlink(loop);
+    expect(lstatSync(loop, { throwIfNoEntry: false })).toBeUndefined();
+  });
+});
+
+// Locally a shell edits a note beside the memory tool: a search finds the words the note holds now, and only those.
+describe('the memory notes, edited by the shell', () => {
+  test('a search finds the new word an edit put in, not the old one, and a removed note leaves no hit', async () => {
+    const { state, project } = roots('cwd-plane-memory-journey');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    const note = join(state, 'jarvis', 'home', 'main', 'memory', 'deploy.md');
+    await rt.memory.write('memory/deploy.md', 'wrangler staging deploy succeeded\n');
+    await rt.memory.index('memory/deploy.md');
+    await rt.memory.write('memory/cache.md', 'redis eviction tuned for staging\n');
+    await rt.memory.index('memory/cache.md');
+    const shell = present(rt.shell, 'the workspace shell');
+
+    expect((await shell.exec(`printf 'kubernetes ingress now fronts staging\\n' > '${note}'`)).exitCode).toBe(0);
+    expect((await rt.memory.search('kubernetes', 5)).map((hit) => hit.path)).toEqual(['memory/deploy.md']);
+    expect(await rt.memory.search('wrangler', 5)).toEqual([]);
+
+    expect((await shell.exec(`rm '${note}'`)).exitCode).toBe(0);
+    expect(await rt.memory.search('kubernetes', 5)).toEqual([]);
+    expect((await rt.memory.search('staging', 1)).map((hit) => hit.path)).toEqual(['memory/cache.md']);
+  });
+
+  // A stamp is trusted only once the note's last change is two seconds behind it; the clock is a minute on, so it is.
+  test('a same-length edit that keeps the note\'s times, as `touch -r` leaves it, is found by its new words', async () => {
+    const { state, project } = roots('cwd-plane-memory-touch');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    const note = join(state, 'jarvis', 'home', 'main', 'memory', 'deploy.md');
+    const times = join(project, 'times');
+    const shell = present(rt.shell, 'the workspace shell');
+    await rt.memory.write('memory/deploy.md', 'wrangler staging deploy succeeded\n');
+    setSystemTime(new Date(Date.now() + 60_000));
+
+    try {
+      expect((await rt.memory.search('wrangler', 5)).map((hit) => hit.path)).toEqual(['memory/deploy.md']);
+      const before = statSync(note);
+      const edit = `touch -r '${note}' '${times}' && printf 'kubernetes ingress fronts staging\\n' > '${note}' && touch -r '${times}' '${note}'`;
+
+      expect((await shell.exec(edit)).exitCode).toBe(0);
+      const after = statSync(note);
+
+      expect([after.ino, after.size, after.mtimeMs]).toEqual([before.ino, before.size, before.mtimeMs]);
+      expect((await rt.memory.search('kubernetes', 5)).map((hit) => hit.path)).toEqual(['memory/deploy.md']);
+      expect(await rt.memory.search('wrangler', 5)).toEqual([]);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('a shell write that lands while the index reads the note is what the same search finds', async () => {
+    const { state, project } = roots('cwd-plane-memory-race');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    const note = join(state, 'jarvis', 'home', 'main', 'memory', 'deploy.md');
+    const files = present(rt.agentStateVfs, 'main\'s home');
+    const read = files.readFile.bind(files);
+    let edited = false;
+    await rt.memory.write('memory/deploy.md', 'wrangler staging deploy succeeded\n');
+
+    // The shell's write lands after the index has the old bytes in hand, before it looks at the file again.
+    files.readFile = async (path) => {
+      const bytes = await read(path);
+
+      if (!edited && path === 'memory/deploy.md') {
+        edited = true;
+        writeFileSync(note, 'kubernetes ingress now fronts staging\n');
+      }
+
+      return bytes;
+    };
+
+    expect((await rt.memory.search('kubernetes', 5)).map((hit) => hit.path)).toEqual(['memory/deploy.md']);
+    expect(edited).toBe(true);
+    expect(await rt.memory.search('wrangler', 5)).toEqual([]);
+  });
+
+  // A FIFO's read would wait for a writer that never comes: what is no regular file is dropped unread.
+  for (const [entry, make] of [['a directory', 'mkdir'], ['a FIFO', 'mkfifo']] as const) {
+    test(`a note replaced by ${entry} leaves no hit, and the search still answers`, async () => {
+      const { state, project } = roots(`cwd-plane-memory-${make}`);
+      const { rt } = await openedWorkspace(state, 'jarvis', project);
+      const note = join(state, 'jarvis', 'home', 'main', 'memory', 'deploy.md');
+      await rt.memory.write('memory/deploy.md', 'wrangler staging deploy succeeded\n');
+      await rt.memory.index('memory/deploy.md');
+
+      expect((await present(rt.shell, 'the workspace shell').exec(`rm '${note}' && ${make} '${note}'`)).exitCode).toBe(0);
+      expect(await rt.memory.search('wrangler', 5)).toEqual([]);
+    });
+  }
+});
+
+describe('SOUL.md is the workspace\'s own file', () => {
+  // SOUL.md is a real file of the own space: the agent edits it from its file tool or its shell, and the next turn reads it.
+  test('an edit of SOUL.md, by the file tool or the shell, is the soul the next turn reads', async () => {
     const { state, project } = roots('soul-owner');
     const dbPath = join(state, 'jarvis', 'agent.db');
     mkdirSync(dirname(dbPath), { recursive: true });
-    const db = new Database(dbPath);
-    await createWorkspace(db, { name: 'jarvis', purpose: 'Test agent jarvis', llm: DUMMY_LLM });
+    const db = published(dbPath);
+    await createWorkspace(db, { name: 'jarvis', purpose: 'Test agent jarvis', llm: DUMMY_LLM, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
-    const ownerSoul = () => readSoul(present(rt.agentStateVfs, 'the agent state'));
-    const born = present(await ownerSoul(), 'the born soul');
+    expect(soulIn(rt.space)).toContain('Test agent jarvis');
 
-    await expect(writeText(rt.storage.vfs, '/agent/SOUL.md', 'forged')).rejects.toThrow();
-    await writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/SOUL.md`, 'forged');
+    await writeText(rt.toolFiles, 'vfs://home/main/SOUL.md', '# by the file tool\n');
+    expect(soulIn(rt.space)).toBe('# by the file tool\n');
+    const shell = await present(rt.shell, 'the workspace shell').exec(`printf '# by the shell\\n' > '${join(rt.space, 'home/main/SOUL.md')}'`);
 
-    for (const command of forgeries) {
-      await present(rt.shell, 'the workspace shell').exec(command);
-
-      expect(await ownerSoul()).toBe(born);
-      expect(await readText(rt, '/agent/SOUL.md')).toBe(born);
-    }
+    expect(shell.exitCode).toBe(0);
+    expect(soulIn(rt.space)).toBe('# by the shell\n');
   });
 
 });

@@ -7,6 +7,7 @@ import { syscallError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
+import { vfsReference } from '../vfs/resolve';
 import { BUILTIN_SKILL_FILES } from './builtins';
 import { compareSkillNames, listSkillFiles, resolveSkillFile, type SkillFile } from './discover';
 import { SKILL_FOLDER_FILE, SKILLS_VIEW, WORKSPACE_SKILLS_DIR } from './types';
@@ -17,14 +18,14 @@ type Located =
   | { readonly kind: 'builtin'; readonly text: string; readonly rest: string }
   | { readonly kind: 'file'; readonly file: SkillFile; readonly rest: string };
 
-/** `plane` is the agent's whole file plane, read per call. */
+/** `plane` names the workspace's files by their `vfs://` path, read per call. */
 export function skillsMount(plane: () => VFS): VfsMount {
   const encoder = new TextEncoder();
   const absent = (path: string, syscall: string) => syscallError('ENOENT', syscall, `${SKILLS_VIEW}${path}`);
 
   const readOnly = (path: string, syscall: string) => syscallError('EROFS', syscall, `${SKILLS_VIEW}${path}`, {
-    detail: `${SKILLS_VIEW} is a read-only view of every skill; write one at ${WORKSPACE_SKILLS_DIR}/<name>/${SKILL_FOLDER_FILE}, `
-      + `or under ${SHARED_SKILLS_DIR} for the owner's Drive`,
+    detail: `${vfsReference(SKILLS_VIEW)} is a read-only view of every skill; write one at `
+      + `${vfsReference(WORKSPACE_SKILLS_DIR)}/<name>/${SKILL_FOLDER_FILE}, or under ${vfsReference(SHARED_SKILLS_DIR)} for the owner's Drive`,
   });
 
   /** The skill a path names and the rest of the path; null for the root or an unknown name. */

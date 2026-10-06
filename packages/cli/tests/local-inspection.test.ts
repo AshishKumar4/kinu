@@ -5,7 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { CHAT_SESSION_ID, SessionHistory, WorkspaceActorDirectory, type ActorHandle } from '@kinu.run/core';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
-import { MEMORY_PATH, WORKSPACE_ROOT } from '@kinu.run/core';
+import { MEMORY_PATH } from '@kinu.run/core';
 import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import { AGENT_HOME, agentDbPath, updateConfigFile } from '../src/config';
@@ -76,7 +76,7 @@ describe('local inspection of memory', () => {
     const db = new Database(agentDbPath(MEMORY_NAME));
     const rt = createCLIRuntime(db, { llm: { name: 'offline', baseURL: 'http://localhost:0', headers: {}, model: 'offline-model' }, cwd: scratchDir('inspection-folder') });
     await rt.memory.write(MEMORY_PATH, '# Memory\n\nindexed note\n');
-    await writeText(present(rt.agentStateVfs, 'the agent state'), `${WORKSPACE_ROOT}/${MEMORY_PATH}`, '# Memory\n\nedited in place\n');
+    await writeText(present(rt.agentStateVfs, 'the agent state'), MEMORY_PATH, '# Memory\n\nedited in place\n');
     // The same file the agent's memory reads, not a second one beside it.
     expect(await rt.memory.read(MEMORY_PATH)).toBe('# Memory\n\nedited in place\n');
     db.close();
@@ -94,6 +94,6 @@ describe('local inspection of memory', () => {
     db.close();
 
     expect(agentHits).toEqual([MEMORY_PATH]);
-    expect(searchLocalMemory(MEMORY_NAME, 'staging wrangler', 5).map((hit) => hit.path)).toEqual(agentHits);
+    expect((await searchLocalMemory(MEMORY_NAME, 'staging wrangler', 5)).map((hit) => hit.path)).toEqual(agentHits);
   });
 });

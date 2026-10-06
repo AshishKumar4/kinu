@@ -76,14 +76,16 @@ A workspace holds the state. Agents are the actors that work inside it.
   that same conversation instead of minting one per process. Recorded JSONL
   files are diagnostics.
 - The file plane belongs to the workspace. Hosted, `Storage.vfs` is the
-  authoritative Nimbus filesystem. A local workspace keeps two planes on
-  purpose. Agent state (SOUL.md, scaffold, memory, craft store, conversation,
-  every ledger) always lives in its own SQLite-backed filesystem. The
-  workspace plane that `file`, `shell`, `eval` and AGENTS.md address binds to
-  the folder on the agent's ref (`CLIRuntimeConfig.cwd`, required, never
-  `process.cwd()`); a fixture or eval episode binds a scratch folder. The
-  agent reads its own memory, SOUL.md and scaffold at `/agent`, a read-only view
-  of that state (`core/src/vfs/agent-view.ts`), and the `file` tool reaches an
+  authoritative Nimbus filesystem. Locally every file is a real one: the
+  workspace's own space is `~/.kinu/<workspace>/`, where SOUL.md, the memory
+  notes and the scaffold are files of `home/main/`, and its data (conversation,
+  memory index, craft store, every ledger) is `agent.db` beside them. The
+  plane that `file`, `shell`, `eval` and AGENTS.md address is the shell's own
+  namespace, one host-root composite over the folder on the agent's ref
+  (`CLIRuntimeConfig.cwd`, required, never `process.cwd()`); a fixture or eval
+  episode binds a scratch folder. `vfs://` names the space and `local://` the
+  folder. The memory notes and the scaffold are read-only mounts to the file
+  tool, and the `file` tool reaches an
   absolute path outside the directory as the shell does: each operation is
   reviewed as the command it amounts to (`cat`, `tee`, `rm -rf`, ...) under the
   shell's approval mode and grants. Relative file paths resolve where the agent

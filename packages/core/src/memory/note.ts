@@ -6,7 +6,7 @@ import type { Memory } from '../types/primitives';
 export const MEMORY_PATH = 'memory/MEMORY.md';
 
 /** Only files under this directory are FTS5 indexed. */
-const MEMORY_DIR = 'memory/';
+export const MEMORY_DIR = 'memory/';
 
 /** Accepts `memory/a.md` and `/memory/a.md` alike; null outside the memory directory. */
 export function memoryIndexPath(vfsPath: string): string | null {

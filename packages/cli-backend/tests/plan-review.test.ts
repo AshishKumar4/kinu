@@ -95,7 +95,7 @@ function fileResults(events: readonly SessionEvent[]) {
 
 describe('LocalAgentSession — plan review', () => {
   test('a submitted plan is stored, broadcast, holds the next build turn, and releases it on approval', async () => {
-    const write = { action: 'write', path: '/home/main/ledger.txt', content: 'integer cents' };
+    const write = { action: 'write', path: 'vfs://home/main/ledger.txt', content: 'integer cents' };
 
     const { db, agent, events, taken } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
@@ -180,7 +180,7 @@ describe('LocalAgentSession — plan review', () => {
 
   test('a build turn with no plan pending keeps its build authority', async () => {
     const { db, agent, events } = session([
-      { call: 'file', input: { action: 'write', path: '/home/main/plain.txt', content: 'no plan here' } },
+      { call: 'file', input: { action: 'write', path: 'vfs://home/main/plain.txt', content: 'no plan here' } },
       { answer: 'Done.' },
     ]);
 
@@ -199,7 +199,7 @@ describe('LocalAgentSession — plan review', () => {
     const { db, agent, events } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
       { answer: 'Plan submitted for review.' },
-      { call: 'file', input: { action: 'write', path: '/home/main/typo.txt', content: 'fixed' } },
+      { call: 'file', input: { action: 'write', path: 'vfs://home/main/typo.txt', content: 'fixed' } },
       { answer: 'Fixed the typo.' },
     ]);
 
@@ -220,7 +220,7 @@ describe('LocalAgentSession — plan review', () => {
     const { db, agent, events } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
       { answer: 'Plan submitted for review.' },
-      { call: 'file', input: { action: 'write', path: '/home/main/report.txt', content: 'noted' } },
+      { call: 'file', input: { action: 'write', path: 'vfs://home/main/report.txt', content: 'noted' } },
       { answer: 'Handled the report.' },
     ]);
 
@@ -267,7 +267,7 @@ describe('LocalAgentSession — plan review', () => {
     const { db, agent, events, taken } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
       { answer: 'Plan submitted for review.' },
-      { call: 'file', input: { action: 'write', path: '/home/main/other.txt', content: 'unrelated' } },
+      { call: 'file', input: { action: 'write', path: 'vfs://home/main/other.txt', content: 'unrelated' } },
       { answer: 'Done.' },
     ]);
 

@@ -8,6 +8,7 @@ import { Result } from 'effect';
 import type { JsonObject } from '../utils/json';
 import type { InstructionTrust } from '../types/instruction-trust';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { vfsReference } from '../vfs/resolve';
 
 export interface SkillParseRefusal { readonly error: string; readonly line?: number }
 
@@ -92,9 +93,14 @@ export function skillViewPath(name: string): string {
   return `${SKILLS_VIEW}/${name}/${SKILL_FOLDER_FILE}`;
 }
 
+/** {@link skillViewPath} as the prompt names it, a reference either backend's file tool reads. */
+export function skillReference(name: string): string {
+  return vfsReference(skillViewPath(name));
+}
+
 /** Index line for a workspace or Drive file: provenance only, no unapproved description. */
 export function workspaceSkillIndexLine(name: string, source: SkillSource = 'vfs'): string {
   const origin = source === 'shared' ? 'shared drive skill' : 'workspace skill';
 
-  return `- **${name}** \`${skillViewPath(name)}\`: ${origin}; reference material until the owner approves it`;
+  return `- **${name}** \`${skillReference(name)}\`: ${origin}; reference material until the owner approves it`;
 }

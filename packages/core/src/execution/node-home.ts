@@ -36,6 +36,7 @@ export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNo
     ...(box.processes !== undefined && { processes: box.processes }),
     ...(box.ports !== undefined && { ports: box.ports }),
     ...(box.mountTable !== undefined && { mountTable: box.mountTable.bind(box) }),
+    ...(box.namespace !== undefined && { namespace: box.namespace.bind(box) }),
     ...(box.shellCwd !== undefined && { shellCwd: box.shellCwd.bind(box) }),
     exec: (command, options) => box.exec(command, optionsFor(options)),
   };

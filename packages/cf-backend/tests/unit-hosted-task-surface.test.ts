@@ -70,6 +70,24 @@ test('a hired subordinate is framed as a hire, not as a head', async () => {
   expect(system).toContain('report');
 });
 
+// The workspace's soul is SOUL.md as it stands: a save with no main turn after it still frames the next hired turn.
+test("a hired subordinate's turn is framed with SOUL.md as it stands, not as main last read it", async () => {
+  const gateway = scriptedGateway([]);
+  const workspace = gatewayWorkspace(gateway);
+  await workspace.agent.setSoul('# Checkout\n\n## Mission\n\nAudit the checkout flow.');
+
+  const child = await hostedSubordinateHarness(workspace, {
+    name: 'soul-reader', displayName: 'Soul reader', nameOrigin: 'user', mission: 'read the soul it is framed with',
+  });
+
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'Say what the workspace is for.');
+  await workspace.agent.setSoul('# Checkout\n\n## Mission\n\nAudit the refunds flow.');
+  const before = gateway.runs.length;
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'Say it again.');
+
+  expect(systemPrompt(gateway.runs.slice(before))).toContain('Audit the refunds flow.');
+});
+
 test('a hosted child advertises only its callable crafted surface and loses it when code reach is revoked', async () => {
   const gateway = scriptedGateway([]);
   const workspace = gatewayWorkspace(gateway);

@@ -649,7 +649,6 @@
     "head_cut_created_at INTEGER NOT NULL DEFAULT 0",
     "staged_agent_config INTEGER NOT NULL DEFAULT 0",
     "staged_crafted_tools INTEGER NOT NULL DEFAULT 0",
-    "staged_memory_chunks INTEGER NOT NULL DEFAULT 0",
     "staged_session_messages INTEGER NOT NULL DEFAULT 0",
     "staged_conversation_entries INTEGER NOT NULL DEFAULT 0",
     "staged_conversation_entry_parts INTEGER NOT NULL DEFAULT 0",
@@ -661,7 +660,6 @@
     "import_path TEXT",
     "want_agent_config INTEGER NOT NULL DEFAULT 0",
     "want_crafted_tools INTEGER NOT NULL DEFAULT 0",
-    "want_memory_chunks INTEGER NOT NULL DEFAULT 0",
     "want_session_messages INTEGER NOT NULL DEFAULT 0",
     "want_conversation_entries INTEGER NOT NULL DEFAULT 0",
     "want_conversation_entry_parts INTEGER NOT NULL DEFAULT 0",
@@ -851,6 +849,17 @@
     "end_line INTEGER NOT NULL",
     "hash TEXT NOT NULL",
     "text TEXT NOT NULL"
+  ],
+  "memory_note_chunks@packages/agent-utils/src/memory/store.ts": [
+    "id TEXT PRIMARY KEY",
+    "path TEXT NOT NULL",
+    "start_line INTEGER NOT NULL",
+    "end_line INTEGER NOT NULL",
+    "hash TEXT NOT NULL"
+  ],
+  "memory_note_files@packages/agent-utils/src/memory/store.ts": [
+    "path TEXT PRIMARY KEY",
+    "stamp TEXT"
   ],
   "mission_budget@packages/core/src/mission-budget.ts": [
     "actor_id TEXT NOT NULL",
@@ -1496,9 +1505,5 @@
     "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
     "decisions INTEGER NOT NULL",
     "overview TEXT NOT NULL"
-  ],
-  "workspace_soul@packages/core/src/identity/schema.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "markdown TEXT NOT NULL"
   ]
 }

@@ -255,7 +255,7 @@ export async function memoryCommand(name: string, queryParts: string[] = [], opt
         schema: v.string(),
       }) },
     local: async () => query
-      ? decodeJsonValue({ value: searchLocalMemory(target.localName, query, limit) })
+      ? decodeJsonValue({ value: await searchLocalMemory(target.localName, query, limit) })
       : { content: await readLocalMemory(target.localName) },
   });
 

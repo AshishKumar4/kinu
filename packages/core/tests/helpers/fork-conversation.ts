@@ -1,3 +1,4 @@
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
 /**
@@ -172,10 +173,11 @@ export async function seedForkSource(workspace: TestWorkspace, opts: {
 
   if (memory.length > 0) await workspace.vfs.mkdir('memory', { recursive: true });
 
-  for (const [index, file] of memory.entries()) {
+  const index = new MemoryStore(workspace.vfs, workspace.sql);
+
+  for (const file of memory) {
     await writeText(workspace.vfs, file.path, file.text);
-    void workspace.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text)
-      VALUES (${`chunk-${index}`}, ${file.path}, ${1}, ${2}, ${`hash-${index}`}, ${file.text})`;
+    await index.indexFile(file.path, file.text);
   }
 
   return new ForkConversation(workspace, opts.artifactDirectory ?? SOURCE_ARTIFACTS);
