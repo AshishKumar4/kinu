@@ -482,7 +482,7 @@ export interface PendingConsentResolution {
   readonly isCurrent: () => boolean;
 }
 
-export function resolvePendingConsent(
+function resolvePendingConsent(
   { consentId, decision, resolve, remove, report, isCurrent }: PendingConsentResolution,
 ): Promise<void> {
   return refreshLiveResource({

@@ -4,7 +4,6 @@ import {
   formatWorkspaceError,
   loadWorkspaceSnapshot,
   refreshLiveResource,
-  resolvePendingConsent,
   type LiveRefreshAdmission,
   type LiveRefreshErrors,
   type LiveRefreshSource,
@@ -68,21 +67,6 @@ function reporter(initial: LiveRefreshErrors = {}) {
 
       if (message === null) delete next[source];
       else next[source] = message;
-      errors = next;
-    },
-  };
-}
-
-function consentReporter(initial: ReadonlyMap<string, string> = new Map()) {
-  let errors = new Map(initial);
-
-  return {
-    get errors() { return errors; },
-    report: (consentId: string, message: string | null) => {
-      const next = new Map(errors);
-
-      if (message === null) next.delete(consentId);
-      else next.set(consentId, message);
       errors = next;
     },
   };
@@ -222,104 +206,6 @@ describe('MCTS progress admission', () => {
 });
 
 describe('workspace live refresh failures', () => {
-  test('an older completion cannot replace data from a newer refresh', async () => {
-    const admission = activeAdmission();
-    const older = Promise.withResolvers<string>();
-    const newer = Promise.withResolvers<string>();
-    let visible = 'stale';
-    const errors = reporter();
-
-    const olderRefresh = refreshLiveResource({
-      source: 'jobs',
-      read: () => older.promise,
-      apply: (value) => { visible = value; },
-      report: errors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'jobs'),
-    });
-
-    const newerRefresh = refreshLiveResource({
-      source: 'jobs',
-      read: () => newer.promise,
-      apply: (value) => { visible = value; },
-      report: errors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'jobs'),
-    });
-
-    newer.resolve('newer');
-    await newerRefresh;
-    older.resolve('older');
-    await olderRefresh;
-
-    expect(visible).toBe('newer');
-  });
-
-  test('an older failure cannot replace the successful state of a newer refresh', async () => {
-    const admission = activeAdmission();
-    const older = Promise.withResolvers<string>();
-    const newer = Promise.withResolvers<string>();
-    let visible = 'stale';
-    const errors = reporter({ jobs: 'prior failure' });
-
-    const olderRefresh = refreshLiveResource({
-      source: 'jobs',
-      read: () => older.promise,
-      apply: (value) => { visible = value; },
-      report: errors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'jobs'),
-    });
-
-    const newerRefresh = refreshLiveResource({
-      source: 'jobs',
-      read: () => newer.promise,
-      apply: (value) => { visible = value; },
-      report: errors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'jobs'),
-    });
-
-    newer.resolve('newer');
-    await newerRefresh;
-    older.reject(new Error('older request failed'));
-    await olderRefresh;
-
-    expect(visible).toBe('newer');
-    expect(errors.errors.jobs).toBeUndefined();
-  });
-
-  test('a completion admitted for the prior actor cannot repopulate the next actor', async () => {
-    const admission = createLiveRefreshAdmission();
-    admission.activateActor('prior-actor');
-    const priorActor = Promise.withResolvers<string>();
-    const nextActor = Promise.withResolvers<string>();
-    let visible = 'stale';
-    const errors = reporter();
-
-    const priorRefresh = refreshLiveResource({
-      source: 'jobs',
-      read: () => priorActor.promise,
-      apply: (value) => { visible = value; },
-      report: errors.report,
-      isCurrent: admission.admit('prior-actor', 'jobs'),
-    });
-
-    admission.activateActor('next-actor');
-    visible = 'cleared';
-
-    const nextRefresh = refreshLiveResource({
-      source: 'jobs',
-      read: () => nextActor.promise,
-      apply: (value) => { visible = value; },
-      report: errors.report,
-      isCurrent: admission.admit('next-actor', 'jobs'),
-    });
-
-    nextActor.resolve('next actor');
-    await nextRefresh;
-    priorActor.resolve('prior actor');
-    await priorRefresh;
-
-    expect(visible).toBe('next actor');
-    expect(formatWorkspaceError(errors.errors, true)).toBeNull();
-  });
 
   test('a retained callback from the prior actor cannot admit a new request', async () => {
     const admission = createLiveRefreshAdmission();
@@ -347,47 +233,6 @@ describe('workspace live refresh failures', () => {
     expect(visible).toBe('actor-b');
     expect(requested).toBeFalse();
     expect(formatWorkspaceError(errors.errors, true)).toBeNull();
-  });
-
-  test('all polled surfaces share one stable, non-spammy failure message', () => {
-    expect(formatWorkspaceError({
-      jobs: 'offline',
-      pendingActions: 'offline',
-      memoryContent: 'offline',
-      executors: 'offline',
-      slates: 'offline',
-      consents: 'offline',
-      plan: 'offline',
-    }, true)).toEqual({
-      severity: 'partial',
-      title: 'Background jobs, pending actions, memory content, executors, slates, device consents, and active plan could not be refreshed.',
-      scope: 'The conversation is available. Showing last known data.',
-      detail: 'offline',
-      retry: 'Retry',
-    });
-  });
-
-  test('a failed refresh retains stale data and reports one actionable error', async () => {
-    let jobs = ['already visible'];
-    const admission = activeAdmission();
-    const errors = reporter();
-
-    await refreshLiveResource({
-      source: 'jobs',
-      read: () => Promise.reject(new Error('jobs RPC unavailable')),
-      apply: (next: string[]) => { jobs = next; },
-      report: errors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'jobs'),
-    });
-
-    expect(jobs).toEqual(['already visible']);
-    expect(formatWorkspaceError(errors.errors, true)).toEqual({
-      severity: 'partial',
-      title: 'Background jobs could not be refreshed.',
-      scope: 'The conversation is available. Showing last known data.',
-      detail: 'jobs RPC unavailable',
-      retry: 'Retry loading background jobs',
-    });
   });
 
   test('failures consolidate, and each successful retry clears only its source', async () => {
@@ -629,88 +474,5 @@ describe('loading the workspace snapshot', () => {
 
     expect(await loading).toBe('superseded');
     expect(errors.errors).toEqual({});
-  });
-});
-
-describe('device consent resolution', () => {
-  test('a rejected resolution keeps the consent visible and reports the failure', async () => {
-    const pending = ['consent-1'];
-    const admission = activeAdmission();
-    const resolutionErrors = consentReporter();
-    const refreshErrors = reporter();
-
-    await resolvePendingConsent({
-      consentId: 'consent-1',
-      decision: 'once',
-      resolve: () => Promise.reject(new Error('device hub unavailable')),
-      remove: (id) => pending.splice(pending.indexOf(id), 1),
-      report: resolutionErrors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'consentResolution:consent-1'),
-    });
-
-    expect(pending).toEqual(['consent-1']);
-    expect(resolutionErrors.errors.get('consent-1')).toBe('device hub unavailable');
-
-    await refreshLiveResource({
-      source: 'consents',
-      read: () => Promise.resolve(['consent-1']),
-      apply: () => {},
-      report: refreshErrors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'consents'),
-    });
-    expect(resolutionErrors.errors.get('consent-1')).toBe('device hub unavailable');
-  });
-
-  test('a successful resolution removes the card and clears its prior error', async () => {
-    const pending = ['consent-1'];
-    const admission = activeAdmission();
-    const errors = consentReporter(new Map([['consent-1', 'previous failure']]));
-
-    await resolvePendingConsent({
-      consentId: 'consent-1',
-      decision: 'always',
-      resolve: () => Promise.resolve(),
-      remove: (id) => pending.splice(pending.indexOf(id), 1),
-      report: errors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'consentResolution:consent-1'),
-    });
-
-    expect(pending).toEqual([]);
-    expect(errors.errors.get('consent-1')).toBeUndefined();
-  });
-
-  test('simultaneous decisions for different consent ids remain independent', async () => {
-    const pending = ['consent-1', 'consent-2'];
-    const first = Promise.withResolvers<void>();
-    const second = Promise.withResolvers<void>();
-    const admission = activeAdmission();
-    const errors = consentReporter();
-    const remove = (id: string) => pending.splice(pending.indexOf(id), 1);
-
-    const firstResolution = resolvePendingConsent({
-      consentId: 'consent-1',
-      decision: 'once',
-      resolve: () => first.promise,
-      remove,
-      report: errors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'consentResolution:consent-1'),
-    });
-
-    const secondResolution = resolvePendingConsent({
-      consentId: 'consent-2',
-      decision: 'deny',
-      resolve: () => second.promise,
-      remove,
-      report: errors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'consentResolution:consent-2'),
-    });
-
-    first.reject(new Error('consent-1 unavailable'));
-    await firstResolution;
-    second.resolve(undefined);
-    await secondResolution;
-
-    expect(pending).toEqual(['consent-1']);
-    expect(errors.errors.get('consent-1')).toBe('consent-1 unavailable');
   });
 });

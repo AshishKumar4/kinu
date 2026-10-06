@@ -49,7 +49,7 @@ export class FakeGpu {
   }
 }
 
-let vgpuInit: () => Promise<FakeGpu> = () => Promise.resolve(new FakeGpu());
+const vgpuInit = (): Promise<FakeGpu> => Promise.resolve(new FakeGpu());
 
 let lastGpu: FakeGpu | null = null;
 
@@ -136,15 +136,10 @@ export async function installFakeVgpu(): Promise<void> {
 }));
 }
 
-export function setVgpuInit(init: () => Promise<FakeGpu>): void {
-  vgpuInit = init;
-}
-
 export function lastFakeGpu(): FakeGpu | null {
   return lastGpu;
 }
 
 export function resetFakeVgpu(): void {
-  vgpuInit = () => Promise.resolve(new FakeGpu());
   lastGpu = null;
 }

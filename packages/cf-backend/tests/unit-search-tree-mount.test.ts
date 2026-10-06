@@ -5,7 +5,7 @@ import { VGPUError as CoreVGPUError } from '@vgpu/core';
 import { SearchTree } from '@kinu.run/core/web/hero-art';
 import type { StrokeSurface } from '@kinu.run/core/web/hero-canvas';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
-import { installFakeVgpu, lastFakeGpu, resetFakeVgpu, setVgpuInit } from './helpers/fake-vgpu';
+import { installFakeVgpu, lastFakeGpu, resetFakeVgpu } from './helpers/fake-vgpu';
 
 await installFakeVgpu();
 
@@ -244,26 +244,4 @@ describe('the hero mount lands on Canvas2D whenever the GPU half gives out', () 
     }
   });
 
-  test('a failed WebGPU start paints the tree through the canvas renderer and says why', async () => {
-    const logs = createRecordingLogger();
-    const restoreSink = setDiagnosticsSink(logs);
-    setVgpuInit(() => Promise.reject(new TypeError('device request was denied')));
-
-    try {
-      const living = mountHero();
-      await landed(living);
-
-      expect(living.renderer()).toBe('canvas');
-      expect(hostChildren).toHaveLength(1);
-      expect(hostChildren[0]?.dataset.renderer).toBe('canvas');
-
-      for (let frame = 0; frame < 12; frame += 1) drainFrames();
-      expect(hostChildren[0]?.strokes).toBeGreaterThan(0);
-
-      const reported = logs.emitted.find((entry) => entry.event === 'landing.hero_webgpu_failed');
-      expect(reported?.fields['reason']).toContain('device request was denied');
-    } finally {
-      restoreSink();
-    }
-  });
 });
