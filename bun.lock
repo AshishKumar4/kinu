@@ -181,8 +181,6 @@
       "name": "@kinu.run/cli-backend",
       "version": "0.1.0",
       "dependencies": {
-        "@ai-sdk/openai": "4.0.83",
-        "@ai-sdk/openai-compatible": "3.0.62",
         "@ai-sdk/provider": "4.0.21",
         "@cloudflare/codemode": "0.5.2",
         "@kinu.run/agent-utils": "workspace:*",
