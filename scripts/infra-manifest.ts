@@ -73,8 +73,10 @@ export const EMBEDDER_SOURCE = 'packages/cf-backend/src/runtime.ts';
  *  absent — a config this cannot read is not a config it may certify. */
 const WorkerSchema = v.object({
   name: v.optional(v.string()),
+  main: v.optional(v.string()),
   account_id: v.optional(v.string()),
   compatibility_date: v.optional(v.string()),
+  compatibility_flags: v.optional(v.array(v.string())),
   routes: v.optional(v.array(v.object({
     pattern: v.string(),
     custom_domain: v.optional(v.boolean()),
@@ -184,9 +186,9 @@ function environmentConfig(config: v.InferOutput<typeof WranglerConfigSchema>, e
     throw new Error(`${WRANGLER_CONFIG} env.staging names no routes of its own, so it would inherit production's`);
   }
 
-  const { name, account_id: accountId, compatibility_date: compatibilityDate, assets, exports, triggers } = production;
+  const { name, account_id: accountId, compatibility_date: compatibilityDate, compatibility_flags: compatibilityFlags, assets, exports, triggers } = production;
 
-  const inherited = Object.fromEntries(Object.entries({ account_id: accountId, compatibility_date: compatibilityDate, assets, exports, triggers })
+  const inherited = Object.fromEntries(Object.entries({ account_id: accountId, compatibility_date: compatibilityDate, compatibility_flags: compatibilityFlags, assets, exports, triggers })
     .filter(([, value]) => value !== undefined));
 
   return named({ ...inherited, name: `${name ?? 'worker'}-staging`, ...staging });

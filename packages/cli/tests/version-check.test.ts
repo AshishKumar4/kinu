@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { scratchDir } from '@kinu.run/test-utils';
+import { runToExit, scratchDir } from '@kinu.run/test-utils';
 import { fetchServedVersion } from '../src/version-check';
 import { isSameBuild, type JsonObject, type JsonValue } from '@kinu.run/core';
 
@@ -23,8 +23,7 @@ function configHome(config: JsonObject): string {
 async function runStartup(home: string, opts: { isTTY: boolean; fetchExpr: string }): Promise<{
   lines: string[]; outcome: string | null; spawned: number;
 }> {
-  const proc = Bun.spawn({
-    cmd: [process.execPath, '-e', `
+  const { stdout, stderr, exitCode } = await runToExit([process.execPath, '-e', `
       import { runStartupUpdateCheck } from './packages/cli/src/version-check.ts';
       import { VERSION } from './packages/cli/src/display.ts';
       const lines = [];
@@ -37,18 +36,10 @@ async function runStartup(home: string, opts: { isTTY: boolean; fetchExpr: strin
         spawnRefresh: () => { spawned += 1; },
       });
       console.log(JSON.stringify({ lines, outcome, spawned }));
-    `],
+    `], {
     cwd: repoRoot,
     env: { ...process.env, KINU_HOME: home },
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
-
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
 
   if (exitCode !== 0) throw new Error(`script failed (${exitCode}): ${stderr}`);
 

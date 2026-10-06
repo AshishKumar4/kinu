@@ -1,4 +1,5 @@
 import { scratchDir } from '../../test-utils/src/scratch';
+import { runToExit } from '@kinu.run/test-utils';
 import { writeFileSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
@@ -17,20 +18,10 @@ function scratchHome(): string {
 }
 
 async function runCli(home: string, args: string[]) {
-  const proc = Bun.spawn([process.execPath, cliBin, ...args], {
+  return runToExit([process.execPath, cliBin, ...args], {
     cwd: repoRoot,
     env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' },
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
-
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-
-  return { stdout, stderr, exitCode };
 }
 
 describe('canonicalProviderName', () => {

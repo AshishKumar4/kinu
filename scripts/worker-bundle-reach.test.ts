@@ -8,7 +8,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { builtinModules } from 'node:module';
 import { build, stop } from 'esbuild';
-import { readWranglerConfig } from './release-manifest';
+import { deployedConfig } from './infra-manifest';
 
 const WORKER = 'packages/cf-backend';
 
@@ -29,7 +29,7 @@ function packageOf(input: string): string | null {
 
 /** The packages the Worker's entry is built from, with `planted` imported beside it. */
 async function bundledPackages(planted = ''): Promise<Set<string>> {
-  const main = readWranglerConfig().main;
+  const main = deployedConfig('production').main;
 
   if (main === undefined) throw new Error('wrangler.jsonc names no `main`');
 

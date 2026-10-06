@@ -8,8 +8,10 @@ import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { runToExit, scratchPath } from '@kinu.run/test-utils';
+import { ELAPSED_COUNTER, SPINNER_FRAMES } from '@kinu.run/core/tui';
 
 export type PtyStep =
+  /** `timeout` bounds idle time without a new semantic screen state, not total elapsed time. */
   | { readonly wait: string; readonly timeout?: number }
   /** An overlay leaving is the product's signal that the covered surface has its keys back. */
   | { readonly gone: string; readonly timeout?: number }
@@ -31,7 +33,7 @@ const PtyResultSchema = v.object({
 });
 
 const DRIVER = String.raw`
-import base64, codecs, json, os, pty, select, signal, struct, sys, termios, fcntl, time, unicodedata
+import base64, codecs, json, os, pty, re, select, signal, struct, sys, termios, fcntl, time, unicodedata
 
 
 class Screen:
@@ -214,10 +216,18 @@ fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 raw = bytearray()
 screen = Screen(rows, cols)
+animation = spec["animation"]
+elapsed = re.compile(re.escape(animation["elapsed"]["prefix"]) + r"\d+" + re.escape(animation["elapsed"]["suffix"]) + r"\b")
+
+def progress_state():
+    text = elapsed.sub("", screen.text())
+    for frame in animation["spinner"]:
+        text = text.replace(frame, "")
+    return " ".join(text.split())
 
 def pump(seconds):
-    end = time.time() + seconds
-    while time.time() < end:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
         ready, _, _ = select.select([master], [], [], 0.05)
         if not ready:
             continue
@@ -233,17 +243,23 @@ def pump(seconds):
 
 alive = True
 waits = []
-started = time.time()
+started = time.monotonic()
 for step in spec["steps"]:
     if "wait" in step or "gone" in step:
         until = "gone" if "gone" in step else "shown"
         text = step["gone"] if until == "gone" else step["wait"]
-        deadline = time.time() + step.get("timeout", 15)
+        idle = step.get("timeout", 15)
+        deadline = time.monotonic() + idle
+        seen = {progress_state()}
         met = (text in screen.text()) == (until == "shown")
-        while not met and time.time() < deadline and alive:
+        while not met and time.monotonic() < deadline and alive:
             alive = pump(0.1)
             met = (text in screen.text()) == (until == "shown")
-        waits.append({"until": until, "text": text, "met": met, "afterMs": int((time.time() - started) * 1000)})
+            state = progress_state()
+            if state not in seen:
+                seen.add(state)
+                deadline = time.monotonic() + idle
+        waits.append({"until": until, "text": text, "met": met, "afterMs": int((time.monotonic() - started) * 1000)})
         if not met:
             break
     elif "send" in step:
@@ -348,6 +364,7 @@ export async function runTuiInPty(entry: string, options: {
       ...options.env,
     },
     steps: options.steps,
+    animation: { spinner: SPINNER_FRAMES, elapsed: ELAPSED_COUNTER },
   };
 
   const run = await runToExit([python, driver, JSON.stringify(spec)], {

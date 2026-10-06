@@ -20,7 +20,8 @@ import type { OrchestratorAgent } from '../src/orchestrator';
 import type { UserDO } from '../src/user/user-do';
 import type { FilesRouteAgent } from '../src/files-routes';
 import type { TerminalWorkspace } from '../src/terminal-route';
-import { orchestratorHarness, rpcReachableFrom, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { rpcReachableFrom } from './helpers/platform-context';
 import { MUST_STAY_DENIED } from './helpers/rpc-denied';
 import { declaredName, memberCalleeName, parse, walk } from '../../../scripts/syntax';
 

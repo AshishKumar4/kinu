@@ -46,7 +46,7 @@ describe('the deployment preflight', () => {
     // comparing shas that do not exist.
     const verdict = deploymentVerdict({ localSha: 'abc1234', health: health(null) });
     expect(verdict.kind).toBe('unstamped');
-    expect(describeDeploymentVerdict(verdict, ORIGIN)).toContain('incomplete');
+    expect(describeDeploymentVerdict(verdict, ORIGIN)).toContain(`${ORIGIN}/api/health`);
   });
 
   test('an unanswered health endpoint carries the transport failure verbatim', () => {
@@ -74,7 +74,7 @@ describe('the deployment preflight', () => {
       // `current` states the build it verified; the other three must name the
       // remedy. A state reported without either has moved the problem.
       const actionable = verdict.kind === 'current'
-        ? line.includes('runs this checkout')
+        ? line.includes(verdict.sha)
         : line.includes('deploy') || line.includes('--allow-stale');
 
       expect(actionable, `${verdict.kind}: ${line}`).toBe(true);

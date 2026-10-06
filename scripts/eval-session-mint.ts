@@ -20,21 +20,14 @@ import { dirname } from 'node:path';
 import * as v from 'valibot';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER } from '@kinu.run/core';
 import {
-  EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, evalAccount, evalSessionPath, evalTargetVerdict, evalWebIdentityEnv,
+  EVAL_IDENTITY_ENV, evalAccount, evalSessionPath, evalTargetVerdict, evalWebIdentityEnv,
   isEvalAccountEmail,
 } from '@kinu.run/test-utils';
 import { pollCliAuth, startCliAuth } from '../packages/cli/src/cloud-api';
 
 const account = evalAccount();
 
-// An origin set to blank names no target, so it reads as absent.
-const originFromEnv = process.env[EVAL_IDENTITY_ENV.origin]?.trim();
-
-const origin = originFromEnv === undefined || originFromEnv.length === 0
-  ? EVAL_DEPLOYMENT_ORIGIN
-  : originFromEnv;
-
-const target = evalTargetVerdict(origin);
+const target = evalTargetVerdict(process.env[EVAL_IDENTITY_ENV.origin]);
 
 if (target.kind === 'refused') {
   console.error(`eval-session-mint: REFUSED — ${target.reason}`);

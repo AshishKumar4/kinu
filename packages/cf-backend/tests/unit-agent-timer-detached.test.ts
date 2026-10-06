@@ -6,7 +6,7 @@ import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink, type Logger } from '@kinu.run/core/obs';
 
 import { AgentDatabase } from '../src/agent-facet/agent-database';
-import { makeCtx } from './helpers/actor-harness';
+import { makeCtx } from './helpers/platform-context';
 
 function unreachable(): never {
   throw new Error('the timer test reached the workspace');
