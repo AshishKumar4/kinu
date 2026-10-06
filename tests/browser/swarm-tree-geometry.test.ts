@@ -710,3 +710,67 @@ describe('a search, as it happens', () => {
     expect(workingAfterDecay, 'the working mark never expired').toBe(0);
   });
 });
+
+/** Each node the scene draws, keyed by its search and id: its status, its parent, whether it is folded. */
+function drawnNodes(page: Page): Promise<{ key: string; status: string; parent: string | null; folded: boolean }[]> {
+  return page.$$eval('g.mcts-node', (nodes) => nodes.map((node) => {
+    const search = node.closest('g.mcts-region')?.getAttribute('data-run') ?? '';
+    const parent = node.getAttribute('data-parent');
+
+    return {
+      key: `${search}/${node.getAttribute('data-node') ?? ''}`,
+      status: node.getAttribute('data-status') ?? '',
+      parent: parent === null ? null : `${search}/${parent}`,
+      folded: node.hasAttribute('data-folded'),
+    };
+  }));
+}
+
+/**
+ * Folding hides what was abandoned and nothing else: a pruned or failed branch keeps its own node, folded, and shows
+ * none of its children; every node with no abandoned branch above it stays, a settled search's own root included,
+ * though settling marks that root pruned; and Expand brings every node back.
+ */
+test('folding hides exactly the abandoned branches, never a search itself, and expanding restores them', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1280, height: 1238 });
+    await page.goto(`${origin}/gallery.html?frame=forks`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('g.mcts-node[data-node]');
+    await settled(page);
+
+    const before = await drawnNodes(page);
+    const byKey = new Map(before.map((node) => [node.key, node]));
+
+    const abandoned = (id: string | null): boolean => {
+      const node = id === null ? undefined : byKey.get(id);
+
+      return node !== undefined && node.parent !== null && (node.status === 'pruned' || node.status === 'failed');
+    };
+
+    const underAbandoned = (id: string): boolean => {
+      for (let at = byKey.get(id)?.parent ?? null; at !== null; at = byKey.get(at)?.parent ?? null) if (abandoned(at)) return true;
+
+      return false;
+    };
+
+    const parents = new Set(before.flatMap((node) => (node.parent === null ? [] : [node.parent])));
+
+    // The fixture has something to fold, or this proves nothing.
+    expect(before.some((node) => abandoned(node.key) && parents.has(node.key))).toBe(true);
+
+    await page.click('button[aria-label="Fold abandoned branches"]');
+    await settled(page);
+    const after = await drawnNodes(page);
+    const shown = new Set(after.map((node) => node.key));
+
+    expect(after.filter((node) => node.parent !== null && underAbandoned(node.key))).toEqual([]);
+    expect(before.filter((node) => !underAbandoned(node.key) && !shown.has(node.key))).toEqual([]);
+    expect(after.filter((node) => abandoned(node.key) && parents.has(node.key)).every((node) => node.folded)).toBe(true);
+
+    await page.click('button[aria-label="Expand every branch"]');
+    await settled(page);
+    expect((await drawnNodes(page)).map((node) => node.key).sort()).toEqual(before.map((node) => node.key).sort());
+    await page.close();
+  });
+});

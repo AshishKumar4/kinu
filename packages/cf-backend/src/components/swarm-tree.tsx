@@ -645,6 +645,10 @@ export function SwarmTree({
 				.data(region.nodes)
 				.join("g")
 				.attr("class", "mcts-node")
+				.attr("data-node", (d) => d.data.id)
+				.attr("data-status", (d) => d.data.status)
+				.attr("data-parent", (d) => d.parent?.data.id ?? null)
+				.attr("data-folded", (d) => (collapsed.has(foldKey(region.runId, d.data.id)) ? "" : null))
 				.attr("transform", (d) => `translate(${d.y},${d.x})`)
 				.style("cursor", "pointer");
 
