@@ -2349,12 +2349,15 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 
     if (method === "listMounts") return rpcResult([]).json<T>();
 
-    if (method === "getMemoryContent") return rpcResult(`Memory ${revision}`).json<T>();
+    // `data-workspace-revision="empty"`: the workspace remembers nothing.
+    const memory = revision === "empty" ? "" : `Memory ${revision}`;
+
+    if (method === "getMemoryContent") return rpcResult(memory).json<T>();
 
     if (method === "getWorkspaceSnapshot") {
       const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
 
-      return rpcResult(v.parse(JsonValueSchema, { ...snapshot, memoryContent: `Memory ${revision}`, activePlan: galleryAgentPlan })).json<T>();
+      return rpcResult(v.parse(JsonValueSchema, { ...snapshot, memoryContent: memory, activePlan: galleryAgentPlan })).json<T>();
     }
   }
 

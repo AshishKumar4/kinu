@@ -2,6 +2,30 @@ import { expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
 
+/** What the Agent tab's memory section shows: its retry, the workspace's memory, an empty state, or nothing yet. */
+function memoryShows(page: Page): Promise<string> {
+  return page.$eval('[data-section="memory"]', (section) => {
+    if (section.querySelector('[data-failure]') !== null) return 'failed';
+
+    if (section.querySelector('[data-empty]') !== null) return 'empty';
+
+    return /Memory \w+/u.exec(section.textContent ?? '')?.[0] ?? 'nothing yet';
+  });
+}
+
+async function openAgentTab(page: Page): Promise<void> {
+  await page.waitForSelector('[data-composer-root]');
+
+  // With nothing loaded the inspector starts shut; its tabs take clicks once it has opened.
+  if (await page.$('button[aria-label="Show inspector"]') !== null) {
+    await page.click('button[aria-label="Show inspector"]');
+    await page.waitForSelector('button[aria-label="Hide inspector"]');
+  }
+
+  await page.click('button[title="Agent"]');
+  await page.waitForSelector('[data-section="memory"]');
+}
+
 
 test('Files recovers current workspace data after a failed read and reconnect', async () => {
   await withGallery(async ({ newPage, origin }) => {
@@ -384,6 +408,62 @@ test('a read answered after its workspace was left never shows in the next one',
     await answerJobs(page, left, { label: 'left workspace build' });
     await framesDrawn(page);
     expect([await pageSays(page, 'next workspace build'), await pageSays(page, 'left workspace build')]).toEqual([true, false]);
+    await page.close();
+  });
+});
+
+/** Loads the workspace page, then makes `revision` what its reads answer from the next reconnect on. */
+async function workspaceAt(page: Page, origin: string, revision: string): Promise<void> {
+  await page.goto(`${origin}/gallery.html?frame=workspacepage&workspaceFault=1`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('[data-composer-root]');
+  // The stub's first open belongs to the initial connection, so only a later one re-reads.
+  await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
+  await page.evaluate((loaded) => {
+    document.documentElement.dataset.workspaceRevision = loaded;
+    window.dispatchEvent(new Event('gallery-reconnect'));
+  }, revision);
+}
+
+/**
+ * The Agent tab's memory claims only what a read said: nothing while the snapshot is out, a retry once it failed with
+ * nothing loaded (the reason stays the banner's), the empty state for a workspace that loaded holding nothing, and the
+ * last memory, or the last emptiness, while a dropped connection leaves the snapshot stale.
+ */
+test('memory shows what the last read said, through loading, failure, a stale snapshot and an empty one', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1920, height: 1100 });
+
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&snapshot=held`, { waitUntil: 'networkidle0' });
+    await openAgentTab(page);
+    expect(await memoryShows(page)).toBe('nothing yet');
+    await page.evaluate(() => { document.documentElement.dataset.snapshotReleased = '1'; });
+    await page.waitForFunction(() => document.querySelector('[data-section="memory"] [data-empty]') !== null);
+
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&snapshot=failed`, { waitUntil: 'networkidle0' });
+    await openAgentTab(page);
+    await page.waitForFunction(() => document.querySelector('[data-section="memory"] [data-failure]') !== null);
+    // The pane offers its retry without repeating the reason the banner gives.
+    expect(await page.$eval('[data-section="memory"]', (section) => section.textContent ?? '')).not.toContain('Network connection lost');
+
+    // Loaded, then every read fails: the memory on screen stays, and so does an empty one.
+    for (const [revision, loaded] of [['before', 'Memory before'], ['empty', 'empty']] as const) {
+      await workspaceAt(page, origin, revision);
+      await openAgentTab(page);
+      await page.waitForFunction((want) => {
+        const section = document.querySelector('[data-section="memory"]');
+
+        return want === 'empty' ? section?.querySelector('[data-empty]') !== null : section?.textContent?.includes(want) === true;
+      }, {}, loaded);
+
+      await page.evaluate(() => {
+        document.documentElement.dataset.workspaceFault = '1';
+        window.dispatchEvent(new Event('gallery-reconnect'));
+      });
+      await page.waitForFunction(() => document.body.textContent?.includes('Showing last known data'));
+      expect(await memoryShows(page)).toBe(loaded);
+    }
+
     await page.close();
   });
 });
