@@ -12,6 +12,7 @@ import {
   WorkspaceActorDirectory,
   type ActorHandle, type AppDataStore, type CodemodeProvider, type SqlExec, type SqlExecutor, type SqlValue,
 } from '@kinu.run/core';
+import { KinuError, settleSync } from '@kinu.run/core/obs';
 import { KinuSandboxExecutor, codemodeLauncher } from '../../src/codemode-sandbox';
 
 interface ProbeActors {
@@ -26,6 +27,13 @@ export interface DbProbeAnswer {
   /** Rows as the database holds them, so the assertion is not the program agreeing with itself. */
   readonly rows: readonly { readonly actor: string; readonly key: string }[];
   readonly tables: readonly string[];
+  readonly evidence: readonly string[];
+}
+
+/** What a batch inside a caller's transaction left: why the caller refused, if it did, and the rows and evidence that stood. */
+export interface OuterBatchAnswer {
+  readonly reason: string | null;
+  readonly rows: DbProbeAnswer['rows'];
   readonly evidence: readonly string[];
 }
 
@@ -127,6 +135,36 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
       .flatMap((event) => (event.type === 'db_op'
         ? [`${event.op}:${event.table}:${event.scope}:${event.rowsAffected}:${String(event.batch)}`]
         : []));
+  }
+
+  /**
+   * A batch inside a caller's transaction, as admission writes ride one: a fence refusing after it, or the caller's body
+   * throwing, takes the batch its own nested transaction committed, and its evidence, with it.
+   */
+  outerBatch(refusal: 'none' | 'fence' | 'caller'): OuterBatchAnswer {
+    const { main } = this.open();
+    const store = this.store(main);
+    let reason: string | null = null;
+
+    store.createTable({
+      name: 'ledger', scope: 'actor', columns: [{ name: 'key', type: 'text', primaryKey: true }, { name: 'amount', type: 'integer' }],
+    });
+
+    try {
+      this.ctx.storage.transactionSync(() => {
+        store.batch([
+          { op: 'insert', table: 'ledger', rows: [{ key: 'a', amount: 1 }] },
+          { op: 'insert', table: 'ledger', rows: [{ key: 'b', amount: 2 }] },
+        ]);
+        settleSync(refusal === 'fence' ? Effect.fail(new KinuError('denied', 'a turn started mid-revert')) : Effect.void);
+
+        if (refusal === 'caller') throw new Error('outer transaction failed');
+      });
+    } catch (cause) {
+      reason = cause instanceof Error ? cause.message : String(cause);
+    }
+
+    return { reason, rows: this.rows(), evidence: this.evidence(main) };
   }
 
   /** A handle whose identity is not in the directory: a stale binding is refused before any statement runs. */

@@ -2,7 +2,7 @@
 // Augments `Cloudflare.Env`, which `cloudflare:test` and `cloudflare:workers` both read.
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type {
-  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, StreamLifecycleDO, TransactionDO,
+  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, StreamLifecycleDO,
 } from './worker';
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
@@ -342,7 +342,6 @@ declare global {
       RETENTION: DurableObjectNamespace<RetentionDO>;
       NEIGHBOUR: DurableObjectNamespace<NeighbourDO>;
       GATED: DurableObjectNamespace<GatedDO>;
-      TRANSACTION: DurableObjectNamespace<TransactionDO>;
       ALARMED: DurableObjectNamespace<AlarmDO>;
       CACHE_WARM_PROBE: DurableObjectNamespace<CacheWarmProbeDO>;
       EVICTION_PROBE: DurableObjectNamespace<EvictionProbeDO>;

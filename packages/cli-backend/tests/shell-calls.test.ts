@@ -7,34 +7,34 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolExecutionOptions } from 'ai';
-import { codemodeSurface, DEVICE_REQUEST_OPTION, DeviceRequestOwnership } from '@kinu.run/core';
+import { codemodeSurface, createBashShell, DEVICE_REQUEST_OPTION, DeviceRequestOwnership } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
-import { createCLIRuntime } from '../src/runtime';
+import { createCLIRuntime, createHostShell } from '../src/runtime';
 
-function runtimeOf(cwd = scratchDir('cli-shell-calls-folder')) {
-  const db = new Database(join(scratchDir('cli-shell-calls'), 'agent.db'));
-
-  return createCLIRuntime(db, { llm: null, agentName: 'calls', cwd });
+/** A directory's host shell, wrapped as the runtime wraps it; no runtime is built for a shell's own state. */
+function shellOf(directory = scratchDir('cli-shell-calls-folder')) {
+  return createBashShell(createHostShell(directory), {
+    home: directory, scope: 'calls', stateDirectory: scratchDir('cli-shell-calls-state'),
+  });
 }
 
-function shellOf(cwd?: string) {
-  const { shell } = runtimeOf(cwd);
+/** One runtime over the eval directory, built once: both eval cases read only its codemode surface. */
+const evalDirectory = scratchDir('cli-shell-eval');
 
-  if (!shell) throw new Error('The runtime has no shell.');
+writeFileSync(join(evalDirectory, 'package.json'), '{"name":"probe"}');
 
-  return shell;
-}
+const { execute } = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
+  ...codemodeSurface(createCLIRuntime(new Database(join(scratchDir('cli-shell-calls'), 'agent.db')), { llm: null, agentName: 'calls', cwd: evalDirectory }), {}),
+  craftedTools: () => [],
+});
 
-/** `eval` over a directory's runtime, called with the tool options a turn hands it. */
-function evalIn(directory: string) {
-  const { execute } = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({ ...codemodeSurface(runtimeOf(directory), {}), craftedTools: () => [] });
-
+/** `eval` over the directory's runtime, called with the tool options a turn hands it. */
+function run(code: string, options: Partial<ToolExecutionOptions<unknown>> & { [DEVICE_REQUEST_OPTION]?: DeviceRequestOwnership } = {}) {
   if (!execute) throw new Error('eval has no execute');
 
-  return (code: string, options: Partial<ToolExecutionOptions<unknown>> & { [DEVICE_REQUEST_OPTION]?: DeviceRequestOwnership } = {}) =>
-    execute({ code }, { toolCallId: 'call_eval', messages: [], context: undefined, ...options });
+  return execute({ code }, { toolCallId: 'call_eval', messages: [], context: undefined, ...options });
 }
 
 test("a directory's host shell starts each call fresh there, and a name keeps its directory and exports", async () => {
@@ -59,15 +59,11 @@ test("the workspace's shell answers a call while another still runs, and a cance
 });
 
 test("an eval's child process starts where the shell does, in the directory's own project", async () => {
-  const directory = scratchDir('cli-shell-eval');
-  writeFileSync(join(directory, 'package.json'), '{"name":"probe"}');
-
-  expect(await evalIn(directory)("const { stdout } = await require('child_process').exec('cat package.json'); return stdout;"))
+  expect(await run("const { stdout } = await require('child_process').exec('cat package.json'); return stdout;"))
     .toMatchObject({ result: '{"name":"probe"}' });
 });
 
 test("an eval's exec carries the call's job and cancel: the job's name answers busy, and the stop ends its command", async () => {
-  const run = evalIn(scratchDir('cli-shell-eval'));
   const job = new DeviceRequestOwnership('job-1');
   job.drain('job-1');
   const stop = new AbortController();

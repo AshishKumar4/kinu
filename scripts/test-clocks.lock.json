@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-10-06",
-  "total": 95,
+  "total": 94,
   "files": {
     "packages/cf-backend/tests/helpers/actor-harness.ts": {
       "lap-poll": 1
@@ -57,7 +57,7 @@
       "sleep": 10
     },
     "packages/cf-backend/tests/workerd/worker.ts": {
-      "sleep": 3
+      "sleep": 2
     },
     "packages/cli-backend/tests/local-session-lifecycle.test.ts": {
       "sleep": 1
