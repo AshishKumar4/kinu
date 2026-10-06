@@ -647,9 +647,9 @@ describe('summaries', () => {
 
     expect({ server: server.prompts, sent: await server.transform(compacted, { model: 'openai/gpt-5.5' }) }).toEqual({ server: [], sent: compacted.slice(3) });
 
-    // A response can carry two items (`compaction, message, compaction`, measured 2026-10-06); the latest replaces the rest.
+    // A response can carry two items (`compaction, message, compaction`, measured 2026-10-06); the latest replaces the
+    // rest, also where a trimmed history opens at that answer and the cut keeps every message.
     const twice: ModelMessage[] = [
-      user('the ask the provider compacted at'),
       assistant([
         { type: 'custom', kind: 'openai.compaction', providerOptions: { openai: { type: 'compaction', itemId: 'cmp_1', encryptedContent: 'FIRST' } } },
         { type: 'text', text: 'ok' },

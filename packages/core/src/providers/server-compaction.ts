@@ -4,7 +4,7 @@
  * (platform.claude.com/docs/en/build-with-claude/compaction-threshold), OpenAI's an encrypted `compaction` item
  * (developers.openai.com/api/docs/guides/compaction).
  */
-import type { ModelMessage, ProviderMetadata } from 'ai';
+import type { AssistantContent, AssistantModelMessage, ModelMessage, ProviderMetadata } from 'ai';
 import * as v from 'valibot';
 import type { JsonValue } from '../utils/json';
 import type { ProviderOptions } from './effort';
@@ -89,24 +89,39 @@ function triggerTokens(contextWindow: number | null | undefined): number {
 
 const CompactionMark = v.looseObject({ type: v.literal('compaction') });
 
-/** A part, chunk or stored part carrying a provider's summary (`by` that one only), by the mark its SDK adapter gives
- *  it: Anthropic's on a text part, OpenAI's on a `custom` one. */
-/** Estimated tokens after the latest OpenAI compaction item, or null when none is replayed. */
-export function sinceLatestCompaction(messages: readonly ModelMessage[]): number | null {
+/** The latest OpenAI compaction item: its assistant message, that message's parts, and its own part. */
+export interface LatestCompaction {
+  readonly at: number;
+  readonly message: AssistantModelMessage;
+  readonly parts: Exclude<AssistantContent, string>;
+  readonly part: number;
+}
+
+/** Where a request may open: OpenAI's latest compaction item carries the context before it, so the rest may go. */
+export function latestCompaction(messages: readonly ModelMessage[]): LatestCompaction | null {
   for (let at = messages.length - 1; at >= 0; at--) {
     const message = messages[at];
 
     if (message?.role !== 'assistant' || !Array.isArray(message.content)) continue;
 
     const parts = message.content;
-    const latest = parts.map((part) => part.type === 'custom' && isServerCompaction(part.providerOptions, 'openai')).lastIndexOf(true);
+    const part = parts.map((each) => each.type === 'custom' && isServerCompaction(each.providerOptions, 'openai')).lastIndexOf(true);
 
-    if (latest >= 0) return Math.ceil(JSON.stringify([...parts.slice(latest + 1), ...messages.slice(at + 1)]).length / CHARS_PER_TOKEN);
+    if (part >= 0) return { at, message, parts, part };
   }
 
   return null;
 }
 
+/** Estimated tokens after the latest OpenAI compaction item, or null when none is replayed. */
+export function sinceLatestCompaction(messages: readonly ModelMessage[]): number | null {
+  const latest = latestCompaction(messages);
+
+  return latest === null ? null : Math.ceil(JSON.stringify([...latest.parts.slice(latest.part + 1), ...messages.slice(latest.at + 1)]).length / CHARS_PER_TOKEN);
+}
+
+/** A part, chunk or stored part carrying a provider's summary (`by` that one only), by the mark its SDK adapter gives
+ *  it: Anthropic's on a text part, OpenAI's on a `custom` one. */
 export function isServerCompaction(metadata: ProviderMetadata | JsonValue | undefined, by?: ServerCompactor): boolean {
   return (['anthropic', 'openai'] as const).some((vendor) => (by ?? vendor) === vendor && v.is(v.object({ [vendor]: CompactionMark }), metadata));
 }

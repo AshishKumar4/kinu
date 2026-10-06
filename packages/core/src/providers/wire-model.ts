@@ -10,11 +10,29 @@ export type WireProtocol = 'responses' | 'messages' | 'chat-completions';
 
 export const OPENAI_AUTHOR = 'openai/';
 
-export const ANTHROPIC_AUTHOR = 'anthropic/';
+const ANTHROPIC_AUTHOR = 'anthropic/';
 
-/** The bare id of a gateway `openai/` model, else null. */
-export function gatewayOpenAIModel(modelId: string | undefined): string | null {
-  return modelId?.startsWith(OPENAI_AUTHOR) === true ? modelId.slice(OPENAI_AUTHOR.length) : null;
+/** The API a gateway model is spoken to in, and the id its SDK is built with. */
+export interface GatewayWire {
+  readonly protocol: WireProtocol;
+  readonly modelId: string;
+}
+
+/** Each author's own API where the gateway serves one (`/responses`, `/messages`), else its unified chat API. */
+export function gatewayWire(modelId: string): GatewayWire {
+  // The Anthropic SDK reads Claude's limits by Anthropic's own id.
+  if (modelId.startsWith(ANTHROPIC_AUTHOR)) return { protocol: 'messages', modelId: modelId.slice(ANTHROPIC_AUTHOR.length).replaceAll('.', '-') };
+
+  if (modelId.startsWith(OPENAI_AUTHOR)) return { protocol: 'responses', modelId: modelId.slice(OPENAI_AUTHOR.length) };
+
+  return { protocol: 'chat-completions', modelId };
+}
+
+/** The API a route's provider fixes for its model, null where the catalog decides per model. */
+export function routeProtocol(providerId: string | undefined, modelId: string | undefined): WireProtocol | null {
+  if (providerId === 'anthropic' || providerId === 'claude') return 'messages';
+
+  return providerId === 'my-gateway' && modelId !== undefined ? gatewayWire(modelId).protocol : null;
 }
 
 export interface WireModelInput {

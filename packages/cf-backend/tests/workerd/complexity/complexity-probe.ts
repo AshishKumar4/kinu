@@ -95,7 +95,7 @@ function requestBytes(messages: readonly ModelMessage[] | undefined): number {
  *  prune budget. The dynamic block and the step context are the turn's own. */
 const PIPELINE = {
   prune: { contextWindow: 200_000, modelOutputLimit: 8_000 },
-  destinationProviderId: 'anthropic',
+  destination: { providerId: 'anthropic' },
   cache: { strategy: { kind: 'anthropic' as const } },
 } satisfies StepPipeline;
 
