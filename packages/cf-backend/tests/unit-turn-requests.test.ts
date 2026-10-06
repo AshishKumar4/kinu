@@ -4,9 +4,8 @@ import { ActorClaimStore, JsonValueSchema, measureContext, RunEventRecorder, typ
 import * as v from 'valibot';
 import { makeSql } from '../../core/tests/helpers';
 import {
-  catalogTurn, gatewayWorkspace, historyOver, until, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
+  catalogTurn, gatewayWorkspace, historyOver, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
-import { socketConnection } from './helpers/bindings';
 import { answeringGateway, requestOf, scriptedGateway } from './helpers/platform-gateway';
 
 function latestTurnId(harness: ActorHarness<HarnessOrchestratorAgent>): string {
@@ -117,8 +116,8 @@ describe('the context number a page reads back', () => {
     ).all().map((row) => row.tokens);
 
     const lastTurn = gateRows().at(-1) ?? 0;
-    await harness.agent.onMessage(socketConnection({ id: 'tab-1', send: () => {} }), JSON.stringify({ type: 'cf_agent_chat_clear' }));
-    await until(() => gateRows().length === 3, 'the measure the clear owes');
+    await harness.agent.clearConversation();
+    expect(gateRows()).toHaveLength(3);
 
     const { fill } = await harness.agent.getActivitySnapshot();
     expect(fill).toMatchObject({ tokens: gateRows().at(-1), source: 'gate' });
