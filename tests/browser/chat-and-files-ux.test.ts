@@ -1424,6 +1424,73 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
   });
 });
 
+/** A turn whose loop stopped mid-work says so even though its last call settled; a turn that finished says nothing. */
+describe('how a settled turn ended', () => {
+  test('the turn that stopped mid-work carries a notice and the finished one does not', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=revert`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => (document.querySelector('#chat')?.textContent ?? '').includes('eleven call sites'));
+
+      // Where each status note sits: after the stopped turn's call and before the next request, or in the finished turn.
+      const notes = await page.evaluate(() => {
+        const chat = document.querySelector('#chat');
+        const at = (words: string) => [...(chat?.querySelectorAll('*') ?? [])].filter((node) => node.textContent?.includes(words) === true).at(-1);
+        const stoppedCall = at('coupon-kind.test.ts');
+        const nextAsk = at('Now rewrite the pricing service');
+        const finishedCall = at('packages/pricing');
+        const after = (anchor: Element | undefined, node: Element) => anchor !== undefined && (anchor.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+        const statuses = [...(chat?.querySelectorAll('[role="status"]') ?? [])];
+
+        return {
+          stopped: statuses.filter((node) => after(stoppedCall, node) && !after(nextAsk, node)).length,
+          finished: statuses.filter((node) => after(finishedCall, node)).length,
+        };
+      });
+
+      expect(notes).toEqual({ stopped: 1, finished: 0 });
+      await page.close();
+    });
+  });
+});
+
+/** A redirect that ran as a branch leaves takes to compare: the chip names the current one, the comparison cycles
+ *  through all of them both ways, and a pick becomes the current answer. One take alone offers nothing to compare. */
+describe('alternate takes on an answer', () => {
+  const chip = '#chat button[title^="Your mid-turn redirect"]';
+  const shown = (page: Page) => page.$eval('[role="dialog"]', (dialog) => /Take (\d) of (\d)/.exec(dialog.textContent ?? '')?.slice(1, 3).join('/') ?? '');
+
+  test('compare, cycle both ways, and pick one, which the chip then names', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=revert&takes=3`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(chip);
+      expect(await page.$eval(chip, (button) => button.textContent?.trim())).toBe('Take 1 of 3');
+
+      await page.click(chip);
+      await page.waitForSelector('[role="dialog"]');
+      expect(await shown(page)).toBe('1/3');
+      await page.keyboard.press('ArrowLeft');
+      expect(await shown(page)).toBe('3/3');
+      await page.click('[role="dialog"] button[aria-label="Next take"]');
+      await page.click('[role="dialog"] button[aria-label="Next take"]');
+      expect(await shown(page)).toBe('2/3');
+      expect(await page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '')).toContain('three call sites');
+
+      await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent?.trim() === 'Use this take')?.click());
+      await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
+      await page.waitForFunction((at) => document.querySelector(at)?.textContent?.trim() === 'Take 2 of 3', {}, chip);
+
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=revert&takes=1`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => (document.querySelector('#chat')?.textContent ?? '').includes('eleven call sites'));
+      expect(await page.$(chip)).toBeNull();
+      await page.close();
+    });
+  });
+});
+
 /**
  * iOS Safari zooms the page when a text field under 16px takes focus, and leaves it zoomed. On a touch phone every
  * text field, on the pages that carry one, must compute to at least 16px.
@@ -3478,6 +3545,40 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       expect(stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('0');
 
+      await page.close();
+    });
+  });
+
+  // A preview is only replaced by what the sandbox validly says: a failed or forged answer keeps the last good one and
+  // names the problem; an answer of no ports retires it.
+  test('a running preview survives a failed or forged listing, and leaves when the sandbox lists no ports', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForSelector('[data-preview-ready]');
+      await page.click('[data-preview-ready]');
+      await page.waitForSelector('[aria-label="Arrived app"]');
+
+      const listingSays = (state: string) => page.evaluate((next) => { document.documentElement.dataset.sandboxPorts = next; }, state);
+
+      // The listing's failure line, by what it names; its full message is the line's title.
+      const problem = () => page.evaluate(() => [...document.querySelectorAll('[data-failure]')]
+        .find((line) => line.textContent?.includes('preview listings'))?.getAttribute('title') ?? null);
+
+      await listingSays('failed');
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-failure]')].some((line) => line.textContent?.includes('preview listings')));
+      expect(await problem()).toContain('Nimbus is temporarily unavailable');
+      expect(await page.$('[aria-label="Arrived app"]')).not.toBeNull();
+
+      await listingSays('forged');
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-failure]')].some((line) => line.getAttribute('title')?.includes('invalid preview registration')));
+      expect(await page.$eval('[aria-label="Arrived app"]', (tab) => tab.getAttribute('title') ?? tab.textContent ?? '')).not.toContain('evil.example');
+
+      await listingSays('none');
+      await page.waitForFunction(() => document.querySelector('[aria-label="Arrived app"]') === null);
+      expect(await problem()).toBeNull();
       await page.close();
     });
   });

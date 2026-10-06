@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
-import { delegatedTaskMetadata, followJobOutput, summarizeSteps, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
+import { delegatedTaskMetadata, followJobOutput, summarizeSteps, TURN_END_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -26,7 +26,7 @@ import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
-import type { ParkedWriteReview, ReasoningEffort } from "@kinu.run/core";
+import type { AlternateTakeSet, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
@@ -314,6 +314,9 @@ const CHATGPT_DEVICE = new URLSearchParams(location.search).get("chatgpt") === "
 const MODELS_FAIL = new URLSearchParams(location.search).get("models") === "fail";
 
 const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
+
+/** `&visit=failed`: the roster cannot record the visit for a reason other than the workspace being gone. */
+const VISIT_FAILS = new URLSearchParams(location.search).get("visit") === "failed";
 
 const GALLERY_DEVICE = { id: "dev-1", label: "Owner's laptop" };
 
@@ -883,6 +886,8 @@ function rosterRead(search: URLSearchParams): Promise<Response> {
 function touchFixture(): Response {
   const root = document.documentElement;
   root.dataset.galleryTouches = String(Number(root.dataset.galleryTouches ?? "0") + 1);
+
+  if (VISIT_FAILS) return fixtureJson({ error: "the roster is unavailable" }, 503);
 
   return WORKSPACE_GONE
     ? fixtureJson({ error: "No such workspace." }, 404)
@@ -1610,9 +1615,10 @@ const REVERT_THREAD: UIMessage[] = [
     id: "rv-u1", role: "user", createdAt: NOW - 8 * 60e3,
     parts: [{ type: "text", text: "Add the coupon-kind regression test and run the checkout suite." }],
   }),
+  // The loop stopped mid-work after a settled call (a step ceiling), so only the turn's own end says it did not finish.
   msg({
-    id: "rv-a1", role: "assistant", createdAt: NOW - 7 * 60e3,
-    parts: [{ type: "text", text: "Added `tests/coupon-kind.test.ts`. The suite is green: 14 passed." }],
+    id: "rv-a1", role: "assistant", createdAt: NOW - 7 * 60e3, metadata: { [TURN_END_METADATA_KEY]: "incomplete" },
+    parts: [{ type: "tool-shell", toolCallId: "rv-call-1", state: "output-available", input: { command: "bun test tests/coupon-kind.test.ts" }, output: "14 pass\n0 fail" }],
   }),
   msg({
     id: "rv-u2", role: "user", createdAt: NOW - 6 * 60e3,
@@ -1620,7 +1626,10 @@ const REVERT_THREAD: UIMessage[] = [
   }),
   msg({
     id: "rv-a2", role: "assistant", createdAt: NOW - 5 * 60e3,
-    parts: [{ type: "text", text: "Rewrote `pricing-service.ts` against the campaign table and updated eleven call sites." }],
+    parts: [
+      { type: "tool-shell", toolCallId: "rv-call-2", state: "output-available", input: { command: "bun test packages/pricing" }, output: "31 pass\n0 fail" },
+      { type: "text", text: "Rewrote `pricing-service.ts` against the campaign table and updated eleven call sites." },
+    ],
   }),
 ];
 
@@ -1676,6 +1685,14 @@ function galleryPortListing(executor: string | undefined): GalleryListing | null
 
   if (flags.sandboxStarting === "1") return { kind: "listed", value: { ports: [], pending: "the sandbox's container is still restoring" } };
 
+  // `data-sandbox-ports`: what the sandbox answers next. `failed`: an error; `forged`: a port whose address is not
+  // a preview's; `none`: no ports at all.
+  if (flags.sandboxPorts === "failed") return { kind: "listed", value: { ports: [], error: "Nimbus is temporarily unavailable" } };
+
+  if (flags.sandboxPorts === "forged") return { kind: "listed", value: { ports: [{ port: 8130, url: "https://evil.example/", name: "Arrived app" }] } };
+
+  if (flags.sandboxPorts === "none") return { kind: "listed", value: { ports: [] } };
+
   // Arrives after first paint.
   if (flags.previewArrived === "1") {
     return { kind: "listed", value: { ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] } };
@@ -1693,8 +1710,34 @@ function gallerySlates() {
   };
 }
 
+/* `&takes=3`: the revert thread's last answer ran beside two branched redirects, so there is a choice to compare;
+   `&takes=1`: a set with one take, which offers nothing to compare. A pick is recorded and the set comes back with it. */
+const TAKE_COUNT = Number(new URLSearchParams(location.search).get("takes") ?? 0);
+
+let galleryTakes: AlternateTakeSet = {
+  id: "take-1", turnId: "rv-a2", sessionId: "default", task: "Read the rules from the campaign table instead", winnerNodeId: "win",
+  chosenNodeId: null, createdAt: NOW - 5 * 60e3,
+  candidates: ([
+    { nodeId: "win", text: "Rewrote `pricing-service.ts` against the campaign table and updated eleven call sites.", origin: "live" },
+    { nodeId: "alt", text: "Kept the service and read each rule from the campaign table at its three call sites.", origin: "branch" },
+    { nodeId: "alt2", text: "Moved the rules into a view over the campaign table; the service reads the view.", origin: "branch" },
+  ] satisfies AlternateTakeSet["candidates"]).slice(0, TAKE_COUNT),
+};
+
+function galleryPickTake(args?: unknown[]): TakePickOutcome {
+  const [, nodeId] = v.parse(v.tuple([v.string(), v.string()]), args);
+  const chosen = galleryTakes.candidates.find((candidate) => candidate.nodeId === nodeId);
+
+  if (chosen === undefined) throw new Error(`gallery: no take ${nodeId}`);
+  galleryTakes = { ...galleryTakes, chosenNodeId: nodeId };
+
+  return { changedAnswer: nodeId !== galleryTakes.winnerNodeId, chosen, set: galleryTakes, continuationQueued: false };
+}
+
 /* The reads the first-visit inspector policy decides on, in the shapes the page consumes (`listSlates` needs an array for `slates.map`). */
 const WORKSPACE_PAGE_RPC = new Map(Object.entries({
+  listAlternateTakes: () => (TAKE_COUNT > 0 ? { [galleryTakes.turnId ?? ""]: galleryTakes } : {}),
+  pickAlternateTake: galleryPickTake,
   getWorkspaceSnapshot: () => {
     const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
 
@@ -1895,7 +1938,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
 
 new MutationObserver(() => {
   galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getExposedPorts"] }));
-}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived", "data-sandbox-starting"] });
+}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived", "data-sandbox-starting", "data-sandbox-ports"] });
 
 /* `&history=N&historyLatency=ms`: N older rows, paged; `&historyHold=1` waits for `gallery:release-page`. */
 const HISTORY_ROWS = Number(new URLSearchParams(location.search).get("history") ?? 0);

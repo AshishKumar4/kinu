@@ -10,7 +10,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asFetchFunction, requestUrl } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend } from '@kinu.run/test-utils';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend, WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
@@ -62,7 +62,17 @@ describe('createLocalModelResolver', () => {
       for (const withSession of [false, true]) {
         rt.actor.config.setLearning(false);
 
-        if (withSession) session = new LocalAgentSession({ rt, db, modelResolver: createLocalModelResolver({ llm }), onEvent: () => {} });
+        // The session's menu is no part of a lane's retries: the live models.dev read took 4.8 s of this test. The
+        // catalog is the fixture's; any other listing is refused at once.
+        const catalog = asFetchFunction(async (input, init) => {
+          const url = requestUrl(input);
+
+          if (url === 'https://models.dev/api.json') return Response.json(WORKERS_AI_MODELS_DEV);
+
+          return url.startsWith(server.url.origin) ? await fetch(input, init) : new Response('not here', { status: 404 });
+        });
+
+        if (withSession) session = new LocalAgentSession({ rt, db, modelResolver: createLocalModelResolver({ llm, fetch: catalog }), onEvent: () => {} });
 
         for (const retries of [0, 1]) {
           requests = 0;
