@@ -21,6 +21,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import {
   TrashIcon, BrainIcon, GearIcon, UsersThreeIcon,
 } from "@phosphor-icons/react";
+import "virtual:kinu-theme.css";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";

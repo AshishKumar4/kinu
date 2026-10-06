@@ -5,8 +5,9 @@
  */
 
 import {
-  type ArtFrame, clamp, grown, viewDistance, type KeepOut, NODE_STRIDE, PULSE_STRIDE, seededRandom, STROKE_STRIDE, TONE_ACCENT, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
+  type ArtFrame, clamp, grown, viewDistance, type KeepOut, NODE_STRIDE, PULSE_STRIDE, STROKE_STRIDE, TONE_ACCENT, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
 } from './art';
+import { seededRandom } from '../utils/stats';
 import { movePulse, type Pulse, pulseTail, writePulse } from './pulse';
 
 /** How far the pointer may displace a tip, in view width units. */

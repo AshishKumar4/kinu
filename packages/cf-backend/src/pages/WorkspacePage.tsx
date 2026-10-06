@@ -17,7 +17,6 @@ import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
-import { HistoryReserve, historyBoundaryError, useReservedScroll } from "@/hooks/use-history-reserve";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
@@ -31,7 +30,8 @@ import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
-import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
+import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, SteerBubble } from "@/components/MessageView";
+import { ProgrammaticTurnCard } from "@/components/ProgrammaticTurnCard";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { cloudPlanes, filesFocusOf, hasComparableTakes, referencePrefixes, WORKSPACE_ROOT, type FilesFocus } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
@@ -42,7 +42,8 @@ import { ChatSlates } from "@/components/slates/InlineSlate";
 import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent, type SurfaceKind } from "@kinu.run/core";
 import { ViewOnlyBar } from "@/components/ViewOnlyBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
-import { ConversationStartBoundary, FileLinkContext, HistoryBoundary } from "@/components/surfaces/shared";
+import { FileLinkContext } from "@/components/surfaces/shared";
+import { TranscriptViewport } from "@/components/TranscriptViewport";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { KeptChatColumn } from "@/components/KeptChatColumn";
 import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
@@ -536,22 +537,12 @@ function SubordinateChatColumn({
   const setInput = ui.setDraft;
   usePlanApprovedMode(state.activePlan, ui.setMode);
 
-  const { history, transcript, thread, reserves } = useChatThread({
+  const chat = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded,
     steerRuns: state.steerRuns, actor: state.paneActorId,
   });
 
-  const { ref: messagesRef, rowPx } = useReservedScroll({
-    grows: "up",
-    content: transcript,
-    fetched: history.entries,
-    loading: history.loading,
-    onReachEdge: history.loadMore,
-    onReserve: history.read,
-    initialScroll: ui.savedScroll,
-    onScrollPosition: ui.rememberScroll,
-    settled: state.transcriptSeeded,
-  });
+  const { thread } = chat;
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -588,41 +579,21 @@ function SubordinateChatColumn({
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
-        <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column pt-5 pb-12 space-y-5">
-          <HistoryReserve range={reserves.top} rowPx={rowPx} history={history} />
-          {thread.entries.length > 0 && (
-            <HistoryBoundary
-              loading={history.loading}
-              error={historyBoundaryError(history)}
-              exhausted={history.exhausted}
-              onRetry={history.retry}
-            />
-          )}
-          <ConversationStartBoundary
-            hasEntries={thread.entries.length > 0}
-            streaming={live}
-            error={historyBoundaryError(history)}
-            exhausted={history.exhausted}
-            onRetry={history.retry}
-            pending={<ConversationSkeleton />}
-            empty={
-              <div className="flex h-full flex-col items-center justify-center text-center">
-                <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
-                <p className="text-sm p-text-3">This agent's conversation starts here.</p>
-              </div>
-            }
-          />
-          {thread.entries.map(({ message: msg, steers }, i) => (
+        <TranscriptViewport chat={chat} live={live} padClass="pt-5 pb-12"
+          scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
+          pending={<ConversationSkeleton />}
+          empty={
+            <div className="flex h-full flex-col items-center justify-center text-center">
+              <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
+              <p className="text-sm p-text-3">This agent's conversation starts here.</p>
+            </div>
+          }
+          rows={(before) => thread.entries.map(({ message: msg, steers }, i) => (
             <Fragment key={msg.id}>
-              <HistoryReserve range={reserves.before.get(msg.id)} rowPx={rowPx} history={history} />
-              <MessageView
-                message={msg}
-                steers={steers}
-                liveTail={i === thread.entries.length - 1 ? tail : null}
-              />
+              {before(msg.id)}
+              <MessageView message={msg} steers={steers} liveTail={i === thread.entries.length - 1 ? tail : null} />
             </Fragment>
-          ))}
-          <HistoryReserve range={reserves.tail} rowPx={rowPx} history={history} />
+          ))}>
           <ChatLiveTail tail={tail} />
           {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
           {state.chatError && (
@@ -634,7 +605,7 @@ function SubordinateChatColumn({
               onDismiss={state.clearChatError}
             />
           )}
-        </div>
+        </TranscriptViewport>
       </ErrorBoundary>
 
       {!takesInput && <ViewOnlyBar running={live} onStop={stop} />}
@@ -897,22 +868,12 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const [forkFor, setForkFor] = useState<string | null>(null);
 
   // `state.messages` is the SDK's newest window with streamed messages; older history pages from storage.
-  const { history, transcript, thread, reserves, positions } = useChatThread({
+  const chat = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, steerRuns: state.steerRuns,
     total: state.agentStatus?.messageCount,
   });
 
-  const { ref: messagesRef, rowPx } = useReservedScroll({
-    grows: "up",
-    content: transcript,
-    fetched: history.entries,
-    loading: history.loading,
-    onReachEdge: history.loadMore,
-    onReserve: history.read,
-    initialScroll: ui.savedScroll,
-    onScrollPosition: ui.rememberScroll,
-    settled: state.transcriptSeeded,
-  });
+  const { history, thread, positions, transcript } = chat;
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // The hook spends the per-message aggregate cap (one DO row, see core/cloud-wire) inside its
@@ -1146,29 +1107,17 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
               </div>
             )}
             <ErrorBoundary label="Chat">
-            <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column pt-7 pb-12 space-y-5">
-              <ConversationStartBoundary
-                hasEntries={thread.entries.length > 0}
-                streaming={live}
-                error={historyBoundaryError(history)}
-                exhausted={history.exhausted}
-                onRetry={history.retry}
-                pending={<ConversationSkeleton />}
-                empty={<EmptyConversation mission={as?.purpose ?? ""} />}
-              />
-              <HistoryReserve range={reserves.top} rowPx={rowPx} history={history} />
-              {thread.entries.length > 0 && (
-                <HistoryBoundary
-                  loading={history.loading} error={historyBoundaryError(history)}
-                  exhausted={history.exhausted} onRetry={history.retry} />
-              )}
-              {thread.entries.map(({ message: msg, steers }, i) => {
+            <TranscriptViewport chat={chat} live={live} startFirst padClass="pt-7 pb-12"
+              scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
+              pending={<ConversationSkeleton />}
+              empty={<EmptyConversation mission={as?.purpose ?? ""} />}
+              rows={(before) => thread.entries.map(({ message: msg, steers }, i) => {
                 const takes = takesByTurn[msg.id];
                 const signalId = messageSignalId({ metadata: msg.metadata });
 
                 return (
                   <Fragment key={msg.id}>
-                    <HistoryReserve range={reserves.before.get(msg.id)} rowPx={rowPx} history={history} />
+                    {before(msg.id)}
                     <MessageView
                       message={msg}
                       steers={steers}
@@ -1185,8 +1134,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                     />
                   </Fragment>
                 );
-              })}
-              <HistoryReserve range={reserves.tail} rowPx={rowPx} history={history} />
+              })}>
               <ChatLiveTail tail={mainTail} />
               {looseCards.map(({ card, turn }) => (
                 <ProgrammaticTurnCard key={card.id} turn={turn} text={card.text} state={card.state} />
@@ -1218,7 +1166,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                   onDismiss={state.clearChatError}
                 />
               )}
-            </div>
+            </TranscriptViewport>
             </ErrorBoundary>
 
             {state.pendingConsents.length > 0 && (

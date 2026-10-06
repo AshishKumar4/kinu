@@ -37,9 +37,9 @@ const ACTION_ONLY: WorkspaceNotice = {
   retry: null,
 };
 
-function markupFor(notices: readonly ComposerNotice[]): string {
+function markupFor(notices: readonly ComposerNotice[], draft = ''): string {
   return renderToStaticMarkup(createElement(Composer, {
-    value: '',
+    value: draft,
     onValueChange: () => {},
     onSend: () => {},
     placeholder: 'Send a message...',
@@ -81,20 +81,21 @@ describe('workspaceLoadNotice', () => {
 
 describe('the composer under a partial failure', () => {
   test('the warning names the resource, keeps its retry, and leaves the composer enabled', () => {
-    const html = markupFor([workspaceLoadNotice(PARTIAL, () => {})]);
+    // Sendable: an empty draft disables Send anyway.
+    const html = markupFor([workspaceLoadNotice(PARTIAL, () => {})], 'Look at the cart');
     expect(html).toContain('Tools could not be refreshed.');
     expect(html).toContain('Retry loading tools');
-    expect(html).toContain('Technical details');
     expect(html).toContain('catalog offline');
     expect(html).toContain('role="status"');
     expect(html).not.toContain('role="alert"');
-    const textarea = /<textarea[^>]*>/.exec(html)?.[0] ?? '';
-    expect(textarea).not.toMatch(/(^|\s)disabled(=|\s|>)/);
-    expect(html).toContain('aria-label="Send"');
+    const disabled = (tag: string) => /(^|\s)disabled(=|\s|>)/.test(tag);
+    expect(disabled(/<textarea[^>]*>/.exec(html)?.[0] ?? 'disabled')).toBe(false);
+    expect(disabled(/<button[^>]*aria-label="Send"[^>]*>/.exec(html)?.[0] ?? 'disabled')).toBe(false);
   });
 
   test('a blocking failure renders an alert with the open sentence', () => {
     const html = markupFor([workspaceLoadNotice(BLOCKING, () => {})]);
+    expect(html).toContain('role="alert"');
     expect(html).toContain('open this workspace');
     expect(html).toContain('Retry');
   });

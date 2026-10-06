@@ -16,8 +16,8 @@ const port = (executor: string, portNumber: number, name: string): PinnedPort =>
   ({ executor, port: portNumber, url: `http://localhost:${String(portNumber)}`, name });
 
 interface Pass {
-  readonly attrs: string;
-  readonly focus: SurfaceFocus;
+  readonly surface: SurfaceKind | null;
+  readonly chip: { readonly surface: SurfaceKind; readonly title: string } | null;
 }
 
 interface StripProps {
@@ -31,10 +31,10 @@ interface Controls {
 
 interface Mounted {
   readonly passes: Pass[];
-  readonly html: string;
+  readonly shown: Pass;
 }
 
-/** `renderToStaticMarkup` skips effects, and `useSurfaceFocus` holds none; each step runs once per render pass. */
+/** SSR runs no effects, and the hook holds none; each step runs once per pass. */
 function mount(input: {
   surface: SurfaceKind;
   previewFocus?: string | null;
@@ -59,57 +59,45 @@ function mount(input: {
       onSurface: input.onSurface ?? (() => {}),
     });
 
-    const attrs = `data-surface="${focus.surface}" `
-      + `data-chip-surface="${focus.readyChip?.surface ?? ''}" `
-      + `data-chip-title="${focus.readyChip?.title ?? ''}"`;
-
-    passes.push({ attrs, focus });
+    const chip = focus.readyChip;
+    passes.push({ surface: focus.surface, chip: chip === null ? null : { surface: chip.surface, title: chip.title } });
     input.steps?.[passes.length - 1]?.(focus, {
       setProps: (next) => { setProps((prev) => ({ ...prev, ...next })); },
     });
 
-    return createElement('div', {
-      'data-surface': focus.surface,
-      'data-chip-surface': focus.readyChip?.surface ?? '',
-      'data-chip-title': focus.readyChip?.title ?? '',
-    });
+    return null;
   }
 
-  const html = renderToStaticMarkup(createElement(Strip));
+  renderToStaticMarkup(createElement(Strip));
 
   if (input.steps !== undefined && passes.length < input.steps.length) {
     throw new Error(`a scripted step never ran: ${String(passes.length)} pass(es) for ${String(input.steps.length)} step(s)`);
   }
 
-  return { passes, html };
+  return { passes, shown: passes[passes.length - 1] ?? { surface: input.surface, chip: null } };
 }
+
+const chipOf = (mounted: Mounted): SurfaceKind | null => mounted.shown.chip?.surface ?? null;
 
 describe('a passive arrival, through the strip', () => {
   test('a slate arrival chips the surface it names; a port arrival chips its preview tab', () => {
-    expect(mount({ surface: 'Work', previewFocus: 'slate:abc' }).html)
-      .toContain('data-chip-surface="slate:abc"');
-    expect(mount({ surface: 'Work', previewFocus: 'preview:workspace:3000' }).html)
-      .toContain('data-chip-surface="preview:workspace:3000"');
-    expect(mount({ surface: 'Work' }).html).toContain('data-chip-surface=""');
-    expect(mount({ surface: 'Work', previewFocus: 'something-else' }).html)
-      .toContain('data-chip-surface=""');
+    expect(chipOf(mount({ surface: 'Work', previewFocus: 'slate:abc' }))).toBe('slate:abc');
+    expect(chipOf(mount({ surface: 'Work', previewFocus: 'preview:workspace:3000' }))).toBe('preview:workspace:3000');
+    expect(chipOf(mount({ surface: 'Work' }))).toBeNull();
+    expect(chipOf(mount({ surface: 'Work', previewFocus: 'something-else' }))).toBeNull();
   });
 
   test('an arrival already on screen chips nothing', () => {
-    expect(mount({ surface: 'slate:abc', previewFocus: 'slate:abc' }).html)
-      .toContain('data-chip-surface=""');
+    expect(chipOf(mount({ surface: 'slate:abc', previewFocus: 'slate:abc' }))).toBeNull();
   });
 
   test('the chip titles the slate by name and the port by its pinned name', () => {
     const slates = [slate('abc', 'Dashboard')];
     const ports = [port('workspace', 3000, 'Arrived app')];
 
-    expect(mount({ surface: 'Work', previewFocus: 'slate:abc', slates }).html)
-      .toContain('data-chip-title="Dashboard"');
-    expect(mount({ surface: 'Work', previewFocus: 'preview:workspace:3000', pinnedPorts: ports }).html)
-      .toContain('data-chip-title="Arrived app"');
-    expect(mount({ surface: 'Work', previewFocus: 'slate:xyz', slates }).html)
-      .toContain('data-chip-title="xyz"');
+    expect(mount({ surface: 'Work', previewFocus: 'slate:abc', slates }).shown.chip?.title).toBe('Dashboard');
+    expect(mount({ surface: 'Work', previewFocus: 'preview:workspace:3000', pinnedPorts: ports }).shown.chip?.title).toBe('Arrived app');
+    expect(mount({ surface: 'Work', previewFocus: 'slate:xyz', slates }).shown.chip?.title).toBe('xyz');
   });
 });
 
@@ -125,7 +113,7 @@ describe('dismissal, through the strip', () => {
     });
 
     expect(passes).toHaveLength(2);
-    expect(passes[1]?.attrs).toContain('data-chip-surface=""');
+    expect(passes[1]?.chip).toBeNull();
     expect(seen).toEqual([]);
   });
 
@@ -140,8 +128,8 @@ describe('dismissal, through the strip', () => {
     });
 
     expect(passes).toHaveLength(3);
-    expect(passes[1]?.attrs).toContain('data-chip-surface=""');
-    expect(passes[2]?.attrs).toContain('data-chip-surface="slate:def"');
+    expect(passes[1]?.chip).toBeNull();
+    expect(passes[2]?.chip?.surface).toBe('slate:def');
   });
 });
 
@@ -171,7 +159,7 @@ describe('navigating consumes the arrival, through the strip', () => {
     });
 
     expect(passes).toHaveLength(2);
-    expect(passes[1]?.attrs).toContain('data-chip-surface=""');
+    expect(passes[1]?.chip).toBeNull();
     expect(seen).toEqual(['slate:abc']);
   });
 
@@ -188,8 +176,7 @@ describe('navigating consumes the arrival, through the strip', () => {
     });
 
     expect(passes).toHaveLength(2);
-    expect(passes[1]?.attrs).toContain('data-surface="Files"');
-    expect(passes[1]?.attrs).toContain('data-chip-surface="slate:abc"');
+    expect(passes[1]).toEqual({ surface: 'Files', chip: { surface: 'slate:abc', title: 'abc' } });
   });
 
   test('an earlier dismissal is untouched by unrelated navigation', () => {
@@ -207,8 +194,8 @@ describe('navigating consumes the arrival, through the strip', () => {
     });
 
     expect(passes).toHaveLength(4);
-    expect(passes[2]?.attrs).toContain('data-chip-surface="slate:def"');
-    expect(passes[3]?.attrs).toContain('data-chip-surface=""');
+    expect(passes[2]?.chip?.surface).toBe('slate:def');
+    expect(passes[3]?.chip).toBeNull();
   });
 
   test('the chip click is the same navigate: onto the surface it announced', () => {
@@ -230,6 +217,6 @@ describe('navigating consumes the arrival, through the strip', () => {
     });
 
     expect(seen).toEqual(['preview:workspace:3000']);
-    expect(passes[1]?.attrs).toContain('data-chip-surface=""');
+    expect(passes[1]?.chip).toBeNull();
   });
 });

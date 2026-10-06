@@ -2162,8 +2162,10 @@ export {
 export {
   COPY_SCRIPT, GITHUB_ICON, KINU_MARK, MARK_IDS, REPO_URL,
   mark, markDocument, publicFooter, publicPage,
-  type MarkId, type Mode, type PublicPageOptions, type PublicToken, type RadiusRole, type TokenSet,
+  type MarkId, type PublicPageOptions,
 } from './http/public-shell';
+
+export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
 
 export {
   approvalDocument, authDocument, installDocument, loginDocument, type BuiltinSignIn, type LoginProvider,
