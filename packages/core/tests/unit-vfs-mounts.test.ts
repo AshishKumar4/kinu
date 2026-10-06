@@ -619,6 +619,19 @@ function shared(bundle: ReturnType<typeof createWorkspaceBundle>, mounts: readon
 	return workspaceFilePlane(bundle, { mounts, principal, home: WORKSPACE_ROOT }).files;
 }
 
+describe('a write on the workspace\'s namespace', () => {
+	test('makes the directories above it, as the principal: a slate\'s first file lands, and /etc stays root\'s', async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const files = shared(bundle, []);
+		await files.writeFile('/slates/keeper/package.json', new TextEncoder().encode('{"main":"server.ts"}'));
+		await writeText(files, 'notes/2026/today.md', 'kept');
+
+		expect(await bundle.shell.exec('cat /slates/keeper/package.json /home/main/notes/2026/today.md')).toMatchObject({ stdout: '{"main":"server.ts"}kept', exitCode: 0 });
+		await expect(writeText(files, '/etc/kinu/probe.conf', 'x')).rejects.toMatchObject({ code: 'EACCES' });
+		expect(await exists(files, '/etc/kinu')).toBe(false);
+	});
+});
+
 describe('the workspace shell serves the same mount table (#22)', () => {
 	/** A workspace whose session user holds `/shared` (a Drive), `/sandbox` (any ranged tree) and an absent `/pc`. */
 	async function workspaceWithMounts() {
