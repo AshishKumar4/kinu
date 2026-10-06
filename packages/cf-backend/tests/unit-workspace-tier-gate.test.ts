@@ -134,6 +134,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'workspaces.write', name: 'removeWorkspace', run: (u, c) => u.removeWorkspace(c, OTHER_WORKSPACE, USER_ID) },
 
   { capability: 'workspaces.rename_self', name: 'setWorkspaceDisplayName', run: (u, c) => u.setWorkspaceDisplayName(c, WORKSPACE, 'Renamed', 'user') },
+  { capability: 'workspaces.rename_self', name: 'setWorkspaceLogo', run: (u, c) => u.setWorkspaceLogo(c, WORKSPACE, '<svg viewBox="0 0 8 8"><circle r="3"/></svg>') },
   {
     capability: 'workspaces.overview_self',
     name: 'putWorkspaceOverview',

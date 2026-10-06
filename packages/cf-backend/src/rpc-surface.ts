@@ -188,6 +188,7 @@ const USER_DO_METHODS = [
   'setDeviceTier',
   'setDisplayName',
   'setWorkspaceDisplayName',
+  'setWorkspaceLogo',
   'signOutChatGpt',
   'startChatGptPasteSignIn',
   'startChatGptSignIn',

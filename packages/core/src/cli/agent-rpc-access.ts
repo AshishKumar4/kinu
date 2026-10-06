@@ -143,6 +143,7 @@ export const AGENT_RPC_ACCESS = {
   restoreFileCheckpoint: 'interactive',
   retryBackgroundJob: 'interactive',
   revertChangelogEntry: 'interactive',
+  regenerateWorkspaceLogo: 'interactive',
   revokeShellApprovalGrants: 'interactive',
   runOptimization: 'interactive',
   setAlwaysActiveSkills: 'interactive',

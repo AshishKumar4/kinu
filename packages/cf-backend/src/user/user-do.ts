@@ -125,7 +125,7 @@ import {
   type PutEgressSecretInput,
   revocationEndpointFor, revokeOAuthGrant, type UnrevokedGrant,
 } from '@kinu.run/core';
-import { compareCodeUnits, GITHUB_MCP_PRESET, initAccessTokenTable } from '@kinu.run/core';
+import { compareCodeUnits, GITHUB_MCP_PRESET, initAccessTokenTable, sanitizeWorkspaceLogoSvg } from '@kinu.run/core';
 import {
   addSkill, ChunkedUpload, deleteDriveEntry, driveFailure, DriveUploadTargetSchema, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
   listDrive, makeDriveFolder, markAsSkill, normalizeDrivePath, packDriveFolder, receiveDriveUpload, renameDriveEntry,
@@ -1451,6 +1451,26 @@ export class UserDO extends Agent<Env> {
     this.rosterChanged(name);
 
     return { applied: true };
+  }
+
+  // Sanitized again at this boundary.
+  async setWorkspaceLogo(caller: UserCaller, name: string, svg: string): Promise<{ drawn: boolean }> {
+    const resolved = await this.requireTier(caller, 'workspaces.rename_self');
+    validateWorkspaceName(name);
+
+    return settle(Effect.gen({ self: this }, function* () {
+      if (resolved.kind === 'workspace' && resolved.workspace !== name) {
+        return yield* Effect.fail(new KinuError('denied', `Workspace "${resolved.workspace}" may only draw its own logo.`));
+      }
+
+      const kept = sanitizeWorkspaceLogoSvg(svg);
+
+      if (kept === null) this.sqlx(`DELETE FROM workspace_logos WHERE name = ?`, name);
+      else this.sqlx(`INSERT OR REPLACE INTO workspace_logos (name, svg, drawn_at) VALUES (?, ?, ?)`, name, kept, Date.now());
+      this.rosterChanged(name);
+
+      return { drawn: kept !== null };
+    }));
   }
 
   /** Null when no row exists; actors hydrate their activation cache from this. */

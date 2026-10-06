@@ -1451,6 +1451,11 @@
     "owner_user_id TEXT NOT NULL DEFAULT ''",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
   ],
+  "workspace_logos@packages/core/src/state/user-schema.ts": [
+    "name TEXT PRIMARY KEY",
+    "svg TEXT NOT NULL",
+    "drawn_at INTEGER NOT NULL"
+  ],
   "workspace_overview_nudges@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
     "attempts INTEGER NOT NULL",

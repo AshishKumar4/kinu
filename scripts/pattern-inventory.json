@@ -888,6 +888,27 @@
       "owner": "CJS_IMPORT",
       "sourceSha256": "35649bf934923ae7e10df35684af94ba865b4eefc387701406e8629df4dda392",
       "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/identity/logo.ts",
+      "kind": "regex-literal",
+      "owner": "unsafeValue",
+      "sourceSha256": "c1beba3a36eb9dec92d414487954ca3244b4fe2eb1cbbbec9b47898364833484",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/identity/logo.ts",
+      "kind": "regex-literal",
+      "owner": "start",
+      "sourceSha256": "3cb6b0eea4a53ebb2b887aece4de758c7be97a8d907dd470c972a38686d30a12",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/identity/logo.ts",
+      "kind": "regex-literal",
+      "owner": "source",
+      "sourceSha256": "ab8745dfdba1bb178577e526259870d253ed78e737f70855deeeb313de115a36",
+      "decision": "safety"
     }
   ]
 }

@@ -137,7 +137,7 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
-  readMission, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
+  readMission, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT, isPlaceholderMission, drawWorkspaceLogo,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
@@ -2356,6 +2356,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The genesis turn owes the naming: the create stored a stand-in title, and no
       // other turn replaces one.
       autoTitle: { mission, standIn: input.event === WORKSPACE_CREATED_EVENT },
+      logo: input.event === WORKSPACE_CREATED_EVENT ? { mission } : undefined,
     };
 
     return parts;
@@ -2439,6 +2440,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           if (unreachable !== null) return { status: 'owed', detail: unreachable };
           await this.applyAutoTitle(subject, standIn === true);
+
+          return { status: 'completed' };
+        },
+      }),
+
+      workspace_logo: terminalEffect({
+        input: v.object({ subject: v.string() }),
+        run: async ({ subject }) => {
+          const unreachable = await this.titlingRefusal();
+
+          if (unreachable !== null) return { status: 'owed', detail: unreachable };
+          await this.drawLogo(subject);
 
           return { status: 'completed' };
         },
@@ -4626,6 +4639,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
 
     return { builtIn, crafted, executors };
+  }
+
+  @callable() async regenerateWorkspaceLogo(): Promise<{ drawn: boolean; refusal: string | null }> {
+    const refusal = await this.titlingRefusal();
+
+    if (refusal !== null) return { drawn: false, refusal };
+    const mission = readMission(this.boundSql);
+    const subject = mission === null || isPlaceholderMission(mission) ? await this.workspaceTitle() ?? this.name : mission;
+
+    return { drawn: await this.drawLogo(subject), refusal: null };
+  }
+
+  private async drawLogo(subject: string): Promise<boolean> {
+    const svg = await drawWorkspaceLogo(await this.oneShotOn('logo'), subject);
+
+    if (svg === null) return false;
+    const { stub, caller } = await this.userHub();
+
+    return (await stub.setWorkspaceLogo(caller, this.name, svg)).drawn;
   }
 
   @callable() async setDisplayName(displayName: string) {
