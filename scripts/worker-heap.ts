@@ -505,6 +505,13 @@ async function main(args: readonly string[]): Promise<number> {
   // One character above U+00FF stores a whole module's retained source two bytes per character.
   const wide = graph.filter((module) => module.endsWith('.js') && isWide(readFileSync(join(DIST, module), 'utf8')));
   const measured = await measure();
+  // Report only, until the owner decides which shape the peak row reads: the same run with V8's heap capped at the
+  // isolate's 128 MB, as a deployed Worker runs it (developers.cloudflare.com/workers/platform/limits, read 2026-10-06).
+  process.env.MINIFLARE_WORKERD_V8_FLAGS = '--max-heap-size=128';
+  const capped = await measure();
+  delete process.env.MINIFLARE_WORKERD_V8_FLAGS;
+  console.log(`${GATE}: under a 128 MB V8 heap the ${String(LONG_TURN.steps)}-step turn completed, peaking at ${mb(capped.longTurnPeak)} used `
+    + `and growing ${mb(capped.longTurnGrowth)} live; the uncapped run peaked at ${mb(measured.longTurnPeak)}`);
   const findings: string[] = [];
 
   if (wide.length > 0) findings.push(`${wide.join(', ')} carry characters outside ASCII, which V8 keeps two bytes each`);
