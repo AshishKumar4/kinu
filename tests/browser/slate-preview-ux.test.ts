@@ -503,6 +503,27 @@ test('a wide pane shows every file expanded beside the tree, with no expand butt
   });
 });
 
+// Changes opens on the machine doing the work: a connected machine before the workspace, and never a sandbox that is
+// asleep, which a read would wake.
+test('Changes opens on a connected machine, and never reads a sandbox that is asleep', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await openChanges(newPage, origin, true);
+    const reads = () => page.evaluate(() => (document.documentElement.dataset.galleryDiffReads ?? '').split(' '));
+
+    try {
+      await page.waitForSelector('[data-file-row="src/device.ts"]');
+      expect(await page.$eval('[data-changes] [data-source-menu]', (menu) => menu.textContent?.trim())).toBe('Your PC');
+
+      await page.click('[data-add-idle-sandbox]');
+      await page.evaluate(() => { window.dispatchEvent(new Event('focus')); });
+      await page.waitForFunction(() => (document.documentElement.dataset.galleryDiffReads ?? '').split(' ').filter((source) => source === 'device').length > 1);
+      expect(await reads()).not.toContain('sandbox');
+      await page.click('[data-changes] [data-source-menu]');
+      expect(await page.$$eval('[role="menuitemradio"]', (items) => items.map((item) => item.textContent ?? '').some((text) => /sandbox/iu.test(text)))).toBe(false);
+    } finally { await page.close(); }
+  });
+});
+
 test('after Mark reviewed, the source menu still reaches a machine\'s changes', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await openChanges(newPage, origin, true);
