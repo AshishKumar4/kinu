@@ -8,13 +8,13 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import type { AgentRuntime, DeferredApprovalChannel, LLMProviderConfig, ShellApprovalOutcome, WriteEvent, WriteObserver } from '@kinu.run/core';
-import { ConversationSearchStore, buildBuiltinTools, discoverSkills, initWorkspaceSchema, readSoul, reviewCommand, SLATES_ROOT, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
+import { ConversationSearchStore, buildBuiltinTools, discoverSkills, initWorkspaceSchema, reviewCommand, SLATES_ROOT, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { present, scratchDir, spawnTest, toolExecute } from '@kinu.run/test-utils';
 import {
   createCLIRuntime, createHostShell, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
-  type CLIRuntime,
+  type CLIRuntime, soulWriter, soulIn,
 } from '../src/runtime';
 import { createHeadRuntime } from './actor-fixture';
 import { registerLocalActor } from '@kinu.run/core';
@@ -63,7 +63,7 @@ async function openedWorkspace(state: string, name: string, cwd: string) {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
-  await createWorkspace(db, { name, purpose: `Test agent ${name}`, llm: DUMMY_LLM });
+  await createWorkspace(db, { name, purpose: `Test agent ${name}`, llm: DUMMY_LLM, writeSoul: soulWriter(db) });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   return openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd });
@@ -576,11 +576,11 @@ describe('the shell over the bound directory', () => {
 });
 
 describe('what an opened workspace puts where', () => {
-  test('SOUL and memory are read from the agent plane and never appear in the directory', async () => {
+  test('SOUL.md is a file of the own space and memory is the agent plane\'s; the folder holds neither', async () => {
     const { state, project } = roots('cwd-plane-opened');
     const { rt, info } = await openedWorkspace(state, 'jarvis', project);
 
-    // Both come off the private plane; a shared directory holds neither.
+    // Neither is in the folder: SOUL.md is in the workspace's own space, memory in its state plane.
     expect(info.soul).toContain('jarvis');
     expect(info.purpose).toBe('Test agent jarvis');
     expect(info.memorySize).toBeGreaterThan(0);
@@ -597,31 +597,28 @@ describe('what an opened workspace puts where', () => {
     const agentState = rt.agentStateVfs;
 
     if (!agentState) throw new Error('an opened workspace must expose its own state plane');
-    expect(await exists(agentState, 'SOUL.md')).toBe(true);
+    expect(await exists(agentState, 'SOUL.md')).toBe(false);
+    expect(await exists(rt.storage.vfs, '/home/main/SOUL.md')).toBe(true);
     expect(await exists(agentState, 'memory/MEMORY.md')).toBe(true);
     expect(await exists(agentState, 'scaffold/agent.js')).toBe(true);
   });
 });
 
 describe('the agent\'s own state in a placed workspace', () => {
-  test('memory, SOUL.md and the scaffold read at /agent, and nothing writes through it', async () => {
+  test('memory and the scaffold read at /agent, and nothing writes through it', async () => {
     const { state, project } = roots('cwd-plane-agent-view');
     const { rt } = await openedWorkspace(state, 'jarvis', project);
     await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
     await rt.identity.scaffold.write('// evolved\n');
-    const soul = String(await nimbusReadText(present(rt.agentStateVfs, 'the agent state plane'), 'SOUL.md'));
 
-    expect((await rt.storage.vfs.readdir('/agent')).map(({ name }) => name).sort()).toEqual(['SOUL.md', 'memory', 'scaffold']);
-    expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
+    expect((await rt.storage.vfs.readdir('/agent')).map(({ name }) => name).sort()).toEqual(['memory', 'scaffold']);
     expect(await readText(rt, '/agent/memory/MEMORY.md')).toContain('learned something');
     expect(await readText(rt, '/agent/scaffold/agent.js')).toBe('// evolved\n');
     expect(await exists(rt.storage.vfs, '/agent/workspace.db')).toBe(false);
 
     expect(await refusalOf(() => writeText(rt.storage.vfs, '/agent/memory/MEMORY.md', 'forged'))).toBe('EROFS');
-    expect(await refusalOf(() => writeText(rt.storage.vfs, '/agent/SOUL.md', 'forged'))).toBe('EROFS');
     expect(await refusalOf(() => rt.storage.vfs.unlink('/agent/scaffold/agent.js'))).toBe('EROFS');
     expect(await refusalOf(() => rt.storage.vfs.mkdir('/agent/memory/more', { recursive: true }))).toBe('EROFS');
-    expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
     expect(readdirSync(project)).toEqual([]);
   });
 });
@@ -706,30 +703,24 @@ test('the file tool shows the agent a screenshot the rung moved out, from the li
   });
 });
 
-describe('SOUL.md is the owner\'s', () => {
-  const forgeries = ['printf forged > SOUL.md', 'rm -f SOUL.md', 'mv SOUL.md gone.md', 'chmod 666 SOUL.md', 'printf forged > f && mv -f f SOUL.md'];
-
-  // The soul is the agent's state, read-only at /agent; a SOUL.md in the folder or the own space is just a file.
-  test('no agent file or shell forgery reaches the next turn', async () => {
+describe('SOUL.md is the workspace\'s own file', () => {
+  // SOUL.md is a real file of the own space: the agent edits it from its file tool or its shell, and the next turn reads it.
+  test('an edit of SOUL.md, by the file tool or the shell, is the soul the next turn reads', async () => {
     const { state, project } = roots('soul-owner');
     const dbPath = join(state, 'jarvis', 'agent.db');
     mkdirSync(dirname(dbPath), { recursive: true });
     const db = new Database(dbPath);
-    await createWorkspace(db, { name: 'jarvis', purpose: 'Test agent jarvis', llm: DUMMY_LLM });
+    await createWorkspace(db, { name: 'jarvis', purpose: 'Test agent jarvis', llm: DUMMY_LLM, writeSoul: soulWriter(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
-    const ownerSoul = () => readSoul(present(rt.agentStateVfs, 'the agent state'));
-    const born = present(await ownerSoul(), 'the born soul');
+    expect(soulIn(rt.space)).toContain('Test agent jarvis');
 
-    await expect(writeText(rt.storage.vfs, '/agent/SOUL.md', 'forged')).rejects.toThrow();
-    await writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/SOUL.md`, 'forged');
+    await writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/SOUL.md`, '# by the file tool\n');
+    expect(soulIn(rt.space)).toBe('# by the file tool\n');
+    const shell = await present(rt.shell, 'the workspace shell').exec(`printf '# by the shell\\n' > '${join(rt.space, 'home/main/SOUL.md')}'`);
 
-    for (const command of forgeries) {
-      await present(rt.shell, 'the workspace shell').exec(command);
-
-      expect(await ownerSoul()).toBe(born);
-      expect(await readText(rt, '/agent/SOUL.md')).toBe(born);
-    }
+    expect(shell.exitCode).toBe(0);
+    expect(soulIn(rt.space)).toBe('# by the shell\n');
   });
 
 });

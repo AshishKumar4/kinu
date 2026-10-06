@@ -21,7 +21,6 @@ import { renderIssues, type JsonObject } from '../utils/json';
 import { compareCodeUnits } from '../utils/text';
 import { openWorkspaceMainActor } from './workspace-actors';
 import { FORK_PIN_PREFIX, forkCarries, type ForkFileSource, type ForkPinnedFiles } from './fork';
-import { SOUL_PATH } from './soul';
 import {
   forkArtifactPath,
   forkConversationCounts,
@@ -118,8 +117,6 @@ const ForkFrameSchema = v.variant('kind', [
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntries'), rows: v.array(ForkConversationEntryRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntryParts'), rows: v.array(ForkConversationEntryPartRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('contextMembers'), rows: v.array(ForkContextMemberRowSchema) }),
-  /** SOUL.md whole: its protected write takes one argument. */
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('soul'), bytes: v.instance(Uint8Array) }),
   /** Chunks a page names that the target lacked, stored ahead of that page. */
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('chunks'), target: ForkImportTargetSchema, chunks: v.array(ForkExportChunkSchema) }),
   /** One page of one import. */
@@ -187,18 +184,12 @@ function pageJson(page: VfsExportPage): JsonObject {
 }
 
 /**
- * Canonical preimage of one frame (all but its digest). SOUL.md's bytes are hashed as bytes, not JSON; a chunk is
- * named by the sha256 of its bytes, which the target's import re-hashes before storing it.
+ * Canonical preimage of one frame (all but its digest). A chunk is named by the sha256 of its bytes, which the
+ * target's import re-hashes before storing it.
  */
 type ForkFrameSealInput = (UnsealedForkFrame | UnsealedForkSectionFrame) & { digest?: string };
 
 function forkFramePreimage(frame: ForkFrameSealInput): string {
-  if (frame.kind === 'soul') {
-    const { bytes, digest: _digest, ...meta } = frame;
-
-    return `${stableStringify({ ...meta })}|${sha256Hex(bytes)}`;
-  }
-
   if (frame.kind === 'chunks') {
     const { chunks, digest: _digest, ...meta } = frame;
 
@@ -419,14 +410,6 @@ export async function* forkTransferFrames(
   const pinned = await source.vfs.pin(`${FORK_PIN_PREFIX}${source.transferId}`);
 
   try {
-    const soulPath = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
-    const soul = pinned.kind(soulPath) === 'file' ? pinned.readFile(soulPath) : null;
-
-    if (soul !== null && soul.byteLength > source.frameBytes) {
-      throw new KinuError('bad_input', `SOUL.md is ${soul.byteLength} bytes, past the ${source.frameBytes} one fork frame carries; `
-        + 'its protected write takes the file whole');
-    }
-
     const imports: ForkImport[] = [
       ...pinned.readdir(WORKSPACE_ROOT).filter(forkCarries).sort(compareCodeUnits)
         .map((name): ForkImport => ({ target: { in: 'home', name }, root: `${WORKSPACE_ROOT}/${name}` })),
@@ -441,7 +424,7 @@ export async function* forkTransferFrames(
       craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
       memoryChunks: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`[0]?.count ?? 0,
       ...conversation,
-      files: imports.length + (soul === null ? 0 : 1),
+      files: imports.length,
     };
 
     const identity = source.sql<{ id: string; name: string }>`
@@ -533,9 +516,6 @@ export async function* forkTransferFrames(
           break;
       }
     }
-
-    // Copy: structured clone of a view carries its whole backing buffer.
-    if (soul !== null) yield* send({ ...envelope(), kind: 'soul', bytes: soul.slice() });
 
     /** The chunks a page wants, a frame of them at a time. */
     const chunkFrames = async function* (
@@ -680,14 +660,6 @@ export class ForkTransferReceiver {
     staged: ForkStaging, frame: Exclude<ForkFrame, { kind: 'begin' | 'commit' }>,
   ): Effect.Effect<{ status: 'staged'; sectionCursor: number } | { status: 'want'; hashes: string[] }> {
     return Effect.gen({ self: this }, function* () {
-      if (frame.kind === 'soul') {
-        yield* this.filesPhase(staged);
-        yield* Effect.promise(() => this.files.publishSoul(frame.bytes));
-        this.writer.stageSoul();
-
-        return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
-      }
-
       if (frame.kind === 'chunks') {
         const dst = yield* this.open(staged, frame.target);
         yield* Effect.promise(() => this.files.importChunks(dst, frame.chunks));
@@ -732,13 +704,6 @@ export class ForkTransferReceiver {
     return Effect.succeed(at);
   }
 
-  /** Files come once the row sections are done, and one import at a time. */
-  private filesPhase(staged: ForkStaging): Effect.Effect<void> {
-    return staged.importing === null
-      ? Effect.void
-      : Effect.die(new Error(`fork transfer sent SOUL.md while the import at ${JSON.stringify(staged.importing)} was still incomplete`));
-  }
-
   /**
    * The destination of one import frame, re-rooted into the target's own paths once, here. An import's first frame
    * opens it, replacing what the target was born with there (its own `.nimbusrc`, say: the fork carries the
@@ -747,7 +712,7 @@ export class ForkTransferReceiver {
    */
   private open(staged: ForkStaging, target: ForkImportTarget): Effect.Effect<string> {
     return Effect.gen({ self: this }, function* () {
-      // SOUL.md publishes only through its protected write; the rest are the target's own to make.
+      // The rest are the target's own to make.
       if (target.in === 'home' && !forkCarries(target.name)) {
         return yield* Effect.die(new Error(`fork transfer sent an import of ${JSON.stringify(target.name)}, a name under the home a fork does not carry`));
       }

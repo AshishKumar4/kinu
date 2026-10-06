@@ -19,7 +19,6 @@ import { KinuError } from '../obs/error';
 import { VfsExportPageSchema } from '../vfs/export-page';
 import { isNimbusTable } from '../vfs/nimbus-tables';
 import { isTreeRelativePath, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
-import { SOUL_PATH } from './soul';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
 
@@ -778,8 +777,8 @@ function filesPhase(source: ArchiveFileSource, { sink, walk }: PageState, page: 
   });
 }
 
-/** The soul is a row a boot seals into the file; runtimes reinstall on use. */
-const MAIN_HOME_NOT_CARRIED = { [SOUL_PATH]: true, '.nimbus': true } satisfies Record<string, true>;
+/** Runtimes reinstall on use. */
+const MAIN_HOME_NOT_CARRIED = { '.nimbus': true } satisfies Record<string, true>;
 
 function carriedRoots(pinned: ArchivePinnedStore): string[] {
   const under = (parent: string, carried: (name: string) => boolean): string[] => pinned.readdir(parent)

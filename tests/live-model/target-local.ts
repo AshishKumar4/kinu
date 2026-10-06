@@ -39,7 +39,7 @@ import { join } from 'node:path';
 import { initWorkspaceSchema, type LLMProviderConfig } from '../../packages/core/src/index';
 import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { makeWorkspaceSchemaSql, soulWriter, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { installPreTurnProfile, requireExecutorSurface, requireSandboxedExecutors } from './harness';
 
 export interface LocalTargetOptions {
@@ -76,7 +76,7 @@ export async function provisionLocalTarget(opts: LocalTargetOptions): Promise<Lo
   const db = new Database(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
 
-  await createWorkspace(db, { name: opts.workspace, purpose: opts.purpose, llm: opts.llm });
+  await createWorkspace(db, { name: opts.workspace, purpose: opts.purpose, llm: opts.llm, writeSoul: soulWriter(db) });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const folder = localTargetFolder(opts.dir);
   mkdirSync(folder, { recursive: true });

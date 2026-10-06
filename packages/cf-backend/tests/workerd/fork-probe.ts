@@ -9,7 +9,7 @@ import {
   agentArtifactDirectory, agentHome, CHAT_SESSION_ID, MAIN_AGENT,
   FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver,
   foldForkStream, createWorkspaceForkSink, createWorkspaceForkSource, writeWorkspaceSoul, forkTransferFrames, initWorkspaceSchema, nimbusSessionFiles,
-  readForkLineage, readMission, SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
+  readForkLineage, missionOf, SOUL_FILE, SOUL_PATH, SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
   type ForkFrame, type ForkFrameReply, type ForkLineageRow, type ForkResult, type ForkStaging, type SqlExecutor, type SqlValue,
   WORKSPACE_ROOT,
 } from '@kinu.run/core';
@@ -63,7 +63,7 @@ export type ForkDeliveryStop =
   | 'end';
 
 export type ForkCorruption =
-  /** SOUL.md's or a page's content changed without resealing: the per-frame digest refuses it. */
+  /** A page's content changed without resealing: the per-frame digest refuses it. */
   | 'frame'
   /** A chunk's bytes changed; its frame names it by hash, so Nimbus's re-hash refuses it. */
   | 'chunk';
@@ -126,6 +126,13 @@ abstract class ForkProbeDO extends DurableObject<Cloudflare.Env> {
 
   protected async sealSoul(bytes: string | Uint8Array): Promise<void> {
     await writeWorkspaceSoul(this.fileHost, bytes);
+  }
+
+  /** SOUL.md as the store holds it, read as the kernel. */
+  async soul(): Promise<string | null> {
+    const kernel = (await this.store()).as(CRED_KERNEL);
+
+    return kernel.readdir(WORKSPACE_ROOT).some((entry) => entry.name === SOUL_PATH) ? new TextDecoder().decode(kernel.readFile(SOUL_FILE)) : null;
   }
 
   /** Every file under the home with its size and digest, in path order. */
@@ -273,7 +280,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
           continue;
         }
 
-        if (request.stop === 'files' && (frame.kind === 'soul' || frame.kind === 'page' || frame.kind === 'chunks')) break;
+        if (request.stop === 'files' && (frame.kind === 'page' || frame.kind === 'chunks')) break;
 
         if (request.stop !== 'end' && frame.kind === 'commit') break;
 
@@ -326,9 +333,7 @@ function corruptFrame(frame: ForkFrame, how: ForkCorruption): ForkFrame {
     return { ...frame, chunks: frame.chunks.map((chunk) => ({ hash: chunk.hash, data: chunk.data.map((byte) => byte ^ 0xff) })) };
   }
 
-  if (frame.kind === 'soul') return { ...frame, bytes: frame.bytes.map((byte) => byte ^ 0xff) };
-
-  if (frame.kind !== 'page') throw new Error(`frame ${frame.seq} is a ${frame.kind} frame, not SOUL.md or a page`);
+  if (frame.kind !== 'page') throw new Error(`frame ${frame.seq} is a ${frame.kind} frame, not a page`);
 
   return { ...frame, page: { ...frame.page, rows: frame.page.rows.map((row) => ({ ...row, mtime: row.mtime + 1 })) } };
 }
@@ -347,11 +352,11 @@ export interface ForkTargetState {
   files: ProbeFile[];
 }
 
-/** The identity row and the mission every listing reads, which is the soul's. */
-function identityWithMission(sql: SqlExecutor): { id: string; name: string; mission: string | null } | null {
+/** The identity row and the mission every listing reads, which is SOUL.md's. */
+function identityWithMission(sql: SqlExecutor, soul: string | null): { id: string; name: string; mission: string | null } | null {
   const row = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`[0];
 
-  return row === undefined ? null : { ...row, mission: readMission(sql) };
+  return row === undefined ? null : { ...row, mission: missionOf(soul) };
 }
 
 export class ForkTargetProbeDO extends ForkProbeDO {
@@ -402,7 +407,7 @@ export class ForkTargetProbeDO extends ForkProbeDO {
 
     return {
       lineage: readForkLineage(this.sql),
-      identity: identityWithMission(this.sql),
+      identity: identityWithMission(this.sql, await this.soul()),
       displayName: openWorkspaceMainActor(this.sql).config.getDisplayName(),
       entries: tally(this.sql<{ count: number }>`
         SELECT COUNT(*) AS count FROM conversation_entries WHERE role <> ${'system'}`),

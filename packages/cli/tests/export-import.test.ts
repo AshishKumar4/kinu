@@ -285,6 +285,8 @@ describe('kinu export / import', () => {
     const runtime = await createWorkspace(db, {
       name: 'skywriter', purpose: 'archive restart proof',
       llm: { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' },
+      // In memory, a workspace has no space to keep SOUL.md in.
+      writeSoul: async () => {},
     });
 
     await writeText(runtime.storage.vfs, 'version.txt', 'before restart');

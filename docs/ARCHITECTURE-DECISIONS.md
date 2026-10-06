@@ -286,13 +286,37 @@ across mounts answers EXDEV and moves nothing; a mount point answers EBUSY
 (EISDIR for unlink); `..` is lexical, so `/pc/..` is the workspace root and
 `/pc/home/dev/../../etc` lands on the device's `/etc`, which the device's
 consent then refuses. Kinu keeps only its own mount metadata (owner,
-read-only, store view), the ENXIO a stat of an absent mount states, and a
-write report asked of the device directly until Nimbus routes a path to its
-mount (NIMBUS-ASKS #23). The `vfs://` prefix rows stay: they are the spelling
-agents, links and prompts use, not mounts. The local resolver's subtree rows
-stay too: the CLI's shell runs on the machine, so `vfs://local/x` must become
-the folder's real path. Phase two, the file tool reading the shell's own
-namespace, waits on NIMBUS-ASKS #23 and #24.
+read-only, store view) and the ENXIO a stat of an absent mount states. The
+`vfs://` prefix rows stay: they are the spelling agents, links and prompts
+use, not mounts.
+
+W4. One namespace. On the cloud the file tool reads the kernel's own
+per-principal namespace, the one its shells read: each principal's view holds
+its mounts (a branch, with no uid of its own, is keyed by its actor id), a
+device's write report is asked of the backend `routeOf` names, and head
+attribution hears the namespace's `observeWrites`. Both are a local patch of
+`@nimbus-sh/core` until Nimbus ships them (NIMBUS-ASKS #23 and #24). Decided
+2026-10-06, owner design B (2026-10-04) and m1960. Reversed: a second
+composite the file tool built over the bare kernel tree, beside the one the
+shells read, with an observing wrapper of its own. Locally everything is real
+files: `vfs://` is the workspace's own space `~/.kinu/<workspace>/` and
+`local://` the folder. Conversations, memory, jobs and settings stay in
+`agent.db`: that is data, not files, so `/context` (a rendering of the
+conversation) and `/skills` (the builtins and the workspace's own skills) stay
+views the file tool reads and the prompt names as such, and `/agent` shows
+the scaffold read-only. `/shared`, never bound locally, is gone there. The
+CLI's file plane is the host's, so its head attribution keeps the observing
+wrapper (`core/vfs/observe.ts`).
+
+W5. `SOUL.md` is the soul's only copy: an ordinary file of main's home
+(1000:1000, 0664) the owner sets and every agent of the workspace edits, read
+at each turn and by every listing. Decided 2026-10-06 ("SOUL.md is supposed
+to be editable by the agents in a workspace"). Reversed: the `workspace_soul`
+row, the kernel 0444 seal resealed from it at every boot and turn start, the
+soul frame of a fork and the file tool's "set from Settings" refusals. The
+schema genesis moved with it, so a local database from before is refused, not
+opened without its soul. Pinned by "an agent with its own uid edits SOUL.md"
+(red at 0644, the soul at 0664) and its cloud and CLI flows.
 
 ## Chat loop
 

@@ -121,23 +121,17 @@ describe('a workspace fork', () => {
     expect(await readSoul(tgt.vfs)).toBe('help with testing');
   });
 
-  test('a soul swapped since the seal does not become the fork\'s: the target row holds the owner\'s', async () => {
+  test('the fork carries SOUL.md as the source\'s agents left it', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedForkTarget(tgt, { workspaceId: 'TGT' });
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
-
-    // A mid-turn swap of the file: the fork carries the owner's row through the resealed source.
-    const kernel = (await src.bundle.session()).vfs.as(CRED_KERNEL);
-    kernel.unlink(`${WORKSPACE_ROOT}/SOUL.md`);
-    kernel.writeFile(`${WORKSPACE_ROOT}/SOUL.md`, 'forged');
-    kernel.chown(`${WORKSPACE_ROOT}/SOUL.md`, 1000, 1000);
-    kernel.chmod(`${WORKSPACE_ROOT}/SOUL.md`, 0o644);
+    await writeText(src.vfs, 'SOUL.md', 'edited by an agent');
 
     await forkInto(src, tgt, { untilMessageId: 'm1' });
 
-    expect(await readSoul(tgt.vfs)).toBe('help with testing');
+    expect(await readSoul(tgt.vfs)).toBe('edited by an agent');
   });
 
   test('an entry after the cut is not inherited', async () => {
@@ -564,7 +558,7 @@ describe('a workspace fork', () => {
 });
 
 describe('the files a fork carries', () => {
-  test('SOUL.md first, then one import a name under the home in order, then each payload once', async () => {
+  test('one import a name under the home in order, SOUL.md among them, then each payload once', async () => {
     const ws = fresh();
     const chat = await seedForkSource(ws, { memory: [] });
     await writeText(ws.vfs, 'b/inner.md', 'inner');
@@ -575,8 +569,6 @@ describe('the files a fork carries', () => {
     const frames = await sourceFrames(ws, 'm2');
 
     const carried = [...new Set(frames.flatMap((frame) => {
-      if (frame.kind === 'soul') return ['SOUL.md'];
-
       if (frame.kind !== 'page') return [];
 
       return [frame.target.in === 'home' ? frame.target.name : `payload ${frame.target.path}`];
@@ -584,8 +576,7 @@ describe('the files a fork carries', () => {
 
     const payloads = carried.filter((name) => name.startsWith('payload '));
 
-    expect(carried[0]).toBe('SOUL.md');
-    expect(carried.filter((name) => ['a.md', 'b'].includes(name))).toEqual(['a.md', 'b']);
+    expect(carried.filter((name) => ['SOUL.md', 'a.md', 'b'].includes(name))).toEqual(['SOUL.md', 'a.md', 'b']);
     expect(carried.slice(-payloads.length)).toEqual(payloads);
     expect(payloads).toHaveLength(2);
     expect(carried).not.toContain('scaffold');

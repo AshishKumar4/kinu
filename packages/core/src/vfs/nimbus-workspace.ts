@@ -21,7 +21,7 @@ import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { CommandResult, RunOptions } from '@nimbus-sh/core/substrate/lifo/sandbox/types.js';
 import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
-  settleWorkspaceSlates, resealWorkspaceSoul,
+  settleWorkspaceSlates, provisionWorkspaceSoul,
   type HomeRootVfs, type TmpConfiner,
 } from './agent-home';
 import { registerNpm, workspaceCommandNotFound } from './workspace-runtimes';
@@ -300,7 +300,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
     // Trusted host init, once per engine boot: a registration is not stored with the tree.
     settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
-    resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
+    provisionWorkspaceSoul(workspace.vfs.as(CRED_KERNEL));
 
     await registerNpm(workspace);
     const root = workspace.vfs.as(CRED_KERNEL);

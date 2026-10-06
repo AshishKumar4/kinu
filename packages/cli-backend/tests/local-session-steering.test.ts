@@ -2121,15 +2121,11 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
   });
 
   test('a custom SOUL.md reaches the model request, re-read each turn', async () => {
-    // The soul is read per turn from its row, so an owner edit lands next request.
+    // SOUL.md is read per turn from its file, so an edit lands next request.
     const { db, rt } = workspaceRuntime();
+    const edit = (markdown: string): Promise<void> => writeText(rt.storage.vfs, '/home/main/SOUL.md', markdown);
 
-    const ownerEdit = (markdown: string): void => {
-      db.exec('CREATE TABLE IF NOT EXISTS workspace_soul (id INTEGER PRIMARY KEY CHECK (id = 1), markdown TEXT NOT NULL)');
-      db.prepare('INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown').run(markdown);
-    };
-
-    ownerEdit('# Soul\n\nYou are Atlas. Hold the owner\'s stated intent above the letter of the ask.');
+    await edit('# Soul\n\nYou are Atlas. Hold the owner\'s stated intent above the letter of the ask.');
     let system = '';
 
     rt.actor.config.setLearning(false);
@@ -2142,7 +2138,7 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
     await session.send('first turn', { id: crypto.randomUUID() });
     expect(system).toContain('You are Atlas.');
 
-    ownerEdit('# Soul\n\nYou are Rhea. Prefer deleting code over adding it.');
+    await edit('# Soul\n\nYou are Rhea. Prefer deleting code over adding it.');
     await session.send('second turn', { id: crypto.randomUUID() });
     expect(system).toContain('You are Rhea.');
     expect(system).not.toContain('You are Atlas.');

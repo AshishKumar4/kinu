@@ -23,7 +23,7 @@ import {
   openWorkspaceCLI,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
-  type SessionEvent,
+  type SessionEvent, soulWriter,
 } from '@kinu.run/cli-backend';
 // The v2 fixture model is a test helper, not a package export: reuse it rather than keep a second copy.
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
@@ -119,7 +119,7 @@ async function seedUntitledWorkspace(project: string): Promise<string> {
   db.exec('PRAGMA journal_mode = WAL');
 
   try {
-    const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, llm: DUMMY_LLM });
+    const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, llm: DUMMY_LLM, writeSoul: soulWriter(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     rt.actor.config.setDisplayNameOrigin('', 'auto');
   } finally {

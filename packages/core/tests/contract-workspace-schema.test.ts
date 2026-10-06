@@ -79,7 +79,7 @@ const ROOT_ONLY_TABLES = [
   'agent_figures', 'agent_open_turns', 'fork_lineage', 'fork_staged_files', 'fork_transfer',
   'slate_file_manifest', 'slate_live_share_users', 'slate_live_shares', 'slate_publications',
   'slate_share_users', 'slate_shares', 'slate_state', 'slate_versions',
-  'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity', 'workspace_soul',
+  'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity',
 ];
 
 /** The three dialects initWorkspaceSchema takes and its transaction, over one bun:sqlite handle; core may not import cli-backend. */

@@ -2,7 +2,7 @@
 
 export {
   agentStateFiles, createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, inspectionFiles,
-  createHostShell,
+  createHostShell, soulIn, soulOf, soulWriter,
   type CLIRuntime,
 } from './runtime';
 

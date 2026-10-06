@@ -79,7 +79,7 @@ import {
   type AccountSpend,
   MEMORY_PATH,
   WORKSPACE_ROOT,
-  readMission,
+  missionOf,
   searchMemoryChunks,
   type MemorySearchResult,
 } from '@kinu.run/core';
@@ -87,7 +87,7 @@ import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { classify, tolerateAsync } from '@kinu.run/core/obs';
 import {
   agentStateFiles, makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
-  openWorkspaceCLI, resolverModelPlane,
+  openWorkspaceCLI, resolverModelPlane, soulOf,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveLocalAgent } from './config';
@@ -813,8 +813,8 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
       db, `SELECT name, created_at FROM workspace_identity LIMIT 1`).at(0)
     : null;
 
-  // Off the soul's row, not SOUL.md: opening the workspace filesystem writes.
-  const mission = readMission(makeSql(db));
+  // SOUL.md read where it lies in the workspace's space, without opening a filesystem.
+  const mission = missionOf(soulOf(db));
 
   return {
     name: identity?.name ?? null,

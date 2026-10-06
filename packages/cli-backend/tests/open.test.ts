@@ -1,4 +1,5 @@
 // openWorkspaceCLI: the local resume path, reading a workspace's identity and SOUL.md.
+import { soulWriter } from '../src/runtime';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { spawnTest } from '@kinu.run/test-utils';
 
@@ -18,7 +19,7 @@ describe('openWorkspaceCLI', () => {
     const dir = scratchDir('open');
     const dbPath = join(dir, 'agent.db');
     const db = new Database(dbPath);
-    await createWorkspace(db, { name: 'jarvis', purpose: 'Run the household and the lab.', llm: DUMMY_LLM });
+    await createWorkspace(db, { name: 'jarvis', purpose: 'Run the household and the lab.', llm: DUMMY_LLM, writeSoul: soulWriter(db) });
 
     const { info } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
@@ -31,7 +32,7 @@ describe('openWorkspaceCLI', () => {
     const dir = scratchDir('open-locked');
     const dbPath = join(dir, 'agent.db');
     const made = new Database(dbPath);
-    await createWorkspace(made, { name: 'jarvis', purpose: 'Run the lab.', llm: DUMMY_LLM });
+    await createWorkspace(made, { name: 'jarvis', purpose: 'Run the lab.', llm: DUMMY_LLM, writeSoul: soulWriter(made) });
     made.close();
 
     // Another process (the daemon) is mid-write when this one opens the workspace.

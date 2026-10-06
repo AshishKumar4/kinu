@@ -5,7 +5,6 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Workspace fork write and its accounting. The target DB must already be initialized (initWorkspaceSchema). */
 
 import type { SqlExecutor } from '../types/primitives';
-import { SOUL_PATH } from './soul';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { ForkStagingState } from './fork-staging';
 import { invalidateConversationSearchIndex } from '../memory/conversation-search';
@@ -225,11 +224,6 @@ export class ForkTargetWriter {
     }
 
     this.staging.count({ contextMembers: rows.length });
-  }
-
-  /** SOUL.md landed through its protected write; the mission is read off it, never copied. */
-  stageSoul(): void {
-    this.staging.addFile(SOUL_PATH);
   }
 
   publish(): Promise<ForkResult> {

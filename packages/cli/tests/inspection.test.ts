@@ -1,3 +1,4 @@
+import { soulWriter } from '@kinu.run/cli-backend';
 import { childEnv, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { placeLocalWorkspace } from './helpers/local-refs';
@@ -105,7 +106,7 @@ async function createLocalAgent(home: string, name: string): Promise<string> {
   const db = new Database(join(dir, "agent.db"));
 
   try {
-    const rt = await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM });
+    const rt = await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM, writeSoul: soulWriter(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     // `search_nodes` and `agent_log` are actor-private: seed under the main actor `createWorkspace` issued;
     // rows under any other id are silently invisible to `kinu swarm` and `kinu events`.

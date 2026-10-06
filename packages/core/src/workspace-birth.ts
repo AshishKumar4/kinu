@@ -19,7 +19,6 @@ import { initRunEventTables, RunEventRecorder } from './events/recorder';
 import { buildRuntime } from './runtime-builder';
 import { createSqlFiber } from './execution/fiber';
 import type { WorkspaceBundle } from './vfs/nimbus-workspace';
-import { writeWorkspaceSoul } from './vfs/workspace-planes';
 import { cloudPlanes } from './vfs/resolve';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import type { ActorHandle } from './identity/actor-handle';
@@ -34,6 +33,8 @@ export interface WorkspaceBirthConfig {
   purpose: string;
   llm: LLMProviderConfig;
   scaffold?: string;
+  /** Writes the first SOUL.md where the workspace keeps it: a real file of its own space. */
+  writeSoul: (markdown: string) => Promise<void>;
 }
 
 interface WorkspaceComponents {
@@ -94,7 +95,7 @@ export async function createWorkspace(
   const titled = config.title?.trim();
   const heading = titled === undefined || titled === '' ? UNTITLED_WORKSPACE_NAME : titled;
 
-  await seedSoul({ name: heading, mission: config.purpose }, (content) => writeWorkspaceSoul(workspace, content));
+  await seedSoul({ name: heading, mission: config.purpose }, config.writeSoul);
 
   await workspace.vfs.mkdir('memory', { recursive: true });
   await writeText(workspace.vfs, 'memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);

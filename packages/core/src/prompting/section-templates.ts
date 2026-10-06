@@ -133,7 +133,7 @@ export const EXECUTORS_SECTION = definePromptSection(
 /** Each prefix as the `vfs://` subtree it names, and where each subtree is on this machine: a fact per workspace, after the shared prefix. */
 export const PLANES_SECTION = definePromptSection(
   "executors/planes",
-  "{{aliases}}{{mounts}}",
+  "{{aliases}}{{mounts}}{{ownSkills}}{{views}}{{#if hasViews}}{{/if}}{{#if hasOwnSkills}}{{/if}}",
   planesSection.trimEnd(),
 );
 

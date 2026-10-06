@@ -122,7 +122,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
 
   table: {
     workspace_identity: EVERYWHERE,
-    workspace_soul: EVERYWHERE,
     // The workspace's actor directory; subordinates read the root's roster.
     workspace_actors: EVERYWHERE,
     // Delegated turns handed to an agent's own isolate; created with the workspace schema everywhere.

@@ -273,6 +273,11 @@ function subtreeOf(name: string, planes: PathPlanes): string | undefined {
 }
 
 /** Where a VFS path is on this machine: under the deepest subtree holding it. */
+/** Where a `vfs://` path is on this machine: its deepest mount's real directory, or the path itself on the cloud. */
+export function realPath(vfs: string, planes: PathPlanes): string {
+  return onMachine(vfs, planes);
+}
+
 function onMachine(vfs: string, planes: PathPlanes): string {
   const mount = deepest(planes.mounts.filter((candidate) => holds(candidate.subtree, vfs)), (candidate) => candidate.subtree);
 

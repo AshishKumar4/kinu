@@ -10,7 +10,7 @@ import {
   type AccountUsage, type CallAccount, type LLMProviderConfig, type Usage,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { makeSql, makeWorkspaceSchemaSql, soulWriter } from '@kinu.run/cli-backend';
 import { scratchDir } from '@kinu.run/test-utils';
 import { placeLocalWorkspace } from './helpers/local-refs';
 
@@ -25,7 +25,7 @@ async function localWorkspace(home: string, name: string, calls: ReadonlyArray<{
   const db = new Database(join(home, name, 'agent.db'));
 
   try {
-    await createWorkspace(db, { name, purpose: 'Spend fixture', llm: DUMMY_LLM });
+    await createWorkspace(db, { name, purpose: 'Spend fixture', llm: DUMMY_LLM, writeSoul: soulWriter(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
 

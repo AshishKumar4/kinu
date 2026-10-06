@@ -63,7 +63,7 @@ import { TierIdSchema,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES,
-  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, readMission,
+  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf,
   branchesTerminalEffect, chatTerminalEffects,
   SUBORDINATE_REPORT_STATUSES,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
@@ -125,7 +125,6 @@ import { TierIdSchema,
   type WorkspaceTitleState,
   type PromptIdentity,
   narrowToolSurface, codemodeCapabilitiesFor,
-  readSoul,
   type ResolvedTurnProfile, type TierId,
   decodeJsonValue, projectJsonValue, JsonValueSchema,
   agentSelfHost, createAgentSelfProvider,
@@ -151,7 +150,7 @@ import { TierIdSchema,
 import {
   diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, detach, type Refusal,
 } from '@kinu.run/core/obs';
-import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
+import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, soulIn, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, nodeWorkspace, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { OS_LEASE_PROCESS } from './agent-host/lease-process';
@@ -352,10 +351,6 @@ function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | unde
   return parsed.success ? parsed.output.profile_tier : undefined;
 }
 
-/** The owner's soul from its row where the runtime holds a workspace, else the actor's own file. */
-async function currentSoul(rt: CLIRuntime): Promise<string | null> {
-  return await (rt.ownerSoul?.() ?? readSoul(rt.agentStateVfs ?? rt.storage.vfs));
-}
 
 export class LocalAgentSession {
   /** The seam core publishes and enqueues through, as cf's actor holds one; outside callers publish here too. */
@@ -1754,8 +1749,8 @@ export class LocalAgentSession {
     // Re-statted each turn; only files fitting the model window are read, each classified by owner approval.
     const agentsMd = await discoverAgentsMd(this.cwd, this.modelCatalog.window(), this.instructionTrust);
 
-    // agentStateVfs is the identity tree when it differs; a missing SOUL.md renders the default.
-    const soul = await currentSoul(this.rt);
+    // The workspace's SOUL.md as its agents left it; a missing one renders the default.
+    const soul = soulIn(this.rt.space);
 
     const systemPromptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
       executors,
@@ -1867,7 +1862,7 @@ export class LocalAgentSession {
    *  decisions, so the CLI cannot drift from the Durable Object. */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     // A child titles from its brief, as a hosted actor does; the workspace mission names only the root.
-    const mission = this.rt.actor.parentActorId === null ? readMission(this.rt.storage.sql) : null;
+    const mission = this.rt.actor.parentActorId === null ? missionOf(soulIn(this.rt.space)) : null;
 
     // Decided on the live turn: `shouldGate` reads RAM a restart lacks, so the row's existence carries it.
     const gated = this.rt.shell !== undefined

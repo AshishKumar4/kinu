@@ -48,20 +48,20 @@ export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS, type 
 
 export {
   DEFAULT_SOUL_MD,
+  SOUL_FILE,
   SOUL_PATH,
   WORKSPACE_CREATED_EVENT,
   UNTITLED_WORKSPACE_NAME,
   isPlaceholderMission,
   workspaceGenesisSignal,
   readSoul,
-  storeDurableSoulDb,
-  readMission,
+  missionOf,
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
 } from './identity/soul';
 
-export { WORKSPACE_IDENTITY_DDL, WORKSPACE_SOUL_DDL } from './identity/schema';
+export { WORKSPACE_IDENTITY_DDL } from './identity/schema';
 
 export { validateSwarmProfileSnapshot } from './profiles';
 
@@ -1037,7 +1037,7 @@ export type {
 } from './vfs/nimbus-workspace';
 
 export {
-  settledWorkspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
+  workspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
   workspaceArchiveStore, workspaceArchiveTarget, archiveFileTree,
 } from './vfs/workspace-planes';
 

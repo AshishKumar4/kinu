@@ -89,6 +89,16 @@ describe('the agent works in prefixed paths, and is told where each plane is', (
     expect(prompt).toContain('read-only at `vfs://agent`');
   });
 
+  // A view has bytes only the file tool renders; the shell is told so, and where the workspace's own skills really are.
+  test('locally, the views are named as the file tool\'s alone, with the real path of the workspace\'s own skills', () => {
+    const { rt } = createTestRuntime();
+    const planes = localPlanes({ space: '/home/ana/.kinu/acme', folder: '/home/ana/acme', home: '/home/ana', views: ['skills', 'context'] });
+    const prompt = buildSystemPromptSync({ ...rt, planes }, local.opts);
+
+    expect(prompt).toContain('`vfs://skills` and `vfs://context` are views only the `file` tool and `workspace.*` read; no shell has a path for them.');
+    expect(prompt).toContain('The workspace\'s own skills are files at `/home/ana/.kinu/acme/home/main/skills`.');
+  });
+
   test('the cloud is told the same, with its own roots', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, full.opts);

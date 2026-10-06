@@ -12,12 +12,6 @@ export const WORKSPACE_IDENTITY_DDL =
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`;
 
-/** The owner's soul; SOUL.md is resealed from it. */
-export const WORKSPACE_SOUL_DDL = `CREATE TABLE IF NOT EXISTS workspace_soul (
-    id       INTEGER PRIMARY KEY CHECK (id = 1),
-    markdown TEXT NOT NULL
-  )`;
-
 const ACTOR_DDL = [
   // mcts/schemas.ts and scaffold/schemas.ts own their DDL (initActorTables runs it): one owner per table.
 
@@ -124,7 +118,6 @@ export function initActorDdl(execRaw: RawSqlExec): void {
 
 export function initWorkspaceOwnershipTables(execRaw: RawSqlExec): void {
   execRaw(WORKSPACE_IDENTITY_DDL);
-  execRaw(WORKSPACE_SOUL_DDL);
   execRaw(FORK_LINEAGE_DDL);
   execRaw(FORK_TRANSFER_DDL);
   execRaw(FORK_STAGED_FILES_DDL);

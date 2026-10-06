@@ -1,13 +1,10 @@
-import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Chunked file transfer behind the files route: no chunk approaches the catalogued RPC payload ceiling,
 // and no caller-supplied offset or length is trusted.
 import { describe, expect, test } from "bun:test";
-import { Database } from 'bun:sqlite';
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { present } from "@kinu.run/test-utils";
-import { ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, deleteExecutorPathOp, renameExecutorPathOp, statExecutorFile, writeExecutorFileOp } from "@kinu.run/core";
-import { createWorkspaceBundle } from './helpers';
+import { ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, deleteExecutorPathOp, statExecutorFile, writeExecutorFileOp } from "@kinu.run/core";
 
 const MiB = 1024 * 1024;
 
@@ -82,27 +79,15 @@ describe("ExecutorFileUpload", () => {
     expect([...present(plane.files.get("/home/main/big.bin"), "the transferred big.bin")]).toEqual([...whole]);
   });
 
-  test("a save of the workspace's SOUL.md is the owner's soul write, never a plain file write", async () => {
-    for (const path of ["SOUL.md", "./SOUL.md", "/home/main/SOUL.md"]) {
-      const plane = makePlane();
-      const souls: string[] = [];
-
-      const upload = new ExecutorFileUpload(plane.router, "workspace", path, {
-        expectedRevision: 3, writeSoul: async (bytes) => { souls.push(new TextDecoder().decode(bytes)); },
-      });
-
-      expect(await upload.chunk(0, new TextEncoder().encode("# mine"), true)).toEqual({ ok: true });
-      expect(souls).toEqual(["# mine"]);
-      expect(plane.files.size).toBe(0);
-    }
-
+  // SOUL.md is a file every agent of the workspace edits: a save and a delete of it are a file's.
+  test("SOUL.md is saved and deleted as any file is", async () => {
     const plane = makePlane();
+    const upload = new ExecutorFileUpload(plane.router, "workspace", "/home/main/SOUL.md");
 
-    const notes = new ExecutorFileUpload(plane.router, "workspace", "/home/main/notes/SOUL.md", {
-      writeSoul: async () => { throw new Error("not the soul"); },
-    });
-
-    expect(await notes.chunk(0, new TextEncoder().encode("x"), true)).toEqual({ ok: true });
+    expect(await upload.chunk(0, new TextEncoder().encode("# mine"), true)).toEqual({ ok: true });
+    expect(new TextDecoder().decode(plane.files.get("/home/main/SOUL.md"))).toBe("# mine");
+    expect(await deleteExecutorPathOp(plane.router, "workspace", "/home/main/SOUL.md")).toEqual({ ok: true });
+    expect(plane.files.size).toBe(0);
   });
 
   test("an out-of-order chunk is refused with the expected offset, and the stream recovers", async () => {
@@ -174,53 +159,6 @@ describe("ExecutorFileUpload", () => {
     const bytes = patternBytes(2 * MiB);
     expect(await writeExecutorFileOp(plane.router, "workspace", "/g.bin", { bytes: bytes })).toEqual({ ok: true });
     expect(await statExecutorFile(plane.router, "workspace", "/g.bin")).toEqual({ size: bytes.byteLength });
-  });
-});
-
-describe("the owner's SOUL.md is set, not moved or deleted", () => {
-  // A parent segment before the home names SOUL.md as POSIX resolves it, so it is SOUL.md: never deleted, saved as the owner's.
-  for (const path of ['/../home/main/SOUL.md', '/home/x/../main/SOUL.md']) {
-    test(`a parent segment before the home names SOUL.md itself: ${path}`, async () => {
-      const db = new Database(':memory:');
-      const bundle = createWorkspaceBundle(db);
-
-      try {
-        const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
-        const soul = '# Keep the owner policy';
-        kernel.writeFile('/home/main/SOUL.md', soul);
-        kernel.chmod('/home/main/SOUL.md', 0o444);
-
-        const router = {
-          getProvider: (id: string) => id === 'workspace' ? { files: bundle.vfs, homeDir: async () => '/home/main' } : undefined,
-        };
-
-        expect(await deleteExecutorPathOp(router, 'workspace', path)).toMatchObject({ error: expect.stringContaining('Settings') });
-        expect(await readText(bundle.vfs, '/home/main/SOUL.md')).toBe(soul);
-
-        const souls: string[] = [];
-
-        const upload = new ExecutorFileUpload(router, 'workspace', path, {
-          writeSoul: async (bytes) => { souls.push(new TextDecoder().decode(bytes)); },
-        });
-
-        expect(await upload.chunk(0, new TextEncoder().encode('changed policy'), true)).toEqual({ ok: true });
-        expect(souls).toEqual(['changed policy']);
-        expect(await readText(bundle.vfs, '/home/main/SOUL.md')).toBe(soul);
-      } finally {
-        db.close();
-      }
-    });
-  }
-
-  test("a rename onto it or a delete of it says where the soul is set, and writes nothing", async () => {
-    const plane = makePlane();
-
-    expect(await renameExecutorPathOp(plane.router, "workspace", "/home/main/SOUL.md", "/home/main/old.md"))
-      .toMatchObject({ error: expect.stringContaining("Settings") });
-    expect(await renameExecutorPathOp(plane.router, "workspace", "/home/main/notes.md", "SOUL.md"))
-      .toMatchObject({ error: expect.stringContaining("Settings") });
-    expect(await deleteExecutorPathOp(plane.router, "workspace", "/home/main/SOUL.md"))
-      .toMatchObject({ error: expect.stringContaining("Settings") });
   });
 });
 

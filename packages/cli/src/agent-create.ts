@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
   changeRoleAsOwner, openWorkspaceMainActor,
   DEFAULT_ROLE_ID,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
-  readMission,
+  missionOf,
   workspaceSlug,
   type ReasoningEffort,
   type SuggestedWorkspaceIdentity,
@@ -13,7 +14,7 @@ import {
 import { ensureDefaultTier, loadActiveProfile } from './default-model';
 import { readDefaultTier } from './profiles';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { makeSql, makeWorkspaceSchemaSql, soulIn, soulWriter } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
   agentDir,
@@ -187,7 +188,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   try {
     db.exec('PRAGMA journal_mode = WAL');
     // The slug (`workspace_identity.name`) addresses the workspace; the title heads SOUL.md and MEMORY.md.
-    const rt = await createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig });
+    const rt = await createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig, writeSoul: soulWriter(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = rt.actor.config;
 
@@ -281,15 +282,9 @@ function inheritedPeerMission(peers: readonly { name: string }[]): string | null
     const dbPath = agentDbPath(peer.name);
 
     if (!existsSync(dbPath)) continue;
-    const db = new Database(dbPath, { readonly: true });
+    const mission = missionOf(soulIn(dirname(dbPath)));
 
-    try {
-      const mission = readMission(makeSql(db));
-
-      if (mission) return mission;
-    } finally {
-      db.close();
-    }
+    if (mission) return mission;
   }
 
   return null;
