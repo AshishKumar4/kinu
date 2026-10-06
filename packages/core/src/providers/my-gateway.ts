@@ -13,19 +13,8 @@ import * as v from 'valibot';
 
 export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';
 
-/** BYOK slugs the OpenAI-compatible REST surface serves, mapped to their models.dev id (also the wire author). */
-const GATEWAY_SLUG_TO_CATALOG = new Map([
-  ['openai', 'openai'],
-  ['anthropic', 'anthropic'],
-  ['google-ai-studio', 'google'],
-  ['xai', 'xai'],
-  ['groq', 'groq'],
-  ['mistral', 'mistral'],
-  ['deepseek', 'deepseek'],
-  ['cerebras', 'cerebras'],
-  ['perplexity', 'perplexity'],
-  ['cohere', 'cohere'],
-]);
+/** models.dev's rows for the gateway: the `{author}/{model}` ids its REST API takes (`anthropic/claude-opus-4.5`). */
+const GATEWAY_CATALOG_ID = 'cloudflare-ai-gateway';
 
 const ProviderConfigsSchema = v.object({
   result: v.optional(v.array(v.object({ provider_slug: v.optional(v.string()) }))),
@@ -34,9 +23,6 @@ const ProviderConfigsSchema = v.object({
 const CreditBalanceSchema = v.object({
   result: v.optional(v.object({ balance: v.optional(v.number()) })),
 });
-
-/** Providers Unified Billing pays for without a stored key; listed only when the account holds credits. */
-const UNIFIED_BILLING_SLUGS = ['openai', 'anthropic', 'google-ai-studio', 'xai', 'groq'] as const;
 
 const CATALOG_TTL_MS = 60_000;
 
@@ -66,7 +52,7 @@ export function createMyGatewayProvider(): ModelProvider {
 
         if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cloneModelInfos(cached.models);
 
-        const discovered = yield* Effect.promise(() => servableProviderSlugs(baseURL, auth.headers, deps));
+        const discovered = yield* Effect.promise(() => servableAuthors(baseURL, auth.headers, deps));
 
         if (!discovered.authoritative) {
           // A 429/5xx said nothing about which providers are served: keep the last catalog, else fail loudly.
@@ -79,24 +65,11 @@ export function createMyGatewayProvider(): ModelProvider {
           }));
         }
 
-        const models: ModelInfo[] = [];
-        const stale: StaleModelList[] = [];
+        const listed = yield* Effect.promise(() => settleModelList(listModelsDevProviderModels(GATEWAY_CATALOG_ID, deps)));
+        const { billed, keyed } = discovered;
+        const models = listed.models.filter((model) => billed || keyed.has(model.id.slice(0, model.id.indexOf('/'))));
 
-        for (const slug of discovered.slugs) {
-          const catalogId = GATEWAY_SLUG_TO_CATALOG.get(slug);
-
-          if (!catalogId) continue; // slug the OpenAI-compat surface can't serve
-
-          const listed = yield* Effect.promise(() => settleModelList(listModelsDevProviderModels(catalogId, deps)));
-
-          if (listed.stale !== null) stale.push(listed.stale);
-
-          for (const model of listed.models) models.push({ ...model, id: `${catalogId}/${model.id}` });
-        }
-
-        const [first] = stale;
-
-        if (first !== undefined) return yield* Effect.fail(new StaleModelList(models, { reason: first.reason, cause: first.cause }));
+        if (listed.stale !== null) return yield* Effect.fail(new StaleModelList(models, { reason: listed.stale.reason, cause: listed.stale.cause }));
         catalogCache.set(cacheKey, { at: Date.now(), models });
 
         return cloneModelInfos(models);
@@ -143,7 +116,7 @@ export function gatewayWireModel(name: string, modelId: string, transport: Gatew
 
 /** What one discovery pass learned; only an `authoritative` empty menu may be published and cached. */
 type GatewayDiscovery =
-  | { authoritative: true; slugs: string[] }
+  | { authoritative: true; billed: boolean; keyed: ReadonlySet<string> }
   | { authoritative: false; reason: string };
 
 /** One management observation: what it contributed, or why it said nothing. */
@@ -167,9 +140,8 @@ async function readGatewayManagement(
   return { kind: 'transient', reason: `AI Gateway management answered HTTP ${String(response.status)}` };
 }
 
-/** Provider slugs this gateway can serve: BYOK keys, plus Unified Billing ones with credits.
- *  Unanswered calls are non-authoritative, so the caller keeps the last catalog shown. */
-async function servableProviderSlugs(
+/** Credits pay for every catalog row, a stored key (BYOK) for its author's. An unanswered read keeps the last menu. */
+async function servableAuthors(
   baseURL: string,
   authHeaders: Record<string, string>,
   deps: ProviderDeps,
@@ -177,10 +149,10 @@ async function servableProviderSlugs(
   const account = cloudflareAccountAPIRoot(baseURL);
   const gatewayId = authHeaders['cf-aig-gateway-id'];
 
-  if (!account || !gatewayId) return { authoritative: true, slugs: [] };
+  if (!account || !gatewayId) return { authoritative: true, billed: false, keyed: new Set() };
   const fetchImpl = deps.fetch ?? fetch;
   const headers = { ...authHeaders, accept: 'application/json' };
-  const slugs = new Set<string>();
+  const keyed = new Set<string>();
 
   // Independent reads, so together: each is a Cloudflare API round trip.
   const [configs, credit] = await Promise.all([
@@ -194,19 +166,13 @@ async function servableProviderSlugs(
     const body = v.parse(ProviderConfigsSchema, configs.body);
 
     for (const row of body.result ?? []) {
-      if (row.provider_slug !== undefined) slugs.add(row.provider_slug);
+      if (row.provider_slug !== undefined) keyed.add(row.provider_slug);
     }
   }
 
   if (credit.kind === 'transient') return { authoritative: false, reason: credit.reason };
 
-  if (credit.kind === 'observed') {
-    const body = v.parse(CreditBalanceSchema, credit.body);
+  const balance = credit.kind === 'observed' ? v.parse(CreditBalanceSchema, credit.body).result?.balance : undefined;
 
-    if (body.result?.balance !== undefined && body.result.balance > 0) {
-      for (const slug of UNIFIED_BILLING_SLUGS) slugs.add(slug);
-    }
-  }
-
-  return { authoritative: true, slugs: [...slugs].sort() };
+  return { authoritative: true, billed: balance !== undefined && balance > 0, keyed };
 }
