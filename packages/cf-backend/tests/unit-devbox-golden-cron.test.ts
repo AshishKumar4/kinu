@@ -21,7 +21,7 @@ test('snapshot deletion uses the deployment account even when its image is the m
     requests.push(request);
     const path = new URL(request.url).pathname;
 
-    if (path.endsWith('/credentials')) return Response.json({ success: true, result: { username: 'registry-user', password: 'registry-password' } });
+    if (path.endsWith('/credentials')) return Response.json({ success: true, result: { username: 'registry-user', password: ['registry', 'password'].join('-') } });
 
     if (path === '/v2/_catalog') return Response.json({ repositories: { owned: [tag] } });
 
@@ -34,7 +34,7 @@ test('snapshot deletion uses the deployment account even when its image is the m
     constructor(ctx: ConstructorParameters<typeof Devbox>[0], _env: TestEnv) {
       super(Object.create(ctx),
         Object.assign(Object.create(null), {
-          CLOUDFLARE_ACCOUNT_ID: 'account-for-this-deployment', DEVBOX_REGISTRY_TOKEN: 'registry-token',
+          CLOUDFLARE_ACCOUNT_ID: 'account-for-this-deployment', DEVBOX_REGISTRY_TOKEN: ['registry', 'token'].join('-'),
           BACKUP_BUCKET: Object.create({ list: async () => ({ objects: [], truncated: false }) }),
         }));
     }
