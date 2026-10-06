@@ -16,7 +16,7 @@ import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../head
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { HeadInferenceDeps } from '../heads/head-inference';
 import type { HostedActor } from '../state/actor-host';
-import type { ResolvedModelWindow } from '../context-window';
+import type { ModelWindow } from '../context-window';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
 import type { DynamicContext } from '../prompting/volatile-context';
 import { buildToolSurface, type ReportToolDeps } from '../tools/builtins';
@@ -174,7 +174,7 @@ export interface HostedNodeSeat {
   readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   readonly conversations: ConversationRecall;
   /** The window a turn on `spec` is admitted against, from the backend's catalog; null is the caller's own model. */
-  readonly windowOf: (spec: string | null) => Promise<ResolvedModelWindow>;
+  readonly windowOf: (spec: string | null) => Promise<ModelWindow>;
   readonly jobs: StepLoopJobSeat;
 }
 
@@ -192,7 +192,7 @@ export interface NodeLoopDeps {
   conversations: ConversationRecall;
   jobs: StepLoopJobSeat;
   model: LanguageModel;
-  window: ResolvedModelWindow;
+  window: ModelWindow;
   logger: Logger;
   signal?: AbortSignal;
   clock: Clock;

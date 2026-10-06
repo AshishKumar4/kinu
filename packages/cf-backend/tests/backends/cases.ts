@@ -8,6 +8,7 @@ import { CHECKPOINT_CASES } from './cases/checkpoints';
 import { CONFIG_PLANE_CASES } from './cases/config-plane';
 import { CONVERSATION_CASES } from './cases/conversation';
 import { EVOLUTION_CASES } from './cases/evolution';
+import { MEMORY_CASES } from './cases/memory';
 import { OWNER_DESK_CASES } from './cases/owner-desk';
 import { WORK_LEDGER_CASES } from './cases/work-ledger';
 
@@ -25,4 +26,5 @@ export const SHARED_CASES: readonly SharedCase[] = [
   ...EVOLUTION_CASES,
   ...CONVERSATION_CASES,
   ...CHECKPOINT_CASES,
+  ...MEMORY_CASES,
 ];

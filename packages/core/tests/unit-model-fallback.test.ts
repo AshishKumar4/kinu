@@ -105,6 +105,7 @@ async function turn(
   const chain: ChatFallback[] = fallbacks.map((modelId) => ({
     spec: `openrouter/${modelId}`,
     accepts: acceptsOf(modelId),
+    window: { contextWindow: null, modelOutputLimit: null },
     bind: () => ({ model: modelFor(modelId), provider: 'openrouter', providerOptions: { openrouter: { reasoningEffort: 'high' } } }),
   }));
 
@@ -366,6 +367,7 @@ async function accountTurn(
   const chain: ChatFallback[] = fallbacks.map((spec) => ({
     spec,
     accepts: new Set(['image']),
+    window: { contextWindow: null, modelOutputLimit: null },
     bind: () => ({ model: registry.resolve(spec, deps), provider: 'openai-compat' }),
   }));
 

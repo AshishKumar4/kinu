@@ -2,7 +2,7 @@
 // Augments `Cloudflare.Env`, which `cloudflare:test` and `cloudflare:workers` both read.
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type {
-  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, StreamLifecycleDO, TransactionDO,
+  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, StreamLifecycleDO, TransactionDO,
 } from './worker';
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
@@ -31,7 +31,6 @@ import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { CodemodeLauncher } from '../../src/codemode-sandbox';
-import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
@@ -186,6 +185,7 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
+  deletedWorkspaceFacet(workspace: string): Promise<{ readonly before: string[]; readonly after: string[] }>;
   onePlane(workspace: string, agent: string): Promise<OnePlaneObservation>;
   swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
   craftedFromNode(workspace: string): Promise<CraftedFromNodeObservation>;
@@ -338,7 +338,6 @@ declare global {
       NEIGHBOUR: DurableObjectNamespace<NeighbourDO>;
       GATED: DurableObjectNamespace<GatedDO>;
       TRANSACTION: DurableObjectNamespace<TransactionDO>;
-      SOCKET: DurableObjectNamespace<SocketDO>;
       ALARMED: DurableObjectNamespace<AlarmDO>;
       CACHE_WARM_PROBE: DurableObjectNamespace<CacheWarmProbeDO>;
       EVICTION_PROBE: DurableObjectNamespace<EvictionProbeDO>;
@@ -370,6 +369,7 @@ declare global {
       CODEX_EGRESS_RECORDS: Service<CodexEgressRecordsRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
+      DELETE_ALL_PROBE: DurableObjectNamespace<import('./delete-all-probe').DeleteAllProbeDO>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;
@@ -377,7 +377,6 @@ declare global {
       ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
       SEALED_ORCHESTRATOR: DurableObjectNamespace<SealedOrchestratorRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
-  DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       LOADER: WorkerLoader;
       /** The production Worker entry hosted by `public-surface-probe`, WebSocket upgrades included. */
       PUBLIC_SURFACE: Fetcher;

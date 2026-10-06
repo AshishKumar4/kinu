@@ -318,6 +318,19 @@ schema genesis moved with it, so a local database from before is refused, not
 opened without its soul. Pinned by "an agent with its own uid edits SOUL.md"
 (red at 0644, the soul at 0664) and its cloud and CLI flows.
 
+W4. A workspace delete is the object's own storage wipe (`destroy()`, whose
+`deleteAll()` takes every agent facet's database with the workspace's), with
+no per-facet delete before it (m1924). Decided 2026-10-06. Reversed:
+`wipeStorage` called `ctx.facets.delete` for each hosted agent first, on the
+belief that `deleteAll` missed facet storage. Measured on workerd
+1.20260811.1, compatibility date 2026-09-30, by `tests/workerd/delete-all.test.ts`:
+a facet restarted with no wipe reads its row; after the parent's `deleteAll()`
+it reads none, and the parent's tables and alarm are gone; and a hired agent's
+own SQLite row is gone after the shipped `destroyAgent`. That last case fails
+when the wipe skips the storage, so it pins the decision. Not measured on the
+edge: Cloudflare's facet docs say the facets' databases are stored with the
+parent's, and do not name `deleteAll`.
+
 ## Chat loop
 
 C1. The stored assistant row holds the turn's answer. The runner selects it
@@ -1498,10 +1511,17 @@ and floor (developers.openai.com/api/docs/guides/compaction lists no models, so
 the GPT-5 family it documents). @ai-sdk/openai 4 returns the encrypted item as a
 `custom` part with its mark; it is persisted, replayed (by reference, since the
 route stores), kept out of the answer, the stream and the transcript, and the
-request opens at the ask before it. Codex, ChatGPT and OpenCode routes are not
-asked: their acceptance is unknown. Proven against a fixture of the documented
+request opens at the ask before it. Proven against a fixture of the documented
 item and the SDK's mapping (`contract-server-compaction.test.ts`,
 `unit-extension.test.ts`); live acceptance is unmeasured.
+The ChatGPT plan's routes (`chatgpt`, `codex`) take no threshold. As OpenAI's
+own client does (oh-my-pi's Codex compaction V2, after codex-rs
+`compact_remote_v2.rs`), the step whose input reached the trigger, or the
+turn's first after `/compact`, ends in a `compaction_trigger` item; the answer
+is the compaction item alone, and the turn goes on from it. Unstored, the item
+is replayed whole (id and encrypted content). Proven on a CLI session against a
+fake of the unstored backend (`cli-backend/tests/plan-compaction.test.ts`);
+live acceptance awaits `probe-chatgpt-compact.ts`. OpenCode is not asked.
 
 ## Open
 

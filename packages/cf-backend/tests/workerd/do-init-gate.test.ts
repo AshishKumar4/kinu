@@ -1,7 +1,9 @@
 /**
  * Defends: anything Durable Object init awaits stalls every request on that object, even a pure read.
- * Measured once on a deployed probe: 2303 / 10215 / 25212 ms for a 2s / 10s / 25s busy neighbour,
- * reset at 31s (`platform-catalog.ts:465`); `bun test` has no input gate. 700ms stall, not 25s: same fact, cheaper.
+ * Measured 2026-08-16 against a filesystem object busy for 2 / 10 / 25 / 31 s: the read took 2303 / 10215 / 25212 ms,
+ * then the object reset; with a clean `onStart`, 216 / 184 / 266 / 339 ms. An idle object answers in 0-2 ms, and one
+ * parked inside a turn awaiting the model in 1 ms: the input gate closes around storage, not network awaits.
+ * `bun test` has no input gate. 700ms stall, not 25s: same fact, cheaper.
  */
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';

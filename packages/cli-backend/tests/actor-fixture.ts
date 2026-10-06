@@ -10,7 +10,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
 import { ConversationSearchStore, bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
-import { resolveModelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
+import { modelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
 
 /** A head's runtime over its parent's database; a head has no store of its own. */
 export async function createHeadRuntime(parent: CLIRuntime, id: string, observer?: WriteObserver) {
@@ -115,7 +115,7 @@ export function headSeatFactory(
         subordinateDelegates: () => [],
         approvals: () => ({ items: [], total: 0 }),
       }),
-      windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
+      windowOf: async () => modelWindow(null),
       // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
       jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
       release: async () => {
@@ -214,8 +214,8 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
     }),
     conversations: new ConversationSearchStore(runtime.storage.sql, runtime.actor, (sessionId) => stores.history.transcript(sessionId)),
     // No catalog in a fixture: every spec is admitted against the static table.
-    windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
-    window: resolveModelWindow('', null),
+    windowOf: async () => modelWindow(null),
+    window: modelWindow(null),
     // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
     jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
   } satisfies Omit<HeadSeat, 'release'> & Pick<HeadInferenceDeps, 'window'>;

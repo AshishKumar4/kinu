@@ -28,9 +28,9 @@ describe('proxied auth resolution', () => {
     expect(resolution.baseURL).toBeUndefined();
   });
 
-  test('passes a credential-owned base URL through for the placeholder rewrite', () => {
-    expect(proxyAuthResolution('openai-compat.default', 'https://host.example/v1').baseURL)
-      .toBe('https://host.example/v1');
+  test('passes a credential-owned endpoint through for the placeholder rewrite and its declared window', () => {
+    expect(proxyAuthResolution('openai-compat.default', { baseURL: 'https://host.example/v1', contextWindow: 180_000 }))
+      .toMatchObject({ baseURL: 'https://host.example/v1', contextWindow: 180_000 });
   });
 
 });

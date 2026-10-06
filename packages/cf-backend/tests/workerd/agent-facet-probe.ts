@@ -23,7 +23,21 @@ export * from '../../src/server';
 
 const PROBE_OWNER_ID = 'a9e1c0de5eed0000a9e1c0de5eed0000';
 
-const PROBE_RPC = ['onePlane', 'swarmNode', 'agentFor', 'craftedFromNode', 'swarmJobNode', 'jobWindowArmed', 'outrunJobWindow', 'jobRows', 'taskEvents'];
+const PROBE_RPC = ['markedFacet', 'facetMarks', 'onePlane', 'swarmNode', 'agentFor', 'craftedFromNode', 'swarmJobNode', 'jobWindowArmed', 'outrunJobWindow', 'jobRows', 'taskEvents'];
+
+/** Reads `probe_marks` from whatever facet storage it starts over. */
+const MARKS_READER = `import { DurableObject } from 'cloudflare:workers';
+export class MarksReader extends DurableObject {
+  marks() {
+    const table = this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'probe_marks'").toArray();
+    return table.length === 0 ? [] : this.ctx.storage.sql.exec('SELECT value FROM probe_marks').toArray().map((row) => String(row.value));
+  }
+}
+`;
+
+interface MarksReader extends Rpc.DurableObjectBranded {
+  marks(): string[];
+}
 
 let bootId: string | null = null;
 
@@ -33,6 +47,29 @@ export class OrchestratorAgent extends ProductionOrchestrator {
 
     for (const name of PROBE_RPC) Reflect.deleteProperty(this, name);
     sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, ...PROBE_RPC]);
+  }
+
+  /** A hired agent whose facet storage holds one row; its storage key, to read the facet after a wipe. */
+  async markedFacet(name: string): Promise<{ readonly storageKey: string; readonly marks: string[] }> {
+    const directory = this.actorDirectoryStore();
+    const child = directory.create({ parent: directory.main(), name, creationId: name, origin: 'user', lifetime: 'durable' });
+    const facet = await this.agentFacetOf<AgentFacet>(child.actorId);
+    await facet.mark('the agent\'s own row');
+
+    return { storageKey: directory.describe(child).storageKey, marks: await facet.marks() };
+  }
+
+  /** What the facet stored under `storageKey` holds now, read by a fresh start of it: storage is the name's, not the class's. */
+  async facetMarks(storageKey: string): Promise<string[]> {
+    const reader = this.env.LOADER.get('facet-marks-reader', () => ({
+      compatibilityDate: '2026-09-30',
+      mainModule: 'reader.js',
+      modules: { 'reader.js': MARKS_READER },
+    }));
+
+    this.ctx.facets.abort(storageKey, new Error('read afresh'));
+
+    return await this.ctx.facets.get<MarksReader>(storageKey, () => ({ class: reader.getDurableObjectClass<MarksReader>('MarksReader') })).marks();
   }
 
   async onePlane(name: string): Promise<OnePlaneObservation> {
@@ -229,7 +266,7 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 
 export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
   private async target(workspace: string): Promise<Pick<OrchestratorAgent,
-    'onePlane' | 'swarmNode' | 'agentFor' | 'craftedFromNode' | 'setModel' | 'setSoul' | 'swarmJobNode' | 'jobWindowArmed' | 'outrunJobWindow' | 'jobRows'
+    'markedFacet' | 'facetMarks' | 'destroyAgent' | 'onePlane' | 'swarmNode' | 'agentFor' | 'craftedFromNode' | 'setModel' | 'setSoul' | 'swarmJobNode' | 'jobWindowArmed' | 'outrunJobWindow' | 'jobRows'
     | 'taskEvents' | 'cancelBackgroundJob'>> {
     const owner = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
@@ -244,6 +281,16 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
 
   async onePlane(workspace: string, agent: string): Promise<OnePlaneObservation> {
     return await (await this.target(workspace)).onePlane(agent);
+  }
+
+  /** A hired agent's facet storage before and after the shipped workspace delete. */
+  async deletedWorkspaceFacet(workspace: string): Promise<{ readonly before: string[]; readonly after: string[] }> {
+    const marked = await (await this.target(workspace)).markedFacet('scribe');
+    const root = await getAgentByName<ProbeEnv, OrchestratorAgent>(this.env.OrchestratorAgent, workspace);
+    await root.destroyAgent(PROBE_OWNER_ID);
+    const fresh = await getAgentByName<ProbeEnv, OrchestratorAgent>(this.env.OrchestratorAgent, workspace);
+
+    return { before: marked.marks, after: await fresh.facetMarks(marked.storageKey) };
   }
 
   // Each relay is built here, in this isolate, so the answer read is the one it hands the platform.

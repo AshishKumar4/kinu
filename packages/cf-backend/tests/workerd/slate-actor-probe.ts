@@ -24,7 +24,7 @@ import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-proces
 import { jsonSchema, tool as defineTool } from 'ai';
 import type { JsonObject, UserCaller } from '@kinu.run/core';
 import { callUserMcpTool } from '../../src/user-mcp-call';
-import type { McpToolCall } from '../../src/user/user-do';
+import type { McpToolCall } from '../../src/user/mcp-servers';
 
 const NO_BROWSER_RUN = { missing: 'this probe reaches no Browser Run' };
 

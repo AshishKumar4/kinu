@@ -5,7 +5,7 @@ import { createAnthropicProvider } from './anthropic';
 import { createModelsDevCatalogSource } from './catalog';
 import { createClaudeProvider } from './claude';
 import { createOpenAIProvider } from './openai';
-import { createOpenAICompatProvider } from './openai-compat';
+import { createNamedEndpointSource, createOpenAICompatProvider } from './openai-compat';
 import { createOpenRouterProvider } from './openrouter';
 import { accountDeps, createProviderRegistry, type ProviderRegistry } from './registry';
 import { catalogModelInfo } from './util';
@@ -21,7 +21,6 @@ export interface BackendTransports {
   readonly codex: ModelProvider | undefined;
   /** CLI only. */
   readonly opencode: ModelProvider | undefined;
-  readonly compat?: readonly ModelProvider[];
   readonly appTitle?: string;
 }
 
@@ -32,11 +31,12 @@ export function createModelRegistry(transports: BackendTransports): ProviderRegi
   for (const provider of [
     transports.workersAi, transports.myGateway, transports.aiGateway, transports.chatgpt, transports.codex,
     createClaudeProvider(), transports.opencode, createOpenAIProvider(), createAnthropicProvider(),
-    createOpenRouterProvider({ appTitle: transports.appTitle }), createOpenAICompatProvider(), ...transports.compat ?? [],
+    createOpenRouterProvider({ appTitle: transports.appTitle }), createOpenAICompatProvider(),
   ]) {
     if (provider !== undefined) registry.register(provider);
   }
 
+  registry.registerDynamic(createNamedEndpointSource());
   // workers-ai's catalog id.
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 

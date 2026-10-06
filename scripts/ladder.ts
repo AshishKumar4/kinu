@@ -39,7 +39,7 @@ import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline, writeFully 
 import { recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
-  CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, storeAt, toolVersions,
+  CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
 } from './ladder-cache';
 import type { GateCacheRequest, Plan, Store, ToolVersions } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
@@ -1739,10 +1739,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'It renders the WORKER-built pages in a local browser, never the deployed '
       + 'edge — a stale cached object at Cloudflare (measured on staging 2026-08-21) '
       + 'passes here and serves anyway. No pixel is compared, so a legible-but-ugly '
-      + 'regression passes, and copy quality is unread beyond those landmark labels. '
-      + 'The old product name is not grepped here at all: that gate is '
-      + 'packages/cf-backend/tests/unit-public-shell.test.ts, over the worker-built '
-      + 'documents rather than the rendered page.',
+      + 'regression passes, and copy quality is unread beyond those landmark labels.',
     inputs: CLIENT_BUILD,
   },
   {
@@ -3957,7 +3954,7 @@ if (import.meta.main) {
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
   const caching = cacheEnabled({ changedFrom, ciPart, noCache: process.argv.includes('--no-cache') });
-  const tools = toolVersions(root);
+  const tools = toolVersions(root, await pathNodeVersion());
   const store = storeAt(defaultStoreDirectory());
   const revision = fullRevision();
   const ciRows: CIVerdict[] = [];

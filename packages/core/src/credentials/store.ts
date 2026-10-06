@@ -31,4 +31,6 @@ export interface OpenAICompatCredential {
   apiKey?: string;
   /** Extra headers to merge (some providers want `HTTP-Referer`, `X-Title`, etc.). */
   extraHeaders?: Record<string, string>;
+  /** The window the owner declares for every model this endpoint lists, in tokens. */
+  contextWindow?: number;
 }

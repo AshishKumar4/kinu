@@ -8,7 +8,7 @@ Self-evolving agent framework: swarm tree-search exploration, mutable scaffoldin
 ## Gates
 - A gate governs exactly the set it measures; read the corpus through `scripts/sources.ts`, never a hand list. Prove a gate red in every direction it claims before trusting it green; print its blind spots on the green path.
 - A red gate requires diagnosis, not automatic obedience to its assertion. Fix a real defect or stale fixture; retire a low-value check under Testing judgment below. Never bypass useful coverage with `--no-verify`, `oxlint-disable`, an allowlist, an ignore entry, a severity downgrade, a weakened assertion, a skip, a raised timeout, or a lock ratchet.
-- A functional defect the owner finds by hand gets a regression check at the closest realistic boundary. Use `tests/first-run/` when reproduction requires the deployed product, and prove it red before the fix ships. Cosmetic feedback does not require a regression test.
+- A functional defect is proven fixed by the behavioural flow it lives in (`tests/first-run/`, `tests/browser/`, the shared-backend suite), run against the real product, red before the fix and green after. Banned: narrow unit tests that pin one symptom, a boundary value or length, a string, a regex, source text, DOM or wording; delete them on sight. Cosmetic feedback gets no test.
 - A useful fixture must detect its claimed failure. Restore that ability when it breaks; remove the fixture when its contract is obsolete.
 - A verification claim names the tree, the command, and the revision. A subagent's summary is a claim to check.
 - A gate that pins platform behaviour (what the runtime, an SDK, or a service does) cites a dated measurement on that platform in its header. A comment in our own source is not a measurement. A gate built on an unmeasured premise enforces the regression it was meant to prevent; `scripts/do-init-gate.ts` did exactly that from 2026-09-10 to 2026-09-13.
@@ -89,7 +89,7 @@ The main agent orchestrates and does most fixes and every conflict resolution it
 - Port 3000 is reserved; dev servers bind `0.0.0.0`; wrangler uses `--ip 0.0.0.0`.
 
 ## Every Fix
-- A bug has two root causes: the defect, and why the code let it exist (sloppy or unreadable code, a duplicated path, an anti-pattern, a noisy or source-coupled test that could not catch it). Name both in the commit body and fix both.
+- A bug has two root causes: the defect, and why the code let it exist. Ask first, every time: is it duplicated code, a duplicated path, or redundant state? How did it come to this? Fix that from the core and delete the duplicate in the same commit. Name both causes in the commit body.
 - Each fix leaves its area smaller or clearer: delete the duplicate path, dead code or wrapper it touches, with no lost behaviour. A fix that only adds lines names why nothing could be cut.
 - 2026-09-23 example: the provider pacer applied a per-invocation platform limit as an isolate-wide lane budget; the parked request looked hung and was cancelled (1101). The cut deleted the budget, not the symptom.
 

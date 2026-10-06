@@ -4,7 +4,7 @@
  */
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Connection } from 'agents';
-import type { UserProfile } from '../../src/user/user-do';
+import type { UserProfile } from '../../src/user/profile';
 import type { CliAgentTarget, CliRoutesAuthority, CliRoutesEnv } from '../../src/cli/routes';
 import type { UserRoutesAuthority } from '../../src/user/routes';
 import type { McpAuthority } from '../../src/mcp-server';
@@ -212,7 +212,7 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
     revokeBrowserSession: refuse('revokeBrowserSession'),
     getAuth: refuse('getAuth'),
     getAuthHeaders: refuse('getAuthHeaders'),
-    getCredentialBaseURL: refuse('getCredentialBaseURL'),
+    getCredentialEndpoint: refuse('getCredentialEndpoint'),
     relayDevice: refuse('relayDevice'),
     relayModelCall: refuse('relayModelCall'),
     cancelModelRelay: refuse('cancelModelRelay'),

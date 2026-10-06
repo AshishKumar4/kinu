@@ -1,4 +1,3 @@
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
@@ -8,7 +7,6 @@ import {
   createChatGptProvider,
   accountDeps,
   specModelInfo,
-  createOpenAICompatProvider,
   createProviderProxyFetch,
   listModelsDevProviderModels,
   generateReported,
@@ -31,6 +29,8 @@ import {
   type AgentModelEntry,
   type ModelInfo,
   cloudProxyBaseURL,
+  createWireModel,
+  gatewayWireModel,
   type CloudProxyProviderId,
   type ModelMenu,
   type ModelProvider,
@@ -57,6 +57,7 @@ const proxiedCredentialsSchema = v.object({
   credentials: v.optional(v.array(v.object({
     key: v.string(),
     baseURL: v.optional(v.string()),
+    contextWindow: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
     failure: v.optional(v.string()),
   })), []),
 });
@@ -241,8 +242,6 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     chatgpt: createChatGptProvider(),
     codex: undefined,
     opencode: createOpenCodeProvider(),
-    compat: Object.keys(credentials.openaiCompat ?? {}).sort().flatMap((name) => (name === 'default' ? []
-      : [createOpenAICompatProvider(`openai-compat:${name}`)])),
     appTitle: 'Kinu CLI',
   });
 
@@ -263,7 +262,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
         if (remote?.failure !== undefined) return yield* Effect.die(new Error(remote.failure));
 
-        return remote ? proxyAuthResolution(key, remote.baseURL) : null;
+        return remote ? proxyAuthResolution(key, remote) : null;
       }));
     },
     hasCredential(key) {
@@ -474,7 +473,7 @@ function readCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch):
 }
 
 interface ProxiedCredentials {
-  byKey: Map<string, { baseURL?: string; failure?: string }>;
+  byKey: Map<string, { baseURL?: string; contextWindow?: number; failure?: string }>;
   /** Set only until a listing succeeds; afterwards a failure serves the last good answer. */
   error: string | null;
 }
@@ -496,13 +495,12 @@ function readProxyCredentialListing(cloud: LocalCloudSession, fetchImpl?: typeof
 
     if (!res.ok) return yield* Effect.die(new Error(`the Kinu provider proxy returned HTTP ${String(res.status)}`));
     const body = v.parse(proxiedCredentialsSchema, yield* Effect.promise(() => res.json()));
-    const byKey = new Map<string, { baseURL?: string; failure?: string }>();
+    const byKey: ProxiedCredentials['byKey'] = new Map();
 
-    for (const { key, baseURL, failure } of body.credentials) {
+    for (const { key, failure, ...endpoint } of body.credentials) {
       if (!key) continue;
 
-      if (failure !== undefined) byKey.set(key, { failure });
-      else byKey.set(key, baseURL ? { baseURL } : {});
+      byKey.set(key, failure === undefined ? endpoint : { failure });
     }
 
     return { byKey, error: null };
@@ -546,12 +544,15 @@ function createCloudProxyProvider(opts: {
     },
     // A relay: the worker's transport spends the call's retry allowance, so the header must reach it unspent.
     createModel(modelId, deps): LanguageModel {
-      return createOpenAICompatible({
-        name: opts.id,
+      const transport = {
         baseURL,
         headers: { Authorization: `Bearer ${opts.cloud.token}`, [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
         ...(opts.fetch !== undefined && { fetch: opts.fetch }),
-      }).chatModel(modelId);
+      };
+
+      return opts.id === 'my-gateway'
+        ? gatewayWireModel(opts.id, modelId, transport, deps)
+        : createWireModel({ name: opts.id, modelId, ...transport, protocol: 'chat-completions', reasoning: false });
     },
   };
 }
@@ -672,7 +673,11 @@ function buildAuthStore(
   }
 
   for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {
-    store.set(`openai-compat.${name}`, { headers: credentialToHeaders(`openai-compat.${name}`, compat), baseURL: compat.baseURL });
+    store.set(`openai-compat.${name}`, {
+      headers: credentialToHeaders(`openai-compat.${name}`, compat),
+      baseURL: compat.baseURL,
+      ...(compat.contextWindow !== undefined && { contextWindow: compat.contextWindow }),
+    });
   }
 
   return {

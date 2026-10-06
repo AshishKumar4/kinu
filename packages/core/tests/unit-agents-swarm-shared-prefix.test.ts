@@ -73,7 +73,10 @@ function swarmDeps(
   model: CapturingModel,
   overrides: Partial<AgentsSwarmDeps> = {},
 ): AgentsSwarmDeps {
-  return { rt: world.rt, hostNode: hostedSeatsOver(world).hostNode, model: () => model, ...unobservedSearchSeams(), ...overrides };
+  // The fake model's catalog window, which the shared prefix's threshold measures against.
+  const windowOf = async () => ({ contextWindow: 128_000, modelOutputLimit: null });
+
+  return { rt: world.rt, hostNode: hostedSeatsOver(world).hostNode, model: () => model, windowOf, ...unobservedSearchSeams(), ...overrides };
 }
 
 function agentsTool(deps: AgentsToolDeps) {

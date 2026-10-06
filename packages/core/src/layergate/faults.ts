@@ -122,11 +122,11 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'context-budget/policy-regresses',
     layer: 'context-budget',
-    patches: ['contextWindowForModel', 'clampToolResult'],
-    models: 'the window table rots back to the default, and the clamp charges its marker on top of the cap instead of inside it',
+    patches: ['modelWindow', 'clampToolResult'],
+    models: 'a catalog window is guessed back to a default, and the clamp charges its marker on top of the cap instead of inside it',
     inject: (s) => ({
       ...s,
-      contextWindowForModel: () => ({ measured: false, window: 128_000 }),
+      modelWindow: () => ({ contextWindow: 128_000, modelOutputLimit: null }),
       clampToolResult: async (text) => {
         if (text.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) return text;
         const headLen = Math.floor(DEFAULT_TOOL_RESULT_MAX_CHARS * 0.5);

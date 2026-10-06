@@ -58,7 +58,7 @@ function fixture(files: Record<string, string>, scripts: Record<string, string> 
   return {
     root,
     store: storeAt(join(scratchDir('ladder-cache-store'), 'kinu-ladder')),
-    tools: toolVersions(root),
+    tools: toolVersions(root, 'v24.0.0'),
     repo: () => repoAt(root, (run, tracked) => claims(run, tracked)),
   };
 }
@@ -334,7 +334,7 @@ describe('ladder-cache — red in every direction it claims', () => {
 
     // The installed compiler moves: the key reads the manifest, not a list.
     writeFileSync(join(fx.root, 'node_modules', 'typescript', 'package.json'), JSON.stringify({ version: '7.1.0' }));
-    const moved = toolVersions(fx.root);
+    const moved = toolVersions(fx.root, fx.tools.node);
     expect(moved.typescript).toBe('7.1.0');
 
     for (const run of ['bun scripts/a.ts', 'bun scripts/b.ts']) expect(runGate(fx, run, DERIVED, moved).plan.kind).toBe('miss');

@@ -182,7 +182,7 @@ describe('Anthropic server-side compaction', () => {
     for await (const _ of runChat({
       model: createAnthropicProvider().createModel('claude-opus-4-7', deps(mock.fetch)),
       modelSpec: 'anthropic/claude-opus-4-7', modelContext: { id: 'anthropic/claude-opus-4-7', contextWindow: 200_000 },
-      fallbacks: [{ spec: 'anthropic/claude-sonnet-4-6', accepts: new Set(), bind: () => ({ model: createAnthropicProvider().createModel('claude-sonnet-4-6', deps(mock.fetch)), provider: 'anthropic' }) }],
+      fallbacks: [{ spec: 'anthropic/claude-sonnet-4-6', accepts: new Set(), window: { contextWindow: 1_000_000, modelOutputLimit: 64_000 }, bind: () => ({ model: createAnthropicProvider().createModel('claude-sonnet-4-6', deps(mock.fetch)), provider: 'anthropic' }) }],
       cooldowns: createFallbackCooldowns(),
       system: 'You are Kinu.', history: [{ role: 'user', content: 'rename the parser' }], tools: {},
       transformTrigger: 'force', countInputTokens: async () => ({ kind: 'counted' as const, tokens: 120_000 }),

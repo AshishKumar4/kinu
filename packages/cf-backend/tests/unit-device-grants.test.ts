@@ -22,6 +22,7 @@ import {
   NO_DEVICE_CONNECTED, type JsonValue,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
+import { UserDevices } from '../src/user/devices';
 
 
 // The /api app's module graph reaches the Agents SDK: mocked before it loads.
@@ -785,7 +786,8 @@ describe('device revocation admission', () => {
       },
     };
 
-    const hubCandidate = Object.getOwnPropertyDescriptor(harness.userDO, '_devices')?.value;
+    const devices = Object.getOwnPropertyDescriptor(harness.userDO, 'devices')?.value;
+    const hubCandidate = devices instanceof UserDevices ? devices._devices : undefined;
 
     if (!(hubCandidate instanceof DeviceSocketHub)) throw new Error('UserDO device hub is unavailable.');
     hub = hubCandidate;

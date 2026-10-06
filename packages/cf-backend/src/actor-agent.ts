@@ -45,8 +45,8 @@ import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, hold, logged, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
-  createCompactionExtension, createSharedPrefixCompactor, createVfsTranscriptStore,
-  createCompactionStateStore, createModelSummarizer, COMPACTION_PRESETS,
+  createCompactionExtension, createVfsTranscriptStore, type CompactionExtension,
+  createCompactionStateStore, createModelSummarizer,
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
 import { convertToModelMessages } from "ai";
@@ -84,7 +84,7 @@ import {
   // (see turn-failure.ts).
   TurnAccumulator, AgentOrchestrator, ActorSession, ChatSession, type AgentOrchestratorDeps, type BackendHost,
   type ChatTurnInput, type ComposedRequest, type PreparedTurn, type OwedTerminalEffectsInput, type ActorTurnLease, type ActorExecutionInput,
-  type KinuExtension, type OwedEffect,
+  type OwedEffect,
   type InlineSteer,
   type AgentsToolAction,
   type AgentsToolDeps,
@@ -155,7 +155,7 @@ import {
   type InstructionApproval, type InstructionTrustResolver,
   InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
-  type ResolvedModelWindow,
+  type ModelWindow,
   reasoningEffortOptions,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
@@ -299,7 +299,7 @@ interface ComposedTurn {
   readonly operation: OperationProfile;
   /** Window for admission, compaction and pruning; records whether figures are the
    * catalog's or the static table's stand-in. */
-  readonly window: ResolvedModelWindow;
+  readonly window: ModelWindow;
   readonly memoryTail: string | undefined;
   readonly countInputTokens: (request: CountableRequest) => Promise<InputTokenCount>;
   readonly reasoningOptions: ReturnType<typeof reasoningEffortOptions>;
@@ -1542,11 +1542,11 @@ export abstract class ActorAgent extends Agent<Env> {
     this.logActivity(activity, compactionLogDetail(message, detail));
   }
 
-  /** Handed to every turn; core adds the inbox's own turn extension itself. */
-  private _compactionExtension: KinuExtension | null = null;
+  /** Handed to every turn (core adds the inbox's own turn extension itself), and to the swarm for its shared prefix. */
+  private _compaction: CompactionExtension | null = null;
 
-  protected registerCompactionExtension(): void {
-    this._compactionExtension = createCompactionExtension({
+  protected compaction(): CompactionExtension {
+    this._compaction ??= createCompactionExtension({
       ports: {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
         plans: this.compactionState.plans,
@@ -1567,7 +1567,12 @@ export abstract class ActorAgent extends Agent<Env> {
       model: () => this.effectiveModelSpec(),
       attachments: { files: () => this.rt },
     });
-    this.extensions.register(this._compactionExtension);
+
+    return this._compaction;
+  }
+
+  protected registerCompactionExtension(): void {
+    this.extensions.register(this.compaction());
   }
 
   /** Tags ride the WebSocket attachment, so the rpc gate, both identities and the pane's chat room
@@ -2679,6 +2684,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return {
       rt, model, originContext, compactShared,
+      windowOf: (spec) => this.modelCatalog.windowFor(spec),
       reportModelCall: (report) => { this.reportModelCall(report); },
       nodeCodemode: (actor) => nodeCodemodeTool(seams, actor),
       webSearch: seams.webSearch(),
@@ -2696,20 +2702,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
 
-    const swarm = this.swarmDeps(this.rt, () => this.getModel(), () => this.turnOriginContext(), createSharedPrefixCompactor({
-        ports: {
-          transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
-          plans: this.compactionState.plans,
-          logger: this.compactionLogger,
-        },
-        archive: this.compactionState.archive,
-        summarize: createModelSummarizer(() => this.getModel(), {
-          source: 'compaction', report: (report) => this.reportModelCall(report),
-          operations: this.modelOperations,
-        }),
-        // Explicitly the light preset, matching every other production compaction path.
-        profile: COMPACTION_PRESETS.light,
-      }));
+    const swarm = this.swarmDeps(this.rt, () => this.getModel(), () => this.turnOriginContext(), this.compaction().compactShared);
 
     const deps: AgentsToolDeps = {
       mode: workMode,
@@ -3967,6 +3960,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly modelCatalog = new ModelCatalogSession({
     effectiveSpec: () => this.effectiveModelSpec(),
     lookup: async (spec) => (spec ? this.catalogEntry(spec) : null),
+    measured: (spec) => this.stores.eventRecorder.measuredWindow(spec),
   });
 
   protected async catalogEntry(spec: string): Promise<ModelInfo | null> {
@@ -4072,7 +4066,6 @@ export abstract class ActorAgent extends Agent<Env> {
       modelContext: {
         id: composed.promptModel.id,
         contextWindow: composed.window.contextWindow,
-        windowMeasured: composed.window.windowMeasured,
         modelOutputLimit: composed.window.modelOutputLimit,
       },
       system: composed.system,
@@ -4104,6 +4097,7 @@ export abstract class ActorAgent extends Agent<Env> {
     liveTurn.fallbacks = composed.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
       spec: providers.normalizeSpecSync(spec),
       accepts: this.modelCatalog.acceptedMedia(spec),
+      window: this.modelCatalog.window(spec),
       bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
     }));
 
@@ -4363,7 +4357,6 @@ export abstract class ActorAgent extends Agent<Env> {
     this.orch.restrictTurnWorkMode(composed.profile.workMode);
     this.recordSystemPromptHash(composed.system);
     this._turnDurableLength = composed.rawMessages.length;
-    this._turnContextWindow = composed.window.contextWindow;
     const measured = measureCompactionTrigger(this.compactionState, this.name, composed.rawMessages.length);
 
     // Forced rebuild is armed by overflow recovery (onChatResponse).
@@ -4372,8 +4365,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return { ...composed, measured };
   }
 
-  /** Set in beforeTurn; read by beforeStep's prune budget every step. */
-  protected _turnContextWindow = 0;
   private _turnOrigin: ContextSelection | null = null;
 
   private async turnOriginContext(): Promise<readonly ModelMessage[]> {

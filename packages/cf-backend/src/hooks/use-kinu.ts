@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo, type RefObject, type SetStateAction } from "react";
 import { useAgent } from "agents/react";
 import { Effect } from "effect";
 import {
@@ -540,7 +540,15 @@ function runningJob(job: BackgroundJob): boolean {
   return job.status === "running" || job.status === "serving";
 }
 
-export function useKinu(target?: string | KinuActorAddress) {
+interface WorkspaceExtension {
+  readonly snapshot: (snap: WorkspaceSnapshot, isSourceCurrent: (source: LiveRefreshSource) => boolean) => Promise<void>;
+  readonly frame: (msg: SocketFrame) => Promise<void>;
+  readonly refresh: () => void;
+  readonly jobs: () => Promise<void>;
+}
+
+/** One chat's connection and conversation. */
+function useChatOwner(target: string | KinuActorAddress | undefined, extension: RefObject<WorkspaceExtension | null> | null) {
   const targetString = v.safeParse(v.string(), target);
   const targetAddress = v.safeParse(KinuActorAddressSchema, target);
 
@@ -565,12 +573,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   const isSubordinate = subordinate !== undefined;
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
-  const [memory, setMemory] = useState<MemoryEntry[]>([]);
-  const [mctsTrees, setMctsTrees] = useState<ReadonlyMap<string, ForkNode>>(new Map());
-  const [memoryContent, setMemoryContent] = useState<string>("");
   // Keyed by source so one recovery never erases another's error; none expire on a timer.
   const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({});
-  const [consentResolutionErrors, setConsentResolutionErrors] = useState<ReadonlyMap<string, string>>(new Map());
 
   const setSourceError = useCallback((source: ErrorSource, message: string | null) => {
     setErrors((prev) => {
@@ -578,17 +582,6 @@ export function useKinu(target?: string | KinuActorAddress) {
       const next = { ...prev };
 
       if (message) next[source] = message; else delete next[source];
-
-      return next;
-    });
-  }, []);
-
-  const setConsentResolutionError = useCallback((consentId: string, message: string | null) => {
-    setConsentResolutionErrors((previous) => {
-      if ((previous.get(consentId) ?? null) === message) return previous;
-      const next = new Map(previous);
-
-      if (message) next.set(consentId, message); else next.delete(consentId);
 
       return next;
     });
@@ -617,11 +610,6 @@ export function useKinu(target?: string | KinuActorAddress) {
 
     return () => liveRefreshAdmission.invalidateActor(actorKey);
   }, [actorKey, liveRefreshAdmission]);
-  const consentResolutionReasons = [...new Set(consentResolutionErrors.values())];
-
-  const liveErrors = consentResolutionReasons.length === 0
-    ? errors
-    : { ...errors, consentResolution: formatNaturalList(consentResolutionReasons) };
 
   // `agentStatus` is set only by a completed snapshot and cleared only by a workspace switch,
   // so it means "this workspace has last known data".
@@ -633,87 +621,16 @@ export function useKinu(target?: string | KinuActorAddress) {
     ? { status: "error", message: errors.snapshot, last: agentStatus }
     : loadedStatus;
 
-  const error = formatWorkspaceError(liveErrors, agentStatus !== null);
-  const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
-  const [workspaceAgents, setWorkspaceAgents] = useState<PanelAgent[] | null>(null);
-  const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
-  const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
-  // Listing ports never provisions a sandbox: getExposedPorts returns [] unless the executor is already active.
-  const [pinnedPorts, setPinnedPorts] = useState<PinnedPreviewPort[]>([]);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [previewStarting, setPreviewStarting] = useState<readonly string[]>([]);
-  const exposedPortsRefreshGeneration = useRef(0);
-  /** Held in a ref too: the socket handler's effect must not re-subscribe (its cleanup forgets the
-   *  live head paint). Null on the workspace pane and until the load resolves it. */
+  const error = formatWorkspaceError(errors, agentStatus !== null);
+  /** Read by the socket's reader at each frame; null on the workspace pane, and until the load resolves it. */
   const ownActorIdRef = useRef<string | null>(null);
   const [paneActorId, setPaneActorId] = useState<string | null>(null);
-  const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
-  const [jobOutputs, setJobOutputs] = useState<Readonly<Record<string, JobOutputTail>>>({});
-  const listedJobs = useRef<BackgroundJob[]>([]);
-  listedJobs.current = backgroundJobs;
-
-  const liveJobs = useMemo(() => backgroundJobs.map((job) => {
-    const told = jobOutputs[job.id];
-
-    if (told === undefined || !runningJob(job) || (job.output?.seq ?? 0) >= told.seq) return job;
-
-    return { ...job, output: told };
-  }), [backgroundJobs, jobOutputs]);
-
-  const [slates, setSlates] = useState<SlateSummary[]>([]);
   const sendLandings = useRef(new Map<string, SendLandingResolvers>());
-  const knownSlates = useRef<Set<string> | null>(null);
-  const knownPorts = useRef<Set<string> | null>(null);
-  const [previewFocus, setPreviewFocus] = useState<string | null>(null);
   const [planFocus, setPlanFocus] = useState<string | null>(null);
-  const [arrivedReference, setArrivedReference] = useState<WorkspacePlanReference | null>(null);
-  // `knownWorkspacePlans`: references this connection was told about (dedupes repeated frames).
-  // `claimedWorkspacePlans`: references a pane already acted on, so a hint never fires twice.
-  const knownWorkspacePlans = useRef(new Set<string>());
-  const claimedWorkspacePlans = useRef(new Set<string>());
   const knownPlans = useRef(new Set<string>());
-  const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
-  const [changesMoved, setChangesMoved] = useState(0);
-  const [readMoves, setReadMoves] = useState<ReadMoves>({});
-  const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
-  /** A connect clears it. */
-  const [unavailableDevices, setUnavailableDevices] = useState<UnavailableDevice[] | null>(null);
   const [modelFallbacks, setModelFallbacks] = useState<string[]>([]);
-  // One read behind both the Work queue and the strip's accent badge, so they cannot disagree.
-  const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
-  // Unknown until the first read: an optimistic absence would flip the strip to Files first.
-  const [tabPresence, setTabPresence] = useState<TabPresence | undefined>(undefined);
-  // Only for the sidebar roster's dot; the tab badge is the queue's length.
-  const [changelogUnseen, setChangelogUnseen] = useState(0);
-  const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
   /** Seeded by the snapshot each (re)connect loads, then replaced by every `turn_claim` frame. */
   const [turnClaim, setTurnClaim] = useState<TurnClaimState>({ kind: "settled" });
-  // Counts, not timestamps: a transcript only needs to notice its branch moved, without a shared clock.
-  const [headActivity, setHeadActivity] = useState<ReadonlyMap<string, number>>(new Map());
-
-  const bumpHeadActivity = useCallback((headId: string) => {
-    setHeadActivity((previous) => {
-      const next = new Map(previous);
-      next.set(headId, (previous.get(headId) ?? 0) + 1);
-
-      return next;
-    });
-  }, []);
-
-  /** Ephemeral: the durable step is the truth. Retired when the step lands (`head_activity`,
-   *  `HeadDeltas.retire`), on a terminal branch status, a cancelled turn, or socket drop. */
-  const [headDeltaMap, setHeadDeltaMap] = useState<ReadonlyMap<string, HeadDelta>>(new Map());
-
-  const retireDelta = useCallback((headId: string) => {
-    setHeadDeltaMap((previous) => retireHeadDelta(previous, headId));
-  }, []);
-
-  const forgetDeltas = useCallback(() => { setHeadDeltaMap(new Map()); }, []);
-
-  const headDeltas = useMemo<HeadDeltas>(() => ({
-    get: (headId) => headDeltaMap.get(headId),
-    retire: retireDelta,
-  }), [headDeltaMap, retireDelta]);
 
   // Shown from the moment the server takes a steer until its durable user row arrives.
   const [steerRuns, setSteerRuns] = useState<InlineSteer[]>([]);
@@ -735,9 +652,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   } | null>(null);
 
   const providerWaitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [subordinates, setSubordinates] = useState<SubordinateRosterEntry[]>([]);
-  const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
-  const [signalCards, setSignalCards] = useState<readonly SignalCard[]>([]);
   const [activePlan, setActivePlan] = useState<PlanReview | null>(null);
   // Set by the connect frame; the only thing that entitles the pane to draw an empty conversation.
   // False is "not yet", never "nothing".
@@ -772,11 +686,9 @@ export function useKinu(target?: string | KinuActorAddress) {
       // No close-code list: the SDK classifies terminal closes (`isTerminalCloseEvent`) and
       // publishes `connectionError`.
       setConnectionStatus("disconnected");
-      // A half-written step would claim to be current across the reconnect gap.
-      forgetDeltas();
       // Nothing can re-announce this socket's wait once it is gone.
       clearProviderWait();
-    }, [forgetDeltas, clearProviderWait]),
+    }, [clearProviderWait]),
     // Transient no-op; partysocket auto-reconnects and the next onOpen recovers.
     onError: useCallback(() => {}, []),
   };
@@ -923,23 +835,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (isNewerDeployedBuild(baseline, live)) setNewerDeployedBuild(true);
   }, []);
 
-  // A socket can replay a frame after reconnect; `pushSeq` is per root, so frames for different
-  // roots cannot reject or replace each other.
-  const mctsProgressState = useRef(createMctsProgressState<ForkNode>(actorKey));
-
-  const setMctsTreeFromProgress = useCallback((progress: MctsProgress) => {
-    const next = applyMctsProgress(
-      mctsProgressState.current,
-      actorKey,
-      progress,
-      explorationForkTree({ tree: progress.nodes, head: progress.head }),
-    );
-
-    if (next === mctsProgressState.current) return;
-    mctsProgressState.current = next;
-    setMctsTrees(next.trees);
-  }, [actorKey]);
-
   // A generation counter, because a ref cannot retrigger an effect. Bumped by backoff retry, every
   // reconnect after the first, and `retryLoad`. Calls queue client-side while the socket is down.
   const [loadGeneration, setLoadGeneration] = useState(0);
@@ -965,7 +860,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (!agent) return;
 
     const onOpen = async () => {
-      knownPorts.current = null;
       const isFirst = recoveryFirstOpen.current;
       recoveryFirstOpen.current = false;
       sessionRecovery.socketOpened(isFirst);
@@ -1020,7 +914,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
 
       try {
-        // The read the tab already depends on, so a corpse fails the ping and the load identically.
+        // The tab's own read, so a corpse fails the ping and the load alike.
         await rpc("getActorSnapshot", [subordinate]);
         setSourceError("snapshot", null);
       } catch (cause) {
@@ -1075,73 +969,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     };
   }, [actorKey, isSubordinate, liveRefreshAdmission, loadGeneration, rpc, setSourceError, subordinate, workspace]);
 
-  const refreshBackgroundJobs = useCallback(() => refreshCurrentLiveResource(
-    "jobs",
-    () => rpc<BackgroundJob[]>("listBackgroundJobs", subordinate === undefined ? [50] : [50, subordinate]),
-    setBackgroundJobs,
-  ), [refreshCurrentLiveResource, rpc, subordinate]);
-
-  const refreshPendingConsents = useCallback(() => refreshCurrentLiveResource(
-    "consents", () => rpc<PendingConsent[]>("listPendingConsents", []), setPendingConsents,
-  ), [refreshCurrentLiveResource, rpc]);
-
-  // One call feeds the queue and the sidebar dot's unseen count so they cannot disagree.
-  const refreshPendingActions = useCallback(() => refreshCurrentLiveResource(
-    "pendingActions",
-    () => rpc<PendingAction[]>("listPendingActions", []),
-    (actions) => {
-      setPendingActions(actions);
-      const unseen = actions.find((a) => a.kind === "unseen_changes");
-      setChangelogUnseen(unseen ? 1 : 0);
-    },
-  ), [refreshCurrentLiveResource, rpc]);
-
-  const refreshTabPresence = useCallback(() => refreshCurrentLiveResource(
-    "presence",
-    () => rpc<TabPresence>("getWorkspaceTabPresence", []),
-    setTabPresence,
-  ), [refreshCurrentLiveResource, rpc]);
-
-  const applySlates = useCallback((listing: SlateSummary[], announce = false) => {
-    const previous = knownSlates.current;
-
-    if (announce && previous !== null) {
-      const added = listing.find(slate => !previous.has(slate.id));
-
-      if (added) setPreviewFocus(`slate:${added.id}`);
-    }
-
-    knownSlates.current = new Set([...(previous ?? []), ...listing.map(slate => slate.id)]);
-    setSlates(listing);
-    setSlateReloads((reloads) => pruneSlateReloads(reloads, listing));
-  }, []);
-
-  const refreshSlates = useCallback(() => refreshCurrentLiveResource(
-    "slates",
-    () => rpc<{ slates: SlateSummary[]; problems: SlateProblem[] }>("listSlates", []).then((listing) => listing.slates),
-    (listing) => applySlates(listing, true),
-  ), [applySlates, refreshCurrentLiveResource, rpc]);
-
-  /** Through the "roster" admission, so a read still in flight cannot overwrite it. */
-  const writeRoster = useCallback((next: SetStateAction<SubordinateRosterEntry[]>) => refreshCurrentLiveResource(
-    "roster", async () => next, setSubordinates,
-  ), [refreshCurrentLiveResource]);
-
-  const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", async () => {
-    const roster = parseSubordinateRoster({ value: await rpc<unknown>("listSubordinates", []) });
-
-    if (!roster) throw new Error("Subordinate roster returned an invalid response");
-
-    return roster;
-  }, setSubordinates), [refreshCurrentLiveResource, rpc]);
-
-  // Stable identity: an inline arrow re-armed the changelog hook's effect and fired markChangelogSeen
-  // every render.
-  const clearChangelogUnseen = useCallback(() => {
-    setChangelogUnseen(0);
-    setPendingActions((prev) => prev.filter((a) => a.kind !== "unseen_changes"));
-  }, []);
-
   /** Aborts the SDK request and the server turn in parallel. Unread messages come back on their
    *  `returned` broadcasts. Releases the send latch on settle, success or failure. */
   const abortChat = useCallback(async (): Promise<void> => {
@@ -1157,7 +984,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       abandonTurnIfOwner(sendLatch.current, aborting);
 
       try {
-        await refreshBackgroundJobs();
+        await extension?.current?.jobs();
       } catch (cause) {
         diagnostics.failure('workspace.abort_refresh_failed', toKinuError({
           doing: 'refreshing live workspace data',
@@ -1166,16 +993,7 @@ export function useKinu(target?: string | KinuActorAddress) {
         }));
       }
     }
-  }, [stop, rpc, refreshBackgroundJobs]);
-
-  // The server pushes the fact, not the rows; one re-read updates every open tab.
-  const reread = async (resource: string, refresh: () => Promise<void>): Promise<void> => {
-    try {
-      await refresh();
-    } catch (cause) {
-      diagnostics.failure('workspace.live_refresh_failed', toKinuError({ doing: 'refreshing live workspace data', cause, otherwise: 'io' }), { resource });
-    }
-  };
+  }, [stop, rpc, extension]);
 
   const adoptPlan = (plan: PlanReview | null): void => {
     if (!plan) return;
@@ -1189,83 +1007,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   const paneFrame = async (msg: SocketFrame): Promise<void> => {
     if (msg.type === "cf_agent_chat_messages") {
       setTranscriptSeeded(true);
-    } else if (msg.type === "mcts-progress") {
-      setMctsTreeFromProgress(msg);
-    } else if (msg.type === "device_consent") {
-      setPendingConsents((prev) => {
-        if (prev.some((c) => c.consentId === msg.consentId)) return prev;
-
-        const card: PendingConsent = {
-          consentId: msg.consentId,
-          deviceLabel: msg.deviceLabel,
-          method: msg.method ?? "exec",
-          command: msg.command,
-          createdAt: Date.now(),
-        };
-
-        if (msg.workspaceName) card.workspaceName = msg.workspaceName;
-
-        return [...prev, card];
-      });
-    } else if (msg.type === "device_consent_resolved") {
-      setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
-      setConsentResolutionError(msg.consentId, null);
-    } else if (msg.type === "device_unavailable") {
-      setUnavailableDevices(msg.devices);
-    } else if (msg.type === "device_available") {
-      setUnavailableDevices(null);
     } else if (msg.type === "model_fallback") {
       setModelFallbacks((prev) => [...prev, msg.message]);
-    } else if (msg.type === "work_cancelled") {
-      forgetDeltas();
-      await reread('background_jobs', refreshBackgroundJobs);
-    } else if (msg.type === JOB_OUTPUT_EVENT) {
-      const listed = listedJobs.current.find((job) => job.id === msg.jobId)?.output;
-      const running = new Set(listedJobs.current.filter(runningJob).map((job) => job.id));
-
-      setJobOutputs((told) => ({
-        ...Object.fromEntries(Object.entries(told).filter(([id]) => running.has(id))),
-        [msg.jobId]: followJobOutput(told[msg.jobId] ?? listed, msg),
-      }));
-    } else if (msg.type === READS_CHANGED_EVENT) {
-      setReadMoves((moves) => Object.fromEntries([
-        ...Object.entries(moves), ...msg.reads.map((read) => [read, (moves[read] ?? 0) + 1]),
-      ]));
-    } else if (msg.type === SLATES_CHANGED_EVENT) {
-      setSlateReloads((previous) => {
-        const next = new Map(previous);
-
-        for (const id of msg.ids) next.set(id, (next.get(id) ?? 0) + 1);
-
-        return next;
-      });
-
-      await reread('slates', refreshSlates);
-    } else if (msg.type === CHANGES_MOVED_EVENT) {
-      setChangesMoved((moved) => moved + 1);
-    } else if (msg.type === "branch_status") {
-      const status = branchRunStatus(msg.status);
-
-      // The head id derives from the run id, so retire without waiting for a journal write a
-      // failed branch never makes.
-      if (status !== "running") retireDelta(branchHeadId(msg.branchId));
-      setBranchRuns((prev) => [
-        ...prev.filter((b) => b.branchId !== msg.branchId),
-        {
-          branchId: msg.branchId,
-          task: msg.task ?? "",
-          status,
-          takeSetId: msg.takeSetId,
-          turnId: msg.turnId,
-          message: msg.message,
-        },
-      ]);
-    } else if (msg.type === "head_activity") {
-      // The step landed: re-read the journal and retire its in-progress paint so both never show.
-      retireDelta(msg.headId);
-      bumpHeadActivity(msg.headId);
-    } else if (msg.type === "head_stream") {
-      setHeadDeltaMap((previous) => appendHeadDelta(previous, msg.headId, msg.kind, msg.delta));
     } else if (msg.type === "steer_status") {
       settleSendLanding(sendLandings.current, msg);
       // `returned` (handed back to the composer) and `turn` (now its own user turn) both remove the bubble.
@@ -1278,153 +1021,17 @@ export function useKinu(target?: string | KinuActorAddress) {
             atStep: msg.atStep ?? null,
           },
         ]);
-    } else if (msg.type === "signal_card") {
-      const card = parseSignalCardEvent({ value: msg });
-
-      if (card) setSignalCards((current) => applySignalCard(current, card));
     } else if (msg.type === "plan_updated") {
       adoptPlan(parsePlanReview({ value: msg.plan }));
-    } else if (msg.type === 'workspace_plan_updated') {
-      const key = JSON.stringify(msg.reference);
-
-      if (!knownWorkspacePlans.current.has(key)) {
-        knownWorkspacePlans.current.add(key);
-        setArrivedReference(msg.reference);
-      }
     } else if (msg.type === TURN_CLAIM_FRAME) {
       setTurnClaim(msg.claim);
-    } else if (msg.type === "subordinate_event") {
-      const subordinateEvent = parseSubordinateActivityEvent({ value: msg });
-
-      if (subordinateEvent) {
-        setSubordinateEvents((current) => current.some((listed) => listed.id === subordinateEvent.id)
-          ? current
-          : [...current.slice(-49), subordinateEvent]);
-      }
-    } else if (msg.type === "executor-output") {
-      setExecutorOutputs(prev => {
-        const next = new Map(prev);
-        const existing = next.get(msg.executor) ?? [];
-        // A live echo is the whole output, so the stored length is what is shown.
-        const stdout = msg.stdout ?? "";
-        const stderr = msg.stderr ?? "";
-        next.set(msg.executor, [...existing, {
-          id: crypto.randomUUID(), command: msg.command,
-          stdout, stdout_len: stdout.length,
-          stderr, stderr_len: stderr.length,
-          exit_code: msg.exitCode ?? 0, created_at: msg.timestamp,
-        }]);
-
-        return next;
-      });
+    } else {
+      await extension?.current?.frame(msg);
     }
   };
 
+
   useSocketFrames(agent, () => ({ isSubordinate, ownActorId: ownActorIdRef.current }), { everyFrame, paneFrame });
-
-  // A new socket cannot know what a running head had half-written.
-  useEffect(() => () => forgetDeltas(), [agent, forgetDeltas]);
-
-  const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent({
-    consentId,
-    decision,
-    resolve: (id, choice) => rpc("resolveDeviceConsent", [id, choice]),
-    remove: (id) => setPendingConsents((previous) => previous.filter((consent) => consent.consentId !== id)),
-    report: setConsentResolutionError,
-    isCurrent: liveRefreshAdmission.admit(actorKey, `consentResolution:${consentId}`),
-  }), [actorKey, liveRefreshAdmission, rpc, setConsentResolutionError]);
-
-  const refreshExposedPorts = useCallback(async () => {
-    const generation = ++exposedPortsRefreshGeneration.current;
-
-    const results = await Promise.all(["workspace", "sandbox"].map(async (executor) => {
-      try {
-        const result = await rpc<ExposedPortList>("getExposedPorts", [executor]);
-
-        return { executor, result } satisfies ExecutorPortRefresh;
-      } catch (cause) {
-        return {
-          executor,
-          result: { ports: [], error: errorMessage({ cause }) },
-        } satisfies ExecutorPortRefresh;
-      }
-    }));
-
-    if (generation !== exposedPortsRefreshGeneration.current) return;
-    setPinnedPorts((previous) => {
-      const next = reconcilePreviewPorts(previous, results);
-      setPreviewError(next.error);
-      setPreviewStarting((before) => (before.join() === next.starting.join() ? before : next.starting));
-
-      if (next.error === null) {
-        const ids = next.ports.map(port => `${port.executor}:${port.port}`);
-        const previousIds = knownPorts.current;
-        const added = previousIds === null ? undefined : ids.find(id => !previousIds.has(id));
-
-        if (added) setPreviewFocus(`preview:${added}`);
-        knownPorts.current = new Set([...(previousIds ?? []), ...ids]);
-      }
-
-      return next.ports;
-    });
-  }, [rpc]);
-
-  const liveReads = useMemo((): Partial<Record<LiveRead, () => Promise<void>>> => ({
-    getExposedPorts: refreshExposedPorts,
-    getMemoryContent: () => refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
-    getExecutors: () => refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
-    listWorkspaceAgents: () => refreshCurrentLiveResource("agents", () => rpc<PanelAgent[]>("listWorkspaceAgents", []), setWorkspaceAgents),
-    listSubordinates: refreshRoster,
-    listBackgroundJobs: refreshBackgroundJobs,
-    listPendingActions: refreshPendingActions,
-    getWorkspaceTabPresence: refreshTabPresence,
-    listSlates: refreshSlates,
-    getActivePlanReview: () => refreshCurrentLiveResource(
-      "plan",
-      () => rpc<unknown>("getActivePlanReview", []),
-      (plan) => setActivePlan(parseActivePlanReview({ value: plan })),
-    ),
-  }), [
-    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshPendingActions, refreshRoster, refreshSlates,
-    refreshTabPresence, rpc,
-  ]);
-
-  const liveRefreshTaskId = useRef(0);
-  const liveRefreshTasks = useRef(new Map<number, Promise<void>>());
-
-  const rereadLive = useCallback((reads: readonly LiveRead[], also: readonly (() => Promise<void>)[] = []): void => {
-    const taskId = ++liveRefreshTaskId.current;
-
-    const task = (async () => {
-      try {
-        await Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]);
-      } catch (cause) {
-        diagnostics.failure('workspace.live_refresh_failed', toKinuError({
-          doing: 'refreshing live workspace data',
-          cause,
-          otherwise: 'io',
-        }));
-      } finally {
-        liveRefreshTasks.current.delete(taskId);
-      }
-    })();
-
-    liveRefreshTasks.current.set(taskId, task);
-  }, [liveReads]);
-
-  const refreshLiveData = useCallback((): void => {
-    rereadLive(LIVE_READS, [refreshPendingConsents]);
-  }, [refreshPendingConsents, rereadLive]);
-
-  const lastMoves = useRef<ReadMoves>({});
-
-  useEffect(() => {
-    const moved = LIVE_READS.filter((read) => (readMoves[read] ?? 0) !== (lastMoves.current[read] ?? 0));
-
-    lastMoves.current = readMoves;
-
-    if (moved.length > 0) rereadLive(moved);
-  }, [readMoves, rereadLive]);
 
   const retryLoad = useCallback(() => {
     failureStreak.current = 0;
@@ -1432,8 +1039,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     // The SDK stops auto-redialling exactly when it sets `connectionError`, so Retry must force one.
     sessionRecovery.manualRetry(agentRef.current?.connectionError != null);
 
-    if (!isSubordinate) refreshLiveData();
-  }, [isSubordinate, refreshLiveData, sessionRecovery, setSourceError]);
+    extension?.current?.refresh();
+  }, [extension, sessionRecovery, setSourceError]);
 
   /** Never edits the claim locally: the server's `turn_claim` frame retires the button, so a refused
    *  recovery still shows as stuck. Resolves the failure reason (also the workspace notice) or null. */
@@ -1454,22 +1061,10 @@ export function useKinu(target?: string | KinuActorAddress) {
       return reason;
     }
 
-    refreshLiveData();
+    extension?.current?.refresh();
 
     return null;
-  }, [refreshLiveData, rpc, setSourceError]);
-
-  const wasStreaming = useRef(false);
-  useEffect(() => {
-    if (isSubordinate) return;
-
-    if (isStreaming) {
-      wasStreaming.current = true;
-    } else if (wasStreaming.current) {
-      wasStreaming.current = false;
-      refreshLiveData();
-    }
-  }, [isStreaming, isSubordinate, refreshLiveData]);
+  }, [extension, rpc, setSourceError]);
 
   // One round trip: a second awaited RPC for the active plan makes a plan-gated composer paint in
   // build mode and jump. The exploration canvas is not seeded here; its surface fetches its own.
@@ -1482,22 +1077,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (!isCurrent()) return;
     setAgentStatus(snap.status);
 
-
-    if (isSourceCurrent("memoryContent")) {
-      setMemoryContent(snap.memoryContent);
-
-      if (snap.memoryContent) setMemory(memoryRows(snap.memoryContent));
-    }
-
-    if (isSourceCurrent("executors")) {
-      setExecutors(snap.executors);
-      setLastActiveExecutor(snap.lastActiveExecutor);
-      const outputs = new Map<string, ExecutorOutput[]>();
-
-      for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
-      setExecutorOutputs(outputs);
-    }
-
     if (isSourceCurrent("plan")) {
       const loadedPlan = parsePlanReview({ value: snap.activePlan });
 
@@ -1505,29 +1084,11 @@ export function useKinu(target?: string | KinuActorAddress) {
       setActivePlan(loadedPlan);
     }
 
-    if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
-
-    if (isSourceCurrent("slates")) applySlates(snap.slates);
     // Replace, never merge: durable rows are the authority, so a reconnecting tab learns missed
     // transitions and drops settled chips. A racing broadcast upserts by id afterwards.
     setSteerRuns(snap.pendingSteers);
-    setBranchRuns(snap.branchRuns.map((run) => ({
-      branchId: run.branchId, task: run.task, status: run.status,
-    })));
     setTurnClaim(snap.turnClaim);
-
-    try {
-      await Promise.all([
-        refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshPendingConsents(),
-        ...(isSubordinate ? [] : [liveReads.listWorkspaceAgents?.()]),
-      ]);
-    } catch (cause) {
-      diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
-        doing: 'refreshing live workspace data',
-        cause,
-        otherwise: 'io',
-      }));
-    }
+    await extension?.current?.snapshot(snap, isSourceCurrent);
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
@@ -1561,72 +1122,22 @@ export function useKinu(target?: string | KinuActorAddress) {
   }
 
   useEffect(() => {
-    ++exposedPortsRefreshGeneration.current;
     setLoadGeneration(0);
     failureStreak.current = 0;
-    wasStreaming.current = false;
     // The abandoned turn's stale owner token can no longer release the latch, so a late
     // completion cannot open it for the next holder.
     abandonTurn(sendLatch.current);
-    searchSeq.current += 1;
-    clearTimeout(searchTimer.current);
     setErrors({});
-    setConsentResolutionErrors(new Map());
     setAgentStatus(null);
-    setMemory([]);
-    setMemoryContent("");
-    mctsProgressState.current =
-      activateMctsProgressActor<ForkNode>(mctsProgressState.current, actorKey);
-    setMctsTrees(mctsProgressState.current.trees);
-    setExecutorOutputs(new Map());
-    setLastActiveExecutor(null);
-    setPinnedPorts([]);
-    setPreviewError(null);
-    setPreviewStarting([]);
-    setBackgroundJobs([]);
-    setSlates([]);
-    setTabPresence(undefined);
-    knownSlates.current = null;
-    knownPorts.current = null;
     knownPlans.current.clear();
-    knownWorkspacePlans.current.clear();
-    claimedWorkspacePlans.current.clear();
-    setArrivedReference(null);
-    setPreviewFocus(null);
     setPlanFocus(null);
-    setSlateReloads(new Map());
-    setPendingConsents([]);
     setActivePlan(null);
-    setPendingActions([]);
-    setChangelogUnseen(0);
-    setBranchRuns([]);
     setChatError(null);
     setModelFallbacks([]);
-    setSubordinates([]);
-    setSubordinateEvents([]);
-    setSignalCards([]);
     // The last actor's id would admit its frames here and page its history.
     ownActorIdRef.current = null;
     setPaneActorId(null);
   }, [workspace, subordinate]);
-
-  /** True exactly once per reference per connection. Records only the key handed in, so a newer
-   *  arrival is never suppressed; the held reference is never cleared. */
-  const claimWorkspacePlan = useCallback((reference: WorkspacePlanReference): boolean => {
-    const key = JSON.stringify(reference);
-
-    if (claimedWorkspacePlans.current.has(key)) return false;
-    claimedWorkspacePlans.current.add(key);
-
-    return true;
-  }, []);
-
-  const workspacePlanArrival = useMemo<WorkspacePlanArrival | null>(
-    () => arrivedReference === null
-      ? null
-      : { reference: arrivedReference, claim: claimWorkspacePlan },
-    [arrivedReference, claimWorkspacePlan],
-  );
 
   /**
    * Idle: starts a turn under the send latch via the SDK chat path, answering `'turn'`. Otherwise
@@ -1679,49 +1190,6 @@ export function useKinu(target?: string | KinuActorAddress) {
       return regenerate();
     });
   }, [startTurn, messages.length, regenerate]);
-
-  // Orders replies so a slow earlier query cannot land last over a newer prefix.
-  const searchSeq = useRef(0);
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(searchTimer.current), []);
-
-  const searchMemory = useCallback((q: string) => {
-    clearTimeout(searchTimer.current);
-    const seq = ++searchSeq.current;
-
-    if (!q.trim()) {
-      setSourceError("memory", null);
-
-      if (memoryContent) setMemory(memoryRows(memoryContent));
-
-      return;
-    }
-
-    searchTimer.current = setTimeout(() => detach(Effect.promise(async () => {
-      // Published only while this query is still the newest.
-      let thrown: { cause: unknown } | null = null;
-
-      try {
-        const results = await rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q]);
-
-        if (seq !== searchSeq.current) return;
-        setSourceError("memory", null);
-        setMemory((results ?? []).map(r => ({
-          path: r.path,
-          content: r.snippet,
-          matchScore: r.rrfScore,
-          updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
-          savedBy: null,
-        })));
-      } catch (err) {
-        thrown = { cause: err };
-      }
-
-      if (thrown !== null && seq === searchSeq.current) {
-        setSourceError("memory", `Memory search failed: ${errorMessage(thrown)}`);
-      }
-    })), MEMORY_SEARCH_DEBOUNCE_MS);
-  }, [rpc, memoryContent, setSourceError]);
 
   /** Resolves null on success or the failure reason, which is also recorded on `error` after the
    *  picker is rolled back. Callers reporting "Saved" must check the result; it never rejects. */
@@ -1782,135 +1250,740 @@ export function useKinu(target?: string | KinuActorAddress) {
     return saved;
   }, [rpc]);
 
+  const rereadPlan = useCallback(() => refreshCurrentLiveResource(
+    "plan",
+    () => rpc<unknown>("getActivePlanReview", []),
+    (plan) => setActivePlan(parseActivePlanReview({ value: plan })),
+  ), [refreshCurrentLiveResource, rpc]);
+
+  return {
+    chat: {
+      messages,
+      /** Null when nothing is being waited on: "working" vs "waiting on {provider}". */
+      providerWait,
+      liveness,
+      recoverTurn,
+      /** Until true, empty `messages` means "not delivered", not "there is nothing". */
+      transcriptSeeded,
+      connectionStatus,
+      /** Set when reconnecting cannot help (not this caller's workspace, or gone). The SDK owns the
+       *  classification and clears it on open. */
+      terminalClose: connectionError,
+      /** Latched once per page load. */
+      newerDeployedBuild,
+      /** Never auto-expires. */
+      error,
+      /** Also cancels the pending backoff retry and clears a stale action error. */
+      retryLoad,
+      chatError,
+      clearChatError: () => setChatError(null),
+      retryLastMessage,
+      agentStatus,
+      /** A pane may only report "none" for a read that came back; `agentStatus` alone cannot tell
+       *  loading from failed. */
+      snapshot,
+      activePlan,
+      planFocus,
+      sendChat,
+      abortChat,
+      clearHistory,
+      setModel,
+      setReasoningEffort,
+      setDisplayName,
+      modelFallbacks,
+      /** Returned steers are removed by the server's broadcast, not by the surface. */
+      steerRuns,
+      rpc,
+      rawAgent: agent,
+      actorAddress,
+      isSubordinate,
+      /** Addresses cursored reads of this chat's older history. */
+      paneActorId,
+    },
+    link: {
+      agent, rpc, actorKey, liveRefreshAdmission, refreshCurrentLiveResource, setSourceError, errors,
+      loaded: agentStatus !== null, streaming: isStreaming, rereadPlan,
+    },
+  };
+}
+
+type ChatLink = ReturnType<typeof useChatOwner>["link"];
+
+/** The reads only the workspace's pane draws. */
+function useWorkspaceReads(link: ChatLink) {
+  const {
+    agent, rpc, actorKey, liveRefreshAdmission, refreshCurrentLiveResource, setSourceError, errors, loaded, streaming, rereadPlan,
+  } = link;
+
+  const [memory, setMemory] = useState<MemoryEntry[]>([]);
+  const [mctsTrees, setMctsTrees] = useState<ReadonlyMap<string, ForkNode>>(new Map());
+  const [memoryContent, setMemoryContent] = useState<string>("");
+  const [consentResolutionErrors, setConsentResolutionErrors] = useState<ReadonlyMap<string, string>>(new Map());
+
+  const setConsentResolutionError = useCallback((consentId: string, message: string | null) => {
+    setConsentResolutionErrors((previous) => {
+      if ((previous.get(consentId) ?? null) === message) return previous;
+      const next = new Map(previous);
+
+      if (message) next.set(consentId, message); else next.delete(consentId);
+
+      return next;
+    });
+  }, []);
+
+  const consentResolutionReasons = [...new Set(consentResolutionErrors.values())];
+
+  const liveErrors = consentResolutionReasons.length === 0
+    ? errors
+    : { ...errors, consentResolution: formatNaturalList(consentResolutionReasons) };
+
+  const error = formatWorkspaceError(liveErrors, loaded);
+  const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
+  const [workspaceAgents, setWorkspaceAgents] = useState<PanelAgent[] | null>(null);
+  const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
+  const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
+  // Listing ports never provisions a sandbox: [] unless the executor is already active.
+  const [pinnedPorts, setPinnedPorts] = useState<PinnedPreviewPort[]>([]);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewStarting, setPreviewStarting] = useState<readonly string[]>([]);
+  const exposedPortsRefreshGeneration = useRef(0);
+  const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
+  const [jobOutputs, setJobOutputs] = useState<Readonly<Record<string, JobOutputTail>>>({});
+  const listedJobs = useRef<BackgroundJob[]>([]);
+  listedJobs.current = backgroundJobs;
+
+  const liveJobs = useMemo(() => backgroundJobs.map((job) => {
+    const told = jobOutputs[job.id];
+
+    if (told === undefined || !runningJob(job) || (job.output?.seq ?? 0) >= told.seq) return job;
+
+    return { ...job, output: told };
+  }), [backgroundJobs, jobOutputs]);
+
+  const [slates, setSlates] = useState<SlateSummary[]>([]);
+  const knownSlates = useRef<Set<string> | null>(null);
+  const knownPorts = useRef<Set<string> | null>(null);
+  const [previewFocus, setPreviewFocus] = useState<string | null>(null);
+  const [arrivedReference, setArrivedReference] = useState<WorkspacePlanReference | null>(null);
+  // `knownWorkspacePlans`: references this connection was told about (dedupes repeated frames).
+  // `claimedWorkspacePlans`: references a pane already acted on, so a hint never fires twice.
+  const knownWorkspacePlans = useRef(new Set<string>());
+  const claimedWorkspacePlans = useRef(new Set<string>());
+  const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
+  const [changesMoved, setChangesMoved] = useState(0);
+  const [readMoves, setReadMoves] = useState<ReadMoves>({});
+  const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
+  /** A connect clears it. */
+  const [unavailableDevices, setUnavailableDevices] = useState<UnavailableDevice[] | null>(null);
+  // One read behind both the Work queue and the strip's accent badge, so they cannot disagree.
+  const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
+  // Unknown until the first read: an optimistic absence would flip the strip to Files first.
+  const [tabPresence, setTabPresence] = useState<TabPresence | undefined>(undefined);
+  // Only for the sidebar roster's dot; the tab badge is the queue's length.
+  const [changelogUnseen, setChangelogUnseen] = useState(0);
+  const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
+  // Counts, not timestamps: a transcript only needs to notice its branch moved, without a shared clock.
+  const [headActivity, setHeadActivity] = useState<ReadonlyMap<string, number>>(new Map());
+
+  const bumpHeadActivity = useCallback((headId: string) => {
+    setHeadActivity((previous) => {
+      const next = new Map(previous);
+      next.set(headId, (previous.get(headId) ?? 0) + 1);
+
+      return next;
+    });
+  }, []);
+
+  /** Ephemeral: the durable step is the truth. Retired when the step lands (`head_activity`,
+   *  `HeadDeltas.retire`), on a terminal branch status, a cancelled turn, or socket drop. */
+  const [headDeltaMap, setHeadDeltaMap] = useState<ReadonlyMap<string, HeadDelta>>(new Map());
+
+  const retireDelta = useCallback((headId: string) => {
+    setHeadDeltaMap((previous) => retireHeadDelta(previous, headId));
+  }, []);
+
+  const forgetDeltas = useCallback(() => { setHeadDeltaMap(new Map()); }, []);
+
+  const headDeltas = useMemo<HeadDeltas>(() => ({
+    get: (headId) => headDeltaMap.get(headId),
+    retire: retireDelta,
+  }), [headDeltaMap, retireDelta]);
+
+  const [subordinates, setSubordinates] = useState<SubordinateRosterEntry[]>([]);
+  const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
+  const [signalCards, setSignalCards] = useState<readonly SignalCard[]>([]);
+
+  // A socket can replay a frame after reconnect; `pushSeq` is per root, so frames for different
+  // roots cannot reject or replace each other.
+  const mctsProgressState = useRef(createMctsProgressState<ForkNode>(actorKey));
+
+  const setMctsTreeFromProgress = useCallback((progress: MctsProgress) => {
+    const next = applyMctsProgress(
+      mctsProgressState.current,
+      actorKey,
+      progress,
+      explorationForkTree({ tree: progress.nodes, head: progress.head }),
+    );
+
+    if (next === mctsProgressState.current) return;
+    mctsProgressState.current = next;
+    setMctsTrees(next.trees);
+  }, [actorKey]);
+
+  // A new socket cannot know what a running head had half-written.
+  useEffect(() => {
+    const opened = () => { knownPorts.current = null; };
+
+    agent.addEventListener("open", opened);
+    agent.addEventListener("close", forgetDeltas);
+
+    return () => {
+      agent.removeEventListener("open", opened);
+      agent.removeEventListener("close", forgetDeltas);
+      forgetDeltas();
+    };
+  }, [agent, forgetDeltas]);
+
+  const refreshBackgroundJobs = useCallback(() => refreshCurrentLiveResource(
+    "jobs",
+    () => rpc<BackgroundJob[]>("listBackgroundJobs", [50]),
+    setBackgroundJobs,
+  ), [refreshCurrentLiveResource, rpc]);
+
+  const refreshPendingConsents = useCallback(() => refreshCurrentLiveResource(
+    "consents", () => rpc<PendingConsent[]>("listPendingConsents", []), setPendingConsents,
+  ), [refreshCurrentLiveResource, rpc]);
+
+  // One call feeds the queue and the sidebar dot's unseen count so they cannot disagree.
+  const refreshPendingActions = useCallback(() => refreshCurrentLiveResource(
+    "pendingActions",
+    () => rpc<PendingAction[]>("listPendingActions", []),
+    (actions) => {
+      setPendingActions(actions);
+      const unseen = actions.find((a) => a.kind === "unseen_changes");
+      setChangelogUnseen(unseen ? 1 : 0);
+    },
+  ), [refreshCurrentLiveResource, rpc]);
+
+  const refreshTabPresence = useCallback(() => refreshCurrentLiveResource(
+    "presence",
+    () => rpc<TabPresence>("getWorkspaceTabPresence", []),
+    setTabPresence,
+  ), [refreshCurrentLiveResource, rpc]);
+
+  const applySlates = useCallback((listing: SlateSummary[], announce = false) => {
+    const previous = knownSlates.current;
+
+    if (announce && previous !== null) {
+      const added = listing.find(slate => !previous.has(slate.id));
+
+      if (added) setPreviewFocus(`slate:${added.id}`);
+    }
+
+    knownSlates.current = new Set([...(previous ?? []), ...listing.map(slate => slate.id)]);
+    setSlates(listing);
+    setSlateReloads((reloads) => pruneSlateReloads(reloads, listing));
+  }, []);
+
+  const refreshSlates = useCallback(() => refreshCurrentLiveResource(
+    "slates",
+    () => rpc<{ slates: SlateSummary[]; problems: SlateProblem[] }>("listSlates", []).then((listing) => listing.slates),
+    (listing) => applySlates(listing, true),
+  ), [applySlates, refreshCurrentLiveResource, rpc]);
+
+  /** Through the "roster" admission, so a read still in flight cannot overwrite it. */
+  const writeRoster = useCallback((next: SetStateAction<SubordinateRosterEntry[]>) => refreshCurrentLiveResource(
+    "roster", async () => next, setSubordinates,
+  ), [refreshCurrentLiveResource]);
+
+  const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", async () => {
+    const roster = parseSubordinateRoster({ value: await rpc<unknown>("listSubordinates", []) });
+
+    if (!roster) throw new Error("Subordinate roster returned an invalid response");
+
+    return roster;
+  }, setSubordinates), [refreshCurrentLiveResource, rpc]);
+
+  // Stable, or the changelog hook's effect fires markChangelogSeen every render.
+  const clearChangelogUnseen = useCallback(() => {
+    setChangelogUnseen(0);
+    setPendingActions((prev) => prev.filter((a) => a.kind !== "unseen_changes"));
+  }, []);
+
+  // The server pushes the fact, not the rows; one re-read updates every open tab.
+  const reread = async (resource: string, refresh: () => Promise<void>): Promise<void> => {
+    try {
+      await refresh();
+    } catch (cause) {
+      diagnostics.failure('workspace.live_refresh_failed', toKinuError({ doing: 'refreshing live workspace data', cause, otherwise: 'io' }), { resource });
+    }
+  };
+
+  const paneFrame = async (msg: SocketFrame): Promise<void> => {
+    if (msg.type === "mcts-progress") {
+      setMctsTreeFromProgress(msg);
+    } else if (msg.type === "device_consent") {
+      setPendingConsents((prev) => {
+        if (prev.some((c) => c.consentId === msg.consentId)) return prev;
+
+        const card: PendingConsent = {
+          consentId: msg.consentId,
+          deviceLabel: msg.deviceLabel,
+          method: msg.method ?? "exec",
+          command: msg.command,
+          createdAt: Date.now(),
+        };
+
+        if (msg.workspaceName) card.workspaceName = msg.workspaceName;
+
+        return [...prev, card];
+      });
+    } else if (msg.type === "device_consent_resolved") {
+      setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
+      setConsentResolutionError(msg.consentId, null);
+    } else if (msg.type === "device_unavailable") {
+      setUnavailableDevices(msg.devices);
+    } else if (msg.type === "device_available") {
+      setUnavailableDevices(null);
+    } else if (msg.type === "work_cancelled") {
+      forgetDeltas();
+      await reread('background_jobs', refreshBackgroundJobs);
+    } else if (msg.type === JOB_OUTPUT_EVENT) {
+      const listed = listedJobs.current.find((job) => job.id === msg.jobId)?.output;
+      const running = new Set(listedJobs.current.filter(runningJob).map((job) => job.id));
+
+      setJobOutputs((told) => ({
+        ...Object.fromEntries(Object.entries(told).filter(([id]) => running.has(id))),
+        [msg.jobId]: followJobOutput(told[msg.jobId] ?? listed, msg),
+      }));
+    } else if (msg.type === READS_CHANGED_EVENT) {
+      setReadMoves((moves) => Object.fromEntries([
+        ...Object.entries(moves), ...msg.reads.map((read) => [read, (moves[read] ?? 0) + 1]),
+      ]));
+    } else if (msg.type === SLATES_CHANGED_EVENT) {
+      setSlateReloads((previous) => {
+        const next = new Map(previous);
+
+        for (const id of msg.ids) next.set(id, (next.get(id) ?? 0) + 1);
+
+        return next;
+      });
+
+      await reread('slates', refreshSlates);
+    } else if (msg.type === CHANGES_MOVED_EVENT) {
+      setChangesMoved((moved) => moved + 1);
+    } else if (msg.type === "branch_status") {
+      const status = branchRunStatus(msg.status);
+
+      // The head id derives from the run id, so retire without waiting for a journal write a
+      // failed branch never makes.
+      if (status !== "running") retireDelta(branchHeadId(msg.branchId));
+      setBranchRuns((prev) => [
+        ...prev.filter((b) => b.branchId !== msg.branchId),
+        {
+          branchId: msg.branchId,
+          task: msg.task ?? "",
+          status,
+          takeSetId: msg.takeSetId,
+          turnId: msg.turnId,
+          message: msg.message,
+        },
+      ]);
+    } else if (msg.type === "head_activity") {
+      // The step landed: re-read the journal and retire its in-progress paint so both never show.
+      retireDelta(msg.headId);
+      bumpHeadActivity(msg.headId);
+    } else if (msg.type === "head_stream") {
+      setHeadDeltaMap((previous) => appendHeadDelta(previous, msg.headId, msg.kind, msg.delta));
+    } else if (msg.type === "steer_status") {
+    } else if (msg.type === "signal_card") {
+      const card = parseSignalCardEvent({ value: msg });
+
+      if (card) setSignalCards((current) => applySignalCard(current, card));
+    } else if (msg.type === 'workspace_plan_updated') {
+      const key = JSON.stringify(msg.reference);
+
+      if (!knownWorkspacePlans.current.has(key)) {
+        knownWorkspacePlans.current.add(key);
+        setArrivedReference(msg.reference);
+      }
+    } else if (msg.type === "subordinate_event") {
+      const subordinateEvent = parseSubordinateActivityEvent({ value: msg });
+
+      if (subordinateEvent) {
+        setSubordinateEvents((current) => current.some((listed) => listed.id === subordinateEvent.id)
+          ? current
+          : [...current.slice(-49), subordinateEvent]);
+      }
+    } else if (msg.type === "executor-output") {
+      setExecutorOutputs(prev => {
+        const next = new Map(prev);
+        const existing = next.get(msg.executor) ?? [];
+        // A live echo is the whole output, so the stored length is what is shown.
+        const stdout = msg.stdout ?? "";
+        const stderr = msg.stderr ?? "";
+        next.set(msg.executor, [...existing, {
+          id: crypto.randomUUID(), command: msg.command,
+          stdout, stdout_len: stdout.length,
+          stderr, stderr_len: stderr.length,
+          exit_code: msg.exitCode ?? 0, created_at: msg.timestamp,
+        }]);
+
+        return next;
+      });
+    }
+  };
+
+  const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent({
+    consentId,
+    decision,
+    resolve: (id, choice) => rpc("resolveDeviceConsent", [id, choice]),
+    remove: (id) => setPendingConsents((previous) => previous.filter((consent) => consent.consentId !== id)),
+    report: setConsentResolutionError,
+    isCurrent: liveRefreshAdmission.admit(actorKey, `consentResolution:${consentId}`),
+  }), [actorKey, liveRefreshAdmission, rpc, setConsentResolutionError]);
+
+  const refreshExposedPorts = useCallback(async () => {
+    const generation = ++exposedPortsRefreshGeneration.current;
+
+    const results = await Promise.all(["workspace", "sandbox"].map(async (executor) => {
+      try {
+        const result = await rpc<ExposedPortList>("getExposedPorts", [executor]);
+
+        return { executor, result } satisfies ExecutorPortRefresh;
+      } catch (cause) {
+        return {
+          executor,
+          result: { ports: [], error: errorMessage({ cause }) },
+        } satisfies ExecutorPortRefresh;
+      }
+    }));
+
+    if (generation !== exposedPortsRefreshGeneration.current) return;
+    setPinnedPorts((previous) => {
+      const next = reconcilePreviewPorts(previous, results);
+      setPreviewError(next.error);
+      setPreviewStarting((before) => (before.join() === next.starting.join() ? before : next.starting));
+
+      if (next.error === null) {
+        const ids = next.ports.map(port => `${port.executor}:${port.port}`);
+        const previousIds = knownPorts.current;
+        const added = previousIds === null ? undefined : ids.find(id => !previousIds.has(id));
+
+        if (added) setPreviewFocus(`preview:${added}`);
+        knownPorts.current = new Set([...(previousIds ?? []), ...ids]);
+      }
+
+      return next.ports;
+    });
+  }, [rpc]);
+
+  const liveReads = useMemo((): Partial<Record<LiveRead, () => Promise<void>>> => ({
+    getExposedPorts: refreshExposedPorts,
+    getMemoryContent: () => refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
+    getExecutors: () => refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
+    listWorkspaceAgents: () => refreshCurrentLiveResource("agents", () => rpc<PanelAgent[]>("listWorkspaceAgents", []), setWorkspaceAgents),
+    listSubordinates: refreshRoster,
+    listBackgroundJobs: refreshBackgroundJobs,
+    listPendingActions: refreshPendingActions,
+    getWorkspaceTabPresence: refreshTabPresence,
+    listSlates: refreshSlates,
+    getActivePlanReview: rereadPlan,
+  }), [
+    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshPendingActions, refreshRoster, refreshSlates,
+    refreshTabPresence, rereadPlan, rpc,
+  ]);
+
+  const liveRefreshTaskId = useRef(0);
+  const liveRefreshTasks = useRef(new Map<number, Promise<void>>());
+
+  const rereadLive = useCallback((reads: readonly LiveRead[], also: readonly (() => Promise<void>)[] = []): void => {
+    const taskId = ++liveRefreshTaskId.current;
+
+    const task = (async () => {
+      try {
+        await Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]);
+      } catch (cause) {
+        diagnostics.failure('workspace.live_refresh_failed', toKinuError({
+          doing: 'refreshing live workspace data',
+          cause,
+          otherwise: 'io',
+        }));
+      } finally {
+        liveRefreshTasks.current.delete(taskId);
+      }
+    })();
+
+    liveRefreshTasks.current.set(taskId, task);
+  }, [liveReads]);
+
+  const refreshLiveData = useCallback((): void => {
+    rereadLive(LIVE_READS, [refreshPendingConsents]);
+  }, [refreshPendingConsents, rereadLive]);
+
+  const lastMoves = useRef<ReadMoves>({});
+
+  useEffect(() => {
+    const moved = LIVE_READS.filter((read) => (readMoves[read] ?? 0) !== (lastMoves.current[read] ?? 0));
+
+    lastMoves.current = readMoves;
+
+    if (moved.length > 0) rereadLive(moved);
+  }, [readMoves, rereadLive]);
+
+  const wasStreaming = useRef(false);
+  useEffect(() => {
+    if (streaming) {
+      wasStreaming.current = true;
+    } else if (wasStreaming.current) {
+      wasStreaming.current = false;
+      refreshLiveData();
+    }
+  }, [streaming, refreshLiveData]);
+
+  async function applySnapshot(snap: WorkspaceSnapshot, isSourceCurrent: (source: LiveRefreshSource) => boolean): Promise<void> {
+    if (isSourceCurrent("memoryContent")) {
+      setMemoryContent(snap.memoryContent);
+
+      if (snap.memoryContent) setMemory(memoryRows(snap.memoryContent));
+    }
+
+    if (isSourceCurrent("executors")) {
+      setExecutors(snap.executors);
+      setLastActiveExecutor(snap.lastActiveExecutor);
+      const outputs = new Map<string, ExecutorOutput[]>();
+
+      for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
+      setExecutorOutputs(outputs);
+    }
+
+    if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
+
+    if (isSourceCurrent("slates")) applySlates(snap.slates);
+    setBranchRuns(snap.branchRuns.map((run) => ({
+      branchId: run.branchId, task: run.task, status: run.status,
+    })));
+
+    try {
+      await Promise.all([
+        refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshPendingConsents(),
+        liveReads.listWorkspaceAgents?.(),
+      ]);
+    } catch (cause) {
+      diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
+        doing: 'refreshing live workspace data',
+        cause,
+        otherwise: 'io',
+      }));
+    }
+  }
+
+  useEffect(() => {
+    ++exposedPortsRefreshGeneration.current;
+    wasStreaming.current = false;
+    searchSeq.current += 1;
+    clearTimeout(searchTimer.current);
+    setConsentResolutionErrors(new Map());
+    setMemory([]);
+    setMemoryContent("");
+    mctsProgressState.current =
+      activateMctsProgressActor<ForkNode>(mctsProgressState.current, actorKey);
+    setMctsTrees(mctsProgressState.current.trees);
+    setExecutorOutputs(new Map());
+    setLastActiveExecutor(null);
+    setPinnedPorts([]);
+    setPreviewError(null);
+    setPreviewStarting([]);
+    setBackgroundJobs([]);
+    setSlates([]);
+    setTabPresence(undefined);
+    knownSlates.current = null;
+    knownPorts.current = null;
+    knownWorkspacePlans.current.clear();
+    claimedWorkspacePlans.current.clear();
+    setArrivedReference(null);
+    setPreviewFocus(null);
+    setSlateReloads(new Map());
+    setPendingConsents([]);
+    setPendingActions([]);
+    setChangelogUnseen(0);
+    setBranchRuns([]);
+    setSubordinates([]);
+    setSubordinateEvents([]);
+    setSignalCards([]);
+  }, [actorKey]);
+
+
+  /** True exactly once per reference per connection. Records only the key handed in, so a newer
+   *  arrival is never suppressed; the held reference is never cleared. */
+  const claimWorkspacePlan = useCallback((reference: WorkspacePlanReference): boolean => {
+    const key = JSON.stringify(reference);
+
+    if (claimedWorkspacePlans.current.has(key)) return false;
+    claimedWorkspacePlans.current.add(key);
+
+    return true;
+  }, []);
+
+  const workspacePlanArrival = useMemo<WorkspacePlanArrival | null>(
+    () => arrivedReference === null
+      ? null
+      : { reference: arrivedReference, claim: claimWorkspacePlan },
+    [arrivedReference, claimWorkspacePlan],
+  );
+
+  // Orders replies so a slow earlier query cannot land last over a newer prefix.
+  const searchSeq = useRef(0);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(searchTimer.current), []);
+
+  const searchMemory = useCallback((q: string) => {
+    clearTimeout(searchTimer.current);
+    const seq = ++searchSeq.current;
+
+    if (!q.trim()) {
+      setSourceError("memory", null);
+
+      if (memoryContent) setMemory(memoryRows(memoryContent));
+
+      return;
+    }
+
+    searchTimer.current = setTimeout(() => detach(Effect.promise(async () => {
+      // Published only while this query is still the newest.
+      let thrown: { cause: unknown } | null = null;
+
+      try {
+        const results = await rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q]);
+
+        if (seq !== searchSeq.current) return;
+        setSourceError("memory", null);
+        setMemory((results ?? []).map(r => ({
+          path: r.path,
+          content: r.snippet,
+          matchScore: r.rrfScore,
+          updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
+          savedBy: null,
+        })));
+      } catch (err) {
+        thrown = { cause: err };
+      }
+
+      if (thrown !== null && seq === searchSeq.current) {
+        setSourceError("memory", `Memory search failed: ${errorMessage(thrown)}`);
+      }
+    })), MEMORY_SEARCH_DEBOUNCE_MS);
+  }, [rpc, memoryContent, setSourceError]);
+
   // Fires the RPC only; the broadcast renders the row. An optimistic append double-rendered output.
   const executeInExecutor = useCallback((executorId: string, command: string) => {
     return rpc<ExecutorCommandResult>("executeInExecutor", [executorId, command]);
   }, [rpc]);
 
+  const extension: WorkspaceExtension = { snapshot: applySnapshot, frame: paneFrame, refresh: refreshLiveData, jobs: refreshBackgroundJobs };
 
   return {
-    messages,
-    /** Null when nothing is being waited on: "working" vs "waiting on {provider}". */
-    providerWait,
-    liveness,
-    recoverTurn,
-    /** Until true, empty `messages` means "not delivered", not "there is nothing". */
-    transcriptSeeded,
-    connectionStatus,
-    /** Set when reconnecting cannot help (not this caller's workspace, or gone). The SDK owns the
-     *  classification and clears it on open. */
-    terminalClose: connectionError,
-    /** Latched once per page load. */
-    newerDeployedBuild,
-    /** Never auto-expires. */
+    extension,
     error,
-    /** Also cancels the pending backoff retry and clears a stale action error. */
-    retryLoad,
-    chatError,
-    clearChatError: () => setChatError(null),
-    retryLastMessage,
-    agentStatus,
-    /** A pane may only report "none" for a read that came back; `agentStatus` alone cannot tell
-     *  loading from failed. */
-    snapshot,
-    memory,
-    memoryContent,
-    mctsTrees,
-    activePlan,
-    sendChat,
-    abortChat,
-    searchMemory,
-    clearHistory,
-    setModel,
-    setReasoningEffort,
-    setDisplayName,
-    executors,
-    workspaceAgents,
-    executorOutputs,
-    lastActiveExecutor,
-    executeInExecutor,
-    pinnedPorts,
-    previewFocus, planFocus,
-    workspacePlanArrival,
-    previewError,
-    previewStarting,
-    refreshExposedPorts,
-    backgroundJobs: liveJobs,
-    refreshBackgroundJobs,
-    pendingActions,
-    /** Called by Work's decide so a decided row leaves the list at once, not on the next poll. */
-    refreshPendingActions,
-    tabPresence,
-    slates,
-    slateReloads,
-    changesMoved,
-    readMoves,
-    pendingConsents,
-    resolveConsent,
-    unavailableDevices,
-    modelFallbacks,
-    /** Work marks self-changes seen server-side, then calls the clear. */
-    changelogUnseen,
-    clearChangelogUnseen,
-    branchRuns,
-    dismissBranchRun: (branchId: string) =>
-      setBranchRuns((prev) => prev.filter((b) => b.branchId !== branchId)),
-    /** A reader whose branch id ticked re-reads the journal. */
-    headActivity,
-    /** Retired the moment the step lands, so a reader never shows the same text twice. */
-    headDeltas,
-    /** Returned steers are removed by the server's broadcast, not by the surface. */
-    steerRuns,
-    /** Throws on error ('agent busy', 'fork point not found', 'agent name already exists'). */
-    forkAgent: (untilMessageId: string, opts?: { name?: string }) =>
-      rpc<{ id: string; name: string; url: string; forkPointMs: number }>("forkAgent", [untilMessageId, opts ?? {}]),
-    rpc,
-    rawAgent: agent,
-    actorAddress,
-    isSubordinate,
-    /** Addresses cursored reads of this chat's older history. */
-    paneActorId,
-    subordinates,
-    subordinateEvents,
-    signalCards,
-    /** The server answers a blank displayName; the UI shows "New agent" until the titler lands. */
-    createSubordinate: async () => {
-      const result = await rpc<{
-        name: string;
-        displayName: string;
-        subordinate: SubordinateRosterEntry;
-      }>("createSubordinateAgent", []);
+    reads: {
+      memory,
+      memoryContent,
+      mctsTrees,
+      searchMemory,
+      executors,
+      workspaceAgents,
+      executorOutputs,
+      lastActiveExecutor,
+      executeInExecutor,
+      pinnedPorts,
+      previewFocus,
+      workspacePlanArrival,
+      previewError,
+      previewStarting,
+      refreshExposedPorts,
+      backgroundJobs: liveJobs,
+      refreshBackgroundJobs,
+      pendingActions,
+      /** Called by Work's decide so a decided row leaves the list at once, not on the next poll. */
+      refreshPendingActions,
+      tabPresence,
+      slates,
+      slateReloads,
+      changesMoved,
+      readMoves,
+      pendingConsents,
+      resolveConsent,
+      unavailableDevices,
+      /** Work marks self-changes seen server-side, then calls the clear. */
+      changelogUnseen,
+      clearChangelogUnseen,
+      branchRuns,
+      dismissBranchRun: (branchId: string) =>
+        setBranchRuns((prev) => prev.filter((b) => b.branchId !== branchId)),
+      /** A reader whose branch id ticked re-reads the journal. */
+      headActivity,
+      /** Retired the moment the step lands, so a reader never shows the same text twice. */
+      headDeltas,
+      /** Throws on error ('agent busy', 'fork point not found', 'agent name already exists'). */
+      forkAgent: (untilMessageId: string, opts?: { name?: string }) =>
+        rpc<{ id: string; name: string; url: string; forkPointMs: number }>("forkAgent", [untilMessageId, opts ?? {}]),
+      subordinates,
+      subordinateEvents,
+      signalCards,
+      /** The server answers a blank displayName; the UI shows "New agent" until the titler lands. */
+      createSubordinate: async () => {
+        const result = await rpc<{
+          name: string;
+          displayName: string;
+          subordinate: SubordinateRosterEntry;
+        }>("createSubordinateAgent", []);
 
-      await writeRoster((current) => [
-        ...current.filter((entry) => entry.name !== result.subordinate.name),
-        result.subordinate,
-      ]);
+        await writeRoster((current) => [
+          ...current.filter((entry) => entry.name !== result.subordinate.name),
+          result.subordinate,
+        ]);
 
-      return result;
-    },
-    /** A user-chosen name permanently blocks auto-retitling (server-side). */
-    renameSubordinate: async (name: string, displayName: string) => {
-      const result = v.parse(
-        SubordinateMutationEnvelopeSchema,
-        await rpc<unknown>("renameSubordinateAgent", [name, displayName]),
-      );
+        return result;
+      },
+      /** A user-chosen name permanently blocks auto-retitling (server-side). */
+      renameSubordinate: async (name: string, displayName: string) => {
+        const result = v.parse(
+          SubordinateMutationEnvelopeSchema,
+          await rpc<unknown>("renameSubordinateAgent", [name, displayName]),
+        );
 
-      const entry = result.subordinate;
-      await writeRoster((current) => current.map(
-        (existing) => existing.name === entry.name ? entry : existing,
-      ));
+        const entry = result.subordinate;
+        await writeRoster((current) => current.map(
+          (existing) => existing.name === entry.name ? entry : existing,
+        ));
 
-      return entry;
-    },
-    dismissSubordinate: async (name: string, keepHistory?: boolean) => {
-      const args = keepHistory === undefined ? [name] : [name, keepHistory];
-      const result = await rpc<{ ok: true; name: string; historyKept: boolean }>("dismissSubordinate", args);
+        return entry;
+      },
+      dismissSubordinate: async (name: string, keepHistory?: boolean) => {
+        const args = keepHistory === undefined ? [name] : [name, keepHistory];
+        const result = await rpc<{ ok: true; name: string; historyKept: boolean }>("dismissSubordinate", args);
 
-      await writeRoster((current) => current.filter((entry) => entry.name !== result.name));
+        await writeRoster((current) => current.filter((entry) => entry.name !== result.name));
 
-      return result;
+        return result;
+      },
     },
   };
+}
+
+/** The workspace's chat and its reads, over one socket. */
+export function useKinu(workspace?: string) {
+  const extension = useRef<WorkspaceExtension | null>(null);
+  const { chat, link } = useChatOwner(workspace, extension);
+  const { reads, extension: own, error } = useWorkspaceReads(link);
+  extension.current = own;
+
+  return { ...chat, ...reads, error };
+}
+
+/** One hosted agent's chat, without the workspace's reads. */
+export function useActorChat(address: KinuActorAddress) {
+  return useChatOwner(address, null).chat;
 }
 
 /** Beyond `renderThrownChain`: a bare string from a JSON error body, and an object with no

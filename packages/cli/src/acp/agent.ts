@@ -133,7 +133,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
     sessionId: SessionId,
     update: SessionNotification['update'],
   ): Promise<void> => {
-    // An undelivered update must not fail its turn; report on stderr because stdout carries the protocol.
+    // An undelivered update must not fail its turn; it is logged because stdout carries the protocol.
     await settleLogged('acp.session_update_undelivered', { doing: 'delivering an acp session/update notification', otherwise: 'io' }, () => client.notify(CLIENT_METHODS.session_update, { sessionId, update }), { sessionId });
   };
 

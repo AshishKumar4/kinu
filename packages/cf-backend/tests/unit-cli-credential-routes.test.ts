@@ -4,7 +4,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
 import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
-import type { CredentialSummary } from '../src/user/user-do';
+import type { CredentialSummary } from '../src/user/credentials';
 import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
 import type { JsonValue } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';

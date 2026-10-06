@@ -13,7 +13,7 @@ import * as v from 'valibot';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
-import type { WorkspaceEntry, WorkspaceRegistration, WorkspaceRegistrationSource } from './user-do';
+import type { WorkspaceEntry, WorkspaceRegistration, WorkspaceRegistrationSource } from './workspaces';
 import { indexNewWorkspace, unindexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
 import { isOwnedByAnotherAccount } from './workspace-ownership';

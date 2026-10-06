@@ -9,7 +9,6 @@ import { createAgentClient } from '../client-factory';
 import { runChatLoop } from '../chat-loop';
 import { ensureLocalDaemonRunning } from './daemon';
 import { printError, ACCENT, DIM } from '../display';
-import { installTurnDiagnostics } from '../turn-log';
 import { listKnownAgents } from '../agent-list';
 import { ask } from '../prompt';
 
@@ -91,7 +90,6 @@ export async function chatCommand(
   const target = requireAgentTarget(chosen);
 
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  installTurnDiagnostics();
   const client = await createAgentClient(target, opts);
 
   if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) {

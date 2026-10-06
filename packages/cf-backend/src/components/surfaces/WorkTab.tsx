@@ -208,11 +208,11 @@ function WorkReview({ item, owner, rpc, planRpc, onReviewActor, resource, onRetr
     <div className="flex h-full min-h-0 flex-col space-y-3 animate-fade-in">
       <div className="flex shrink-0 items-center gap-3">
         <button type="button" data-back-to-work onClick={onBack}
-          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs p-accent transition-colors hover:p-elevated">
+          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-xs p-accent transition-colors hover:p-elevated">
           <ArrowLeftIcon size={12} /> Back to Work
         </button>
-        {!mine && <span className="p-meta p-text-3">Read-only: {item.owner.name}'s plan
-          {onReviewActor && <button type="button" className="ml-2 p-accent" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name}'s conversation</button>}
+        {!mine && <span className="flex min-w-0 flex-col items-start gap-0.5 p-meta p-text-3">Read-only: {item.owner.name}'s plan
+          {onReviewActor && <button type="button" className="text-left p-accent" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name}'s conversation</button>}
         </span>}
       </div>
       {resource.status === "error" && (

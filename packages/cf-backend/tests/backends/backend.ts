@@ -6,19 +6,22 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { initWorkspaceSchema, type ActorHandle, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
+import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { scratchDir, scratchPath, scriptedTurnModel, sqlOver, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import {
-  historyOver, orchestratorHarness, sentTurn, workspaceFiles, workspaceMainActor,
+  historyOver, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
 import { deviceHarness, WORKSPACE } from '../helpers/device-harness';
 import { pcAgentDaemon } from '../helpers/pc-agent-daemon';
 import { testOwner } from '../helpers/user-do';
+import { joinHarnessFibers } from '../helpers/agents-sdk';
 import type { OrchestratorAgent } from '../../src/orchestrator';
 import { LocalAgentSession } from '../../../cli-backend/src/local-session';
 import { createHostCheckpoints } from '../../../cli-backend/src/checkpoints';
 import { createLocalModelResolver, type LocalModelResolver } from '../../../cli-backend/src/model-resolver';
-import { createCLIRuntime, makeWorkspaceSchemaSql } from '../../../cli-backend/src/runtime';
+import { openWorkspaceCLI } from '../../../cli-backend/src/open';
+import { soulOf, soulWriter } from '../../../cli-backend/src/runtime';
 
 export const TEST_BACKEND_ENV = 'KINU_TEST_BACKEND';
 
@@ -83,6 +86,11 @@ export interface SharedBackend {
   /** Snapshot `dir` into the store this backend's checkpoint methods read, as a turn's first
    *  mutation there does: the owner's device for cf, this machine for the CLI. */
   readonly snapshot: (dir: string, turn: CheckpointTurnMeta) => Promise<void>;
+  /** Turns the main actor's sleep-time lane on or off behind a fast model answering `answer`; the prompts it
+   *  is asked land in the returned list. */
+  readonly sleepTime: (answer: SleepTimeUpdate, enabled: boolean) => string[];
+  /** Resolves once every detached lane a settled turn started has finished. */
+  readonly settled: () => Promise<void>;
   /** Opens a turn of `mode` on the main actor and holds it at its model call until released, so a case
    *  acts while a turn runs. */
   readonly holdTurn: (text: string, mode: WorkMode) => Promise<HeldTurn>;
@@ -160,6 +168,13 @@ async function cloudflare(): Promise<SharedBackend> {
     history: historyOver(harness),
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
     holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), mode)),
+    sleepTime: (answer, enabled) => {
+      const prompts = scriptedSleepTime(agent, answer);
+      workspaceMainActor(db).config.setSleepTimeComputeEnabled(enabled);
+
+      return prompts;
+    },
+    settled: () => joinHarnessFibers(),
     surface: {
       getReasoningEffort: () => agent.getReasoningEffort(),
       setReasoningEffort: (effort) => agent.setReasoningEffort(effort),
@@ -229,24 +244,46 @@ function scriptedResolver(model: LanguageModel): LocalModelResolver {
     resolveModel: () => model,
     credentialFor: (spec) => real.credentialFor(spec),
     listProviders: () => real.listProviders(),
-    listModels: () => real.listModels(),
+    // The menu is the scripted model alone: a provider installed on the host (an `opencode` on PATH) never reaches a case.
+    listModels: () => Promise.resolve({ models: [{ provider: NO_ENDPOINT.name, id: NO_ENDPOINT.model }], failures: [] }),
     modelInfo: () => Promise.resolve(null),
     countInputTokens: () => Promise.resolve({ kind: 'unsupported', provider: 'fake', reason: 'a scripted model has no count endpoint' }),
     getAuth: real.getAuth,
   };
 }
 
-/** The CLI session over its own workspace database, with its checkpoint store under scratch. */
-function cli(): SharedBackend {
-  const db = new Database(scratchPath('shared-backend', 'agent.db'));
-  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
+let born: Promise<Database> | null = null;
+
+/** One workspace born as `kinu create` births it, once per run. */
+function bornWorkspace(): Promise<Database> {
+  born ??= (async () => {
+    const db = new Database(scratchPath('shared-backend-born', 'agent.db'));
+    db.exec('PRAGMA journal_mode = WAL');
+    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT, writeSoul: soulWriter(db) });
+
+    return db;
+  })();
+
+  return born;
+}
+
+/** The CLI session over a copy of the born workspace, opened as `kinu` opens one, with its checkpoint store under scratch. */
+async function cli(): Promise<SharedBackend> {
+  const dbPath = scratchPath('shared-backend', 'agent.db');
+  const original = await bornWorkspace();
+  original.run('VACUUM INTO ?', [dbPath]);
+  const db = new Database(dbPath);
+  // SOUL.md is a file of the workspace's space, beside its database: the copy takes it too.
+  await soulWriter(db)(soulOf(original) ?? '');
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
   const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
   rt.checkpoints = checkpoints;
   const gate = turnGate();
   const modelResolver = scriptedResolver(gate.model);
 
   rt.actor.config.setLearning(false);
+  // Off unless a case scripts it, as the cf harness leaves it.
+  rt.actor.config.setSleepTimeComputeEnabled(false);
 
   const session = new LocalAgentSession({
     rt, db, model: gate.model, modelResolver, onEvent: () => {},
@@ -264,6 +301,22 @@ function cli(): SharedBackend {
       await checkpoints.ensureCheckpoint(dir);
     },
     holdTurn: (text, mode) => gate.hold(async () => { await session.send(text, { id: crypto.randomUUID(), mode }); }),
+    sleepTime: (answer, enabled) => {
+      const prompts: string[] = [];
+
+      rt.fastLlm = {
+        stream: async function* () { yield ''; },
+        complete: async (prompt) => {
+          prompts.push(prompt);
+
+          return JSON.stringify(answer);
+        },
+      };
+      rt.actor.config.setSleepTimeComputeEnabled(enabled);
+
+      return prompts;
+    },
+    settled: () => session.settleBackgroundWork(),
     surface: {
       getReasoningEffort: async () => session.getReasoningEffort(),
       setReasoningEffort: async (effort) => session.setReasoningEffort(effort),
@@ -319,5 +372,5 @@ function cli(): SharedBackend {
 }
 
 export function openBackend(name: BackendName): Promise<SharedBackend> {
-  return name === 'cf' ? cloudflare() : Promise.resolve(cli());
+  return name === 'cf' ? cloudflare() : cli();
 }

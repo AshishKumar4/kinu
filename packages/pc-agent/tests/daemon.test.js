@@ -635,6 +635,35 @@ describe('daemon device path confinement', () => {
     fs.rmSync(baited, { force: true });
   });
 
+  test('a write through a dangling link out of the consented folder is refused and creates nothing', async () => {
+    // The sandboxed shell can plant `link -> <outside>/new.txt` with the target absent; a write that follows it
+    // would create the target outside every folder the owner shared.
+    const project = path.join(scratchDir('daemon-dangling'), 'project');
+    const outside = path.join('/dev/shm', `kinu-daemon-dangling-${process.pid}`);
+    fs.mkdirSync(project);
+    fs.mkdirSync(outside);
+    fs.symlinkSync(path.join(outside, 'new.txt'), path.join(project, 'link'));
+    fs.symlinkSync(path.join(outside, 'sub'), path.join(project, 'dir-link'));
+    const ws = fakeWs();
+
+    try {
+      for (const [id, method, params] of [
+        ['dangling-write', 'writeFile', [path.join(project, 'link'), 'escaped']],
+        ['dangling-dir-write', 'writeFile', [path.join(project, 'dir-link', 'new.txt'), 'escaped']],
+        ['dangling-mkdir', 'mkdirPath', [path.join(project, 'dir-link', 'inner'), { recursive: true }]],
+      ]) {
+        handle({ id, method, sandbox: scoped([project]), params }, ws, {});
+        const frame = await ws.response(id);
+        expect(frame.result).toBeUndefined();
+        expect(frame.error?.message).toContain('does not expose');
+      }
+
+      expect(fs.readdirSync(outside)).toEqual([]);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   test('an agent home that is not one workspace under the daemon\'s own root is refused', async () => {
     // A workspace name carrying `a/../b` composes a home that resolves under
     // the root yet belongs to workspace b.

@@ -601,6 +601,33 @@ describe('the file methods read what the command reads', () => {
     expect(() => view().resolvePath(path.join(agentHome, 'escape'), 'read')).toThrow('does not expose');
   });
 
+  test('a dangling link is judged by where a write through it would land', () => {
+    // A write follows a final link even when its target is absent, and creates the target: the sandboxed shell can
+    // plant such a link in a consented folder, so the file methods must decide on the target, not the link.
+    const outside = path.join('/dev/shm', `kinu-view-dangling-${process.pid}`);
+    const inside = path.join(consented, 'landed.txt');
+    fs.symlinkSync(path.join(outside, 'new.txt'), path.join(consented, 'dangling'));
+    fs.symlinkSync('dangling', path.join(consented, 'chained'));
+    fs.symlinkSync(inside, path.join(consented, 'kept'));
+    fs.symlinkSync(outside, path.join(consented, 'dangling-dir'));
+    fs.symlinkSync('loop-b', path.join(consented, 'loop-a'));
+    fs.symlinkSync('loop-a', path.join(consented, 'loop-b'));
+
+    expect(() => view().resolvePath(path.join(consented, 'dangling'), 'write')).toThrow('does not expose');
+    expect(() => view().resolvePath(path.join(consented, 'chained'), 'write')).toThrow('does not expose');
+    expect(() => view().resolvePath(path.join(consented, 'dangling-dir', 'new.txt'), 'write')).toThrow('does not expose');
+    expect(view().resolvePath(path.join(consented, 'kept'), 'write')).toBe(inside);
+    expect(() => view().resolvePath(path.join(consented, 'loop-a'), 'write')).toThrow('symbolic links');
+    expect(fs.existsSync(outside)).toBe(false);
+  });
+
+  test('a dangling link into Kinu\'s own directory is refused with the Sandbox switch off', () => {
+    const raw = sandbox.rawViewFor({ platform: 'linux', deviceHome });
+    fs.symlinkSync(path.join(deviceHome, 'planted-device.json'), path.join(consented, 'into-kinu'));
+
+    expect(() => raw.resolvePath(path.join(consented, 'into-kinu'), 'write')).toThrow('inside Kinu');
+  });
+
   test('the system trees stay readable and the agent\'s temp answers for /var/tmp', () => {
     expect(view().resolvePath('/etc/hostname', 'read')).toBe('/etc/hostname');
     expect(() => view().resolvePath('/etc/kinu-planted', 'write')).toThrow('read-only');

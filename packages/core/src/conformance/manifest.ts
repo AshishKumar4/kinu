@@ -367,11 +367,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       cli: { absent: 'the local executor is the host machine, which has no snapshot, restore or discard stage to fail at' },
     },
     // Keeps the sleep-time answer so a replay applies the same update.
-    sleep_time_updates: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: "a local turn's sleep-time compute cannot be interrupted between its call and its write" },
-    },
+    sleep_time_updates: EVERYWHERE,
     turn_craft_usage: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,

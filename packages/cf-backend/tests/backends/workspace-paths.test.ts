@@ -176,9 +176,11 @@ for (const name of testBackends()) {
         await plane.write('shared/item.txt', 'local shared spelling');
         expect(await plane.read('pc/studio/item.txt')).toMatchObject({ content: 'local device spelling' });
         expect(await plane.read('shared/item.txt')).toMatchObject({ content: 'local shared spelling' });
-        expect((await plane.read('/shared/item.txt')).error).toContain('ENXIO');
         // `..` climbs lexically on both backends, as POSIX does: out of a mount it lands beside the mount point.
         expect((await plane.read('/shared/../item.txt')).error).toContain('no such file or directory');
+
+        // Locally the owner's Drive is never bound, so `/shared` is no mount: a path there is only absent.
+        expect((await plane.read('/shared/item.txt')).error).toContain(name === 'cf' ? 'ENXIO' : 'no such file or directory');
 
         if (name === 'cf') {
           expect((await plane.read('/pc/studio/item.txt')).error).toContain('ENXIO');

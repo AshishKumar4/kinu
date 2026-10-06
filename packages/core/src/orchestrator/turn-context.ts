@@ -11,7 +11,7 @@ import type { ModelMessage, ToolSet } from 'ai';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer';
 import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls';
 import type { LostToolCall } from '../tools/effect-claim';
-import { stepContextLimit, type ResolvedModelWindow } from '../context-window';
+import { stepContextLimit, type ModelWindow } from '../context-window';
 import { turnInputStart } from '../prompting/volatile-context';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import type { CompactionTrigger, ExtensionHost } from '../extension';
@@ -29,7 +29,8 @@ export interface TurnContextInput {
   attachments?: AttachmentPolicy;
   extensions?: ExtensionHost;
   sessionKey: string;
-  contextWindow: number;
+  /** Null when unknown: nothing compacts by size. */
+  contextWindow: number | null;
   /** The model the request is built for. */
   model?: string | undefined;
   providerReportedTokens?: number;
@@ -47,7 +48,7 @@ export interface AssembledTurn {
 
 /**
  * Without `count` (or on `unsupported`) the gate still applies via `estimateTokens`.
- * Only a measured window (`limits.windowMeasured`) may refuse; a stand-in only sizes compaction.
+ * An unknown window leaves the limit unbounded, so only a known one refuses.
  */
 export interface TurnAdmission {
   count?(request: CountableRequest): Promise<InputTokenCount>;
@@ -57,7 +58,7 @@ export interface TurnAdmission {
   instructions?: string | null | undefined;
   /** The turn's `/name` skill bodies the step pipeline splices before the input. */
   activated?: string | null | undefined;
-  limits: ResolvedModelWindow;
+  limits: ModelWindow;
 }
 
 /**
@@ -173,15 +174,6 @@ export function assembleTurnMessages(input: TurnContextInput): Promise<Assembled
     const tokens = yield* Effect.promise(() => measure(assembled));
 
     if (tokens <= limit) return { ...assembled, admittedTokens: tokens };
-
-    // An unmeasured window neither refuses nor spends the forced compaction; the provider answers.
-    if (!admission.limits.windowMeasured) {
-      diagnostics.event('admission.unmeasured_window', {
-        sessionKey: input.sessionKey, tokens, limit, contextWindow: admission.limits.contextWindow,
-      });
-
-      return { ...assembled, admittedTokens: tokens };
-    }
 
     // An armed compaction already rewrote this assembly.
     if (input.trigger !== 'auto') return yield* Effect.die(refuseOversizedRequest(tokens, limit));

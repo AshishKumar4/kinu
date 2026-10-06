@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-06",
-  "files": 3038,
-  "functions": 78485,
+  "files": 3017,
+  "functions": 78251,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -254,10 +254,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>paneFrame",
-      "complexity": 28
-    },
-    {
       "key": "packages/cli/src/config.ts#resolveLLMConfig",
       "complexity": 28
     },
@@ -339,10 +335,6 @@
     },
     {
       "key": "packages/cli/src/tui/overlays.tsx#ModelListOverlay",
-      "complexity": 27
-    },
-    {
-      "key": "packages/compaction/src/extension.ts#createCompactionExtension>transformContext",
       "complexity": 27
     },
     {
