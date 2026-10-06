@@ -258,7 +258,7 @@
       "complexity": 28
     },
     {
-      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#6>handler",
+      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>paneFrame",
       "complexity": 28
     },
     {

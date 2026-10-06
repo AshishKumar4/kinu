@@ -3,8 +3,8 @@ import { useAgent } from "agents/react";
 import { Effect } from "effect";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
-  branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, JobOutputFrameSchema, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE,
-  PROVIDER_WAIT_SOURCES, READS_CHANGED_EVENT, SLATES_CHANGED_EVENT, type JobOutputTail,
+  branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE,
+  READS_CHANGED_EVENT, SLATES_CHANGED_EVENT, type JobOutputTail,
   hostedActorSocketPath, type LiveRead, type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
@@ -28,7 +28,7 @@ import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
 import { looksLikeSecretField, parseMemoryNotes, type InlineSteer } from "@kinu.run/core";
-import { detach, diagnostics, KinuError, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
+import { detach, diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -46,9 +46,12 @@ import {
 } from "@kinu.run/core";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
 import { terminalChatError, type ChatTurnError } from "@kinu.run/core";
-import { turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState } from "@kinu.run/core";
+import { turnLiveness, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
+import { SubordinateActivityEventSchema, useSocketFrames, type MctsProgress, type SocketFrame } from "./socket-frames";
 import { pruneSlateReloads } from "@kinu.run/core";
+
+export { WorkspacePlanUpdatedFrameSchema, type MctsProgress } from "./socket-frames";
 
 export type { ExecutorInfo };
 
@@ -194,73 +197,7 @@ export interface WorkspaceSnapshot {
   turnClaim: TurnClaimState;
 }
 
-import { PlanReviewSchema, WorkspacePlanReferenceSchema, type WorkspacePlanReference } from "@kinu.run/core";
-
-const MctsRowSchema = v.object({
-  id: v.string(),
-  parent_id: v.nullable(v.string()),
-  root_id: v.optional(v.nullable(v.string())),
-  depth: v.number(),
-  visits: v.number(),
-  value: v.number(),
-  own_score: v.nullable(v.number()),
-  status: v.picklist(["open", "pruned", "terminal", "failed", "running"]),
-  action: v.string(),
-  task: v.string(),
-  observation: v.string(),
-  created_at: v.optional(v.number()),
-});
-
-const MctsProgressUsageSchema = v.object({
-  input: v.optional(v.number()),
-  output: v.optional(v.number()),
-  cacheRead: v.optional(v.number()),
-  cacheWrite: v.optional(v.number()),
-  cacheWrite1h: v.optional(v.number()),
-  reasoning: v.optional(v.number()),
-  neurons: v.optional(v.number()),
-});
-
-const MctsProgressHeadSchema = v.object({
-  rootId: v.string(),
-  task: v.string(),
-  rationale: v.string(),
-  status: v.string(),
-  spawnedAt: v.number(),
-  heads: v.array(v.object({
-    id: v.string(),
-    parentId: v.nullable(v.string()),
-    depth: v.number(),
-    task: v.string(),
-    rationale: v.string(),
-    status: v.string(),
-    summary: v.nullable(v.string()),
-    errorMessage: v.nullable(v.string()),
-    usage: MctsProgressUsageSchema,
-    wallClockMs: v.number(),
-    spawnedAt: v.number(),
-    lastStepAt: v.nullable(v.number()),
-    decisions: v.array(v.object({
-      question: v.string(),
-      choice: v.string(),
-      rationale: v.string(),
-    })),
-  })),
-  merge: v.nullable(v.object({
-    narrative: v.string(),
-  })),
-});
-
-const MctsProgressMessageSchema = v.object({
-  type: v.literal("mcts-progress"),
-  rootId: v.string(),
-  isolateGen: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-  pushSeq: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-  nodes: v.array(MctsRowSchema),
-  head: v.nullable(MctsProgressHeadSchema),
-});
-
-export type MctsProgress = v.InferOutput<typeof MctsProgressMessageSchema>;
+import { PlanReviewSchema, type WorkspacePlanReference } from "@kinu.run/core";
 
 const SubordinateRosterEntrySchema = v.object({
   name: v.string(),
@@ -280,144 +217,10 @@ const SubordinateMutationEnvelopeSchema = v.object({
   subordinate: SubordinateRosterEntrySchema,
 });
 
-const SubordinateActivityEventSchema = v.object({
-  type: v.literal("subordinate_event"),
-  id: v.string(),
-  kind: v.picklist(["task", "report"]),
-  subordinate: v.string(),
-  status: v.optional(v.string()),
-  content: v.string(),
-  task: v.optional(v.string()),
-  timestamp: v.number(),
-});
-
-/** Exported so a pushing caller (the gallery fixture) builds the frame through this schema;
- *  a stale event name would otherwise be silently dropped. */
-export const WorkspacePlanUpdatedFrameSchema = v.strictObject({
-  type: v.literal("workspace_plan_updated"),
-  reference: WorkspacePlanReferenceSchema,
-});
-
-const SocketMessageSchema = v.variant("type", [
-  v.object({ type: v.literal("workspace_renamed"), displayName: v.optional(v.string()) }),
-  // Arrival is what the chat pane waits on; the payload is the SDK's business.
-  v.looseObject({ type: v.literal("cf_agent_chat_messages") }),
-  v.object({
-    type: v.literal("cf_agent_use_chat_response"),
-    error: v.optional(v.boolean()), done: v.optional(v.boolean()), body: v.optional(v.string()),
-    id: v.optional(v.string()),
-  }),
-  // For a retained terminal record the id is the failed turn's, matching the error frame that
-  // follows: that tells a replay from a live failure.
-  v.object({ type: v.literal("cf_agent_stream_resuming"), id: v.string() }),
-  MctsProgressMessageSchema,
-  v.object({
-    type: v.literal("device_consent"), consentId: v.string(), deviceLabel: v.string(),
-    method: v.optional(v.string()), command: v.string(),
-    workspaceName: v.optional(v.nullable(v.string())),
-  }),
-  v.object({ type: v.literal("device_consent_resolved"), consentId: v.string() }),
-  v.object({
-    type: v.literal("device_unavailable"),
-    devices: v.array(v.object({ id: v.string(), label: v.string(), lastSeenAt: v.nullable(v.number()) })),
-  }),
-  v.object({ type: v.literal("device_available"), deviceId: v.string(), label: v.string() }),
-  v.object({ type: v.literal("model_fallback"), message: v.string() }),
-  // Waiting on the provider (429/529 sleep, backoff, sibling cooldown), not thinking. `attempt`
-  // is 0 when the wait precedes the first attempt.
-  v.object({
-    type: v.literal("provider_wait"),
-    provider: v.string(),
-    modelId: v.optional(v.string()),
-    waitMs: v.number(),
-    attempt: v.number(),
-    status: v.optional(v.number()),
-    source: v.picklist(PROVIDER_WAIT_SOURCES),
-    actorId: v.optional(v.string()),
-  }),
-  v.object({ type: v.literal("work_cancelled") }),
-  v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) }),
-  JobOutputFrameSchema,
-  v.object({ type: v.literal(SLATES_CHANGED_EVENT), ids: v.array(v.string()) }),
-  v.object({ type: v.literal(CHANGES_MOVED_EVENT) }),
-  v.object({
-    type: v.literal("branch_status"), branchId: v.string(), task: v.optional(v.string()),
-    status: v.optional(v.string()), takeSetId: v.optional(v.string()),
-    turnId: v.optional(v.string()), message: v.optional(v.string()),
-  }),
-  v.object({ type: v.literal("head_activity"), headId: v.string() }),
-  /** Best-effort paint of a head's provider deltas; the durable step is the truth. */
-  v.object({
-    type: v.literal("head_stream"), headId: v.string(),
-    kind: v.picklist(["text", "reasoning"]), delta: v.string(),
-  }),
-  v.object({
-    type: v.literal("steer_status"), steerId: v.string(), text: v.string(),
-    status: v.picklist(["queued", "landed", "returned", "turn"]),
-    /** On `landed`: the step the model read it in. */
-    atStep: v.optional(v.number()),
-    /** Declared so `v.object` keeps the stamp; see {@link admitsActorFrame}. */
-    actorId: v.optional(v.string()),
-  }),
-  /** Loose: {@link parseSignalCardEvent} owns the payload; this hook reads only the actor stamp. */
-  v.looseObject({ type: v.literal("signal_card"), actorId: v.optional(v.string()) }),
-  v.object({ type: v.literal("plan_updated"), plan: PlanReviewSchema }),
-  WorkspacePlanUpdatedFrameSchema,
-  TurnClaimFrameSchema,
-  SubordinateActivityEventSchema,
-  v.object({
-    type: v.literal("executor-output"), executor: v.string(), command: v.string(),
-    stdout: v.optional(v.string()), stderr: v.optional(v.string()),
-    exitCode: v.optional(v.number()), timestamp: v.number(),
-  }),
-]);
-
-function parseSocketMessage(data: MessageEvent["data"]) {
-  const text = v.safeParse(v.string(), data);
-
-  if (!text.success) return null;
-
-  // Non-JSON is not ours; any other failure is a real fault, not "no message".
-  const decoded = v.safeParse(
-    SocketMessageSchema,
-    tolerate<unknown>(() => JSON.parse(text.output), "malformed-input"),
-  );
-
-  return decoded.success ? decoded.output : null;
-}
-
-/**
- * One Durable Object broadcasts to every socket, so hosted actors' frames (`signal_card`,
- * `steer_status`) carry an actor stamp. Unstamped frames are the workspace's own. `provider_wait`'s
- * `actorId` is not ownership. The workspace pane admits no stamped frame; an agent pane admits
- * its own actor's; an unresolved pane admits none.
- */
-function admitsActorFrame(
-  msg: v.InferOutput<typeof SocketMessageSchema>,
-  pane: { readonly isSubordinate: boolean; readonly ownActorId: string | null },
-): boolean {
-  if (msg.type !== "signal_card" && msg.type !== "steer_status") return true;
-
-  if (msg.actorId === undefined) return true;
-
-  return pane.isSubordinate && pane.ownActorId === msg.actorId;
-}
-
 function branchRunStatus(status: string | undefined): "settled" | "error" | "running" {
   if (status === "settled") return "settled";
 
   return status === "error" ? "error" : "running";
-}
-
-function paneFrame(
-  data: MessageEvent["data"],
-  pane: { readonly isSubordinate: boolean; readonly ownActorId: string | null },
-): v.InferOutput<typeof SocketMessageSchema> | null {
-  const msg = parseSocketMessage(data);
-
-  if (msg === null || !admitsActorFrame(msg, pane)) return null;
-
-  return msg;
 }
 
 
@@ -976,37 +779,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     }, [forgetDeltas, clearProviderWait]),
     // Transient no-op; partysocket auto-reconnects and the next onOpen recovers.
     onError: useCallback(() => {}, []),
-    onMessage: useCallback((ev: MessageEvent) => {
-      const data = parseSocketMessage(ev.data);
-
-      if (data?.type === "workspace_renamed") {
-        const displayName = data.displayName;
-
-        if (displayName?.trim()) {
-          setAgentStatus((prev) => prev ? { ...prev, displayName } : prev);
-        }
-
-        window.dispatchEvent(new CustomEvent("kinu:workspace-renamed", {
-          detail: { name: actorAddress.workspace, displayName },
-        }));
-      } else if (data?.type === "cf_agent_stream_resuming") {
-        resumedRequestIds.current.add(data.id);
-      } else if (data?.type === "provider_wait") {
-        showProviderWait(data);
-      } else if (data?.type === "cf_agent_use_chat_response") {
-        // A stream frame ends the wait; the on-connect replay must not paint "waiting" either.
-        clearProviderWait();
-        const failed = terminalChatError(data, resumedRequestIds.current);
-
-        if (failed !== null) setChatError(failed);
-      } else {
-        // On connect the server replays the last terminal error with a stale request id the transport
-        // drops; this handler is the only place that frame is seen. The rule lives in `chat-turn-error.ts`.
-        const failed = data === null ? null : terminalChatError(data, resumedRequestIds.current);
-
-        if (failed !== null) setChatError(failed);
-      }
-    }, [actorAddress.workspace, clearProviderWait, showProviderWait]),
   };
 
   if (subordinate) {
@@ -1016,6 +788,37 @@ export function useKinu(target?: string | KinuActorAddress) {
   }
 
   const agent = useAgent(agentOptions);
+
+  // Whoever a frame names: a rename, stream bookkeeping, a provider wait, a turn's error.
+  const everyFrame = useCallback((data: SocketFrame) => {
+    if (data.type === "workspace_renamed") {
+      const displayName = data.displayName;
+
+      if (displayName?.trim()) {
+        setAgentStatus((prev) => prev ? { ...prev, displayName } : prev);
+      }
+
+      window.dispatchEvent(new CustomEvent("kinu:workspace-renamed", {
+        detail: { name: actorAddress.workspace, displayName },
+      }));
+    } else if (data.type === "cf_agent_stream_resuming") {
+      resumedRequestIds.current.add(data.id);
+    } else if (data.type === "provider_wait") {
+      showProviderWait(data);
+    } else if (data.type === "cf_agent_use_chat_response") {
+      // A stream frame ends the wait; the on-connect replay must not paint "waiting" either.
+      clearProviderWait();
+      const failed = terminalChatError(data, resumedRequestIds.current);
+
+      if (failed !== null) setChatError(failed);
+    } else {
+      // On connect the server replays the last terminal error with a stale request id the transport
+      // drops; this handler is the only place that frame is seen. The rule lives in `chat-turn-error.ts`.
+      const failed = terminalChatError(data, resumedRequestIds.current);
+
+      if (failed !== null) setChatError(failed);
+    }
+  }, [actorAddress.workspace, clearProviderWait, showProviderWait]);
 
   const {
     messages,
@@ -1365,164 +1168,162 @@ export function useKinu(target?: string | KinuActorAddress) {
     }
   }, [stop, rpc, refreshBackgroundJobs]);
 
-  // Attach to the outer `agent` EventTarget, not the private `_ws`, so the listener survives
-  // partysocket reconnects without dropping events.
-  useEffect(() => {
-    if (!agent) return;
+  // The server pushes the fact, not the rows; one re-read updates every open tab.
+  const reread = async (resource: string, refresh: () => Promise<void>): Promise<void> => {
+    try {
+      await refresh();
+    } catch (cause) {
+      diagnostics.failure('workspace.live_refresh_failed', toKinuError({ doing: 'refreshing live workspace data', cause, otherwise: 'io' }), { resource });
+    }
+  };
 
-    // The server pushes the fact, not the rows; one re-read updates every open tab.
-    const reread = async (resource: string, refresh: () => Promise<void>): Promise<void> => {
-      try {
-        await refresh();
-      } catch (cause) {
-        diagnostics.failure('workspace.live_refresh_failed', toKinuError({ doing: 'refreshing live workspace data', cause, otherwise: 'io' }), { resource });
-      }
-    };
+  const adoptPlan = (plan: PlanReview | null): void => {
+    if (!plan) return;
+    const key = `${plan.id}:${plan.revision}`;
 
-    const adoptPlan = (plan: PlanReview | null): void => {
-      if (!plan) return;
-      const key = `${plan.id}:${plan.revision}`;
+    if (!knownPlans.current.has(key) && plan.status === "pending") setPlanFocus(key);
+    knownPlans.current.add(key);
+    setActivePlan(plan);
+  };
 
-      if (!knownPlans.current.has(key) && plan.status === "pending") setPlanFocus(key);
-      knownPlans.current.add(key);
-      setActivePlan(plan);
-    };
+  const paneFrame = async (msg: SocketFrame): Promise<void> => {
+    if (msg.type === "cf_agent_chat_messages") {
+      setTranscriptSeeded(true);
+    } else if (msg.type === "mcts-progress") {
+      setMctsTreeFromProgress(msg);
+    } else if (msg.type === "device_consent") {
+      setPendingConsents((prev) => {
+        if (prev.some((c) => c.consentId === msg.consentId)) return prev;
 
-    const handler = async (event: MessageEvent) => {
-      const msg = paneFrame(event.data, { isSubordinate, ownActorId: ownActorIdRef.current });
+        const card: PendingConsent = {
+          consentId: msg.consentId,
+          deviceLabel: msg.deviceLabel,
+          method: msg.method ?? "exec",
+          command: msg.command,
+          createdAt: Date.now(),
+        };
 
-      if (!msg) return;
+        if (msg.workspaceName) card.workspaceName = msg.workspaceName;
 
-        if (msg.type === "cf_agent_chat_messages") {
-          setTranscriptSeeded(true);
-        } else if (msg.type === "mcts-progress") {
-          setMctsTreeFromProgress(msg);
-        } else if (msg.type === "device_consent") {
-          setPendingConsents((prev) => {
-            if (prev.some((c) => c.consentId === msg.consentId)) return prev;
-
-            const card: PendingConsent = {
-              consentId: msg.consentId,
-              deviceLabel: msg.deviceLabel,
-              method: msg.method ?? "exec",
-              command: msg.command,
-              createdAt: Date.now(),
-            };
-
-            if (msg.workspaceName) card.workspaceName = msg.workspaceName;
-
-            return [...prev, card];
-          });
-        } else if (msg.type === "device_consent_resolved") {
-          setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
-          setConsentResolutionError(msg.consentId, null);
-        } else if (msg.type === "device_unavailable") {
-          setUnavailableDevices(msg.devices);
-        } else if (msg.type === "device_available") {
-          setUnavailableDevices(null);
-        } else if (msg.type === "model_fallback") {
-          setModelFallbacks((prev) => [...prev, msg.message]);
-        } else if (msg.type === "work_cancelled") {
-          forgetDeltas();
-          await reread('background_jobs', refreshBackgroundJobs);
-        } else if (msg.type === JOB_OUTPUT_EVENT) {
-          const listed = listedJobs.current.find((job) => job.id === msg.jobId)?.output;
-          const running = new Set(listedJobs.current.filter(runningJob).map((job) => job.id));
-
-          setJobOutputs((told) => ({
-            ...Object.fromEntries(Object.entries(told).filter(([id]) => running.has(id))),
-            [msg.jobId]: followJobOutput(told[msg.jobId] ?? listed, msg),
-          }));
-        } else if (msg.type === READS_CHANGED_EVENT) {
-          setReadMoves((moves) => Object.fromEntries([
-            ...Object.entries(moves), ...msg.reads.map((read) => [read, (moves[read] ?? 0) + 1]),
-          ]));
-        } else if (msg.type === SLATES_CHANGED_EVENT) {
-          setSlateReloads((previous) => {
-            const next = new Map(previous);
-
-            for (const id of msg.ids) next.set(id, (next.get(id) ?? 0) + 1);
-
-            return next;
-          });
-
-          await reread('slates', refreshSlates);
-        } else if (msg.type === CHANGES_MOVED_EVENT) {
-          setChangesMoved((moved) => moved + 1);
-        } else if (msg.type === "branch_status") {
-          const status = branchRunStatus(msg.status);
-
-          // The head id derives from the run id, so retire without waiting for a journal write a
-          // failed branch never makes.
-          if (status !== "running") retireDelta(branchHeadId(msg.branchId));
-          setBranchRuns((prev) => [
-            ...prev.filter((b) => b.branchId !== msg.branchId),
-            {
-              branchId: msg.branchId,
-              task: msg.task ?? "",
-              status,
-              takeSetId: msg.takeSetId,
-              turnId: msg.turnId,
-              message: msg.message,
-            },
-          ]);
-        } else if (msg.type === "head_activity") {
-          // The step landed: re-read the journal and retire its in-progress paint so both never show.
-          retireDelta(msg.headId);
-          bumpHeadActivity(msg.headId);
-        } else if (msg.type === "head_stream") {
-          setHeadDeltaMap((previous) => appendHeadDelta(previous, msg.headId, msg.kind, msg.delta));
-        } else if (msg.type === "steer_status") {
-          settleSendLanding(sendLandings.current, msg);
-          // `returned` (handed back to the composer) and `turn` (now its own user turn) both remove the bubble.
-          setSteerRuns((prev) => msg.status === "returned" || msg.status === "turn"
-            ? prev.filter((s) => s.id !== msg.steerId)
-            : [
-              ...prev.filter((s) => s.id !== msg.steerId),
-              {
-                id: msg.steerId, text: msg.text, state: msg.status,
-                atStep: msg.atStep ?? null,
-              },
-            ]);
-        } else if (msg.type === "signal_card") {
-          const card = parseSignalCardEvent({ value: msg });
-
-          if (card) setSignalCards((current) => applySignalCard(current, card));
-        } else if (msg.type === "plan_updated") {
-          adoptPlan(parsePlanReview({ value: msg.plan }));
-        } else if (msg.type === 'workspace_plan_updated') {
-          const key = JSON.stringify(msg.reference);
-
-          if (!knownWorkspacePlans.current.has(key)) {
-            knownWorkspacePlans.current.add(key);
-            setArrivedReference(msg.reference);
-          }
-        } else if (msg.type === TURN_CLAIM_FRAME) {
-          setTurnClaim(msg.claim);
-        } else if (msg.type === "subordinate_event") {
-          const subordinateEvent = parseSubordinateActivityEvent({ value: msg });
-
-          if (subordinateEvent) {
-            setSubordinateEvents((current) => current.some((listed) => listed.id === subordinateEvent.id)
-              ? current
-              : [...current.slice(-49), subordinateEvent]);
-          }
-        }
-    };
-
-    const received = (event: MessageEvent) => detach(Effect.promise(() => handler(event)));
-
-    agent.addEventListener("message", received);
-
-    return () => {
-      agent.removeEventListener("message", received);
-      // A new socket cannot know what a running head had half-written.
+        return [...prev, card];
+      });
+    } else if (msg.type === "device_consent_resolved") {
+      setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
+      setConsentResolutionError(msg.consentId, null);
+    } else if (msg.type === "device_unavailable") {
+      setUnavailableDevices(msg.devices);
+    } else if (msg.type === "device_available") {
+      setUnavailableDevices(null);
+    } else if (msg.type === "model_fallback") {
+      setModelFallbacks((prev) => [...prev, msg.message]);
+    } else if (msg.type === "work_cancelled") {
       forgetDeltas();
-    };
-  }, [
-    agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshSlates,
-    retireDelta, setConsentResolutionError, setMctsTreeFromProgress, isSubordinate,
-  ]);
+      await reread('background_jobs', refreshBackgroundJobs);
+    } else if (msg.type === JOB_OUTPUT_EVENT) {
+      const listed = listedJobs.current.find((job) => job.id === msg.jobId)?.output;
+      const running = new Set(listedJobs.current.filter(runningJob).map((job) => job.id));
+
+      setJobOutputs((told) => ({
+        ...Object.fromEntries(Object.entries(told).filter(([id]) => running.has(id))),
+        [msg.jobId]: followJobOutput(told[msg.jobId] ?? listed, msg),
+      }));
+    } else if (msg.type === READS_CHANGED_EVENT) {
+      setReadMoves((moves) => Object.fromEntries([
+        ...Object.entries(moves), ...msg.reads.map((read) => [read, (moves[read] ?? 0) + 1]),
+      ]));
+    } else if (msg.type === SLATES_CHANGED_EVENT) {
+      setSlateReloads((previous) => {
+        const next = new Map(previous);
+
+        for (const id of msg.ids) next.set(id, (next.get(id) ?? 0) + 1);
+
+        return next;
+      });
+
+      await reread('slates', refreshSlates);
+    } else if (msg.type === CHANGES_MOVED_EVENT) {
+      setChangesMoved((moved) => moved + 1);
+    } else if (msg.type === "branch_status") {
+      const status = branchRunStatus(msg.status);
+
+      // The head id derives from the run id, so retire without waiting for a journal write a
+      // failed branch never makes.
+      if (status !== "running") retireDelta(branchHeadId(msg.branchId));
+      setBranchRuns((prev) => [
+        ...prev.filter((b) => b.branchId !== msg.branchId),
+        {
+          branchId: msg.branchId,
+          task: msg.task ?? "",
+          status,
+          takeSetId: msg.takeSetId,
+          turnId: msg.turnId,
+          message: msg.message,
+        },
+      ]);
+    } else if (msg.type === "head_activity") {
+      // The step landed: re-read the journal and retire its in-progress paint so both never show.
+      retireDelta(msg.headId);
+      bumpHeadActivity(msg.headId);
+    } else if (msg.type === "head_stream") {
+      setHeadDeltaMap((previous) => appendHeadDelta(previous, msg.headId, msg.kind, msg.delta));
+    } else if (msg.type === "steer_status") {
+      settleSendLanding(sendLandings.current, msg);
+      // `returned` (handed back to the composer) and `turn` (now its own user turn) both remove the bubble.
+      setSteerRuns((prev) => msg.status === "returned" || msg.status === "turn"
+        ? prev.filter((s) => s.id !== msg.steerId)
+        : [
+          ...prev.filter((s) => s.id !== msg.steerId),
+          {
+            id: msg.steerId, text: msg.text, state: msg.status,
+            atStep: msg.atStep ?? null,
+          },
+        ]);
+    } else if (msg.type === "signal_card") {
+      const card = parseSignalCardEvent({ value: msg });
+
+      if (card) setSignalCards((current) => applySignalCard(current, card));
+    } else if (msg.type === "plan_updated") {
+      adoptPlan(parsePlanReview({ value: msg.plan }));
+    } else if (msg.type === 'workspace_plan_updated') {
+      const key = JSON.stringify(msg.reference);
+
+      if (!knownWorkspacePlans.current.has(key)) {
+        knownWorkspacePlans.current.add(key);
+        setArrivedReference(msg.reference);
+      }
+    } else if (msg.type === TURN_CLAIM_FRAME) {
+      setTurnClaim(msg.claim);
+    } else if (msg.type === "subordinate_event") {
+      const subordinateEvent = parseSubordinateActivityEvent({ value: msg });
+
+      if (subordinateEvent) {
+        setSubordinateEvents((current) => current.some((listed) => listed.id === subordinateEvent.id)
+          ? current
+          : [...current.slice(-49), subordinateEvent]);
+      }
+    } else if (msg.type === "executor-output") {
+      setExecutorOutputs(prev => {
+        const next = new Map(prev);
+        const existing = next.get(msg.executor) ?? [];
+        // A live echo is the whole output, so the stored length is what is shown.
+        const stdout = msg.stdout ?? "";
+        const stderr = msg.stderr ?? "";
+        next.set(msg.executor, [...existing, {
+          id: crypto.randomUUID(), command: msg.command,
+          stdout, stdout_len: stdout.length,
+          stderr, stderr_len: stderr.length,
+          exit_code: msg.exitCode ?? 0, created_at: msg.timestamp,
+        }]);
+
+        return next;
+      });
+    }
+  };
+
+  useSocketFrames(agent, () => ({ isSubordinate, ownActorId: ownActorIdRef.current }), { everyFrame, paneFrame });
+
+  // A new socket cannot know what a running head had half-written.
+  useEffect(() => () => forgetDeltas(), [agent, forgetDeltas]);
 
   const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent({
     consentId,
@@ -1986,36 +1787,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     return rpc<ExecutorCommandResult>("executeInExecutor", [executorId, command]);
   }, [rpc]);
 
-  // Attach to the outer `agent` EventTarget so the listener survives reconnects.
-  useEffect(() => {
-    if (!agent) return;
-
-    const handler = (event: MessageEvent) => {
-      const msg = parseSocketMessage(event.data);
-
-      if (msg?.type === "executor-output") {
-          setExecutorOutputs(prev => {
-            const next = new Map(prev);
-            const existing = next.get(msg.executor) ?? [];
-            // A live echo is the whole output, so the stored length is what is shown.
-            const stdout = msg.stdout ?? "";
-            const stderr = msg.stderr ?? "";
-            next.set(msg.executor, [...existing, {
-              id: crypto.randomUUID(), command: msg.command,
-              stdout, stdout_len: stdout.length,
-              stderr, stderr_len: stderr.length,
-              exit_code: msg.exitCode ?? 0, created_at: msg.timestamp,
-            }]);
-
-            return next;
-          });
-      }
-    };
-
-    agent.addEventListener("message", handler);
-
-    return () => agent.removeEventListener("message", handler);
-  }, [agent]);
 
   return {
     messages,
