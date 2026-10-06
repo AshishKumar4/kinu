@@ -45,6 +45,8 @@ const UNSUPPORTED_ITEM = 'User subscription sharing currently supports only text
 function planBackend() {
   const sent: JsonObject[] = [];
   let compactions = 0;
+  /** What each item counts as when replayed: the request it compacted (measured 2026-10-06: 6,504 tokens for one item). */
+  const original = new Map<string, number>();
   let reply = 'Renamed.';
 
   const fetch = asFetchFunction(async (url, init) => {
@@ -72,14 +74,20 @@ function planBackend() {
       return Response.json({ error: { message: UNSUPPORTED_ITEM, type: 'invalid_request_error', param: null, code: 'subscription_sharing_unsupported_capability' } }, { status: 400 });
     }
 
-    // Past the threshold, by a rough count of what was sent: a compaction, the answer, and a compaction after it.
+    // Past the threshold, by a rough count of what was sent, a replayed item at its original size: a compaction, the
+    // answer, and a compaction after it.
     const threshold = management?.find((rule) => rule.type === 'compaction')?.compact_threshold;
 
-    if (apiRoute && threshold !== undefined && text.length / 4 >= threshold) {
+    const counted = input.reduce((total, item) => (item.type === 'compaction'
+      ? total - JSON.stringify(item).length / 4 + (original.get(item.id ?? '') ?? 0)
+      : total), text.length / 4);
+
+    if (apiRoute && threshold !== undefined && counted >= threshold) {
       const answer = { id: 'msg_1', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: reply, annotations: [] }] };
 
       const compaction = () => {
         compactions += 1;
+        original.set(`cmp_${String(compactions)}`, counted);
 
         return { type: 'compaction', id: `cmp_${String(compactions)}`, encrypted_content: `ENC-${String(compactions)}` };
       };
@@ -178,11 +186,14 @@ describe('a ChatGPT plan route compacts on the provider', () => {
       expect({
         triggers: backend.sent.filter(compacting).length,
         thresholds: backend.sent.some((body) => body.context_management !== undefined),
+        // A request replaying the item asks for no compaction until what follows it crosses the threshold itself.
+        askedAfter: backend.sent.slice(first).some((body) => body.context_management !== undefined),
         items: after.map((input) => input.filter((item) => item.type === 'compaction')),
         olderSent: after.some((input) => JSON.stringify(input).includes('requirement 0')),
       }).toEqual({
         triggers: expected.triggers,
         thresholds: expected.thresholds,
+        askedAfter: false,
         items: after.map(() => [expected.item]),
         olderSent: false,
       });

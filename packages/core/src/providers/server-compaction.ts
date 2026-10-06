@@ -4,10 +4,11 @@
  * (platform.claude.com/docs/en/build-with-claude/compaction-threshold), OpenAI's an encrypted `compaction` item
  * (developers.openai.com/api/docs/guides/compaction).
  */
-import type { ProviderMetadata } from 'ai';
+import type { ModelMessage, ProviderMetadata } from 'ai';
 import * as v from 'valibot';
 import type { JsonValue } from '../utils/json';
 import type { ProviderOptions } from './effort';
+import { CHARS_PER_TOKEN } from '../llm';
 
 /** Where Kinu compacts, as a percentage of the context window: the ladder's trigger and the provider's. */
 export const COMPACTION_TRIGGER_PERCENT = 85;
@@ -47,14 +48,21 @@ export function serverCompactor(spec: string | undefined): ServerCompactor | nul
   return model[4] === undefined || Number(model[5]) >= 5 ? 'anthropic' : null;
 }
 
-/** The threshold option, or undefined. A forced compaction (`/compact`, an overflow) passes the request's input. */
+/**
+ * The threshold option, or undefined. A forced compaction (`/compact`, an overflow) passes the request's input.
+ * OpenAI counts a replayed compaction item at its original size (6,504 tokens for one item, measured 2026-10-06), so a
+ * request carrying one stays over the threshold and recompacts every time: it asks only once `sinceLatest`, what came
+ * after the latest item, crosses the threshold itself.
+ */
 export function serverCompactionOptions(
-  spec: string | undefined, contextWindow: number | null | undefined, forcedInput?: number,
+  spec: string | undefined, contextWindow: number | null | undefined, forcedInput?: number, sinceLatest: number | null = null,
 ): ProviderOptions | undefined {
   const threshold = triggerTokens(contextWindow);
   const vendor = serverCompactor(spec);
 
   if (vendor === null || CODEX_ROUTE.test(spec ?? '') || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
+
+  if (vendor === 'openai' && forcedInput === undefined && sinceLatest !== null && sinceLatest < threshold) return undefined;
 
   const value = forcedInput === undefined
     ? threshold
@@ -83,6 +91,22 @@ const CompactionMark = v.looseObject({ type: v.literal('compaction') });
 
 /** A part, chunk or stored part carrying a provider's summary (`by` that one only), by the mark its SDK adapter gives
  *  it: Anthropic's on a text part, OpenAI's on a `custom` one. */
+/** Estimated tokens after the latest OpenAI compaction item, or null when none is replayed. */
+export function sinceLatestCompaction(messages: readonly ModelMessage[]): number | null {
+  for (let at = messages.length - 1; at >= 0; at--) {
+    const message = messages[at];
+
+    if (message?.role !== 'assistant' || !Array.isArray(message.content)) continue;
+
+    const parts = message.content;
+    const latest = parts.map((part) => part.type === 'custom' && isServerCompaction(part.providerOptions, 'openai')).lastIndexOf(true);
+
+    if (latest >= 0) return Math.ceil(JSON.stringify([...parts.slice(latest + 1), ...messages.slice(at + 1)]).length / CHARS_PER_TOKEN);
+  }
+
+  return null;
+}
+
 export function isServerCompaction(metadata: ProviderMetadata | JsonValue | undefined, by?: ServerCompactor): boolean {
   return (['anthropic', 'openai'] as const).some((vendor) => (by ?? vendor) === vendor && v.is(v.object({ [vendor]: CompactionMark }), metadata));
 }
