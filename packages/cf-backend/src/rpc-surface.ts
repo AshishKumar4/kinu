@@ -36,6 +36,7 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
   '_cf_checkRunFibersForFacet',
   '_cf_cleanupFacetPrefix',
   '_cf_closeSubAgentConnection',
+  '_cf_closeSubAgentConnectionsForPrefix',
   '_cf_destroyDescendantFacet',
   '_cf_handleSubAgentWebSocketClose',
   '_cf_handleSubAgentWebSocketConnect',

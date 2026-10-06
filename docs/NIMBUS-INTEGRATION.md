@@ -156,9 +156,9 @@ resolver layer of five packages or more is sharded across objects called
 same shape. Each is an ordinary instance of our class, so each composes a
 hosted runtime over its own storage and answers from it. A sibling is not a
 Kinu workspace: it has no genesis, no owner and no transcript, because
-`supervisorOp` is a plain RPC method and Kinu's schema bootstrap runs from
-`onStart`, which the Agents SDK starts for `fetch`, `alarm` and its own
-internal RPCs only. `packages/cf-backend/tests/workerd/nimbus-git-npm.test.ts`
+Kinu's schema bootstrap runs from `onStart`, which returns at once for a
+sibling (since agents 0.25 the SDK starts an object for its first async RPC,
+`supervisorOp` included). `packages/cf-backend/tests/workerd/nimbus-git-npm.test.ts`
 holds this: it installs six packages, one wider than the coordinator resolves
 alone. D23-N records the measurement.
 

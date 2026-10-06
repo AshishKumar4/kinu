@@ -217,7 +217,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
           + '`triggers` rows driven by the local AlarmScheduler (core/src/events/hub/triggers.ts)',
       },
     },
-    // Created by the Agents SDK's constructor (agents 0.24 `_ensureSchema`), so the fiber sweep asks no schema.
+    // Created by the Agents SDK's constructor (agents 0.26 `_ensureSchema`), so the fiber sweep asks no schema.
     cf_agents_runs: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,
