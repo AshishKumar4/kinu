@@ -183,14 +183,17 @@ test('a socket open but answering nothing is redialled after three timeouts in a
   });
 });
 
-async function pressButton(page: Page, words: string): Promise<void> {
-  await page.$$eval('button', (buttons, label) => {
+/** Presses the button showing `words` inside `within`. */
+async function pressButtonIn(page: Page, within: string, words: string): Promise<void> {
+  await page.$$eval(`${within} button`, (buttons, label) => {
     const button = buttons.find((each) => each.textContent?.trim() === label);
 
     if (!(button instanceof HTMLElement)) throw new Error(`no ${label} on the page`);
     button.click();
   }, words);
 }
+
+const pressButton = (page: Page, words: string): Promise<void> => pressButtonIn(page, 'body', words);
 
 /** Retry re-reads; on a socket the SDK has given up on, it redials first. */
 test('Retry re-reads the workspace, and redials first only when the socket was closed for good', async () => {
@@ -212,6 +215,50 @@ test('Retry re-reads the workspace, and redials first only when the socket was c
     await pressButton(page, 'Try again');
     await page.waitForFunction((was) => Number(document.documentElement.dataset.gallerySnapshotReads ?? '0') > was, {}, denied.snapshotReads);
     expect((await socketRecord(page)).redials).toBe(1);
+    await page.close();
+  });
+});
+
+/** Settles the held resolution of consent `id`, failing it with `failed` when given. */
+async function settleConsent(page: Page, id: string, failed?: string): Promise<void> {
+  await page.evaluate((detail) => { window.dispatchEvent(new CustomEvent('gallery:consent-settle', { detail })); }, { id, ...(failed !== undefined && { failed }) });
+}
+
+/** The consent cards on the page, by id. */
+function consentCards(page: Page): Promise<(string | null)[]> {
+  return page.$$eval('[data-device-bind]', (cards) => cards.map((card) => card.getAttribute('data-device-bind')));
+}
+
+/**
+ * Two device commands waiting at once are decided apart: one refused by the device hub keeps its card and says why,
+ * the other's card goes, a re-read of the waiting list keeps the reason standing, and deciding the first again clears it.
+ */
+test('two waiting device commands are decided independently, and a refused decision keeps its card and its reason', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&consent=two`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-device-bind="c-2"]');
+    expect(await consentCards(page)).toEqual(['c-1', 'c-2']);
+
+    await pressButtonIn(page, '[data-device-bind="c-1"]', 'Use studio');
+    await pressButtonIn(page, '[data-device-bind="c-2"]', 'Not now');
+    await settleConsent(page, 'c-1', 'device hub unavailable');
+    await page.waitForFunction(() => document.body.textContent?.includes('device hub unavailable'));
+    await settleConsent(page, 'c-2');
+    await page.waitForFunction(() => document.querySelector('[data-device-bind="c-2"]') === null);
+    expect(await consentCards(page)).toEqual(['c-1']);
+
+    // The waiting list is read again: the refused command is still waiting, and still says why.
+    await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
+    await page.waitForFunction(() => document.querySelector('[data-device-bind="c-1"]') !== null);
+    expect(await consentCards(page)).toEqual(['c-1']);
+    expect(await page.evaluate(() => document.body.textContent?.includes('device hub unavailable'))).toBe(true);
+
+    await pressButtonIn(page, '[data-device-bind="c-1"]', 'Use studio');
+    await settleConsent(page, 'c-1');
+    await page.waitForFunction(() => document.querySelector('[data-device-bind]') === null);
+    expect(await page.evaluate(() => document.body.textContent?.includes('device hub unavailable'))).toBe(false);
     await page.close();
   });
 });

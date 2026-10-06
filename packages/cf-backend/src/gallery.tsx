@@ -1872,12 +1872,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   previewSlate: (args?: unknown[]) => ({
     ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
   }),
-  // `&consent=waiting`: a device command already waiting.
-  // `&consent=spoofed`: a command whose bidi and zero-width characters would show a reader a different command.
-  listPendingConsents: () => (["waiting", "spoofed"].includes(new URLSearchParams(location.search).get("consent") ?? "")
-    ? [{ consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1,
-      command: new URLSearchParams(location.search).get("consent") === "spoofed" ? "rm -rf ./build \u202E\u2066gpj.x\u200B" : "git push origin main" }]
-    : []),
+  listPendingConsents: galleryConsents,
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
   listFileCheckpoints: () => REVERT_LISTING,
@@ -2154,6 +2149,55 @@ async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
   return null;
 }
 
+const TWO_CONSENTS = [
+  { consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1, command: "git push origin main" },
+  { consentId: "c-2", deviceLabel: "laptop", method: "exec", createdAt: 2, command: "bun run deploy" },
+];
+
+/**
+ * `&consent=waiting`: a device command already waiting. `&consent=spoofed`: one whose bidi and zero-width characters
+ * would show a reader a different command. `&consent=two`: two devices' commands, each resolution held until
+ * `gallery:consent-settle` `{ id, failed? }`, and a resolved one no longer listed.
+ */
+function galleryConsents(): JsonValue {
+  const asked = new URLSearchParams(location.search).get("consent");
+  const resolved = (document.documentElement.dataset.galleryConsentsResolved ?? "").split(",");
+
+  if (asked === "two") return TWO_CONSENTS.filter((consent) => !resolved.includes(consent.consentId));
+
+  if (asked !== "waiting" && asked !== "spoofed") return [];
+
+  return [{ consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1,
+    command: asked === "spoofed" ? "rm -rf ./build \u202E\u2066gpj.x\u200B" : "git push origin main" }];
+}
+
+const ConsentSettleSchema = v.object({ id: v.string(), failed: v.optional(v.string()) });
+
+async function galleryResolveConsent(args?: unknown[]): Promise<JsonValue> {
+  const [id] = v.parse(v.tuple([v.string(), v.string()]), args);
+
+  if (new URLSearchParams(location.search).get("consent") !== "two") return {};
+
+  const settled = await new Promise<v.InferOutput<typeof ConsentSettleSchema>>((resolve) => {
+    const listen = (event: Event) => {
+      const asked = v.parse(ConsentSettleSchema, event instanceof CustomEvent ? event.detail : null);
+
+      if (asked.id !== id) return;
+      window.removeEventListener("gallery:consent-settle", listen);
+      resolve(asked);
+    };
+
+    window.addEventListener("gallery:consent-settle", listen);
+  });
+
+  if (settled.failed !== undefined) throw new Error(settled.failed);
+  const root = document.documentElement.dataset;
+
+  root.galleryConsentsResolved = `${root.galleryConsentsResolved ?? ""},${id}`;
+
+  return {};
+}
+
 /** What went to the running turn rather than opening one. */
 async function galleryMidTurnSend(args?: unknown[]): Promise<JsonValue> {
   const asks = document.documentElement.dataset;
@@ -2188,6 +2232,7 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["clearConversation", galleryClearConversation],
   ["send", galleryMidTurnSend],
   ["cancelCurrentWork", galleryCancelWork],
+  ["resolveDeviceConsent", galleryResolveConsent],
 ]);
 
 /** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
