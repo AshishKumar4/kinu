@@ -163,6 +163,10 @@ describe('my-gateway model discovery', () => {
         'xai/grok-4.7': { id: 'xai/grok-4.7', name: 'Grok 4.7', tool_call: true, limit: { context: 256000 } },
       },
     },
+    // OpenAI's and Google's own ids are REST ids too, and these rows are absent from the gateway's.
+    openai: { id: 'openai', npm: '@ai-sdk/openai', models: { 'gpt-6.1-sol': { id: 'gpt-6.1-sol', name: 'GPT 6.1 Sol', tool_call: true } } },
+    google: { id: 'google', npm: '@ai-sdk/google', models: { 'gemini-2.5-pro': { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tool_call: true } } },
+    anthropic: { id: 'anthropic', npm: '@ai-sdk/anthropic', models: { 'claude-sonnet-4-5': { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', tool_call: true } } },
   });
 
   function discoveryFetch(opts: {
@@ -213,7 +217,7 @@ describe('my-gateway model discovery', () => {
     const models = await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
     const ids = models.map((m) => m.id).sort();
     // No catalog row is authored `google-ai-studio` or `workers-ai`; Workers AI is its own provider.
-    expect(ids).toEqual(['openai/gpt-4.1']);
+    expect(ids).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
     expect(models.find((m) => m.id === 'openai/gpt-4.1')?.contextWindow).toBe(1047576);
     expect(urls.some((u) => u.includes('/ai-gateway/gateways/byok-gw/provider_configs'))).toBe(true);
   });
@@ -256,7 +260,8 @@ describe('my-gateway model discovery', () => {
     });
 
     const models = await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
-    expect(models.map((m) => m.id).sort()).toEqual(['anthropic/claude-sonnet-4.5', 'openai/gpt-4.1', 'xai/grok-4.7']);
+    // Anthropic's own `claude-sonnet-4-5` is no REST id; the gateway's row is.
+    expect(models.map((m) => m.id).sort()).toEqual(['anthropic/claude-sonnet-4.5', 'google/gemini-2.5-pro', 'openai/gpt-4.1', 'openai/gpt-6.1-sol', 'xai/grok-4.7']);
   });
 
   test('denied management reads narrow the menu to empty instead of throwing', async () => {
@@ -310,17 +315,17 @@ describe('my-gateway model discovery', () => {
 
     const provider = present(reg.registry.get('my-gateway'), 'the my-gateway provider');
 
-    expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
+    expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
 
     // Past the catalog TTL, so the cache is consulted rather than short-circuited.
     try {
       upstream = 'down';
       setSystemTime(new Date(Date.now() + 61_000));
-      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
+      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
 
       upstream = 'ok';
       setSystemTime(new Date(Date.now() + 61_000));
-      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
+      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
     } finally {
       setSystemTime();
     }

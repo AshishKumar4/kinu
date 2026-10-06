@@ -13,8 +13,11 @@ import * as v from 'valibot';
 
 export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';
 
-/** models.dev's rows for the gateway: the `{author}/{model}` ids its REST API takes (`anthropic/claude-opus-4.5`). */
+/** models.dev's gateway rows, in the ids its REST API takes (`anthropic/claude-opus-4.5`). */
 const GATEWAY_CATALOG_ID = 'cloudflare-ai-gateway';
+
+/** Own ids that are REST ids too (`openai/gpt-6.1-sol`, `google/gemini-2.5-pro`: 200, 2026-10-06); not Anthropic's or xAI's. */
+const NATIVE_ID_PROVIDERS = ['openai', 'google'] as const;
 
 const ProviderConfigsSchema = v.object({
   result: v.optional(v.array(v.object({ provider_slug: v.optional(v.string()) }))),
@@ -65,14 +68,28 @@ export function createMyGatewayProvider(): ModelProvider {
           }));
         }
 
-        const listed = yield* Effect.promise(() => settleModelList(listModelsDevProviderModels(GATEWAY_CATALOG_ID, deps)));
         const { billed, keyed } = discovered;
-        const models = listed.models.filter((model) => billed || keyed.has(model.id.slice(0, model.id.indexOf('/'))));
+        const models = new Map<string, ModelInfo>();
+        const stale: StaleModelList[] = [];
 
-        if (listed.stale !== null) return yield* Effect.fail(new StaleModelList(models, { reason: listed.stale.reason, cause: listed.stale.cause }));
-        catalogCache.set(cacheKey, { at: Date.now(), models });
+        for (const source of [GATEWAY_CATALOG_ID, ...NATIVE_ID_PROVIDERS]) {
+          const listed = yield* Effect.promise(() => settleModelList(listModelsDevProviderModels(source, deps)));
 
-        return cloneModelInfos(models);
+          if (listed.stale !== null) stale.push(listed.stale);
+
+          for (const model of listed.models) {
+            const id = source === GATEWAY_CATALOG_ID ? model.id : `${source}/${model.id}`;
+
+            if (!models.has(id) && (billed || keyed.has(id.slice(0, id.indexOf('/'))))) models.set(id, { ...model, id });
+          }
+        }
+
+        const [first] = stale;
+
+        if (first !== undefined) return yield* Effect.fail(new StaleModelList([...models.values()], { reason: first.reason, cause: first.cause }));
+        catalogCache.set(cacheKey, { at: Date.now(), models: [...models.values()] });
+
+        return cloneModelInfos([...models.values()]);
       }));
     },
 
@@ -114,12 +131,11 @@ export function gatewayWireModel(name: string, modelId: string, transport: Gatew
   });
 }
 
-/** What one discovery pass learned; only an `authoritative` empty menu may be published and cached. */
+/** Only an `authoritative` empty menu may be published and cached. */
 type GatewayDiscovery =
   | { authoritative: true; billed: boolean; keyed: ReadonlySet<string> }
   | { authoritative: false; reason: string };
 
-/** One management observation: what it contributed, or why it said nothing. */
 type ManagementRead =
   | { kind: 'observed'; body: unknown }
   | { kind: 'denied' }
@@ -140,7 +156,7 @@ async function readGatewayManagement(
   return { kind: 'transient', reason: `AI Gateway management answered HTTP ${String(response.status)}` };
 }
 
-/** Credits pay for every catalog row, a stored key (BYOK) for its author's. An unanswered read keeps the last menu. */
+/** Credits pay for every row, a stored key (BYOK) for its author's. */
 async function servableAuthors(
   baseURL: string,
   authHeaders: Record<string, string>,
