@@ -6331,11 +6331,11 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
 }
 
 /** The only dynamic import in this dispatch: the page pulls d3 and the tree renderer. It reads through `useKinu`, resolved to `gallery-agent-stub` here. */
-async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
+async function mctsExplorerFrame(run: string | null): Promise<MountedFrame> {
   const { default: SwarmExplorer } = await import("@/pages/SwarmExplorer");
-  serveGalleryRpc(focusRun(run));
+  serveGalleryRpc(run === null ? forkRpc : focusRun(run));
 
-  return routedPage(`/swarm/checkout-fixes?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
+  return routedPage(run === null ? "/swarm/checkout-fixes" : `/swarm/checkout-fixes?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
 }
 
 function routedPage(entry: string, path: string, page: React.ReactNode, height = "h-screen"): MountedFrame {
@@ -6646,6 +6646,8 @@ async function mount() {
     ["forkfull", () => mctsExplorerFrame("n000")],
     ["forkbig", () => mctsExplorerFrame("n000")],
     ["forkswarmfull", () => mctsExplorerFrame("sw000")],
+    // `&run=` is the permalink's run, as any id the reader typed; none opens the newest.
+    ["forkexplorer", () => mctsExplorerFrame(new URLSearchParams(location.search).get("run"))],
     ["settings", settingsFrame],
     ["control", controlFrame],
     ["home", homeFrame],

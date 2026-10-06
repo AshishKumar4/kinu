@@ -892,3 +892,50 @@ test('a running swarm draws every journalled node once, under its own parent, in
     await page.close();
   });
 });
+
+/** The explorer at `run`, or with no run asked for: the run it opened, by name, and whether it says the run is missing. */
+async function explorerAt(newPage: Gallery['newPage'], origin: string, asked: string | null): Promise<{ page: Page; name: string; missing: boolean }> {
+  const page = await newPage();
+
+  await page.setViewport({ width: 1280, height: 900 });
+  await page.goto(`${origin}/gallery.html?frame=forkexplorer${asked === null ? '' : `&run=${asked}`}`, { waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => document.querySelector('g.mcts-node[data-node]') !== null
+    || document.body.textContent?.includes('Swarm not found') === true);
+
+  return {
+    page,
+    name: await page.evaluate(() => document.querySelector('[data-explorer-run]')?.textContent ?? ''),
+    missing: await page.evaluate(() => document.body.textContent?.includes('Swarm not found') === true),
+  };
+}
+
+/**
+ * A swarm's permalink opens that swarm and no other: an id the workspace never ran says so rather than showing a
+ * different one, and only with no id does the explorer open the newest. A merge drawn there is not a competition:
+ * every head hangs from the split, none is scored, none is the winner.
+ */
+test('a permalink opens its own swarm or none, and a merge is drawn unscored with no winner', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const newest = await explorerAt(newPage, origin, null);
+    expect([newest.name, newest.missing]).toEqual(['coupon.kind readers', false]);
+    await newest.page.close();
+
+    const unknown = await explorerAt(newPage, origin, 'never-ran');
+    expect([unknown.missing, await unknown.page.$('g.mcts-node')]).toEqual([true, null]);
+    await unknown.page.close();
+
+    const merge = await explorerAt(newPage, origin, 'root-merge-1');
+    expect([merge.name, merge.missing]).toEqual(['rules-by-kind call sites', false]);
+    await settled(merge.page);
+
+    const heads = await merge.page.$$eval('g.mcts-node[data-node]', (nodes) => nodes.map((node) => ({
+      parent: node.getAttribute('data-parent'), status: node.getAttribute('data-status'), scored: node.hasAttribute('data-value'),
+    })));
+
+    expect(heads.filter((node) => node.parent === null)).toHaveLength(1);
+    expect(heads.filter((node) => node.parent !== null).every((node) => node.parent === 'root-merge-1')).toBe(true);
+    expect(heads.some((node) => node.scored || node.status === 'terminal')).toBe(false);
+    expect(await merge.page.$('[data-tree-winner]')).toBeNull();
+    await merge.page.close();
+  });
+});
