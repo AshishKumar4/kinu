@@ -54,3 +54,28 @@ test("every context area's share of the prompt stands inside the inspector at it
     await page.close();
   });
 });
+
+// m1219: the cache rates read in order of weight, the EMA largest and the tail percentiles quieter than the rest.
+test('the prompt-cache rates step down in size: EMA, then last and mean, then p95 and p99', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.goto(`${origin}/gallery.html?frame=activitycache`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('dl dt');
+
+    // In order: EMA, Last, Mean, p95, p99. A rate the panel lost fails here rather than reading as size 0.
+    const [ema, last, mean, p95, p99] = await page.evaluate(() => ['EMA', 'Last', 'Mean', 'p95', 'p99'].map((name) => {
+      const label = [...document.querySelectorAll('dl dt')].find((node) => node.textContent?.trim() === name);
+      const value = label?.nextElementSibling?.querySelector('span') ?? label?.nextElementSibling;
+
+      if (value === null || value === undefined) throw new Error(`no ${name} rate on the panel`);
+
+      return Number.parseFloat(getComputedStyle(value).fontSize);
+    }));
+
+    expect(ema).toBeGreaterThan(last ?? ema);
+    expect(mean).toBe(last);
+    expect(p95).toBeLessThan(mean ?? p95);
+    expect(p99).toBe(p95);
+    await page.close();
+  });
+});

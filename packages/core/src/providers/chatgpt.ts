@@ -7,7 +7,7 @@ import { APICallError, wrapLanguageModel, type LanguageModel, type LanguageModel
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, diagnostics, KinuError, settle, tolerate, type ErrorCode } from '../obs/index';
-import { chatgptCatalogRows } from './codex';
+import { chatgptCatalogRows, shownCatalogRows } from './codex';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
 import { withRateLimitRetry } from './rate-limit-retry';
@@ -371,7 +371,8 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         if (!res.ok) return yield* Effect.fail(stale((yield* refusalOf(res, url))?.message ?? `api.openai.com answered HTTP ${String(res.status)}`));
         const body: unknown = yield* Effect.promise(() => res.json());
 
-        return chatgptCatalogRows({ body }).filter((row) => row.visibility === 'list').map((row): ModelInfo => row.model);
+        // OpenAI's rule for this route (developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
+        return shownCatalogRows('chatgpt', chatgptCatalogRows({ body }), (visibility) => visibility === 'list').map((row): ModelInfo => row.model);
       }));
     },
 

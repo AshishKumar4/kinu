@@ -93,7 +93,7 @@ export interface WorkSurfaceProps {
   readMoves?: ReadMoves;
   /** Absent in fixture frames, which keeps every tab visible: unknown is not empty. */
   tabPresence?: TabPresence;
-  /** The workspace's presence read has not answered: no tab is marked until it has or the reader picks one. */
+  /** Presence unread: no tab is marked until it answers or the reader picks. */
   presencePending?: boolean;
   rpc: Rpc;
   slateBody?: (slate: SlateSummary) => ReactNode;
@@ -228,7 +228,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
     ? undefined
     : props.slates?.find((slate) => slate.id === openSlate);
 
-  // One connect dialog for the three surfaces in this column that ask for it: only one is mounted at a time.
+  // One connect dialog for the column's three surfaces; one is mounted at a time.
   const [connecting, setConnecting] = useState(false);
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);

@@ -11,6 +11,7 @@
     "./clef-binding-answer": "./src/clef-binding-answer.ts",
     "./mossaic": "./src/mossaic.ts",
     "./hand-clock": "./src/hand-clock.ts",
+    "./models-dev": "./src/models-dev.ts",
     "./vfs": "./src/vfs.ts"
   },
   "dependencies": {

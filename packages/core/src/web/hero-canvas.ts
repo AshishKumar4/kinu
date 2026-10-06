@@ -1,9 +1,10 @@
 /** Canvas2D renderers for the living art (non-GPU `ArtFrame` pictures and the phone's dust); no mounting, observing, or clocks. */
 
 import {
-  type ArtPalette, type ArtRenderer, cssRgba, NODE_STRIDE, PULSE_STRIDE, RECESS, type Rgb, seededRandom, STROKE_STRIDE, TONE_ASH,
+  type ArtPalette, type ArtRenderer, cssRgba, NODE_STRIDE, PULSE_STRIDE, RECESS, type Rgb, STROKE_STRIDE, TONE_ASH,
   TONE_BRIGHT, TONE_EMBER,
 } from './art';
+import { seededRandom } from '../utils/stats';
 
 /** The CanvasRenderingContext2D slice this renderer uses; tests satisfy it with a recording stub. */
 export interface StrokeSurface {

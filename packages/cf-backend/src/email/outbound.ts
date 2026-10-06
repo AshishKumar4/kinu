@@ -89,7 +89,6 @@ export async function sendInboundEmailReceipt(
     diagnostics.failure(
       'email.receipt_failed',
       new KinuError('unavailable', result.error),
-      { messageId: result.messageId },
     );
 
     return false;
@@ -133,7 +132,7 @@ export function createEmailThreadDispatcher(
           return { delivered: false, detail: 'email_thread holder_addr missing addresses' };
         }
 
-        // One reply per channel; a lease re-drive after a mid-send crash re-sends the same Message-ID, deduped downstream.
+        // One reply per channel: the outbox sends a key once.
         const result = yield* Effect.promise(() => ctx.outbox.send(
           email,
           `reply:${channel.id}`,
@@ -229,7 +228,7 @@ export async function sendOwnerEmail(
     diagnostics.failure(
       'email.owner_notification_failed',
       new KinuError('unavailable', result.error),
-      { workspace: deps.agentName, messageId: result.messageId },
+      { workspace: deps.agentName },
     );
 
     return false;

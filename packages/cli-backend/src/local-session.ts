@@ -2488,7 +2488,7 @@ export class LocalAgentSession {
       hostNode: (node) => this.hostNode(node),
       announceHeadActivity: () => this.headActivity,
       reportNodeDelta: () => this.publishHeadStream,
-      model: this.cachedModel ?? this.defaultModel("an agents swarm"),
+      model: () => this.cachedModel ?? this.defaultModel("an agents swarm"),
       reportModelCall: this.modelCallSink,
       nodeCodemode: (actor) => hostedCodemodeTool(actor, this.headCodemodeExtras()),
       webSearch: this.getWebSearchProvider(),

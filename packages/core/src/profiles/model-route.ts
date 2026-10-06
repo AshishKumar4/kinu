@@ -16,7 +16,6 @@ export const MODEL_ROUTE_POLICY = {
   head: { kind: 'invocation' },
   swarm: { kind: 'invocation' },
   slate: { kind: 'invocation' },
-  // The workspace's own model draws its logo.
   logo: { kind: 'invocation' },
   scaffold: { kind: 'fixed', tier: 'deep' },
   judge: { kind: 'fixed', tier: 'deep' },

@@ -79,6 +79,7 @@ export function createCloudWorkspaceForUser<Id>(
     const servable = defaultSpecFor(
       input.model ?? (yield* Effect.promise(async () => userDO.getWorkspaceProfileCatalog(caller))).catalog.tiers.default.model,
       menu.models.map((entry) => entry.spec),
+      new Set(menu.failures.map((failure) => failure.provider)),
     );
 
     if (!servable) {

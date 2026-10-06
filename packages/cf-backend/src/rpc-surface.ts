@@ -199,7 +199,7 @@ const USER_DO_METHODS = [
   'userMcp_add',
   'userMcp_callTool',
   'userMcp_cancelCall',
-  'userMcp_githubAuthorization',
+  'userMcp_githubRefresh',
   'userMcp_handleOAuthCallback',
   'userMcp_list',
   'userMcp_presets',

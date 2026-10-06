@@ -1,9 +1,9 @@
 // The installed tree against the lock that names it. Red is a planted stale package in a workspace's own
 // node_modules, the state the primary checkout's cf-backend held wrangler 4.123.0 in on 2026-09-26.
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { childEnv, scratchDir } from '@kinu.run/test-utils';
 import { installDrift } from './install-parity';
 import { bindPinnedCompiler } from './mossaic-sdk';
 import { MOSSAIC_SDK } from './sources';
@@ -63,6 +63,74 @@ function checkout(name: string): string {
 }
 
 describe('the installed tree is the one bun.lock names', () => {
+  test.each(['2.0.0', '1.0.0'])('worktree setup borrows only a donor installed at the matching lock’s version: %s', (version) => {
+    const donor = checkout('install-parity-donor');
+    const tree = scratchDir('install-parity-worktree');
+    const bin = scratchDir('install-parity-bootstrap');
+    const log = join(bin, 'install.log');
+
+    install(donor, 'node_modules/tool', version);
+    mkdirSync(join(donor, '.git'));
+    mkdirSync(join(donor, 'scripts'));
+    mkdirSync(join(donor, 'patches'));
+    writeFileSync(join(donor, 'package.json'), JSON.stringify({ workspaces: ['packages/*', MOSSAIC_SDK] }));
+    writeFileSync(join(donor, 'packages/app/package.json'), JSON.stringify({ name: '@fx/app', version: '0.0.0' }));
+    writeFileSync(join(donor, MOSSAIC_SDK, 'package.json'), JSON.stringify({ name: '@mossaic/sdk', version: '0.0.0' }));
+    writeFileSync(join(donor, 'scripts/install-parity.ts'), `import { installDrift } from ${JSON.stringify(join(import.meta.dir, 'install-parity.ts'))}; process.exit(installDrift(${JSON.stringify(donor)}).length === 0 ? 0 : 1);`);
+
+    for (const file of ['package.json', 'bun.lock', 'packages/app/package.json', `${MOSSAIC_SDK}/package.json`]) {
+      mkdirSync(dirname(join(tree, file)), { recursive: true });
+      copyFileSync(join(donor, file), join(tree, file));
+    }
+
+    mkdirSync(join(tree, 'scripts'));
+    mkdirSync(join(tree, 'patches'));
+    copyFileSync(join(import.meta.dir, 'setup-worktree.sh'), join(tree, 'scripts/setup-worktree.sh'));
+    copyFileSync(join(import.meta.dir, 'repo-runtime.sh'), join(tree, 'scripts/repo-runtime.sh'));
+    symlinkSync(join(donor, 'node_modules'), join(tree, 'node_modules'), 'dir');
+
+    const bootstrap = `#!/usr/bin/bash
+if [ "$1" = install ]; then
+  printf '%s\\n' "$PWD" >> "$KINU_WORKTREE_INSTALL_LOG"
+  mkdir -p node_modules/tool node_modules/.bin
+  printf '%s' '{"version":"2.0.0"}' > node_modules/tool/package.json
+  cp "$KINU_WORKTREE_BOOTSTRAP" node_modules/.bin/bun
+  exit 0
+fi
+case "\${1##*/}" in mossaic-sdk.ts|ladder.ts) exit 0 ;; esac
+exec ${JSON.stringify(resolve(import.meta.dir, '../node_modules/.bin/bun'))} "$@"
+`;
+
+    writeFileSync(join(bin, 'bun'), bootstrap);
+    chmodSync(join(bin, 'bun'), 0o755);
+    copyFileSync(join(bin, 'bun'), join(donor, 'node_modules/.bin/bun'));
+    chmodSync(join(donor, 'node_modules/.bin/bun'), 0o755);
+    writeFileSync(join(bin, 'git'), `#!/usr/bin/bash
+case "$*" in
+  'rev-parse --show-toplevel') printf '%s\\n' "$KINU_WORKTREE_ROOT" ;;
+  'rev-parse --git-common-dir') printf '%s/.git\\n' "$KINU_WORKTREE_DONOR" ;;
+  *) exit 87 ;;
+esac
+`);
+    chmodSync(join(bin, 'git'), 0o755);
+
+    const run = Bun.spawnSync(['bash', 'scripts/setup-worktree.sh'], { cwd: tree, env: childEnv({
+      PATH: `${bin}:/usr/bin:/bin`, KINU_WORKTREE_ROOT: tree, KINU_WORKTREE_DONOR: donor,
+      KINU_WORKTREE_INSTALL_LOG: log, KINU_WORKTREE_BOOTSTRAP: join(bin, 'bun'),
+    }), stdout: 'pipe', stderr: 'pipe' });
+
+    expect(run.exitCode, run.stderr.toString()).toBe(0);
+    expect(readFileSync(join(donor, 'node_modules/tool/package.json'), 'utf8')).toBe(JSON.stringify({ version }));
+
+    const installed = version === '1.0.0';
+
+    expect(lstatSync(join(tree, 'node_modules/tool')).isSymbolicLink()).toBe(!installed);
+    expect(readFileSync(join(tree, 'node_modules/tool/package.json'), 'utf8')).toBe('{"version":"2.0.0"}');
+    expect(existsSync(log)).toBe(installed);
+
+    if (installed) expect(readFileSync(log, 'utf8').trim()).toBe(tree);
+  });
+
   test('a tree the lock describes has no drift: nested versions, linked copies, a skipped platform package', () => {
     expect(installDrift(checkout('install-parity-clean'))).toEqual([]);
   });

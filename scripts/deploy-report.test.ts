@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { childEnv, scratchDir } from '@kinu.run/test-utils';
 import { measurePromptUsage, type Assertion } from '../evals/src/results';
 import { previousSummary, renderReport, type ReportEntry, type ReportSummary } from './deploy-report';
 
@@ -18,6 +18,43 @@ const summary = (sha: string, dir: string, mode: string, reds: readonly string[]
 });
 
 describe('the deploy report', () => {
+  test('the final report withdraws this staging run’s record at 1201 s, but keeps it at 1199 s', () => {
+    const source = readFileSync(new URL('deploy.sh', import.meta.url), 'utf8');
+    const start = source.indexOf('finish() {');
+    const end = source.indexOf('\n}\n', start);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+
+    const finish = source.slice(start, end + 2);
+
+    for (const [seconds, published, expected] of [
+      [1199, 1, [0, '1']],
+      [1201, 1, [1, '0']],
+      [1201, 0, [1, '1']],
+    ] as const) {
+      const { summary: verdict } = renderReport({ dir: '/reports/final', meta: META,
+        entries: [{ kind: 'mark', mark: 'end', seconds }],
+      });
+
+      const run = Bun.spawnSync(['bash', '-c', `
+KINU_ROOT=.
+KINU_ENV=staging
+KINU_REDS=0
+DEPLOY_PUBLISHED=${String(published)}
+verified=1
+trap 'printf "%s" "$verified"' EXIT
+mark() { :; }
+report() { return ${verdict.reds.length === 0 ? '0' : '1'}; }
+bun() { [ "$1" = "./scripts/promote.ts" ] && [ "$2" = "forget" ] && verified=0; }
+${finish}
+finish
+`], { env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
+
+      expect([run.exitCode, run.stdout.toString()], run.stderr.toString()).toEqual([...expected]);
+    }
+  });
+
   test('owned deploy wall over twenty minutes is red; the longest eval trial is named and excluded, never killed', () => {
     const input = (seconds: number) => ({
       dir: '/reports/budget', meta: META, entries: [

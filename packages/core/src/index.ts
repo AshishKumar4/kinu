@@ -796,7 +796,6 @@ export {
   cacheableSystem,
   hasCacheMarkers,
   markCacheTail,
-  markLastToolForAnthropicCache,
   promptCacheOptions,
   promptCacheWarm,
   resolvePromptCacheStrategy,
@@ -1579,7 +1578,10 @@ export {
   type GitHubCi, type GitHubItem, type GitHubRepo, type WorkspaceGitHub,
 } from './github/activity';
 
-export { refreshGitHub, type GitHubRefreshOutcome, type WorkspaceGitHubView } from './github/refresh';
+export {
+  gitHubRefreshAsk, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type GitHubRefreshOutcome,
+  type WorkspaceGitHubView,
+} from './github/refresh';
 
 export { readGitHubRemotes } from './github/remotes';
 
@@ -2164,8 +2166,10 @@ export {
 export {
   COPY_SCRIPT, GITHUB_ICON, KINU_MARK, MARK_IDS, REPO_URL,
   mark, markDocument, publicFooter, publicPage,
-  type MarkId, type Mode, type PublicPageOptions, type PublicToken, type RadiusRole, type TokenSet,
+  type MarkId, type PublicPageOptions,
 } from './http/public-shell';
+
+export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
 
 export {
   approvalDocument, authDocument, installDocument, loginDocument, type BuiltinSignIn, type LoginProvider,

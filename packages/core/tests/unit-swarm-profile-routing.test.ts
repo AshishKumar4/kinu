@@ -121,7 +121,7 @@ function harness(input: {
   const swarm: AgentsSwarmDeps = {
     rt,
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
-    model: caller.model,
+    model: () => caller.model,
     ...unobservedSearchSeams(),
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);
@@ -271,7 +271,7 @@ describe('a delegated tier routes the model its nodes run', () => {
 
     const entry = createAgentsTool({
       mode: 'build', swarms: true,
-      swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model, ...unobservedSearchSeams() },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: () => caller.model, ...unobservedSearchSeams() },
     });
 
     if (!entry) throw new Error('Expected the agents tool to be created');
@@ -385,7 +385,7 @@ function perNodeHarness() {
   const swarm: AgentsSwarmDeps = {
     rt,
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
-    model: caller.model,
+    model: () => caller.model,
     ...unobservedSearchSeams(),
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);

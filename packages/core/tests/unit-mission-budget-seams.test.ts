@@ -105,7 +105,7 @@ function searchableDeps(opts: {
       rt,
       // One actor per node: spend is charged per node, and a shared handle would bill a wave to one ledger.
       hostNode: hostedSeatsOver({ rt, db }).hostNode,
-      model: expandingModel(opts.usage),
+      model: () => expandingModel(opts.usage),
       ...unobservedSearchSeams(),
     },
     team: {

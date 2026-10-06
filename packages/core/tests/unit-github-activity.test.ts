@@ -5,7 +5,7 @@ import { Database } from 'bun:sqlite';
 import { makeExecRaw, makeSql } from './helpers';
 import { Effect } from 'effect';
 import { initGitHubActivityTable, readGitHubActivity, recordGitHubActivity, recordGitHubObservations, type WorkspaceGitHub } from '../src/github/activity';
-import { refreshGitHub } from '../src/github/refresh';
+import { gitHubRefreshAsk, refreshGitHub } from '../src/github/refresh';
 import { readGitHubRemotes } from '../src/github/remotes';
 import type { JsonValue } from '../src/utils/json';
 
@@ -45,6 +45,31 @@ describe('the workspace\'s GitHub record, as the overview reads it', () => {
 
     expect(pr).toMatchObject({ state: 'merged', title: 'Guard archived coupons (#42)', actors: ['main'], unattributed: false, lastAt: 10 });
     expect(readGitHubActivity(sql, []).observedAt).toBe(20);
+  });
+
+  test('an issue closed by its node id lands on the issue its lookup named; an unknown node records nothing', () => {
+    const { sql } = workspace();
+
+    recordGitHubActivity(sql, [{ action: 'opened', subject: 'issue', repo: 'acme/checkout', number: 41, title: 'SAVE20 500s' }], { actorId: 'main', source: 'mcp', at: 1 });
+    recordGitHubActivity(sql, [{ action: 'identified', subject: 'issue', repo: 'acme/checkout', number: 41, node: 'I_kw41' }], { actorId: null, source: 'egress', at: 2 });
+    recordGitHubActivity(sql, [{ action: 'closed', subject: 'issue', node: 'I_kw41', state: 'closed' }], { actorId: null, source: 'egress', at: 3 });
+    recordGitHubActivity(sql, [{ action: 'closed', subject: 'issue', node: 'I_unknown', state: 'closed' }], { actorId: null, source: 'egress', at: 4 });
+
+    expect(readGitHubActivity(sql, []).items).toEqual([expect.objectContaining({ repo: 'acme/checkout', number: 41, state: 'closed', lastAt: 3, unattributed: true })]);
+  });
+
+  test('a push and an agent\'s issue stay on the record however many refreshes follow', () => {
+    const { sql } = workspace();
+
+    recordGitHubActivity(sql, [{ action: 'pushed', subject: 'repo', repo: 'acme/checkout', ref: 'fix/guard' }], { actorId: 'main', source: 'egress', at: 1 });
+    recordGitHubActivity(sql, [{ action: 'opened', subject: 'issue', repo: 'acme/checkout', number: 41 }], { actorId: 'scout', source: 'mcp', at: 2 });
+
+    for (let at = 3; at < 2600; at += 1) recordGitHubObservations(sql, [{ subject: 'repo', repo: 'acme/checkout', ref: 'fix/guard', ci: 'pending' }], at);
+
+    const record = readGitHubActivity(sql, []);
+
+    expect(record.repos[0]?.lastPush).toEqual({ ref: 'fix/guard', at: 1 });
+    expect(record.items[0]?.actors).toEqual(['scout']);
   });
 
   test('a repository shows its last push, its CI and whether it is a remote; one only cloned or only a remote still shows', () => {
@@ -103,7 +128,7 @@ describe('a refresh reads what GitHub says now, with the account\'s token', () =
       '/repos/acme/infra/commits/main/status': { state: 'success', total_count: 1 },
     });
 
-    const refreshed = await Effect.runPromise(refreshGitHub({ authorization: 'Bearer gho_1', activity, fetch }));
+    const refreshed = await Effect.runPromise(refreshGitHub({ authorization: 'Bearer gho_1', ask: gitHubRefreshAsk(activity), fetch }));
 
     expect(refreshed.outcome).toBe('refreshed');
     expect(refreshed.observed).toEqual([
@@ -115,9 +140,23 @@ describe('a refresh reads what GitHub says now, with the account\'s token', () =
     expect(asked.every((line) => line.endsWith(' Bearer gho_1'))).toBe(true);
   });
 
+  test('CI folds check runs and commit statuses together: a failure anywhere fails, then anything pending', async () => {
+    const one = (runs: JsonValue, status: JsonValue) => github({
+      '/repos/acme/checkout/commits/fix%2Fguard/check-runs': runs, '/repos/acme/checkout/commits/fix%2Fguard/status': status,
+    }).fetch;
+
+    const ask = { repos: [{ repo: 'acme/checkout', branch: 'fix/guard' }], items: [] };
+    const green = { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'success' }] };
+    const ci = async (fetch: ReturnType<typeof one>) => (await Effect.runPromise(refreshGitHub({ authorization: 'Bearer gho_1', ask, fetch }))).observed[0];
+
+    expect(await ci(one(green, { state: 'failure', total_count: 1 }))).toMatchObject({ ci: 'failure' });
+    expect(await ci(one(green, { state: 'pending', total_count: 1 }))).toMatchObject({ ci: 'pending' });
+    expect(await ci(one(green, { state: 'success', total_count: 1 }))).toMatchObject({ ci: 'success' });
+  });
+
   test('a token GitHub refuses says so, and records nothing it did not read', async () => {
     const { fetch } = github({ '/repos/acme/checkout/issues/42': { message: 'Bad credentials' } }, 401);
-    const refreshed = await Effect.runPromise(refreshGitHub({ authorization: 'Bearer expired', activity, fetch }));
+    const refreshed = await Effect.runPromise(refreshGitHub({ authorization: 'Bearer expired', ask: gitHubRefreshAsk(activity), fetch }));
 
     expect(refreshed).toEqual({ observed: [], outcome: 'denied' });
   });

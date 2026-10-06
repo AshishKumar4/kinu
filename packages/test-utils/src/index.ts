@@ -17,6 +17,8 @@ export * from './merge-policy';
 
 export * from './network';
 
+export * from './models-dev';
+
 export * from './runtime';
 
 export * from './credentials';

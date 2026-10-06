@@ -58,7 +58,7 @@ export interface TerminalTurnParts {
   readonly sleepTime?: boolean;
   /** `standIn`: the shown title is a new workspace's, replaced by this turn's naming (identity/naming.ts). */
   readonly autoTitle?: { readonly mission: string | null; readonly standIn?: boolean };
-  /** Owed by a new workspace's first turn, however it ended. */
+  /** Owed by a new workspace's first turn. */
   readonly logo?: { readonly mission: string | null };
   /** Presence is the caller's decision: a `task` child owes a terminal answer on every ending, a durable child only on completion. */
   readonly parentReport?: {

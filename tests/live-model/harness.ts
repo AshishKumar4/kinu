@@ -138,7 +138,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   // caller's own actor, which is the failure this refusal prevents.
   const swarm: AgentsSwarmDeps = {
     rt,
-    model,
+    model: () => model,
     reportModelCall: liveModelCallSink(sql, rt.actor),
     // A node's eval and web as the CLI session builds them.
     nodeCodemode: (actor) => hostedCodemodeTool(actor, [web()]),

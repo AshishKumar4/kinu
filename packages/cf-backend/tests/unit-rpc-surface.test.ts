@@ -23,6 +23,7 @@ import type { TerminalWorkspace } from '../src/terminal-route';
 import { orchestratorHarness, rpcReachableFrom, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { MUST_STAY_DENIED } from './helpers/rpc-denied';
 import { declaredName, memberCalleeName, parse, walk } from '../../../scripts/syntax';
+import { harnessCallables } from './helpers/agents-sdk';
 
 // After the helpers register the SDK mock: a static import would bind these to the real `agents` Agent.
 const { ActorAgent } = await import('../src/actor-agent');
@@ -254,6 +255,15 @@ describe('the agent surfaces cannot drift from their callers', () => {
       .toEqual([]);
     expect(internalOrchestratorRpc.filter((name) => Object.hasOwn(AGENT_RPC_ACCESS, name)))
       .toEqual([]);
+  });
+
+  // A misplaced decorator once left the Work read uncallable from the page and made the egress recorder callable.
+  test('the overview\'s and Work\'s reads are callable from the page; the egress recorder is not', () => {
+    orchestratorHarness();
+    const callable = harnessCallables();
+
+    expect(['listWorkspaceWork', 'getWorkspaceGitHub', 'listWorkspaceAgents'].filter((name) => !callable.has(name))).toEqual([]);
+    expect(['recordGitHubEgress', 'runScaffoldOnce'].filter((name) => callable.has(name))).toEqual([]);
   });
 
   /**

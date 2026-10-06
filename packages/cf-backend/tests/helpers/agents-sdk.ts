@@ -79,6 +79,11 @@ Object.assign(globalThis, {
   },
 });
 
+const declaredCallables = new Set<string>();
+
+/** Every method name a loaded class marks `@callable()`, as its decorator ran; `getCallableMethods` still answers none. */
+export const harnessCallables = (): ReadonlySet<string> => declaredCallables;
+
 export function harnessHolds(): readonly string[] {
   return [...held];
 }
@@ -547,7 +552,11 @@ export function mockAgentsSdk(): void {
       }
       readonly name: string = '';
     },
-    callable: () => <Method>(method: Method): Method => method,
+    callable: () => <Method>(method: Method, context: ClassMethodDecoratorContext): Method => {
+      declaredCallables.add(String(context.name));
+
+      return method;
+    },
     // A harness call has no connection, as a route's or a stub's has none, unless the suite opens one as a pane would.
     getCurrentAgent: () => ({ agent: undefined, connection: paneConnection, request: undefined, email: undefined }),
     getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>
@@ -784,6 +793,8 @@ export interface RecordedMcpConnection {
   options: { transport: RecordedMcpTransport };
   /** The connection's MCP client, as far as a raw `tools/list` read goes. */
   client?: { request(): Promise<object> };
+  sessionId?: string;
+  clearResumedSession?(): void;
 }
 
 /** `restored` / `waited` are call counts: they prove a read did not touch the connection machinery. */
@@ -822,6 +833,15 @@ export function seedMcpAnswer(answer: CallToolResult): void {
 /** The next `callTool` is held, as a server holding the request holds it: only its signal settles it, as the SDK's request settles. */
 export function holdNextMcpToolCall(): void {
   mcpCallToolHeld = true;
+}
+
+/** A Streamable-HTTP session: a 404 on it is renewed. */
+export function seedMcpSession(id: string, sessionId: string): void {
+  const connection = liveMcpManager?.mcpConnections[id];
+
+  if (!connection) throw new Error(`No live MCP connection for ${id}.`);
+  connection.sessionId = sessionId;
+  connection.clearResumedSession = () => { connection.sessionId = undefined; };
 }
 
 /** Each held call's abort reason: on it the SDK tells the server the request is cancelled. */

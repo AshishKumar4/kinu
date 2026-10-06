@@ -376,14 +376,13 @@ function createGatewayBackedProvider(opts: {
     isAvailable: () => opts.llm.baseURL !== '' && Object.keys(opts.llm.headers).length > 0,
     unavailableReason: () => 'KINU_BASE_URL and KINU_AUTH are required for the local gateway provider.',
     async listModels(deps): Promise<ModelInfo[]> {
-      const fallback: ModelInfo[] = [{ id: opts.defaultModel, label: opts.defaultModel, capabilities: ['tools', 'streaming'] }];
-
-      if (!opts.catalogProviderId) return fallback;
+      // With no catalog, the configured model is all this endpoint names.
+      if (!opts.catalogProviderId) return [{ id: opts.defaultModel, label: opts.defaultModel, capabilities: ['tools', 'streaming'] }];
 
       const prefix = opts.catalogModelPrefix ?? '';
 
       return mapModelList(listModelsDevProviderModels(opts.catalogProviderId, deps, {
-        fallback,
+        required: true,
         preferredIds: [opts.defaultModel.replace(/^workers-ai\//, '')],
       }), (models) => models.map((model) => ({
         ...model,

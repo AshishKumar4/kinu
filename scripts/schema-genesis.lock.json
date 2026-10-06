@@ -711,6 +711,36 @@
     "state TEXT",
     "ci TEXT"
   ],
+  "github_items@packages/core/src/github/activity.ts": [
+    "repo TEXT NOT NULL",
+    "number INTEGER NOT NULL",
+    "subject TEXT NOT NULL",
+    "title TEXT",
+    "url TEXT",
+    "state TEXT",
+    "actors TEXT NOT NULL",
+    "unattributed INTEGER NOT NULL",
+    "last_at INTEGER NOT NULL",
+    "observed_at INTEGER",
+    "PRIMARY KEY (repo, number)"
+  ],
+  "github_nodes@packages/core/src/github/activity.ts": [
+    "node_id TEXT PRIMARY KEY",
+    "repo TEXT NOT NULL",
+    "subject TEXT NOT NULL",
+    "number INTEGER NOT NULL",
+    "at INTEGER NOT NULL"
+  ],
+  "github_repos@packages/core/src/github/activity.ts": [
+    "repo TEXT PRIMARY KEY",
+    "push_ref TEXT",
+    "push_at INTEGER",
+    "fetched_at INTEGER",
+    "observed_branch TEXT",
+    "ci TEXT",
+    "ci_at INTEGER",
+    "observed_at INTEGER"
+  ],
   "head_journal@packages/core/src/heads/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",

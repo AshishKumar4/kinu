@@ -723,7 +723,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: first.model, mode: 'build', logger: log },
+      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: () => first.model, mode: 'build', logger: log },
       resolved(),
     );
 
@@ -760,7 +760,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
 
     const deps: AgentsToolDeps = {
       mode: 'build', swarms: true,
-      swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
+      swarm: { rt, hostNode: activation(), model: () => second.model, ...unobservedSearchSeams() },
       budget: governor,
     };
 
@@ -887,7 +887,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const first = nodeModel({ freezeFromStart: 1, frozenNodes: FLAT_SEARCH.branches });
 
     const frozen = runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: () => first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(FLAT_SEARCH),
     );
 
@@ -913,7 +913,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const { fiber, settled } = inlineFiber();
 
     const agents = createAgentsTool({
-      mode: 'build', swarms: true, swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
+      mode: 'build', swarms: true, swarm: { rt, hostNode: activation(), model: () => second.model, ...unobservedSearchSeams() },
     });
 
     const runner = new BackgroundJobRunner({
@@ -1006,7 +1006,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: () => first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1026,7 +1026,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
 
     // A second host: an eviction is what destroys the first one's admitted turns.
     const agents = createAgentsTool({
-      mode: 'build', swarms: true, swarm: { rt, hostNode: activation(), model: second.model, ...unobservedSearchSeams() },
+      mode: 'build', swarms: true, swarm: { rt, hostNode: activation(), model: () => second.model, ...unobservedSearchSeams() },
     });
 
     const runner = new BackgroundJobRunner({
@@ -1082,7 +1082,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: () => first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1119,7 +1119,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: () => first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1190,7 +1190,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: () => first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1221,7 +1221,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: () => first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1319,7 +1319,7 @@ describe('a named swarm is called by its name', () => {
     if ('reason' in named) throw new Error(`the suite's own composition does not resolve: ${named.error}`);
     const model = nodeModel();
     await runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode, model: model.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: () => model.model, mode: 'build', logger: createRecordingLogger() },
       named,
     );
 
@@ -1336,7 +1336,7 @@ describe('a named swarm is called by its name', () => {
     const sql = rt.storage.sql;
     const model = nodeModel();
     await runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode, model: model.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: () => model.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     const rootId = firstRoot(sql)?.root_id ?? '';
@@ -1398,7 +1398,7 @@ describe('a second search over a task already running is refused', () => {
     const second = nodeModel();
 
     const result = await runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode, model: second.model, mode: 'build', logger: log },
+      { reportModelCall: unobservedSpend, rt, hostNode, model: () => second.model, mode: 'build', logger: log },
       resolved(),
     );
 

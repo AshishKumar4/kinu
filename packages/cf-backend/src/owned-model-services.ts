@@ -98,7 +98,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
   }
 
   /** Memoized on the normalized spec: heads ask once per step. `invalidate()` drops it. */
-  resolveModel(spec?: string | null): LanguageModel {
+  resolveModel(spec: string): LanguageModel {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);
 
@@ -115,7 +115,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return agent.registry.credentialFor(agent.normalizeSpecSync(spec), agent.deps);
   }
 
-  resolveModelWithEffort(spec: string | null | undefined, effort: ReasoningEffort | null) {
+  resolveModelWithEffort(spec: string, effort: ReasoningEffort | null) {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);
     const { provider } = parseModelSpec(normalized);

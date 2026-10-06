@@ -347,6 +347,18 @@ describe('turn-pipeline correctness wiring', () => {
     expect(unpinned.model).toEqual({ model: 'workers-ai/account-default', source: 'role' });
   });
 
+  test("an unpinned workspace reports the account's default before its first turn, and its next turn runs on it", async () => {
+    const workspace = orchestratorHarness();
+    workspace.agent.harnessInstallCatalog({
+      tiers: { default: { model: 'workers-ai/account-default' } },
+      availableModels: ['workers-ai/account-default'],
+    });
+
+    const status = await workspace.agent.getAgentStatus();
+    expect(status.model).toBe('workers-ai/account-default');
+    expect(workspace.agent.getModel()).toMatchObject({ modelId: 'account-default' });
+  });
+
   test("a hire runs at its tier's own effort, else at the effort its parent runs at", async () => {
     // Before, the workspace's effort overrode a hire's tier; a tier that declares an effort is the owner's choice for the role.
     const workspace = orchestratorHarness();

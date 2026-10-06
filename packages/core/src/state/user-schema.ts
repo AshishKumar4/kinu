@@ -416,7 +416,7 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // A workspace's logo, drawn by its own model and rebuilt from the allowlist (identity/logo.ts) on the way in.
+  // Sanitized on the way in (identity/logo.ts).
   sql.exec(`
     CREATE TABLE IF NOT EXISTS workspace_logos (
       name     TEXT PRIMARY KEY,

@@ -21,6 +21,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import {
   TrashIcon, BrainIcon, GearIcon, UsersThreeIcon,
 } from "@phosphor-icons/react";
+import "virtual:kinu-theme.css";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
@@ -1339,6 +1340,7 @@ const MESSAGES: UIMessage[] = [
   msg({
     id: "a2", role: "assistant", createdAt: NOW - 3 * 60e3,
     parts: [
+      { type: "reasoning", text: "The edit failed because old_text no longer matched after the formatter ran, so the file on disk is not the one I read; I should re-read it, apply the change against what is there now, then run the migration twice against a scratch database to prove it is idempotent, because staging already ran the first half of it on Tuesday and a second run must not double the backfill or touch the fixed-amount coupons it already set." },
       { type: "text", text: "The edit above didn't take — re-reading before I retry, then confirming the migration is idempotent before I let it near staging." },
       // Its own row (a lone text part on either side stops it folding into a run) so its expanded state is inspectable.
       {
@@ -1541,7 +1543,11 @@ Move the eligibility check in \`packages/core/src/checkout/apply-coupon.ts:42\` 
 
 \`\`\`mermaid
 graph TD; A-->B
-\`\`\``;
+\`\`\`
+
+$$
+\\frac{\\text{saved}}{\\text{cart}} \\le 0.2 \\quad \\href{javascript:alert(1)}{\\text{off}}
+$$`;
 
 const GALLERY_PLAN_CONTENTS = new Map([
   ["late-heading", GALLERY_PLAN_LATE_HEADING],

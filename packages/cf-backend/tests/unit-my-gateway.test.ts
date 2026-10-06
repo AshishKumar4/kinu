@@ -221,6 +221,36 @@ describe('my-gateway model discovery', () => {
     expect(urls.some((u) => u.includes('/ai-gateway/gateways/byok-gw/provider_configs'))).toBe(true);
   });
 
+  test('the two management reads are in flight together, not one after the other', async () => {
+    let creditAsked = false;
+    let overlapped = false;
+    const answer = discoveryFetch({ slugs: ['openai'], balance: 0 });
+
+    const fetchFn = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input);
+
+      if (url.includes('/billing/credit-balance')) creditAsked = true;
+
+      if (url.includes('/provider_configs')) {
+        // The configs read answers once the credit read is out; a serial read gives up after a few turns.
+        for (let turn = 0; turn < 50 && !creditAsked; turn += 1) {
+          const next = Promise.withResolvers<void>();
+          setImmediate(next.resolve);
+          await next.promise;
+        }
+
+        overlapped = creditAsked;
+      }
+
+      return answer(input, init);
+    });
+
+    const reg = createAgentProviderRegistry({ env: {}, userDO: gatewayStub({ gatewayId: 'parallel-gw', token: `t-${Math.random()}` }), fetch: fetchFn });
+
+    await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
+    expect(overlapped).toBe(true);
+  });
+
   test('positive Unified Billing balance adds the billable provider set', async () => {
     const reg = createAgentProviderRegistry({
       env: {},

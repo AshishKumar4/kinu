@@ -618,11 +618,11 @@ async function cloudflareSignInSteps(
       email: 'ashish@example.com',
       first_name: null,
       last_name: null,
-      username: 'ashish',
+      username: '61b1829abc1e61e3521cd0d1efed72a2',
     });
 
     expect(doneAsh.status).toBe(302);
-    expect([...handle.sessions.values()].map((row) => row.identity.displayName)).toEqual(['ashish']);
+    expect([...handle.sessions.values()].map((row) => row.identity.displayName)).toEqual([null]);
   });
 
   test('Cloudflare OAuth token variants survive the callback into the stored credential', async () => {

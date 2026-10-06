@@ -144,13 +144,16 @@ function api<Schema extends v.GenericSchema>(
   schema: Schema, method: string, path: string, body?: RequestBody,
 ): Effect.Effect<v.InferOutput<Schema>> {
   return Effect.gen(function* () {
-    const res = yield* Effect.promise(() => fetch(`/api/user${path}`, {
+    const ask = Effect.promise(() => fetch(`/api/user${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       // Reads only: an aborted mutation may already have landed server-side, making a timeout an ambiguous retry (KINU-073).
       signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
     }));
+
+    // Reads only: a write may have landed.
+    const res = yield* (method === 'GET' ? Effect.catchDefect(ask, (dropped) => (dropped instanceof TypeError ? ask : Effect.die(dropped))) : ask);
 
     if (!res.ok) {
       const detail = yield* Effect.promise(() => errorDetail(res));

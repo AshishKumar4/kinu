@@ -180,12 +180,10 @@ html, body, #root {
      fields 8px; controls 6px; actions and chips are pills. `--r-card` and
      `--r-overlay` alias no Tailwind rung — the mock's two 14px measures sit
      between Tailwind's 12 and 16, and a role that means "outer card" should
-     not have to negotiate with a library scale to say so. Locked by
-     unit-radius-scale.test.ts. */
-  --r-control: var(--radius-sm);   /*  6px — chips, inline code, segment items */
-  --r-row:     var(--radius-md);   /*  8px — buttons, fields, rows */
-  --r-card:    0.875rem;           /* 14px — outer cards, panels, notices */
-  --r-overlay: 0.875rem;           /* 14px — dialogs, menus, the composer */
+     not have to negotiate with a library scale to say so. The radii, the
+     grounds, surfaces, borders, text, accent, status, code and overlay
+     shadow are core's `web/theme.ts`, which the signed-out pages share;
+     they arrive through `virtual:kinu-theme.css`. The rest live here. */
 
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
@@ -200,15 +198,7 @@ html, body, #root {
      `themes.dark`), mapped onto the app's role names. The mock's own
      variable name is cited per token so an audit can trace each value
      back to his file. ── */
-  --c-recessed: #131110;   /* mock --deep — wells, tracks, inset code */
-  --c-bg:       #0F0D0B;   /* mock --bg — the canvas   */
-  --c-sidebar:  #141110;   /* mock --panel2 — chrome: sidebar, top bar, composer strip */
-  --c-surface:  #181512;   /* mock --panel — card   */
-  --c-elevated: #221C15;   /* mock --raise — hover raise, menus, dialogs */
   --c-overlay:  #221C15;   /* dialogs — dark conflates the top two rungs, as the mock does */
-  /* mock --chip — a plane INSIDE a card: the model chip, the Run/Supervise
-     pill container, count badges. One step above the card it sits on. */
-  --c-fill:     #1B1713;
   /* mock --input — the composer well. It sits BELOW the canvas, a dark
      inset inside the chrome strip, which is why it is not `--c-elevated`. */
   --c-input-bg: #0B0A09;
@@ -218,27 +208,14 @@ html, body, #root {
      alpha hairline composited over these grounds reads grey. mock --line
      for structural rules, --dash for separators inside a card, --line2 for
      outlined controls (the composer, quiet buttons, the tab pill). */
-  --c-border:        #262019;  /* mock --line  */
-  --c-border-strong: #332C23;  /* mock --line2 */
-  --c-input-border:  #332C23;  /* mock --line2 — the composer's resting edge */
   --c-dash:          #2A241D;  /* mock --dash — dashed separators */
 
-  --c-text:     #EDE5D8;   /* mock --ink   15.5:1 on bg */
-  --c-text-2:   #D8CFC2;   /* mock --ink3  12.6:1 — secondary UI text */
-  --c-text-3:   #9C9184;   /* mock --dim    6.3:1 — the dim role */
   --c-text-4:   #8E8478;   /* mock --faint2 lifted from #8A7F72 for AA (4.6:1 worst) — micro labels */
 
-  --c-accent:    #E0A458;  /* mock --gold / --goldFill */
-  --c-accent-fg: #E3D2AE;  /* mock --silk — the bright end: links, brand ink, inline code */
-  --c-accent-on: #1A1408;  /* mock --goldInk, 8.4:1 on gold */
-  --c-accent-subtle: rgba(224, 164, 88, 0.12);
   --c-accent-mark:   var(--c-accent);  /* an icon that marks "here": the gold itself, where the ground is dark */
 
   /* Status hues. good/bad are the mock's own; warning and info have no
      mock literal and keep the family's tan and slate. */
-  --c-success:  #8FBC8B;   /* mock --good, 9.0:1 */
-  --c-warning:  #E8B97A;   /* derived, 10.8:1 */
-  --c-danger:   #C97B6B;   /* mock --bad, 6.0:1 */
   --c-info:     #8FB6D6;   /* derived, 9.1:1 */
 
   --c-success-tint: rgba(143, 188, 139, 0.14);
@@ -254,7 +231,6 @@ html, body, #root {
      syntax-coloured — the mock sets every inline identifier in its bright
      thread colour, and CodeBlock in components/surfaces/shared.tsx does
      the same. */
-  --c-code:     #E3D2AE;   /* mock --silk, in prose */
   /* A code block is a well, which is what `--c-recessed` already means. */
   --c-code-bg:  var(--c-recessed);
 
@@ -273,7 +249,6 @@ html, body, #root {
      the ladder plus a hairline. On paper that is not enough, so the token
      exists and is `none` here. */
   --shadow-card: none;
-  --shadow-overlay: 0 18px 44px -12px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
   --shadow-menu:    0 10px 28px -10px rgba(0, 0, 0, 0.5);
   --shadow-composer: 0 12px 32px -12px rgba(0, 0, 0, 0.6), 0 2px 6px -2px rgba(0, 0, 0, 0.35);
   --c-composer-bg: #1A1714;
@@ -378,34 +353,15 @@ html, body, #root {
 
      Gold splits in two on paper: the fill stays bright (#D89A44) while
      text-grade gold deepens to #8F5C10, exactly as the mock does. ── */
-  --c-recessed: #E0D8C5;   /* mock --deep */
-  --c-bg:       #E9E2D3;   /* mock --bg */
-  --c-sidebar:  #F1EBDD;   /* mock --panel2 */
-  --c-surface:  #F7F3E9;   /* mock --panel — paper cards */
-  --c-elevated: #E8E0CE;   /* mock --raise — hover raise, menus */
   --c-overlay:  #F7F3E9;   /* dialogs — paper, lifted by shadow */
-  --c-fill:     #E5DCC8;   /* mock --chip */
   --c-input-bg: #F7F3E9;   /* mock --input */
 
-  --c-border:        #D2C6AE;  /* mock --line  */
-  --c-border-strong: #BBAB8C;  /* mock --line2 */
-  --c-input-border:  #BBAB8C;  /* mock --line2 */
   --c-dash:          #DBD1BE;  /* mock --dash */
 
-  --c-text:     #1C1710;   /* mock --ink   13.8:1 on bg */
-  --c-text-2:   #3D3427;   /* mock --ink3   9.5:1 */
-  --c-text-3:   #5E5344;   /* mock --dim    5.8:1 */
   --c-text-4:   #695C4C;   /* mock --faint2 lifted from #6F6252 for AA (4.6:1 worst) */
 
-  --c-accent:    #D89A44;  /* mock --goldFill — fills keep the bright object */
-  --c-accent-fg: #7A5514;  /* mock --silk — links, brand ink, inline code, 5.2:1 on bg */
-  --c-accent-on: #1F1503;  /* mock --goldInk, 7.4:1 on the fill */
-  --c-accent-subtle: rgba(216, 154, 68, 0.16);
   --c-accent-mark:   var(--c-accent-fg);  /* the gold is under 2:1 on the light wash; the ink is 4.9:1 */
 
-  --c-success:  #316530;   /* mock --good #356B35 lifted for AA on wells (4.9:1 worst) */
-  --c-warning:  #7E5205;
-  --c-danger:   #96412C;   /* mock --bad */
   --c-info:     #2F6289;
 
   --c-success-tint: rgba(49, 101, 48, 0.11);
@@ -417,7 +373,6 @@ html, body, #root {
   --c-user-bg:     #F2D9AC;  /* mock --bubble */
   --c-user-border: #D9B573;  /* mock --bubbleLine */
 
-  --c-code:     #7A5514;   /* mock --silk, deepened ink on paper */
 
   /* On paper the scrim reads as ink pulled over the page, not a blackout. */
   --c-scrim: rgba(43, 26, 4, 0.32);
@@ -425,7 +380,6 @@ html, body, #root {
   /* The mock separates its planes with tone plus strong rules and casts no
      card shadow; only floating layers get a lift. */
   --shadow-card: none;
-  --shadow-overlay: 0 16px 40px -14px rgba(43, 26, 4, 0.20), 0 2px 8px rgba(43, 26, 4, 0.07);
   --shadow-menu:    0 10px 24px -10px rgba(43, 26, 4, 0.18), 0 1px 3px rgba(43, 26, 4, 0.06);
   --shadow-composer: 0 12px 32px -14px rgba(43, 26, 4, 0.24), 0 1px 3px rgba(43, 26, 4, 0.07);
   --c-composer-bg: #F8F4EB;
@@ -525,7 +479,8 @@ body { background: var(--c-bg); color: var(--c-text); }
   ul, ol { margin: 0.35em 0; padding-left: 1.1rem; }
   ul { list-style: disc; } ol { list-style: decimal; }
   h1, h2, h3 { font-size: 1em; font-weight: 600; margin: 0.5em 0 0.2em; color: var(--c-text-2); }
-  &[data-folded] { max-height: 3lh; overflow: hidden; mask-image: linear-gradient(to bottom, #000 45%, transparent); }
+  &[data-folded] { max-height: 3lh; overflow: hidden; }
+  &[data-folded][data-overflows] { mask-image: linear-gradient(to bottom, #000 45%, transparent); }
 }
 
 /* ── Type roles — the scale lives here, not in per-component literals ─ */

@@ -1,28 +1,22 @@
-/**
- * A workspace's logo is SVG a model wrote, so it is untrusted. It is read token by token and rebuilt from an
- * allowlist: shapes, paths, gradients, transforms and SMIL or CSS animation survive; scripts, foreign content,
- * event attributes and every reference outside the document do not. The page then shows it only as an image.
- */
+/** Model-written SVG is untrusted: rebuilt from an allowlist, shown only as an image. */
 
-/** The rebuilt logo's ceiling; a larger one is refused rather than cut. */
 const WORKSPACE_LOGO_MAX_BYTES = 8_192;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-/** Elements kept with their content. Anything else is dropped with everything inside it. */
+/** Any other element drops with its content. */
 const ELEMENTS = new Set([
   'svg', 'g', 'defs', 'path', 'circle', 'ellipse', 'rect', 'line', 'polyline', 'polygon',
   'lineargradient', 'radialgradient', 'stop', 'clippath', 'mask', 'use', 'symbol',
   'animate', 'animatetransform', 'animatemotion', 'set', 'mpath', 'style', 'text', 'tspan',
 ]);
 
-/** Element names as SVG spells them, since the set above is matched lower-cased. */
 const CASED = new Map([
   ['lineargradient', 'linearGradient'], ['radialgradient', 'radialGradient'], ['clippath', 'clipPath'],
   ['animatetransform', 'animateTransform'], ['animatemotion', 'animateMotion'],
 ]);
 
-/** The attributes an animation may drive: drawing ones only, never a reference. */
+/** An animation drives drawing attributes only, never a reference. */
 const DRAWN = [
   'd', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'width', 'height', 'points', 'transform',
   'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray', 'stroke-dashoffset',
@@ -49,10 +43,9 @@ const CASED_ATTRIBUTES = new Map([
 
 const DRAWN_NAMES = new Set(DRAWN);
 
-/** Text survives only where it draws or styles. */
 const TEXT_HOLDERS = new Set(['style', 'text', 'tspan']);
 
-/** `url(#local)` is the one url() a logo needs; any other, an escape, an import or a script scheme ends the logo. */
+/** Only `url(#local)`; any other url, escape, import or script scheme ends the logo. */
 function unsafeValue(value: string): boolean {
   const lowered = value.toLowerCase();
 
@@ -68,7 +61,6 @@ const escapeText = (value: string): string => value.replace(/&/g, '&amp;').repla
 
 const XML_ENTITIES = new Map([['amp', '&'], ['lt', '<'], ['gt', '>'], ['quot', '"'], ['apos', "'"]]);
 
-/** Undoes the five XML entities and numeric ones, so a value is judged as the renderer would read it. */
 function decodeEntities(value: string): string {
   return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, code: string) => {
     const lowered = code.toLowerCase();
@@ -83,7 +75,7 @@ function decodeEntities(value: string): string {
 }
 
 function keptAttributes(element: string, source: string): string | null {
-  // First of a repeated name wins: XML refuses a redefinition, and the image would not draw.
+  // First wins: XML refuses a redefinition.
   const kept = new Map<string, string>();
 
   for (const match of source.matchAll(/([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
@@ -100,7 +92,7 @@ function keptAttributes(element: string, source: string): string | null {
 
     if (element === 'svg' && (name === 'width' || name === 'height' || name === 'xmlns')) continue;
 
-    // Plain `href`: the xlink prefix would need a namespace declaration the rebuilt root does not carry.
+    // Plain `href`: the rebuilt root declares no xlink namespace.
     const written = name === 'xlink:href' ? 'href' : CASED_ATTRIBUTES.get(name) ?? name;
 
     if (!kept.has(written)) kept.set(written, value);
@@ -111,7 +103,7 @@ function keptAttributes(element: string, source: string): string | null {
 
 const closeTag = (name: string): string => `</${CASED.get(name) ?? name}>`;
 
-/** The document as rebuilt so far. Every element still open is kept on `open`, a dropped one too, so its content drops with it. */
+/** Open elements, dropped ones too, so their content drops. */
 class Rebuilt {
   readonly out: string[] = [];
   readonly open: { readonly name: string; readonly kept: boolean }[] = [];
@@ -122,12 +114,12 @@ class Rebuilt {
 
     if (parent?.kept !== true || !TEXT_HOLDERS.has(parent.name)) return;
 
-    // A style sheet is one run of text, judged whole: a tag inside it could split `url(` past the check.
+    // Judged whole: a tag inside could split `url(` past the check.
     if (parent.name === 'style' && (unsafeValue(text) || !(this.out.at(-1) ?? '').startsWith('<style'))) return;
     this.out.push(escapeText(decodeEntities(text)));
   }
 
-  /** Closes the nearest open element of that name and whatever was left open inside it; true once the root is closed. */
+  /** True once the root closes. */
   close(name: string): boolean {
     const depth = this.open.map((element) => element.name).lastIndexOf(name);
 
@@ -136,7 +128,6 @@ class Rebuilt {
     return this.open.length === 0;
   }
 
-  /** False when the root itself is refused. */
   start(name: string, rawAttributes: string, selfClosing: boolean): boolean {
     const parent = this.open.at(-1);
     const allowed = (parent === undefined ? name === 'svg' : parent.kept) && ELEMENTS.has(name);
@@ -164,10 +155,7 @@ class Rebuilt {
   }
 }
 
-/**
- * The first `<svg>…</svg>` in `written`, rebuilt from the allowlist, or null when there is none, it carries no
- * drawing, or it is over the size cap. An animation that would drive a reference drops its whole element.
- */
+/** The first `<svg>` in `written`, rebuilt; null when absent, empty or over the cap. */
 export function sanitizeWorkspaceLogoSvg(written: string): string | null {
   const start = written.search(/<svg[\s>]/i);
 
@@ -209,8 +197,7 @@ function workspaceLogoPrompt(subject: string): string {
   ].join('\n');
 }
 
-/** `complete` takes the system prompt apart, as `LLM.complete` has no system channel. Model errors propagate;
- *  a drawing the allowlist leaves nothing of is null, and the monogram stays. */
+/** Model errors propagate; a refused drawing is null, and the monogram stays. */
 export async function drawWorkspaceLogo(
   complete: (system: string, prompt: string) => Promise<string>,
   subject: string,

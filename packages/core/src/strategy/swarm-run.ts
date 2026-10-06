@@ -66,7 +66,8 @@ export interface SwarmRunDeps {
   readonly rt: AgentRuntime;
   /** Acquire the hosted logical actor one node runs as, by that node's identity. */
   readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
-  readonly model: LanguageModel;
+  /** The caller's model, read only for a run with no profile record. */
+  readonly model: () => LanguageModel;
   readonly mode: WorkMode;
   readonly signal?: AbortSignal;
   /** Each running worker's own stop, by head id; absent where nothing can stop one worker. */

@@ -3,8 +3,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { INTERRUPTED_TURN, currentDateForPrompt, publishSubordinateReport, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
-import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, buildHeadMessages, buildHeadSystemPrompt, callableToolNames, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type HeadInferenceDeps, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
-import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { EventLog, HeadCapture, subordinateMessageDedupeKey, titleActorFromMessage, spawnSeatedHead, buildHeadMessages, buildHeadSystemPrompt, callableToolNames, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type HeadInferenceDeps, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { attempt, attemptInItsWords, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { isCFRuntime, type CFRuntime } from './runtime';
 import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting';
@@ -195,6 +195,24 @@ export async function admitHostedTask(
       () => new KinuError('denied', 'The birth assignment belongs to a different actor creation.'))
       .pipe(Effect.andThen(Effect.promise(() => admitAs(actor)))),
   ));
+}
+
+/** Retry on a hosted chat: the message's assignment pends again. */
+export function retryHostedMessage(
+  seams: HostedActorSeams, reference: ActorReference, input: { readonly messageId: string; readonly reopen: () => Promise<void> },
+): Promise<'turn'> {
+  return settle(Effect.gen(function* () {
+    if (seams.turnInFlight(reference)) return yield* Effect.fail(new KinuError('denied', 'Stop the turn that is running before you retry.'));
+    const log = new EventLog(seams.exec, seams.host.bindStores(reference).handle);
+    const assignment = log.idForDedupeKey(subordinateMessageDedupeKey(input.messageId));
+
+    if (assignment === null) return yield* Effect.fail(new KinuError('bad_input', 'Only the newest message can be retried.'));
+    yield* attemptInItsWords('bad_input', input.reopen);
+    log.unbind(assignment);
+    seams.armWake();
+
+    return 'turn' as const;
+  }));
 }
 
 function hostedHirer(seams: HostedActorSeams, child: BoundActor): BoundActor {

@@ -92,11 +92,8 @@ prune() {
   done
 }
 
-if cmp -s "$TREE/bun.lock" "$MAIN/bun.lock" && diff -rq "$TREE/patches" "$MAIN/patches" >/dev/null 2>&1; then
-  if [ ! -d "$MAIN/node_modules" ]; then
-    echo "The main checkout ($MAIN) has no node_modules — run 'bun install' there first." >&2
-    exit 1
-  fi
+if cmp -s "$TREE/bun.lock" "$MAIN/bun.lock" && diff -rq "$TREE/patches" "$MAIN/patches" >/dev/null 2>&1 \
+    && (cd "$MAIN" && "$MAIN/node_modules/.bin/bun" scripts/install-parity.ts >/dev/null 2>&1); then
   mirror "$MAIN/node_modules" "$TREE/node_modules" top
   prune "$TREE/node_modules"
   # Nested trees carry the versions bun.lock places there (the SDK's own typescript).
@@ -105,7 +102,10 @@ if cmp -s "$TREE/bun.lock" "$MAIN/bun.lock" && diff -rq "$TREE/patches" "$MAIN/p
     if [ -d "$TREE/$dir/node_modules" ]; then prune "$TREE/$dir/node_modules"; fi
   done
 else
-  echo "Dependencies differ from the main checkout; installing this worktree's locked set."
+  echo "No matching installed donor; installing this worktree's locked set."
+  # Remove borrowed trees before installing: Bun must never write through their links into the donor.
+  rm -rf "$TREE/node_modules"
+  for dir in $WORKSPACES; do rm -rf "$TREE/$dir/node_modules"; done
   (cd "$TREE" && bun install --frozen-lockfile)
 fi
 
