@@ -13,9 +13,9 @@ import { isVfsErrorCode, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-
 import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { commandResult, commandResultAt, uncheckpointedSentence, type CommandResult } from './exec-result';
-import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { causeCodes, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { settle } from '../obs/effect';
-import { DEVICE_METHOD, deviceFailureCodes } from './device-protocol';
+import { DEVICE_METHOD } from './device-protocol';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
   connectedDevices, deviceFleetAsk, deviceByName, freshDeviceToolchain,
@@ -681,7 +681,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     Effect.tryPromise({
       try: () => transport.rpc(method, params, target),
       catch: (cause) => {
-        const code = [...deviceFailureCodes({ cause })].find(isVfsErrorCode);
+        const code = [...causeCodes({ cause })].find(isVfsErrorCode);
 
         return code === undefined ? deviceFailure({ doing: `${method} on the device`, cause }) : new VfsError(code, renderThrownChain({ cause }), path, { cause });
       },

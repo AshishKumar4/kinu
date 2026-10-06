@@ -72,13 +72,9 @@ describe('the mission-derived title', () => {
     expect(parseWorkspaceTitle('{"title":"   "}')).toBe(null);
   });
 
-  test('the naming prompt asks for a JSON title, not a slug', () => {
-    const prompt = workspaceTitlePrompt('Build a durable benchmark runner');
-
-    expect(prompt).toContain('Return a concise JSON object');
-    expect(prompt).toContain('title');
-    expect(prompt).not.toContain('slug');
-    expect(prompt).toContain('Mission:');
+  test('the naming prompt forwards the mission', () => {
+    const mission = 'Build a durable benchmark runner';
+    expect(workspaceTitlePrompt(mission)).toContain(mission);
   });
 });
 

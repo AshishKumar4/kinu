@@ -58,7 +58,7 @@ export function isDefinitiveTerminalFailure(code: ErrorCode): boolean {
 
 /** The owner reads an abandoned effect in the Activity log, by what it was doing. */
 const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {
-  sleep_time: 'memory compression', auto_title: 'naming the chat',
+  sleep_time: 'memory compression', auto_title: 'naming the chat', workspace_logo: 'drawing the workspace logo',
   improvement_lanes: 'self-improvement', turn_record: 'recording the turn',
   turn_lessons: 'learning from the turn\'s struggles',
 };
@@ -84,6 +84,8 @@ const TERMINAL_EFFECT_NAMES = [
   // Detached: the review is a model call the next turn must not wait on; a replay finds its note already recorded.
   'advisor_review',
   'sleep_time', 'auto_title',
+  // Detached; a refused drawing completes and the monogram stays.
+  'workspace_logo',
   'parent_report',
   // Retired (docs/EVOLUTION-REDESIGN.md §6): no turn owes them, and a row an older build wrote completes unrun.
   'shadow_trial', 'auto_gepa',

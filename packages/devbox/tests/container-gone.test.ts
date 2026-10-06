@@ -1,18 +1,15 @@
 // A container that is gone: a heartbeat must not second-guess a restoration in flight, and
 // a stop or discard on a gone container must not resurrect an instance to act on it.
+import { TestDevbox } from './support/test-devbox';
 import { describe, expect, test } from 'bun:test';
 
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import { chainBox, chainHead } from './support/chain-box';
-import { Devbox, gate, harness, STAMP_COMMAND } from './support/devbox-harness';
+import { gate, harness, STAMP_COMMAND } from './support/devbox-harness';
 
 const BOOT_ID_KEY = 'devbox:boot-id';
 
 /** The shipped policy with a test-length probe: nothing here is about budgets. */
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class TestBox extends TestDevbox<unknown> {
 
   protected override get previewHost(): string | undefined {
     return 'preview.example';

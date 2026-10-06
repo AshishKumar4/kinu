@@ -291,40 +291,7 @@ export async function fireTimer(session: LocalAgentSession, label: string, fireA
 }
 
 export function codemodeModel(code: string): LanguageModel {
-  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
-  let step = 0;
-
-  return new TestLanguageModelV2({
-    provider: 'fake',
-    modelId: 'fake-model',
-    doStream: async () => {
-      step += 1;
-
-      return {
-        stream: new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: 'stream-start', warnings: [] });
-
-            if (step === 1) {
-              controller.enqueue({
-                type: 'tool-call', toolCallId: 'call-1', toolName: 'eval',
-                input: JSON.stringify({ code }),
-              });
-              controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
-            } else {
-              controller.enqueue({ type: 'text-start', id: '0' });
-              controller.enqueue({ type: 'text-delta', id: '0', delta: 'done' });
-              controller.enqueue({ type: 'text-end', id: '0' });
-              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
-            }
-
-            controller.close();
-          },
-        }),
-        response: { headers: {} },
-      };
-    },
-  });
+  return toolSequenceModel([{ name: 'eval', input: { code } }]);
 }
 
 export function toolSequenceModel(
@@ -517,24 +484,6 @@ export async function captureSettleTimings(run: () => Promise<void>): Promise<{ 
   }
 
   return timings;
-}
-
-export async function captureFailures(event: string, run: () => Promise<void>): Promise<string[]> {
-  const original = console.error;
-  const lines: string[] = [];
-  console.error = (...args: unknown[]) => {
-    const line = v.safeParse(v.string(), args[0]);
-
-    if (line.success && line.output.includes(`"${event}"`)) lines.push(line.output);
-  };
-
-  try {
-    await run();
-  } finally {
-    console.error = original;
-  }
-
-  return lines;
 }
 
 export function jobColumn(db: Database, id: string, column: 'status' | 'error' | 'result'): string {

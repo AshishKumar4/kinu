@@ -34,7 +34,7 @@ export function ftsQueryTerms(query: string): string[] {
 	return tokens;
 }
 
-export function sanitizeFtsQuery(query: string): string {
+function sanitizeFtsQuery(query: string): string {
 	const tokens = ftsQueryTerms(query);
 
 	if (tokens.length === 0) return '""';
@@ -43,17 +43,31 @@ export function sanitizeFtsQuery(query: string): string {
 }
 
 /** Any-term form of a sanitized query, or null when a single token makes it identical. */
-export function relaxFtsQuery(safeQuery: string): string | null {
+function relaxFtsQuery(safeQuery: string): string | null {
 	const tokens = safeQuery.split(" ").filter(Boolean);
 
 	return tokens.length > 1 ? tokens.join(" OR ") : null;
+}
+
+/** Keep the strict page first, querying partial matches only when it needs filling. */
+export function searchFts<Row>(
+	query: string,
+	capacity: number,
+	matching: (query: string, capacity: number) => Row[],
+	idOf: (row: Row) => string,
+): Row[] {
+	const safe = sanitizeFtsQuery(query);
+	const strict = matching(safe, capacity);
+	const relaxed = strict.length >= capacity ? null : relaxFtsQuery(safe);
+
+	return relaxed === null ? strict : fillToCapacity(strict, matching(relaxed, capacity), capacity, idOf);
 }
 
 /**
  * Shared recall fill policy: the strict page in rank order, then partial matches until `capacity`
  * distinct rows. One `capacity`-sized partial page suffices: every strict match is also a partial match.
  */
-export function fillToCapacity<Row>(
+function fillToCapacity<Row>(
 	strict: readonly Row[],
 	partial: readonly Row[],
 	capacity: number,

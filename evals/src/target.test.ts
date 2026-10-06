@@ -2,6 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { resolveEvalTarget } from './target';
 
 describe('resolveEvalTarget', () => {
+  test.each(['', '   '])('an explicitly blank origin %j is refused before resolving a secret', (origin) => {
+    expect(() => resolveEvalTarget({ KINU_EVAL_ORIGIN: origin, KINU_EVAL_WEB_IDENTITY: 'secret' }))
+      .toThrow(/KINU_EVAL_ORIGIN.*empty value/);
+  });
+
   test('an origin outside the eval allowlist is refused before any trial spends', () => {
     expect(() => resolveEvalTarget({ KINU_EVAL_ORIGIN: 'https://example.com', KINU_EVAL_WEB_IDENTITY: 'secret' }))
       .toThrow(/not an eval target/);

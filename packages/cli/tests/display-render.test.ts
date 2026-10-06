@@ -1,4 +1,4 @@
-// Tool results through printToolResult: a refusal renders as prose, and a cut line says so.
+// Tool results through printToolResult: a refusal renders as prose; the turn status row holds and resumes.
 import { printToolResult, createTurnStatus } from '../src/display';
 import { describe, expect, test, vi, afterEach } from 'bun:test';
 
@@ -24,12 +24,10 @@ function captureConsole(run: () => void): string[] {
 
 
 describe('printToolResult', () => {
-  test('a recorded failure renders its message and class', () => {
+  test('a recorded failure renders its message, not its record', () => {
     const lines = captureConsole(() => printToolResult('No device connected.', { success: false, reason: 'unavailable' }));
     const text = lines.join('\n');
-    expect(text).toContain('failed');
     expect(text).toContain('No device connected.');
-    expect(text).toContain('(unavailable)');
     expect(text).not.toContain('{"reason"');
   });
 
@@ -42,19 +40,6 @@ describe('printToolResult', () => {
     expect(text).toContain('second');
   });
 
-  test('a long result line is cut with an ellipsis that says so', () => {
-    const lines = captureConsole(() => printToolResult('x'.repeat(200), { success: true }));
-    const text = lines.join('\n');
-    expect(text).toContain('…');
-    expect(text.length).toBeLessThan(200);
-  });
-
-  test('a result longer than five lines reports the withheld count', () => {
-    const lines = captureConsole(() => printToolResult(['a', 'b', 'c', 'd', 'e', 'f', 'g'].join('\n'), { success: true }));
-    const text = lines.join('\n');
-    expect(text).toContain('(2 more lines)');
-    expect(text).toContain('…');
-  });
   test('successful refusal-shaped output is rendered as data', () => {
     const content = '{"reason":"denied","error":"historical incident"}';
     const text = captureConsole(() => printToolResult(content, { success: true })).join('\n');

@@ -14,9 +14,10 @@
  */
 import { READS_CHANGED_EVENT, type JsonValue } from '../../packages/core/src/index';
 import {
-  decodeFrame, decodeSocketJson, encodeChatRequest, encodeRpcRequest, HEADER_WEBSOCKET, recordPublicTurn, webHeaders,
-  type PublicSendResult, type PublicTurnRecorder, type PublicWebIdentity,
-} from '../../evals/src/session';
+  decodeFrame, decodeSocketJson, encodeChatRequest, encodeRpcRequest, HEADER_WEBSOCKET, recordPublicTurn,
+  type PublicSendResult, type PublicTurnRecorder,
+} from '../../evals/src/session-protocol';
+import { webHeaders, type PublicWebIdentity } from '../../evals/src/session';
 
 /** One RPC in flight on a public socket. */
 interface PendingRpc {

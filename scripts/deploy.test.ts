@@ -412,9 +412,9 @@ describe("deploy gate", () => {
     const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, phaseGates(phase)]));
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
     expect(byPhase.upload).toEqual(["bun scripts/secret-scan.ts", "bun run gate:infra"]);
-    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bash scripts/product-flows-tier.sh", "bash scripts/eval-pass-tier.sh"]);
+    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bun run gate:devbox-e2e", "bash scripts/product-flows-tier.sh", "bash scripts/eval-pass-tier.sh"]);
     expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
-    expect(byPhase.source?.length).toBe(PLAN.length - 7);
+    expect(byPhase.source?.length).toBe(PLAN.length - 8);
 
     for (const gate of LADDER) {
       if (gate.phase === undefined) {

@@ -398,6 +398,33 @@ const OWNER_TEXT = '# the owner wrote this\n';
     expect(Math.max(...asked.filter((a) => a.table === 'blobs').map((a) => a.limit))).toBeLessThanOrEqual(8);
   });
 
+  test('a row whose columns arrive in another order restores each value to its own column', async () => {
+    const source = await seeded();
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud' });
+    const RowSchema = v.looseObject({ t: v.literal('row'), table: v.string(), values: v.record(v.string(), v.unknown()) });
+    const seen = new Set<string>();
+
+    // A second row of one table, its columns reversed: JSON objects carry no column order.
+    const reordered = lines.map((line) => {
+      const row = v.safeParse(RowSchema, JSON.parse(line));
+
+      if (!row.success || row.output.table !== 'conversation_entries') return line;
+
+      if (!seen.has(row.output.table)) {
+        seen.add(row.output.table);
+
+        return line;
+      }
+
+      return JSON.stringify({ ...row.output, values: Object.fromEntries(Object.entries(row.output.values).reverse()) });
+    });
+
+    const target = fresh();
+    await restoreWorkspaceArchive(target.archive, reordered);
+    const read = (ws: Workspace) => ws.sql<Record<string, SqlValue>>`SELECT * FROM conversation_entries ORDER BY position`;
+    expect(read(target)).toEqual(read(source));
+  });
+
   test('a truncated archive is refused, not half-restored', async () => {
     const source = await seeded();
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud' });

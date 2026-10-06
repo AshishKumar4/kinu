@@ -7,6 +7,7 @@ import { Effect } from 'effect';
 import { tolerate, settleSync } from '../obs/effect';
 import { diagnostics } from '../obs/log';
 import { KinuError } from '../obs/error';
+import { bytesToBase64 } from '../utils/base64';
 import * as v from 'valibot';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
 import { WS_OPEN } from './device-hub';
@@ -124,14 +125,14 @@ export class DeviceTerminalHub {
     }
 
     if (message instanceof ArrayBuffer) {
-      tunnel.notify({ type: DEVICE_PTY_INPUT, session, data: base64FromBytes(new Uint8Array(message)) });
+      tunnel.notify({ type: DEVICE_PTY_INPUT, session, data: bytesToBase64(new Uint8Array(message)) });
 
       return;
     }
 
     if (ArrayBuffer.isView(message)) {
       const bytes = new Uint8Array(message.buffer, message.byteOffset, message.byteLength);
-      tunnel.notify({ type: DEVICE_PTY_INPUT, session, data: base64FromBytes(bytes) });
+      tunnel.notify({ type: DEVICE_PTY_INPUT, session, data: bytesToBase64(bytes) });
 
       return;
     }
@@ -205,16 +206,4 @@ export class DeviceTerminalHub {
 
     return sessions;
   }
-}
-
-/** Chunked so a large paste cannot exceed one call's argument limit. */
-function base64FromBytes(bytes: Uint8Array): string {
-  const CHUNK = 0x8000;
-  let text = '';
-
-  for (let at = 0; at < bytes.length; at += CHUNK) {
-    text += String.fromCharCode(...bytes.subarray(at, at + CHUNK));
-  }
-
-  return btoa(text);
 }

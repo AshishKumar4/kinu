@@ -6,7 +6,7 @@ import type { UserDO } from './user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import {
-  createCloudWorkspaceForUser,
+  createCloudWorkspaceForUser, isCreateConflict,
   type CloudWorkspaceBirth, type CloudWorkspaceRegistry, type CreateCloudWorkspaceEnv,
   CreateCloudWorkspaceInputSchema,
 } from './workspace-create';
@@ -47,11 +47,7 @@ export function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequest<Id
       const cause = Cause.squash(failed);
       const error = authoredRefusal({ doing: 'creating this workspace', cause });
 
-      // Two of workspace-create.ts's refusals are conflicts (409): an unserved provider, and a name held by an unfinished transfer.
-      const conflict = error.message.startsWith('Cloudflare Workers AI is not connected')
-        || error.message.startsWith('Workspace name conflict');
-
-      if (conflict) return err(409, error.message);
+      if (isCreateConflict({ cause })) return err(409, error.message);
 
       return yield* Effect.die(error);
     }));

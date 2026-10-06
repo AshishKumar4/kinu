@@ -12,7 +12,6 @@ import {
   healthProbeCommand,
   healthProbeSilent,
   incidentRetryDelayMs,
-  PORT_TOKEN_ALPHABET,
   admissionStep,
   classifyRecovery,
   openStartBudget,
@@ -412,9 +411,7 @@ describe('recovery is one decision per failure, with no count and no timeout', (
 describe('port tokens and listener probes', () => {
   test('a token is 16 characters drawn only from the alphabet the SDK accepts', () => {
     const token = generatePortToken(n => Uint8Array.from({ length: n }, (_, i) => i * 7));
-    expect(token).toHaveLength(16);
-
-    for (const character of token) expect(PORT_TOKEN_ALPHABET).toContain(character);
+    expect(token).toMatch(/^[a-z0-9_]{16}$/u);
   });
 
   test('the probe reads curl verdicts, and treats an unparsable answer as silence', () => {
@@ -432,11 +429,27 @@ describe('port tokens and listener probes', () => {
     expect(healthProbeSilent('0|0')).toBe(true);
   });
 
-  test('the probe command binds to loopback and cannot hang the restart', () => {
-    const command = healthProbeCommand(8080);
-    expect(command).toContain('127.0.0.1:8080');
-    expect(command).toContain('-m 3');
-    expect(command).toContain('--connect-timeout 2');
+  test('the command proves an answering listener, refuses a closed one, and ends on a silent listener', async () => {
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: (request) => new URL(request.url).pathname === '/'
+      ? new Response(null, { status: 503 }) : Promise.withResolvers<Response>().promise });
+
+    const probe = async (command: string) => {
+      const child = Bun.spawn(['bash', '-c', command], { stdout: 'pipe', stderr: 'pipe' });
+      const stdout = await new Response(child.stdout).text();
+      await new Response(child.stderr).text();
+      expect(await child.exited).toBe(0);
+
+      return stdout;
+    };
+
+    const port = server.port ?? 0;
+
+    try {
+      expect(healthProbeSilent(await probe(healthProbeCommand(port)))).toBe(false);
+      expect(await probe(healthProbeCommand(port).replace('/ 2>&1', '/silent 2>&1'))).toContain('000|28');
+    } finally { await server.stop(true); }
+
+    expect(healthProbeSilent(await probe(healthProbeCommand(port)))).toBe(true);
   });
 });
 
@@ -686,7 +699,7 @@ describe('thrown values', () => {
   });
 });
 
-import { createCheckpointLane } from '../src/lifecycle';
+import { createCheckpointLane } from '../src/operation-lanes';
 import {
   deliverIncidents,
   INCIDENT_LEDGER_MAX_ROWS,

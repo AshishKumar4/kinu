@@ -27,8 +27,10 @@ const {
 } = await import('../src/egress/outbound');
 
 const {
-  eventsOver, orchestratorHarness, stubOf,
+  eventsOver, orchestratorHarness,
 } = await import('./helpers/actor-harness');
+
+const { stubOf } = await import('./helpers/platform-context');
 
 
 const SECRET = ['sk_live_', 'abcdefghij0123456789'].join('');

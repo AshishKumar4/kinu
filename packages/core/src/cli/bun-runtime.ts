@@ -1,7 +1,7 @@
 // One PATH-independent Bun resolution, run by the launcher and the device daemon so they cannot disagree.
 // The CLI needs `bun:sqlite` and `Bun.stdin`, so an unresolvable or too-old Bun is a hard stop.
 
-/** `tests/unit-install-script.test.ts` asserts this equals the repo's `packageManager` pin. */
+/** The user's minimum Bun, independent of the repository's dev Bun. */
 const KINU_BUN_VERSION = '1.4.2';
 
 /** Non-`major.minor.patch` input is not comparable; the shell half treats it as incompatible. */

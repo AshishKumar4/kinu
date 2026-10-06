@@ -23,7 +23,7 @@ import {
   RefinementProposalSchema, createRefinementStore, evolutionDebt, holdRefinementLane, refinementAnswerStored,
   refinementRequestView,
   type RefinementClaim, type RefinementDeps, type RefinementStore,
-  type EvolutionDebt, type RefinementEdit, type RefinementProposal, type RefinementRequest,
+  type RefinementEdit, type RefinementProposal, type RefinementRequest,
   type RefinementRequestView, type RefinementRoute, type RefinementScope, type RefinementStage,
   type RefinementTrigger, type SettleRefinementPatch,
 } from './refinement';
@@ -118,10 +118,6 @@ export async function refinementDebtRequest(
     turnIds: debt.turnIds,
     debtKey: debt.key,
   });
-}
-
-export function refinementDebt(deps: RefinementDeps): EvolutionDebt {
-  return evolutionDebt(deps.control.sql, deps.control.rt.actor);
 }
 
 export type RefinementLaneStep =

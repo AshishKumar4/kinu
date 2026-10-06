@@ -1,14 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
+import { buildPlan, transformTurns, type Item, type Turn } from '@better-compact/core';
 import {
-  buildPlan,
   kinuCodec,
   kinuConventions,
   kinuSpec,
-  transformTurns,
-  type Item,
-  type Turn,
 } from '../src/index';
 import { assistant, toolCall, toolMessage, toolResult, user } from './helpers';
 

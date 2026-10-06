@@ -38,6 +38,7 @@ import {
 import { parseJsonc } from './jsonc';
 import { trackedFiles } from './sources';
 import blockImage from '../packages/devbox/block-lower/upstream.json';
+import { copyPinnedTools } from './devbox-tools';
 import { R2_OPERATION_NAMES as R2_OP_VOCABULARY } from '../packages/devbox/bench/r2-operations';
 
 type StartupPollVerdict =
@@ -131,7 +132,7 @@ interface FixtureNames {
 /** Digest of the image the arms actually ran on: a provenance row naming only the commit
  *  cannot tell two runs on different images apart. */
 interface FixtureImageDigests {
-  readonly imageSha256: string;
+  readonly declaredImage: string;
 }
 
 /** One arm's own Worker, bucket, container application and config.
@@ -163,7 +164,7 @@ const FixtureConfigSchema = v.looseObject({
   containers: v.array(v.looseObject({
     class_name: v.string(),
     scheduling_policy: v.literal('durable_object'),
-    images: v.object({ devbox: v.object({ image: v.string() }) }),
+    images: v.optional(v.object({ devbox: v.object({ image: v.string() }) })),
   })),
   r2_buckets: v.array(v.looseObject({
     bucket_name: v.string(),
@@ -227,7 +228,7 @@ export function fixtureConfigForArms(
       .filter((migration) => migration.new_sqlite_classes.length > 0),
     containers: config.containers
       .filter((container) => deployedClasses.includes(container.class_name))
-      .map((container) => ({ ...container, images: { devbox: { image: SANDBOX_IMAGE } } })),
+      .map((container) => ({ ...container, images: process.env['BENCH_IMAGE'] === undefined ? undefined : { devbox: { image: SANDBOX_IMAGE } } })),
     r2_buckets: config.r2_buckets.map((bucket) => bucket.bucket_name === 'kinu-devbox-bench'
       ? { ...bucket, bucket_name: names.bucket }
       : bucket),
@@ -286,19 +287,15 @@ export function createFixtureResources(
     arms: armFixtures,
     manifest,
     configDir: dir,
-    digests: { imageSha256: SANDBOX_IMAGE_DIGEST },
+    digests: { declaredImage: SANDBOX_IMAGE },
     disposeConfig: () => { rmSync(dir, { recursive: true, force: true }); },
   };
 }
 
 const HARNESS = '/workspace/.devbox-bench';
 
-/** `BENCH_IMAGE_DIGEST` runs another pushed digest of the same repository: a before-and-after pair at one hour. */
-const SANDBOX_IMAGE_DIGEST = process.env['BENCH_IMAGE_DIGEST'] ?? blockImage.digest;
-
-/** Fixture configs pin this immutable reference so the provenance row names the bytes that ran,
- *  not a tag another publisher can repoint. */
-export const SANDBOX_IMAGE = blockImage.image.replace(blockImage.digest, SANDBOX_IMAGE_DIGEST);
+/** The managed base; a comparison can name another declared image without changing what a golden boots. */
+export const SANDBOX_IMAGE = process.env['BENCH_IMAGE'] ?? blockImage.base;
 
 const PROCESS_DEADLINE_MS = 1_500_000;
 
@@ -840,6 +837,8 @@ export async function deployFixture(
   fixture: ArmFixture,
   boot: { readonly productionSync?: boolean; readonly size?: string; readonly faults?: boolean } = {},
 ): Promise<DeployedFixture> {
+  await copyPinnedTools(fixture.bucket);
+
   const output = wrangler([
     'deploy', '--config', fixture.configPath, '--var', `BENCH_TOKEN:${token}`,
     ...(boot.productionSync === true ? ['--var', 'BENCH_PRODUCTION_SYNC:1'] : []),

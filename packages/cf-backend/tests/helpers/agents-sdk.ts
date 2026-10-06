@@ -79,6 +79,11 @@ Object.assign(globalThis, {
   },
 });
 
+const declaredCallables = new Set<string>();
+
+/** Every method name a loaded class marks `@callable()`, as its decorator ran; `getCallableMethods` still answers none. */
+export const harnessCallables = (): ReadonlySet<string> => declaredCallables;
+
 export function harnessHolds(): readonly string[] {
   return [...held];
 }
@@ -547,7 +552,11 @@ export function mockAgentsSdk(): void {
       }
       readonly name: string = '';
     },
-    callable: () => <Method>(method: Method): Method => method,
+    callable: () => <Method>(method: Method, context: ClassMethodDecoratorContext): Method => {
+      declaredCallables.add(String(context.name));
+
+      return method;
+    },
     // A harness call has no connection, as a route's or a stub's has none, unless the suite opens one as a pane would.
     getCurrentAgent: () => ({ agent: undefined, connection: paneConnection, request: undefined, email: undefined }),
     getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>

@@ -250,7 +250,9 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     instruction_approvals: EVERYWHERE,
     plan_reviews: EVERYWHERE,
     // Shared schema; only cf records into it (the devbox egress and the GitHub MCP).
-    github_activity: EVERYWHERE,
+    github_items: EVERYWHERE,
+    github_repos: EVERYWHERE,
+    github_nodes: EVERYWHERE,
     compaction_state: EVERYWHERE,
     compaction_archive: EVERYWHERE,
     imported_experience: EVERYWHERE,

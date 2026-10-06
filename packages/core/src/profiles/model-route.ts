@@ -16,6 +16,7 @@ export const MODEL_ROUTE_POLICY = {
   head: { kind: 'invocation' },
   swarm: { kind: 'invocation' },
   slate: { kind: 'invocation' },
+  logo: { kind: 'invocation' },
   scaffold: { kind: 'fixed', tier: 'deep' },
   judge: { kind: 'fixed', tier: 'deep' },
   advisor: { kind: 'fixed', tier: 'deep' },

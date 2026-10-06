@@ -125,7 +125,7 @@ import {
   type PutEgressSecretInput,
   revocationEndpointFor, revokeOAuthGrant, type UnrevokedGrant,
 } from '@kinu.run/core';
-import { compareCodeUnits, GITHUB_MCP_PRESET, initAccessTokenTable } from '@kinu.run/core';
+import { compareCodeUnits, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, initAccessTokenTable, refreshGitHub, sanitizeWorkspaceLogoSvg, type GitHubRefreshAnswer, type GitHubRefreshAsk } from '@kinu.run/core';
 import {
   addSkill, ChunkedUpload, deleteDriveEntry, driveFailure, DriveUploadTargetSchema, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
   listDrive, makeDriveFolder, markAsSkill, normalizeDrivePath, packDriveFolder, receiveDriveUpload, renameDriveEntry,
@@ -155,13 +155,13 @@ import {
   type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
   type McpPresetId, mcpPresetById,
   describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor,
+  validateMcpServerInput, validateMcpServerName, parseAllowedTools, parseMcpHeaders, type McpTransport,
 } from '@kinu.run/core';
 import {
-  validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
-  parseMcpHeaders, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession,
+  mapConnectionStatus, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession,
   storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, readUndiscoveredToolList,
   mcpListingRefusals,
-  type McpPresetAvailability, type McpServerSummary, type McpToolListing, type McpTransport,
+  type McpPresetAvailability, type McpServerSummary, type McpToolListing,
 } from './mcp';
 import {
   acceptRosterSocket, isRosterSocket, libraryTiles, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, unreportedWorkspaces,
@@ -169,6 +169,7 @@ import {
 } from './roster';
 import { deletePictures, picturePrefix } from '../slates/pictures';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
+import { notInRegistry } from './workspace-ownership';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner,
   issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, resetAccount,
@@ -819,7 +820,7 @@ export class UserDO extends Agent<Env> {
     validateWorkspaceName(workspaceName);
 
     if (!this.workspaceRegistered(workspaceName)) {
-      throw new KinuError('missing', `Workspace ${workspaceName} is not in your registry.`);
+      throw notInRegistry(`Workspace ${workspaceName} is not in your registry.`);
     }
 
     return this.reconcileWorkspaceCapability(workspaceName, presentedHash);
@@ -1470,6 +1471,26 @@ export class UserDO extends Agent<Env> {
     this.rosterChanged(name);
 
     return { applied: true };
+  }
+
+  // Sanitized again at this boundary.
+  async setWorkspaceLogo(caller: UserCaller, name: string, svg: string): Promise<{ drawn: boolean }> {
+    const resolved = await this.requireTier(caller, 'workspaces.rename_self');
+    validateWorkspaceName(name);
+
+    return settle(Effect.gen({ self: this }, function* () {
+      if (resolved.kind === 'workspace' && resolved.workspace !== name) {
+        return yield* Effect.fail(new KinuError('denied', `Workspace "${resolved.workspace}" may only draw its own logo.`));
+      }
+
+      const kept = sanitizeWorkspaceLogoSvg(svg);
+
+      if (kept === null) this.sqlx(`DELETE FROM workspace_logos WHERE name = ?`, name);
+      else this.sqlx(`INSERT OR REPLACE INTO workspace_logos (name, svg, drawn_at) VALUES (?, ?, ?)`, name, kept, Date.now());
+      this.rosterChanged(name);
+
+      return { drawn: kept !== null };
+    }));
   }
 
   /** Null when no row exists; actors hydrate their activation cache from this. */
@@ -5602,10 +5623,19 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     }
   }
 
-  /** Server-side only, for the overview's refresh; null without a GitHub connection. */
-  async userMcp_githubAuthorization(caller: UserCaller): Promise<string | null> {
+  /** Reads GitHub with the account's token (vault, else MCP); the workspace gets only the answers (m48). */
+  async userMcp_githubRefresh(caller: UserCaller, ask: GitHubRefreshAsk): Promise<GitHubRefreshAnswer> {
     await this.requireTier(caller, 'mcp.tools');
+    const asked = v.parse(GitHubRefreshAskSchema, ask);
+    const vault = Object.entries((await this.getAuthHeaders(caller, 'github')) ?? {}).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
+    const authorization = vault ?? await this.githubMcpAuthorization();
 
+    if (authorization === null) return { observed: [], outcome: 'no-token' };
+
+    return settle(refreshGitHub({ authorization, ask: asked, fetch: async (url, init) => fetch(url, init) }));
+  }
+
+  private async githubMcpAuthorization(): Promise<string | null> {
     const row = this.sqlx<{ id: string }>(
       `SELECT s.id FROM user_mcp_servers s JOIN user_mcp_server_presets p ON p.server_id = s.id WHERE p.preset_id = ? LIMIT 1`, GITHUB_MCP_PRESET,
     )[0];

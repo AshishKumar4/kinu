@@ -1,5 +1,5 @@
-/** Shadow-git checkpoint store format: the wire contract with the pc-agent daemon, which pins the same
- *  values as literals. Covers encoding edge cases the parity test never exercises. */
+/** Shadow-git checkpoint store format: the on-disk contract both engines run (the daemon's copy is generated).
+ *  Covers encoding edge cases the parity test never exercises. */
 
 import { describe, test, expect } from 'bun:test';
 import {
@@ -9,8 +9,8 @@ import {
   checkpointRefTimestampMs,
   checkpointReason,
   checkpointSubject,
-  diagnoseStaging,
   parseCheckpointSubject,
+  stagingOutcome,
 } from '../src/checkpoints/format';
 
 const meta = { turnId: 't1', sessionId: 's1' };
@@ -117,8 +117,8 @@ describe('store-format constants pinned by the pc-agent daemon mirror', () => {
   });
 });
 
-/** The staging diagnosis over git's stderr: a non-permission staging failure must never read as tolerable. */
-describe('diagnoseStaging', () => {
+/** What a `git add` left, from its exit and stderr: a non-permission staging failure must never read as tolerable. */
+describe('stagingOutcome', () => {
   // Verbatim from `git add -A --ignore-errors` (git 2.53) over a work tree with
   // a mode-000 directory and a mode-000 file.
   const DENIALS = [
@@ -128,39 +128,35 @@ describe('diagnoseStaging', () => {
   ].join('\n');
 
   test('names the unreadable paths once each, sorted, and explains every line', () => {
-    expect(diagnoseStaging(DENIALS)).toEqual({
-      unreadable: ['locked.txt', 'systemd-private-abc'],
-      unexplained: [],
-    });
+    expect(stagingOutcome(1, DENIALS)).toEqual({ unreadable: ['locked.txt', 'systemd-private-abc'] });
   });
 
-  test('clean stderr is neither unreadable nor unexplained', () => {
-    expect(diagnoseStaging('')).toEqual({ unreadable: [], unexplained: [] });
+  test('a clean add stages everything', () => {
+    expect(stagingOutcome(0, '')).toEqual({ unreadable: [] });
+  });
+
+  test('an add that never finished is no snapshot, whatever it printed', () => {
+    expect(stagingOutcome(null, DENIALS)).toEqual({ failure: 'checkpoint staging failed: git add did not finish' });
   });
 
   test("git's abort summary is explained only by a denial it can follow", () => {
     // The line `add` prints WITHOUT --ignore-errors. It restates the denials
     // above it and adds nothing…
-    expect(diagnoseStaging(`${DENIALS}\nfatal: adding files failed`).unexplained).toEqual([]);
+    expect(stagingOutcome(128, `${DENIALS}\nfatal: adding files failed`)).toEqual({ unreadable: ['locked.txt', 'systemd-private-abc'] });
     // …but on its own it is a staging failure with no explanation, and a caller
     // that treated it as tolerable would commit a truncated tree.
-    expect(diagnoseStaging('fatal: adding files failed').unexplained)
-      .toEqual(['fatal: adding files failed']);
+    expect(stagingOutcome(128, 'fatal: adding files failed')).toEqual({ failure: 'checkpoint staging failed: fatal: adding files failed' });
   });
 
   test('an unindexable file that was never denied is reported, not tolerated', () => {
     // `unable to index file` covers more than permissions — a vanished or
     // unreadable-for-another-reason path lands here too.
-    expect(diagnoseStaging("error: unable to index file 'other.txt'")).toEqual({
-      unreadable: [],
-      unexplained: ["error: unable to index file 'other.txt'"],
-    });
+    expect(stagingOutcome(1, "error: unable to index file 'other.txt'"))
+      .toEqual({ failure: "checkpoint staging failed: error: unable to index file 'other.txt'" });
   });
 
   test('a real staging failure alongside a denial is still reported', () => {
-    const mixed = `${DENIALS}\nerror: unable to write new index file`;
-    expect(diagnoseStaging(mixed).unreadable).toEqual(['locked.txt', 'systemd-private-abc']);
-    expect(diagnoseStaging(mixed).unexplained).toEqual(['error: unable to write new index file']);
+    expect(stagingOutcome(1, `${DENIALS}\nerror: unable to write new index file`)).toHaveProperty('failure');
   });
 });
 

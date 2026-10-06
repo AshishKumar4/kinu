@@ -265,17 +265,20 @@ describe('the delivery route claims exactly its own paths', () => {
 });
 
 describe('trigger management reports what delivery hides', () => {
+  /** A session signed in just now, so creation passes its step-up gate. */
+  const freshSession = { identity: { userId: 'u_1', email: 'owner@example.com', sub: 'sub_1', authTime: Date.now() }, workspace: { name: WORKSPACE } };
+
   function createRequest(): Request {
     return new Request(`${ORIGIN}/api/workspaces/${WORKSPACE}/triggers`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-kinu-auth-time': String(Date.now()) },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ label: 'github', auth_mode: 'hmac' }),
     });
   }
 
   test('no route secret: creation reports the deployment, and registers nothing', async () => {
     const { env, resolveHubAgent, probe } = harness({ secret: null });
-    const response = await serveFamily(hubRoutes(() => resolveHubAgent), { workspace: { name: WORKSPACE } })(createRequest(), env);
+    const response = await serveFamily(hubRoutes(() => resolveHubAgent), freshSession)(createRequest(), env);
 
     expect(response?.status).toBe(503);
     expect(await response?.json()).toMatchObject({
@@ -286,7 +289,7 @@ describe('trigger management reports what delivery hides', () => {
 
   test('with a route secret the same request is not refused as unconfigured', async () => {
     const { env, resolveHubAgent } = harness();
-    const response = await serveFamily(hubRoutes(() => resolveHubAgent), { workspace: { name: WORKSPACE } })(createRequest(), env);
+    const response = await serveFamily(hubRoutes(() => resolveHubAgent), freshSession)(createRequest(), env);
 
     expect(response?.status).not.toBe(503);
   });

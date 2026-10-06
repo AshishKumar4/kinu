@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { GitHubFactSchema, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, refreshGitHub, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { GitHubFactSchema, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -128,7 +128,7 @@ import {
   type ChangelogEntry, type ChangelogRevertResult,
   listAlternateTakeSets, latestAlternateTakeSet,
   type AlternateTakeSet, type TakePickOutcome,
-  startBranchHead, newBranchId, PendingSendStore,
+  startBranchHead, newBranchId, admitBranch, type BranchTurnResult, PendingSendStore,
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
@@ -137,7 +137,7 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
-  readMission, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
+  readMission, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT, isPlaceholderMission, drawWorkspaceLogo,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
@@ -207,6 +207,7 @@ import * as v from 'valibot';
 import { Hono } from 'hono';
 import { beneath, rawPath, rethrow } from './api/context';
 import { experienceLibraryOver } from './user/experience-library';
+import { ownedByAnotherAccount } from './user/workspace-ownership';
 import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
@@ -1145,7 +1146,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * hire/ask/send/list/dismiss vanish from the enum rather than refusing.
    */
   private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
-    const swarm = this.swarmDeps(turn.runtime, () => turn.model);
+    const swarm = this.swarmDeps(turn.runtime, () => turn.model, () => this.agentStores(turn.actor.handle.actorId).workingContext());
 
     const deps: AgentsToolDeps = {
       mode: turn.input.mode,
@@ -1956,6 +1957,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private readonly actorRetirementsInFlight = new Map<string, Promise<ActorDirectoryResult>>();
 
+  private readonly hostedRetries = new Set<string>();
+
   async actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> {
     const { actorId, workspaceId, parentActorId } = this.actorHandle();
 
@@ -2129,8 +2132,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       history: (limit) => this.agentStores(actorId).history(limit),
       admitted: (id) => this.agentStores(actorId).admitted(id),
       send: (input) => whenActorTakesInput(this.boundSql, actorId, () => sendNow(input)),
-      retry: (id) => whenActorTakesInput(this.boundSql, actorId, () => retryHostedMessage(this.hostedSeams(), reference, {
-        messageId: id, reopen: async () => { await (await facet()).reopen(snapshot(), id); },
+      retry: (claim) => whenActorTakesInput(this.boundSql, actorId, () => retryHostedMessage(this.hostedSeams(), reference, {
+        reserved: this.hostedRetries, claim, reopen: async () => (await facet()).reopen(snapshot()),
       })),
       interrupt: () => {
         this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));
@@ -2264,7 +2267,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }
 
       if (current !== userId) {
-        return yield* new KinuError('denied', `Agent owned by a different user (stored=${current.slice(0, 8)}..., caller=${userId.slice(0, 8)}...)`);
+        return yield* ownedByAnotherAccount(`Agent owned by a different user (stored=${current.slice(0, 8)}..., caller=${userId.slice(0, 8)}...)`);
       }
 
       // No scaffold probe here: this runs on every authenticated request. An interrupted bootstrap
@@ -2359,6 +2362,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The genesis turn owes the naming: the create stored a stand-in title, and no
       // other turn replaces one.
       autoTitle: { mission, standIn: input.event === WORKSPACE_CREATED_EVENT },
+      logo: input.event === WORKSPACE_CREATED_EVENT ? { mission } : undefined,
     };
 
     return parts;
@@ -2442,6 +2446,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           if (unreachable !== null) return { status: 'owed', detail: unreachable };
           await this.applyAutoTitle(subject, standIn === true);
+
+          return { status: 'completed' };
+        },
+      }),
+
+      workspace_logo: terminalEffect({
+        input: v.object({ subject: v.string() }),
+        run: async ({ subject }) => {
+          const unreachable = await this.titlingRefusal();
+
+          if (unreachable !== null) return { status: 'owed', detail: unreachable };
+          await this.drawLogo(subject);
 
           return { status: 'completed' };
         },
@@ -2914,8 +2930,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
-  @callable()
   /** The devbox egress cannot name the agent, so nobody's. Never `@callable`. */
   async recordGitHubEgress(facts: readonly GitHubFact[]): Promise<void> {
     recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId: null, source: 'egress', at: Date.now() });
@@ -2932,14 +2946,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private refreshGitHub(activity: WorkspaceGitHub): Effect.Effect<WorkspaceGitHubView['refresh']> {
     return Effect.gen({ self: this }, function* () {
-      const authorization = yield* attempt({ doing: 'finding the account\'s GitHub token', otherwise: 'unavailable' }, async () => this.githubAuthorization());
+      const { stub, caller } = yield* Effect.promise(async () => this.userHub());
 
-      if (authorization === null) return 'no-token' as const;
-      const refreshed = yield* refreshGitHub({ authorization, activity, fetch: async (url, init) => fetch(url, init) });
+      const answer = yield* attempt({ doing: 'asking the account to read GitHub', otherwise: 'unavailable' },
+        async () => stub.userMcp_githubRefresh(caller, gitHubRefreshAsk(activity)));
 
-      recordGitHubObservations(this.boundSql, refreshed.observed, Date.now());
+      recordGitHubObservations(this.boundSql, answer.observed, Date.now());
 
-      return refreshed.outcome;
+      return answer.outcome;
     }).pipe(Effect.catch((failed) => Effect.sync(() => {
       diagnostics.failure('github.refresh_failed', failed);
 
@@ -2947,14 +2961,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     })));
   }
 
-  private async githubAuthorization(): Promise<string | null> {
-    const { stub, caller } = await this.userHub();
-    const vault = await stub.getAuthHeaders(caller, 'github');
-    const header = Object.entries(vault ?? {}).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
-
-    return header ?? stub.userMcp_githubAuthorization(caller);
-  }
-
+  /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
+  @callable()
   async listWorkspaceWork(): Promise<WorkspaceWork> {
     return readWorkspaceWork(
       this.boundSql,
@@ -3630,20 +3638,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * The pair settles into Alternate Takes on this turn; progress streams as 'branch_status'.
    */
   @callable()
-  branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
+  branchTurn(text: string): Promise<BranchTurnResult> {
     return settle(Effect.gen({ self: this }, function* () {
-      const task = text.trim();
+      const admitted = yield* admitBranch(text, { inFlight: this._inFlight, workMode: this.turnWorkMode() });
 
-      if (!task) return yield* new KinuError('bad_input', 'branchTurn requires the redirect text');
-
-      if (!this._inFlight) {
-        return { accepted: false, reason: 'No turn is running: send it as a normal message instead.' };
-      }
-
-      if (this.turnWorkMode() === 'plan') {
-        return { accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' };
-      }
-
+      if ('accepted' in admitted) return admitted;
+      const { task } = admitted;
       const runtime = this.getCFHeadRuntime();
 
       if (!runtime) {
@@ -4638,6 +4638,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
 
     return { builtIn, crafted, executors };
+  }
+
+  @callable() async regenerateWorkspaceLogo(): Promise<{ drawn: boolean; refusal: string | null }> {
+    const refusal = await this.titlingRefusal();
+
+    if (refusal !== null) return { drawn: false, refusal };
+    const mission = readMission(this.boundSql);
+    const subject = mission === null || isPlaceholderMission(mission) ? await this.workspaceTitle() ?? this.name : mission;
+
+    return { drawn: await this.drawLogo(subject), refusal: null };
+  }
+
+  private async drawLogo(subject: string): Promise<boolean> {
+    const svg = await drawWorkspaceLogo(await this.oneShotOn('logo'), subject);
+
+    if (svg === null) return false;
+    const { stub, caller } = await this.userHub();
+
+    return (await stub.setWorkspaceLogo(caller, this.name, svg)).drawn;
   }
 
   @callable() async setDisplayName(displayName: string) {

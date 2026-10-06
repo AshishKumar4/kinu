@@ -1,7 +1,5 @@
-/**
- * The workspace's own page: one line on where things stand, its GitHub work, and every agent's tasks on one board.
- * Each section reads a real source or says plainly that none exists yet.
- */
+/** The workspace's page: where things stand, its GitHub work, and every agent's tasks; each section reads a real
+ *  source or says none exists yet. */
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
 import type { AgentTaskTree, PanelAgent, Rpc, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
@@ -10,6 +8,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { AgentStatusMark } from "@/components/AgentStatus";
 import { GitHubSection } from "@/components/workspaces/GitHubSection";
+import { WorkspaceLogo } from "@/components/Marks";
 
 type Lane = "todo" | "doing" | "waiting" | "done";
 
@@ -76,9 +75,10 @@ function summaryOf(agents: readonly PanelAgent[], cards: readonly Card[]): strin
   ].join(" · ");
 }
 
-export function WorkspaceOverview({ workspace, title, rpc, readMoves, lineage, agents, open }: {
+export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, lineage, agents, open }: {
   workspace: string;
   title: string;
+  logo: string | null | undefined;
   rpc: Rpc;
   readMoves: ReadMoves;
   lineage: ForkLineage | null;
@@ -102,12 +102,15 @@ export function WorkspaceOverview({ workspace, title, rpc, readMoves, lineage, a
   return (
     <div className="min-h-0 flex-1 overflow-y-auto" data-workspace-overview>
       <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-10 px-5 pb-16 pt-9 sm:px-8">
-        <header className="flex flex-col gap-1.5">
-          <h1 className="p-display text-[26px] font-semibold leading-tight p-text">{title}</h1>
-          <p className="text-[13.5px] p-text-3" data-overview-summary>
-            {work === null ? "Reading the workspace…" : summaryOf(agents, cards)}
-            {lineage && <> · forked from <Link to={`/workspace/${lineage.sourceWorkspaceName}`} className="p-accent hover:underline">its parent</Link></>}
-          </p>
+        <header className="flex items-center gap-4">
+          <WorkspaceLogo title={title} logo={logo} size={44} />
+          <div className="flex min-w-0 flex-col gap-1">
+            <h1 className="p-display text-[26px] font-semibold leading-tight p-text">{title}</h1>
+            <p className="text-[13.5px] p-text-3" data-overview-summary>
+              {work === null ? "Reading the workspace…" : summaryOf(agents, cards)}
+              {lineage && <> · forked from <Link to={`/workspace/${lineage.sourceWorkspaceName}`} className="p-accent hover:underline">its parent</Link></>}
+            </p>
+          </div>
         </header>
 
         <section aria-labelledby="overview-github" className="flex flex-col gap-3">

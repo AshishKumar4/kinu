@@ -1,14 +1,14 @@
 // Drives the shipped `Devbox` class with an in-memory R2 binding and a model of its chain:
-// what the box asks of the chain is the subject here; disk-chain-image.test.ts runs the real one.
+// what the box asks of the chain is the subject here; the deploy tier runs the real one.
 import { createHash } from 'node:crypto';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 
 import { DiskChainStateSchema, type DiskChain, type DiskChainPorts } from '../../src/disk-chain';
 import { attempt } from '../../src/errors';
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../../src/lifecycle';
+import { TestDevbox } from './test-devbox';
 import type { DevboxStore, StoredValue } from '../../src/storage';
-import { Devbox, harness } from './devbox-harness';
+import { harness } from './devbox-harness';
 import type { FakeSandbox } from './devbox-harness';
 
 /** The disk chain record's revision, or null before the first commit. */
@@ -107,7 +107,7 @@ export interface ChainBox {
 
 /** The shipped policy with a test-length probe: nothing here is about budgets,
  *  and ambient checkpoints are off so a test's own commits are the only ones. */
-export class ChainTestBox extends Devbox<Record<string, never>> {
+export class ChainTestBox extends TestDevbox<Record<string, never>> {
   #store: DevboxStore | undefined;
 
   /** Wired after construction, because the harness creates the container the
@@ -118,10 +118,6 @@ export class ChainTestBox extends Devbox<Record<string, never>> {
 
   protected override get store(): DevboxStore | undefined {
     return this.#store;
-  }
-
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
   }
 
   protected override get ambientCheckpoints(): boolean {

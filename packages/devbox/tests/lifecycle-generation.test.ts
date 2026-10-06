@@ -1,6 +1,7 @@
 // Lifecycle ownership, readiness and the recovery ladder, driven through the real `Devbox`
 // against `support/devbox-harness.ts`; the pure halves are pinned in `decisions.test.ts`.
 import { beforeEach, describe, expect, test, vi } from 'bun:test';
+import { TestDevbox, TEST_DEVBOX_POLICY as TEST_POLICY } from './support/test-devbox';
 
 import * as v from 'valibot';
 
@@ -28,14 +29,6 @@ const failure = (code: string): SandboxFailure =>
 
 /** A start that throws having created nothing, as when a container refuses a command. */
 const refused = (code: string): StartFault => ({ error: failure(code), created: false });
-
-/** Only the port-probe windows are shortened so a silent listener fails fast;
- *  every other number is the shipped policy. */
-const TEST_POLICY: DevboxPolicy = {
-  ...DEFAULT_DEVBOX_POLICY,
-  portWaitMs: 4,
-  portProbeIntervalMs: 1,
-};
 
 const HEARTBEAT_POLICY: DevboxPolicy = {
   ...TEST_POLICY,
@@ -75,11 +68,7 @@ class TightBox extends Devbox<unknown> {
   }
 }
 
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return TEST_POLICY;
-  }
-
+class TestBox extends TestDevbox<unknown> {
   protected override get previewHost(): string | undefined {
     return 'preview.example';
   }

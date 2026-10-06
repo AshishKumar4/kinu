@@ -346,49 +346,57 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   let attached = options.connectedDeviceId ?? null;
   let socketAttachment: JsonValue = { protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES] };
 
-  const socketBody = {
-    readyState: 1,
-    deserializeAttachment: () => isJsonObject(socketAttachment) ? { ...socketAttachment, device: attached } : { device: attached },
-    serializeAttachment: (value: JsonValue) => { socketAttachment = value; },
-    send: (data: string) => {
-      if (recordPush(data, attached)) return;
-      const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
+  function daemonSocket(input: {
+    readonly device: () => string | null;
+    readonly readAttachment: () => JsonValue;
+    readonly writeAttachment: (value: JsonValue) => void;
+    readonly record: (call: DeviceFrame) => void;
+  }) {
+    const body = {
+      readyState: 1,
+      deserializeAttachment: input.readAttachment,
+      serializeAttachment: input.writeAttachment,
+      send: (data: string) => {
+        if (recordPush(data, input.device())) return;
+        const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
 
-      if (!frame.success) return;
-      const call: DeviceFrame = { id: frame.output.id, method: frame.output.method, params: frame.output.params ?? [] };
+        if (!frame.success) return;
+        const call: DeviceFrame = { ...frame.output, params: frame.output.params ?? [] };
 
-      if (frame.output.sandbox !== undefined) call.sandbox = frame.output.sandbox;
+        input.record(call);
+        const responder = options.deviceResponder;
+        const owner = hub.current;
 
-      if (frame.output.checkpoint !== undefined) call.checkpoint = frame.output.checkpoint;
+        if (!responder || !owner) return;
 
-      if (frame.output.deviceId !== undefined) call.deviceId = frame.output.deviceId;
+        // The daemon answers a throwing method with an error frame. Tests join the
+        // harness fiber before inspecting a delayed answer's effects.
+        return owner.runFiber('test:device-responder', async () => {
+          try {
+            const result = await responder(call, (said) => owner.webSocketMessage(ws, JSON.stringify(said)));
+            await owner.webSocketMessage(ws, JSON.stringify({ id: call.id, result }));
+          } catch (cause) {
+            await owner.webSocketMessage(ws, JSON.stringify({
+              id: call.id, error: daemonError({ cause }),
+            }));
+          }
+        });
+      },
+      close: () => { body.readyState = 3; },
+    };
 
-      if (frame.output.output !== undefined) call.output = frame.output.output;
-      deviceFrames.push(call);
-      const responder = options.deviceResponder;
-      const owner = hub.current;
+    // Hibernatable sockets are workerd-only; the double rides the prototype like helpers/jsrpc-stub.ts.
+    const ws: WebSocket = Object.create(body);
 
-      if (!responder || !owner) return;
+    return { ws, body };
+  }
 
-      // The daemon answers a throwing method with an error frame. Tests join the
-      // harness fiber before inspecting a delayed answer's effects.
-      return owner.runFiber('test:device-responder', async () => {
-        try {
-          const result = await responder(call, (said) => owner.webSocketMessage(socket, JSON.stringify(said)));
-          await owner.webSocketMessage(socket, JSON.stringify({ id: call.id, result }));
-        } catch (cause) {
-          await owner.webSocketMessage(socket, JSON.stringify({
-            id: call.id, error: daemonError({ cause }),
-          }));
-        }
-      });
-    },
-    close: () => { socketBody.readyState = 3; },
-  };
-
-  // Hibernatable sockets are workerd-only; the double rides the prototype like
-  // helpers/jsrpc-stub.ts, and the hub reads only the members above.
-  const socket: WebSocket = Object.create(socketBody);
+  const { ws: socket, body: socketBody } = daemonSocket({
+    device: () => attached,
+    readAttachment: () => isJsonObject(socketAttachment) ? { ...socketAttachment, device: attached } : { device: attached },
+    writeAttachment: (value) => { socketAttachment = value; },
+    record: (call) => { deviceFrames.push(call); },
+  });
 
   let consentDecision: TestUserDO['consentDecision'] = 'deny';
 
@@ -631,49 +639,17 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       // caches the toolchain probe there; a no-op store would re-probe on every status read.
       let attachment: JsonValue = { device: deviceId, protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES] };
 
-      const body = {
-        readyState: 1,
-        deserializeAttachment: () => attachment,
-        serializeAttachment: (value: JsonValue) => { attachment = value; },
-        send: (data: string) => {
-          if (recordPush(data, deviceId)) return;
-          const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
-
-          if (!frame.success) return;
-
-          const call: DeviceFrame = {
-            id: frame.output.id, method: frame.output.method, params: frame.output.params ?? [], device: deviceId,
-          };
-
-          if (frame.output.sandbox !== undefined) call.sandbox = frame.output.sandbox;
-
-          if (frame.output.checkpoint !== undefined) call.checkpoint = frame.output.checkpoint;
-
-          if (frame.output.deviceId !== undefined) call.deviceId = frame.output.deviceId;
-
-          if (frame.output.output !== undefined) call.output = frame.output.output;
+      const { ws, body } = daemonSocket({
+        device: () => deviceId,
+        readAttachment: () => attachment,
+        writeAttachment: (value) => { attachment = value; },
+        record: (call) => {
+          call.device = deviceId;
           frames.push(call);
           deviceFrames.push(call);
-          const responder = options.deviceResponder;
-          const owner = hub.current;
-
-          if (!responder || !owner) return;
-
-          return owner.runFiber('test:device-responder', async () => {
-            try {
-              const result = await responder(call, (said) => owner.webSocketMessage(ws, JSON.stringify(said)));
-              await owner.webSocketMessage(ws, JSON.stringify({ id: call.id, result }));
-            } catch (cause) {
-              await owner.webSocketMessage(ws, JSON.stringify({
-                id: call.id, error: daemonError({ cause }),
-              }));
-            }
-          });
         },
-        close: () => { body.readyState = 3; },
-      };
+      });
 
-      const ws: WebSocket = Object.create(body);
       daemons.push({ deviceId, ws, frames });
 
       return {

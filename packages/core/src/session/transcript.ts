@@ -553,6 +553,20 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     });
   }
 
+  /** The newest user row's turn, its empty failed answer dropped; null without one. */
+  reopenNewestTurn(): ConversationEntry | null {
+    const newest = this.newestUserId();
+    const row = newest === null ? null : this.read(newest);
+    const opener = row === null ? null : this.read(row.turnId ?? row.id);
+
+    if (opener?.role !== 'user') return null;
+    const last = this.at(this.count() - 1);
+
+    if (last?.role === 'assistant' && last.parts.length === 0 && last.turnId === opener.id) this.truncate(last.position);
+
+    return opener;
+  }
+
   /** A rewind: `position` and everything after it is deleted, parts with it; the chat keeps no branch. */
   truncate(position: number): void {
     this.atomic(() => {

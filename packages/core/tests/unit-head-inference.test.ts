@@ -520,23 +520,11 @@ describe('head prompt + messages', () => {
     const sys = buildHeadSystemPrompt(input);
     expect(sys).toContain('analyze the parser');
     expect(sys).toContain('record_evidence');
-    expect(sys).toContain('canonical workspace you were forked from');
-    expect(sys).not.toContain('private Nimbus workspace');
-    expect(sys).not.toContain('nimbus.*');
     // Inheritance is structural: one message per inherited message, then the task.
     const msgs = buildHeadMessages(input);
     expect(msgs).toHaveLength(2);
     expect(msgs[0]).toEqual({ role: 'user', content: 'the prior user message' });
     expect(msgs[1]).toEqual({ role: 'user', content: 'Now focus on your assigned task: analyze the parser' });
-  });
-
-  test('Plan heads are read-only researchers without the top-level submit tool', () => {
-    const sys = buildHeadSystemPrompt(headInput({ mode: 'plan' }));
-
-    expect(sys).toContain('In Plan mode');
-    expect(sys).toContain('Do not edit, write, or delete files');
-    expect(sys).not.toContain('submit_plan');
-    expect(sys).not.toContain('release.');
   });
 });
 

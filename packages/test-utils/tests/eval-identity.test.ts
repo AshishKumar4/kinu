@@ -36,6 +36,11 @@ const DEPLOYMENTS = ((): readonly v.InferOutput<typeof DeploymentSchema>[] => {
 const FOREIGN_ORIGIN = 'https://preview.kinu.run';
 
 describe('the eval target allowlist — a declared deployment, or a loopback, nothing else', () => {
+  test('an unset target defaults once, and whitespace around staging keeps its own secret', () => {
+    expect(evalTargetVerdict(undefined)).toEqual({ kind: 'allowed', origin: EVAL_DEPLOYMENT_ORIGIN, why: 'deployment' });
+    expect(evalTargetVerdict(`  ${EVAL_STAGING_ORIGIN}/  `)).toEqual({ kind: 'allowed', origin: EVAL_STAGING_ORIGIN, why: 'deployment' });
+  });
+
   test('each origin wrangler declares is an eval target, with and without a trailing slash', () => {
     expect(DEPLOYMENTS.map((deployment) => deployment.vars.CLI_PUBLIC_ORIGIN))
       .toEqual([EVAL_DEPLOYMENT_ORIGIN, EVAL_STAGING_ORIGIN]);
@@ -191,6 +196,11 @@ describe('refusedEvalEndpoint — the variable an operator has to fix', () => {
 });
 
 describe('resolveEvalIdentity — the credential is the eval service account or nothing', () => {
+  test.each(['', '   '])('a blank origin %j is refused even without a bearer', (origin) => {
+    expect(resolveEvalIdentity({ [EVAL_IDENTITY_ENV.origin]: origin }).kind).toBe('refused');
+    expect(resolveEvalIdentity({ [EVAL_IDENTITY_ENV.origin]: origin, [EVAL_IDENTITY_ENV.token]: 'pta_eval' }).kind).toBe('refused');
+  });
+
   test('a token with no origin runs against the deployment, as the eval service account', () => {
     const resolved = resolveEvalIdentity({ [EVAL_IDENTITY_ENV.token]: 'pta_eval' });
     expect(resolved).toEqual({

@@ -3939,6 +3939,136 @@ is no namespace scope. A workspace of its own means a relay of its own. Chrome's
 WebTransport over this host's WARP tunnel (MTU 1280) failed with a packet
 write error until its QUIC packets were capped at 1200 bytes.
 
+D72. The native application prepares no Devbox image; the golden's base is
+`cloudflare/debian-trixie` (2026-10-06, the commit carrying this entry;
+m1890, m1959, m2023). This removes D50's named custom image declaration,
+not D66's golden or its tools build. Wrangler 4.145 refuses the official
+name in `containers.images.devbox.image`: that field accepts only a
+digest-pinned managed-registry image. Its `durable_object` application
+permits no `images` map, and the golden starts the official name directly.
+
+Measured on eval-owned throwaway Workers, Medium, internet off:
+
+| Run | Application declaration | What the box actually booted |
+|---|---|---|
+| `dc2026100604100676936` | `kinu-devbox-native@sha256:b40f5a17…` | Cloudflare's `cf/production/node-24-trixie@sha256:6cef8f20…` |
+| `dc20261006042135d5c0c` | no `images` map; `Container.images` answered `{}` | the same Cloudflare trixie digest |
+
+The first run built its golden in 66.4 s. The no-image control built it in
+58.0 s and started its first box in 1.17 s. Both ran the tools, native exec,
+process-launch, tree-kill and trust contracts successfully. The no-image
+run also drove KasmVNC's framed client through the product's desktop route:
+a click changed Chromium's red page to blue, and the document refused a
+foreign socket. Every Worker, application, bucket and snapshot tag of both
+runs was deleted and checked absent. The first driver was interrupted while
+waiting on a desktop route missing its execution context; its explicit
+cleanup recovery checked the same absence. Reports are under
+`/mnt/local/kinu/tmp/kinu-devbox-contracts-KbgG5B/` and `-TTRRDA/`.
+
+The Ubuntu runtime stage, Node image copy, runtime image build helpers and
+runtime image digest are deleted. The Dockerfile's `tools` target stays:
+`scripts/devbox-tools.ts build` and `publish` still build it, while a golden
+pipes the pinned tarball's R2 parts into its base. The 335,860,844-byte
+tarball remains `d1639d06…`; the runtime-stage deletion changes no tools
+stage input. The live tools contract installed that exact archive, refused
+an incomplete part before extraction and reinstalled with `changed=0`.
+Docker builds the distribution artifact only; no commit test builds or
+starts a Docker image.
+
+The official-base declaration also exposed an image/account coupling:
+snapshot cleanup derived its account from the deleted custom image URL.
+Kinu now supplies its deployment's `CLOUDFLARE_ACCOUNT_ID`. The regression
+was red with an undefined account and green with the managed base. The
+native fixture's snapshot deletions independently verified the same
+account-scoped registry path. Fresh Vite build plus `wrangler deploy
+--dry-run` passed with no Devbox image preparation: 11,860.90 KiB Total
+Upload on `0657ad9af` plus this change (2026-10-06); the earlier
+`ad2215476` build with the same native declaration was 11,841.24 KiB.
+
+The deployed regression tier is `bun run gate:devbox-e2e`, now the native
+container driver. Run `dc20261006045352da6d8` passed all 17 steps in 370 s
+including its verified teardown: golden, declared-image inspection, tools,
+exec, process launch/boot fencing, tree kill, trust, desktop click, product
+snapshot/lost-snapshot/plain recovery, and eight disk-chain controls.
+Those controls cover block growth/truncation and writable mmap/WAL,
+compaction/deletion, a missing baseline, streaming under disk pressure,
+parallel lower mounts, low-disk lazy resume, lost inventory publication,
+and the next tick after a quiesce. The report is
+`/mnt/local/kinu/tmp/kinu-devbox-contracts-f3aM6j/report.json` and carries
+the source revision and dirty digest. Every snapshot tag, Worker,
+application and bucket was absent afterwards.
+
+Deleted: the eight local-Docker suites and their build/container/store/mmap
+fixtures, plus the obsolete 2026-09-01 five-strategy driver and its
+calibration-only oracle. The native contracts use the golden's actual
+kernel, shim, Files clients and R2 route. A local publisher test also
+claimed disk use never exceeded three windows; the loaded run exceeded
+that while preserving every byte. D57 already records a soft window
+overshoot of 203 MB at 40 MiB (more than three). That unmeasured scheduler
+pin and its sampling helper are deleted; concurrent publication and exact
+stored bytes stay checked, and the live disk-pressure row proves the
+useful bounded-disk contract on an actual container.
+
+A failed teardown health read is recorded, not a prerequisite for deletion.
+The research run `dc20261006052451b68f5` hit DNS `ETIMEOUT` there; explicit
+cleanup recovery removed its resources. The driver now completes the
+Worker, application and bucket deletions even when health or an earlier
+cleanup operation fails. The throwing-health regression was red with zero
+deletions and green with all three; health retains the DNS cause in its
+report. This changes no container lifetime or retry policy.
+
+D73. Native bindings do not replace the Durable Object, and SDK 1.0 does
+not supply a container-start hook (2026-10-06, m1966, m1967; the commit
+carrying this entry). One object still owns one container, its SQLite,
+generation, admission fence and alarms. `ctx.container.start()` starts the
+guest; `exec`, PTYs, ports, `monitor` and snapshots are native methods.
+There is no SDK `Sandbox` or `Container.onStart` superclass in this design.
+Devbox's start boundary admits the container, configures its routes, then
+awaits its restore hook inside `ctx.blockConcurrencyWhile`. Every external
+operation goes through readiness; restoration and its resource admissions
+remain one owner. `repair` admits tools but names missing residents through
+the incident inbox (D67).
+
+The measured gate contract is D38/D43: no request delivered inside the
+native restore block in nine pending-timer controls; native-process holds
+completed 9/9, while Worker-timer holds still reset behind outside timers.
+The native restore budget uses a guest process, not a Worker timer. Moving
+lineage selection/deletion into `Snapshots` and scopes/queues into
+`operation-lanes` changes no gate or teardown fence. The hybrid,
+lifecycle-generation, quiesce-order, resource-lane and registry suites
+exercise these same owners.
+
+SDK 1.0's installed README and exports were read on 2026-10-06. It supplies
+`Files`, `S3Mount`/`S3Gateway`, and `DirectoryBackup`; command, PTY and
+snapshot execution belong to the native binding. Devbox uses its file and
+mount clients. What remains here is the product's golden builder, primary
+snapshot lineage with an R2 block-delta fallback, generation-safe recovery,
+supervised resident restart, rest consent, preview/desktop socket activity,
+and the binding-backed S3 route (D41). Those are not SDK services. D38
+already removed the old control WebSocket, ContainerProxy and both SDK
+patches. D62 removed 4,041 source and 10,782 test lines of the older chain;
+this change removes the separate local-image test path. There is no new
+container transport or Sandbox wrapper.
+
+D74. No DirectoryBackup leg remains to remove (2026-10-06, m1932;
+the commit carrying this entry). The letter C names different designs in
+two entries: D53's C was snapshots plus DirectoryBackup; D68's C is native
+snapshots plus the disk chain. D68's D is vblk alone, not D53's
+DirectoryBackup-alone D. The open-asks note conflated those letter labels.
+Repository search of `packages/devbox` found zero `DirectoryBackup`
+imports or calls; the live no-image box reported `disk-chain/2`, wrote block
+deltas and recovered through that chain, not a directory archive.
+
+The retained measurement is D53, repeated on the accepted fixture there:
+224 MiB DirectoryBackup-alone save 2.125 s, small-edit save 2.430 s moving
+234,891,281 bytes, and whole restore 1.131-2.063 s (n=5). At 2 GiB it took
+11.8-18.6 s to download and restore the whole tree (n=2); five owner
+evictions retained the prior backup and left an incomplete upload. The
+owner's D55/D66 hybrid choice needs a size-independent lazy fallback and
+block-sized edits. DirectoryBackup's eager whole-directory restore is not
+that fallback. It stays an SDK export, not a Devbox dependency. No logged
+decision is reversed and no new backup mechanism is built.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

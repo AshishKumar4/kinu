@@ -3,9 +3,10 @@
 import type { AssistantModelMessage, ModelMessage, ToolCallPart, ToolModelMessage, ToolResultPart } from 'ai';
 import * as v from 'valibot';
 import type { PathPlanes, Storage } from '@kinu.run/core';
+import type { EnginePorts, Logger, PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
 import {
   createCompactionExtension,
-  type ArchiveIndexStore, type ArchiveRange, type EnginePorts, type Logger, type PlanSnapshot, type PlanStore, type TranscriptStore,
+  type ArchiveIndexStore, type ArchiveRange,
 } from '../src/index';
 
 export function user(text: string): ModelMessage {

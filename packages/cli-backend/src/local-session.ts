@@ -109,8 +109,8 @@ import { TierIdSchema,
   bootstrapScaffold,
   createScaffoldHistory,
   type AlternateTakeSet, type TakePickOutcome,
-  startBranchHead, newBranchId,
-  type PendingBranch, type BranchStatusEvent,
+  startBranchHead, newBranchId, admitBranch,
+  type PendingBranch, type BranchStatusEvent, type BranchTurnResult,
   type AlarmScheduler, type BackgroundJob, type ListedBackgroundJob,
   type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
@@ -1150,25 +1150,27 @@ export class LocalAgentSession {
   }
 
   /** Run a mid-turn redirect as a budgeted head beside the live turn, settling into Alternate Takes
-   *  (core steer-branch.ts). False when no turn is in flight. */
-  branch(text: string): boolean {
-    if (!this.chat.pumping) return false;
-    const task = text.trim();
+   *  (core steer-branch.ts). */
+  branchTurn(text: string): BranchTurnResult {
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const admitted = yield* admitBranch(text, { inFlight: this.chat.pumping, workMode: this.actorSession.workMode });
 
-    if (!task) return false;
-    this.ensureModelState();
-    const id = newBranchId();
-    // Read now: the branch charges the turn the owner redirected, not whichever runs next.
-    const missionLabels = this.budget.scope;
+      if ('accepted' in admitted) return admitted;
+      const { task } = admitted;
+      this.ensureModelState();
+      const id = newBranchId();
+      // Read now: the branch charges the turn the owner redirected, not whichever runs next.
+      const missionLabels = this.budget.scope;
 
-    const handle = this.readInheritedContext().then((inheritedContext) => startBranchHead(this._headRuntime, this.headJournal, {
-      id, task, inheritedContext, missionLabels,
+      const handle = this.readInheritedContext().then((inheritedContext) => startBranchHead(this._headRuntime, this.headJournal, {
+        id, task, inheritedContext, missionLabels,
+      }));
+
+      this.pendingBranches.push({ id, task, handle });
+      this.host.broadcast({ type: 'branch_status', status: 'running', branchId: id, task } satisfies BranchStatusEvent);
+
+      return { accepted: true, branchId: id } satisfies BranchTurnResult;
     }));
-
-    this.pendingBranches.push({ id, task, handle });
-    this.host.broadcast({ type: 'branch_status', status: 'running', branchId: id, task } satisfies BranchStatusEvent);
-
-    return true;
   }
 
   /** Returns the dropped steer texts. */
@@ -2715,13 +2717,12 @@ export class LocalAgentSession {
     ];
   }
 
-  /** One builder for constructor and rebind; a copy omitting `resolveModel` makes per-search
-   *  models a silent no-op (see `createCLIHeadRuntime`'s tests). */
+  /** One builder for constructor and rebind. */
   private headRuntimeOptions(
     model: () => LanguageModel,
   ): CLIHeadRuntimeDeps {
     // Named interface, not Parameters<...>[0], so the field-supply census sees this site.
-    const options: CLIHeadRuntimeDeps = {
+    return {
       model,
       // Merge model, effort and spend label are core's policy (`headMergeLLM`).
       profile: () => this.routingProfile(),
@@ -2737,14 +2738,8 @@ export class LocalAgentSession {
       journal: () => this.headJournal,
       publishHeadStream: this.publishHeadStream,
       hostHead: (input, writes) => this.hostHead(input, writes),
+      resolveModel: (spec) => this.resolveModelForSpec(spec),
     };
-
-    if (this.modelResolver) {
-      const modelResolver = this.modelResolver;
-      options.resolveModel = (spec) => modelResolver.resolveModel(spec, this.conversation());
-    }
-
-    return options;
   }
 
   /**

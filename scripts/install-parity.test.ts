@@ -135,6 +135,14 @@ esac
     expect(installDrift(checkout('install-parity-clean'))).toEqual([]);
   });
 
+  test('npm build metadata absent from Bun’s resolved lock version is not another package version', () => {
+    const root = checkout('install-parity-build-metadata');
+    install(root, 'node_modules/tool', '2.0.0+9bd19c9');
+    expect(installDrift(root)).toEqual([]);
+    writeFileSync(join(root, 'bun.lock'), LOCK.replace('tool@2.0.0', 'tool@2.0.0+other'));
+    expect(installDrift(root)).toEqual([`${join(root, 'node_modules/tool')} holds 2.0.0+9bd19c9 where bun.lock names 2.0.0+other`]);
+  });
+
   test.each([
     ['a stale package in a workspace\'s node_modules, shadowing the root\'s,', 'packages/app/node_modules/tool', '1.0.0', 'where bun.lock installs nothing'],
     ['a package at another version than the lock names at its path', 'node_modules/tool', '2.1.0', 'where bun.lock names 2.0.0'],

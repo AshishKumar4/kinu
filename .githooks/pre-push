@@ -1,41 +1,9 @@
 #!/usr/bin/env bash
 #
-# Push tier: the commit tier plus the shared-spine suites, the Cloudflare
-# composition root, and the gates whose cost only makes sense once — dead code,
-# secret scan, schema drift, and every gate's own self-test.
+# A push runs the static `local` tier on the pushed tree, a few minutes. The test suites run on GitHub CI's
+# parallel runners for the pushed commit, and a release deploys only a commit whose CI is green (deploy.sh).
 #
-# NO TEST COUNT AND NO TIER COST HERE. This header said "3,105 shared-spine
-# tests ... ~62s declared". `scripts/ladder.ts` records 3,105 as the figure that
-# had drifted against a measured 3,917 and refuses to quote a count at all, and
-# the push tier's own declared seconds now sum to ~97s on top of the commit
-# tier's ~12s. `bun scripts/ladder.ts --matrix` prints both, derived, which is
-# the only form of either number that stays true.
-#
-# Why the secret scan is HERE and not later: push is the last tier at which a
-# leaked credential is still recoverable without a rotation.
-#
-# Why packages/cli and packages/cli-backend are NOT here: 92s and 41s. Together
-# they are more than twice this whole tier for 17% of its tests, and pushing is
-# something you do many times a day. They run in CI, which is where a two-minute
-# suite belongs.
-#
-# NEVER --no-verify. The push tier is a proven subset of the CI tier
-# (scripts/ladder.test.ts asserts it by claimed files), so bypassing it cannot
-# let anything through — it only moves the same failure to CI.
-
-# WHY THE TRANSCRIPT GOES TO A FILE.
-#
-# Gates run with stdout inherited, and this tier's whole transcript is 16,650
-# lines, measured 2026-09-03 — more than the pipe git gives a pre-push hook
-# will read. Write it there and git stops reading before the end, the next
-# write takes SIGPIPE, and the hook dies with status 141 — which git reports as
-# a refusal with no failing gate named. That refused three pushes in one
-# evening whose 42 gates had all passed, while the same tier run standalone
-# exited 0, which is what localised it.
-#
-# So the transcript lands in a file and git sees the verdict. A failure prints
-# the finding and names the log, which is also the only readable form of a
-# 16,000-line tier.
+# NEVER --no-verify.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 source scripts/repo-runtime.sh
@@ -45,7 +13,7 @@ source scripts/repo-runtime.sh
 head="$(git rev-parse HEAD)"
 while read -r _ local_sha _ _; do
   if [ "$local_sha" != "0000000000000000000000000000000000000000" ] && [ "$local_sha" != "$head" ]; then
-    printf 'pre-push: this push sends %s, but the push tier proves the checked-out %s.\n' "$local_sha" "$head" >&2
+    printf 'pre-push: this push sends %s, but the tier proves the checked-out %s.\n' "$local_sha" "$head" >&2
     printf 'Push from a worktree that has that commit checked out.\n' >&2
     exit 1
   fi
@@ -57,7 +25,7 @@ if [ -n "$(git status --porcelain=v1)" ]; then
 fi
 
 log="$(git rev-parse --git-dir)/push-tier.log"
-if "$PWD/node_modules/.bin/bun" scripts/ladder.ts --tier=push > "$log" 2>&1; then
+if "$PWD/node_modules/.bin/bun" scripts/ladder.ts --tier=local > "$log" 2>&1; then
   tail -n 1 "$log"
   exit 0
 fi

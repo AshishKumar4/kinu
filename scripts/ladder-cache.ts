@@ -3,7 +3,7 @@
  * proof that nothing it can read has changed.
  *
  * The proof is a sha256 over the gate's input closure (`ladder-closure.ts`):
- * the command, the checkout it runs in, every closure file's working-tree
+ * the command, every closure file's working-tree
  * bytes, the value of every environment name the gate is given, and the
  * toolchain (bun, node, typescript, oxlint, wrangler, vitest, the platform).
  * A recorded entry lives outside the tree at `~/.cache/kinu-ladder/<sha256>`
@@ -30,7 +30,7 @@
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join, resolve, sep } from 'node:path';
 import * as v from 'valibot';
 import { CHILD_ENV_NAMES } from '../packages/test-utils/src/ambient-env';
 import { deriveClosure } from './ladder-closure';
@@ -49,6 +49,10 @@ const ToolVersionsSchema = v.object({
 
 export type ToolVersions = v.InferOutput<typeof ToolVersionsSchema>;
 
+export function cacheEnabled(options: { readonly changedFrom?: string; readonly ciPart?: string; readonly noCache: boolean }): boolean {
+  return options.ciPart === undefined && !options.noCache;
+}
+
 const PackageVersion = v.object({ version: v.string() });
 
 /** The toolchain a gate's verdict stands on. Package versions are read from
@@ -65,7 +69,7 @@ export function toolVersions(root: string): ToolVersions {
   };
 
   return {
-    bun: Bun.version,
+    bun: `${Bun.version}+${Bun.revision}`,
     node: process.versions.node,
     typescript: installed('typescript'),
     oxlint: installed('oxlint'),
@@ -78,6 +82,7 @@ export function toolVersions(root: string): ToolVersions {
 /** One recorded green run. */
 const EntrySchema = v.object({
   run: v.string(),
+  execution: v.optional(v.string()),
   revision: v.string(),
   seconds: v.number(),
   recordedAt: v.string(),
@@ -196,18 +201,18 @@ export interface KeyPreimage {
   readonly env?: EnvReader;
 }
 
-/** The key: sha256 over the run, the checkout's root, the closure's bytes,
- *  the environment the gate is given and the toolchain. The root is a key
- *  input because the gate runs in it: an absolute path lands in socket
- *  names, temp paths and messages, and a checkout's untracked state is not
- *  another checkout's, so a proof recorded in one checkout is never another's.
+/** The key: sha256 over the run, closure bytes, keyed environment and toolchain.
+ *  A location-sensitive verdict names its
+ *  checkout; content verdicts name relative inputs and declared built bytes.
  *  Environment VALUES enter the preimage only, so a secret named on a row
  *  never lands in the store. */
 export function keyFor(preimage: KeyPreimage): string {
   const { run, closure, tools, repo, env = ambientEnv } = preimage;
+  const checkout = resolve(repo.root);
   const hash = createHash('sha256');
   hash.update(`run\0${run}\0`);
-  hash.update(`root\0${repo.root}\0`);
+
+  if (closure.location === 'checkout') hash.update(`root\0${repo.root}\0`);
   hash.update(`tools\0${JSON.stringify(tools)}\0`);
 
   for (const file of closure.files) {
@@ -228,7 +233,20 @@ export function keyFor(preimage: KeyPreimage): string {
     }
   }
 
-  for (const name of gateEnvNames(closure)) hash.update(`env\0${name}\0${env(name) ?? '\u0001unset'}\0`);
+  for (const name of gateEnvNames(closure)) {
+    let keyed = env(name);
+
+    if (closure.location !== 'checkout' && keyed !== undefined && ['PATH', 'PWD', 'NODE_PATH', 'KINU_ROOT'].includes(name)) {
+      const separator = name === 'PATH' || name === 'NODE_PATH' ? delimiter : '\u0000';
+      keyed = keyed.split(separator).map((path) => {
+        if (path === checkout) return '<checkout>';
+
+        return path.startsWith(`${checkout}${sep}`) ? `<checkout>${path.slice(checkout.length)}` : path;
+      }).join(separator);
+    }
+
+    hash.update(`env\0${name}\0${keyed ?? '\u0001unset'}\0`);
+  }
 
   return hash.digest('hex');
 }
@@ -270,7 +288,7 @@ export function planGate(gate: GateCacheRequest): Plan {
 export function recordGreen(
   plan: Extract<Plan, { kind: 'miss' }>,
   gate: GateCacheRequest,
-  result: { readonly seconds: number; readonly revision: string },
+  result: { readonly seconds: number; readonly revision: string; readonly execution?: string },
 ): string | undefined {
   const after = deriveClosure(gate.run, gate.inputs, gate.repo);
 
@@ -281,6 +299,7 @@ export function recordGreen(
 
   gate.store.record(key, {
     run: gate.run,
+    execution: result.execution,
     revision: result.revision,
     seconds: Math.round(result.seconds * 100) / 100,
     recordedAt: new Date().toISOString(),

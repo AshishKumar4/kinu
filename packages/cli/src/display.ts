@@ -2,7 +2,7 @@ import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { BUILTIN_TOOLS, describeProviderError, describeToolCall, fmtUsd, quotaWindowText, summarizeToolCall, timeAgo, usageTotal } from '@kinu.run/core';
-import { clipText, TUI_MARKS } from '@kinu.run/core/tui';
+import { clipText, TUI_MARKS, SPINNER_FRAMES } from '@kinu.run/core/tui';
 import type { AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
 import { STEP_RESTART_NOTICE, type AgentSearchNode } from './agent-client';
 import cliPackage from '../package.json' with { type: 'json' };
@@ -56,8 +56,6 @@ function boxRow(label: string, value: string, width: number): string {
 
   return `${DIM(BOX.v)} ${label}${value}${' '.repeat(padding)}`;
 }
-
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 const isTTY = process.stdout.isTTY ?? false;
 

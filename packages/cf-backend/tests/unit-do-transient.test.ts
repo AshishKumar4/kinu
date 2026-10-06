@@ -5,7 +5,7 @@ import { describe, test, expect } from 'bun:test';
 import { PLATFORM_CATALOG } from '@kinu.run/core';
 import { retryTransientDO, classifyTransientDO } from '@kinu.run/core';
 import {
-  claimOwnedWorkspace,
+  claimOwnedWorkspace, notInRegistry, ownedByAnotherAccount,
   type OwnedWorkspaceResult, type WorkspaceOwnerClaim, type WorkspaceOwnershipEnv, type WorkspaceRegistry,
 } from '../src/user/workspace-ownership';
 
@@ -198,9 +198,11 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     expect(await claimFailure('persist-503', CONNECTION_LOST)).toMatchObject({ failure: { status: 503 } });
   });
 
-  test('a genuine ownership collision still reports 403', async () => {
-    expect(await claimFailure('collision-403', 'collision-403 is owned by a different user'))
-      .toMatchObject({ failure: { status: 403 } });
+  test('a genuine ownership collision still reports 403, whatever its words', async () => {
+    const collision = ownedByAnotherAccount('someone else already holds collision-403');
+
+    expect(await claimOwnedWorkspace(envWith({ claimError: collision }), USER, 'collision-403'))
+      .toMatchObject({ failure: { status: 403, error: 'Workspace collision-403 belongs to another account.' } });
   });
 
   test('an application failure is still ours to own, at 500', async () => {
@@ -252,7 +254,7 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     const env = envWith({
       membershipAnswers: [true, false],
       registryReads: reads,
-      capabilityError: new Error('Workspace evicted-404 is not in your registry.'),
+      capabilityError: notInRegistry('evicted-404 left the registry'),
       capabilitySucceeds: 1,
     });
 

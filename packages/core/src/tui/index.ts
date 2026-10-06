@@ -1,6 +1,7 @@
 /** The terminal client's presentation, off the root barrel so the Worker loads none of it. */
 export {
   CHANGE_KIND_GLYPH,
+  ELAPSED_COUNTER,
   composerVisibleRows,
   TUI_ADVERTISED_PRESET_BINDINGS,
   TUI_ADVERTISED_HINTS,
@@ -11,6 +12,6 @@ export {
 
 export { modelDisplayName, formatContextUsage } from './context-status';
 
-export { clipText, terminalText, literalText, agentDisplayLabel } from './format';
+export { clipText, terminalText, literalText, agentDisplayLabel, SPINNER_FRAMES, meterText, type TurnMeter } from './format';
 
 export { renderChangelogText } from './changelog-text';

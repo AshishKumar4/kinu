@@ -11,7 +11,8 @@ import {
 import { sqlOver } from '@kinu.run/test-utils';
 import { createAgentTracing, createRecordingTracer } from '@kinu.run/core/obs';
 import { makeExecRaw, makeSqlExec } from '../../../core/tests/helpers';
-import { makeCtx, makeEnv } from './actor-harness';
+import { makeEnv } from './actor-harness';
+import { makeCtx } from './platform-context';
 import { createWorkspaceActorHost, HostedActorHomes, type WorkspaceHostSeams } from '../../src/actor-hosting';
 import { createHostedWorkspace } from '../../src/workspace-host';
 import { HELD_NIMBUS_TASKS } from './programmatic-host';
@@ -76,7 +77,7 @@ export async function hostedWorkspace(
   const mainHandle = directory.createMain({ name: 'harness' });
   const main = actorReferenceOf(mainHandle);
 
-  // Real workspace host; `ctx` comes from `actor-harness.ts` so there is one answer to which platform members an actor reaches.
+  // Real workspace host, over the same platform context every actor fixture uses.
   const ctx = makeCtx(db, workspaceId);
   // Shared with `actor-harness.ts`: one source of truth for which bindings an actor may reach.
   const env = makeEnv();

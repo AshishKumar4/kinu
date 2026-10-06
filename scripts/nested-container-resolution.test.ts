@@ -1,5 +1,5 @@
 /** Resolve every deployed Worker import with the bundler that emits the artifact.
- *  Container image contents are outside this graph; block-image.test.ts exercises the native image. */
+ *  Container contents are outside this graph; the devbox deploy tier exercises the real golden. */
 import { readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { expect, test } from 'bun:test';

@@ -12,8 +12,9 @@ import { ownerCaller } from '@kinu.run/core';
 import { JsonObjectSchema, USER_AI_PROXY_PATH, parseJsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { settle, tolerate, tolerated } from '@kinu.run/core/obs';
-import { beneath } from '../api/context';
-import { inferenceProxyGate, type CliEnv } from '../cli/routes';
+import { beneath, type FamilyEnv } from '../api/context';
+import { inferenceProxyGate, type CliBearerEnv, type CliBearerVariables } from '../api/cli-bearer';
+import type { CliAuthAuthority } from '../cli/auth-store';
 import * as v from 'valibot';
 
 const PROXY_PLACEHOLDER = 'https://kinu-user-ai-proxy.invalid';
@@ -27,11 +28,13 @@ export interface UserAIProxyEnv<Id> extends AvailableModelsEnv<Id>, OwnerCapabil
   AI?: NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createDirectWorkersAIFetch>[0]>;
 }
 
-export const aiProxyRoutes = new Hono<CliEnv>();
+type ProxyAuthority = CliAuthAuthority & UserCredentialClient;
 
-aiProxyRoutes.use(`${USER_AI_PROXY_PATH}/*`, beneath(USER_AI_PROXY_PATH, inferenceProxyGate));
+export const aiProxyRoutes = new Hono<FamilyEnv<UserAIProxyEnv<unknown> & CliBearerEnv<ProxyAuthority>, CliBearerVariables<ProxyAuthority>>>();
 
-aiProxyRoutes.use(`${USER_AI_RUN_PATH}/*`, beneath(USER_AI_RUN_PATH, inferenceProxyGate));
+aiProxyRoutes.use(`${USER_AI_PROXY_PATH}/*`, beneath(USER_AI_PROXY_PATH, inferenceProxyGate()));
+
+aiProxyRoutes.use(`${USER_AI_RUN_PATH}/*`, beneath(USER_AI_RUN_PATH, inferenceProxyGate()));
 
 /** A decision model's rating for a CLI with no Cloudflare token of its own; only the decision models are run. */
 aiProxyRoutes.post(`${USER_AI_RUN_PATH}/*`, async (c) => {

@@ -2,17 +2,11 @@
  * The deployed release configuration: the two things a production incident needs
  * to already be true, because neither can be established afterwards.
  *
- * A1 THE CONTAINER IMAGE IS IMMUTABLE. `docker.io/cloudflare/sandbox:0.12.8` is a
- *   mutable pointer. Anyone who can push that repository can re-point the tag,
- *   and the next container start runs the new bytes with nothing in this
- *   repository changed — inside a container holding somebody's workspace, and
- *   with no record afterwards of which image actually ran. A digest cannot be
- *   re-pointed: it IS the bytes. So every deployable environment must name the
- *   image by digest, both must name the SAME one, and that digest must be the one
- *   resolved for the `@cloudflare/sandbox` version this deployment ships — the
- *   SDK asks the container for its own SANDBOX_VERSION on every start
- *   (Sandbox.checkVersionCompatibility), so a digest from another version is a
- *   mismatch logged at container start rather than a failed deploy.
+ * A1 CUSTOM IMAGES ARE IMMUTABLE. A custom image uses its recorded digest, never
+ *   a moving tag. Devbox starts the official managed base directly and prepares
+ *   no Wrangler image; its golden installs the pinned tools archive (D66/D72).
+ *   The tools record pins the Sandbox shim version and the source it was built
+ *   from. A declared Ubuntu image would prepare bytes no box ever boots.
  *
  * A2 THE WORKER'S STACK TRACES ARE READABLE. An uncaught exception in a deployed
  *   Worker reaches Workers Logs as a stack over one minified bundle unless
@@ -83,34 +77,21 @@ const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
 
 const BLOCK_LOWER = 'packages/devbox/block-lower';
 
-/** The container hosts: every Worker config that runs the block-lower image. */
+/** The container hosts: every Worker config that uses the devbox tools. */
 const CONTAINER_HOSTS = [WRANGLER, 'packages/devbox/bench/wrangler.jsonc', 'packages/devbox/example/wrangler.jsonc'];
 
 /**
- * The sandbox container image every environment runs, declared ONCE: the block-lower artifact record.
- *
- * `packages/devbox/block-lower/Dockerfile` compiles `devbox-block-lower` and `devbox-squashfuse` into the
- * upstream `@cloudflare/sandbox` base, and the result is pushed to this account's registry; the push writes
- * `upstream.json` with the pushed manifest's digest, the sandbox release whose container the SDK expects,
- * and the hash of every source the image was built from. Each wrangler.jsonc repeats the reference because a
- * JSONC file cannot import a constant; this record is what they are held to.
+ * The tools record holds their build sources, shim release and managed base.
  */
 const BlockLowerArtifactSchema = v.object({
-  image: v.string(),
-  digest: v.string(),
+  base: v.literal('cloudflare/debian-trixie'),
   sandboxVersion: v.string(),
   files: v.record(v.string(), v.string()),
 });
 
 const ARTIFACT = v.parse(BlockLowerArtifactSchema, JSON.parse(readRepositoryFile(REPO_ROOT, `${BLOCK_LOWER}/upstream.json`)));
 
-const SANDBOX_IMAGE = {
-  repository: ARTIFACT.image.slice(0, ARTIFACT.image.lastIndexOf('@')),
-  version: ARTIFACT.sandboxVersion,
-  digest: ARTIFACT.digest,
-} as const;
-
-const PINNED_IMAGE = ARTIFACT.image;
+const CUSTOM_IMAGE = CONTAINER_IMAGES.CodexEgress;
 
 /** Each container class and the one image the release record declares for it. */
 const PINNED_IMAGES = new Map(Object.entries(CONTAINER_IMAGES).map(([className, image]) => [className, imageReference(image)]));
@@ -150,11 +131,11 @@ function isImmutableImageReference(reference: string): boolean {
  *  object starts by name (`durable_object`). */
 const ContainerSchema = v.union([
   v.object({ class_name: v.string(), image: v.string() }),
-  v.object({ class_name: v.string(), scheduling_policy: v.literal('durable_object'), images: v.record(v.string(), v.object({ image: v.string() })) }),
+  v.object({ class_name: v.string(), scheduling_policy: v.literal('durable_object'), images: v.optional(v.record(v.string(), v.object({ image: v.string() }))) }),
 ]);
 
 const imagesOf = (container: v.InferOutput<typeof ContainerSchema>): string[] =>
-  'images' in container ? Object.values(container.images).map((entry) => entry.image) : [container.image];
+  'image' in container ? [container.image] : Object.values(container.images ?? {}).map((entry) => entry.image);
 
 /** A container host's config, narrowed to the images it runs. */
 const ContainerHostSchema = v.object({ containers: v.array(ContainerSchema) });
@@ -195,14 +176,19 @@ test('every Worker manifest uses the canonical deployment compatibility date', (
   }
 });
 
-describe('the sandbox container image is pinned', () => {
-  test('the Worker runs the pinned digest and names no tag', () => {
+describe('the managed base and custom container images', () => {
+  test('the native devbox prepares no image, and each custom image is digest-pinned', () => {
     const containers = CONFIG.containers ?? [];
 
     expect(containers.map((container) => container.class_name).sort(), 'the Worker declares other containers than the record')
       .toEqual([...PINNED_IMAGES.keys()].sort());
 
     for (const container of containers) {
+      if (container.class_name === 'KinuDevbox') {
+        expect(imagesOf(container)).toEqual([]);
+        continue;
+      }
+
       for (const image of imagesOf(container)) {
         expect(isImmutableImageReference(image), 'the Worker runs a re-pointable image').toBe(true);
         expect(image, 'the Worker runs an image the release record does not declare')
@@ -232,21 +218,21 @@ describe('the sandbox container image is pinned', () => {
     // Exact, not a range: the container reports one SANDBOX_VERSION and the SDK
     // compares it to the installed one, so `^0.12.8` would let an install decide
     // which container is correct.
-    expect(manifest.dependencies['@cloudflare/sandbox']).toBe(SANDBOX_IMAGE.version);
+    expect(manifest.dependencies['@cloudflare/sandbox']).toBe(ARTIFACT.sandboxVersion);
   });
 
   test('a re-pointable reference is refused, in both directions', () => {
-    expect(isImmutableImageReference(PINNED_IMAGE)).toBe(true);
-    expect(isImmutableImageReference(`localhost:5000/sandbox@${SANDBOX_IMAGE.digest}`)).toBe(true);
+    expect(isImmutableImageReference(imageReference(CUSTOM_IMAGE))).toBe(true);
+    expect(isImmutableImageReference(`localhost:5000/sandbox@${CUSTOM_IMAGE.digest}`)).toBe(true);
 
-    expect(isImmutableImageReference(`${SANDBOX_IMAGE.repository}:0.12.8`)).toBe(false);
-    expect(isImmutableImageReference(`${SANDBOX_IMAGE.repository}:latest`)).toBe(false);
+    expect(isImmutableImageReference(`${CUSTOM_IMAGE.repository}:0.12.8`)).toBe(false);
+    expect(isImmutableImageReference(`${CUSTOM_IMAGE.repository}:latest`)).toBe(false);
     // The digest pulls, and the tag is still there to be believed and bumped.
-    expect(isImmutableImageReference(`${SANDBOX_IMAGE.repository}:0.12.8@${SANDBOX_IMAGE.digest}`))
+    expect(isImmutableImageReference(`${CUSTOM_IMAGE.repository}:0.12.8@${CUSTOM_IMAGE.digest}`))
       .toBe(false);
-    expect(isImmutableImageReference(SANDBOX_IMAGE.repository)).toBe(false);
-    expect(isImmutableImageReference(`${SANDBOX_IMAGE.repository}@sha256:822501de`)).toBe(false);
-    expect(isImmutableImageReference(`${SANDBOX_IMAGE.repository}@md5:${'0'.repeat(64)}`)).toBe(false);
+    expect(isImmutableImageReference(CUSTOM_IMAGE.repository)).toBe(false);
+    expect(isImmutableImageReference(`${CUSTOM_IMAGE.repository}@sha256:822501de`)).toBe(false);
+    expect(isImmutableImageReference(`${CUSTOM_IMAGE.repository}@md5:${'0'.repeat(64)}`)).toBe(false);
   });
 });
 
@@ -684,12 +670,10 @@ describe('sign-in has no single chokepoint', () => {
 
 
 /**
- * A8 THE BLOCK-LOWER IMAGE IS BUILT FROM THIS TREE. The pushed image is the only thing any host runs, so a
- * source edited without a rebuild and a new record ships a container that is not the code reviewed here, and
- * a host left on an older digest runs a filesystem the others do not.
+ * A8 THE TOOLS ARE BUILT FROM THIS TREE. A source change needs a new pinned artifact before the golden serves it.
  */
-describe('the block-lower image is built from this tree', () => {
-  test('the record hashes exactly the sources the image builds from, and each hash holds', () => {
+describe('the tools tarball is built from this tree', () => {
+  test('the record hashes exactly the tools-stage sources, and each hash holds', () => {
     const sources = trackedFiles()
       .filter((file) => file.startsWith(`${BLOCK_LOWER}/`))
       .map((file) => file.slice(BLOCK_LOWER.length + 1))
@@ -703,15 +687,14 @@ describe('the block-lower image is built from this tree', () => {
     }
   });
 
-  test('every container host runs the recorded image, by digest', () => {
-    expect(ARTIFACT.image.endsWith(`@${ARTIFACT.digest}`)).toBe(true);
-
+  test('every devbox host uses the native scheduling policy with no image preparation', () => {
     for (const host of CONTAINER_HOSTS) {
       const config = parseJsonc(readRepositoryFile(REPO_ROOT, host), ContainerHostSchema, host);
       // The Codex forwarder beside it is held by the pin test above.
       const sandboxes = config.containers.filter((container) => container.class_name !== 'CodexEgress');
 
-      expect(sandboxes.flatMap(imagesOf), host).toEqual(sandboxes.map(() => PINNED_IMAGE));
+      expect(sandboxes.map(row => 'scheduling_policy' in row ? row.scheduling_policy : 'default'), host).toEqual(sandboxes.map(() => 'durable_object'));
+      expect(sandboxes.flatMap(imagesOf), host).toEqual([]);
     }
   });
 });
