@@ -1872,7 +1872,13 @@ describe('linking a machine happens on the surface that asked for it', () => {
       // The disclosure is on screen before anything is installed: no command yet.
       expect(await page.$('[data-connect-command]')).toBeNull();
 
-      await page.click('[role="dialog"] [data-connect-start]');
+      // Named, and pressed twice before the first answer: one registration, carrying the name.
+      await page.type('[role="dialog"] input[aria-label="Device name"]', 'Build box');
+      await page.$eval('[role="dialog"] [data-connect-start]', (button) => {
+        if (!(button instanceof HTMLButtonElement)) throw new Error('the start control is not a button');
+        button.click();
+        button.click();
+      });
       await page.waitForSelector('[data-connect-command]');
       expect(await page.$eval('[data-connect-command]', (code) => code.textContent ?? '')).toBe(
         "curl -fsSL 'https://kinu.run/install.sh' | KINU_PARENT_ACTIVATES=1 bash -s -- --no-setup --connect"
@@ -1886,12 +1892,8 @@ describe('linking a machine happens on the surface that asked for it', () => {
         () => document.querySelector('[role="dialog"]') === null,
       );
       expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
-      // One registration got us here. The fixture counts its own POSTs, so a
-      // second one — a double click, a re-render, an effect that re-fired —
-      // shows up as a number rather than as a device row nobody notices.
-      expect(await page.evaluate(
-        () => document.documentElement.dataset.galleryRegistrations,
-      )).toBe('1');
+      // One registration got us here, though the button was pressed twice: a second would be a device row nobody notices.
+      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryRegistrations ?? '[]'))).toEqual(['Build box']);
       await page.close();
     });
   });
@@ -1923,6 +1925,25 @@ describe('linking a machine happens on the surface that asked for it', () => {
       );
       expect(await page.$('[role="dialog"] [data-connect-waiting]')).not.toBeNull();
       expect(await page.$('[data-connect-command]')).not.toBeNull();
+      await page.close();
+    });
+  });
+
+  test('a refused registration is named, and the next press registers', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1100, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=fail-first`, { waitUntil: 'networkidle0' });
+      await page.click('[data-env-card="device"] [data-env-connect]');
+      await page.waitForSelector('[role="dialog"] [data-connect-start]');
+
+      await page.click('[role="dialog"] [data-connect-start]');
+      await page.waitForSelector('[role="dialog"] [data-connect-error]');
+      expect(await page.$eval('[data-connect-error]', (line) => line.textContent ?? '')).toContain('the hub is busy');
+
+      await page.click('[role="dialog"] [data-connect-start]');
+      await page.waitForSelector('[data-connect-command]');
+      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryRegistrations ?? '[]'))).toHaveLength(2);
       await page.close();
     });
   });

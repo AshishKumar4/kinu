@@ -17,6 +17,7 @@
     "no-copy-rpc-stub",
     "no-ddl-in-catch",
     "no-dynamic-model-import",
+    "model-method-boundary",
     "no-effect-swallow",
     "no-elapsed-work-deadline",
     "no-empty-catch",
@@ -79,6 +80,7 @@
       "require-super-alarm",
       "no-tui-colour-literal",
       "no-dynamic-model-import",
+      "model-method-boundary",
       "require-variant-utility",
       "no-cli-credential-flag",
       "no-bare-error-in-durable-object"
@@ -104,7 +106,7 @@
     },
     "index.ts": {
       "upstream": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415",
-      "local": "08525a1052f33449ff8fbf8a2a2eab1dfc17a796f36aac780730a411c61b06f6",
+      "local": "d7528676680d3186d47571212e4381510e7c200be7f883b5336ad8386743e0d9",
       "reason": "Registers the Kinu-local rules declared in kinuRules beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
@@ -219,6 +221,12 @@
       "kinuOnly": true
     },
     "rules/no-dynamic-model-import.ts": {
+      "kinuOnly": true
+    },
+    "rules/model-method-boundary.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/model-method-boundary.ts": {
       "kinuOnly": true
     },
     "rules/no-effect-swallow.test.ts": {
