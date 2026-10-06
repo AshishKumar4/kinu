@@ -16,6 +16,7 @@ import { HeadJournal } from '../src/heads/journal';
 import { newBranchId } from '../src/steer-branch';
 import type { Page, SeekCursor } from '../src/session/page';
 import type { ForkRunSummary } from '../src/read-models/fork-runs';
+import type { SqlValue } from '../src/types/primitives';
 
 function freshDb() {
   const db = new Database(':memory:');
@@ -263,6 +264,30 @@ describe('listForkRuns', () => {
     const runs = listForkRuns(sql, actor, null, 3).items;
     expect(runs).toHaveLength(3);
     expect(runs.map((r) => r.id)).toEqual(['s3', 'm3', 's2']);
+  });
+
+  // A page's cost is its own runs: the halves were folded for every run the actor had, then filtered.
+  test('a page folds only the runs on it', () => {
+    const { db, sql, actor, actorId } = freshDb();
+
+    for (let i = 0; i < 4; i++) {
+      seedJournalledRun(db, actorId, { rootId: `m${i}`, task: `merge ${i}`, at: 1000 + i * 10, heads: [{ status: 'completed' }], merged: true });
+      seedSearchRun(db, actorId, { rootId: `s${i}`, task: `search ${i}`, at: 1005 + i * 10, branches: 2, winner: 0.5, ledger: 'converged' });
+    }
+
+    const folded: string[][] = [];
+
+    const counting: typeof sql = <T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+      const rows = sql<T & { root_id: string }>(strings, ...values);
+
+      if (/GROUP BY [nj]\.root_id/.test(strings.join('?'))) folded.push(rows.map((row) => row.root_id));
+
+      return rows;
+    };
+
+    // The page reads one past its limit to know whether another follows.
+    expect(listForkRuns(counting, actor, null, 1).items.map((run) => run.id)).toEqual(['s3']);
+    expect(folded).toEqual([['s3'], ['m3']]);
   });
 
   test('an exact lookup reaches a run outside the recent-list window', () => {

@@ -30,8 +30,8 @@ import {
   nextDeviceRequestId,
 } from './device-tunnel';
 import { readDeviceOwnershipContext } from './signal';
-import { callJob, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
-import { approveFileAccess, createShellSession, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { approveFileAccess, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { callJob, createShellSession, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
 import { asBytes } from '../safety/bound-write';
 import { isPrefixName, RESERVED_ROOTS } from '../vfs/resolve';
 import {

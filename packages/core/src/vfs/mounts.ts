@@ -2,13 +2,12 @@ import { type Awaitable, type VFS, type VfsRemoval, type VfsStat } from '@nimbus
 /**
  * Workspace plane mount table: the durable workspace tree extended by `/pc` (device tunnel) and `/sandbox`
  * (container), each read through that executor's own `files` VFS so its boundaries still apply.
- * Mount points are absolute; relative paths stay in the workspace, so `pc/x` is a workspace file.
  */
 
 
 import type { CheckpointFiles } from '../types/primitives';
 import { Effect } from 'effect';
-import type { FilesOwner } from '../safety/approval-gate';
+import type { FilesOwner } from '../safety/command-review';
 import type { ExecutorStatus } from '../execution/types';
 import { renderThrownChain, settle } from '../obs/index';
 import { isVfsError, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';

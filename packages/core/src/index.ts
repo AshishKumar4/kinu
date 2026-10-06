@@ -948,8 +948,8 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 export {
   DefaultExecutionRouter, runOnExecutor, type ExecutorRun,
   withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach, type ShellReach,
-  busyShell, callJob, createBashShell, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
-  type MachineShells,
+  busyShell, callJob, createBashShell, createShellSession, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
+  type MachineShells, type ShellSession,
   createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending, sandboxSizeLabel,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
@@ -1342,7 +1342,6 @@ export {
 // Safety
 export {
   reviewCommand,
-  createShellSession,
   formatApproval,
   gatedGrants,
   formatApprovalGrant, holdsGrant,
@@ -1358,7 +1357,6 @@ export {
   type ApprovalHarm,
   type FilesOwner,
   type GatedExecutor,
-  type ShellSession,
   type ApprovalGrant,
   type ShellApprovalRequest,
   type ShellApprovalOutcome,

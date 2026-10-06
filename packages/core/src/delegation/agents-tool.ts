@@ -1,7 +1,5 @@
 /**
- * `agents`: the one delegation tool. Actions: swarm (configured search over ephemeral nodes), hire
- * (`lifetime` durable|task, an existing `agent`, or scope=workspace), msg, list, dismiss.
- * Which actions exist follows the wired deps (agentsActionsFor).
+ * `agents`: the one delegation tool: swarm, hire, msg, list, dismiss, as the wired deps allow (agentsActionsFor).
  * Swarm call contract: docs/EXPLORATION.md "Presets", "Validity over the resolved configuration",
  * "Accepted and ignored".
  */
@@ -18,7 +16,7 @@ import {
   type AgentsToolAction,
 } from '../tools/registry';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
-import { nearestField } from '../tools/field-names';
+import { actionFieldRefusal, nearestField } from '../tools/field-names';
 import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
@@ -437,8 +435,6 @@ export const AGENTS_ACTION_FIELDS = {
   dismiss: ['agent', 'keep_history'],
 } as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
 
-const fieldsOf = (action: AgentsToolAction): readonly string[] => AGENTS_ACTION_FIELDS[action];
-
 /** Every input field and its type, declared once: the model parse refuses unknown fields, replay drops them. */
 const AgentsInputEntries = {
   action: v.picklist(AGENTS_TOOL_ACTIONS),
@@ -676,10 +672,6 @@ const StoredAgentsInputSchema = v.object({ ...AgentsInputEntries, action: v.stri
 const AGENTS_INPUT_FIELDS: readonly string[] = Object.keys(AgentsInputEntries)
   .filter((field) => field !== 'action');
 
-function actionReads(action: AgentsToolAction, field: string): boolean {
-  return fieldsOf(action).some((declared) => declared === field);
-}
-
 const FieldNamesSchema = v.record(v.string(), v.unknown());
 
 function fieldNames(value: JsonValue): readonly string[] {
@@ -691,16 +683,6 @@ function fieldNames(value: JsonValue): readonly string[] {
 const FIELD_RULE = 'A field the called action cannot act on is refused rather than dropped: a cap'
   + ' that never reached the run is a cap that was never applied.';
 
-function takesSentence(action: AgentsToolAction): string {
-  return `action "${action}" takes: ${fieldsOf(action).join(', ')}.`;
-}
-
-function fieldsSentence(action: AgentsToolAction | undefined): string {
-  if (action) return ` ${takesSentence(action)}`;
-
-  return ` Fields are: ${AGENTS_INPUT_FIELDS.join(', ')}.`;
-}
-
 /**
  * What is wrong with the field names of `input` (unknown, or misplaced for the called action), or
  * undefined. Runs ahead of the strict schemas, which still refuse anything this misses.
@@ -710,45 +692,22 @@ function agentsFieldRefusal(call: { input: unknown }): string | undefined {
 
   if (!parsed.success) return undefined;
   const declared = v.safeParse(v.picklist(AGENTS_TOOL_ACTIONS), parsed.output['action']);
-  const action = declared.success ? declared.output : undefined;
-  const problems: string[] = [];
-  // Printed once at the end so the field list is not repeated per clause.
-  let listFields = false;
+  const sent = Object.keys(parsed.output);
 
-  for (const field of Object.keys(parsed.output)) {
-    if (field === 'action') continue;
+  if (declared.success) {
+    const refusal = actionFieldRefusal({ fields: AGENTS_ACTION_FIELDS, action: declared.output, sent });
 
-    if (Object.hasOwn(AgentsInputEntries, field)) {
-      if (action && !actionReads(action, field)) {
-        const readers = AGENTS_TOOL_ACTIONS.filter((other) => actionReads(other, field));
-        problems.push(`field "${field}" does not apply to action "${action}": it is read by`
-          + ` ${readers.join('/')}, and ${action} would ignore it.`);
-        listFields = true;
-      }
-
-      continue;
-    }
-
-    const meant = nearestField(field, action ? fieldsOf(action) : AGENTS_INPUT_FIELDS);
-
-    if (meant) {
-      problems.push(`unknown field "${field}": did you mean "${meant}"?`);
-      continue;
-    }
-
-    const elsewhere = action ? nearestField(field, AGENTS_INPUT_FIELDS) : undefined;
-    problems.push(elsewhere
-      ? `unknown field "${field}": "${elsewhere}" is read by`
-        + ` ${AGENTS_TOOL_ACTIONS.filter((other) => actionReads(other, elsewhere)).join('/')},`
-        + ` not ${action ?? 'this action'}.`
-      : `unknown field "${field}".`);
-    listFields = true;
+    return refusal === undefined ? undefined : `${refusal} ${FIELD_RULE}`;
   }
 
-  if (problems.length === 0) return undefined;
-  const fields = listFields ? fieldsSentence(action) : '';
+  // No action yet: only a field no action reads is named, with the nearest one that is.
+  const problems = sent.filter((field) => field !== 'action' && !Object.hasOwn(AgentsInputEntries, field)).map((field) => {
+    const meant = nearestField(field, AGENTS_INPUT_FIELDS);
 
-  return `${problems.join(' ')}${fields} ${FIELD_RULE}`;
+    return meant === undefined ? `unknown field "${field}".` : `unknown field "${field}": did you mean "${meant}"?`;
+  });
+
+  return problems.length === 0 ? undefined : `${problems.join(' ')} Fields are: ${AGENTS_INPUT_FIELDS.join(', ')}. ${FIELD_RULE}`;
 }
 
 /** The one parse for the `agents` tool and its codemode namespace. */

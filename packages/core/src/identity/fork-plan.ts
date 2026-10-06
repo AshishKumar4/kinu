@@ -8,7 +8,7 @@ import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
-import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { isTreeRelativePath, workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import {
   ForkContextMemberRowSchema,
   ForkConversationEntryPartRowSchema,
@@ -53,9 +53,7 @@ interface ForkChainEntryRow {
 }
 
 function artifactSegments(relative: string, path: string, root: string): Effect.Effect<string> {
-  const traversal = relative.split('/').some((segment) => segment === '' || segment === '.' || segment === '..');
-
-  return relative.startsWith('/') || traversal
+  return !isTreeRelativePath(relative)
     ? Effect.die(new Error(
       `fork cannot carry payload ${JSON.stringify(path)}: it does not name a file inside the artifact `
       + `directory ${JSON.stringify(root)}`,

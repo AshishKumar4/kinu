@@ -4,7 +4,6 @@
  * One root id is one run. A run may write the search tree (`search_nodes`), node transcripts
  * (`head_journal` / `head_runs`), or both (a swarm whose unit is an agent); each half is an
  * independent flag on one row, and paging is over runs, never over either store.
- * Steer-as-Branch runs are excluded by `STEER_BRANCH_RUN_ID_PREFIX`.
  */
 
 import { Effect } from 'effect';
@@ -61,7 +60,7 @@ export function listForkRuns(
 
     const positions = queryPositions({ sql, actorId: actor.actorId, limit: over, rootId: null, after });
 
-    return seekPage(readRuns(sql, actor.actorId, null, positions), page, forkAnchor);
+    return seekPage(readRuns(sql, actor.actorId, positions), page, forkAnchor);
   }));
 }
 
@@ -71,7 +70,7 @@ export function readForkRun(sql: SqlExecutor, actor: ActorHandle, rootId: string
 
   const positions = queryPositions({ sql, actorId: actor.actorId, limit: 1, rootId, after: null });
 
-  return readRuns(sql, actor.actorId, rootId, positions)[0] ?? null;
+  return readRuns(sql, actor.actorId, positions)[0] ?? null;
 }
 
 /** `startedAt` alone is not a position (two runs can share a millisecond); the id completes it. */
@@ -144,16 +143,11 @@ function queryPositions({ sql, actorId, limit, rootId, after }: PositionQuery): 
     .map((row) => ({ rootId: row.root_id, startedAt: row.started_at }));
 }
 
-function readRuns(
-  sql: SqlExecutor,
-  actorId: string,
-  rootId: string | null,
-  positions: readonly RunPosition[],
-): ForkRunSummary[] {
+function readRuns(sql: SqlExecutor, actorId: string, positions: readonly RunPosition[]): ForkRunSummary[] {
   if (positions.length === 0) return [];
-  const wanted = new Set(positions.map((position) => position.rootId));
-  const trees = queryTreeHalves(sql, actorId, rootId, wanted);
-  const journals = queryTranscriptHalves(sql, actorId, rootId, wanted);
+  const roots = JSON.stringify(positions.map((position) => position.rootId));
+  const trees = queryTreeHalves(sql, actorId, roots);
+  const journals = queryTranscriptHalves(sql, actorId, roots);
 
   return positions.flatMap((position) => {
     const tree = trees.get(position.rootId);
@@ -214,12 +208,7 @@ interface TreeHalf {
  * Grouped by `search_nodes.root_id`, not the `mcts_search_runs` ledger, which prunes settled rows
  * after a day. Every `search_nodes` read, including the child subquery, must be actor-scoped.
  */
-function queryTreeHalves(
-  sql: SqlExecutor,
-  actorId: string,
-  rootId: string | null,
-  wanted: ReadonlySet<string>,
-): Map<string, TreeHalf> {
+function queryTreeHalves(sql: SqlExecutor, actorId: string, roots: string): Map<string, TreeHalf> {
   const rows = sql<{
     root_id: string; branches: number; task: string | null; name: string | null;
     status: string | null; frontier: number; terminal: number; best_terminal: number | null;
@@ -238,13 +227,12 @@ function queryTreeHalves(
     FROM search_node_scores n
     LEFT JOIN mcts_search_runs r ON r.actor_id = ${actorId} AND r.root_id = n.root_id
     WHERE n.actor_id = ${actorId}
-      AND (${rootId} IS NULL OR n.root_id = ${rootId})
+      AND n.root_id IN (SELECT value FROM json_each(${roots}))
     GROUP BY n.root_id`;
 
   const halves = new Map<string, TreeHalf>();
 
   for (const row of rows) {
-    if (!wanted.has(row.root_id)) continue;
     halves.set(row.root_id, {
       branches: row.branches,
       task: row.task,
@@ -312,12 +300,7 @@ interface TranscriptHalf {
 
 /** Grouped by `head_journal`, as `HeadJournal.listRuns` is: a top-level split's synthetic root
  *  has no journal row. */
-function queryTranscriptHalves(
-  sql: SqlExecutor,
-  actorId: string,
-  rootId: string | null,
-  wanted: ReadonlySet<string>,
-): Map<string, TranscriptHalf> {
+function queryTranscriptHalves(sql: SqlExecutor, actorId: string, roots: string): Map<string, TranscriptHalf> {
   const rows = sql<{
     root_id: string; heads: number; running: number; errored: number;
     root_status: string | null; root_task: string | null;
@@ -336,13 +319,12 @@ function queryTranscriptHalves(
     LEFT JOIN head_merge_results m ON m.actor_id = j.actor_id AND m.root_id = j.root_id
     WHERE j.actor_id = ${actorId}
       AND j.root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
-      AND (${rootId} IS NULL OR j.root_id = ${rootId})
+      AND j.root_id IN (SELECT value FROM json_each(${roots}))
     GROUP BY j.root_id`;
 
   const halves = new Map<string, TranscriptHalf>();
 
   for (const row of rows) {
-    if (!wanted.has(row.root_id)) continue;
     halves.set(row.root_id, {
       branches: row.heads,
       rootTask: row.root_task,

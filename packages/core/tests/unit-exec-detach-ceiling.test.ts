@@ -28,7 +28,7 @@ import type { OutputChunk, OutputSink, Schedule, Shell, ShellExecResult } from '
 import { withApprovalGatedShell } from '../src/execution/approval';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { JOB_STAMP_ENV } from '../src/types/jobs';
-import { createShellSession } from '../src/safety/approval-gate';
+import { createShellSession } from '../src/execution/shell-session';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';

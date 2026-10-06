@@ -14,7 +14,7 @@ import { KinuError } from '../obs/error';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import type { SqlExecutor } from '../types/primitives';
-import { WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { isTreeRelativePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import type { ActorHandle } from './actor-handle';
 import type { ForkFileSink } from './fork-sink';
 import { renderIssues, type JsonObject } from '../utils/json';
@@ -48,7 +48,7 @@ import {
   type ForkMemoryChunkRow,
   type ForkSessionMessageRow,
 } from './fork-rows';
-import { ForkTargetWriter, forkResultOf, type ForkResult } from './fork-writer';
+import { ForkSectionCountsSchema, ForkTargetWriter, forkResultOf, type ForkResult, type ForkStagedCounts } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
 /** Fork transfer protocol version; a receiver refuses one it does not implement. Bump when an older
@@ -72,17 +72,6 @@ export const FORK_ROW_SECTIONS = [
 export type ForkRowSection = (typeof FORK_ROW_SECTIONS)[number];
 
 /** Per-section row counts, and the files (SOUL.md and each import), declared by the source and checked at `commit`. */
-const ForkSectionCountsSchema = v.object({
-  agentConfig: v.number(),
-  craftedTools: v.number(),
-  memoryChunks: v.number(),
-  sessionMessages: v.number(),
-  conversationEntries: v.number(),
-  conversationEntryParts: v.number(),
-  contextMembers: v.number(),
-  files: v.number(),
-});
-
 /** Fields every frame carries. `seq` is 0-based; `commit`'s `seq` is the number of frames before it. */
 const FRAME_ENVELOPE = {
   version: v.literal(FORK_TRANSFER_VERSION),
@@ -95,14 +84,13 @@ const FRAME_ENVELOPE = {
 /** Relative, no empty, `.` or `..` segment: no frame names a path outside the tree. */
 const ForkTreePathSchema = v.pipe(
   v.string(),
-  v.check((path) => !path.startsWith('/') && path.split('/').every((part) => part !== '' && part !== '.' && part !== '..'),
-    'a fork path is relative and has no empty, "." or ".." segment'),
+  v.check(isTreeRelativePath, 'a fork path is relative and has no empty, "." or ".." segment'),
 );
 
 /** A name directly under the home: one segment. */
 const ForkHomeNameSchema = v.pipe(
   v.string(),
-  v.check((name) => name !== '' && name !== '.' && name !== '..' && !name.includes('/'), 'a home name is one path segment'),
+  v.check((name) => isTreeRelativePath(name) && !name.includes('/'), 'a home name is one path segment'),
 );
 
 /** Where an import lands: a tree under the home, or a payload the receiver re-roots into its own artifact directory. */
@@ -151,7 +139,7 @@ export type ForkPageFrame = Extract<ForkFrame, { kind: 'page' }>;
 
 export type ForkRowFrame = Extract<ForkFrame, { kind: ForkRowSection }>;
 
-export type ForkSectionCounts = v.InferOutput<typeof ForkSectionCountsSchema>;
+export type ForkSectionCounts = ForkStagedCounts;
 
 /** A frame before it is sealed; distributive so `kind` still narrows each member. */
 export type UnsealedForkFrame = ForkFrame extends infer F

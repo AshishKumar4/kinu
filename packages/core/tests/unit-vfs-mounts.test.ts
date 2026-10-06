@@ -798,7 +798,16 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		await expect(writeText(table, '/skills/kept.md', 'changed')).rejects.toMatchObject({ code: 'EROFS' });
 		await expect(table.writeFileWithReport?.('/skills/kept.md', new TextEncoder().encode('changed'))).rejects.toMatchObject({ code: 'EROFS' });
 		await expect(table.rename('/skills/kept.md', '/skills/moved.md')).rejects.toMatchObject({ code: 'EROFS' });
+		await expect(Promise.resolve(table.unlink('/skills/kept.md'))).rejects.toMatchObject({ code: 'EROFS' });
+		await expect(Promise.resolve(table.mkdir('/skills/new'))).rejects.toMatchObject({ code: 'EROFS' });
+		await expect(table.removeRecursive('/skills/kept.md')).rejects.toMatchObject({ code: 'EROFS' });
+
+		for (const command of ['rm /skills/kept.md', 'mkdir /skills/new', 'rm -r /skills/kept.md']) {
+			expect([command, (await bundle.shell.exec(command)).exitCode]).not.toEqual([command, 0]);
+		}
+
 		expect(await readText(skills, '/kept.md')).toBe('kept');
+		expect(await exists(skills, '/new')).toBe(false);
 	});
 
 	test('mv between two mounts copies across, since each mount is its own device', async () => {

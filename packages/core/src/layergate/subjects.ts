@@ -37,7 +37,8 @@ import { renderForLLM } from '../events/hub/visibility';
 import { StepInjections } from '../prompting/step-injections';
 import { Inbox } from '../orchestrator/inbox';
 import { DrainScheduler } from '../orchestrator/drain-scheduler';
-import { formatApproval, gateExec, reviewCommand } from '../safety/approval-gate';
+import { reviewCommand } from '../safety/command-review';
+import { formatApproval, gateExec } from '../safety/approval-gate';
 import { argumentDigest } from '../safety/argument-digest';
 import { checkMisevolution } from '../safety/misevolution';
 import { drawArm, trialDecision } from '../evolution/trial-rules';
@@ -180,7 +181,7 @@ export const SUBJECT_SOURCE = {
   Inbox: 'orchestrator/inbox.ts',
   DrainScheduler: 'orchestrator/drain-scheduler.ts',
 
-  reviewCommand: 'safety/approval-gate.ts',
+  reviewCommand: 'safety/command-review.ts',
   formatApproval: 'safety/approval-gate.ts',
   gateExec: 'safety/approval-gate.ts',
   argumentDigest: 'safety/argument-digest.ts',

@@ -13,6 +13,11 @@ export function isSystemManaged(name: string): boolean {
   return SYSTEM_MANAGED_DIRECTORIES.has(name);
 }
 
+/** Relative, with no empty, `.` or `..` segment. */
+export function isTreeRelativePath(path: string): boolean {
+  return path !== '' && !path.startsWith('/') && path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
+
 /** As a process in `cwd` names it. Not `resolveVfsPath`: it keeps a leading `..` (NIMBUS-ASKS). */
 export function workspacePath(path: string, cwd: string): string {
   return normalizePath(path.startsWith('/') ? path : `${cwd}/${path}`);

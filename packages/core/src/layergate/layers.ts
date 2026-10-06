@@ -56,6 +56,8 @@ const EXECUTORS = Object.freeze([
   { name: 'nimbus', available: false, configured: false, active: false, status: 'not_configured' },
 ] as const);
 
+const SKILL_BODY = 'Step one. Step two. Step three.';
+
 // Owner-approved, so it renders in system placement and its `allowed_tools` still bound the surface.
 const SKILL: ActiveSkill = Object.freeze({
   trust: 'approved',
@@ -63,7 +65,7 @@ const SKILL: ActiveSkill = Object.freeze({
   description: 'How this project deploys.',
   allowed_tools: ['shell', 'workspace.*'],
   user_invocable: true,
-  body: 'Step one. Step two. Step three.',
+  body: SKILL_BODY,
   bodyRef: { kind: 'file', path: workspaceSkillPath('deploy-runbook'), chars: 31 } as const,
   ext: {},
   source: 'vfs',
@@ -267,16 +269,27 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'context-assembly/system-prefix',
-        asserts: 'the full cacheable prefix, byte for byte, for a representative CF turn',
-        observe: (s) => s.buildSystemPromptSync({
-          soulOverride: 'You are Kinu.',
-          availableTools: [...BUILTIN_TOOLS],
-          executors: EXECUTORS,
-          backend: 'cf',
-          model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
-          agentsMd: { admitted: [{ path: '/AGENTS.md', content: 'Root rules.', trust: 'approved' }], referenced: [] },
-          activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: 'deploy-runbook' } }] },
-        }),
+        asserts: 'a representative CF turn\'s cacheable prefix carries each input it is given, the same way twice',
+        observe: (s) => {
+          const render = () => s.buildSystemPromptSync({
+            soulOverride: 'You are Kinu.',
+            availableTools: [...BUILTIN_TOOLS],
+            executors: EXECUTORS,
+            backend: 'cf',
+            model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
+            agentsMd: { admitted: [{ path: '/AGENTS.md', content: 'Root rules.', trust: 'approved' }], referenced: [] },
+            activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: 'deploy-runbook' } }] },
+          });
+
+          const prompt = render();
+
+          return {
+            carries: ['You are Kinu.', 'Root rules.', SKILL_BODY].map((input) => prompt.includes(input)),
+            executors: EXECUTORS.map((exec) => [exec.name, prompt.includes(exec.name)]),
+            tools: BUILTIN_TOOLS.map((name) => [name, prompt.includes(`\`${name}\``)]),
+            deterministic: prompt === render(),
+          };
+        },
       },
       {
         id: 'context-assembly/prefix-stable-under-activation-reason',
@@ -301,7 +314,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: '/deploy-runbook' } }] },
           });
 
-          return { identical: byPin === byExplicit, length: byPin.length };
+          return { identical: byPin === byExplicit, carriesSkill: byPin.includes(SKILL_BODY) };
         },
       },
       {
@@ -326,7 +339,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           return {
             identicalAcrossFamilies: kimi === section('claude-sonnet-4-7', 'anthropic')
               && kimi === section('gpt-5.5', 'openai'),
-            index: kimi,
+            indexed: ['shell', 'agents', 'memory'].map((name) => kimi.includes(`\`${name}\``)),
           };
         },
       },
@@ -773,17 +786,32 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     probes: [
       {
         id: 'compaction/first-pass-prompt',
-        asserts: 'the first compaction prompt carries the section spec and the budget rules',
-        observe: (s) => s.buildCompactionSummaryPrompt({ transcript: 'user: fix auth\nassistant: done', budgetTokens: 1_500 }),
+        asserts: 'the first compaction prompt carries the transcript, the budget and the section spec',
+        observe: (s) => {
+          const transcript = 'user: fix auth\nassistant: done';
+          const prompt = s.buildCompactionSummaryPrompt({ transcript, budgetTokens: 1_500 });
+
+          return {
+            transcript: prompt.includes(transcript),
+            budget: prompt.includes('1500'),
+            sections: prompt.split('\n').filter((line) => line.startsWith('## ')),
+          };
+        },
       },
       {
         id: 'compaction/iterative-prompt',
-        asserts: 'an existing summary switches the prompt to in-place update, preserving structure',
-        observe: (s) => s.buildCompactionSummaryPrompt({
-          transcript: 'user: also add tests',
-          previousSummary: '## Active Task\nfix auth',
-          budgetTokens: 1_500,
-        }),
+        asserts: 'an existing summary switches the prompt to in-place update of that summary',
+        observe: (s) => {
+          const input = { transcript: 'user: also add tests', budgetTokens: 1_500 };
+          const previousSummary = '## Active Task\nfix auth';
+          const prompt = s.buildCompactionSummaryPrompt({ ...input, previousSummary });
+
+          return {
+            transcript: prompt.includes(input.transcript),
+            previousSummary: prompt.includes(previousSummary),
+            switched: prompt !== s.buildCompactionSummaryPrompt(input),
+          };
+        },
       },
       {
         id: 'compaction/latest-ask-is-verbatim',
@@ -801,13 +829,12 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             budgetTokens: 1_000,
           });
 
-          const block = (p: string) => p.slice(p.indexOf('THE USER'), p.indexOf('"""', p.indexOf('"""') + 3) + 3);
+          const kept = (oversize.match(/Q{50,}/g) ?? []).map((run) => run.length);
 
           return {
-            verbatimInBudget: block(inBudget).includes('Q'.repeat(5_000)),
-            oversizeLength: block(oversize).length,
-            oversizeKeepsTail: block(oversize).includes('Q'.repeat(4_000) + '\n"""'),
-            oversizeNamed: block(oversize).includes('chars omitted from the middle'),
+            verbatimInBudget: inBudget.includes('Q'.repeat(5_000)),
+            oversizeKeptRuns: kept,
+            oversizeNamesOmitted: oversize.includes(String(10_000 - kept.reduce((sum, run) => sum + run, 0))),
           };
         },
       },
@@ -819,7 +846,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const wrapped = s.wrapCompactionSummary(body);
 
           return {
-            wrapped,
+            marked: wrapped !== body && wrapped.endsWith(body),
             roundTrip: s.stripCheckpointPreamble(wrapped) === body,
             bare: s.stripCheckpointPreamble(`  ${body}  `),
           };

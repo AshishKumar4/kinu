@@ -1,11 +1,10 @@
+export { MAX_PLAN_ANNOTATIONS_BYTES, admitReviewAnnotations, DiffAnchorSchema } from './annotation-admission';
+
 export {
-  MAX_PLAN_ANNOTATIONS_BYTES,
   MAX_PLAN_CONTENT_BYTES,
   PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
-  admitReviewAnnotations,
-  DiffAnchorSchema,
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,

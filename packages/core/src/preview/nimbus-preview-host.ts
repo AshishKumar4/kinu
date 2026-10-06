@@ -1,19 +1,11 @@
-// One DNS label `<port base36>-<handle>-<token>-<workspace>`, parsed positionally; fixed-width fields
-// leave `WORKSPACE_ADDRESS_MAX` for the name so no workspace address is ever truncated.
+// One DNS label `<port base36>-<handle>-<token>-<workspace>`: a port before the share label's tail
+// (slate-share-host.ts), so both grammars read handle, token and workspace one way.
 
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
-import { workspaceAddressRefusal } from '../identity/naming';
+import { parseSlateShareLabel, slateShareLabel } from './slate-share-host';
 
 const PORT_RE = /^[0-9a-z]{1,4}$/;
-
-const HANDLE_RE = /^[a-f0-9]{10}$/;
-
-const TOKEN_RE = /^[a-z2-7]{15}$/;
-
-const HANDLE_LENGTH = 10;
-
-const TOKEN_LENGTH = 15;
 
 export interface WorkspacePreviewHost {
   port: number;
@@ -32,26 +24,15 @@ export function parseWorkspacePreviewLabel(label: string): WorkspacePreviewHost 
   const portEnd = lower.indexOf('-');
 
   if (portEnd < 1) return null;
-  const handleStart = portEnd + 1;
-  const handleEnd = handleStart + HANDLE_LENGTH;
-  const tokenStart = handleEnd + 1;
-  const tokenEnd = tokenStart + TOKEN_LENGTH;
-
-  if (lower[handleEnd] !== '-' || lower[tokenEnd] !== '-') return null;
-
   const portText = lower.slice(0, portEnd);
-  const handle = lower.slice(handleStart, handleEnd);
-  const token = lower.slice(tokenStart, tokenEnd);
-  const workspace = lower.slice(tokenEnd + 1);
+  const tail = parseSlateShareLabel(lower.slice(portEnd + 1));
 
-  if (!PORT_RE.test(portText) || !HANDLE_RE.test(handle) || !TOKEN_RE.test(token)) return null;
-
-  if (workspaceAddressRefusal(workspace) !== null) return null;
+  if (!PORT_RE.test(portText) || tail === null) return null;
   const port = Number.parseInt(portText, 36);
 
   if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
 
-  return { port, workspace, handle, token };
+  return { port, ...tail };
 }
 
 /** Null when the workspace name does not fit (reported as "no URL"); malformed derived parts throw. */
@@ -63,18 +44,16 @@ export function buildWorkspacePreviewHost(parts: {
   suffix: string;
 }): string | null {
   return settleSync(Effect.gen(function* () {
-    const { port, workspace, handle, token, suffix } = parts;
+    const { port, suffix } = parts;
 
     if (!Number.isInteger(port) || port < 1 || port > 65_535) {
       return yield* Effect.die(new Error(`Invalid workspace preview port: ${port}`));
     }
 
-    if (!HANDLE_RE.test(handle)) return yield* Effect.die(new Error('Invalid workspace preview capability handle'));
+    const tail = slateShareLabel(parts, 'workspace preview capability');
 
-    if (!TOKEN_RE.test(token)) return yield* Effect.die(new Error('Invalid workspace preview token'));
-
-    if (workspaceAddressRefusal(workspace) !== null) return null;
-    const label = `${port.toString(36)}-${handle}-${token}-${workspace}`;
+    if (tail === null) return null;
+    const label = `${port.toString(36)}-${tail}`;
 
     return label.length > 63 ? null : `${label}.${suffix}`;
   }));

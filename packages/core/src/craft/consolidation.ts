@@ -4,7 +4,7 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import { effectiveScore } from './ema';
+import { craftScores, effectiveScore } from './ema';
 import { isoDate, nowMs } from '../utils/date';
 import { DEFAULT_CONFIG } from '../config';
 
@@ -19,11 +19,7 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
 
   const now = nowMs();
 
-  const scores = rt.storage.sql<{ name: string; score: number; uses: number; last_used_at: number }>`
-    SELECT name, score, uses, last_used_at FROM crafted_tools
-  `;
-
-  const scoreMap = new Map(scores.map(s => [s.name, s]));
+  const scoreMap = craftScores(rt.storage.sql);
 
   const toRetire: string[] = [];
 

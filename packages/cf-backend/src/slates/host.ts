@@ -8,7 +8,7 @@ import {
   forgetSlateFiles, SlateFiles, SlateShareStore, WorkspaceSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
   type BlueprintReading, type DurableAppIdentity, type DurableApps, type ShareUser,
 } from '@kinu.run/core/slates';
-import { SlateLiveShareStore, initSlateLiveShareTables, WorkspaceLiveShares } from '@kinu.run/core/slates';
+import { SlateLiveShareStore, initSlateLiveShareTables, shareLiveSlate } from '@kinu.run/core/slates';
 import {
   credentialedBindings, ingressAdmitted,
   parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
@@ -19,7 +19,7 @@ import {
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
   type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
-  type MissionGovernor, type WorkspaceOverviewShare,
+  type MissionGovernor, type WorkspaceOverviewShare, slateCapabilityGraph, type SlateCapabilityGraph,
 } from '@kinu.run/core';
 import { SLATES_ROOT } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
@@ -152,13 +152,8 @@ export class SlateHost {
     }
   }
 
-  private async liveShares(): Promise<WorkspaceLiveShares> {
-    return new WorkspaceLiveShares({
-      workspace: this.deps.workspace,
-      shares: this.live,
-      catalog: () => this.deps.catalog(),
-      shareUrl: (handle) => this.deps.shareUrl(handle),
-    });
+  private async graph(slate: string): Promise<SlateCapabilityGraph> {
+    return slateCapabilityGraph({ slate, workspace: this.deps.workspace, catalog: await this.deps.catalog() });
   }
 
   /** Uses `get`, not `live`: a revoked row still reads; refusing it is the caller's job. */
@@ -533,7 +528,12 @@ export class SlateHost {
 
             case 'shares': return { ok: true, value: projectJsonValue({ value: blueprints.list() }) };
             case 'share': {
-              return await this.changedShares({ ok: true, value: projectJsonValue({ value: await (await this.liveShares()).share(operation.id, operation.visibility, operation.approved, operation.fork) }) });
+              const created = await shareLiveSlate({
+                shares: this.live, graph: await this.graph(operation.id), visibility: operation.visibility, approved: operation.approved,
+                fork: operation.fork, url: (handle) => this.deps.shareUrl(handle),
+              });
+
+              return await this.changedShares({ ok: true, value: projectJsonValue({ value: created }) });
             }
 
             case 'liveShares': return { ok: true, value: projectJsonValue({ value: this.live.list().map((row) => ({ ...row, paused: this.sharePaused(row) })) }) };
@@ -541,7 +541,7 @@ export class SlateHost {
           }
         }
 
-        case 'graph': return { ok: true, value: projectJsonValue({ value: await (await this.liveShares()).graph(operation.id) }) };
+        case 'graph': return { ok: true, value: projectJsonValue({ value: await this.graph(operation.id) }) };
       }
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate operation', cause, otherwise: 'io' })) };

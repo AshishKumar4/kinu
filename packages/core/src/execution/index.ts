@@ -36,8 +36,8 @@ export { DefaultExecutionRouter, runOnExecutor, type ExecutorRun } from './route
 export { withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach, type ShellReach } from './approval';
 
 export {
-  busyShell, callJob, createBashShell, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
-  type MachineShells,
+  busyShell, callJob, createBashShell, createShellSession, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
+  type MachineShells, type ShellSession,
 } from './shell-session';
 
 export {

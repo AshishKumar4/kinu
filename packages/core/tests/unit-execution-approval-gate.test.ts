@@ -10,7 +10,9 @@ import { gateProviderExec, withApprovalGatedShell } from '../src/execution/appro
 import { shellExecOptions } from '../src/execution/shell-session';
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
-import { createShellSession, type FilesOwner, type ShellApprovalPolicy, type ShellApprovalRequest } from '../src/safety/approval-gate';
+import { type FilesOwner } from '../src/safety/command-review';
+import { type ShellApprovalPolicy, type ShellApprovalRequest } from '../src/safety/approval-gate';
+import { createShellSession } from '../src/execution/shell-session';
 
 import { withMountTable } from '../src/vfs/mounts';
 import { skillsMount } from '../src/skills/view';
