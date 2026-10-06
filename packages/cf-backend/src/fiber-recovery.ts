@@ -21,7 +21,7 @@ export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Max rows one activation sweep scans; matches the framework's own scan
- * (`patches/agents@0.24.0.patch`). Shared by every row-budgeted sweep here.
+ * (`patches/agents@0.26.0.patch`). Shared by every row-budgeted sweep here.
  */
 const SWEEP_MAX_ROWS = 4096;
 
@@ -38,7 +38,7 @@ const FiberMetaRowSchema = v.object({
 export type FiberMetaRow = v.InferOutput<typeof FiberMetaRowSchema>;
 
 /** Narrow port over `cf_agents_runs`: no method can return a snapshot blob. */
-/** Over `cf_agents_runs`, which the SDK's `Agent` constructor creates (agents 0.24 `_ensureSchema`). */
+/** Over `cf_agents_runs`, which the SDK's `Agent` constructor creates (agents 0.26 `_ensureSchema`). */
 export interface FiberRowStore {
   /** `MAX(rowid)`, read once and then frozen by the caller. */
   upperBoundary(): number | null;
