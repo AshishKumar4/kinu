@@ -12,6 +12,7 @@ import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode, type DeviceMode } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { composing } from "@/components/ui/form";
+import { useConfirmation } from "@/components/ui/ConfirmDialog";
 
 /** The hub enforces the same `effectiveDeviceMode`, so this line matches what it does. */
 const SANDBOX_MODE_COPY = {
@@ -60,6 +61,7 @@ export function DeviceRow({
   const [editing, setEditing] = useState<string | null>(null);
   const [acknowledging, setAcknowledging] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const { ask, dialog } = useConfirmation();
 
   if (device.revokedAt !== null) {
     const countLine = unstoppedLine(unstoppedCommands);
@@ -132,11 +134,15 @@ export function DeviceRow({
   const cannotSandbox = sandbox.capability !== "sandboxed";
 
   // Only turning off asks; on only narrows what a command reaches.
-  const setSandbox = (on: boolean) => Effect.gen(function* () {
-    if (!on && !confirm(`Turn Sandbox off for "${device.label}"? The agent will run as you with full access.`)) return;
+  const sandboxOff = () => ask({
+    title: `Turn Sandbox off for "${device.label}"?`, body: "The agent will run as you with full access.", action: "Turn off",
+    failed: "Could not change the Sandbox setting", run: async () => { await setDeviceSandboxTier(device.id, "raw"); onDeviceChanged(); },
+  });
+
+  const sandboxOnAgain = () => Effect.gen(function* () {
     setSwitching(true);
 
-    yield* Effect.ensuring(Effect.catchCause(Effect.promise(async () => setDeviceSandboxTier(device.id, on ? "sandboxed" : "raw")), showing((chain) => {
+    yield* Effect.ensuring(Effect.catchCause(Effect.promise(async () => setDeviceSandboxTier(device.id, "sandboxed")), showing((chain) => {
       onError(`Could not change the Sandbox setting: ${chain}`);
     })), Effect.sync(() => { setSwitching(false); }));
 
@@ -193,7 +199,7 @@ export function DeviceRow({
             aria-checked={sandboxOn}
             aria-label={`Sandbox on ${device.label}`}
             disabled={switching || device.wholeMachine}
-            onClick={() => detach(setSandbox(!sandboxOn))}
+            onClick={() => detach(sandboxOn ? Effect.sync(sandboxOff) : sandboxOnAgain())}
             className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors disabled:opacity-50 ${
               sandboxOn ? "border-[var(--c-accent)] bg-[var(--c-accent)]" : "border-[var(--c-border-strong)] bg-[var(--c-fill)]"
             }`}
@@ -230,6 +236,7 @@ export function DeviceRow({
           </>
         )}
       </div>
+      {dialog}
     </div>
   );
 }

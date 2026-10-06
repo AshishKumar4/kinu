@@ -21,6 +21,7 @@ import {
 } from "@/lib/user-api";
 import type { ProfileCatalogEnvelope } from '@kinu.run/core';
 import { Card, Choice, Field, inputCls } from "@/components/ui/form";
+import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
@@ -82,6 +83,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
   const unrevoked = useAsyncResource(listUnrevokedGrants);
 
   const [chatgptWelcome, setChatgptWelcome] = useState(false);
+  const [unconfirmedSignOut, setUnconfirmedSignOut] = useState<string | null>(null);
 
   const reads = [creds, codex, chatgpt, models, catalog, gateways, accounts, unrevoked];
   // Retry re-reads the whole account: mutators invalidate more than their own row.
@@ -93,6 +95,11 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
         {(grants) => <UnrevokedGrants grants={grants} onChanged={reloadAll} />}
       </CardSlot>
       {chatgptWelcome && <ChatGptWelcome onClose={() => setChatgptWelcome(false)} />}
+      {unconfirmedSignOut !== null && (
+        <p role="status" className="rounded-md px-3 py-2 text-xs p-notice-warning">
+          OpenAI did not confirm it revoked the sign-in ({unconfirmedSignOut}). Disconnect Kinu under Apps in ChatGPT settings to be sure.
+        </p>
+      )}
       <Card title="Connect a provider" icon={PlugIcon}>
         <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
           {(credentials) => {
@@ -141,7 +148,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
 
                                 const { unconfirmed } = await signOutChatGpt();
 
-                                if (unconfirmed !== null) alert(`OpenAI did not confirm it revoked the sign-in (${unconfirmed}). Disconnect Kinu under Apps in ChatGPT settings to be sure.`);
+                                setUnconfirmedSignOut(unconfirmed);
                               }}
                               onChanged={reloadAll}
                               connect={<ChatGptConnect plan={plan} onSignedIn={(first) => { reloadAll(); setChatgptWelcome(first); }} />}>
@@ -224,15 +231,17 @@ function ProviderEntry({ provider, name, method, connected, detail, disconnect, 
   /** Settings shown under a connected entry. */
   children?: ReactNode;
 }) {
-  const [error, setError] = useState<string | null>(null);
   const brand = providerBrand(provider);
 
-  const leave = () => Effect.gen(function* () {
-    if (disconnect === undefined || !confirm(`Disconnect ${name}? Your agents lose its models.`)) return;
-    setError(null);
+  const { ask, dialog } = useConfirmation();
 
-    return yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => disconnect()); onChanged(); }), showing(setError));
-  });
+  const leave = () => {
+    if (disconnect === undefined) return;
+    ask({
+      title: `Disconnect ${name}?`, body: "Your agents lose its models.", action: "Disconnect", failed: "Could not disconnect",
+      run: async () => { await disconnect(); onChanged(); },
+    });
+  };
 
   return (
     <div className="space-y-3 px-4 py-3" data-provider={name}>
@@ -243,12 +252,12 @@ function ProviderEntry({ provider, name, method, connected, detail, disconnect, 
         <span className="ml-auto flex items-center gap-2">
           {connected ? <ConnectedBadge detail={detail} /> : <span className="p-meta p-text-3">Not connected</span>}
           {connected && disconnect !== undefined && (
-            <button type="button" onClick={() => detach(leave())} className={dangerQuietCls} aria-label={`Disconnect ${name}`}>Disconnect</button>
+            <button type="button" onClick={leave} className={dangerQuietCls} aria-label={`Disconnect ${name}`}>Disconnect</button>
           )}
         </span>
       </div>
       {connected ? children : connect}
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {dialog}
     </div>
   );
 }

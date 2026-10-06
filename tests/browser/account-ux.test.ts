@@ -700,17 +700,11 @@ describe('a machine\'s Sandbox switch on the Devices page', () => {
         await page.waitForSelector(workstation);
         expect(await row()).toEqual({ on: 'true', gpu: true });
 
-        // Turning it off is asked first: the agent would run as the person, with full access.
-        let asked = '';
-        let accepted: Promise<void> | undefined;
-
-        page.once('dialog', (dialog) => {
-          asked = dialog.message();
-          accepted = dialog.accept();
-        });
+        // Turning it off is asked first, in the page: the agent would run as the person, with full access.
         await page.click(workstation);
-        await accepted;
-        expect(asked).toContain('full access');
+        await page.waitForSelector('[role="dialog"]');
+        expect(await page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '')).toContain('full access');
+        await clickByText(page, '[role="dialog"] button', 'Turn off');
         await page.waitForFunction((at) => document.querySelector(at)?.getAttribute('aria-checked') === 'false', {}, workstation);
         expect(await row()).toEqual({ on: 'false', gpu: false });
 

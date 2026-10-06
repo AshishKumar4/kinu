@@ -1424,6 +1424,16 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
   });
 });
 
+/** Presses the open dialog's button by the words it shows. */
+async function pressInDialog(page: Page, words: string): Promise<void> {
+  await page.$$eval('[role="dialog"] button', (buttons, label) => {
+    const button = buttons.find((each) => each.textContent?.trim() === label);
+
+    if (!(button instanceof HTMLElement)) throw new Error(`no ${label} in the dialog`);
+    button.click();
+  }, words);
+}
+
 /** A turn whose loop stopped mid-work says so even though its last call settled; a turn that finished says nothing. */
 describe('how a settled turn ended', () => {
   test('the turn that stopped mid-work carries a notice and the finished one does not', async () => {
@@ -1479,7 +1489,7 @@ describe('alternate takes on an answer', () => {
       expect(await shown(page)).toBe('2/3');
       expect(await page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '')).toContain('three call sites');
 
-      await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent?.trim() === 'Use this take')?.click());
+      await pressInDialog(page, 'Use this take');
       await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
       await page.waitForFunction((at) => document.querySelector(at)?.textContent?.trim() === 'Take 2 of 3', {}, chip);
 
@@ -1808,13 +1818,11 @@ describe('a revoked device whose command may still run', () => {
         (entry) => entry.getAttribute('aria-current'),
       )).toBe('true');
       await page.waitForSelector('[title="Revoke device"]');
-      let dialogAccepted: Promise<void> | undefined;
-      page.once('dialog', (dialog) => {
-        dialogAccepted = dialog.accept();
-      });
       await page.click('[title="Revoke device"]');
+      await page.waitForSelector('[role="dialog"]');
+      expect(await page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '')).toContain('Agents will lose access');
+      await pressInDialog(page, 'Revoke');
       await page.waitForSelector('[data-device-incident="dev-1"]');
-      await dialogAccepted;
 
       const immediate = await page.$eval('[data-device-incident="dev-1"]', (row) => row.textContent ?? '');
       // 3d50a51a3: the warning reads "Kinu could not confirm that every
