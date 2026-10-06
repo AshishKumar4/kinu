@@ -214,6 +214,9 @@ function buildCLIRuntime(
 ): CLIRuntime {
   waitOnSharedWrites(db);
   db.exec('PRAGMA foreign_keys = ON');
+  // WAL with NORMAL: a commit waits on no fsync. A crash of the process keeps every commit; only a power loss can roll
+  // back the last few, never corrupt the file. FULL cost a streamed answer an fsync per flush (~12 ms a delta).
+  db.exec('PRAGMA synchronous = NORMAL');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
 
