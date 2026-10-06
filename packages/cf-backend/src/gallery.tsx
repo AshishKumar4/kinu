@@ -2127,10 +2127,46 @@ function rosterMoved(): void {
   queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubordinates"] })); });
 }
 
-/** The page reads the gallery answers only after a wait it controls. */
+async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
+  galleryRevertConversation(v.parse(v.string(), args?.[0]));
+
+  return null;
+}
+
+/** What went to the running turn rather than opening one. */
+async function galleryMidTurnSend(args?: unknown[]): Promise<JsonValue> {
+  const asks = document.documentElement.dataset;
+
+  asks.galleryMidTurnSends = `${asks.galleryMidTurnSends ?? ""}${v.parse(v.string(), args?.[0])}\n`;
+
+  return {};
+}
+
+/** Stop's cancel, held while `data-gallery-cancel-held` is set, until `gallery:release-cancel`. */
+async function galleryCancelWork(): Promise<JsonValue> {
+  if (document.documentElement.dataset.galleryCancelHeld === "1") {
+    await new Promise((released) => { window.addEventListener("gallery:release-cancel", released, { once: true }); });
+  }
+
+  return {};
+}
+
+/** `&clear=refused`: a turn is running, so the server refuses and keeps every message. */
+async function galleryClearConversation(): Promise<JsonValue> {
+  if (new URLSearchParams(location.search).get("clear") === "refused") throw new Error(CLEAR_NEEDS_IDLE);
+  galleryClearChat("");
+
+  return null;
+}
+
+/** The page's conversation writes, and the reads the gallery answers only after a wait it controls. */
 const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>([
   ...(HISTORY_ROWS > 0 ? [["getChatHistoryPage", galleryHistoryPage] as const] : []),
   ["savePlanReviewAnnotations", galleryAnnotationSave],
+  ["revertConversation", galleryRevert],
+  ["clearConversation", galleryClearConversation],
+  ["send", galleryMidTurnSend],
+  ["cancelCurrentWork", galleryCancelWork],
 ]);
 
 /** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
@@ -2190,20 +2226,6 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
   const roster = galleryRosterRpc(method, args);
 
   if (roster) return rpcResult(v.parse(JsonValueSchema, roster.value)).json<T>();
-
-  if (method === "revertConversation") {
-    galleryRevertConversation(v.parse(v.string(), args?.[0]));
-
-    return rpcResult(null).json<T>();
-  }
-
-  // `&clear=refused`: a turn is running, so the server refuses and keeps every message.
-  if (method === "clearConversation") {
-    if (new URLSearchParams(location.search).get("clear") === "refused") throw new Error(CLEAR_NEEDS_IDLE);
-    galleryClearChat("");
-
-    return rpcResult(null).json<T>();
-  }
 
   const listing = method === "getExposedPorts" ? galleryPortListing(v.parse(v.optional(v.string()), args?.[0])) : null;
 
