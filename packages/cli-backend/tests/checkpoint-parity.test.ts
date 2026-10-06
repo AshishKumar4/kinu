@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { createHostCheckpoints } from '../src/checkpoints';
 import { present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-import { daemonSources } from '../../../scripts/daemon-checkpoint-format';
+import { daemonSource, GENERATED } from '../../../scripts/daemon-generated';
 
 const require = createRequire(import.meta.url);
 
@@ -74,8 +74,8 @@ function setup() {
 }
 
 describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
-  test('the daemon runs core\'s store format, generated: run scripts/daemon-checkpoint-format.ts after changing it', () => {
-    const { committed, fresh } = daemonSources();
+  test('the daemon runs core\'s store format, generated: run scripts/daemon-generated.ts after changing it', () => {
+    const { committed, fresh } = daemonSource(GENERATED.checkpointFormat);
 
     expect(committed === fresh).toBe(true);
   });
