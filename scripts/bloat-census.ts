@@ -17,7 +17,6 @@ import { type Expression, parseSync } from 'oxc-parser';
 
 import { gitEnv } from '../packages/test-utils/src/git';
 import { type DuplicateGroup, findDuplicateGroups } from './ast-duplication';
-import { packageOf } from './bloat-budget';
 import { canonical, commentCharacters } from './comment-only';
 import { measureFile } from './complexity';
 import { exportedDeclarations, inScope } from './dead-code';
@@ -28,6 +27,8 @@ import {
   parse, referencedNames, type SyntaxNode, walk,
 } from './syntax';
 import { buildGraph, builtinToolNames, findEntrypoints, findUnreached, isReacher, measureReach } from './wired';
+
+const packageOf = (file: string): string => file.split('/')[1] ?? file;
 
 const root = new URL('..', import.meta.url).pathname;
 

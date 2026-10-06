@@ -53,7 +53,7 @@ The main agent orchestrates and does most fixes and every conflict resolution it
 - Main does risky and small work itself: merges, prunes, branch and history operations, secrets, deploys, and any task a few steps finish. Lanes get substantial coherent work; a delegated classification is a claim Main checks before acting on it.
 
 ## Owner Preferences
-- Short commit subjects; no comment that restates code or narrates an edit.
+- Short commit subjects. Write few comments: only a non-obvious reason or constraint, never one that restates code or narrates an edit. No gate counts comment characters; style is guided, not enforced by counts (owner, 2026-10-06).
 - All business logic in core; `cf-backend`, `cli-backend`, `cli` are adapters. When two backends implement one rule differently, the stricter side wins and becomes the shared path, one commit with a pin test.
 - Tests, builds, scratch and large tool output run off the scratch NVMe: `TMPDIR=/mnt/local/kinu/tmp`, with new worktrees and clones under `/mnt/local/kinu/` (2026-10-03: /mnt/scratch measured 103 MB/s reads and a 1 GB write over 60 s; /mnt/local 3.3 GB/s and 2.1 GB/s); never `/tmp` (a RAM disk) or the main SSD, which is wearing. The one exception is a test browser's throwaway profile, which lives in `/tmp` until the browser closes (`scripts/test-chrome.ts`): one probe run wrote 174 MB of profile data in 6 minutes. Read the tail of large output. Conclusion first, plain language, decision-relevant detail only; name contradictions between asks.
 - A feature is designed whole and built whole in one lane: no layers, phases, "part 2 later" or MVP. Probes that settle the design run first, inside the lane, and the feature lands complete. Lanes commit at natural points, not in forced small pieces.
