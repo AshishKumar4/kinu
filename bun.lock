@@ -240,7 +240,7 @@
       "name": "@kinu.run/devbox",
       "version": "0.1.0",
       "dependencies": {
-        "@cloudflare/sandbox": "^1.0.0",
+        "@cloudflare/sandbox": "1.0.0",
         "effect": "4.0.0-rc.117",
         "valibot": "^1.4.1",
       },

@@ -12,8 +12,9 @@
     "./incidents": "./src/incidents.ts",
     "./sizes": "./src/sizes.ts"
   },
+  "//dependencies:@cloudflare/sandbox": "Exact: the container reports one SANDBOX_VERSION and the SDK checks it against the installed one, so a range would let an install pick the container (scripts/release-config.test.ts). Lifts when the SDK accepts a compatible range.",
   "dependencies": {
-    "@cloudflare/sandbox": "^1.0.0",
+    "@cloudflare/sandbox": "1.0.0",
     "effect": "4.0.0-rc.117",
     "valibot": "^1.4.1"
   },
