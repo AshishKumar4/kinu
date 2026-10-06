@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { USER_AI_PROXY_PATH } from '@kinu.run/core';
-import { DeploymentAnswer, EVAL_DEPLOYMENT_ORIGIN, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
+import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
 import {
   openPublicSession, resolveWebIdentity, type KinuPublicSession, type PublicWebIdentity,
 } from './session';
@@ -26,8 +26,7 @@ export const ARMS = [
 
 /** The deployment and the browser-plane identity, refused before any trial when either is missing. */
 export function resolveEvalTarget(env: Env): EvalTarget {
-  const named = env.KINU_EVAL_ORIGIN?.trim() ?? '';
-  const verdict = evalTargetVerdict(named === '' ? EVAL_DEPLOYMENT_ORIGIN : named);
+  const verdict = evalTargetVerdict(env.KINU_EVAL_ORIGIN);
 
   if (verdict.kind === 'refused') throw new Error(verdict.reason);
   const web = resolveWebIdentity(verdict.origin, env);

@@ -149,7 +149,7 @@ async function branchDuring(harness: Harness, turnId: string, messageId: string,
   await turns(harness).openInFlight(turnId, messageId);
   const branch = await harness.agent.branchTurn(task);
 
-  if (!branch.accepted || branch.branchId === undefined) throw new Error(`the branch was refused: ${branch.reason ?? 'no reason'}`);
+  if (!branch.accepted) throw new Error(`the branch was refused: ${branch.reason}`);
 
   return branch.branchId;
 }
@@ -391,10 +391,12 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const first = await branchDuring(harness, 'u-branch', 'a-branch', 'try the other library');
     const second = await harness.agent.branchTurn('try the other algorithm');
 
+    if (!second.accepted) throw new Error(`the branch was refused: ${second.reason}`);
+
     await expect(turns(harness).settle({ messageId: 'a-branch' })).rejects.toThrow('terminal effect turn_end_extensions:a-branch interrupted before its side effect');
 
     expect(effects(harness, 'u-branch', 'a-branch').map((row) => row.effect_key).filter((key) => key.startsWith('v1:branches:')).sort())
-      .toEqual([`v1:branches:${first}`, `v1:branches:${String(second.branchId)}`].sort());
+      .toEqual([`v1:branches:${first}`, `v1:branches:${second.branchId}`].sort());
 
     for (const report of reports) report.resolve({ status: 'completed', summary: 'the branch answer' });
   });

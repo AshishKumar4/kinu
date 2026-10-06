@@ -15,7 +15,7 @@ import {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT,
   CHECKPOINT_REF_PREFIX as REF_PREFIX, CHECKPOINT_WORKDIR_MARKER as WORKDIR_MARKER,
   CHECKPOINT_EXCLUDES, checkpointSubject, parseCheckpointSubject, checkpointRefTimestampMs,
-  checkpointReason, diagnoseStaging,
+  checkpointReason, stagingOutcome,
   type CheckpointAvailability, type CheckpointTurnMeta, type FileCheckpoints,
   type FileCheckpointEntry, type FileRestoreChange, type FileRestoreKind,
   type FileRestorePlan, type FileRestoreResult,
@@ -42,7 +42,8 @@ export interface HostCheckpointsOpts {
   gitBin?: string;
 }
 
-interface GitResult { code: number; stdout: string; stderr: string }
+/** `code` is null when git never finished (a signal, an overfull buffer), whatever it printed. */
+interface GitResult { code: number | null; stdout: string; stderr: string }
 
 interface GitEnvironment { [name: string]: string }
 
@@ -58,12 +59,10 @@ function restoreKindOf(status: string): FileRestoreKind {
   return 'modify';
 }
 
-/** A signal kill carries no numeric code and still counts as failure (1). */
-function gitExitCode(err: ExecFileException | null): number {
+function gitExitCode(err: ExecFileException | null): number | null {
   if (err === null) return 0;
-  const reported = Number(err.code);
 
-  return Number.isFinite(reported) ? reported : 1;
+  return Number.isInteger(err.code) ? Number(err.code) : null;
 }
 
 export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoints {
@@ -75,7 +74,9 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
 
   let gitAvailable: boolean | null = null;
   let turn: CheckpointTurnMeta | null = null;
-  const turnDone = new Set<string>();
+  /** This turn's snapshot of each directory, in flight or taken: whether it was. A failed one is forgotten, so the next
+   *  mutation takes it. */
+  const turnSnapshots = new Map<string, Promise<boolean>>();
   let refSeq = 0;
 
   function isolatedEnv(): GitEnvironment {
@@ -92,7 +93,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     env.GIT_AUTHOR_EMAIL = 'checkpoints@kinu.local';
     env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
     env.GIT_COMMITTER_EMAIL = 'checkpoints@kinu.local';
-    // Pinned locale: `diagnoseStaging` parses git's diagnostics as English strings.
+    // Pinned locale: `stagingOutcome` parses git's diagnostics as English strings.
     env.LC_ALL = 'C';
 
     return env;
@@ -193,24 +194,20 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
 
   /**
    * `--ignore-errors` so an unreadable path costs only that path instead of silently truncating the
-   * snapshot; the skipped paths are returned for `diagnoseStaging`.
+   * snapshot; the skipped paths are named in the reason.
    */
   function stageCurrent(gitDir: string, workdir: string): Effect.Effect<StagedTree> {
     return Effect.gen(function* () {
       const env = storeEnv(gitDir, workdir);
       const add = yield* Effect.promise(async () => runGit(['add', '-A', '--ignore-errors'], workdir, env));
-      const diagnosis = diagnoseStaging(add.stderr);
+      const staged = stagingOutcome(add.code, add.stderr);
 
-      // A non-zero exit explained entirely by unreadable paths is success; anything unexplained throws.
-      if (diagnosis.unexplained.length > 0 || (add.code !== 0 && diagnosis.unreadable.length === 0)) {
-        return yield* Effect.die(new Error(`checkpoint staging failed: ${add.stderr.trim()}`));
-      }
-
+      if ('failure' in staged) return yield* Effect.die(new Error(staged.failure));
       const tree = yield* Effect.promise(async () => runGit(['write-tree'], workdir, env));
 
       if (tree.code !== 0) return yield* Effect.die(new Error(`checkpoint write-tree failed: ${tree.stderr.trim()}`));
 
-      return { tree: tree.stdout.trim(), unreadable: diagnosis.unreadable };
+      return { tree: tree.stdout.trim(), unreadable: staged.unreadable };
     });
   }
 
@@ -306,7 +303,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
   return {
     beginTurn(meta: CheckpointTurnMeta): void {
       turn = meta;
-      turnDone.clear();
+      turnSnapshots.clear();
     },
 
     ensureCheckpoint(dir: string, reason = 'pre-mutation'): Promise<string | null> {
@@ -314,10 +311,21 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
         if (!(yield* probeGit())) return null;
         const abs = resolve(dir);
 
-        if (turnDone.has(abs)) return null;
-        turnDone.add(abs);
+        // A mutation never runs ahead of the snapshot that precedes it; a failed one leaves this call to take it.
+        for (let pending = turnSnapshots.get(abs); pending !== undefined; pending = turnSnapshots.get(abs)) {
+          if (yield* Effect.promise(async () => pending)) return null;
+        }
 
-        return yield* snapshot(abs, turn, reason);
+        const flight = Promise.withResolvers<boolean>();
+        turnSnapshots.set(abs, flight.promise);
+
+        return yield* snapshot(abs, turn, reason).pipe(
+          Effect.tap(() => Effect.sync(() => { flight.resolve(true); })),
+          Effect.onError(() => Effect.sync(() => {
+            if (turnSnapshots.get(abs) === flight.promise) turnSnapshots.delete(abs);
+            flight.resolve(false);
+          })),
+        );
       }));
     },
 

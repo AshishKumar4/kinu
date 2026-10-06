@@ -24,6 +24,20 @@ function setup(opts: { keep?: number; gitBin?: string } = {}) {
   return { root, work, engine };
 }
 
+/** An engine over `root`'s shadow store, running `gitBin`. */
+function engineOver(root: string, gitBin: string) {
+  return createHostCheckpoints({ agent: 'test-agent', base: join(root, 'shadow'), gitBin });
+}
+
+/** git behind a shell wrapper that logs each subcommand to `log`, runs `before` with git's arguments, then runs git. */
+function wrappedGit(root: string, log: string, before: string): string {
+  const path = join(root, 'git-wrapper.sh');
+  writeFileSync(path, `#!/bin/sh\necho "$1" >> '${log}'\n${before}\nexec git "$@"\n`);
+  chmodSync(path, 0o755);
+
+  return path;
+}
+
 describe('createHostCheckpoints', () => {
   test('first mutation in a turn snapshots once; later mutations in the same turn do not', async () => {
     const { work, engine } = setup();
@@ -223,6 +237,63 @@ describe('createHostCheckpoints', () => {
     rmSync(work, { recursive: true, force: true });
     await expect(engine.plan(work, id)).rejects.toThrow('checkpoint staging failed: working directory not found: ');
     expect(await engine.status()).toEqual({ available: true });
+  });
+
+  test('a git add killed mid-run is no checkpoint: it fails and nothing is written from the index', async () => {
+    const { root, work } = setup();
+    const ran = join(root, 'git-calls');
+    const engine = engineOver(root, wrappedGit(root, ran, 'if [ "$1" = add ]; then kill -9 $$; fi'));
+
+    writeFileSync(join(work, 'a.txt'), 'the owner\'s work');
+    engine.beginTurn({ turnId: 't', sessionId: 's' });
+
+    await expect(engine.ensureCheckpoint(work)).rejects.toThrow('checkpoint staging failed');
+    expect(readFileSync(ran, 'utf8').split('\n')).not.toContain('write-tree');
+    expect(await engine.list()).toEqual([]);
+  });
+
+  test('a mutation arriving while the turn\'s snapshot is still being taken waits for it', async () => {
+    const { root, work } = setup();
+    const gate = join(root, 'released');
+    const engine = engineOver(root, wrappedGit(root, join(root, 'git-calls'), `if [ "$1" = add ]; then while [ ! -e '${gate}' ]; do sleep 0.02; done; fi`));
+
+    writeFileSync(join(work, 'a.txt'), 'before the turn');
+    // Probed once, so a call reaches its snapshot with no git of its own.
+    await engine.status();
+    engine.beginTurn({ turnId: 't', sessionId: 's' });
+    const first = engine.ensureCheckpoint(work);
+    let secondWrote = false;
+
+    // The second mutation writes once its own checkpoint call answers, as a tool does.
+    const second = engine.ensureCheckpoint(work).then(() => {
+      secondWrote = true;
+      writeFileSync(join(work, 'a.txt'), 'the second mutation');
+    });
+
+    await new Promise((resolve) => { setImmediate(resolve); });
+    // The first snapshot's `git add` is held, so the second mutation may not have run.
+    expect(secondWrote).toBe(false);
+    writeFileSync(gate, '');
+    await second;
+
+    const restored = await engine.restore(work, present(await first, 'the turn checkpoint id'));
+    expect(restored.files).toEqual([{ path: 'a.txt', kind: 'modify' }]);
+    expect(readFileSync(join(work, 'a.txt'), 'utf8')).toBe('before the turn');
+  });
+
+  test('a snapshot that failed is taken by the turn\'s next mutation', async () => {
+    const { root, work } = setup();
+    const failed = join(root, 'failed-once');
+
+    const engine = engineOver(root, wrappedGit(root, join(root, 'git-calls'),
+      `if [ "$1" = add ] && [ ! -e '${failed}' ]; then touch '${failed}'; echo 'fatal: index.lock exists' >&2; exit 128; fi`));
+
+    writeFileSync(join(work, 'a.txt'), 'before the turn');
+    engine.beginTurn({ turnId: 't', sessionId: 's' });
+
+    await expect(engine.ensureCheckpoint(work)).rejects.toThrow('fatal: index.lock exists');
+    expect(await engine.ensureCheckpoint(work)).toBeTruthy();
+    expect((await engine.list()).map((entry) => entry.turnId)).toEqual(['t']);
   });
 
   test('a path it may not read is skipped and named in the record, not a failed checkpoint', async () => {

@@ -1,5 +1,5 @@
 {
-  "measured": "f4e310827: 1379 test files, 1179 runnable suites, 13474 tests, 50 runners, 1699 non-public product members, 10223 product function bodies",
+  "measured": "31a6c9c64: 1380 test files, 1180 runnable suites, 13482 tests, 50 runners, 1702 non-public product members, 10248 product function bodies",
   "entries": [
     {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: only a resolved write reads as copied :: expected side computed by the code under test",
@@ -154,22 +154,6 @@
             [
               "config.seed, config.variantA, config.variantB, config.repeats, config.manifestHash,",
               "config.seed, config.variantA, config.variantB, config.manifestHash,"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-diversity.test.ts :: the first six branches read exactly as they always did :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "a wide wave rewording the first six angles",
-          "file": "packages/core/src/mcts/diversity.ts",
-          "edits": [
-            [
-              "if (i < DIVERSITY_APPROACHES.length) return approach;",
-              "if (i < DIVERSITY_APPROACHES.length && n <= DIVERSITY_APPROACHES.length) return approach;"
             ]
           ]
         }

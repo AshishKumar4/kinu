@@ -1,13 +1,10 @@
 // D70: the desktop route.
+import { TestDevbox } from './support/test-devbox';
 import { expect, test } from 'bun:test';
 
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
-import { Devbox, harness } from './support/devbox-harness';
+import { harness } from './support/devbox-harness';
 
-class DesktopBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class DesktopBox extends TestDevbox<unknown> {
 
   protected override get ambientCheckpoints(): boolean {
     return false;

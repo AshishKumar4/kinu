@@ -129,15 +129,12 @@ export async function mapGatewayError(res: Response, modelId: string, gatewayId:
 
   if (!friendly) {
     // Unknown failure — keep the original payload intact for the caller.
-    return new Response(body, {
-      status: res.status,
-      headers: { 'content-type': res.headers.get('content-type') ?? 'text/plain' },
-    });
+    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
   }
 
   const detail = message && !friendly.includes(message) ? ` (upstream: ${message})` : '';
 
-  return errorResponse(res.status, `${friendly}${detail}`);
+  return errorResponse(res.status, `${friendly}${detail}`, undefined, res.headers);
 }
 
 function extractGatewayError(body: string): GatewayErrorDetail {
@@ -168,10 +165,16 @@ function extractGatewayError(body: string): GatewayErrorDetail {
     : { code: error.code ?? null, message: error.message ?? null };
 }
 
-export function errorResponse(status: number, message: string, code?: number): Response {
+export function errorResponse(status: number, message: string, code?: number, upstream?: Headers): Response {
   const error = code === undefined ? { message } : { message, code: String(code) };
+  // Only the body is new; the refusal's headers, Retry-After among them, still apply (m1820).
+  const headers = new Headers(upstream);
 
-  return new Response(JSON.stringify({ error }), { status, headers: { 'content-type': 'application/json' } });
+  headers.delete('content-length');
+  headers.delete('content-encoding');
+  headers.set('content-type', 'application/json');
+
+  return new Response(JSON.stringify({ error }), { status, headers });
 }
 
 /** A refusal in Cloudflare's v4 envelope, in the OpenAI shape the SDK adapters read, so its own code and words
@@ -182,7 +185,7 @@ async function inProviderWords(res: Response): Promise<Response> {
   const envelope = v.safeParse(V4ErrorSchema, decoded);
   const first = envelope.success ? envelope.output.errors[0] : undefined;
 
-  if (first?.message !== undefined) return errorResponse(res.status, first.message, first.code);
+  if (first?.message !== undefined) return errorResponse(res.status, first.message, first.code, res.headers);
 
   return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
 }

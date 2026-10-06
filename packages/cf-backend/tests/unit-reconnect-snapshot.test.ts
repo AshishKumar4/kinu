@@ -60,7 +60,7 @@ async function workspaceWithQueuedWork(spawnedAt?: number): Promise<QueuedWork> 
   try {
     const branch = await seeded.agent.branchTurn(BRANCH_TASK);
 
-    if (!branch.accepted || branch.branchId === undefined) throw new Error(`the branch was refused: ${branch.reason ?? 'no reason'}`);
+    if (!branch.accepted) throw new Error(`the branch was refused: ${branch.reason}`);
 
     return { seeded, branchId: branch.branchId, report: (report) => { reported.resolve(report); } };
   } finally {

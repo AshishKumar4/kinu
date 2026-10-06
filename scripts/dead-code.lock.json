@@ -3,6 +3,5 @@
   "packages/cf-backend/package.json#@ai-sdk/openai (unused-dependency)",
   "packages/cf-backend/src/lib/user-api.ts#PollResult (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#RegisteredDevice (unreferenced)",
-  "packages/cf-backend/src/sandbox-lifecycle.ts#SandboxLifecycleStage (unreferenced)",
-  "packages/cf-backend/src/user/mcp.ts#McpServerConfig (unreferenced)"
+  "packages/cf-backend/src/sandbox-lifecycle.ts#SandboxLifecycleStage (unreferenced)"
 ]

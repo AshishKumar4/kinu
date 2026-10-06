@@ -41,7 +41,6 @@
  * of them. The claim follows the run.
  */
 
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -296,8 +295,9 @@ export function unmatchedTargets(
   });
 }
 
-/** Run the targets under `bun test` and hand back the report. */
-function runTargets(): readonly string[] {
+/** Run the targets under `bun test` and hand back the report. Never `spawnSync`: bun 1.4.0-1.4.2 can spin one
+ *  forever after its child exits (oven-sh/bun#34069), which is how this gate went silent in commit hooks. */
+async function runTargets(): Promise<readonly string[]> {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-skip-ratchet-'));
 
   const arms: readonly { readonly what: string; readonly argv: readonly string[] }[] = [
@@ -305,24 +305,26 @@ function runTargets(): readonly string[] {
   ];
 
   try {
-    return arms.map(({ what, argv }, index) => {
+    const reports: string[] = [];
+
+    for (const [index, { what, argv }] of arms.entries()) {
       const out = join(dir, `junit-${String(index)}.xml`);
 
-      const result = spawnSync(
-        'bun',
-        [...argv, `--reporter-outfile=${out}`],
-        { cwd: root, encoding: 'utf8', stdio: ['ignore', 'inherit', 'inherit'] },
-      );
+      const exitCode = await Bun.spawn(['bun', ...argv, `--reporter-outfile=${out}`], {
+        cwd: root, stdin: 'ignore', stdout: 'inherit', stderr: 'inherit',
+      }).exited;
 
       if (!existsSync(out)) {
         throw new Error(
-          `skip-ratchet: ${what} produced no JUnit report (exit ${String(result.status)}) — `
+          `skip-ratchet: ${what} produced no JUnit report (exit ${String(exitCode)}) — `
           + 'nothing to measure, so the gate cannot pass',
         );
       }
 
-      return readFileSync(out, 'utf8');
-    });
+      reports.push(readFileSync(out, 'utf8'));
+    }
+
+    return reports;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -380,7 +382,7 @@ function targetPrefixes(argv: readonly string[]): readonly string[] | null {
   return targets;
 }
 
-function main(argv: readonly string[]): number {
+async function main(argv: readonly string[]): Promise<number> {
   const lockRequested = argv.includes('--lock');
   // A resolved live target changes what the lock MEANS, not how strict this gate
   // is. Every locked entry is `skipIf(!TARGET)`, so with a target they run — and
@@ -409,7 +411,7 @@ function main(argv: readonly string[]): number {
   // caller ran the arms and says which.
   const targets = named.length === 0 ? SKIP_RATCHET_TARGETS : named;
 
-  const xmls = paths.length === 0 ? runTargets() : paths.map((p) => readFileSync(p, 'utf8'));
+  const xmls = paths.length === 0 ? await runTargets() : paths.map((p) => readFileSync(p, 'utf8'));
   const report = mergeReports(xmls.map(parseJUnit));
   const missing = unmatchedTargets(report, targets);
 
@@ -521,4 +523,4 @@ function main(argv: readonly string[]): number {
   return 1;
 }
 
-if (import.meta.main) process.exit(main(process.argv.slice(2)));
+if (import.meta.main) process.exit(await main(process.argv.slice(2)));

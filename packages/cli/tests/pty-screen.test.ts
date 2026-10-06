@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
 import { scratchPath } from '@kinu.run/test-utils';
 import { runTuiInPty, screenOf } from './helpers/pty-screen';
+import { SPINNER_FRAMES, meterText } from '@kinu.run/core/tui';
 
 const ESC = '\u001B';
 
@@ -63,6 +64,65 @@ describe('the pty screen model', () => {
 });
 
 describe('the pty driver', () => {
+  test('meaningful screen progress survives a short idle window under event-loop load', async () => {
+    const program = scratchPath('pty-slow-progress', 'program.ts');
+
+    writeFileSync(program, [
+      "console.log('ready');",
+      'await Bun.stdin.stream().getReader().read();',
+      'for (const phase of ["connecting", "opening workspace", "loading history", "done"]) {',
+      '  const until = performance.now() + 600;',
+      '  while (performance.now() < until) Math.sqrt(performance.now());',
+      '  console.log(phase);',
+      '}',
+      'await Bun.sleep(60_000);',
+    ].join('\n'));
+
+    const run = await runTuiInPty(program, {
+      steps: [{ wait: 'ready' }, { send: '\n' }, { wait: 'done', timeout: 1 }],
+    });
+
+    expect(run.waits[1]?.met).toBe(true);
+    expect(run.waits[1]?.afterMs).toBeGreaterThan(2_000);
+  });
+
+  test('spinner frames and an elapsed counter cannot keep a stuck wait alive', async () => {
+    const program = scratchPath('pty-stuck-animation', 'program.ts');
+    const frames = SPINNER_FRAMES.map((frame, index) => `${frame} thinking${meterText({ startedAt: 0, streamedChars: 0 }, index * 1_000)}`);
+
+    writeFileSync(program, [
+      "console.log('ready');",
+      'await Bun.stdin.stream().getReader().read();',
+      `const frames = ${JSON.stringify(frames)};`,
+      'for (let index = 0; ; index++) {',
+      "  process.stdout.write('\\r\\x1b[2K' + frames[index % frames.length]);",
+      '  await Bun.sleep(100);',
+      '}',
+    ].join('\n'));
+
+    await expect(runTuiInPty(program, {
+      steps: [{ wait: 'ready' }, { send: '\n' }, { wait: 'done', timeout: 1 }],
+    })).rejects.toThrow('the screen never showed "done"');
+  });
+
+  test('cycling between previously seen screens cannot keep a stuck wait alive', async () => {
+    const program = scratchPath('pty-cyclic-progress', 'program.ts');
+
+    writeFileSync(program, [
+      "console.log('ready');",
+      'await Bun.stdin.stream().getReader().read();',
+      'const phases = ["connecting", "opening workspace", "loading history"];',
+      'for (let index = 0; ; index++) {',
+      "  process.stdout.write('\\x1b[2J\\x1b[H' + phases[index % phases.length]);",
+      '  await Bun.sleep(150);',
+      '}',
+    ].join('\n'));
+
+    await expect(runTuiInPty(program, {
+      steps: [{ wait: 'ready' }, { send: '\n' }, { wait: 'done', timeout: 1 }],
+    })).rejects.toThrow('the screen never showed "done"');
+  });
+
   // A wait that never held skipped every later step; a run that read on would blame the wrong step (CI 36962966527).
   test('a wait that never holds fails the run, naming the wait', async () => {
     const program = scratchPath('pty-unmet', 'program.ts');

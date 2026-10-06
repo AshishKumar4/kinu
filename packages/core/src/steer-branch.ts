@@ -11,9 +11,10 @@ import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
 import { Effect, Result } from 'effect';
-import { renderThrownChain, settle } from './obs/index';
+import { KinuError, renderThrownChain, settle } from './obs/index';
 import { defaultLoopOrigin } from './scaffold/loop-origin';
 import type { ActorHandle } from './identity/actor-handle';
+import type { WorkMode } from './types/turn';
 
 /** Depth 1: the branch answers rather than splitting further. */
 export const BRANCH_HEAD_BUDGET = {
@@ -27,6 +28,28 @@ export type BranchStatusEvent =
   | { type: 'branch_status'; status: 'running'; branchId: string; task: string }
   | { type: 'branch_status'; status: 'settled'; branchId: string; task: string; takeSetId: string; turnId: string }
   | { type: 'branch_status'; status: 'error'; branchId: string; task: string; message: string };
+
+export type BranchTurnResult =
+  | { readonly accepted: true; readonly branchId: string }
+  | { readonly accepted: false; readonly reason: string };
+
+/** Only a running Build turn branches: the head gets every mutating tool. */
+export function admitBranch(
+  text: string,
+  live: { readonly inFlight: boolean; readonly workMode: WorkMode },
+): Effect.Effect<{ readonly task: string } | BranchTurnResult, KinuError> {
+  const task = text.trim();
+
+  if (!task) return Effect.fail(new KinuError('bad_input', 'branchTurn requires the redirect text'));
+
+  if (!live.inFlight) return Effect.succeed({ accepted: false, reason: 'No turn is running: send it as a normal message instead.' });
+
+  if (live.workMode === 'plan') {
+    return Effect.succeed({ accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' });
+  }
+
+  return Effect.succeed({ task });
+}
 
 /** Marks a journaled run as a user redirect rather than an agent fork. */
 export const STEER_BRANCH_RUN_ID_PREFIX = 'branch-';

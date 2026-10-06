@@ -98,6 +98,15 @@ function instrumented<A>(run: () => Promise<A>, label = ''): Effect.Effect<A, Ch
   return Effect.tryPromise({ try: run, catch: (error): ChildOutcome => ({ kind: 'instrument-faulted', error: `${label}${renderThrownChain({ cause: error })}` }) });
 }
 
+/** Write and measure as one instrument call: a refused write faults it like a thrown verify. */
+function verified(ctx: MeasurementContext, verifier: ResolvedVerifier, artifact: string, label = ''): Effect.Effect<Measurement, ChildOutcome> {
+  return instrumented(async () => {
+    await writeText(ctx.vfs, verifier.artifact, artifact);
+
+    return verifier.verify(ctx);
+  }, label);
+}
+
 function answered(outcome: Effect.Effect<ChildOutcome, ChildOutcome>): Effect.Effect<ChildOutcome> {
   return Effect.catch(outcome, (faulted) => Effect.succeed(faulted));
 }
@@ -105,8 +114,7 @@ function answered(outcome: Effect.Effect<ChildOutcome, ChildOutcome>): Effect.Ef
 function measuredChild(input: ChildMeasurement): Effect.Effect<ChildOutcome, ChildOutcome> {
   return Effect.gen(function* () {
     const { ctx, verifier, witnessVerifier, measured, baseline } = input;
-    yield* Effect.promise(() => writeText(ctx.vfs, verifier.artifact, input.artifact));
-    const measurement = yield* instrumented(() => verifier.verify(ctx));
+    const measurement = yield* verified(ctx, verifier, input.artifact);
     let witnessFound: boolean | null = null;
 
     if (measured.witness !== null) {
@@ -114,12 +122,9 @@ function measuredChild(input: ChildMeasurement): Effect.Effect<ChildOutcome, Chi
         return { kind: 'instrument-faulted', error: 'witness verifier was not resolved' };
       }
 
-      witnessFound = yield* instrumented(async () => {
-        await writeText(ctx.vfs, witnessVerifier.artifact, input.artifact);
-        const witness = await witnessVerifier.verify(ctx);
+      const witness = yield* verified(ctx, witnessVerifier, input.artifact, 'witness verifier: ');
 
-        return witness.kind === 'measured' && witness.value === 1;
-      }, 'witness verifier: ');
+      witnessFound = witness.kind === 'measured' && witness.value === 1;
     }
 
     if (measurement.kind === 'unmeasurable') {
@@ -163,11 +168,7 @@ function measureParetoChild(input: {
     const details: string[] = [];
 
     for (const instrument of input.pareto.instruments) {
-        const measurement = yield* instrumented(async () => {
-          await writeText(input.pareto.ctx.vfs, instrument.verifier.artifact, input.artifact);
-
-          return instrument.verifier.verify(input.pareto.ctx);
-        });
+        const measurement = yield* verified(input.pareto.ctx, instrument.verifier, input.artifact);
 
         if (measurement.kind === 'unmeasurable') {
           return { kind: 'unmeasurable', detail: measurement.detail };

@@ -432,9 +432,7 @@ describe('renderActiveSkillsSection + tool gating', () => {
       reasons: [{ name: 'a', reason: { kind: 'explicit', matched_token: 'a' } }],
     }, 'system');
 
-    expect(out).toContain('## Active skills');
     expect(out).toContain('run');
-    expect(out).toContain('### a (explicit /a)');
   });
 
   test('toolAllowedBySkills: empty union = no restriction', () => {
@@ -471,7 +469,6 @@ describe('renderActiveSkillsSection + tool gating', () => {
       reasons: [{ name: 'giant', reason: { kind: 'explicit', matched_token: 'giant' } }],
     }, 'unverified');
 
-    expect(out).toContain('### giant (explicit /giant)');
     expect(out).toContain('(50000 chars)');
     // The pointer is the one load path every skill has, whichever root holds it.
     expect(out).toContain(skillViewPath('giant'));

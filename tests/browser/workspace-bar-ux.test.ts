@@ -399,18 +399,85 @@ describe('the open tab, as the browser paints it', () => {
 });
 
 /**
- * Status a reader takes in at a glance: a working chat's name carries a moving light, one that needs the person
- * breathes a red glow, a failed one holds a still red mark. With reduced motion asked for, nothing moves.
+ * Status a reader takes in at a glance: a working chat's name carries a moving light and its tile's eyes type; one
+ * that needs the person has a red light breathing up from under its tab (no outline: the owner's pick, 2026-10-06)
+ * and a red badge on its tile; a failed tile tilts grey. With reduced motion asked for, nothing moves.
  */
 describe('a chat\'s status, as the bar paints it', () => {
   const motion = (page: Page) => page.$$eval('[data-tab-strip="main"] .p-bar-tab[data-status]', (tabs) => Object.fromEntries(tabs.map((tab) => [
     tab.getAttribute('data-status') ?? '',
     {
       label: getComputedStyle(tab.querySelector('.p-status-label') ?? tab).animationName,
-      halo: getComputedStyle(tab, '::after').animationName,
+      // The light under the tab: its own layer, never an outline around the tab.
+      glow: getComputedStyle(tab.querySelector('.p-bar-link') ?? tab, '::before').animationName,
+      outline: getComputedStyle(tab, '::after').boxShadow,
       mark: tab.querySelector('[role="img"]')?.getAttribute('aria-label') ?? null,
+      // The chat's tile: its eyes type while it works, it pulses under a red badge while it waits.
+      eyes: getComputedStyle(tab.querySelector('.p-mascot-eye') ?? tab).animationName,
+      tile: getComputedStyle(tab.querySelector('.p-mascot-tile') ?? tab).animationName,
+      badge: tab.querySelector('.p-mascot-badge') !== null,
     },
   ])));
+
+  test('a drawn logo shows only as an image, a workspace without one wears its monogram, and settings asks for a new drawing', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspaceshell&agents=panel`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-bar-tab[data-title] [data-workspace-logo]');
+
+      const marks = await page.evaluate(() => ({
+        bar: document.querySelector('.p-bar-tab[data-title] [data-workspace-logo]')?.getAttribute('src')?.slice(0, 26) ?? null,
+        inline: document.querySelectorAll('nav svg[viewBox="0 0 64 64"], header svg[viewBox="0 0 64 64"]').length,
+        rows: [...document.querySelectorAll('[data-workspace-logo]')].filter((mark) => mark.closest('a[href^="/workspace/"]') !== null)
+          .map((mark) => mark.getAttribute('data-workspace-logo')),
+      }));
+
+      expect(marks.bar).toBe('data:image/svg+xml;charset');
+      expect(marks.inline).toBe(0);
+      expect(marks.rows).toContain('drawn');
+      expect(marks.rows).toContain('monogram');
+
+      await page.click('a[aria-label="Workspace settings"]');
+      await page.waitForSelector('[data-logo-field] button');
+      await page.click('[data-logo-field] button');
+      await page.waitForFunction(() => document.documentElement.dataset.galleryLogoDraws === '1');
+      await page.close();
+    });
+  });
+
+  test('a chat wears the same character in its tab and its sidebar row, and its neighbours wear others', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspaceshell&agents=panel`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-workspace-chat] .p-mascot');
+
+      const looks = await page.evaluate(() => {
+        const look = (host: Element | null) => {
+          const mark = host?.querySelector('.p-mascot[data-face]');
+
+          return mark === null || mark === undefined ? null
+            : [mark.getAttribute('data-face'), ...[...mark.querySelectorAll('stop')].map((stop) => stop.getAttribute('stop-color'))].join('|');
+        };
+
+        return [...document.querySelectorAll('.p-bar-tab[data-key]')].filter((tab) => tab.getAttribute('data-key') !== 'overview').map((tab) => ({
+          tab: look(tab),
+          row: look(document.querySelector(`[data-workspace-chat="${tab.getAttribute('data-key') ?? ''}"]`)),
+        }));
+      });
+
+      expect(looks.length).toBeGreaterThan(2);
+
+      for (const { tab, row } of looks) {
+        expect(tab).not.toBeNull();
+        expect(row).toBe(tab);
+      }
+
+      expect(new Set(looks.map(({ tab }) => tab)).size).toBeGreaterThan(1);
+      await page.close();
+    });
+  });
 
   test('working shimmers, needing you glows, failed holds still; reduced motion stops both', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -423,9 +490,11 @@ describe('a chat\'s status, as the bar paints it', () => {
 
         const seen = await motion(page);
 
-        expect(seen.working).toEqual({ label: reduce ? 'none' : 'p-shimmer', halo: 'none', mark: 'Working' });
-        expect(seen.waiting).toEqual({ label: 'none', halo: reduce ? 'none' : 'p-attention', mark: 'Needs you' });
-        expect(seen.failed).toEqual({ label: 'none', halo: 'none', mark: 'Last turn failed' });
+        const moving = (name: string) => reduce ? 'none' : name;
+
+        expect(seen.working).toEqual({ label: moving('p-shimmer'), glow: 'none', outline: 'none', mark: 'Working', eyes: moving('p-mascot-type'), tile: 'none', badge: false });
+        expect(seen.waiting).toEqual({ label: 'none', glow: moving('p-attention'), outline: 'none', mark: 'Needs you', eyes: moving('p-mascot-blink'), tile: moving('p-mascot-pulse'), badge: true });
+        expect(seen.failed).toEqual({ label: 'none', glow: 'none', outline: 'none', mark: 'Last turn failed', eyes: 'none', tile: 'none', badge: false });
         await page.close();
       }
     });

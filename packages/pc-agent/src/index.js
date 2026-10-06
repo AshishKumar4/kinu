@@ -273,11 +273,9 @@ function rpc(ws, id, result, error) {
 
 // ── Shadow-git checkpoints ─────────────────────────────────────────────
 //
-// Zero-dep mirror of the store format in core/src/checkpoints/format.ts
-// (same layout, ref scheme, and commit-subject encoding — the constants below
-// pin it; cli-backend/tests/checkpoint-parity.test.ts round-trips one store
-// through both engines) so a machine's checkpoints are one format regardless
-// of which side wrote them:
+// One store format with the CLI's engine: the block below is core's
+// checkpoints/format.ts, generated, so a machine's checkpoints read alike
+// whichever side wrote them:
 //
 //   <device home>/checkpoints/<agent>/<sha256(dir)[:16]>/ — bare GIT_DIR
 //     KINU_WORKDIR                                    — the target dir
@@ -290,11 +288,136 @@ function rpc(ws, id, result, error) {
 // honestly to "checkpoints unavailable: git not found" without blocking
 // anything.
 
+// BEGIN GENERATED from packages/core/src/checkpoints/format.ts by `bun scripts/daemon-checkpoint-format.ts`. Do not edit.
+
+// Shadow-git store format; the daemon carries a generated copy.
+
+const DEFAULT_CHECKPOINT_KEEP = 50;
+
 const CHECKPOINTS_UNAVAILABLE_NO_GIT = 'checkpoints unavailable: git not found';
 
-const REF_PREFIX = 'refs/kinu';
+const CHECKPOINT_REF_PREFIX = 'refs/kinu';
 
-const WORKDIR_MARKER = 'KINU_WORKDIR';
+const CHECKPOINT_WORKDIR_MARKER = 'KINU_WORKDIR';
+
+/** Generated/derived trees never snapshot. */
+const CHECKPOINT_EXCLUDES = [
+  '.git/', '.hg/', '.svn/',
+  'node_modules/', '.venv/', 'venv/', '__pycache__/', '*.pyc',
+  'dist/', 'build/', 'target/', 'out/', '.next/', '.nuxt/',
+  '.cache/', '.pytest_cache/', '.mypy_cache/', '.ruff_cache/', 'coverage/',
+  '.DS_Store', 'Thumbs.db', '*.log',
+];
+
+/** Null meta marks out-of-turn snapshots (pre-restore). */
+function checkpointSubject(meta, reason) {
+  const clean = (field) => {
+    const spaced = field.replace(/[\r\n|]/g, ' ').trim();
+
+    return spaced === '' ? '-' : spaced;
+  };
+
+  return `turn=${clean(meta?.turnId ?? '-')} session=${clean(meta?.sessionId ?? '-')} ${clean(reason)}`;
+}
+
+/** Unrecognized subjects keep the raw text as the reason with no turn attribution. */
+function parseCheckpointSubject(
+  subject,
+) {
+  const m = /^turn=(\S+) session=(\S+) (.*)$/.exec(subject);
+
+  if (!m) return { turnId: null, sessionId: null, reason: subject };
+  const turn = m[1];
+  const session = m[2];
+  const reason = m[3];
+
+  if (turn === undefined || session === undefined || reason === undefined) {
+    return { turnId: null, sessionId: null, reason: subject };
+  }
+
+  return {
+    turnId: turn === '-' ? null : turn,
+    sessionId: session === '-' ? null : session,
+    reason,
+  };
+}
+
+// A path `git add` cannot read is uncovered, not a failed checkpoint. Engines pass `--ignore-errors`
+// (else git aborts, leaving later paths unstaged) under `LC_ALL=C`; these are git 2.53's exact lines.
+const UNREADABLE_DIR = /^warning: could not open directory '(.+?)\/?': Permission denied$/;
+
+const UNREADABLE_FILE = /^error: open\("(.+)"\): Permission denied$/;
+
+const UNINDEXED_FILE = /^error: unable to index file '(.+?)'$/;
+
+const ADD_FAILED = /^fatal: adding files failed$/;
+
+function diagnoseStaging(stderr) {
+  const lines = stderr.split('\n').map((line) => line.trim()).filter(Boolean);
+  const unreadable = new Set();
+
+  for (const line of lines) {
+    const denied = UNREADABLE_DIR.exec(line) ?? UNREADABLE_FILE.exec(line);
+    const file = denied?.[1];
+
+    if (file !== undefined) unreadable.add(file);
+  }
+
+  return {
+    unreadable: [...unreadable].sort((left, right) => (left < right ? -1 : 1)),
+    // Two passes so a consequence line is judged against the whole denial set.
+    unexplained: lines.filter((line) => !isDenial(line, unreadable)),
+  };
+}
+
+/** `code` null: git never finished, so its index is partial whatever it printed. */
+function stagingOutcome(code, stderr) {
+  if (code === null) return { failure: 'checkpoint staging failed: git add did not finish' };
+  const diagnosis = diagnoseStaging(stderr);
+
+  if (diagnosis.unexplained.length > 0 || (code !== 0 && diagnosis.unreadable.length === 0)) {
+    return { failure: `checkpoint staging failed: ${stderr.trim()}` };
+  }
+
+  return { unreadable: diagnosis.unreadable };
+}
+
+function isDenial(line, unreadable) {
+  if (UNREADABLE_DIR.test(line) || UNREADABLE_FILE.test(line)) return true;
+  // Consequence lines are tolerated only alongside a denial; `unable to index file` also covers
+  // non-permission failures.
+  const unindexed = UNINDEXED_FILE.exec(line);
+
+  if (unindexed) {
+    const file = unindexed[1];
+
+    return file !== undefined && unreadable.has(file);
+  }
+
+  return ADD_FAILED.test(line) && unreadable.size > 0;
+}
+
+const REASON_UNREADABLE_LIMIT = 3;
+
+/** Unreadable paths ride in the free-text reason: the subject grammar is a two-engine on-disk contract. */
+function checkpointReason(reason, unreadable) {
+  if (unreadable.length === 0) return reason;
+  const shown = unreadable.slice(0, REASON_UNREADABLE_LIMIT);
+  const rest = unreadable.length - shown.length;
+  const more = rest > 0 ? ` +${String(rest)} more` : '';
+
+  return `${reason} [skipped ${String(unreadable.length)} unreadable: ${shown.join(' ')}${more}]`;
+}
+
+/** Snapshot time from a `refs/kinu/<ms13>-<seq36>` ref name. */
+function checkpointRefTimestampMs(ref) {
+  const m = /(\d{13})-[0-9a-z]+$/.exec(ref);
+  const stamp = m?.[1];
+
+  return stamp === undefined ? 0 : Number(stamp);
+}
+
+// END GENERATED
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 
@@ -304,75 +427,14 @@ const DIFF_KIND = { A: 'create', D: 'delete' };
 
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
 
-const CHECKPOINT_EXCLUDES = [
-  '.git/', '.hg/', '.svn/',
-  'node_modules/', '.venv/', 'venv/', '__pycache__/', '*.pyc',
-  'dist/', 'build/', 'target/', 'out/', '.next/', '.nuxt/',
-  '.cache/', '.pytest_cache/', '.mypy_cache/', '.ruff_cache/', 'coverage/',
-  '.DS_Store', 'Thumbs.db', '*.log',
-];
-
 // Shared temp roots, pinned alongside the TS engine's copy
 // (cli-backend/src/checkpoints.ts): a bare `/tmp/x.js` resolves to `/tmp` for
 // want of a project marker, and that is not a work tree.
 const UNSNAPSHOTTABLE = new Set([os.tmpdir(), '/tmp', '/var/tmp'].map((dir) => path.resolve(dir)));
 
-// What `git add` says about a path it could not READ, pinned as literals —
-// core/src/checkpoints/format.ts holds the same four patterns and the same
-// reason encoding. A path this process may not read (a private temp directory,
-// another user's tree) is not a failed checkpoint: it is a path the snapshot
-// does not cover, recorded in the reason so an incomplete restore is
-// explainable. `--ignore-errors` is what keeps the rest of the tree staged;
-// without it git aborts at the first refusal and everything after it is
-// silently missing. `LC_ALL=C` below is what makes these strings the ones git
-// emits.
-const UNREADABLE_DIR = /^warning: could not open directory '(.+?)\/?': Permission denied$/;
-
-const UNREADABLE_FILE = /^error: open\("(.+)"\): Permission denied$/;
-
-const UNINDEXED_FILE = /^error: unable to index file '(.+?)'$/;
-
-const ADD_FAILED = /^fatal: adding files failed$/;
-
-const REASON_UNREADABLE_LIMIT = 3;
-
-function diagnoseStaging(stderr) {
-  const lines = String(stderr ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
-  const unreadable = new Set();
-
-  for (const line of lines) {
-    const denied = UNREADABLE_DIR.exec(line) ?? UNREADABLE_FILE.exec(line);
-
-    if (denied) unreadable.add(denied[1]);
-  }
-
-  const explained = (line) => {
-    if (UNREADABLE_DIR.test(line) || UNREADABLE_FILE.test(line)) return true;
-    const unindexed = UNINDEXED_FILE.exec(line);
-
-    if (unindexed) return unreadable.has(unindexed[1]);
-
-    return ADD_FAILED.test(line) && unreadable.size > 0;
-  };
-
-  return {
-    unreadable: [...unreadable].sort((a, b) => (a < b ? -1 : 1)),
-    unexplained: lines.filter((line) => !explained(line)),
-  };
-}
-
-function reasonWithSkips(reason, unreadable) {
-  if (unreadable.length === 0) return reason;
-  const shown = unreadable.slice(0, REASON_UNREADABLE_LIMIT);
-  const rest = unreadable.length - shown.length;
-  const more = rest > 0 ? ` +${rest} more` : '';
-
-  return `${reason} [skipped ${unreadable.length} unreadable: ${shown.join(' ')}${more}]`;
-}
-
 function createCheckpoints(opts = {}) {
   const base = opts.base ?? path.join(DEVICE_HOME, 'checkpoints');
-  const keep = Math.max(1, opts.keep ?? 50);
+  const keep = Math.max(1, opts.keep ?? DEFAULT_CHECKPOINT_KEEP);
   const gitBin = opts.gitBin ?? 'git';
   let gitAvailable = null;
   let refSeq = 0;
@@ -457,20 +519,7 @@ function createCheckpoints(opts = {}) {
     await git(['init', '--bare', '--quiet', gitDir], path.dirname(gitDir), isolatedEnv());
     fs.mkdirSync(path.join(gitDir, 'info'), { recursive: true });
     fs.writeFileSync(path.join(gitDir, 'info', 'exclude'), CHECKPOINT_EXCLUDES.join('\n') + '\n');
-    fs.writeFileSync(path.join(gitDir, WORKDIR_MARKER), path.resolve(workdir) + '\n');
-  };
-
-  const cleanField = (s) => String(s ?? '-').replace(/[\n|]/g, ' ').trim() || '-';
-
-  const subjectFor = (turn, reason) =>
-    `turn=${cleanField(turn && turn.turnId)} session=${cleanField(turn && turn.sessionId)} ${cleanField(reason)}`;
-
-  const parseSubject = (subject) => {
-    const m = /^turn=(\S+) session=(\S+) (.*)$/.exec(subject);
-
-    if (!m) return { turnId: null, sessionId: null, reason: subject };
-
-    return { turnId: m[1] === '-' ? null : m[1], sessionId: m[2] === '-' ? null : m[2], reason: m[3] };
+    fs.writeFileSync(path.join(gitDir, CHECKPOINT_WORKDIR_MARKER), path.resolve(workdir) + '\n');
   };
 
   /** Why `dir` is no work tree to snapshot, or null when it is one. */
@@ -499,7 +548,7 @@ function createCheckpoints(opts = {}) {
     let out;
 
     try {
-      out = await git(['for-each-ref', '--sort=-refname', '--format=%(refname)|%(objectname)|%(subject)', REF_PREFIX],
+      out = await git(['for-each-ref', '--sort=-refname', '--format=%(refname)|%(objectname)|%(subject)', CHECKPOINT_REF_PREFIX],
         workdirOrBase(workdir), storeEnv(gitDir, workdir));
     } catch (err) {
       if (err.message === CHECKPOINTS_UNAVAILABLE_NO_GIT) throw err;
@@ -512,12 +561,6 @@ function createCheckpoints(opts = {}) {
 
       return { ref, id, subject: rest.join('|') };
     });
-  };
-
-  const refTimestampMs = (ref) => {
-    const m = /(\d{13})-[0-9a-z]+$/.exec(ref);
-
-    return m ? Number(m[1]) : 0;
   };
 
   /** `git add -A`, keeping what it could not read instead of failing over it.
@@ -533,22 +576,13 @@ function createCheckpoints(opts = {}) {
     }
 
     gitAvailable = true;
+    // A code that is not an exit status (a timeout's kill, an overfull buffer) is git never finishing.
+    const finished = error === null || Number.isInteger(error.code);
+    const staged = stagingOutcome(finished ? (error?.code ?? 0) : null, String(stderr));
 
-    // A code that is not an exit status (a timeout's kill, an overfull buffer)
-    // means git never finished, whatever it printed.
-    if (error !== null && !Number.isInteger(error.code)) {
-      throw new Error(`checkpoint staging failed: ${error.message}`, { cause: error });
-    }
+    if (staged.failure !== undefined) throw new Error(staged.failure, { cause: error ?? undefined });
 
-    const diagnosis = diagnoseStaging(String(stderr));
-
-    // Non-zero explained entirely by paths it may not read is not a failure;
-    // anything else is, and a truncated tree must not be called a checkpoint.
-    if (diagnosis.unexplained.length > 0 || (error !== null && diagnosis.unreadable.length === 0)) {
-      throw new Error(`checkpoint staging failed: ${String(stderr).trim()}`);
-    }
-
-    return diagnosis.unreadable;
+    return staged.unreadable;
   };
 
   const stageCurrent = async (gitDir, workdir) => {
@@ -572,9 +606,9 @@ function createCheckpoints(opts = {}) {
 
     if (latest && (await git(['rev-parse', `${latest.id}^{tree}`], abs, env)).trim() === tree) return latest.id;
 
-    const subject = subjectFor(turn, reasonWithSkips(reason, staged.unreadable));
+    const subject = checkpointSubject(turn, checkpointReason(reason, staged.unreadable));
     const sha = (await git(['commit-tree', tree, '-m', subject], abs, env)).trim();
-    const refName = `${REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
+    const refName = `${CHECKPOINT_REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
     await git(['update-ref', refName, sha], abs, env);
 
     if (refs.length + 1 > keep) {
@@ -646,16 +680,16 @@ function createCheckpoints(opts = {}) {
 
     for (const name of stores) {
       const gitDir = path.join(agentBase, name);
-      const marker = path.join(gitDir, WORKDIR_MARKER);
+      const marker = path.join(gitDir, CHECKPOINT_WORKDIR_MARKER);
 
       if (!fs.existsSync(path.join(gitDir, 'HEAD')) || !fs.existsSync(marker)) continue;
       const workdir = fs.readFileSync(marker, 'utf8').trim();
 
       for (const ref of await storeRefs(gitDir, workdir)) {
-        const meta = parseSubject(ref.subject);
+        const meta = parseCheckpointSubject(ref.subject);
 
         if (turnId !== undefined && turnId !== null && meta.turnId !== turnId) continue;
-        entries.push({ id: ref.id, dir: workdir, at: refTimestampMs(ref.ref), ...meta });
+        entries.push({ id: ref.id, dir: workdir, at: checkpointRefTimestampMs(ref.ref), ...meta });
       }
     }
 

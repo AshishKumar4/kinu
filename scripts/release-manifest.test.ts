@@ -12,13 +12,13 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { deriveInfrastructure, SUPPLY, type Supply } from './infra-manifest';
+import { deployedConfig, deriveInfrastructure, SUPPLY, type Supply } from './infra-manifest';
 import {
-  VAR_POLICY, buildReleaseManifest, readWranglerConfig, releaseBindings, releaseSecrets, releaseVars,
+  VAR_POLICY, buildReleaseManifest, releaseBindings, releaseSecrets, releaseVars,
 } from './release-manifest';
 import { RELEASE_ARTIFACT_NAME, ReleaseManifestSchema } from '../packages/core/src/deploy/manifest';
 
-const CONFIG = readWranglerConfig();
+const CONFIG = deployedConfig('production');
 
 const WORKER = deriveInfrastructure().worker;
 
@@ -32,6 +32,11 @@ const MANIFEST = buildReleaseManifest({
 });
 
 describe('the manifest is the config', () => {
+  test('the runtime compatibility date and flags travel unchanged', () => {
+    expect(MANIFEST.worker.compatibilityDate).toBe(CONFIG.compatibility_date ?? '');
+    expect(MANIFEST.worker.compatibilityFlags).toEqual(CONFIG.compatibility_flags ?? []);
+  });
+
   test('its bindings are exactly the ones the deployed environment declares', () => {
     const declared = [...WORKER.bindings].sort();
     const carried = MANIFEST.bindings.map((binding) => binding.binding).sort();
@@ -43,7 +48,7 @@ describe('the manifest is the config', () => {
     // The red direction that matters: a future `queues` or `hyperdrive` block
     // reaches the environment's binding list through infra-manifest and must
     // not reach a deployment as silence.
-    const withQueue = { ...CONFIG, kv_namespaces: [...(CONFIG.kv_namespaces ?? []), { binding: 'SESSION_KV' }] };
+    const withQueue = { ...CONFIG, kv_namespaces: [...(CONFIG.kv_namespaces ?? []), { binding: 'SESSION_KV', id: 'session-kv' }] };
     const carried = releaseBindings(withQueue, new Set()).map((binding) => binding.binding);
 
     expect(carried).toContain('SESSION_KV');

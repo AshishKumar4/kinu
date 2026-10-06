@@ -645,7 +645,8 @@ class ArchiveRowWriter {
     const agent = record.agent !== undefined;
     const held = this.insert;
 
-    if (held === null || held.table !== record.table || held.agent !== agent || held.columns.length !== columns.length) {
+    // Reused only for the same columns in the same order: a row's values bind in its own key order.
+    if (held === null || held.table !== record.table || held.agent !== agent || held.columns.join('\0') !== columns.join('\0')) {
       this.insert = {
         table: record.table,
         columns,

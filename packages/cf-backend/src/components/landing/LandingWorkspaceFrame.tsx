@@ -470,7 +470,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
         <SidebarRail />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspaceHeader
-          workspace={{ title: frame.title, to: `/workspace/${LANDING_WORKSPACE}`, editValue: frame.title, rename: async () => {}, remove: () => {} }}
+          workspace={{ name: LANDING_WORKSPACE, title: frame.title, to: `/workspace/${LANDING_WORKSPACE}`, editValue: frame.title, rename: async () => {}, remove: () => {} }}
           chats={LANDING_CHATS.map((agent) => ({ agent, to: `/workspace/${LANDING_WORKSPACE}`, rename: async () => {} }))}
           active="main"
           newChat={`/workspace/${LANDING_WORKSPACE}`}

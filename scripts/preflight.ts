@@ -42,7 +42,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import * as v from 'valibot';
+
 import type { CallExpression, Node } from 'oxc-parser';
 import { tolerate } from '@kinu.run/core/obs';
 import { assertMeasured, finding } from './gate-ratchet';
@@ -346,8 +346,8 @@ export function observe(): Environment {
 
   return {
     bun: {
-      actual: Bun.version,
-      pinned: v.parse(v.object({ packageManager: v.string() }), JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'))).packageManager.slice('bun@'.length),
+      actual: Bun.revision,
+      pinned: Bun.spawnSync([join(repo, 'node_modules/.bin/bun'), '-e', 'process.stdout.write(Bun.revision)'], { stdout: 'pipe', stderr: 'pipe' }).stdout.toString().trim(),
     },
     temp,
     freeInodes: fs.ffree,
@@ -374,10 +374,10 @@ export function judge(env: Environment): string[] {
   if (env.bun.actual !== env.bun.pinned) {
     problems.push(finding({
       at: join(repo, 'package.json'),
-      invariant: 'local gates and hosted CI run the checkout\'s pinned Bun',
-      found: `running Bun ${env.bun.actual}; the checkout pins ${env.bun.pinned}`,
+      invariant: 'local gates and hosted CI run the checkout\'s installed Bun',
+      found: `running Bun revision ${env.bun.actual}; the checkout installed ${env.bun.pinned}`,
       silently: 'a runtime-specific hang is attributed to a product change, or a local green does not prove CI\'s runtime',
-      fix: `run the ladder with Bun ${env.bun.pinned}`,
+      fix: 'run the ladder with node_modules/.bin/bun',
     }));
   }
 
@@ -561,7 +561,7 @@ if (import.meta.main) {
     : `${String(env.orphanBrowsers)} test browser(s) outlived their launcher (bun scripts/preflight.ts --reclaim ends them)`;
 
   if (problems.length === 0) {
-    console.log(`preflight: ok — Bun ${env.bun.actual} matches the pin; ${measured}, ${String(env.tempEntries)} entries in the temp directory, `
+    console.log(`preflight: ok — Bun ${Bun.version} matches the checkout's installed runtime; ${measured}, ${String(env.tempEntries)} entries in the temp directory, `
       + `${String(env.scratchOrphans)} of them our own leaked test scratch, ${browsers}, no merge in progress; `
       + `a ${String(PROBE_BYTES / 2 ** 20)} MiB write succeeded, so a per-user quota is not exhausted `
       + '(its remaining headroom is unmeasured: statfs reports the filesystem, not the user)');

@@ -1,6 +1,5 @@
 import protocol from './device-protocol.json';
 import { ERROR_CODES, KinuError, type ErrorCode } from '../obs/error';
-import * as v from 'valibot';
 
 export const DEVICE_PROTOCOL_VERSION = protocol.version;
 
@@ -37,23 +36,3 @@ export function deviceFailure(code: string, message: string, input?: { cause: un
   return new KinuError(category, message, { cause: { code, message, cause: input?.cause } });
 }
 
-const CauseSchema = v.object({ code: v.optional(v.string()), cause: v.optional(v.unknown()) });
-
-export function* deviceFailureCodes(input: { cause: unknown }): Generator<string> {
-  const seen = new Set<unknown>();
-  let cause: unknown = input.cause;
-
-  for (;;) {
-    const parsed = v.safeParse(CauseSchema, cause);
-
-    if (!parsed.success || seen.has(cause)) return;
-    seen.add(cause);
-
-    if (parsed.output.code !== undefined) yield parsed.output.code;
-    cause = parsed.output.cause;
-  }
-}
-
-export function isDeviceFailure(input: { cause: unknown }, ...codes: string[]): boolean {
-  return [...deviceFailureCodes(input)].some((code) => codes.includes(code));
-}

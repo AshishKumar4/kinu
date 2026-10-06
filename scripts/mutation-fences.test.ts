@@ -17,18 +17,10 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { FENCES, snippetSitsExactlyOnce, type FenceResult } from './mutation-fences';
+import { FENCES, fenceFindings, snippetSitsExactlyOnce, type FenceResult } from './mutation-fences';
 import { trackedFiles } from './sources';
 
 const REPO = resolve(import.meta.dir, '..');
-
-/** The verdict the gate's own reporting takes, restated as a predicate so both
- *  its directions are assertable without spawning eight test processes. A
- *  fence is proved only when the pristine owner PASSED and the mutant FAILED
- *  with a settled exit code. */
-function proved(result: FenceResult): boolean {
-  return result.pristineExit === 0 && result.mutantExit !== 0 && result.mutantExit !== null;
-}
 
 describe('the declaration is measurable', () => {
   test('there are fences, and each names a tracked file and a tracked owner', () => {
@@ -128,7 +120,10 @@ describe('the verdict, in every direction it claims', () => {
 
   for (const verdict of verdicts) {
     test(verdict.name, () => {
-      expect(proved(verdict.result)).toBe(verdict.proved);
+      const findings = fenceFindings(verdict.result);
+      expect(findings.length === 0).toBe(verdict.proved);
+
+      if (!verdict.proved) expect(findings.join('\n')).toContain(fence);
     });
   }
 });

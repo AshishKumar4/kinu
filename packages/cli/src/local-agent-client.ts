@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { localFileLinks, type FileLinks, type PathPlanes } from '@kinu.run/core';
+import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type ProposerOutcome } from '@kinu.run/core';
@@ -326,11 +326,19 @@ export class LocalAgentClient implements AgentClient {
     }
   }
 
-  /** Text-only: the head task is a string. */
+  /** Text-only: the head task is a string. A refused branch is said as the cloud client says it. */
   branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
-    const text = promptText(prompt);
+    const text = promptText(prompt).trim();
 
-    if (!this.session.branch(text)) return false;
+    if (!text || !this.session.turnInFlight()) return false;
+    const outcome = this.session.branchTurn(text);
+
+    if (!outcome.accepted) {
+      this.emit({ type: 'broadcast', event: { type: 'branch_status', status: 'error', branchId: '', task: text, message: outcome.reason } satisfies BranchStatusEvent });
+
+      return true;
+    }
+
     this.activeCliSession.append('user', {
       text,
       branched: true,

@@ -8,8 +8,7 @@ import {
 } from '@kinu.run/core';
 import { err, json, readBounded, safeJson } from '@kinu.run/core';
 import { ingressAdmitted, ingressDenied, peerIp } from '@kinu.run/core';
-import { isFreshAuthTime } from '../auth/session';
-import { AUTH_TIME_HEADER } from '../cli/rpc-gate';
+import { isFreshAuthTime, type AuthIdentity } from '../auth/session';
 import {
   matchWebhookDeliveryPath, verifyWebhookRoute, webhookRouteSecret,
   WEBHOOK_ROUTE_UNAVAILABLE, type SignedWebhookRoute,
@@ -42,17 +41,9 @@ const RequestCfSchema = v.object({
   tlsClientAuth: v.optional(v.object({ certVerified: v.optional(v.string()) })),
 });
 
-function requestAuthTimeMs(request: Request): number | null {
-  const forwarded = Number(request.headers.get(AUTH_TIME_HEADER) ?? '');
-
-  if (Number.isFinite(forwarded) && forwarded > 0) return forwarded;
-
-  return null;
-}
-
 /** Widening who can drive turns needs a fresh sign-in; one spelling so the grant routes cannot drift. */
-function requireStepUp(request: Request): Response | null {
-  if (isFreshAuthTime(requestAuthTimeMs(request))) return null;
+function requireStepUp(identity: AuthIdentity): Response | null {
+  if (isFreshAuthTime(identity.authTime)) return null;
 
   return err(401, 'step-up auth required (re-login within 5 minutes)');
 }
@@ -131,7 +122,7 @@ export function hubRoutes<Bindings extends HubEnv>(
   routes.put(EMAIL, async (c) => {
     const request = c.get('workspace').request;
     // Widening who can drive turns by email is a grant.
-    const stepUp = requireStepUp(request);
+    const stepUp = requireStepUp(c.get('identity'));
 
     if (stepUp) return stepUp;
 
@@ -166,7 +157,7 @@ function createTrigger<Bindings extends HubEnv>(c: HubContext<Bindings>): Effect
   return Effect.gen(function* () {
     const request = c.get('workspace').request;
     // Creating a trigger is a grant (same rule as the CLI webhook route: auth/session.ts isFreshAuthTime).
-    const stepUp = requireStepUp(request);
+    const stepUp = requireStepUp(c.get('identity'));
 
     if (stepUp) return stepUp;
 

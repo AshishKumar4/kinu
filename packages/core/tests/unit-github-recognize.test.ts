@@ -77,6 +77,38 @@ describe('GitHub REST, as the devbox egress sees it', () => {
     )).toEqual([]);
   });
 
+  test('a mutation\'s subject is its structured url, never a link written in a title', () => {
+    const query = 'mutation IssueCreate($input:CreateIssueInput!){createIssue(input: $input){issue{title,url}}}';
+    const hostile = 'https://github.com/evil/elsewhere/issues/9';
+
+    expect(recognizeGitHubHttp(
+      { method: 'POST', url: 'https://api.github.com/graphql', body: JSON.stringify({ query, variables: { input: { repositoryId: 'R_1', title: hostile } } }) },
+      ok({ data: { createIssue: { issue: { title: hostile, url: 'https://github.com/acme/checkout/issues/41' } } } }, 200),
+    )).toEqual([{ action: 'opened', subject: 'issue', repo: 'acme/checkout', number: 41, url: 'https://github.com/acme/checkout/issues/41', title: hostile }]);
+
+    // An answer whose only link is in a title records nothing.
+    expect(recognizeGitHubHttp(
+      { method: 'POST', url: 'https://api.github.com/graphql', body: JSON.stringify({ query: 'mutation { updateIssue(input: $input){ issue { title } } }' }) },
+      ok({ data: { updateIssue: { issue: { title: hostile } } } }, 200),
+    )).toEqual([]);
+  });
+
+  test('`gh issue close` answers with a node id only, which the lookup before it names', () => {
+    // Captured from `gh issue close 41`: a lookup by number, then closeIssue answered with the issue's id.
+    const lookup = recognizeGitHubHttp(
+      { method: 'POST', url: 'https://api.github.com/graphql', body: JSON.stringify({ query: 'query IssueByNumber($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){id,title,url}}}' }) },
+      ok({ data: { repository: { issue: { id: 'I_kw41', title: 'https://github.com/evil/elsewhere/issues/9', url: 'https://github.com/acme/checkout/issues/41' } } } }, 200),
+    );
+
+    const closed = recognizeGitHubHttp(
+      { method: 'POST', url: 'https://api.github.com/graphql', body: JSON.stringify({ query: 'mutation IssueClose($input:CloseIssueInput!){closeIssue(input: $input){issue{id}}}', variables: { input: { issueId: 'I_kw41' } } }) },
+      ok({ data: { closeIssue: { issue: { id: 'I_kw41' } } } }, 200),
+    );
+
+    expect(lookup).toEqual([{ action: 'identified', subject: 'issue', repo: 'acme/checkout', number: 41, node: 'I_kw41' }]);
+    expect(closed).toEqual([{ action: 'closed', subject: 'issue', node: 'I_kw41', state: 'closed' }]);
+  });
+
   test('reads, refusals and other hosts record nothing', () => {
     expect(recognizeGitHubHttp({ method: 'GET', url: 'https://api.github.com/repos/acme/checkout/issues/41' }, ok({ number: 41 }, 200))).toEqual([]);
     expect(recognizeGitHubHttp({ method: 'POST', url: 'https://api.github.com/repos/acme/checkout/issues' }, ok({ message: 'Validation Failed' }, 422))).toEqual([]);

@@ -120,8 +120,8 @@ rebuild; a class overrides `archiveExcludes` to keep one.
 
 The upper layer of a recovery must honour writable `MAP_SHARED` mappings, which
 SQLite's WAL mode needs for its shared-memory index.
-`tests/workspace-mount-contract.test.ts` holds that contract against the shipped
-image, and against a FUSE fixture that refuses it, to prove the test can go red.
+The real-container deploy tier checks mmap and WAL on the golden's actual
+lazy recovery mount (`bench/disk-contracts.ts`, D72).
 
 ## Platform constraints
 
@@ -233,15 +233,13 @@ The package test command loads the repository's one Workers platform preload.
   rebinds the SDK's registration marker, or needs none when nothing is mounted,
   and that an incompatible marker, or a mount with none, refuses once rather
   than replacing the container or widening its route (D47).
-- `processes-image.test.ts` runs the process scripts in the real image's shell
-  over `docker exec`: a stop escalates TERM to KILL, and a launch that never
-  ran is recorded and launched again, never adopted as live (D48).
+- `scripts/devbox-container-tier.ts` runs the native process, kill, exec,
+  trust, tools and desktop contracts on an eval-owned throwaway Worker and
+  golden container; it deletes the Worker, application, bucket and snapshots.
 - `hybrid.test.ts` covers the rest snapshot and every wake that cannot use
   it: a stalled or lost snapshot, a moved chain, another image, a refused
-  snapshot. `disk-chain-image.test.ts` runs the real chain in the image with
-  real FUSE: exact lazy recovery, exact plain disk, compaction.
-  `workspace-mount-contract.test.ts` holds the mmap and WAL contract described
-  under Storage against the real image.
+  snapshot. The deploy tier runs the real disk chain against R2, with exact
+  lazy and plain recovery, compaction, block deltas and disk-pressure controls.
 - `scripts/bench-devbox-independence.test.ts` rejects product-core imports and
   workspace dependencies; its third test proves the check can fail.
 - `workspace-resolution.test.ts` rejects `@kinu.run/*` resolving outside this

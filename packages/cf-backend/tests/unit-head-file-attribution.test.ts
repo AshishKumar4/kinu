@@ -54,7 +54,7 @@ test('two heads writing at the same time each report only their own file', async
   const branches = await Promise.all(TASKS.map(async (task) => {
     const branch = await agent.branchTurn(task);
 
-    if (branch.branchId === undefined) throw new Error(`the branch was refused: ${branch.reason ?? 'no reason'}`);
+    if (!branch.accepted) throw new Error(`the branch was refused: ${branch.reason}`);
 
     const seat = db.query<{ storage_key: string }, [string]>('SELECT storage_key FROM workspace_actors WHERE creation_id = ?')
       .get(`${branch.branchId}-head`);

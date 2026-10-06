@@ -16,6 +16,7 @@ export const WORKSPACE_KEYED_ROWS = [
   { table: 'cli_agent_connect_tickets', column: 'agent_name', removal: 'before-destroy' },
   { table: 'user_workspaces', column: 'name', removal: 'after-destroy' },
   { table: 'workspace_overviews', column: 'name', removal: 'after-destroy' },
+  { table: 'workspace_logos', column: 'name', removal: 'after-destroy' },
   { table: 'workspace_overview_nudges', column: 'name', removal: 'after-destroy' },
   { table: 'device_status_watchers', column: 'agent_name', removal: 'after-destroy' },
   { table: 'device_notice_pending', column: 'agent_name', removal: 'after-destroy' },
@@ -412,6 +413,15 @@ export function initUserTables(sql: SqlExec): void {
       activity   TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle')),
       decisions  INTEGER NOT NULL,
       overview   TEXT NOT NULL
+    )
+  `);
+
+  // Sanitized on the way in (identity/logo.ts).
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS workspace_logos (
+      name     TEXT PRIMARY KEY,
+      svg      TEXT NOT NULL,
+      drawn_at INTEGER NOT NULL
     )
   `);
 

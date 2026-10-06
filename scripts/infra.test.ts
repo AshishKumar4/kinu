@@ -967,6 +967,7 @@ describe('staging is the one named environment, read the way Wrangler reads it',
     writeFileSync(path, JSON.stringify({
       name: 'kinu',
       account_id: 'acct',
+      compatibility_flags: ['nodejs_compat'],
       routes: [{ pattern: 'kinu.run', custom_domain: true }],
       triggers: { crons: ['*/15 * * * *'] },
       exports: { Agent: { type: 'durable-object', storage: 'sqlite' } },
@@ -993,6 +994,8 @@ describe('staging is the one named environment, read the way Wrangler reads it',
     expect(derived.worker.vars.get('MODE')).toBe('staging');
     expect(derived.worker.routes).toEqual(['staging.example']);
     expect(liveClasses(deployedConfig('staging', path).exports)).toEqual(['Agent']);
+    expect(deployedConfig('production', path)).toMatchObject({ compatibility_flags: ['nodejs_compat'] });
+    expect(deployedConfig('staging', path)).toMatchObject({ compatibility_flags: ['nodejs_compat'] });
     expect(ids).toContain('r2.kinu-backups-staging');
     expect(ids).not.toContain('r2.kinu-backups');
     expect(ids).toContain('cron.kinu-staging */15 * * * *');

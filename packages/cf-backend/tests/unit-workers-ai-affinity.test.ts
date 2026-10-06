@@ -2,6 +2,7 @@
 // provider's customFetch; a provider rewrite once dropped it silently.
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
+import { CHAT_COMPLETION_BODY } from '@kinu.run/test-utils';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { agentAffinityKey, asFetchFunction } from '@kinu.run/core';
@@ -17,17 +18,6 @@ function fakeUserDOStub() {
   });
 }
 
-function chatCompletionResponse(): Response {
-  return new Response(JSON.stringify({
-    id: 'chatcmpl-1',
-    object: 'chat.completion',
-    created: 0,
-    model: '@cf/moonshotai/kimi-k2.6',
-    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-  }), { headers: { 'content-type': 'application/json' } });
-}
-
 async function captureWorkersAIRequest(conversation: string) {
   const captured: Array<{ url: string; headers: Headers }> = [];
 
@@ -38,7 +28,7 @@ async function captureWorkersAIRequest(conversation: string) {
       const url = new Request(input).url;
       captured.push({ url, headers: new Headers(init?.headers) });
 
-      return chatCompletionResponse();
+      return Response.json(CHAT_COMPLETION_BODY);
     }),
   });
 
@@ -73,7 +63,7 @@ describe('Workers AI session affinity (REST path)', () => {
 
         return calls === 1
           ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
-          : chatCompletionResponse();
+          : Response.json(CHAT_COMPLETION_BODY);
       }),
     });
 

@@ -3,7 +3,7 @@ import {
   memberEffect, toolActionEffect, toolActionMember, toolMembers, TOOL_ACTION_EFFECTS,
 } from '../src/slates/members';
 import {
-  FILE_TOOL_ACTIONS, MEMORY_FACT_ACTIONS, MEMORY_NOTE_ACTIONS, replayPolicyFor, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS,
+  FILE_TOOL_ACTIONS, MEMORY_FACT_ACTIONS, MEMORY_NOTE_ACTIONS, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS,
 } from '../src/tools/registry';
 import { toolCallEffect } from '../src/tools/tool-call-summary';
 import type { JsonObject } from '../src/utils/json';
@@ -39,19 +39,15 @@ test('the member table is what the grant, the graph and the audit row read', () 
   expect(memberEffect('ai', 'anything')).toBe('mutate');
 });
 
-test('the tool rows restate the native classification — pinned to the tools themselves', () => {
-  // Every native action classifies here exactly as the tools' own
-  // classification answers: replay-safe whole tools read, mutating contracts
-  // mutate, and a per-action reading is read. This layer cannot import
-  // tools/, so this pin is what keeps the restatement honest.
+test('every action a native tool declares is classified, and a share reads it as the tool does', () => {
+  // Replay safety is not the effect: the web tool replays safely, yet its fetch and screenshot write.
   const pinned = (tool: string, actions: readonly string[]) => {
     for (const action of actions) {
       // `tasks.mode` is an action that either reads or switches the role; the
       // member covers both forms, so the probe carries the mutating one.
       const probe: JsonObject = tool === 'tasks' && action === 'mode' ? { action, role: 'researcher' } : { action };
-      const expected = replayPolicyFor(tool) === 'safe' || toolCallEffect(tool, probe) === 'read' ? 'read' : 'mutate';
-
-      expect(toolActionEffect(tool, action)).toBe(expected);
+      // A declared action is classified ('unknown' is not an effect), and a share reads it the same way.
+      expect(toolCallEffect(tool, probe)).toBe(toolActionEffect(tool, action));
     }
   };
 

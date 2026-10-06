@@ -187,6 +187,22 @@ test('a cut grant is every read member plus exactly the approved mutations', () 
     .toEqual({ slate: 'issues', binding: 'GITHUB', member: 'create_issue', effect: 'mutate' });
 });
 
+test('a default share reads through the web namespace, but never lets the native web tool write', () => {
+  // The native tool's fetch spills a page and its screenshot saves an image into the workspace; the namespace writes nothing.
+  const project = parseSlateProject({
+    main: 'server.js',
+    slate: { bindings: { NATIVE: { kind: 'tool', name: 'web' }, NET: { kind: 'web' } } },
+  });
+
+  const shared = cutShareGrant(slateCapabilityGraph({
+    slate: 'reader', workspace: 'my-workspace', catalog: { ...catalog, tools: ['web'], slates: { reader: project } },
+  }), []);
+
+  expect(shared.members.map(({ binding, member, effect }) => `${binding}.${member}:${effect}`)).toEqual([
+    'NATIVE.search:read', 'NET.search:read', 'NET.fetch:read', 'NET.screenshot:read',
+  ]);
+});
+
 test('approving a read member or an unknown member refuses', () => {
   expect(() => cutShareGrant(graph, [{ slate: 'issues', binding: 'FILES', member: 'readFile' }]))
     .toThrow('FILES.readFile is not a mutating member of slate issues');
