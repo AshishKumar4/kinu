@@ -160,8 +160,7 @@ export interface AgentStatus {
   forkLineage: ForkLineage | null;
 }
 
-/** Held to the server's return literal and the gallery stub by `unit-snapshot-contract`: a field
- *  either omits reads `undefined` and crashes the composer. */
+/** A field the server's literal or the gallery stub omits reads `undefined` and crashes the composer. */
 export interface SubordinateSnapshot {
   name: string;
   /** The pane's own identity, compared by {@link admitsActorFrame}. */

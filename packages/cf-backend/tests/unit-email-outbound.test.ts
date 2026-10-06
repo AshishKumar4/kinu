@@ -42,11 +42,6 @@ type SentEmail = v.InferOutput<typeof SentEmailSchema>;
 
 type SendEmailBuilder = Parameters<SendEmail['send']>[0];
 
-const ReplyAttemptSchema = v.object({
-  kind: v.string(),
-  outcome: v.object({ outcome: v.string() }),
-});
-
 function fakeSendBinding(opts: { fail?: boolean } = {}) {
   const sent: SentEmail[] = [];
   function send(message: EmailMessage): Promise<EmailSendResult>;
@@ -66,7 +61,8 @@ function fakeSendBinding(opts: { fail?: boolean } = {}) {
   return { binding, sent };
 }
 
-describe('inbound email → turn → threaded reply (the full flow at the seams)', () => {
+// The full round trip, MIME to threaded reply with retries, is `email-round-trip.test.ts`; these are its edges.
+describe('the reply channel at its edges', () => {
   function setup(sendOpts: { fail?: boolean } = {}) {
     const db = new Database(':memory:');
     const exec = makeExec(db);
@@ -109,48 +105,6 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     return result.event_id;
   }
 
-  test("the turn's answer threads back to the sender as a real reply", async () => {
-    const { log, replies, sent, sql } = setup();
-    const eventId = await admitOwnerEmail(log, replies);
-
-    // Bound to a synthetic turn, as AgentOrchestrator does.
-    log.markConsumed(eventId, 'evt-turn-1', 0);
-
-    const result = await dispatchEmailRepliesForTurn(
-      { log, replies }, 'evt-turn-1', 'Yes — staging is green. All 1,470 tests pass.', 2_000,
-    );
-
-    expect(result).toEqual({ delivered: 1, pending: false });
-
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({
-      from: { email: 'scout-a1b2c3@agents.example.com', name: 'Scout' },
-      to: 'owner@example.com',
-      subject: 'Re: Check the deploy',
-      text: 'Yes — staging is green. All 1,470 tests pass.',
-      headers: {
-        'Auto-Submitted': 'auto-replied',
-        'In-Reply-To': '<abc@mail.example.com>',
-        References: '<root@mail.example.com> <abc@mail.example.com>',
-      },
-    });
-
-    expect(replies.findOpenByEvent(eventId)).toBeNull();
-
-    const attempts = sql.exec(
-      `SELECT payload FROM agent_log WHERE kind = 'reply_attempt'`,
-    ).toArray();
-
-    expect(attempts).toHaveLength(1);
-    expect(v.parse(ReplyAttemptSchema, JSON.parse(v.parse(v.string(), attempts[0].payload)))).toMatchObject({
-      kind: 'email_thread', outcome: { outcome: 'delivered' },
-    });
-
-    expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-1', 'again', 3_000))
-      .toEqual({ delivered: 0, pending: false });
-    expect(sent).toHaveLength(1);
-  });
-
   test('an email injected MID-TURN still threads its reply — bound to the batch id the live turn absorbed', async () => {
     const { log, replies, sent } = setup();
     const eventId = await admitOwnerEmail(log, replies);
@@ -187,38 +141,6 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     expect(sent).toHaveLength(1);
     expect(sent[0]?.headers?.['In-Reply-To']).toBe('<abc@mail.example.com>');
     expect(replies.findOpenByEvent(eventId)).toBeNull();
-  });
-
-  test('an existing Re: subject is not double-prefixed', async () => {
-    const { log, replies, sent } = setup();
-
-    const result = await acceptInboundEmail({
-      log, replies, owner_email: 'owner@example.com', allowlist: [], tryConsumeRateLimit: () => true,
-      vfs: createMemoryVfs().vfs,
-    }, {
-      from: 'owner@example.com', to: 'scout-a1b2c3@agents.example.com',
-      subject: 'Re: Check the deploy', body_text: 'and now?',
-      message_id: '<def@mail.example.com>', in_reply_to: '<out-1@x>', references: null,
-      attachments: [], now: 1_000,
-    });
-
-    if (!result.admitted) throw new Error('not admitted');
-    log.markConsumed(result.event_id, 'evt-turn-2', 0);
-    await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-2', 'still green', 2_000);
-    expect(sent[0].subject).toBe('Re: Check the deploy');
-  });
-
-  test('a send failure keeps the channel open for retry and audits the failure', async () => {
-    const { log, replies, sent, sql } = setup({ fail: true });
-    const eventId = await admitOwnerEmail(log, replies);
-    log.markConsumed(eventId, 'evt-turn-3', 0);
-
-    const result = await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-3', 'answer', 2_000);
-    expect(result).toEqual({ delivered: 0, pending: true });
-    expect(sent).toHaveLength(0);
-    expect(replies.findOpenByEvent(eventId)?.state).toBe('open');
-    const attempts = sql.exec(`SELECT payload FROM agent_log WHERE kind = 'reply_attempt'`).toArray();
-    expect(v.parse(ReplyAttemptSchema, JSON.parse(v.parse(v.string(), attempts[0].payload))).outcome.outcome).toBe('failed');
   });
 
   test('a turn with no drain-bound email events sends nothing', async () => {
@@ -294,41 +216,6 @@ describe('the receipt an accepted message gets immediately', () => {
     references: '<root@mail.example.com>',
   };
 
-  test('it threads onto the inbound message and marks itself auto-replied', async () => {
-    const { binding, sent } = fakeSendBinding();
-
-    const ok = await sendInboundEmailReceipt(
-      { email: binding, agentDisplayName: 'Scout', outbox: freshOutbox() }, THREAD, 'evt-1',
-    );
-
-    expect(ok).toBe(true);
-    expect(sent[0]).toMatchObject({
-      from: { email: 'scout-a1b2c3@agents.example.com', name: 'Scout' },
-      to: 'owner@example.com',
-      subject: 'Re: Check the deploy',
-      headers: {
-        // RFC 3834: without it a peer agent's inbox would answer, looping two Kinus.
-        'Auto-Submitted': 'auto-replied',
-        'In-Reply-To': '<abc@mail.example.com>',
-        References: '<root@mail.example.com> <abc@mail.example.com>',
-      },
-    });
-    expect(sent[0].text).toContain('Scout has your message');
-  });
-
-  test('a redelivery of the same message sends exactly one receipt', async () => {
-    // Ingress dedupes on Message-ID, so a retried event keeps its outbox key and never re-sends.
-    const { binding, sent } = fakeSendBinding();
-    const outbox = freshOutbox();
-    const ctx = { email: binding, agentDisplayName: 'Scout', outbox };
-    expect(await sendInboundEmailReceipt(ctx, THREAD, 'evt-1')).toBe(true);
-    expect(await sendInboundEmailReceipt(ctx, THREAD, 'evt-1')).toBe(true);
-    expect(sent).toHaveLength(1);
-
-    expect(await sendInboundEmailReceipt(ctx, THREAD, 'evt-2')).toBe(true);
-    expect(sent).toHaveLength(2);
-  });
-
   test('no send_email binding is a quiet skip, not a failed delivery', async () => {
     const { sent } = fakeSendBinding();
     expect(await sendInboundEmailReceipt(
@@ -351,32 +238,6 @@ describe('the receipt an accepted message gets immediately', () => {
     expect(sent[0].headers?.['References']).toBeUndefined();
   });
 
-  test('the reply this thread later gets is a second message, not a repeat of the receipt', async () => {
-    // Distinct outbox keys: receipt and answer never suppress each other.
-    const { binding, sent } = fakeSendBinding();
-    const outbox = freshOutbox();
-    await sendInboundEmailReceipt({ email: binding, agentDisplayName: 'Scout', outbox }, THREAD, 'evt-1');
-
-    const dispatcher = createEmailThreadDispatcher(() => ({
-      email: binding, agentDisplayName: 'Scout', outbox,
-    }));
-
-    const delivered = await dispatcher.dispatch({
-      id: 'chan-1',
-      event_id: 'evt-1',
-      kind: 'email_thread',
-      holder_addr: JSON.stringify(THREAD),
-      ttl_expires_at: 10_000,
-      state: 'open',
-      reply_payload: null,
-      created_at: 1_000,
-      updated_at: 1_000,
-    }, 'Staging is green.');
-
-    expect(delivered).toEqual({ delivered: true });
-    expect(sent).toHaveLength(2);
-    expect(sent[1].text).toBe('Staging is green.');
-  });
 });
 
 describe('threading headers stay inside the line a receiver must accept', () => {

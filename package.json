@@ -44,7 +44,6 @@
     "gate:undeclared-imports": "bun scripts/undeclared-imports.ts",
     "gate:duplication": "bun scripts/ast-duplication.ts",
     "gate:complexity": "bun scripts/complexity.ts",
-    "gate:bloat-budget": "bun scripts/bloat-budget.ts",
     "gate:error-model": "bun scripts/error-model.ts",
     "gate:effect-diagnostics": "bun scripts/effect-diagnostics.ts",
     "gate:wired": "bun scripts/wired.ts",

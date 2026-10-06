@@ -23,6 +23,8 @@ export const CHATGPT_USAGE_URL = 'https://chatgpt.com/settings/usage';
 
 export const CHATGPT_DEFAULT_MODEL = 'gpt-6.1-sol';
 
+const CURRENT_CODEX_CLIENT = '0.160.1';
+
 const CHATGPT_SIGNED_OUT = 'chatgpt_signed_out';
 
 const TOOL_NAMESPACE = 'functions';
@@ -363,7 +365,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         const auth = yield* signed.pipe(Effect.catch((failure) => Effect.fail(stale(failure.message, failure))));
 
         if (auth === null) return [];
-        const url = `${CHATGPT_BASE_URL}/models`;
+        const url = `${CHATGPT_BASE_URL}/models?client_version=${CURRENT_CODEX_CLIENT}`;
 
         const res = yield* attempt({ doing: 'listing the ChatGPT models', otherwise: 'unavailable' }, () => (route?.fetch ?? deps.fetch ?? fetch)(url, { headers: auth.headers }))
           .pipe(Effect.catch((failure) => Effect.fail(stale(failure.message, failure))));

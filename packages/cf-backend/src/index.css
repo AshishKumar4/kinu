@@ -162,8 +162,7 @@ html, body, #root {
 
      `--font-serif` is Newsreader, and the brand mark is its only reader:
      `KinuLogo.tsx` is the one `font-serif` call site. The signed-out
-     shell declares the same display and mono stacks and
-     `unit-public-shell` asserts the two are identical, because the two
+     shell declares the same display and mono stacks, because the two
      surfaces are one product.
 
      `--font-mono` carries a second job besides code: every eyebrow and

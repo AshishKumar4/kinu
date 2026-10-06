@@ -4166,6 +4166,140 @@ full-root package persistence, snapshot eviction, stale-writer isolation,
 or a long-lived branch. Keep the design already proved; keep the ZeroFS
 follow-up bounded by those same admission rows.
 
+D76. Comparable filesystem I/O does not change D68's choice of the hybrid
+(2026-10-06, m1986; the commit carrying this entry). The missing I/O rows
+are now measured for D68's production chain, native snapshot root,
+current hybrid, vblk and vblk-T's warm thin-pool plane, and for D75's three
+libraries. This does not reopen the restore/save/reliability admission.
+
+Real Medium trixie containers on `48316e8da`, forked from the pinned D66
+golden. Every arm ran the same `io.py`: 128 MiB of incompressible bytes,
+1 MiB sequential operations, 128 seeded random 4 KiB operations, 32
+changed-block fsync samples, and 512 4 KiB files for each metadata pass.
+Three iterations per metric. SHA-256 checked the complete file after the
+writes and every random read checked its exact bytes; all eight arms were
+exact. R2 was each fixture's throwaway bucket, never a user workspace.
+Each container generated its own random payload; sizes, entropy class,
+operation counts and random offsets were identical, not the payload hash.
+
+These are mounted-view figures, not a cold object-store benchmark. Each
+read asked Linux to discard that file's clean pages with
+`POSIX_FADV_DONTNEED`; backend caches remained warm, as did lower-device
+pages that the view's hint does not necessarily discard. The subsequent
+hash checks also warm caches. A FUSE view, ext4 loop device, compressed
+btrfs root and a local thin pool do not discard the same caches. The
+high cached read figures below are not R2 transfer rates.
+
+### Data I/O: medians of three
+
+Sequential columns are MiB/s; random columns are operations/s. `+fsync`
+includes the final fsync after the timed writes. `fsync p50` is the median
+of each iteration's 32 syscall latencies after a changed 4 KiB write,
+then the median of those three medians. It is a syscall-return measure,
+not proof of a host-failure or R2 checkpoint durability guarantee.
+
+| Mounted view | Seq read | Seq write return | Seq write +fsync | Random read 4 KiB | Random write return | Random write +fsync | fsync p50, ms |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| A: production chain `2f660875cc`, base-only overlay | 2,797.1 | 560.9 | 311.2 | 44,486 | 38,155 | 12,933 | 0.874 |
+| B: native snapshot-woken btrfs root | 662.6 | 923.2 | 198.2 | 10,205 | 173,085 | 26,042 | 0.821 |
+| C: hybrid after lazy recovery was made plain | 807.0 | 615.3 | 196.4 | 5,571 | 139,441 | 17,436 | 1.234 |
+| D: recovered vblk-T binary, FUSE file + ext4, local cache | 4,078.9 | 1,455.9 | 199.3 | 16,667 | 308,605 | 10,933 | 1.959 |
+| E: vblk-T warm layout, ext4 on local dm-thin pool | 2,736.4 | 2,028.8 | 64.8 | 19,943 | 216,736 | 4,620 | 3.551 |
+| s3backer `1.5.4-2+b2`, ext4 loop | 1,800.9 | 2,900.4 | 27.6 | 7,755 | 268,383 | 6,497 | 0.102 |
+| ZeroFS `2.3.5`, object-backed LSM + 9P FUSE | 72.1 | 164.2 | 19.7 | 2,367 | 261,177 | 152 | 859.211 |
+| JuiceFS `1.4.1`, S3 data + local SQLite metadata | 63.5 | 414.6 | 91.4 | 7,859 | 10,434 | 65 | 273.584 |
+
+### Small-file metadata: median operations/s
+
+Creation includes writing and closing each 4 KiB file, not an explicit
+per-file fsync. Stat, rename and unlink are separate passes over the same
+512 files. A library's close/flush and namespace protocol are therefore
+part of its observed creation cost; this is not a pure in-memory lookup.
+
+| Mounted view | Create +close | Stat | Rename | Unlink |
+|---|---:|---:|---:|---:|
+| A: production chain | 4,477 | 34,902 | 5,321 | 6,766 |
+| B: native snapshot root | 26,162 | 124,329 | 21,517 | 25,748 |
+| C: hybrid made plain | 10,562 | 57,301 | 10,862 | 12,051 |
+| D: vblk local cache | 20,541 | 105,783 | 26,759 | 43,965 |
+| E: dm-thin warm layout | 13,315 | 86,484 | 20,794 | 32,322 |
+| s3backer | 21,088 | 138,394 | 32,755 | 48,985 |
+| ZeroFS | 681 | 4,537 | 918 | 1,378 |
+| JuiceFS | 3.44 | 5,037 | 1,125 | 905 |
+
+The library creation row is consequential for a development workload:
+JuiceFS's three 512-file passes took 147-150 s in this configuration,
+while the root's passes took about 18-24 ms. That does not condemn every
+JuiceFS configuration: it names this version, cache and metadata engine,
+and the close behavior of the tested mount. D75's quick sequential write
+was not evidence about compiling or installing a small-file tree.
+
+### What each arm was, and was not
+
+- A restores `snapshotChainStorage` and its dependencies from
+  `2f660875cc`. Only the adapter ports and valibot import resolution
+  changed. It published a 128 MiB base to the real R2 route, then mounted
+  that base through s3fs/squashfuse/fuse-overlayfs. This is a base-only
+  chain, not a many-delta session, and no old container image was booted.
+- B wrote its file, took a native root snapshot, destroyed the container
+  and woke from that recorded snapshot before I/O. Snapshot
+  `236ddf06-5ef7-4c9d-8db6-2c73935c4ebc` was deleted with the run.
+- C ran the current disk-chain code, published the same-sized base,
+  erased its workspace, attached the R2 lower, completed the copy, and
+  admitted the plain recovered disk. It reported `recovery made plain`.
+  A still-lazy, low-disk C is a different I/O plane and is not this row.
+- D uses the preserved D68 `vblkt` Go binary, SHA-256 `c66fbbd1…`, copied
+  read-only from the old scratch disk. Its CLI mounted a 1 GiB logical
+  device with 1 MiB blocks and 1 GiB local cache, then ext4 without a
+  reservation. Its initial state was generation 0. The measured writes
+  and fsync target that local device/cache; no R2 generation publication
+  is claimed by this I/O row. D68's cold restore/save figures remain the
+  evidence for that separate path.
+- E reconstructs the *warm physical layout*, not the entire old vblk-T
+  checkpoint driver: a 2 GiB local pool, 16 MiB metadata, 512 KiB thin
+  blocks, one thin volume and ext4 with zero reserved blocks, all on the
+  native btrfs root. It measures no thin-snapshot save or R2 restore.
+  Its small geometry deliberately avoids D68's disk-capacity admission;
+  it cannot rebut the 18 GB ENOSPC or pinned-rewrite failures there.
+- s3backer used a 1 GiB ext4-backed volume, 128 KiB blocks and a 1 GiB
+  block cache. ZeroFS used a 1 GB disk cache and 0.2 GB memory cache.
+  JuiceFS used a 1,024 MiB data cache and its local SQLite metadata. All
+  used their own real R2 store; cache geometries are declared, not equal
+  claims of “cold.” The release archives were the hashes checked in D75.
+
+### Runs, evidence and cleanup
+
+| Run | Measured arm | Report directory under `/mnt/local/kinu/tmp/kinu-devbox-contracts-` |
+|---|---|---|
+| `dc20261006123833202e1` | A | `QsqgTx` |
+| `dc20261006123833235e7` | B | `jAMhN9` |
+| `dc2026100612434425a92` | C | `hoMfyX` |
+| `dc202610061249247c74d` | D | `ACD9Ce` |
+| `dc20261006130605ec0fa` | E warm layout | `xzqKuo` |
+| `dc202610061217276f2a2` | all three D75 libraries, in one container | `W2Qgzt` |
+
+Every report has the revision, dirty digest, raw rows and cleanup result.
+Each metric has three rows, each arm has an exact-byte result, and every
+successful run checked its Worker, application, bucket and recorded
+snapshot tags absent. Failed setup controls are recorded separately:
+the native golden occasionally returned an internal error/rebuild before
+I/O; two early chain controls called the wrong checkpoint method or
+started before their recorded attach; one thin-pool control lacked its
+container device nodes. No failed setup's numbers enter the table.
+
+The full source and sanitized raw reports are archived off-tree at
+`/mnt/local/kinu/tmp/devbox-io.TOor79/io-2026-10-06.tar.zst`, SHA-256
+`973a6972175ad66394d6b1378ca6860a8ac6578e29e460d48ba464f475d2d6b1`;
+`io.py` is SHA-256 `7a4bfb58…`. No measurement instrument enters the product or its
+test tiers. The source methods and data shape are preserved in that
+archive so these rows do not depend on the older missing h2h files.
+
+Do not choose a backup from this table. A/B/C warm-root behavior, cache
+hits and buffered writes cannot settle cold restore or checkpoint
+reliability. D68 already places those above I/O, and D75 explains the
+library integration and metadata obligations. The table closes m1986's
+missing comparable I/O evidence; D68's decision is unchanged.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

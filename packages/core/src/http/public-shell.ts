@@ -49,7 +49,7 @@ export function markDocument(id: MarkId = KINU_MARK): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" color="${THEME_TOKENS.dark['--c-accent']}">${MARK_BODIES[id]}</svg>\n`;
 }
 
-/** Self-hosted latin subsets (OFL in `public/assets/fonts/`); `unit-public-shell` holds their byte budgets. */
+/** Self-hosted latin subsets (OFL in `public/assets/fonts/`). */
 const UI_FONT_PATH = '/assets/fonts/schibsted-latin-var.woff2';
 
 const MONO_FONT_PATH = '/assets/fonts/fragmentmono-latin.woff2';

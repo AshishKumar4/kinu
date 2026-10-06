@@ -31,7 +31,6 @@ function handled(response: Response | null): Response {
 
 function setupEnv() {
   const stored = new Map<string, { kind: CredentialSummary['kind']; value: { kind?: string } }>();
-  const notified: string[] = [];
 
   const userDO = cliAccount({
     async listActiveWorkspaces(_caller: UserCaller) {
@@ -69,13 +68,8 @@ function setupEnv() {
     UserDO: { idFromName: (n) => n, get: () => userDO },
     OrchestratorAgent: {
       idFromName: (n) => n,
-      get: (name) => workspaceObject({
-        async onModelSettingsChanged() {
-          notified.push(name);
-
-          return { ok: true as const };
-        },
-      }),
+      // What a workspace does on the change is `account-change-resumes.test.ts`'s.
+      get: () => workspaceObject({ async onModelSettingsChanged() { return { ok: true as const }; } }),
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     AUTH_KV: unreachableKv('AUTH_KV'),
@@ -86,7 +80,7 @@ function setupEnv() {
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil(promise: Promise<unknown>) { pending.push(promise); } };
 
-  return { env, stored, ctx, notified, settled: () => Promise.all(pending) };
+  return { env, stored, ctx, settled: () => Promise.all(pending) };
 }
 
 function credentialRequest(opts: { token?: string; key?: string; method?: string; body?: JsonValue }) {
@@ -106,8 +100,8 @@ function credentialRequest(opts: { token?: string; key?: string; method?: string
 }
 
 describe('CLI provider credentials', () => {
-  test('a session token can store a key in the account, and every live workspace hears about it', async () => {
-    const { env, stored, ctx, notified, settled } = setupEnv();
+  test('a session token can store a key in the account', async () => {
+    const { env, stored, ctx, settled } = setupEnv();
 
     const res = await serveFamily(cliRoutes, { ctx: ctx })(credentialRequest({
       key: 'openrouter.bearer', method: 'POST', body: { kind: 'bearer', token: 'sk-or-real' },
@@ -115,13 +109,11 @@ describe('CLI provider credentials', () => {
 
     expect(res?.status).toBe(201);
     expect(stored.get('openrouter.bearer')).toMatchObject({ kind: 'bearer' });
-    // Without the fan-out, a provider connected from a terminal stays absent in every running workspace's catalog.
     await settled();
-    expect(notified).toEqual(['jarvis']);
   });
 
   test('a CI access token cannot — writing a provider key is interactive-only', async () => {
-    const { env, stored, ctx, notified, settled } = setupEnv();
+    const { env, stored, ctx, settled } = setupEnv();
 
     const res = await serveFamily(cliRoutes, { ctx: ctx })(credentialRequest({
       token: CI_TOKEN, key: 'openrouter.bearer', method: 'POST', body: { kind: 'bearer', token: 'sk-or-real' },
@@ -131,7 +123,6 @@ describe('CLI provider credentials', () => {
     expect(await handled(res).text()).toContain('interactive CLI session token');
     expect(stored.size).toBe(0);
     await settled();
-    expect(notified).toEqual([]);
   });
 
   test('the listing names what is connected and never a secret', async () => {
@@ -146,8 +137,8 @@ describe('CLI provider credentials', () => {
     expect(JSON.stringify(body)).not.toContain('sk-ant-real');
   });
 
-  test('delete removes it, and the workspaces are told twice — once per mutation', async () => {
-    const { env, stored, ctx, notified, settled } = setupEnv();
+  test('delete removes it', async () => {
+    const { env, stored, ctx, settled } = setupEnv();
     await serveFamily(cliRoutes, { ctx: ctx })(credentialRequest({
       key: 'openai.bearer', method: 'POST', body: { kind: 'bearer', token: 'sk-real' },
     }), env);
@@ -156,11 +147,10 @@ describe('CLI provider credentials', () => {
     expect(res?.status).toBe(200);
     expect(stored.size).toBe(0);
     await settled();
-    expect(notified).toEqual(['jarvis', 'jarvis']);
   });
 
-  test("a key the store refuses reports the store's own reason, and notifies nobody", async () => {
-    const { env, ctx, notified, settled } = setupEnv();
+  test("a key the store refuses reports the store's own reason", async () => {
+    const { env, ctx, settled } = setupEnv();
 
     const res = await serveFamily(cliRoutes, { ctx: ctx })(credentialRequest({
       key: 'cloudflare.ai-gateway', method: 'POST', body: { kind: 'bearer', token: 'x' },
@@ -169,6 +159,5 @@ describe('CLI provider credentials', () => {
     expect(res?.status).toBe(400);
     expect(await handled(res).text()).toContain('derived from your Cloudflare login');
     await settled();
-    expect(notified).toEqual([]);
   });
 });

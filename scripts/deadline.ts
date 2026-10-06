@@ -145,14 +145,20 @@ async function laidOut(pid: number, name: 'environ' | 'cmdline'): Promise<string
   }
 }
 
-/** Kill `pid` and describe it as `<pid> <command>`: as it was when ended, which, between its fork and its exec, is
- *  the program it was forked from. */
-async function end(pid: number): Promise<string> {
+/** Kill a still-live `pid` and describe it as `<pid> <command>`; undefined when it ended during identification. */
+async function end(pid: number): Promise<string | undefined> {
   const command = (await laidOut(pid, 'cmdline'))?.replaceAll('\0', ' ').trim() ?? '';
-  const stat = command === '' ? procFile(pid, 'stat') : undefined;
-  const description = command || (stat === undefined ? '[exited before cmdline was read]' : `[comm: ${stat.slice(stat.indexOf('(') + 1, stat.lastIndexOf(')'))}]`);
+  const stat = procFile(pid, 'stat');
 
-  tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
+  // A lookup precedes the async command read. An empty read can mean exec OR exit: only a process still live now
+  // is a leftover. Otherwise the old lookup counted a process already gone and claimed the kill ended it.
+  if (stat === undefined) return undefined;
+  const state = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0];
+
+  if (state === undefined || state === 'Z' || state === 'X') return undefined;
+  const description = command || `[comm: ${stat.slice(stat.indexOf('(') + 1, stat.lastIndexOf(')'))}]`;
+
+  if (tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch') !== true) return undefined;
 
   return `${String(pid)} ${description}`;
 }
@@ -177,7 +183,11 @@ export async function endLeftovers(mark: string): Promise<string[]> {
     if (statSync(`/proc/${name}/environ`, { throwIfNoEntry: false })?.uid !== uid) continue;
     const environ = await laidOut(pid, 'environ');
 
-    if (environ !== undefined && `\0${environ}`.includes(entry)) left.push(await end(pid));
+    if (environ !== undefined && `\0${environ}`.includes(entry)) {
+      const ended = await end(pid);
+
+      if (ended !== undefined) left.push(ended);
+    }
   }
 
   return left;
@@ -209,7 +219,11 @@ async function endWhere(matches: (fields: readonly string[]) => boolean): Promis
     const stat = /^\d+$/u.test(name) ? procFile(name, 'stat') : undefined;
     const fields = stat?.slice(stat.lastIndexOf(')') + 2).split(' ') ?? [];
 
-    if (fields[0] !== undefined && fields[0] !== 'Z' && matches(fields)) left.push(await end(Number(name)));
+    if (fields[0] !== undefined && fields[0] !== 'Z' && matches(fields)) {
+      const ended = await end(Number(name));
+
+      if (ended !== undefined) left.push(ended);
+    }
   }
 
   return left;

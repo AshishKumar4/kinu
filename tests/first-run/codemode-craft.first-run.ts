@@ -32,6 +32,10 @@
  *   answered   the reply carries the arithmetic answer this file computed
  *              independently. A refusal, an apology, a plan, or the right shape
  *              with the wrong number is RED.
+ *   described  the Tools pane's row for it reads whole after the use: a
+ *              description, wired into `eval`, a measured quality, and the use
+ *              counted. GitHub #5: one crafted tool once made that read fail,
+ *              and every workspace open with it.
  *
  * WHY `eval` AND NOT A ROW PER CRAFTED CALL: a crafted tool runs INSIDE
  * the codemode program — the preamble splices its body into the sandbox arrow —
@@ -102,6 +106,9 @@ describe(SUITE, () => {
         const crafted = (await session.craftedTools()).filter((tool) => !before.has(tool.name));
         const names = crafted.map((tool) => tool.name);
 
+        const described = crafted.filter((tool) => tool.description.trim() !== '' && tool.wired === true
+          && tool.exposure === 'codemode' && (tool.qualityScore ?? -1) >= 0 && (tool.usageCount ?? 0) > 0);
+
         // A call that RAN the crafted tool: closed with no transport error, and
         // its own program calls `tools.<name>(`. Both halves are required — a
         // program that only creates the tool satisfies neither, and a call that
@@ -149,6 +156,13 @@ describe(SUITE, () => {
                 + `${String(codemode.length)} codemode call(s), `
                 + `${String(failures.length)} of them failed`
                 + (failures.length > 0 ? `: ${failures.join('; ')}` : ''),
+          },
+          {
+            what: 'described',
+            reached: described.length > 0,
+            detail: described.length > 0
+              ? `the Tools pane reads ${described.map((tool) => `${tool.name} (quality ${String(tool.qualityScore)}, used ${String(tool.usageCount)})`).join(', ')}`
+              : `no new tool reads whole on the Tools pane: ${JSON.stringify(crafted).slice(0, 240)}`,
           },
           {
             what: 'answered',
