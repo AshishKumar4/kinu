@@ -33,7 +33,7 @@ import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import {
-  bannedKeys, bridgesOf, CATEGORIES, type Category, type CensusInputs, checkRatchet,
+  bannedKeys, bridgesByName, bridgesOf, CATEGORIES, type Category, type CensusInputs, checkRatchet,
   classNonPublicMembers, type Finding, gateTests, isCensusFile, lockText, measureFile, mergeFindings,
   noFindings, nonPublicMembers, productUnitsOf, ratchetCounts, ratchetKey, runnerClaims, runCensus,
 } from './test-census';
@@ -77,6 +77,21 @@ export class Orchestrator {
 
 const HELPER = 'packages/probe/tests/helpers/harness.ts';
 
+/** A helper that hands the harness on, so a suite can reach a bridge without importing its file. */
+const FACTORY = 'packages/probe/tests/helpers/factory.ts';
+
+const FACTORY_TEXT = "export { harness } from './harness';";
+
+/** A second helper whose crossing bridge shares a name with the first's. */
+const OTHER_HELPER = 'packages/probe/tests/helpers/other-harness.ts';
+
+const OTHER_HELPER_TEXT = `
+import { Orchestrator } from '../../src/budget';
+export class OtherHarness extends Orchestrator {
+  observeWake(): number { return this.wakeAt; }
+}
+`;
+
 /** A ladder gate program's own test, whose subject is the tree. */
 const GATE_TEST = 'scripts/probe-gate.test.ts';
 
@@ -104,17 +119,19 @@ function probeInputs(): CensusInputs {
     ['packages/probe/src/card.tsx', `export const Card = () => <section className={'Product shell'}><h1>The chosen title</h1><p>One shared member</p><p>Any convenient wording</p><p>Untitled workspace</p></section>;`],
   ]);
 
-  const bridges = bridgesOf(HELPER, HELPER_TEXT, classNonPublicMembers(sources));
+  const classes = classNonPublicMembers(sources);
+  // The second helper comes last, so a table that kept one bridge per name would hold only its copy.
+  const bridges = [...bridgesOf(HELPER, HELPER_TEXT, classes), ...bridgesOf(OTHER_HELPER, OTHER_HELPER_TEXT, classes)];
 
   return {
     gateTests: new Set([GATE_TEST]),
     sources,
-    readModule: (file) => sources.get(file),
+    readModule: (file) => (file === FACTORY ? FACTORY_TEXT : sources.get(file)),
     nonPublic: nonPublicMembers(sources),
     generators: new Map([['prompt-golden.json', 'scripts/prompt-golden.ts']]),
-    bridges: new Map(bridges.map((bridge) => [bridge.name, bridge])),
+    bridges: bridgesByName(bridges),
     productUnits: productUnitsOf(sources),
-    tracked: new Set([MODULE, PROBE, HELPER]),
+    tracked: new Set([MODULE, PROBE, HELPER, FACTORY, OTHER_HELPER]),
     scope: '@kinu.run',
   };
 }
@@ -626,6 +643,37 @@ describeCategory('private_reach', [
       });
     `,
     expected: ['harness bridge to a non-public member', 'harness bridge to a non-public member'],
+  },
+  {
+    name: 'RED: a bridge reached through a helper that re-exports the harness',
+    source: `
+      import { harness } from './helpers/factory';
+      test('the wake moves', () => {
+        expect(harness().observeWake()).toBe(1_800_000);
+      });
+    `,
+    expected: ['harness bridge to a non-public member'],
+  },
+  {
+    name: 'RED: two helpers declare the same crossing bridge, and the suite imports the first',
+    source: `
+      import { harness } from './helpers/harness';
+      test('the wake moves', () => {
+        expect(harness().observeWake()).toBe(1_800_000);
+      });
+    `,
+    expected: ['harness bridge to a non-public member'],
+  },
+  {
+    name: 'SILENT: a member named like a bridge, on an object whose file never reaches the harness',
+    source: `
+      test('a probe forgets its wake', () => {
+        const probe = { observeWake: () => 0, armWake: () => undefined };
+        probe.armWake();
+        expect(probe.observeWake()).toBe(0);
+      });
+    `,
+    expected: [],
   },
   {
     name: 'RED: a bridge that reaches through another member of its own class',

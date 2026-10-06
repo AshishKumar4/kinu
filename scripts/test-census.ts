@@ -2323,22 +2323,36 @@ export function bridgesOf(file: string, text: string, classes: ClassMembers): Br
   return found;
 }
 
+/** Every bridge by member name. Two helpers may each declare one; a reach counts against a crossing one
+ *  its file can import. */
+export function bridgesByName(bridges: readonly Bridge[]): Map<string, Bridge[]> {
+  const byName = new Map<string, Bridge[]>();
+
+  for (const bridge of bridges) byName.set(bridge.name, [...(byName.get(bridge.name) ?? []), bridge]);
+
+  return byName;
+}
+
 /** Reaches of a bridge that really crosses the boundary, a call or a getter
  *  read, counted only OUTSIDE the file that declares it: inside, they are the
  *  helper's own plumbing, which the blind spots measure. */
 function bridgeReaches(
   parsed: ParsedFile,
   spans: readonly TestSpan[],
-  bridges: ReadonlyMap<string, Bridge>,
+  bridges: ReadonlyMap<string, readonly Bridge[]>,
+  reachable: () => ReadonlySet<string>,
 ): Finding[] {
   const found: Finding[] = [];
   walk(parsed.tree, (node) => {
     const r = node.raw;
 
     if (r.type !== 'MemberExpression' || r.computed || r.property.type !== 'Identifier') return;
-    const bridge = bridges.get(r.property.name);
 
-    if (bridge === undefined || bridge.file === parsed.file || bridge.nonPublic.length === 0) return;
+    // A helper class arrives only where its file is imported; elsewhere the name is someone else's `clear`.
+    const bridge = bridges.get(r.property.name)
+      ?.find((candidate) => candidate.nonPublic.length > 0 && candidate.file !== parsed.file && reachable().has(candidate.file));
+
+    if (bridge === undefined) return;
     const line = parsed.lineAt(node.start);
     found.push({
       file: parsed.file, line, test: titleAt(spans, line),
@@ -2348,6 +2362,46 @@ function bridgeReaches(
   });
 
   return found;
+}
+
+const importsByInputs = new WeakMap<CensusInputs, Map<string, readonly string[]>>();
+
+/** The test files `direct` reaches through imports and re-exports, followed only through test code: no
+ *  product module imports a harness. */
+function testImportClosure(direct: readonly string[], inputs: CensusInputs): Set<string> {
+  let memo = importsByInputs.get(inputs);
+
+  if (memo === undefined) {
+    memo = new Map();
+    importsByInputs.set(inputs, memo);
+  }
+
+  const known = memo;
+
+  const importsOf = (file: string): readonly string[] => {
+    const cached = known.get(file);
+
+    if (cached !== undefined) return cached;
+    const text = inputs.readModule(file);
+    const local = text === undefined ? [] : resolveImports(parseFile(file, text), inputs.tracked, inputs.scope).local;
+
+    known.set(file, local);
+
+    return local;
+  };
+
+  const seen = new Set(direct.filter(isCensusFile));
+  const queue = [...seen];
+
+  for (let file = queue.pop(); file !== undefined; file = queue.pop()) {
+    for (const next of importsOf(file)) {
+      if (seen.has(next) || !isCensusFile(next)) continue;
+      seen.add(next);
+      queue.push(next);
+    }
+  }
+
+  return seen;
 }
 
 /* ── Mocks ───────────────────────────────────────────────────────────── */
@@ -3196,7 +3250,7 @@ export interface CensusInputs {
   readonly readModule: (file: string) => string | undefined;
   readonly nonPublic: ReadonlyMap<string, string>;
   readonly generators: ReadonlyMap<string, string>;
-  readonly bridges: ReadonlyMap<string, Bridge>;
+  readonly bridges: ReadonlyMap<string, readonly Bridge[]>;
   readonly productUnits: ReadonlyMap<string, Unit>;
   readonly tracked: ReadonlySet<string>;
   readonly scope: string;
@@ -3224,6 +3278,7 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
   const spans = testSpans(parsed);
   const facts = localFacts(parsed, inputs.tracked);
   const { internal, external } = mocks(parsed, spans, inputs.scope);
+  let reachable: ReadonlySet<string> | undefined;
   let textReader: ((node: SyntaxNode) => boolean) | undefined;
   let styleReader: ((node: SyntaxNode) => boolean) | undefined;
 
@@ -3240,7 +3295,7 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
     tautology_suspect: tautologies(parsed, spans, localNames, { inputs, rendered: readers.text }),
     private_reach: [
       ...privateReaches(parsed, spans, inputs.nonPublic),
-      ...bridgeReaches(parsed, spans, inputs.bridges),
+      ...bridgeReaches(parsed, spans, inputs.bridges, () => (reachable ??= testImportClosure(local, inputs))),
     ],
     internal_mock: internal,
     copy_pin: pins.copy,
@@ -3301,14 +3356,7 @@ export function censusInputs(tracked: readonly string[], runners: readonly Runne
   const sources = readSources();
   const nonPublic = nonPublicMembers(sources);
   const classes = classNonPublicMembers(sources);
-  const bridges = new Map<string, Bridge>();
-
-  for (const file of tracked.filter(isCensusFile)) {
-    // One name, two helper classes: the crossing one is the door a call may open.
-    for (const bridge of bridgesOf(file, readRepositoryFile(root, file), classes)) {
-      if (bridge.nonPublic.length > 0 || !bridges.has(bridge.name)) bridges.set(bridge.name, bridge);
-    }
-  }
+  const bridges = bridgesByName(tracked.filter(isCensusFile).flatMap((file) => bridgesOf(file, readRepositoryFile(root, file), classes)));
 
   return {
     gateTests: gateTests(runners),
@@ -3426,7 +3474,7 @@ export function runCensus(): Census {
     findings,
     publicSurface,
     externalSeam,
-    bridges: [...inputs.bridges.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    bridges: [...inputs.bridges.values()].flat().sort((a, b) => a.name.localeCompare(b.name)),
     runnerClaims: claimsTable,
     neverRun,
     supportOnly,
