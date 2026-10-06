@@ -1,38 +1,15 @@
 #!/usr/bin/env bash
 #
-# Commit tier: 12s of total static analysis, no test suite.
+# A lane's commit runs the ladder's `local` tier: the typecheck, the anti-slop lint and the structural gates
+# over the whole tree, a few minutes, with no test rows and its results cached by content. An integration merge (branch integration/*) runs the full `commit` tier,
+# test suites included: that is where every lane's work meets, and the place the owner asked the full checks
+# to run (2026-10-06). The push tier and CI contain both.
 #
-# It runs no tests on purpose. At commit time you can afford something TOTAL —
-# every file, every line — and 12s buys exactly that: the typecheck across every
-# project `bun run typecheck` names, every enabled anti-slop rule, and four
-# structural gates that each name a defect
-# class this repo has actually shipped. A test suite at this tier would be a
-# sample, would cost 25s at minimum, and would push the hook into the range
-# where people start reaching for --no-verify.
-#
-# NO COUNTS. This header carried "the 8-project typecheck, the 15 anti-slop
-# rules" against a `check` script that names 16 tsconfig projects and an
-# `.oxlintrc.json` that enables 26 `anti-slop/` rules — and `scripts/ladder.ts`
-# derives that rule count from the config precisely because a hardcoded 21 had
-# already drifted to 22. A number copied into a frozen comment has nothing that
-# re-runs it, so the two authoritative places are named instead: `package.json`'s
-# `check` for the projects, `.oxlintrc.json` for the rules.
-#
-# This tier was unaffordable until TypeScript 7. Measured 2026-08-17, cold,
-# 8 projects: 64.9s under 5.8.3, 6.9s under 7.0.2. That single number is why
-# there was no commit hook here before and why there is one now.
-#
-# NEVER --no-verify. And there is nothing to gain by it: the commit tier is a
-# proven subset of the CI tier (scripts/ladder.test.ts asserts it by the files
-# each tier claims), so skipping this cannot let anything through. It only buys
-# a slower failure, in CI, with your attention somewhere else.
-#
-# One honest imprecision: this checks the WORKING TREE, not the staged content.
-# A partial stage can pass here and fail in CI. Stashing to fix that is how
-# people lose work — and with several agents editing this checkout it would be
-# actively dangerous — so the imprecision is stated rather than papered over.
-
+# NEVER --no-verify. It checks the WORKING TREE, not the staged content; stashing to fix that loses work.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 source scripts/repo-runtime.sh
-exec "$PWD/node_modules/.bin/bun" scripts/ladder.ts --tier=commit --changed=HEAD
+case "$(git symbolic-ref --short -q HEAD)" in
+  integration/*) exec "$PWD/node_modules/.bin/bun" scripts/ladder.ts --tier=commit --changed=HEAD ;;
+  *) exec "$PWD/node_modules/.bin/bun" scripts/ladder.ts --tier=local ;;
+esac

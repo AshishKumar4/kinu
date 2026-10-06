@@ -88,6 +88,8 @@ export const HOOKS_DIR = '.githooks';
 
 /**
  * Tier order is containment order: a later tier runs everything before it.
+ * `local` is a lane's commit: the whole-tree static analysis, a few minutes. The test suites wait for `commit`,
+ * which runs on integration merges, where every lane's work meets (owner, 2026-10-06: full checks at merge points).
  * `evals` sits LAST, after `deploy`, and that placement is its meaning:
  * live-model behavioural evidence that no hook, push or deploy waits on. A
  * deploy that ran the evals took over an hour and spent real tokens to ship a
@@ -98,7 +100,7 @@ export const HOOKS_DIR = '.githooks';
  * members, so an entry cannot hide from the deploy by wearing the tier
  * silently.
  */
-export const TIERS = ['commit', 'push', 'ci', 'deploy', 'evals'] as const;
+export const TIERS = ['local', 'commit', 'push', 'ci', 'deploy', 'evals'] as const;
 
 /**
  * The deploy plan still names every required gate (L18, L23). The local machine preflight and account gate run
@@ -242,7 +244,7 @@ export const LADDER: readonly Gate[] = [
       + 'an unrelated filesystem test, which reads as a code regression and is not one. A gate '
       + 'running beside it could report that regression before the preflight had said the '
       + 'machine was unfit to be reported on.',
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.12,
     catches: 'a gate reporting on an environment nobody looked at: exhausted temp '
       + 'inodes, or a stray project marker that makes a checkpoint working directory '
@@ -264,7 +266,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/pattern-inventory.ts',
     label: 'Pattern inventory',
-    tier: 'commit',
+    tier: 'local',
     seconds: 2.5, // Measured 2026-09-23 on the 24-thread box at load 5: 2.50/2.51/2.63 s.
     catches: 'unclassified code-pattern and named scanner candidates in the shared source corpus',
     blind: 'runtime aliases, unnamed scanners, native source and embedded shell language tokens',
@@ -273,7 +275,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run lint',
     label: 'Anti-slop lint',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 21.4 s solo
     // (test:anti-slop under node, then oxlint). Split out of `bun run check`
     // (37 s) so the lint's closure — the anti-slop tool tree and the corpus —
@@ -310,7 +312,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run typecheck',
     label: 'TypeScript projects',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 18 tsc projects
     // sum to 11.9 s solo (largest cf-backend 1.4 s, scripts 1.25 s, core 1.0 s).
     // One row rather than eighteen: every project reads the corpus, so their
@@ -325,7 +327,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:do-init',
     label: 'Durable Object cold start',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.71 s. Replaces 0.1 s.
     seconds: 0.71,
     catches: 'off-object I/O inside a Durable Object `onStart`, which put a pure SELECT '
@@ -337,7 +339,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:duplication',
     label: 'Duplicate implementations',
-    tier: 'commit',
+    tier: 'local',
     // Re-measured 2026-09-05 on the 24-thread box: 1.6/1.6/1.7/1.7s. Replaces 1.1s.
     seconds: 1.7,
     catches: 'a second implementation of an existing function body, including one with '
@@ -349,7 +351,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:reachability',
     label: 'Unreachable RPC surface',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 2.27 s. Replaces 1 s.
     seconds: 2.27,
     catches: 'an @callable RPC no caller reaches — the "correct, wired, dead" class this '
@@ -360,7 +362,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:platform',
     label: 'Platform fact catalog',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.22 s. Replaces 0.07 s.
     seconds: 0.22,
     catches: 'a catalog entry with no evidence label or provenance.',
@@ -370,7 +372,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:egress-interception',
     label: 'Egress interception totality',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.73 s. Replaces 0.1 s.
     seconds: 0.73,
     catches: 'a container class that lost `enableInternet = false` or '
@@ -386,7 +388,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:typecheck-coverage',
     label: 'Typecheck coverage',
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.1,
     catches: 'a directory of tests that no tsconfig `bun run check` runs ever compiles. '
       + 'The root `tests/` directory was in that state: `check` named eight projects and '
@@ -408,7 +410,7 @@ export const LADDER: readonly Gate[] = [
     // COMMIT: a lane that changes a row's command is the one asked to measure it. Until 2026-09-29 only
     // deploy.test.ts (ci) reached `deployPlan()`'s refusal, and b631df84cd's widened chat-scroll row reached the
     // ci tier unmeasured. Measured 2026-09-29 on the 24-thread box at load 1.1: 1.05 s through the ladder's runner.
-    tier: 'commit',
+    tier: 'local',
     seconds: 1.05,
     catches: 'a row the deploy\'s concurrent wave schedules with no measured cost, a figure taken from a run that '
       + 'failed, and a figure kept for a command that is no longer a gate: the three ways the wave admits a row '
@@ -420,7 +422,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:set-equality',
     label: 'Measured set equals governed set',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.63 s. Replaces 0.2 s.
     seconds: 0.63,
     catches: 'a gate that measures a narrower set than the one it governs — the defect that '
@@ -443,7 +445,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:commit-message',
     label: 'Commit message hygiene',
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.1,
     catches: 'a commit message that credits an orchestration subagent as if it were a human '
       + 'reviewer, narrates the session that produced it, or argues with a previous position in '
@@ -484,7 +486,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:install-scripts',
     label: 'Dependency install-script policy',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.05 s. Replaces 0.2 s.
     seconds: 0.05,
     catches: 'a third-party dependency lifecycle script executing on every `bun install` without '
@@ -506,7 +508,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:patch-parity',
     label: 'Committed patches reproduce node_modules',
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.16,
     catches: 'a committed patch that does not reproduce the `node_modules` the suites ran '
       + 'against. Four dependencies are patched, so every green result in this repository stands '
@@ -535,7 +537,7 @@ export const LADDER: readonly Gate[] = [
     // already moved on by push. At 0.34s over the whole corpus (measured
     // 2026-09-23 at load 20) the refusal belongs on the commit that moves the
     // anchor.
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.34,
     catches: 'a refactor that silently unruns a bench task. Each seeded defect is a '
       + 'context diff against source that keeps moving, so renaming or reflowing the code a '
@@ -624,7 +626,7 @@ export const LADDER: readonly Gate[] = [
     // and it is falsified harder here: those two at least go red in the lane's
     // own tree once it runs them, whereas an undeclared edge is INVISIBLE to
     // every suite by construction — resolution succeeds.
-    tier: 'commit',
+    tier: 'local',
     // Three readings 2026-09-10 on the 24-thread box under load 40 (five lanes
     // building concurrently): 5.31/5.49/6.29s, interleaved with
     // `gate:reachability` (declared 2.27, measured 6.27/7.92/8.09) and
@@ -664,7 +666,7 @@ export const LADDER: readonly Gate[] = [
     // artifact. Cost is real and stated rather than hidden: 7.7-9.3s measured
     // against the 3.6s declared when it was cheaper, so the commit tier grows
     // by roughly this plus dead-code's 15s.
-    tier: 'commit',
+    tier: 'local',
     seconds: 9,
     catches: 'a capability that was designed, built, TESTED, and connected to nothing — the '
       + 'class `gate:dead-code` is structurally unable to see, because knip\'s unit of "used" '
@@ -710,7 +712,7 @@ export const LADDER: readonly Gate[] = [
     // passes — the same artifact-travels-to-the-integrator shape that moved
     // `gate:wired` and `gate:dead-code` here. 0.62/0.67/0.75s measured on this
     // tree, 1s declared, the larger rounded up.
-    tier: 'commit',
+    tier: 'local',
     seconds: 1,
     catches: 'a client entry that can reach `@agent-core/core` or `bun:sqlite` '
       + 'through value imports — the edge that blanks `bun run dev` while the '
@@ -730,7 +732,7 @@ export const LADDER: readonly Gate[] = [
     // a parked step with one, 4.8 MB without). A literal written in any lane
     // widens every request that carries it. 2.13/2.24/2.45s measured on this
     // tree under a test run's load, 3s declared, the larger rounded up.
-    tier: 'commit',
+    tier: 'local',
     seconds: 3,
     catches: 'a string or template literal above U+00FF in product source, or a '
       + 'line of a Markdown prompt asset, outside the two renderers: modules a '
@@ -746,7 +748,7 @@ export const LADDER: readonly Gate[] = [
     // COMMIT. 40 of core's 42 directories are one import cycle, so no package
     // split can start; this declares the three layers and locks today's 177
     // upward edges shrink-only. 0.43s measured, 1s declared.
-    tier: 'commit',
+    tier: 'local',
     seconds: 1,
     catches: 'a new import inside packages/core that points from platform to '
       + 'tools or harness, or from tools to harness — one more edge in the cycle '
@@ -765,7 +767,7 @@ export const LADDER: readonly Gate[] = [
     // vendor's `assistant_messages` failed every hosted workspace at once on
     // 2026-09-11, on the same tree every unit test had seeded from Kinu's own
     // copy of the DDL. Measured 2026-09-12: 0.80/0.80/0.82s; 1s declared.
-    tier: 'commit',
+    tier: 'local',
     seconds: 1,
     catches: 'a Kinu statement over a vendor table whose columns the vendor '
       + 'does not declare — read, write or JOIN — and a Kinu CREATE TABLE that '
@@ -834,7 +836,7 @@ export const LADDER: readonly Gate[] = [
     // COMMIT: at push, lanes had already committed functions over the line
     // (2026-09-23). Measured that day on the 24-thread box at load 5 over 2,575
     // files and 63,573 functions: 2.44/2.50/2.54 s.
-    tier: 'commit',
+    tier: 'local',
     seconds: 2.5,
     catches: 'a new function at the hard end of this codebase, arriving unnamed. The budget is '
       + 'MEASURED rather than chosen: cyclomatic complexity for every function in the '
@@ -858,7 +860,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:silent-drop',
     label: 'Silently dropped failures',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-23 on the 24-thread box at load 5: 0.98/1.00/1.03 s.
     seconds: 1,
     catches: 'a failure destroyed in one of the six ways the four no-swallow lint rules are '
@@ -876,7 +878,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:test-clocks',
     label: 'Wall-clock waits in tests',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-23 on the 24-thread box at load 5: 1.41/1.44/1.46 s over
     // 1,248 test files, one oxc parse each.
     seconds: 1.5,
@@ -924,7 +926,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/schema-drift.ts',
     label: 'Schema drift',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-01, three runs: 0.47/0.52/0.44s over 863 enumerated
     // product files, 71 parsed, 118 tables. It was a PUSH gate at 2s while it
     // asked git for each table's origin on every run; the genesis lock replaced
@@ -949,7 +951,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/gen-cli-docs.ts --check',
     label: 'CLI reference is current',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-26 on the 24-thread box, three runs: 0.30/0.30/0.30 s, 134 MB.
     // The commit tier is where this belongs: the reference is rendered from the command
     // registry, and the drift is written in the same hunk as the option. Checked only in
@@ -1856,7 +1858,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:capability-parity',
     label: 'Cross-backend capability parity',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box: 1.5/1.6/1.6/1.7/1.8s. Replaces 1.2s.
     seconds: 1.7,
     catches: 'the two shapes of backend divergence. A core contract whose optional '
@@ -1988,7 +1990,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:scratch-ownership',
     label: 'Test scratch ownership',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.42 s. Replaces 1.3 s.
     seconds: 0.42,
     catches: 'a suite that mints a temp directory and never removes it, at the mint site. '
@@ -2009,7 +2011,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:agents-fields',
     label: 'Agents action/field relation',
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.34,
     catches: 'a field of the `agents` tool that the handler reads and nothing declares, or '
       + 'declares and nothing reads. The input was one flat `v.object`, and valibot\'s '
@@ -2037,7 +2039,7 @@ export const LADDER: readonly Gate[] = [
     label: 'Comment budget',
     // Measured 2026-09-22 on the 24-thread box: 0.46/0.52/0.73s wall, 417 MB
     // peak, over 1,081 files. It reads oxc's comment list only, never the AST.
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.6,
     catches: 'comment growth in a package. The owner capped comments after the census measured '
       + 'them at 41% of the non-whitespace characters in product source (4,906,181 at '
@@ -2081,7 +2083,7 @@ export const LADDER: readonly Gate[] = [
     label: 'Error-model ratchet',
     // Measured 2026-09-23 on the 24-thread box under load 29: 1.30/1.32/1.35s
     // wall, 690 MB peak, over 1,087 files. One AST walk per product file.
-    tier: 'commit',
+    tier: 'local',
     seconds: 1.4,
     catches: 'a legacy failure mechanism growing while the Effect migration removes them: a '
       + '`throw`, a `catch`, a promise rejection handler, an `{ ok }` or `{ success }` literal '

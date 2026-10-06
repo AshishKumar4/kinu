@@ -396,7 +396,7 @@ assert.deepEqual(
 const ladderRows = ladderTiers(readFileSync("scripts/ladder.ts", "utf8"));
 assert.ok(ladderRows.size > 50, `read ${ladderRows.size} LADDER rows; the table has far more, so the reader is not matching`);
 assert.ok(
-  ["commit", "push", "ci"].includes(ladderRows.get("bun run lint") ?? "absent"),
+  ["local", "commit", "push", "ci"].includes(ladderRows.get("bun run lint") ?? "absent"),
   `the ladder must claim \`bun run lint\` at or before the ci tier; it is at ${ladderRows.get("bun run lint") ?? "no tier"}`,
 );
 
