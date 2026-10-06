@@ -329,6 +329,9 @@ function galleryChatGptStatus() {
 /** Flips when the gallery's Claude sign-in finishes with the fixture's code. */
 let settingsClaudeConnected = false;
 
+/** Keys saved through the providers panel, listed after the stock ones; each body is kept on the page for a flow to read. */
+const settingsSavedCredentials = new Map<string, JsonValue>();
+
 /** `&chatgpt=device`: a machine that signs in; without, none is connected yet. */
 function chatgptFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/chatgpt") {
@@ -373,7 +376,18 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
       { key: "anthropic.bearer", kind: "bearer" },
       { key: "anthropic.bearer@work", kind: "bearer" },
       ...(settingsClaudeConnected ? [{ key: "claude.oauth", kind: "oauth" }] : []),
+      ...[...settingsSavedCredentials.keys()].map((key) => ({ key, kind: "openai-compat" })),
     ]);
+  }
+
+  if (path.startsWith("/api/user/credentials/") && method === "POST") {
+    const key = decodeURIComponent(path.slice("/api/user/credentials/".length));
+
+    settingsSavedCredentials.set(key, JSON.parse(v.parse(v.string(), body)));
+    document.documentElement.dataset.gallerySavedCredentials = JSON.stringify(Object.fromEntries(settingsSavedCredentials));
+
+    // The route's own answer: whether the store now holds the key.
+    return fixtureJson({ ok: settingsSavedCredentials.has(key) });
   }
 
   if (path === "/api/user/unrevoked-grants") return fixtureJson([]);
