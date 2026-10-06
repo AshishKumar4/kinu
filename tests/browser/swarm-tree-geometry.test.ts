@@ -850,3 +850,45 @@ test('fan-in vertices are the nodes the engine fanned in, and a run that reached
     await refused.close();
   });
 });
+
+/**
+ * A running swarm whose stores disagree: the search table holds the root and two settled nodes, the journal all eleven.
+ * Every journalled node is drawn, under its own parent and once, the settled row winning for a node both hold: it
+ * carries its score, while a running node and the unevaluated root carry none. A node that ended badly is drawn failed and keeps its own
+ * journal word: aborted, errored, out of budget, or interrupted.
+ */
+test('a running swarm draws every journalled node once, under its own parent, in its own state', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1440, height: 1100 });
+    await page.goto(`${origin}/gallery.html?frame=forkrunning`, { waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => document.querySelectorAll('g.mcts-node[data-node]').length >= 12);
+    await settled(page);
+
+    const nodes = await page.$$eval('g.mcts-node[data-node]', (drawn) => drawn.map((node) => ({
+      id: node.getAttribute('data-node') ?? '',
+      parent: node.getAttribute('data-parent'),
+      status: node.getAttribute('data-status'),
+      lifecycle: node.getAttribute('data-lifecycle'),
+      scored: node.hasAttribute('data-value'),
+    })));
+
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+
+    expect(nodes.map((node) => node.id).sort((a, b) => a.localeCompare(b))).toEqual(
+      Array.from({ length: 12 }, (_, at) => `lv${String(at).padStart(3, '0')}`),
+    );
+    expect(['lv006', 'lv007', 'lv009'].map((id) => byId.get(id)?.parent)).toEqual(['lv001', 'lv001', 'lv001']);
+    expect(['lv008', 'lv010', 'lv011'].map((id) => byId.get(id)?.parent)).toEqual(['lv002', 'lv002', 'lv002']);
+    // A root nothing has been backpropagated through has no score, not a zero.
+    expect(byId.get('lv000')?.scored).toBe(false);
+    // The settled rows win: scored and open, not the journal's unscored copy.
+    expect(['lv001', 'lv002'].map((id) => [byId.get(id)?.status, byId.get(id)?.scored])).toEqual([['open', true], ['open', true]]);
+    expect(['lv003', 'lv004', 'lv006', 'lv007', 'lv009'].map((id) => [byId.get(id)?.status, byId.get(id)?.scored]))
+      .toEqual(Array.from({ length: 5 }, () => ['running', false]));
+    expect(['lv005', 'lv008', 'lv010', 'lv011'].map((id) => [byId.get(id)?.status, byId.get(id)?.lifecycle])).toEqual([
+      ['failed', 'aborted'], ['failed', 'errored'], ['failed', 'budget_exceeded'], ['failed', 'interrupted'],
+    ]);
+    await page.close();
+  });
+});
