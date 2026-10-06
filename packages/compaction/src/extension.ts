@@ -9,6 +9,7 @@ import {
   buildCompactionSummaryPrompt,
   serverCompactor,
   isServerCompaction,
+  latestCompaction,
   stripCheckpointPreamble,
   wrapCompactionSummary,
   COMPACTION_TRIGGER_PERCENT,
@@ -364,7 +365,7 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
           deps.onOutcome?.({ sessionKey: ctx.sessionKey, outcome: 'invalidated' });
         }
 
-        return messages.length === ctx.messages.length ? undefined : messages;
+        return sameMessages(messages, ctx.messages) ? undefined : messages;
       }
 
       const upgraded =
@@ -468,6 +469,11 @@ function compactedTurnsForPlan(turns: Turn[], plan: BoundaryContextPlan): Turn[]
   ];
 }
 
+/** The latest-item cut may keep every message and still drop parts, so each message is compared, not the count. */
+function sameMessages(cut: readonly ModelMessage[], sent: readonly ModelMessage[]): boolean {
+  return cut.length === sent.length && cut.every((message, at) => message === sent[at]);
+}
+
 function sinceServerSummary(messages: readonly ModelMessage[], by: ServerCompactor): ModelMessage[] {
   let summary = messages.length - 1;
 
@@ -475,15 +481,14 @@ function sinceServerSummary(messages: readonly ModelMessage[], by: ServerCompact
 
   if (summary < 0) return [...messages];
 
-  const held = messages[summary];
-
   // OpenAI's latest compaction item carries the context and everything before it may go (developers.openai.com/api/
   // docs/guides/compaction); a response can carry two (`compaction, message, compaction`, measured 2026-10-06).
-  if (by === 'openai' && held?.role === 'assistant' && Array.isArray(held.content)) {
-    const parts = held.content;
-    const latest = parts.map((part) => part.type === 'custom' && isServerCompaction(part.providerOptions, by)).lastIndexOf(true);
+  const latest = by === 'openai' ? latestCompaction(messages) : null;
 
-    if (latest >= 0) return [{ ...held, content: parts.slice(latest) }, ...messages.slice(summary + 1)];
+  if (latest !== null) {
+    const kept = messages.slice(latest.at + 1);
+
+    return latest.part === 0 ? [latest.message, ...kept] : [{ ...latest.message, content: latest.parts.slice(latest.part) }, ...kept];
   }
 
   let ask = summary - 1;
