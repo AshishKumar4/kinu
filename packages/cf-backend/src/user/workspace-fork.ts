@@ -2,7 +2,7 @@ import { forkTransferFrames, nanoid, FORK_FRAME_BYTES } from '@kinu.run/core';
 import type { ForkFrame, ForkFrameReply } from '@kinu.run/core';
 import type { SqlExecutor, ForkFileSource, ActorHandle } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
-import type { WorkspaceEntry } from './user-do';
+import type { WorkspaceEntry } from './workspaces';
 import { Cause, Effect } from 'effect';
 import { KinuError, settle } from '@kinu.run/core/obs';
 

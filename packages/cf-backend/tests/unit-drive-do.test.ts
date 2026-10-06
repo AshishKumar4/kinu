@@ -7,7 +7,7 @@ import {
   CapabilityDeniedError, DRIVE_RESERVED_DIRS, DRIVE_SKILLS_DIR, mossaicVfs, packZip, unpackZip, type DriveListing,
   type DriveUploadOutcome, type UserCaller,
 } from '@kinu.run/core';
-import type { DriveAnswer } from '../src/user/user-do';
+import type { DriveAnswer } from '../src/user/drive';
 import { fakeMossaic, type FakeMossaic } from '@kinu.run/test-utils';
 import { deriveUserId } from '../src/auth/store';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';

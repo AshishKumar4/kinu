@@ -11,7 +11,7 @@ import { bootstrappedProfile } from './helpers/bindings';
 import { AuthError, authenticateRequest, type AuthIdentity } from '../src/auth/session';
 import { makeKv, type FakeKv } from './helpers/kv';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, sha256Hex } from '@kinu.run/core';
-import type { BrowserSessionIdentity } from '../src/user/user-do';
+import type { BrowserSessionIdentity } from '../src/user/sessions';
 import type { UserCaller } from '@kinu.run/core';
 
 function setupEnv() {

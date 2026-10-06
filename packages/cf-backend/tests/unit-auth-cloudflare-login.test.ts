@@ -10,7 +10,7 @@ import { calculatePKCECodeChallenge } from 'oauth4webapi';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '@kinu.run/core';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { makeKv } from './helpers/kv';
-import type { BrowserSessionIdentity } from '../src/user/user-do';
+import type { BrowserSessionIdentity } from '../src/user/sessions';
 import type { UserCaller } from '@kinu.run/core';
 
 
