@@ -11,6 +11,7 @@ import {
   type LanguageModel,
   type TextPart,
   type ToolCallPart,
+  type PrepareStepResult,
   type StepResult,
   type StopCondition,
   type TextStreamPart,
@@ -37,7 +38,7 @@ import type { CountableRequest, InputTokenCount } from './providers/input-tokens
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
-import { isServerCompaction, serverCompactionOptions, serverCompactor } from './providers/server-compaction';
+import { compactionTriggerOptions, isServerCompaction, serverCompactionOptions, serverCompactor } from './providers/server-compaction';
 import { describeProviderError, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
@@ -222,6 +223,16 @@ interface AnswerStep {
 /** A step's own prose: the provider's compaction summary is not the model speaking. */
 function stepText(step: AnswerStep): string {
   return step.content.flatMap((part) => (part.type === 'text' && !isServerCompaction(part.providerMetadata) ? [part.text] : [])).join('');
+}
+
+function carriesCompaction(step: AnswerStep | undefined): boolean {
+  return step?.content.some((part) => part.type === 'custom' && isServerCompaction(part.providerMetadata)) === true;
+}
+
+function endsAtCompaction(steps: readonly AnswerStep[]): boolean {
+  const last = steps.at(-1);
+
+  return carriesCompaction(last) && (last?.toolCalls?.length ?? 0) === 0 && last !== undefined && stepText(last) === '';
 }
 
 /** The final step's text, or null to keep what streamed (earlier prose is narration); a toolless `length`-cut step
@@ -862,6 +873,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       prepareStep: ({ stepNumber, initialMessages, steps }) => {
         const messages = call.requestStarting(initialMessages);
         stepSpans.start(stepOffset + stepNumber);
+        const opening = stepOffset + stepNumber === 0;
+        const previous = steps.at(-1);
+
+        // Never asked again right after its own compaction.
+        const trigger = carriesCompaction(previous) ? undefined
+          : compactionTriggerOptions(current.spec, serving.contextWindow, opening ? admittedTokens : previous?.usage.inputTokens, opening && forcedInput !== undefined);
 
         const prepared = composePrepareStep({
           extensions,
@@ -876,7 +893,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           turnStart,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
 
-        return prepared instanceof Promise ? prepared.then((done) => done ?? { messages }) : prepared ?? { messages };
+        const asked = (done: PrepareStepResult<ToolSet>) => (trigger === undefined || done === undefined
+          ? done
+          : { ...done, providerOptions: mergeProviderOptions(done.providerOptions, trigger) });
+
+        return prepared instanceof Promise ? prepared.then((done) => asked(done ?? { messages })) : asked(prepared ?? { messages });
       },
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
         async transform(part, controller) {
@@ -1034,6 +1055,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // the same prefix plus everything produced, so nothing is replayed. A second `length` finish is partial completion.
   if (!interrupted && first.finishReason === OUTPUT_LIMIT_REACHED) {
     const continued = yield* callChain(first.steps.length, first.produced);
+    steps = [...steps, ...continued.steps];
+    responseMessages = [...responseMessages, ...continued.produced];
+    interrupted = continued.interrupted;
+  }
+
+  if (!interrupted && endsAtCompaction(steps)) {
+    const continued = yield* callChain(steps.length, responseMessages);
     steps = [...steps, ...continued.steps];
     responseMessages = [...responseMessages, ...continued.produced];
     interrupted = continued.interrupted;

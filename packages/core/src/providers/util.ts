@@ -6,6 +6,7 @@ import { withRateLimitRetry } from './rate-limit-retry';
 import { withCallAccount } from './quota';
 import { evidenceWindow } from '../utils/evidence-window';
 import { Effect } from 'effect';
+import { isServerCompaction } from './server-compaction';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
 import {
@@ -81,6 +82,8 @@ function withoutItemIds(message: LanguageModelV4Message): LanguageModelV4Message
   return {
     ...message,
     content: message.content.map((part) => {
+      // Unstored, a compaction item is sent whole.
+      if (part.type === 'custom' && isServerCompaction(part.providerOptions, 'openai')) return part;
       const { itemId, ...openai } = part.providerOptions?.openai ?? {};
 
       return itemId === undefined ? part : { ...part, providerOptions: { ...part.providerOptions, openai } };

@@ -21,6 +21,8 @@ interface BarItem {
   readonly logo?: string | null;
   readonly rename?: { readonly value: string; readonly save: Rename };
   readonly remove?: () => void;
+  /** The × empties the chat instead of deleting it. */
+  readonly clears?: boolean;
   readonly title?: boolean;
   /** A chat's path, `main` for Main: the handle flows and tests address a tab by. */
   readonly tab?: string;
@@ -31,6 +33,7 @@ export interface ChatTab {
   readonly to: string;
   readonly rename: Rename;
   readonly remove?: () => void;
+  readonly clears?: boolean;
 }
 
 export interface WorkspaceHeaderProps {
@@ -46,8 +49,9 @@ export interface WorkspaceHeaderProps {
 export function WorkspaceHeader({ workspace, chats, active, newChat, leading, trailing }: WorkspaceHeaderProps) {
   const items: BarItem[] = [
     { key: "overview", label: workspace.title, logo: workspace.logo ?? null, to: workspace.to, title: true, rename: { value: workspace.editValue, save: workspace.rename }, remove: workspace.remove },
-    ...chats.map(({ agent, to, rename, remove }) => ({
-      key: agent.key, label: agent.label, to, activity: agent.activity, mascot: mascotSeed(workspace.name, agent.key), rename: { value: agent.label, save: rename }, ...(remove && { remove }),
+    ...chats.map(({ agent, to, rename, remove, clears }) => ({
+      key: agent.key, label: agent.label, to, activity: agent.activity, mascot: mascotSeed(workspace.name, agent.key), rename: { value: agent.label, save: rename },
+      ...(remove && { remove }), ...(clears === true && { clears }),
       tab: agent.open.kind === "chat" ? agent.open.path ?? "main" : agent.key,
     })),
   ];
@@ -103,7 +107,7 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
               )}
               {item.remove && (
                 <button type="button" className="p-bar-action" data-danger onClick={item.remove}
-                  aria-label={`Delete ${item.label}`} title="Delete"><XIcon size={12} /></button>
+                  aria-label={`${item.clears === true ? "Clear" : "Delete"} ${item.label}`} title={item.clears === true ? "Clear" : "Delete"}><XIcon size={12} /></button>
               )}
             </span>
           )}
