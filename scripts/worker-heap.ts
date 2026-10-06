@@ -210,21 +210,27 @@ interface Allocations {
   readonly sites: readonly { readonly site: string; readonly bytes: number }[];
 }
 
-/** Every sampled allocation by the function that made it, collected or not: the churn, not what stays. */
+function frameName(node: ProfileNode): string {
+  const { functionName, url, lineNumber } = node.callFrame;
+
+  return `${functionName === '' ? '(anonymous)' : functionName} ${url.split('/').slice(-2).join('/')}:${String(lineNumber + 1)}`;
+}
+
+/** Every sampled allocation by the function that made it and its caller, collected or not: the churn, not what stays. */
 function allocationSites(head: ProfileNode): Allocations {
   const bySite = new Map<string, number>();
-  const pending = [head];
+  const pending: { node: ProfileNode; caller: string }[] = [{ node: head, caller: '' }];
   let total = 0;
 
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    const { functionName, url, lineNumber } = node.callFrame;
-    const site = `${functionName === '' ? '(anonymous)' : functionName} ${url.split('/').slice(-2).join('/')}:${String(lineNumber + 1)}`;
-    bySite.set(site, (bySite.get(site) ?? 0) + node.selfSize);
-    total += node.selfSize;
-    pending.push(...node.children);
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const name = frameName(next.node);
+    const site = next.caller === '' ? name : `${name}  <-  ${next.caller}`;
+    bySite.set(site, (bySite.get(site) ?? 0) + next.node.selfSize);
+    total += next.node.selfSize;
+    pending.push(...next.node.children.map((node) => ({ node, caller: name })));
   }
 
-  const sites = [...bySite].map(([site, bytes]) => ({ site, bytes })).sort((a, b) => b.bytes - a.bytes).slice(0, 15);
+  const sites = [...bySite].map(([site, bytes]) => ({ site, bytes })).sort((a, b) => b.bytes - a.bytes).slice(0, 25);
 
   return { total, sites };
 }
