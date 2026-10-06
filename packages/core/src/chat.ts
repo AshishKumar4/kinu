@@ -23,7 +23,7 @@ import {
   type PromptModelContext,
 } from './prompting/model-profile';
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan, type PromptCacheRoute } from './prompting/cache-breakpoints';
-import { DEFAULT_CACHE_RETENTION, type CacheRetention } from './providers/types';
+import { DEFAULT_CACHE_RETENTION, parseModelSpec, type CacheRetention } from './providers/types';
 import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import { modelStepMessages } from './prompting/tool-error-feedback';
@@ -595,16 +595,16 @@ function suppressDeferredRejections(
   for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.usage]) deferred.then(undefined, ignore);
 }
 
-/** Provider prompt-cache plan; marker strategies re-roll tail breakpoints each step. Pass-through without opts.cache. */
-function turnCachePlan(opts: ChatOptions, turnMessages: readonly ModelMessage[], tools: ToolSet): CacheBreakpointPlan {
+/** The serving model's prompt-cache plan; marker strategies re-roll tail breakpoints each step. */
+function attemptCachePlan(opts: ChatOptions, route: PromptCacheRoute, turnMessages: readonly ModelMessage[], tools: ToolSet): CacheBreakpointPlan {
   return applyCacheBreakpoints({
-    providerId: opts.cache?.providerId,
-    modelId: opts.cache?.modelId ?? opts.modelContext?.id,
+    providerId: route.providerId,
+    modelId: route.modelId ?? opts.modelContext?.id,
     system: opts.system,
     messages: turnMessages,
     tools,
     sessionKey: opts.cache?.sessionKey ?? '',
-    retention: opts.cache?.retention,
+    retention: route.retention,
   });
 }
 
@@ -731,17 +731,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
       return { ...assembled, changed: base.changed };
     },
-    // A fallback's cache is its own provider's.
-    consume: step => stepContext.consume({ ...step, cache: servingFallback === undefined ? turnRoute : {
-      ...(current.provider !== undefined && { providerId: current.provider }), retention: turnRoute.retention,
-    } }),
+    consume: step => stepContext.consume({ ...step, cache: servingRoute }),
   };
 
-  const cache = turnCachePlan(opts, turnMessages, tools);
-  const rollTail = hasCacheMarkers(cache.strategy);
+  let servingRoute = turnRoute;
+  let cache = attemptCachePlan(opts, servingRoute, turnMessages, tools);
   const forcedInput = opts.transformTrigger === 'force' ? admittedTokens : undefined;
 
-  /** One attempt's provider options: the turn's cache, the serving model's server compaction, then its own. */
+  /** One attempt's provider options: its cache's, the serving model's server compaction, then its own. */
   const optionsFor = (spec: string | undefined, served: number | null | undefined, own: ChatOptions['providerOptions']) => mergeProviderOptions(
     mergeProviderOptions(cache.providerOptions, serverCompactionOptions(spec, served, forcedInput)), own);
 
@@ -837,13 +834,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     );
 
     const call = new ProviderCall(servingFallback);
+    const attempt = cache;
 
     const result = streamText({
       model: current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts),
-      instructions: cache.system,
+      instructions: attempt.system,
       maxRetries: route.callRetries,
       messages: await narrowedFor(request),
-      tools: withToolSchemaDialect(cache.tools, toolSchemaDialect(dialectSpec(current))),
+      tools: withToolSchemaDialect(attempt.tools, toolSchemaDialect(dialectSpec(current))),
       ...offeredTools,
       stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.stepFailure !== null],
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
@@ -868,11 +866,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         const prepared = composePrepareStep({
           extensions,
           abortSignal: signal,
-          cache: rollTail ? { strategy: cache.strategy } : null,
+          cache: hasCacheMarkers(attempt.strategy) ? { strategy: attempt.strategy } : null,
           prune: { contextWindow, modelOutputLimit },
           budget: opts.budget,
           dynamic: opts.dynamicContext,
-          destinationProviderId: opts.cache?.providerId,
+          destinationProviderId: servingRoute.providerId,
           meter,
           context: stepContextPlane,
           turnStart,
@@ -983,7 +981,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     return { steps, produced: paired, finishReason: call.lastFinishReason, interrupted: cut, failure: null };
   };
 
-  /** A model that compacts with another provider, or none, cannot read the request built for the last one: rebuilt. */
+  /** A fallback gets its own provider's cache, replay and options; one compacting elsewhere, or not at all, is rebuilt. */
   const takeOver = async (next: ChatFallback): Promise<void> => {
     const bound = next.bind();
     const served = next.window.contextWindow;
@@ -991,12 +989,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     serving = { ...assembly, model: next.spec, contextWindow: served };
 
-    if (rebuild) {
-      initialContextAvailable = false;
-      const history = initialContext?.messages ?? assembly.history;
-      base = turnCachePlan(opts, (await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined })).messages, tools).messages;
-    }
+    if (rebuild) initialContextAvailable = false;
+    const history = initialContext?.messages ?? assembly.history;
+    const messages = rebuild ? (await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined })).messages : turnMessages;
 
+    servingRoute = { providerId: bound.provider, modelId: parseModelSpec(next.spec).modelId, retention: turnRoute.retention };
+    cache = attemptCachePlan(opts, servingRoute, messages, tools);
+    base = cache.messages;
     current = { ...bound, spec: next.spec, accepts: next.accepts, providerOptions: optionsFor(next.spec, served, bound.providerOptions) };
     servingFallback = next.spec;
     route.tried.push(next.spec);
