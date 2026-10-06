@@ -1487,10 +1487,17 @@ and floor (developers.openai.com/api/docs/guides/compaction lists no models, so
 the GPT-5 family it documents). @ai-sdk/openai 4 returns the encrypted item as a
 `custom` part with its mark; it is persisted, replayed (by reference, since the
 route stores), kept out of the answer, the stream and the transcript, and the
-request opens at the ask before it. Codex, ChatGPT and OpenCode routes are not
-asked: their acceptance is unknown. Proven against a fixture of the documented
+request opens at the ask before it. Proven against a fixture of the documented
 item and the SDK's mapping (`contract-server-compaction.test.ts`,
 `unit-extension.test.ts`); live acceptance is unmeasured.
+The ChatGPT plan's routes (`chatgpt`, `codex`) take no threshold. As OpenAI's
+own client does (oh-my-pi's Codex compaction V2, after codex-rs
+`compact_remote_v2.rs`), the step whose input reached the trigger, or the
+turn's first after `/compact`, ends in a `compaction_trigger` item; the answer
+is the compaction item alone, and the turn goes on from it. Unstored, the item
+is replayed whole (id and encrypted content). Proven on a CLI session against a
+fake of the unstored backend (`cli-backend/tests/plan-compaction.test.ts`);
+live acceptance awaits `probe-chatgpt-compact.ts`. OpenCode is not asked.
 
 ## Open
 

@@ -1,8 +1,8 @@
 /**
- * Server-side compaction: past the trigger, the API summarizes the conversation into an item that opens it from then
- * on. Anthropic's is a `compaction` block (platform.claude.com/docs/en/build-with-claude/compaction-threshold), OpenAI's
- * an encrypted `compaction` item (developers.openai.com/api/docs/guides/compaction). A model that supports it compacts
- * there instead of in better-compact's summary stages, at Kinu's one compaction trigger.
+ * Server-side compaction (ADR P2, P3): past Kinu's one trigger, the API summarizes the conversation into an item that
+ * opens it from then on, instead of better-compact's summary stages. Anthropic's is a `compaction` block
+ * (platform.claude.com/docs/en/build-with-claude/compaction-threshold), OpenAI's an encrypted `compaction` item
+ * (developers.openai.com/api/docs/guides/compaction).
  */
 import type { ProviderMetadata } from 'ai';
 import * as v from 'valibot';
@@ -24,11 +24,15 @@ const COMPACTING = /^claude-(?:(opus|sonnet)-(\d+)(?:-(\d{1,2}))?(?!\d)|(fable|m
 /** OpenAI's guide lists no models; Kinu asks the GPT-5 family on the direct Responses API route. */
 const OPENAI_COMPACTING = /^gpt-5/u;
 
+/** No threshold on the plan's routes: a step asks by a trailing `compaction_trigger` (ADR P3). */
+const PLAN_ROUTE = /^(?:codex|chatgpt)(?:@[^/]*)?\//u;
+
 /** Whose summary a model reads and writes: only that provider's adapters carry it. */
 export type ServerCompactor = 'anthropic' | 'openai';
 
 /** The provider a model compacts with, or null for a model compacted the local way. */
 export function serverCompactor(spec: string | undefined): ServerCompactor | null {
+  if (PLAN_ROUTE.test(spec ?? '')) return 'openai';
   const match = /^(anthropic|claude|openai)(?:@[^/]*)?\/(?:.*\/)?([^/]+)$/u.exec(spec ?? '');
 
   if (match?.[1] === 'openai') return OPENAI_COMPACTING.test(match[2] ?? '') ? 'openai' : null;
@@ -41,17 +45,14 @@ export function serverCompactor(spec: string | undefined): ServerCompactor | nul
   return model[4] === undefined || Number(model[5]) >= 5 ? 'anthropic' : null;
 }
 
-/**
- * The request option asking for it, or undefined where the model does not compact server-side. A forced compaction
- * (`/compact`, an overflow's recovery) passes the request's own input, so this request compacts.
- */
+/** The threshold option, or undefined. A forced compaction (`/compact`, an overflow) passes the request's input. */
 export function serverCompactionOptions(
   spec: string | undefined, contextWindow: number | null | undefined, forcedInput?: number,
 ): ProviderOptions | undefined {
-  const threshold = Math.floor(((contextWindow ?? 0) * COMPACTION_TRIGGER_PERCENT) / 100);
+  const threshold = triggerTokens(contextWindow);
   const vendor = serverCompactor(spec);
 
-  if (vendor === null || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
+  if (vendor === null || PLAN_ROUTE.test(spec ?? '') || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
 
   const value = forcedInput === undefined
     ? threshold
@@ -60,6 +61,20 @@ export function serverCompactionOptions(
   return vendor === 'openai'
     ? { openai: { contextManagement: [{ type: 'compaction', compactThreshold: value }] } }
     : { anthropic: { contextManagement: { edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value } }] } } };
+}
+
+export function compactionTriggerOptions(
+  spec: string | undefined, contextWindow: number | null | undefined, inputTokens: number | undefined, forced: boolean,
+): ProviderOptions | undefined {
+  const threshold = triggerTokens(contextWindow);
+
+  if (!PLAN_ROUTE.test(spec ?? '') || inputTokens === undefined || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
+
+  return inputTokens >= (forced ? SERVER_COMPACTION_MIN_TOKENS : threshold) ? { openai: { compactionTrigger: true } } : undefined;
+}
+
+function triggerTokens(contextWindow: number | null | undefined): number {
+  return Math.floor(((contextWindow ?? 0) * COMPACTION_TRIGGER_PERCENT) / 100);
 }
 
 const CompactionMark = v.looseObject({ type: v.literal('compaction') });
