@@ -46,6 +46,8 @@ async function publicPlane(name: 'cf' | 'cli') {
   mkdirSync(space);
 
   const db = new Database(join(space, 'agent.db'));
+  // As `kinu create` publishes one: in WAL a commit waits on no fsync.
+  db.exec('PRAGMA journal_mode = WAL');
   const rt = createCLIRuntime(db, { llm: null, cwd });
 
   return {
