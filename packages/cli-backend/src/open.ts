@@ -47,8 +47,6 @@ export function openWorkspaceCLI(
   return settle(Effect.gen(function* () {
     waitOnSharedWrites(db);
     const sql = makeSql(db);
-    // A born workspace is already WAL, so this is a no-op; an imported bare database may arrive in another mode.
-    db.exec('PRAGMA journal_mode = WAL');
 
     let identity: OpenedWorkspaceIdentity;
 

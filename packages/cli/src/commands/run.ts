@@ -64,10 +64,7 @@ export async function runCommand(name: string, promptParts: string[], opts: Agen
     return;
   }
 
-  const failed = await runOneShot(target, rawPrompt, opts, {
-    json: outputMode === 'json',
-    headless: false,
-  });
+  const failed = await runOneShot({ json: outputMode === 'json', headless: false }, opts, async () => ({ target, rawPrompt }));
 
   await exitOneShot(failed);
 }
@@ -83,23 +80,20 @@ export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
 
 /** `kinu exec`: headless for CI. Consents fail closed; exit 0 only when the turn completed without errors or denied consents. */
 export async function execCommand(promptParts: string[], opts: ExecOptions): Promise<void> {
-  const rawPrompt = await buildPrompt(promptParts);
-
-  if (!rawPrompt) {
-    throw new Error('A task prompt is required. Usage: kinu exec "task" [--workspace <name>] [--json]');
-  }
-
-  const target = resolveAgentTarget(resolveExecWorkspaceName(opts.workspace));
-
-  const failed = await runOneShot(target, rawPrompt, {
+  const failed = await runOneShot({ json: opts.json === true, headless: true }, {
     model: opts.model,
     baseUrl: opts.baseUrl,
     auth: opts.auth,
     noAutoEvolve: opts.autoEvolve === false,
     ...transcriptOptions(opts),
-  }, {
-    json: opts.json === true,
-    headless: true,
+  }, async () => {
+    const rawPrompt = await buildPrompt(promptParts);
+
+    if (!rawPrompt) {
+      throw new Error('A task prompt is required. Usage: kinu exec "task" [--workspace <name>] [--json]');
+    }
+
+    return { target: resolveAgentTarget(resolveExecWorkspaceName(opts.workspace)), rawPrompt };
   });
 
   await exitOneShot(failed);
@@ -126,16 +120,19 @@ function resolveExecWorkspaceName(explicit?: string): string {
     : `Multiple workspaces configured. Pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
 }
 
-/** A run's one failure boundary: a workspace that will not open fails as a turn does, so --json still prints one error line. */
+/**
+ * A run's one failure boundary, from reading its prompt and finding its workspace through the turn: any failure
+ * prints as a turn's does, so --json still prints one error line.
+ */
 async function runOneShot(
-  target: AgentTarget,
-  rawPrompt: string,
-  opts: AgentClientFlags & TranscriptFlags,
   surface: { json: boolean; headless: boolean },
+  opts: AgentClientFlags & TranscriptFlags,
+  prepare: () => Promise<{ target: AgentTarget; rawPrompt: string }>,
 ): Promise<boolean> {
   const run = { ...surface, failed: false };
 
   try {
+    const { target, rawPrompt } = await prepare();
     await oneShotTurn(target, rawPrompt, opts, run);
   } catch (err) {
     // An error event already printed this failure.
