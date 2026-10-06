@@ -46,8 +46,8 @@ interface FrameSpec {
 }
 
 const FRAME = {
-  checkout: { title: 'Checkout coupon bug', surface: 'Work', mode: 'build' },
-  plan: { title: 'Checkout coupon bug', surface: 'Work', mode: 'plan' },
+  checkout: { title: 'Storefront', surface: 'Work', mode: 'build' },
+  plan: { title: 'Storefront', surface: 'Work', mode: 'plan' },
   slate: { title: 'Support queue', surface: `${SLATE_PREFIX}${SLATE_SUMMARY.id}`, mode: 'build' },
 } satisfies Record<LandingFrameKind, FrameSpec>;
 

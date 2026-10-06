@@ -1,6 +1,7 @@
 /** Shared agent-creation flow. The mission becomes the workspace's SOUL.md and title server-side, not a chat message. */
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import type { FileUIPart } from "ai";
 import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { listAvailableModels } from "@/lib/user-api";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
@@ -27,7 +28,7 @@ export function useCreateWorkspace() {
   const hasModels = menu === null ? null : menu.models.length > 0;
 
   /** `onBeforeNavigate` lets a modal dismiss itself first. */
-  const create = useCallback((mission: string, onBeforeNavigate?: () => void): Promise<void> => {
+  const create = useCallback((mission: string, onBeforeNavigate?: () => void, attachments: readonly FileUIPart[] = []): Promise<void> => {
     const m = mission.trim();
 
     if (!m || busy) return Promise.resolve();
@@ -38,7 +39,7 @@ export function useCreateWorkspace() {
       const created = yield* Effect.promise(() => createWorkspaceFromMission(m));
       roster.upsert(created);
       onBeforeNavigate?.();
-      yield* Effect.promise(async () => navigate(`/workspace/${created.name}`));
+      yield* Effect.promise(async () => navigate(`/workspace/${created.name}`, attachments.length === 0 ? undefined : { state: { attachments } }));
     }), (failed) => Effect.sync(() => {
       setErr(renderThrownChain({ cause: Cause.squash(failed) }));
       setBusy(false);

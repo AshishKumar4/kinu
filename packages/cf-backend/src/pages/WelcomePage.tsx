@@ -15,6 +15,8 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
+import { DefaultModelField } from "@/components/account/DefaultModelField";
+import { McpServersPanel } from "@/components/account/McpServersPanel";
 import { completeOnboarding, setDisplayName } from "@/lib/user-api";
 import { useAccount } from "@/hooks/use-account";
 import { lastValue } from "@/hooks/use-async-resource";
@@ -77,6 +79,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
   // `null` until touched, so a slow profile load never overwrites an edit.
   const [step, setStep] = useState(() => Math.min(Math.max(0, initialStep), LAST_STEP));
+  const [reached, setReached] = useState(step);
   const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +89,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const stepHeight = stepSize.size.h === 0 ? null : stepSize.size.h;
 
   const displayName = name ?? profile?.displayName ?? '';
+
+  useEffect(() => setReached((most) => Math.max(most, step)), [step]);
 
   useEffect(() => {
     if (step === LAST_STEP) {
@@ -191,9 +196,18 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   </div>
                 )}
 
-                {s.id === 'model' && (
+                {s.id === 'providers' && (
                   <div className="space-y-5">
                     <ProvidersPanel returnTo={APP_ROUTES.welcome} />
+                  </div>
+                )}
+
+                {s.id === 'model' && <DefaultModelField shown={i === step} />}
+
+                {s.id === 'tools' && (
+                  <div className="space-y-4">
+                    <p className="text-sm p-text-3">MCP servers give every agent you own their tools. Connect one now, or any time in settings.</p>
+                    {i <= reached && <McpServersPanel />}
                   </div>
                 )}
 

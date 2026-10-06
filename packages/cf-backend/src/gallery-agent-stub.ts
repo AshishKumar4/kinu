@@ -79,6 +79,13 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 	const handlers = useRef(options);
 	handlers.current = options;
 
+	useEffect(() => {
+		const root = document.documentElement;
+		root.dataset.galleryAgentsOpen = String(Number(root.dataset.galleryAgentsOpen ?? "0") + 1);
+
+		return () => { root.dataset.galleryAgentsOpen = String(Number(root.dataset.galleryAgentsOpen ?? "1") - 1); };
+	}, []);
+
 	const agent = useMemo<GalleryAgent>(() => {
 		const listeners = new Map<string, Set<EventListener>>();
 

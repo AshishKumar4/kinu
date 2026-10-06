@@ -10,18 +10,21 @@ import {
 import { RECENT_WORKSPACES, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 import { PromptCard } from "@/components/workspaces/PromptCard";
+import { usePendingAttachments } from "@/hooks/use-pending-attachments";
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
 
 export default function HomePage() {
   const [mission, setMission] = useState("");
   const { entries: workspaces, error: rosterError } = useWorkspaceRoster();
   const listFailed = rosterError !== null;
   const { hasModels, busy, err, create } = useCreateWorkspace();
+  const files = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
   const [isPending, startTransition] = useTransition();
   const creating = busy || isPending;
 
   const submit = (): void => {
     startTransition(async () => {
-      await create(mission);
+      await create(mission, undefined, files.parts);
     });
   };
 
@@ -44,7 +47,8 @@ export default function HomePage() {
           onSubmit={submit}
           busy={creating}
           blocked={hasModels === false}
-          error={err}
+          error={err ?? files.refusal}
+          attachments={{ parts: files.parts, onAdd: files.add, onRemove: files.remove }}
           notice={hasModels === false && <CloudflareAIConnectNotice returnTo="/" message={CONNECT_AI_MESSAGE} />}
         />
 

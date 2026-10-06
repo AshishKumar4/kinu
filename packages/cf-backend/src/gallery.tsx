@@ -19,7 +19,7 @@ import { diagnostics, renderThrownChain, toKinuError, tolerate, settle } from "@
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  TrashIcon, BrainIcon, GearIcon,
+  TrashIcon, BrainIcon, GearIcon, UsersThreeIcon,
 } from "@phosphor-icons/react";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
@@ -123,10 +123,10 @@ const STOCK_ROSTER = {
   entries: [
     { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
       ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
-      : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
-    { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
-    { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
-    { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5 },
+      : "Storefront", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+    { name: "perf-audit", displayName: "Dew", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
+    { name: "email-triage", displayName: "Support inbox", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
+    { name: "design-sys", displayName: "Kinu website", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5 },
     // First-run row: titled by its first prompt, so it has no title yet, only its slug.
     { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3 },
   ],
@@ -312,6 +312,8 @@ const CHATGPT_DEVICE = new URLSearchParams(location.search).get("chatgpt") === "
 
 const MODELS_FAIL = new URLSearchParams(location.search).get("models") === "fail";
 
+const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
+
 const GALLERY_DEVICE = { id: "dev-1", label: "Owner's laptop" };
 
 let settingsChatGptSignedIn = false;
@@ -327,7 +329,7 @@ function galleryChatGptStatus() {
 let settingsClaudeConnected = false;
 
 /** `&chatgpt=device`: a machine that signs in; without, none is connected yet. */
-function chatgptFixture(path: string, method: string): Response | null {
+function chatgptFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/chatgpt") {
     return fixtureJson(CHATGPT_DEVICE
       ? { device: GALLERY_DEVICE, status: galleryChatGptStatus(), account: null, machineSignIn: null }
@@ -344,10 +346,14 @@ function chatgptFixture(path: string, method: string): Response | null {
   if (path === "/api/user/chatgpt/sign-in" && method === "DELETE") return fixtureJson({ cancelled: true });
 
   if (path === "/api/user/chatgpt/paste/start" && method === "POST") {
+    const root = document.documentElement;
+    root.dataset.galleryPasteStarts = String(Number(root.dataset.galleryPasteStarts ?? "0") + 1);
+
     return fixtureJson({ authorizeUrl: "about:blank", redirectUri: "http://127.0.0.1:1455/auth/callback" });
   }
 
   if (path === "/api/user/chatgpt/paste/finish" && method === "POST") {
+    if (v.is(v.string(), body) && body.includes("access_denied")) return fixtureJson({ outcome: "declined", email: null });
     settingsChatGptSignedIn = true;
 
     return fixtureJson({ outcome: "signed_in", email: "owner@example.com" });
@@ -415,7 +421,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
       : fixtureJson({ error: "Codex status fixture failed" }, 503);
   }
 
-  const chatgpt = chatgptFixture(path, method);
+  const chatgpt = chatgptFixture(path, method, body);
 
   if (chatgpt !== null) return chatgpt;
 
@@ -697,15 +703,15 @@ const STOCK_OVERVIEWS = new Map(Object.entries({
   },
   "perf-audit": {
     activity: "working", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: null, task: "Profile the landing bundle and split the vendor chunk" }, slates: [], shares: [],
+    latestRun: { status: null, task: "Make sync resume after a dropped connection" }, slates: [], shares: [],
   },
   "email-triage": {
     activity: "idle", decisionsWaiting: 0, hasUpdates: true,
-    latestRun: { status: "completed", task: "Sort this week's receipts into the ledger" }, slates: [], shares: [],
+    latestRun: { status: "completed", task: "Answer this week's refund requests" }, slates: [], shares: [],
   },
   "design-sys": {
     activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: "error", task: "Design system v2" }, slates: [], shares: [],
+    latestRun: { status: "error", task: "Kinu website" }, slates: [], shares: [],
   },
   "handwrought-walnut-4166c321": {
     activity: "idle", decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [],
@@ -831,6 +837,15 @@ const ANONYMOUS_WORKSPACE = frame === 'workspacepage'
 if (ANONYMOUS_WORKSPACE) STUB.set('/api/user/profile', null);
 
 /** Every path fetched, so a gate can prove what the page did not read. */
+function touchFixture(): Response {
+  const root = document.documentElement;
+  root.dataset.galleryTouches = String(Number(root.dataset.galleryTouches ?? "0") + 1);
+
+  return WORKSPACE_GONE
+    ? fixtureJson({ error: "No such workspace." }, 404)
+    : new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+}
+
 const galleryRequests: string[] = [];
 
 Object.assign(window, { galleryRequests });
@@ -871,10 +886,8 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
   }
 
-  // WorkspacePage records the visit on mount; a 404 renders a notice no real page shows.
-  if (method === "POST" && /^\/api\/user\/workspaces\/[^/]+\/touch$/.test(path)) {
-    return Promise.resolve(new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }));
-  }
+  // WorkspacePage records the visit on mount; a 404 is a workspace the registry no longer holds.
+  if (method === "POST" && /^\/api\/user\/workspaces\/[^/]+\/touch$/.test(path)) return Promise.resolve(touchFixture());
 
   // Feedback and control-plane requests reach the network so the gate decides them by request interception; a stub 404 would fail every send and hide the control plane's non-ok states.
   if (path === FEEDBACK_ENDPOINT || path.startsWith('/api/control/')) return realFetch(input, init);
@@ -1105,8 +1118,8 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   getWorkspaceSnapshot: {
     status: {
       id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",
-      displayName: "Checkout coupon bug", purpose: "Find why the SAVE20 coupon 500s and fix it.",
-      soul: "# Checkout coupon bug\n\nI own the checkout coupon path. I read the migration before I guess.\n",
+      displayName: "Storefront", purpose: "The store's checkout, cart and payments: keep them fast and correct.",
+      soul: "# Storefront\n\nI look after the checkout, the cart and payments. I read the migration before I guess.\n",
       createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 106,
       messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null, reasoningEffort: "medium",
     },
@@ -1662,6 +1675,9 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
       ...AGENTS_PANEL ? [{
         owner: { actorId: galleryActorId("coupon-auditor"), name: "coupon-auditor", title: "Coupon auditor", retired: false, path: ["coupon-auditor"] }, plan: null,
         tasks: [{ id: "t-audit", parentId: null, title: "Audit the coupon rules", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+      }, {
+        owner: { actorId: "swarm-actor-h1", name: "root-merge-1-h1", title: "packages/cart/src/serializer.ts", retired: false, path: null }, plan: null,
+        tasks: [{ id: "t-serialize", parentId: null, title: "Serialize gift-card lines", status: "active", updatedAt: 1, note: null, subtasks: [] }],
       }] : [],
     ],
   }),
@@ -1880,12 +1896,14 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
 const GALLERY_AGENTS: PanelAgent[] = [
   { key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
     actorId: galleryActorId(WORKSPACE_PAGE_NAME), figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } },
-  { key: galleryActorId("docs"), label: "Release notes", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
+  { key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
     figures: { tokens: 12_400, usd: 0.03, activeMs: 3 * 60_000, cacheEma: 0.88 } },
-  { key: galleryActorId("perf"), label: "Perf pass on checkout", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
+  { key: galleryActorId("perf"), label: "Should checkout support gift cards?", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
     figures: { tokens: 31_000, usd: 0.07, activeMs: 9 * 60_000, cacheEma: 0.9 } },
-  { key: galleryActorId("i18n"), label: "Currency formatting", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "i18n" }, tab: true, input: true,
+  { key: galleryActorId("i18n"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "i18n" }, tab: true, input: true,
     figures: { tokens: 8_200, activeMs: 2 * 60_000, cacheEma: null } },
+  { key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true,
+    figures: { tokens: 22_600, usd: 0.05, activeMs: 4 * 60_000, cacheEma: 0.86 } },
   { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true,
     actorId: galleryActorId("coupon-auditor"), figures: { tokens: 48_900, usd: 0.11, activeMs: 7 * 60_000, cacheEma: 0.91 } },
   { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "a-scout", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true,
@@ -1896,11 +1914,13 @@ const GALLERY_AGENTS: PanelAgent[] = [
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false,
     figures: { tokens: 9_800, activeMs: 94_000, cacheEma: null } },
   { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "main",
-    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false, figures: { activeMs: 0, cacheEma: null } },
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false, actorId: "swarm-actor-h1", figures: { activeMs: 0, cacheEma: null } },
   { key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false, figures: { activeMs: 0, cacheEma: null } },
   { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "main", open: { kind: "chat", path: "refiner" }, tab: false, input: false,
     figures: { tokens: 2_300, usd: 0.004, activeMs: 20_000, cacheEma: 0.5 } },
+  { key: "a-sampler", label: "Prompt sampler", category: "hired", activity: "idle", parent: "a-refine", open: { kind: "chat", path: "refiner/sampler" }, tab: false, input: true,
+    figures: { tokens: 900, activeMs: 8_000, cacheEma: null } },
 ];
 
 const NO_GALLERY_FIGURES = { activeMs: 0, cacheEma: null };
@@ -2945,20 +2965,24 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
 /** The bar over fixture chats: working, waiting, failed. */
 const GALLERY_CHATS: readonly PanelAgent[] = [
   { key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
-  { key: galleryActorId("docs"), label: "Release notes", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
-  { key: galleryActorId("agent-4f2c"), label: "Coupon audit", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { key: galleryActorId("agent-4f2c"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
 ];
 
 function GalleryWorkspaceHeader({ active = "main" }: { active?: string }) {
   return (
     <WorkspaceHeader
-      workspace={{ title: "Checkout coupon bug", to: "/workspace/checkout-fixes/overview", editValue: "Checkout coupon bug", rename: async () => {}, remove: () => {} }}
+      workspace={{ title: "Storefront", to: "/workspace/checkout-fixes/overview", editValue: "Storefront", rename: async () => {}, remove: () => {} }}
       chats={GALLERY_CHATS.map((agent): ChatTab => (agent.key === "main"
         ? { agent, to: "/workspace/checkout-fixes", rename: async () => {} }
         : { agent, to: "/workspace/checkout-fixes", rename: async () => {}, remove: () => {} }))}
       active={active}
       newChat="/workspace/checkout-fixes/new"
-      trailing={<Link to="/workspace/checkout-fixes/settings" className="p-bar-icon" aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>}
+      trailing={<>
+        <button type="button" className="p-bar-icon" aria-label="All agents" title="All agents"><UsersThreeIcon size={16} /></button>
+        <Link to="/workspace/checkout-fixes/settings" className="p-bar-icon" aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
+      </>}
     />
   );
 }
@@ -3566,7 +3590,7 @@ function RosterAuthorityFrame() {
 
   const entry: WorkspaceEntry = {
     name: "checkout-fixes",
-    displayName: "Checkout coupon bug",
+    displayName: "Storefront",
     createdAt: NOW - 7 * 864e5,
     lastVisited: NOW - 60e3,
   };
@@ -3807,7 +3831,7 @@ function GalleryModal() {
         </>}
       >
         <p className="text-xs p-text-2 leading-relaxed">
-          Remove <span className="font-medium p-text">Checkout coupon bug</span> and delete everything in it? This cannot be undone.
+          Remove <span className="font-medium p-text">Storefront</span> and delete everything in it? This cannot be undone.
         </p>
       </Modal>
     </div>
@@ -3981,8 +4005,8 @@ function MarksFrame() {
                 <span className="p-heading text-[17px] p-text">Kinu</span>
               </div>
               <div className="p-eyebrow px-2">Workspaces</div>
-              <div className="px-2 py-1.5 rounded-lg bg-[var(--c-elevated)] p-row-text font-medium">Checkout coupon bug</div>
-              <div className="px-2 py-1.5 p-row-text p-text-2">Perf audit — landing</div>
+              <div className="px-2 py-1.5 rounded-lg bg-[var(--c-elevated)] p-row-text font-medium">Storefront</div>
+              <div className="px-2 py-1.5 p-row-text p-text-2">Dew</div>
             </div>
           </div>
         </div>
@@ -3992,10 +4016,10 @@ function MarksFrame() {
 }
 
 const BRAIN_STATUS = {
-  name: "checkout-coupon-bug-9935d3", displayName: "Checkout coupon bug",
-  purpose: "Find why the SAVE20 coupon 500s and fix it.", model: "anthropic/claude-opus-4",
+  name: "checkout-coupon-bug-9935d3", displayName: "Storefront",
+  purpose: "The store's checkout, cart and payments: keep them fast and correct.", model: "anthropic/claude-opus-4",
   scaffoldVersion: 7, searchNodeCount: 12, messageCount: 48,
-  soul: "# Checkout coupon bug", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
+  soul: "# Storefront", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
 } satisfies AgentStatus;
 
 const GALLERY_SLATE_ID = "sandbox-probe";

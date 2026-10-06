@@ -23,8 +23,8 @@ describe('needsOnboarding', () => {
 });
 
 describe('ONBOARDING_STEPS', () => {
-  test('the wizard has its three steps in order', () => {
-    expect(ONBOARDING_STEPS.map((s) => s.id)).toEqual(['profile', 'model', 'showcase']);
+  test('the wizard has its steps in order: you, a provider, the default model, tools, then what Kinu does', () => {
+    expect(ONBOARDING_STEPS.map((s) => s.id)).toEqual(['profile', 'providers', 'model', 'tools', 'showcase']);
   });
 
   test('steps carry titles and no ledes', () => {

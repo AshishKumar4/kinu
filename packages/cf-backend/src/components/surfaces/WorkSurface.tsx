@@ -107,16 +107,30 @@ export interface WorkSurfaceProps {
 function useSelectedTabInView(strip: RefObject<HTMLDivElement | null>, surface: SurfaceKind | null): void {
   useEffect(() => {
     const container = strip.current;
-    const selected = container?.querySelector('[aria-current="true"]');
 
-    if (!container || !selected) return;
-    const viewport = container.getBoundingClientRect();
-    const tab = selected.getBoundingClientRect();
-    const left = viewport.left + container.clientLeft;
-    const right = left + container.clientWidth;
+    if (!container) return;
 
-    if (tab.left < left) container.scrollLeft += tab.left - left;
-    else if (tab.right > right) container.scrollLeft += tab.right - right;
+    const reveal = () => {
+      const selected = container.querySelector('[aria-current="true"]');
+
+      if (!selected) return;
+      const viewport = container.getBoundingClientRect();
+      const tab = selected.getBoundingClientRect();
+
+      // Not laid out yet; scrolling now strands the strip.
+      if (container.clientWidth < tab.width) return;
+      const left = viewport.left + container.clientLeft;
+      const right = left + container.clientWidth;
+
+      if (tab.left < left) container.scrollLeft += tab.left - left;
+      else if (tab.right > right) container.scrollLeft += tab.right - right;
+    };
+
+    reveal();
+    const resized = new ResizeObserver(reveal);
+    resized.observe(container);
+
+    return () => resized.disconnect();
   }, [strip, surface]);
 }
 

@@ -147,3 +147,27 @@ describe('a failed attachment', () => {
     expect(send).toMatch(/(^|\s)disabled(=|\s|>)/);
   });
 });
+
+describe('branching a running turn', () => {
+  const live = (value: string, parts: number) => renderToStaticMarkup(createElement(Composer, {
+    value,
+    onValueChange: () => {},
+    onSend: () => {},
+    placeholder: 'Send a message...',
+    disabled: false,
+    liveness: { kind: 'live', turnId: 't1' } as const,
+    onStop: () => {},
+    onBranch: () => {},
+    attachments: {
+      parts: Array.from({ length: parts }, (_, i) => ({ type: 'file' as const, mediaType: 'text/csv', filename: `cart-${String(i)}.csv`, url: 'data:text/csv,a' })),
+      onAdd: () => {},
+      onRemove: () => {},
+    },
+  }));
+
+  // A branch runs the draft's words: an attachment alone used to offer Branch, which then did nothing.
+  test('is offered for a draft with words, never for attachments alone', () => {
+    expect(live('try the other fix', 0)).toContain('Branch');
+    expect(live('', 1)).not.toContain('Branch');
+  });
+});

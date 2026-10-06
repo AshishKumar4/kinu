@@ -32,8 +32,8 @@ export function ChatGptPlanUsage() {
 type Way = "computer" | "here";
 
 const PASTE_OUTCOME = {
-  declined: "You cancelled the sign-in at OpenAI. Open the link again to retry.",
-  plan_declined: "You signed in without allowing ChatGPT plan usage. Open the link again and allow it.",
+  declined: "You cancelled the sign-in at OpenAI.",
+  plan_declined: "You signed in without allowing ChatGPT plan usage; allow it this time.",
 } as const;
 
 export function ChatGptWelcome({ onClose }: { onClose: () => void }) {
@@ -184,12 +184,17 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
-  useEffect(() => {
+  const begin = useCallback(() => {
+    setStarted(null);
+    setPasted("");
+    setNote(null);
     detach(attempt({ doing: "starting the ChatGPT sign-in", otherwise: "io" }, startChatGptPaste).pipe(
       Effect.map(setStarted),
       Effect.catch(onFailed),
     ));
   }, [onFailed]);
+
+  useEffect(begin, [begin]);
 
   const finish = useCallback(() => {
     setBusy(true);
@@ -222,7 +227,12 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
           <FilledButton onClick={finish} disabled={busy || pasted.trim() === ""} className="shrink-0">{busy ? "Finishing…" : "Finish"}</FilledButton>
         </div>
       </div>
-      {note && <p className="text-xs p-warning">{note}</p>}
+      {note && (
+        <p className="flex flex-wrap items-center gap-2 text-xs p-warning">
+          {note}
+          <button type="button" onClick={begin} className="p-btn-quiet px-2 py-1 text-xs">Start again</button>
+        </p>
+      )}
     </div>
   );
 }

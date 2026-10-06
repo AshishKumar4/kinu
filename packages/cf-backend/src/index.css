@@ -1748,19 +1748,48 @@ body > .annotation-toolbar {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--c-accent-mark);
+  background: var(--c-danger);
   animation: p-status-halo 2.4s ease-out infinite;
 }
 .p-agent-status[data-status="failed"] { color: var(--c-danger); }
 @keyframes p-status-turn { to { transform: rotate(360deg); } }
 @keyframes p-status-halo {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-accent-mark) 50%, transparent); }
-  70%, 100% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--c-accent-mark) 0%, transparent); }
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-danger) 50%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--c-danger) 0%, transparent); }
 }
+
+/* Working: the name's words carry a slow light, left to right. Needing the
+   person: a soft red glow breathes around the tab or row. A failure stays a
+   still red mark, so it never reads as the live pulse. */
+.p-status-label { --shimmer-base: var(--c-text-3); --shimmer-peak: color-mix(in srgb, var(--c-accent-mark) 75%, var(--c-text)); }
+[data-status="working"] .p-status-label {
+  color: transparent;
+  background: linear-gradient(100deg, var(--shimmer-base) 0 32%, var(--shimmer-peak) 50%, var(--shimmer-base) 68% 100%) 100% 0 / 280% 100% no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: p-shimmer 2.8s ease-in-out infinite;
+}
+@keyframes p-shimmer { to { background-position: 0 0; } }
+.p-halo { --halo-inset: 0; isolation: isolate; }
+.p-bar-tab.p-halo { --halo-inset: 7px calc(var(--flare) + 3px) 6px; }
+[data-status="waiting"].p-halo::after {
+  content: "";
+  position: absolute;
+  inset: var(--halo-inset);
+  z-index: -1;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--c-danger) 7%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-danger) 40%, transparent), 0 0 14px 1px color-mix(in srgb, var(--c-danger) 30%, transparent);
+  pointer-events: none;
+  animation: p-attention 2.6s ease-in-out infinite;
+}
+@keyframes p-attention { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .p-agent-status::before { animation: none !important; }
   .p-agent-status[data-status="working"]::before { border-right-color: var(--c-accent-mark); }
-  .p-agent-status[data-status="waiting"]::before { box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--c-accent-mark) 28%, transparent); }
+  .p-agent-status[data-status="waiting"]::before { box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--c-danger) 28%, transparent); }
+  [data-status="working"] .p-status-label { animation: none; color: inherit; background: none; }
+  [data-status="waiting"].p-halo::after { animation: none; opacity: 0.8; }
 }
 
 /* A nested list: rows indented under their parent, with one thin guide

@@ -76,13 +76,14 @@ function summaryOf(agents: readonly PanelAgent[], cards: readonly Card[]): strin
   ].join(" · ");
 }
 
-export function WorkspaceOverview({ workspace, title, rpc, readMoves, lineage, agents }: {
+export function WorkspaceOverview({ workspace, title, rpc, readMoves, lineage, agents, open }: {
   workspace: string;
   title: string;
   rpc: Rpc;
   readMoves: ReadMoves;
   lineage: ForkLineage | null;
   agents: readonly PanelAgent[];
+  open: (agent: PanelAgent) => void;
 }) {
   const load = useCallback(() => rpc<WorkspaceWork>("listWorkspaceWork", []), [rpc]);
   const { resource, reload } = useAsyncResource(load);
@@ -123,7 +124,7 @@ export function WorkspaceOverview({ workspace, title, rpc, readMoves, lineage, a
           <h2 id="overview-tasks" className="p-eyebrow">Tasks</h2>
           {resource.status === "error" && work === null
             ? <LoadFailure what="this workspace's tasks" message={resource.message} onRetry={reload} />
-            : <Board cards={cards} workspace={workspace} loaded={work !== null} />}
+            : <Board cards={cards} workspace={workspace} loaded={work !== null} open={open} />}
         </section>
       </div>
     </div>
@@ -142,7 +143,7 @@ function Quiet({ icon, title, text }: { icon: ReactNode; title: string; text: st
   );
 }
 
-function Board({ cards, workspace, loaded }: { cards: readonly Card[]; workspace: string; loaded: boolean }) {
+function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; workspace: string; loaded: boolean; open: (agent: PanelAgent) => void }) {
   if (loaded && cards.length === 0) {
     return <p className="rounded-xl border border-dashed p-border px-4 py-6 text-center p-meta p-text-3">No tasks yet. When an agent plans its work with the tasks tool, each task lands here.</p>;
   }
@@ -159,7 +160,7 @@ function Board({ cards, workspace, loaded }: { cards: readonly Card[]; workspace
                 <span className={`text-[13px] font-medium ${lane === "waiting" && shown.length > 0 ? "p-accent" : "p-text-2"}`}>{title}</span>
                 <span className="p-meta tabular-nums p-text-4">{shown.length}</span>
               </div>
-              {shown.map((card) => <TaskCard key={card.id} card={card} workspace={workspace} />)}
+              {shown.map((card) => <TaskCard key={card.id} card={card} workspace={workspace} open={open} />)}
             </div>
           );
         })}
@@ -168,12 +169,24 @@ function Board({ cards, workspace, loaded }: { cards: readonly Card[]; workspace
   );
 }
 
-function TaskCard({ card, workspace }: { card: Card; workspace: string }) {
+const CARD_CLASS = "group flex flex-col gap-2.5 rounded-xl border p-border bg-[var(--c-bg)] px-3 py-2.5 text-left transition-colors hover:border-[var(--c-border-strong)]";
+
+function TaskCard({ card, workspace, open }: { card: Card; workspace: string; open: (agent: PanelAgent) => void }) {
+  const { agent } = card;
+
+  if (agent !== undefined) {
+    return <button type="button" data-task-card onClick={() => open(agent)} className={CARD_CLASS}><TaskBody card={card} /></button>;
+  }
+
   const path = card.owner.path;
   const to = path === null || path.length === 0 ? `/workspace/${workspace}` : `/workspace/${workspace}/agents/${path.map(encodeURIComponent).join("/")}`;
 
+  return <Link to={to} data-task-card className={CARD_CLASS}><TaskBody card={card} /></Link>;
+}
+
+function TaskBody({ card }: { card: Card }) {
   return (
-    <Link to={to} className="group flex flex-col gap-2.5 rounded-xl border p-border bg-[var(--c-bg)] px-3 py-2.5 transition-colors hover:border-[var(--c-border-strong)]">
+    <>
       <span className={`text-[13.5px] leading-snug ${card.lane === "done" ? "p-text-3 line-through decoration-[var(--c-border-strong)]" : "p-text"}`}>{card.title}</span>
       <span className="flex items-center gap-2 text-[12px] p-text-3">
         {card.agent && <AgentStatusMark activity={card.agent.activity} />}
@@ -187,6 +200,6 @@ function TaskCard({ card, workspace }: { card: Card; workspace: string }) {
           </span>
         )}
       </span>
-    </Link>
+    </>
   );
 }

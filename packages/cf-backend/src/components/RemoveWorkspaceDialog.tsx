@@ -13,7 +13,9 @@ import { Modal } from "./ui/Modal";
 /** Leaves the workspace first: a mounted socket would reconnect, and `idFromName` resurrects an empty one. */
 export function RemoveWorkspaceDialog({ workspace, onClose }: { workspace: { name: string; displayName: string }; onClose: () => void }) {
   const navigate = useNavigate();
-  const inside = useMatch({ path: `/workspace/${workspace.name}`, end: false }) !== null;
+  const inPage = useMatch({ path: `/workspace/${workspace.name}`, end: false }) !== null;
+  const inSwarm = useMatch({ path: `/swarm/${workspace.name}`, end: false }) !== null;
+  const inside = inPage || inSwarm;
   const { remove } = useWorkspaceRoster();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

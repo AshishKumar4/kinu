@@ -1543,7 +1543,7 @@ describe('history and roster request generations at actual hook boundaries', () 
       expect(await page.$eval('[data-roster-probe]', (el) => el.getAttribute('data-roster-pending'))).toBe('true');
       await page.click('[data-roster-release]');
 
-      // The old server row spells "Checkout coupon bug", and the local edit
+      // The old server row spells "Storefront", and the local edit
       // retired every read in flight, so the released list must publish
       // NOTHING. That is a claim about something NOT happening, and the proof
       // cannot be another `waitForFunction` on the rename: that condition is

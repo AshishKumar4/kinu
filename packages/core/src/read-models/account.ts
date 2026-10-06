@@ -14,7 +14,9 @@ export function needsOnboarding(profile: AccountOnboarding | null): boolean {
 /** Read by both the indicator and the sliding panel so they agree on the count. */
 export const ONBOARDING_STEPS = [
   { id: 'profile', title: 'Your name' },
-  { id: 'model', title: 'Model and providers' },
+  { id: 'providers', title: 'Connect a provider' },
+  { id: 'model', title: 'Your default model' },
+  { id: 'tools', title: 'Connect your tools' },
   { id: 'showcase', title: 'What Kinu does' },
 ] as const;
 

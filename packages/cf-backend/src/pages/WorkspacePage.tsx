@@ -4,7 +4,7 @@ import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } 
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, GearIcon, ListIcon,
+  ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, GearIcon, ListIcon, UsersThreeIcon,
   ClockIcon, WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
   ClockCounterClockwiseIcon, UserPlusIcon, type Icon,
 } from "@phosphor-icons/react";
@@ -56,7 +56,7 @@ import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNoti
 import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
-import { useOpeningMessage } from "@/components/workspaces/NewChatView";
+import { useCarriedAttachments, useOpeningMessage } from "@/components/workspaces/NewChatView";
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
@@ -565,7 +565,7 @@ function SubordinateChatColumn({
     steerRuns: state.steerRuns,
   });
 
-  useOpeningMessage(state.connectionStatus === "connected", (text) => { state.sendChat(text, [], ui.mode); });
+  useOpeningMessage(state.connectionStatus === "connected", (text, files) => { state.sendChat(text, [...files], ui.mode); });
 
   if (state.terminalClose && !state.agentStatus) {
     return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
@@ -709,6 +709,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
 }) {
   const navigate = useNavigate();
   const drawer = useLayoutDrawer();
+  const agentsNav = useAgentsNav();
   const [removing, setRemoving] = useState(false);
   const [deleting, setDeleting] = useState<{ title: string; path: string } | null>(null);
 
@@ -730,6 +731,9 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
         newChat={`/workspace/${workspace}/new`}
         leading={drawer && <button type="button" onClick={drawer} className="p-bar-icon" aria-label="Open menu"><ListIcon size={18} /></button>}
         trailing={<>
+          <button type="button" onClick={() => agentsNav.enter(workspace)} className="p-bar-icon" aria-label="All agents" title="All agents">
+            <UsersThreeIcon size={16} />
+          </button>
           <Link to={`/workspace/${workspace}/settings`} className="p-bar-icon" aria-current={view === "settings" ? "page" : undefined}
             aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
           {view === undefined && inspector && <InspectorToggle control={inspector} />}
@@ -749,22 +753,43 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
 }
 
 /** The workspace's own pages, under the bar the chats share. */
-function WorkspaceView({ view, workspace, title, state, agents }: {
+function WorkspaceView({ view, workspace, title, state, agents, open }: {
   view: string;
   workspace: string;
   title: string;
   state: WorkspaceState;
   agents: readonly PanelAgent[];
+  open: (agent: PanelAgent) => void;
 }) {
   if (view === "settings") return <WorkspaceSettings workspace={workspace} state={state} />;
 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
 
   return <WorkspaceOverview workspace={workspace} title={title} rpc={state.rpc} readMoves={state.readMoves}
-    lineage={state.agentStatus?.forkLineage ?? null} agents={agents} />;
+    lineage={state.agentStatus?.forkLineage ?? null} agents={agents} open={open} />;
+}
+
+function GoneWorkspace() {
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-2 px-6 text-center" data-workspace-gone>
+      <p className="text-sm p-text">This workspace no longer exists</p>
+      <p className="p-meta p-text-3">It was deleted, here or somewhere else.</p>
+      <Link to="/" className="mt-1 text-xs p-accent hover:underline">Back to your workspaces</Link>
+    </div>
+  );
 }
 
 export default function WorkspacePage() {
+  const { agentId } = useParams();
+  const [gone, setGone] = useState<string | null>(null);
+
+  if (agentId !== undefined && gone === agentId) return <GoneWorkspace />;
+
+  // Unmounting closes its socket and every read it polls.
+  return <OpenWorkspace key={agentId} onGone={setGone} />;
+}
+
+function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const params = useParams();
   const { agentId } = params;
   const subName = routedAgentPath(params);
@@ -893,18 +918,23 @@ export default function WorkspacePage() {
   // The hook spends the per-message aggregate cap (one DO row, see core/cloud-wire) inside its
   // reducer, so concurrent additions cannot reserve the same remaining capacity.
   const attachments = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
+  useCarriedAttachments(attachments.offer);
   const { dragOver, handlers: chatDrop } = useFileDrop(attachments.add);
 
   useAutogrow(chatInputRef, chatInput);
 
+  // A visit the roster does not take is a gone workspace; asked again when the socket drops.
+  const dropped = state.connectionStatus === "disconnected";
+
   useEffect(() => {
     if (!agentId) return;
     startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      // A visit the roster did not take is a gone workspace, which the page's own missing state already shows.
-      yield* Effect.promise(async () => touchWorkspace(agentId));
+      const taken = yield* Effect.promise(async () => touchWorkspace(agentId));
+
+      if (!taken) onGone(agentId);
       reportSide("visit", null);
     }), sideFailed("visit"))));
-  }, [agentId, reportSide, sideFailed]);
+  }, [agentId, dropped, onGone, reportSide, sideFailed]);
 
   // Steer-as-Branch: runs the draft as a parallel head while the live turn continues.
   const [branchNotice, setBranchNotice] = useState<string | null>(null);
@@ -1037,15 +1067,6 @@ export default function WorkspacePage() {
   const panelSlate = (control: InspectorControl): string | null =>
     control.beside && !control.collapsed && surface.startsWith(SLATE_PREFIX) ? surface.slice(SLATE_PREFIX.length) : null;
 
-  // Never unmount on transient WS errors.
-  if (state.connectionStatus === "connecting" && !state.agentStatus) return (
-    <div className="h-full flex items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
-  );
-
-  if (state.terminalClose && !state.agentStatus) {
-    return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
-  }
-
   if (!agentId) return null;
 
   const as = state.agentStatus;
@@ -1054,6 +1075,23 @@ export default function WorkspacePage() {
   const statusTitle = as?.displayName;
   const storedTitle = statusTitle === undefined || statusTitle === "" ? rosterTitle : statusTitle;
   const shownTitle = workspaceDisplayTitle({ name: agentId, displayName: storedTitle });
+
+  const bar = (
+    <WorkspaceBar workspace={agentId} title={shownTitle} editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
+      state={state} agents={agentsPanel.list} shown={shownAgent} view={view} subName={subName} inspector={inspectorControl} />
+  );
+
+  // Never unmount on transient WS errors.
+  if (state.connectionStatus === "connecting" && !state.agentStatus) return (
+    <div className="h-full flex flex-col">
+      {bar}
+      <div className="flex flex-1 items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
+    </div>
+  );
+
+  if (state.terminalClose && !state.agentStatus) {
+    return <div className="h-full flex flex-col">{bar}<div className="min-h-0 flex-1"><TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} /></div></div>;
+  }
 
 
   return (
@@ -1079,10 +1117,10 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      <WorkspaceBar workspace={agentId} title={shownTitle} editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
-        state={state} agents={agentsPanel.list} shown={shownAgent} view={view} subName={subName} inspector={inspectorControl} />
+      {bar}
 
-      {view !== undefined && <WorkspaceView view={view} workspace={agentId} title={shownTitle} state={state} agents={agentsPanel.list} />}
+      {view !== undefined && <WorkspaceView view={view} workspace={agentId} title={shownTitle} state={state} agents={agentsPanel.list}
+        open={(agent) => { detach(Effect.promise(async () => agentsPanel.open(agent))); }} />}
       {view === undefined && (
       <WorkbenchPanels
         ref={workbench}
