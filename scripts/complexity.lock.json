@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-06",
-  "files": 3030,
-  "functions": 78517,
+  "files": 3034,
+  "functions": 78541,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -343,10 +343,6 @@
     },
     {
       "key": "packages/cli/src/tui/overlays.tsx#ModelListOverlay",
-      "complexity": 27
-    },
-    {
-      "key": "packages/compaction/src/extension.ts#createCompactionExtension>transformContext",
       "complexity": 27
     },
     {

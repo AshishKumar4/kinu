@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import type { RawSqlExec } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { DiffAnchor, ReviewAnnotation } from '../types/plans';
-import { admitReviewAnnotations, DiffAnchorSchema } from '../plans/review';
+import { admitReviewAnnotations, DiffAnchorSchema } from '../plans/annotation-admission';
 import type { JsonObject } from '../utils/json';
 import { comparePaths } from './change-view';
 import { KinuError } from '../obs/index';

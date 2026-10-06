@@ -644,9 +644,8 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     expect(remaining.some((run) => run.rootId === 'branch-0')).toBe(false);
   });
 
-  // The roster is read every model step and the journal has no GC, so its plan must be bounded by open runs;
-  // a full scan of head_journal is the regression. The statement is captured from the journal itself.
-  test('the roster does not read the settled journal', () => {
+  /** One live run over 200 settled ones; `plans` reads each statement run since the last `clear`. */
+  const settledJournal = () => {
     const db = new Database(':memory:');
     const execRaw = makeExecRaw(db);
     initHeadsTables(execRaw);
@@ -673,24 +672,44 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     }
 
     statements.length = 0;
+
+    // Bound with each statement's own values; a plan is only honest against the real parameters.
+    const plans = () => statements.splice(0).map(({ text, values }) => db
+      .query<{ detail: string }, SQLQueryBindings[]>(`EXPLAIN QUERY PLAN ${text}`)
+      .all(...values.map((value) => (value instanceof ArrayBuffer ? new Uint8Array(value) : value)))
+      .map((row) => row.detail).join('\n'));
+
+    return { journal, plans };
+  };
+
+  // The roster is read every model step and the journal has no GC, so its plan must be bounded by open runs;
+  // a full scan of head_journal is the regression. The statement is captured from the journal itself.
+  test('the roster does not read the settled journal', () => {
+    const { journal, plans } = settledJournal();
+
     expect(journal.listLive()).toEqual({
       items: [{ rootId: 'root-live', rationale: 'still going', running: 1, total: 1 }],
       total: 1,
     });
 
+    const read = plans();
+
     // The count and the page must both use the status index.
-    expect(statements).toHaveLength(2);
+    expect(read).toHaveLength(2);
 
-    for (const { text, values } of statements) {
-      // Bound with the statement's own values; the plan is only honest against the real parameters.
-      const bound: SQLQueryBindings[] = values.map((value) =>
-        value instanceof ArrayBuffer ? new Uint8Array(value) : value);
-
-      const plan = db.query<{ detail: string }, SQLQueryBindings[]>(`EXPLAIN QUERY PLAN ${text}`).all(...bound);
-      const details = plan.map((row) => row.detail).join('\n');
+    for (const details of read) {
       expect(details).not.toMatch(/\bSCAN\b/);
       expect(details).toContain('idx_head_journal_status');
     }
+  });
+
+  // The canvas reads one run per row of its page: a run read that walks every run the actor ever had grows the page with history.
+  test('a run is read by its root, not through every run the actor had', () => {
+    const { journal, plans } = settledJournal();
+
+    expect(journal.readRun('root-live')?.heads.map((head) => head.id)).toEqual(['live-1']);
+
+    for (const details of plans()) expect(details).not.toMatch(/\bSCAN\b|\(actor_id=\?\)/);
   });
 });
 

@@ -1,10 +1,7 @@
 /**
- * ChatSession: the one turn loop, shared by both backends through {@link ChatSessionPorts} and
- * {@link ChatTransport}. Invariants: one turn at a time, and every started turn terminates (one
- * `turn-end`, a closed run, a released lease); a send while a turn exists splices into it; every
- * accepted send is durable before it is acknowledged; the commit is one transaction; leftovers rerun as
- * one user-origin turn; restart replays pending sends and owed effects; an interrupted turn continues
- * once, under the run it was open in.
+ * The one turn loop for both backends. One turn at a time; every started turn ends (one `turn-end`, a closed
+ * run, a released lease); a mid-turn send splices in; a send is durable before acknowledged; leftovers rerun as
+ * one turn; restart replays pending sends and owed effects; an interrupted turn continues once, in its run.
  */
 
 import type { TrialTurn } from '../evolution/trial-rules';
@@ -28,7 +25,7 @@ import type { CacheWarmingLane } from '../providers/cache-warming';
 import { DEFAULT_CACHE_RETENTION } from '../providers/types';
 import { serverCompactor, SERVER_COMPACTION_MIN_TOKENS } from '../providers/server-compaction';
 import type { ToolOutcome } from '../tools/outcome';
-import { OVERFLOW_RETRY_EVENT } from '../turn-failure';
+import { OVERFLOW_RETRY_EVENT, statedContextLimit } from '../turn-failure';
 import type {
   BroadcastEvent, EnqueueTurnResult, ProgrammaticTurn, PromptFile,
 } from '../types/backend-host';
@@ -153,7 +150,7 @@ export interface ChatTurnInput {
 export interface PreparedTurn {
   readonly execution: Omit<ActorExecutionInput, 'task'>;
   readonly sessionKey: string;
-  readonly contextWindow: number;
+  readonly contextWindow: number | null;
   readonly historyLength: number;
   /** The live trial's arm this turn ran (`turnArtifactBodies`), recorded with the completed turn. */
   readonly trial?: TrialTurn | null;
@@ -204,10 +201,7 @@ export interface ComposedRequest {
   readonly sessionKey: string;
 }
 
-/**
- * What `/compact` did: folded the conversation into Better Compact's summary; armed the next request to ask a model
- * that compacts server-side to; or nothing, for a conversation under what that provider compacts.
- */
+/** `/compact` folded into Better Compact's summary, armed a server-side compaction, or found nothing to fold. */
 export type CompactOutcome = 'folded' | 'armed' | 'nothing';
 
 /** Each port is asked per call, never captured. */
@@ -377,6 +371,25 @@ export class ChatSession {
   get turnOwed(): boolean { return this.pumpActive || this.queue.length > 0; }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
+
+  /** Arms the forced compaction and says whether to retry; a too-long refusal also records the window it measured. */
+  private recoverOverflow(prepared: PreparedTurn, error: string, turnWasOverflowRetry: boolean): boolean {
+    const lastPromptTokens = this.actorSession.orchestrator.acc.lastPromptTokens;
+
+    const recovery = applyOverflowRecovery({
+      error, lastPromptTokens, contextWindow: prepared.contextWindow, turnWasOverflowRetry, state: this.compactionState, sessionKey: prepared.sessionKey,
+    });
+
+    const model = prepared.execution.chat.modelSpec ?? prepared.execution.chat.modelContext?.id;
+    const refused = Math.max(this.eventRecorder.readContextMeasures().gate?.tokens ?? 0, lastPromptTokens ?? 0);
+    const window = statedContextLimit(error) ?? (refused > 0 ? refused : null);
+
+    if (recovery.failureClass === 'context_length' && model !== undefined && window !== null && this.runId !== null) {
+      this.eventRecorder.emit(this.runId, { type: 'context_overflow', model, window });
+    }
+
+    return recovery.enqueueRetry;
+  }
   /** Open on purpose, so the wake reconcile must not seal them. */
   drivenRuns(): readonly string[] {
     return [...new Set([this.runId, this.reopenedRunId].filter((runId): runId is string => runId !== null))];
@@ -389,10 +402,7 @@ export class ChatSession {
   }
   get closed(): boolean { return this.ended; }
 
-  /**
-   * Non-zero while a terminal transition runs on the pump's stack: {@link enqueueTurn} then answers at
-   * admission, since awaiting execution from inside the pump would deadlock.
-   */
+  /** Non-zero while a terminal transition runs on the pump's stack, where awaiting execution would deadlock. */
   private settlingDepth = 0;
 
   /** Self-starts the pump when idle. A re-announcement of an already recorded fact starts no turn and answers 'queued'. */
@@ -676,8 +686,7 @@ export class ChatSession {
       .then((outcome) => settleEffect(Result.isSuccess(outcome) ? Effect.succeed(outcome.success) : Effect.fail(outcome.failure)));
   }
 
-  /** One revision at a time; a turn waits for the one in flight, so its own measure is the newer. `run` settles its own
-   *  failure, so the revision a turn awaits never rejects. */
+  /** One revision at a time, so a turn's own measure is the newer; `run` settles its failure, so this never rejects. */
   private revise<T>(run: () => Promise<T>): Promise<T> {
     const ran = (this.revision ?? Promise.resolve()).then(run);
     const revision = ran.then(() => undefined);
@@ -1114,14 +1123,7 @@ export class ChatSession {
     if (execution.failure !== null) {
       const message = renderThrownChain({ cause: execution.failure });
       runError = message.slice(0, 500);
-      overflowRetry = applyOverflowRecovery({
-        error: message,
-        lastPromptTokens: this.actorSession.orchestrator.acc.lastPromptTokens,
-        contextWindow: prepared.contextWindow,
-        turnWasOverflowRetry: item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT,
-        state: this.compactionState,
-        sessionKey: prepared.sessionKey,
-      }).enqueueRetry;
+      overflowRetry = this.recoverOverflow(prepared, message, item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT);
     }
 
     // Classified once: the classifier also files the mid-work defect.
@@ -1239,10 +1241,7 @@ export class ChatSession {
     });
   }
 
-  /**
-   * The answer, its run verdict and the frozen roster in one commit, since `resumeAll()` finds claims.
-   * Uses the raw handle: `rt.storage.sql` and `db` share the connection. Never throws.
-   */
+  /** Answer, run verdict and frozen roster in one commit, since `resumeAll()` finds claims. Never throws. */
   private commitTurn(input: {
     readonly item: QueueItem;
     readonly turnId: string;

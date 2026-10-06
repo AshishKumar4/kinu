@@ -6,14 +6,15 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { initWorkspaceSchema, type ActorHandle, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
+import { initWorkspaceSchema, type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
 import { scratchDir, scratchPath, scriptedTurnModel, sqlOver, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import {
-  historyOver, orchestratorHarness, sentTurn, workspaceFiles, workspaceMainActor,
+  historyOver, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
 import { deviceHarness, WORKSPACE } from '../helpers/device-harness';
 import { pcAgentDaemon } from '../helpers/pc-agent-daemon';
 import { testOwner } from '../helpers/user-do';
+import { joinHarnessFibers } from '../helpers/agents-sdk';
 import type { OrchestratorAgent } from '../../src/orchestrator';
 import { LocalAgentSession } from '../../../cli-backend/src/local-session';
 import { createHostCheckpoints } from '../../../cli-backend/src/checkpoints';
@@ -83,6 +84,11 @@ export interface SharedBackend {
   /** Snapshot `dir` into the store this backend's checkpoint methods read, as a turn's first
    *  mutation there does: the owner's device for cf, this machine for the CLI. */
   readonly snapshot: (dir: string, turn: CheckpointTurnMeta) => Promise<void>;
+  /** Turns the main actor's sleep-time lane on or off behind a fast model answering `answer`; the prompts it
+   *  is asked land in the returned list. */
+  readonly sleepTime: (answer: SleepTimeUpdate, enabled: boolean) => string[];
+  /** Resolves once every detached lane a settled turn started has finished. */
+  readonly settled: () => Promise<void>;
   /** Opens a turn of `mode` on the main actor and holds it at its model call until released, so a case
    *  acts while a turn runs. */
   readonly holdTurn: (text: string, mode: WorkMode) => Promise<HeldTurn>;
@@ -160,6 +166,13 @@ async function cloudflare(): Promise<SharedBackend> {
     history: historyOver(harness),
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
     holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), mode)),
+    sleepTime: (answer, enabled) => {
+      const prompts = scriptedSleepTime(agent, answer);
+      workspaceMainActor(db).config.setSleepTimeComputeEnabled(enabled);
+
+      return prompts;
+    },
+    settled: () => joinHarnessFibers(),
     surface: {
       getReasoningEffort: () => agent.getReasoningEffort(),
       setReasoningEffort: (effort) => agent.setReasoningEffort(effort),
@@ -247,6 +260,8 @@ function cli(): SharedBackend {
   const modelResolver = scriptedResolver(gate.model);
 
   rt.actor.config.setLearning(false);
+  // Off unless a case scripts it, as the cf harness leaves it.
+  rt.actor.config.setSleepTimeComputeEnabled(false);
 
   const session = new LocalAgentSession({
     rt, db, model: gate.model, modelResolver, onEvent: () => {},
@@ -264,6 +279,22 @@ function cli(): SharedBackend {
       await checkpoints.ensureCheckpoint(dir);
     },
     holdTurn: (text, mode) => gate.hold(async () => { await session.send(text, { id: crypto.randomUUID(), mode }); }),
+    sleepTime: (answer, enabled) => {
+      const prompts: string[] = [];
+
+      rt.fastLlm = {
+        stream: async function* () { yield ''; },
+        complete: async (prompt) => {
+          prompts.push(prompt);
+
+          return JSON.stringify(answer);
+        },
+      };
+      rt.actor.config.setSleepTimeComputeEnabled(enabled);
+
+      return prompts;
+    },
+    settled: () => session.settleBackgroundWork(),
     surface: {
       getReasoningEffort: async () => session.getReasoningEffort(),
       setReasoningEffort: async (effort) => session.setReasoningEffort(effort),

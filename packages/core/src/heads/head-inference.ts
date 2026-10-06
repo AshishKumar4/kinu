@@ -14,7 +14,7 @@ import type { WorkMode } from '../types/turn';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
 import type { DynamicContext } from '../prompting/volatile-context';
 import type { PromptModelContext } from '../prompting/model-profile';
-import type { ResolvedModelWindow } from '../context-window';
+import type { ModelWindow } from '../context-window';
 import {
   EVIDENCE_KINDS,
   HeadStepPartsSchema, type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
@@ -400,7 +400,7 @@ export interface HeadInferenceDeps {
   model: LanguageModel;
   modelSpec?: string;
   /** What `model` is admitted against, as the catalog reports it (`ModelCatalogSession`), like an actor's own turn. */
-  window: ResolvedModelWindow;
+  window: ModelWindow;
   /** Accumulator tools plus the backend's scratch tools; the caller controls the surface. */
   tools: ToolSet;
   /** The prompt must name the same file plane the tools reach. */

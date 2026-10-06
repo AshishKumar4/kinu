@@ -77,6 +77,21 @@ const summarize = (node: DetailRow): SearchNodeSummary => ({
   createdAt: node.created_at,
 });
 
+/** Root to `node` over rows in hand; a chain that closes on itself ends. */
+export function ancestorChain<Row extends { readonly id: string; readonly parent_id: string | null }>(node: Row, rows: readonly Row[]): Row[] {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const path: Row[] = [];
+  const seen = new Set<string>();
+
+  for (let cursor: Row | undefined = node; cursor && !seen.has(cursor.id);) {
+    seen.add(cursor.id);
+    path.unshift(cursor);
+    cursor = cursor.parent_id ? byId.get(cursor.parent_id) : undefined;
+  }
+
+  return path;
+}
+
 /** One node, its ancestry and children (`kinu swarm <name> <id>` and the tree view's node pane).
  * The ancestry walk guards against cycles: `parent_id` is a plain column. */
 export function readSearchNodeDetail(
@@ -84,23 +99,22 @@ export function readSearchNodeDetail(
 ): SearchNodeDetail | null {
   actor.assertCurrent();
 
-  const readNode = (id: string): DetailRow | undefined => sql<DetailRow>`
-    SELECT id, parent_id, depth, visits, value, status, action,
-           task, observation, created_at
-    FROM search_nodes WHERE actor_id = ${actor.actorId} AND id = ${id} LIMIT 1`[0];
+  // UNION ends a parent chain that loops.
+  const lineage = sql<DetailRow>`
+    WITH RECURSIVE line(id) AS (
+      SELECT ${nodeId}
+      UNION
+      SELECT s.parent_id FROM search_nodes s JOIN line ON s.id = line.id
+        WHERE s.actor_id = ${actor.actorId} AND s.parent_id IS NOT NULL
+    )
+    SELECT n.id, n.parent_id, n.depth, n.visits, n.value, n.status, n.action,
+           n.task, n.observation, n.created_at
+    FROM search_nodes n JOIN line ON n.id = line.id WHERE n.actor_id = ${actor.actorId}`;
 
-  const node = readNode(nodeId);
+  const node = lineage.find((row) => row.id === nodeId);
 
   if (node === undefined) return null;
-
-  const path: SearchNodeSummary[] = [];
-  const seen = new Set<string>();
-
-  for (let cursor: DetailRow | undefined = node; cursor !== undefined && !seen.has(cursor.id);) {
-    seen.add(cursor.id);
-    path.unshift(summarize(cursor));
-    cursor = cursor.parent_id === null ? undefined : readNode(cursor.parent_id);
-  }
+  const path = ancestorChain(node, lineage).map(summarize);
 
   const children = sql<DetailRow>`
     SELECT id, parent_id, depth, visits, value, status, action,

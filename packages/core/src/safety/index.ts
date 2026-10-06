@@ -1,23 +1,17 @@
 
+export { reviewCommand, type ApprovalDecision, type ApprovalRuleHit, type ApprovalResult, type ApprovalHarm, type FilesOwner, type GatedExecutor } from './command-review';
+
 export {
-  reviewCommand,
-  createShellSession,
   formatApproval,
   gatedGrants,
-  formatApprovalGrant, holdsGrant,
+  formatApprovalGrant,
+  holdsGrant,
   parseApprovalGrant,
   gateExec,
   grantsAreSubset,
   resolveInheritedGrants,
   createInheritedApprovalPolicy,
   STRICT_NO_CHANNEL_POLICY,
-  type ApprovalDecision,
-  type ApprovalRuleHit,
-  type ApprovalResult,
-  type ApprovalHarm,
-  type FilesOwner,
-  type GatedExecutor,
-  type ShellSession,
   type ApprovalGrant,
   type ApprovalSpend,
   type ShellApprovalRequest,

@@ -43,7 +43,7 @@ describe('a workspace that CAN run the instrument passes its preflight', () => {
     const kind = registeredVerifierKind('exec-ratio');
 
     if (kind === null) throw new Error('exec-ratio must resolve');
-    expect(await preflightVerifier(kind, liveContext())).toBeNull();
+    expect(await preflightVerifier(liveContext())).toBeNull();
   });
 });
 
@@ -74,7 +74,7 @@ describe('a workspace that CANNOT run the instrument says so, in the executor\'s
     const kind = registeredVerifierKind('exec-ratio');
 
     if (kind === null) throw new Error('exec-ratio must resolve');
-    expect(await preflightVerifier(kind, brokenShellContext())).not.toBeNull();
+    expect(await preflightVerifier(brokenShellContext())).not.toBeNull();
   });
 });
 

@@ -43,27 +43,26 @@ export interface TerminalTurnParts {
     readonly requestId: string;
   };
   readonly branches?: readonly { readonly id: string; readonly task: string }[];
-  /** Raw, not converted: the claim must exist before any await after a persisted answer. A backend that fired turn-end in the turn owes nothing here. */
+  /** Raw: the claim must exist before any await after a persisted answer. */
   readonly turnEndExtensions?: boolean;
   /** Its armed state is RAM-only, so the row alone records the enqueue. */
   readonly completionGate?: { readonly text: string };
   /** Claimed because enqueueing is asynchronous and must survive a process cut. */
   readonly overflowRetry?: boolean;
-  /** The one output-limit continuation turn (core `owesOutputLimitContinuation`), after the turn's own continuation was cut too. */
+  /** The one output-limit continuation turn (`owesOutputLimitContinuation`). */
   readonly outputContinuation?: boolean;
   /** Decided by the caller, the only one that reads the list and the outcome together. */
   readonly taskReminder?: { readonly text: string };
   readonly advisor?: JsonValue;
   /** The lane reads the transcript, so the row carries no input. */
   readonly sleepTime?: boolean;
-  /** `standIn`: the shown title is a new workspace's, replaced by this turn's naming (identity/naming.ts). */
+  /** `standIn`: a new workspace's shown title, replaced by this turn's naming. */
   readonly autoTitle?: { readonly mission: string | null; readonly standIn?: boolean };
   /** Owed by a new workspace's first turn. */
   readonly logo?: { readonly mission: string | null };
-  /** Presence is the caller's decision: a `task` child owes a terminal answer on every ending, a durable child only on completion. */
+  /** A `task` child owes an answer on every ending, a durable child only on completion. */
   readonly parentReport?: {
     readonly text: string;
-    /** A task child's terminal answer and a durable child's progress note differ for the parent. */
     readonly status: SubordinateReportStatus;
     /** The parent's ingress dedupes on it. */
     readonly sequenceId: string;

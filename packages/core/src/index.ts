@@ -14,6 +14,8 @@ export {
   type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
+export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
+
 export {
   TerminalTransitions, TERMINAL_TRANSITION_CALL_ID,
   type TerminalTransition, type TerminalDisposition, type TerminalTransitionDeps,
@@ -385,6 +387,7 @@ export { StepInjections, type RecordedInjection } from './prompting/step-injecti
 export {
   classifyTurnFailure,
   planOverflowRecovery,
+  statedContextLimit,
   OVERFLOW_RETRY_EVENT,
   OVERFLOW_RETRY_TEXT,
   type TurnFailureClass,
@@ -417,10 +420,7 @@ export {
 
 export type { Usage } from './usage';
 
-export {
-  contextWindowForModel, resolveModelWindow, stepContextLimit, outputReserveTokens,
-  type ContextWindowEstimate, type ModelWindow, type ResolvedModelWindow,
-} from './context-window';
+export { modelWindow, stepContextLimit, outputReserveTokens, type ModelWindow } from './context-window';
 
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
 export {
@@ -950,8 +950,8 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 export {
   DefaultExecutionRouter, runOnExecutor, type ExecutorRun,
   withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach, type ShellReach,
-  busyShell, callJob, createBashShell, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
-  type MachineShells,
+  busyShell, callJob, createBashShell, createShellSession, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
+  type MachineShells, type ShellSession,
   createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending, sandboxSizeLabel,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
@@ -1344,7 +1344,6 @@ export {
 // Safety
 export {
   reviewCommand,
-  createShellSession,
   formatApproval,
   gatedGrants,
   formatApprovalGrant, holdsGrant,
@@ -1360,7 +1359,6 @@ export {
   type ApprovalHarm,
   type FilesOwner,
   type GatedExecutor,
-  type ShellSession,
   type ApprovalGrant,
   type ShellApprovalRequest,
   type ShellApprovalOutcome,

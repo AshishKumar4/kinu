@@ -1,4 +1,5 @@
 import { Effect } from 'effect';
+import * as v from 'valibot';
 import { settleSync, settle } from '../obs/effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Workspace fork write and its accounting. The target DB must already be initialized (initWorkspaceSchema). */
@@ -44,17 +45,19 @@ export interface ForkWriteTarget {
   transaction?: (rows: () => void) => void;
 }
 
-/** How much a writer has taken; checked against the source's declaration before publishing. */
-export interface ForkStagedCounts {
-  agentConfig: number;
-  craftedTools: number;
-  memoryChunks: number;
-  sessionMessages: number;
-  conversationEntries: number;
-  conversationEntryParts: number;
-  contextMembers: number;
-  files: number;
-}
+/** How much a source declares it sends, and a writer has taken; checked against each other before publishing. */
+export const ForkSectionCountsSchema = v.object({
+  agentConfig: v.number(),
+  craftedTools: v.number(),
+  memoryChunks: v.number(),
+  sessionMessages: v.number(),
+  conversationEntries: v.number(),
+  conversationEntryParts: v.number(),
+  contextMembers: v.number(),
+  files: v.number(),
+});
+
+export type ForkStagedCounts = v.InferOutput<typeof ForkSectionCountsSchema>;
 
 /**
  * The fork write: `begin`, a `stage` per batch, then `publish`; the target is not a fork until publish.

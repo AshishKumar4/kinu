@@ -6,26 +6,12 @@
 import type { LanguageModelUsage } from 'ai';
 import * as v from 'valibot';
 
-export interface Usage {
-  /** Prompt tokens, cache-inclusive: `cacheRead` and `cacheWrite` are subsets of this. */
-  readonly input?: number;
-  readonly output?: number;
-  readonly cacheRead?: number;
-  /** Charged at a different rate from a plain input token. */
-  readonly cacheWrite?: number;
-  /** The subset of `cacheWrite` with 1h retention; only Anthropic reports it, and only in `raw`. */
-  readonly cacheWrite1h?: number;
-  /** A subset of `output`, already counted there. */
-  readonly reasoning?: number;
-  /** Cloudflare's billing unit for a Workers AI call, as the proxy reported it. */
-  readonly neurons?: number;
-}
-
-export const USAGE_FIELDS = [
-  'input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoning', 'neurons',
-] as const satisfies ReadonlyArray<keyof Usage>;
-
-/** Spelled out rather than generated from `USAGE_FIELDS`; `unit-usage.test.ts` asserts the two stay in step. */
+/**
+ * Prompt `input` is cache-inclusive: `cacheRead` and `cacheWrite` are subsets of it, the latter charged at a different
+ * rate. `cacheWrite1h` is the 1h-retention subset of `cacheWrite` (only Anthropic reports it, and only in `raw`).
+ * `reasoning` is a subset of `output`, already counted there. `neurons` is Cloudflare's billing unit for a Workers AI
+ * call, as the proxy reported it.
+ */
 export const UsageSchema = v.object({
   input: v.optional(v.number()),
   output: v.optional(v.number()),
@@ -35,6 +21,10 @@ export const UsageSchema = v.object({
   reasoning: v.optional(v.number()),
   neurons: v.optional(v.number()),
 });
+
+export type Usage = Readonly<v.InferOutput<typeof UsageSchema>>;
+
+export const USAGE_FIELDS: ReadonlyArray<keyof Usage> = v.keyof(UsageSchema).options;
 
 /** Omitted, null, or mistyped all read as "not reported", so one bad key cannot sink the parse. */
 const ReportedCount = v.fallback(v.optional(v.nullable(v.number())), undefined);

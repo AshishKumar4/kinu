@@ -212,7 +212,7 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
     revokeBrowserSession: refuse('revokeBrowserSession'),
     getAuth: refuse('getAuth'),
     getAuthHeaders: refuse('getAuthHeaders'),
-    getCredentialBaseURL: refuse('getCredentialBaseURL'),
+    getCredentialEndpoint: refuse('getCredentialEndpoint'),
     relayDevice: refuse('relayDevice'),
     relayModelCall: refuse('relayModelCall'),
     cancelModelRelay: refuse('cancelModelRelay'),

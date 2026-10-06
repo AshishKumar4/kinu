@@ -8,7 +8,7 @@ import { Nimbus, type NimbusExecOptions } from '@nimbus-sh/sdk';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
-import { settleWorkspaceRoot } from '@kinu.run/core';
+import { settleWorkspaceRoot, WORKSPACE_ROOT } from '@kinu.run/core';
 import {
   programmaticHostOver,
   ensureProgrammaticReady,
@@ -35,8 +35,8 @@ async function openWorkspace(): Promise<NimbusWorkspace> {
   const database = new Database(':memory:');
   databases.push(database);
 
-  const workspace = await NimbusWorkspace.create({ ...inlineWorkspaceStorage(database), generation: 1 });
-  // As Kinu's boot leaves it: the workspace root, and its old name a link to it.
+  const workspace = await NimbusWorkspace.create({ ...inlineWorkspaceStorage(database), generation: 1, env: { HOME: WORKSPACE_ROOT } });
+  // As Kinu's boot leaves it: Nimbus seeds the configured home, and root owns /home.
   settleWorkspaceRoot(workspace.vfs.as(ROOT));
 
   return workspace;

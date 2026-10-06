@@ -1,9 +1,11 @@
 /** One spelling, one route: a model spec normalises and lists alike on the cf registry and the CLI resolver. */
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_WORKERS_AI_MODEL_ID } from '@kinu.run/core';
+import { generateText, type LanguageModel } from 'ai';
+import { DEFAULT_WORKERS_AI_MODEL_ID, asFetchFunction, specModelInfo, type OpenAICompatCredential } from '@kinu.run/core';
 import { createAgentProviderRegistry } from '../../src/providers/agent-registry';
 import { createLocalModelResolver } from '../../../cli-backend/src/model-resolver';
-import { userCredentialSource } from '../helpers/user-credentials';
+import { NO_RELAY_MACHINE, userCredentialSource } from '../helpers/user-credentials';
+import { createTestUserDO, testOwner } from '../helpers/user-do';
 
 const cf = createAgentProviderRegistry({
   env: {},
@@ -38,6 +40,66 @@ describe('a model spec on both backends', () => {
     const cliOrder = (await cli.listProviders()).map((provider) => provider.id);
 
     expect(cliOrder.filter((id) => cfOrder.includes(id))).toEqual(cfOrder.filter((id) => cliOrder.includes(id)));
+  });
+
+  // The owner's word on a custom endpoint's window counts as its catalog row: the same credential, the same window.
+  test('a custom endpoint\'s declared window is the window of every model it lists', async () => {
+    const credential: OpenAICompatCredential = { kind: 'openai-compat', baseURL: 'https://llm.example.test/v1', apiKey: 'k', contextWindow: 180_000 };
+
+    const fetch = asFetchFunction(async (input) => (new Request(input).url.endsWith('/models')
+      ? Response.json({ data: [{ id: 'qwen-3' }] })
+      : new Response('', { status: 404 })));
+
+    const harness = createTestUserDO();
+    await harness.userDO.setCredential(await testOwner(), 'openai-compat.default', credential);
+
+    const hosted = createAgentProviderRegistry({ env: {}, fetch, userDO: { caller: testOwner, stub: {
+      ...NO_RELAY_MACHINE,
+      getAuth: (caller, key, opts) => harness.userDO.getAuth(caller, key, opts),
+      listCredentials: (caller) => harness.userDO.listCredentials(caller),
+    } } });
+
+    const local = createLocalModelResolver({ llm: null, credentials: { openaiCompat: { default: credential } }, fetch });
+    const spec = 'openai-compat/qwen-3';
+
+    try {
+      expect([(await specModelInfo(hosted.registry, hosted.deps, spec))?.contextWindow, (await local.modelInfo(spec))?.contextWindow])
+        .toEqual([180_000, 180_000]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  // A named endpoint the web form saves (`openai-compat.<name>`) is served alike: listed, resolved and answered.
+  test('a named custom endpoint lists and answers on both backends', async () => {
+    const credential: OpenAICompatCredential = { kind: 'openai-compat', baseURL: 'https://llm.example.test/v1', apiKey: 'k' };
+
+    const fetch = asFetchFunction(async (input) => (new Request(input).url.endsWith('/models')
+      ? Response.json({ data: [{ id: 'qwen-3' }] })
+      : Response.json({ id: 'c', object: 'chat.completion', created: 1, model: 'qwen-3',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'served' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } })));
+
+    const harness = createTestUserDO();
+    await harness.userDO.setCredential(await testOwner(), 'openai-compat.house', credential);
+
+    const hosted = createAgentProviderRegistry({ env: {}, fetch, userDO: { caller: testOwner, stub: {
+      ...NO_RELAY_MACHINE,
+      getAuth: (caller, key, opts) => harness.userDO.getAuth(caller, key, opts),
+      listCredentials: (caller) => harness.userDO.listCredentials(caller),
+    } } });
+
+    const local = createLocalModelResolver({ llm: null, credentials: { openaiCompat: { house: credential } }, fetch });
+    const spec = 'openai-compat:house/qwen-3';
+    const answer = async (model: LanguageModel) => (await generateText({ model, prompt: 'hi' })).text;
+
+    try {
+      expect({
+        listed: [(await specModelInfo(hosted.registry, hosted.deps, spec))?.id, (await local.modelInfo(spec))?.id],
+        answered: [await answer(hosted.resolveModel(spec, 'kinu-test')), await answer(local.resolveModel(spec, 'kinu-test'))],
+      }).toEqual({ listed: ['qwen-3', 'qwen-3'], answered: ['served', 'served'] });
+    } finally {
+      harness.close();
+    }
   });
 
   test('says what is missing when a provider is unavailable, never a command to run', async () => {

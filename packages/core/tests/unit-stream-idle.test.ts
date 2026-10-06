@@ -69,7 +69,7 @@ function turnOver(primary: ScriptedStream) {
   });
 
   const model = (modelId: string) => createChatModel({ kind: 'openai-compat', name: 'stub', baseURL: 'https://stub.invalid/v1', headers: {}, modelId, fetch });
-  const fallback: ChatFallback = { spec: 'stub/fallback', accepts: new Set(), bind: () => ({ model: model('fallback'), provider: 'stub' }) };
+  const fallback: ChatFallback = { spec: 'stub/fallback', accepts: new Set(), window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: model('fallback'), provider: 'stub' }) };
   const events: ChatEvent[] = [];
 
   const done = (async () => {

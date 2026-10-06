@@ -78,17 +78,16 @@ export function readForkRunParams(
   actor.assertCurrent();
 
   if (rootIds.length === 0) return [];
-  const wanted = new Set(rootIds);
+  const roots = JSON.stringify(rootIds);
   const search = new Map<string, SearchRunParams>();
   const transcripts = new Map<string, TranscriptRunParams>();
 
   const searches = sql<{
     root_id: string; config_json: string; judge_samples_realised: number | null;
   }>`SELECT root_id, config_json, judge_samples_realised FROM mcts_search_runs
-     WHERE actor_id = ${actor.actorId}`;
+     WHERE actor_id = ${actor.actorId} AND root_id IN (SELECT value FROM json_each(${roots}))`;
 
   for (const row of searches) {
-    if (!wanted.has(row.root_id)) continue;
     const params = searchParams(row.config_json, row.judge_samples_realised);
 
     if (params) search.set(row.root_id, params);
@@ -99,10 +98,10 @@ export function readForkRunParams(
     SELECT root_id,
            MAX(merge_strategy)                             AS merge_strategy,
            SUM(CASE WHEN id != root_id THEN 1 ELSE 0 END)  AS heads
-    FROM head_journal WHERE actor_id = ${actor.actorId} GROUP BY root_id`;
+    FROM head_journal WHERE actor_id = ${actor.actorId} AND root_id IN (SELECT value FROM json_each(${roots}))
+    GROUP BY root_id`;
 
   for (const row of journals) {
-    if (!wanted.has(row.root_id)) continue;
     transcripts.set(row.root_id, { mergeStrategy: row.merge_strategy, branches: row.heads });
   }
 

@@ -8,7 +8,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { JsonValue } from '../utils/json';
 import type { CheckpointFiles } from '../types/primitives';
 import type { DeviceSandboxStatus } from './device-status';
-import type { FilesOwner, ShellSession } from '../safety/approval-gate';
+import type { FilesOwner } from '../safety/command-review';
+import type { ShellSession } from './shell-session';
 
 /**
  * "No work deadline" for a mechanism that insists on a timer: the largest `setTimeout` delay; larger values

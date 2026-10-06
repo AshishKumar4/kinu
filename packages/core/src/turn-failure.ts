@@ -46,10 +46,31 @@ const AUTH_PATTERNS: readonly RegExp[] = [
   /(api[ _]?key|credential|token)[^.\n]*(invalid|expired|revoked|not configured)/i,
 ];
 
+/** How providers state the limit a refused request overran: OpenAI's "maximum context length is N", Anthropic's
+ *  "N > M maximum", Gemini's "maximum number of tokens allowed (M)", and the generic "context window of M". */
+const STATED_LIMIT_PATTERNS: readonly RegExp[] = [
+  /maximum context length is ([\d,]+)/i,
+  />\s*([\d,]+) maximum/i,
+  /maximum number of tokens(?: allowed)? (?:is )?\(?([\d,]+)/i,
+  /context (?:length|window) (?:of|is) ([\d,]+)/i,
+  /limit (?:of|is) ([\d,]+) tokens/i,
+];
+
+/** The context limit a too-long refusal states, or null when it states none. */
+export function statedContextLimit(error: string): number | null {
+  for (const pattern of STATED_LIMIT_PATTERNS) {
+    const limit = Number(pattern.exec(error)?.[1]?.replaceAll(',', '') ?? Number.NaN);
+
+    if (Number.isSafeInteger(limit) && limit > 0) return limit;
+  }
+
+  return null;
+}
+
 export interface TurnFailureSignals {
   /** Per-request prompt size (TurnAccumulator.lastPromptTokens), not the turn's cumulative input. */
   lastPromptTokens?: number;
-  contextWindow?: number;
+  contextWindow?: number | null;
 }
 
 export function classifyTurnFailure(error: string, signals: TurnFailureSignals = {}): TurnFailureClass {
@@ -63,7 +84,7 @@ export function classifyTurnFailure(error: string, signals: TurnFailureSignals =
 
     const oversized =
       lastPromptTokens !== undefined && lastPromptTokens > 0 &&
-      contextWindow !== undefined && contextWindow > 0 &&
+      contextWindow !== undefined && contextWindow !== null && contextWindow > 0 &&
       lastPromptTokens > contextWindow * 0.5;
 
     return oversized ? 'context_length' : 'rate_limit';

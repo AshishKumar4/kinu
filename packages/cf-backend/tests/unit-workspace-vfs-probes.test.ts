@@ -7,7 +7,7 @@ import { Database } from 'bun:sqlite';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
-import { settleWorkspaceRoot } from '@kinu.run/core';
+import { settleWorkspaceRoot, WORKSPACE_ROOT } from '@kinu.run/core';
 
 const databases: Database[] = [];
 
@@ -31,9 +31,10 @@ async function openWorkspace(): Promise<NimbusWorkspace> {
     sql,
     transactions,
     generation: 1,
+    env: { HOME: WORKSPACE_ROOT },
   });
 
-  // As Kinu's boot leaves it: the workspace root, and its old name a link to it.
+  // As Kinu's boot leaves it: Nimbus seeds the configured home, and root owns /home.
   settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
 
   return workspace;

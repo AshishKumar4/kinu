@@ -194,8 +194,22 @@ function intersectTools(available: readonly string[], allowed: readonly string[]
   return uniqueTools(permitted);
 }
 
-export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurnProfile {
-  return settleSync(Effect.gen(function* () {
+/** The checked envelope and listing, with the rules that read them. */
+interface CheckedAuthority {
+  readonly envelope: ProfileCatalogEnvelope;
+  readonly provider: v.InferOutput<typeof ProviderCatalogSnapshotSchema>;
+  readonly roles: RoleCatalog;
+  readonly defaultAssignment: TierAssignment;
+  /** A stored tier that cannot serve runs on the account default, then Kinu's. */
+  serving(id: TierId, stored: TierAssignment): TierAssignment;
+  /** A pin is refused when no model of the chain is listed. */
+  requireAvailable(model: string, fallbacks: readonly string[], id: TierId): Effect.Effect<void>;
+  effortFor(spec: string, wanted: ReasoningEffort): ReasoningEffort | null;
+  chainOf(model: string, tierChain: readonly string[], wanted: ReasoningEffort): readonly TierFallback[];
+}
+
+function checkedAuthority(input: ProfileAuthorityInputs): Effect.Effect<CheckedAuthority> {
+  return Effect.gen(function* () {
     const envelope = validateProfileCatalogEnvelope({ value: input.envelope });
     const catalogDigest = profileCatalogDigest(envelope.catalog);
 
@@ -204,26 +218,6 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
         `profile catalog digest mismatch: envelope carries ${input.envelope.digest} `
         + `but the catalog hashes to ${catalogDigest}`,
       ));
-    }
-
-    if (!isWorkMode(input.workMode)) {
-      return yield* Effect.die(new Error(`invalid work mode: ${JSON.stringify(input.workMode)}`));
-    }
-
-    if (!isValidRoleId(input.roleId)) {
-      return yield* Effect.die(new Error(`invalid role id ${JSON.stringify(input.roleId)}: must match ${ROLE_ID_RE.source}`));
-    }
-
-    let explicitTier: TierId | undefined;
-
-    if (input.explicitTier !== undefined) {
-      const parsedTier = v.safeParse(TierIdSchema, input.explicitTier);
-
-      if (!parsedTier.success) {
-        return yield* Effect.die(new Error(`invalid explicit tier: ${JSON.stringify(input.explicitTier)}`));
-      }
-
-      explicitTier = parsedTier.output;
     }
 
     const parsedProvider = v.safeParse(ProviderCatalogSnapshotSchema, input.provider);
@@ -255,46 +249,70 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
       + 'configure a different model for the tier or pick another tier',
     );
 
-    // A pin is refused when no model of the chain is listed.
-    const requireAvailable = (model: string, fallbacks: readonly string[], id: TierId): Effect.Effect<void> => {
-      return Effect.gen(function* () {
-        if (!servable(model, fallbacks)) return yield* Effect.die(unavailable(model, fallbacks, id));
-      });
-    };
-
     const defaultAssignment = envelope.catalog.tiers.default;
 
     if (!defaultAssignment) return yield* Effect.die(new Error('profile catalog has no default tier assignment'));
 
-    /** A stored tier that cannot serve runs on the account default, then Kinu's. */
-    const serving = (id: TierId, stored: TierAssignment): TierAssignment => {
-      if (servable(stored.model, stored.fallbacks ?? [])) return stored;
-
-      const replacement = [defaultAssignment, BUILTIN_PROFILE_CATALOG.tiers.default]
-        .find((candidate) => candidate !== undefined && servable(candidate.model, candidate.fallbacks ?? []));
-
-      if (replacement === undefined) throw unavailable(stored.model, stored.fallbacks ?? [], id);
-      diagnostics.event('profile.tier_model_unlisted', { tier: id, model: stored.model, served: replacement.model });
-
-      return replacement;
-    };
-
     const effortFor = (spec: string, wanted: ReasoningEffort): ReasoningEffort | null =>
       declaredReasoningEffort(wanted, provider.reasoningEfforts[specWithoutAccount(spec)]);
 
-    const chainFor = (model: string, tierChain: readonly string[]): readonly string[] =>
-      (envelope.catalog.modelFallbacks?.[model] ?? tierChain).filter((spec) => spec !== model);
+    return {
+      envelope,
+      provider,
+      roles: { ...effectiveRoleCatalog(envelope.catalog), ...SYSTEM_ROLE_DEFINITIONS },
+      defaultAssignment,
+      serving(id, stored) {
+        if (servable(stored.model, stored.fallbacks ?? [])) return stored;
 
-    const chainOf = (specs: readonly string[], wanted: ReasoningEffort): readonly TierFallback[] => Object.freeze(
-      specs.map((spec) => Object.freeze({ model: spec, reasoningEffort: effortFor(spec, wanted) })),
-    );
+        const replacement = [defaultAssignment, BUILTIN_PROFILE_CATALOG.tiers.default]
+          .find((candidate) => candidate !== undefined && servable(candidate.model, candidate.fallbacks ?? []));
 
-    const roles: RoleCatalog = { ...effectiveRoleCatalog(envelope.catalog), ...SYSTEM_ROLE_DEFINITIONS };
+        if (replacement === undefined) throw unavailable(stored.model, stored.fallbacks ?? [], id);
+        diagnostics.event('profile.tier_model_unlisted', { tier: id, model: stored.model, served: replacement.model });
 
-    const role = roles[input.roleId];
+        return replacement;
+      },
+      requireAvailable(model, fallbacks, id) {
+        return Effect.gen(function* () {
+          if (!servable(model, fallbacks)) return yield* Effect.die(unavailable(model, fallbacks, id));
+        });
+      },
+      effortFor,
+      chainOf: (model, tierChain, wanted) => Object.freeze(
+        (envelope.catalog.modelFallbacks?.[model] ?? tierChain).filter((spec) => spec !== model)
+          .map((spec) => Object.freeze({ model: spec, reasoningEffort: effortFor(spec, wanted) })),
+      ),
+    };
+  });
+}
+
+type TierChoice = Pick<ResolveTurnProfileInput, 'roleId' | 'explicitTier' | 'workspaceModel' | 'actorModel' | 'explicitEffort' | 'inheritedEffort'>;
+
+/** The role, tier, model and effort a turn, or a hire's parent, runs at. */
+function chosenTier(authority: CheckedAuthority, input: TierChoice) {
+  return Effect.gen(function* () {
+    const { envelope } = authority;
+
+    if (!isValidRoleId(input.roleId)) {
+      return yield* Effect.die(new Error(`invalid role id ${JSON.stringify(input.roleId)}: must match ${ROLE_ID_RE.source}`));
+    }
+
+    let explicitTier: TierId | undefined;
+
+    if (input.explicitTier !== undefined) {
+      const parsedTier = v.safeParse(TierIdSchema, input.explicitTier);
+
+      if (!parsedTier.success) {
+        return yield* Effect.die(new Error(`invalid explicit tier: ${JSON.stringify(input.explicitTier)}`));
+      }
+
+      explicitTier = parsedTier.output;
+    }
+
+    const role = authority.roles[input.roleId];
 
     if (!role) {
-      return yield* Effect.die(new Error(`unknown role ${JSON.stringify(input.roleId)}: known roles are ${Object.keys(roles).sort().join(', ')}`));
+      return yield* Effect.die(new Error(`unknown role ${JSON.stringify(input.roleId)}: known roles are ${Object.keys(authority.roles).sort().join(', ')}`));
     }
 
     const requested: TierId = explicitTier ?? role.tier;
@@ -312,10 +330,10 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     } else {
       tierId = 'default';
       source = 'default';
-      stored = defaultAssignment;
+      stored = authority.defaultAssignment;
     }
 
-    const assignment = serving(tierId, stored);
+    const assignment = authority.serving(tierId, stored);
     let replaced: string | null = null;
 
     if (assignment !== stored) {
@@ -324,16 +342,34 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
       replaced = stored.model;
     }
 
-    const tierFallbacks = assignment.fallbacks ?? [];
+    const fallbacks = assignment.fallbacks ?? [];
 
     let model = assignment.model;
 
     for (const pin of modelPins(input)) {
-      yield* requireAvailable(pin.model, tierFallbacks, tierId);
+      yield* authority.requireAvailable(pin.model, fallbacks, tierId);
       model = pin.model;
       source = pin.source;
       replaced = null;
     }
+
+    const wantedEffort = input.explicitEffort ?? assignment.reasoningEffort ?? input.inheritedEffort ?? DEFAULT_TURN_REASONING_EFFORT;
+
+    return { role, tierId, source, model, replaced, fallbacks, wantedEffort, reasoningEffort: authority.effortFor(model, wantedEffort) };
+  });
+}
+
+export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurnProfile {
+  return settleSync(Effect.gen(function* () {
+    const authority = yield* checkedAuthority(input);
+    const { envelope, provider } = authority;
+
+    if (!isWorkMode(input.workMode)) {
+      return yield* Effect.die(new Error(`invalid work mode: ${JSON.stringify(input.workMode)}`));
+    }
+
+    const chosen = yield* chosenTier(authority, input);
+    const { role } = chosen;
 
     const availableTools = role.allowedTools === undefined
       ? uniqueTools(input.availableTools)
@@ -343,21 +379,19 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     const workMode: WorkMode = role.plan === true ? 'plan' : input.workMode;
 
     const tierSlot = (id: TierId): TierRoute => {
-      const slot = serving(id, id === 'default' ? defaultAssignment : (envelope.catalog.tiers[id] ?? defaultAssignment));
+      const slot = authority.serving(id, id === 'default' ? authority.defaultAssignment : (envelope.catalog.tiers[id] ?? authority.defaultAssignment));
       const wanted = slot.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT;
 
       return Object.freeze({
         model: slot.model,
-        reasoningEffort: effortFor(slot.model, wanted),
-        fallbacks: chainOf(chainFor(slot.model, slot.fallbacks ?? []), wanted),
+        reasoningEffort: authority.effortFor(slot.model, wanted),
+        fallbacks: authority.chainOf(slot.model, slot.fallbacks ?? [], wanted),
       });
     };
 
-    const wantedEffort = input.explicitEffort ?? assignment.reasoningEffort ?? input.inheritedEffort ?? DEFAULT_TURN_REASONING_EFFORT;
-    const tierIds = tierIdsOf(envelope.catalog);
     const tiers: Record<TierId, TierRoute> = {};
 
-    for (const id of tierIds) tiers[id] = tierSlot(id);
+    for (const id of tierIdsOf(envelope.catalog)) tiers[id] = tierSlot(id);
     Object.freeze(tiers);
 
     const resolved = {
@@ -368,12 +402,12 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
         instructions: role.instructions,
       }),
       tier: Object.freeze({
-        id: tierId,
-        source,
-        model,
-        reasoningEffort: effortFor(model, wantedEffort),
-        fallbacks: chainOf(chainFor(model, tierFallbacks), wantedEffort),
-        replaced,
+        id: chosen.tierId,
+        source: chosen.source,
+        model: chosen.model,
+        reasoningEffort: chosen.reasoningEffort,
+        fallbacks: authority.chainOf(chosen.model, chosen.fallbacks, chosen.wantedEffort),
+        replaced: chosen.replaced,
       }),
       workMode,
       skills: Object.freeze(skills),
@@ -419,33 +453,31 @@ export function resolveAgentTurnProfile(
 export type PinnedProfile = Pick<AgentConfigStore, 'getRoleSelection' | 'getAssignedTier' | 'getModel' | 'getReasoningEffort'>;
 
 /**
- * The effort a hire's parent runs at: each ancestor resolved as its own turn resolves, from the root down, so a
- * tier that declares an effort keeps it and one that does not takes its parent's. `ancestors` runs nearest first
- * and ends at the root, whose model pin is the workspace's.
+ * The effort a hire's parent runs at, each ancestor chosen from the root down as its own turn is. `ancestors` runs
+ * nearest first and ends at the root, whose model pin is the workspace's.
  */
 export function parentReasoningEffort(authority: ProfileAuthorityInputs, ancestors: readonly PinnedProfile[]): ReasoningEffort | null {
-  const workspaceModel = ancestors.at(-1)?.getModel() ?? null;
-  let inherited: ReasoningEffort | null = null;
+  return settleSync(Effect.gen(function* () {
+    const checked = yield* checkedAuthority(authority);
+    const workspaceModel = ancestors.at(-1)?.getModel() ?? null;
+    let inherited: ReasoningEffort | null = null;
 
-  for (let index = ancestors.length - 1; index >= 0; index -= 1) {
-    const actor = ancestors[index];
+    for (let index = ancestors.length - 1; index >= 0; index -= 1) {
+      const actor = ancestors[index];
 
-    if (actor === undefined) break;
-    inherited = resolveTurnProfile({
-      ...authority,
-      roleId: actor.getRoleSelection(),
-      explicitTier: actor.getAssignedTier() ?? undefined,
-      workspaceModel,
-      actorModel: index === ancestors.length - 1 ? null : actor.getModel(),
-      explicitEffort: actor.getReasoningEffort(),
-      inheritedEffort: inherited,
-      workMode: 'build',
-      availableTools: [],
-      activeSkills: [],
-    }).tier.reasoningEffort;
-  }
+      if (actor === undefined) break;
+      inherited = (yield* chosenTier(checked, {
+        roleId: actor.getRoleSelection(),
+        explicitTier: actor.getAssignedTier() ?? undefined,
+        workspaceModel,
+        actorModel: index === ancestors.length - 1 ? null : actor.getModel(),
+        explicitEffort: actor.getReasoningEffort(),
+        inheritedEffort: inherited,
+      })).reasoningEffort;
+    }
 
-  return inherited;
+    return inherited;
+  }));
 }
 
 /** A hosted actor's ancestors' pins, nearest first, ending at the root's; `parentOf` reads one registered actor. */

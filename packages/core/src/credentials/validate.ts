@@ -29,6 +29,7 @@ const OpenAICompatCredentialSchema = v.object({
   baseURL: v.pipe(v.string(), v.minLength(1)),
   apiKey: v.pipe(v.string(), v.minLength(1)),
   extraHeaders: v.optional(v.record(v.string(), JsonValueSchema)),
+  contextWindow: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
 });
 
 /** Bearer keys whose reader honours `baseURL`; any other refuses one. */
@@ -93,6 +94,7 @@ function credentialOf(input: { key: string; value: unknown }): Effect.Effect<Cre
       baseURL: parsed.baseURL,
       apiKey: parsed.apiKey,
       extraHeaders,
+      ...(parsed.contextWindow !== undefined && { contextWindow: parsed.contextWindow }),
     };
   });
 }

@@ -678,7 +678,7 @@ describe('summaries', () => {
 
     for await (const _ of runChat({
       model: gpt, modelSpec: 'openai/gpt-5.5', modelContext: { id: 'openai/gpt-5.5', contextWindow: 200_000 },
-      fallbacks: [{ spec: 'openai-compat/m', accepts: new Set(), bind: () => ({ model: compat, provider: 'openai-compat' }) }],
+      fallbacks: [{ spec: 'openai-compat/m', accepts: new Set(), window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: compat, provider: 'openai-compat' }) }],
       cooldowns: createFallbackCooldowns(), extensions: new ExtensionHost().register(rig({ model: () => 'openai/gpt-5.5' }).extension),
       cache: { sessionKey: SESSION }, system: 'sys', history: compacted, tools: {},
     })) { /* drain */ }

@@ -10,9 +10,7 @@ import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } fr
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
 } from '../providers/types';
-import {
-  formatApprovalGrant, parseApprovalGrant, type ApprovalGrant,
-} from '../safety/approval-gate';
+import { formatApprovalGrant, parseApprovalGrant, type ApprovalGrant } from '../safety/approval-gate';
 import {
   DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity,
 } from '../types/advisor';

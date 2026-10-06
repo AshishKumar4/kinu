@@ -570,13 +570,22 @@ function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel: stri
       };
     }
 
+    // The owner's word on the window, for an endpoint whose list names none; blank leaves it unknown.
+    const declared = (yield* Effect.promise(() => port.ask({ label: 'Context window in tokens (blank if unknown)' }))).trim().replaceAll(/[,_]/g, '');
+    const contextWindow = declared === '' ? undefined : Number(declared);
+
+    if (contextWindow !== undefined && !(Number.isSafeInteger(contextWindow) && contextWindow > 0)) {
+      return { kind: 'blocked', reason: `"${declared}" is not a whole number of tokens.`, hint: 'Connect again and give the window as a number, such as 131072, or leave it blank.' };
+    }
+
     const spec = `openai-compat/${model}`;
+    const endpoint = { baseURL, apiKey, ...(contextWindow !== undefined && { contextWindow }) };
 
     const where = yield* storeProviderSecret({
       local,
       credKey: 'openai-compat.default',
-      credential: { kind: 'openai-compat', baseURL, apiKey },
-      storeLocally: async () => { await updateConfigFile((config) => withProvider(config, { openaiCompat: { default: { baseURL, apiKey } } })); },
+      credential: { kind: 'openai-compat', ...endpoint },
+      storeLocally: async () => { await updateConfigFile((config) => withProvider(config, { openaiCompat: { default: endpoint } })); },
       clearLocally: async () => { await updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }); },
       // Usually Ollama or vLLM on this machine; the proxy is https-only and a Worker cannot reach loopback.
       endpoint: baseURL,

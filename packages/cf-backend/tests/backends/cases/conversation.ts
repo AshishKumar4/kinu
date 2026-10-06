@@ -50,15 +50,6 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
     },
   },
   {
-    title: 'a message id must be 1 to 128 characters',
-    covers: ['send'],
-    async run({ surface, history }) {
-      await expect(surface.send('Name the release.', '')).rejects.toThrow('A message id is 1 to 128 characters');
-      await expect(surface.send('Name the release.', 'x'.repeat(129))).rejects.toThrow('A message id is 1 to 128 characters');
-      expect(await spoken(history)).toEqual([]);
-    },
-  },
-  {
     title: 'reverting to a message drops it and everything after; an unknown entry is refused',
     covers: ['revertConversation'],
     async run({ surface, history }) {

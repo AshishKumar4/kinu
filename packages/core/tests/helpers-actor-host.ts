@@ -22,7 +22,7 @@ import {
 } from '../src/profiles/catalog';
 import type { HostedNodeSeat } from '../src/strategy/node-agent';
 import type { HeadInferenceDeps } from '../src/heads/head-inference';
-import { resolveModelWindow } from '../src/context-window';
+import { modelWindow } from '../src/context-window';
 import type { NodeIdentity } from '../src/strategy/node-workspace';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
@@ -191,8 +191,8 @@ export function hostedSeatsOver(input: {
     const seated: FixtureSeat = {
       actor,
       runId,
-      windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
-      window: resolveModelWindow('', null),
+      windowOf: async () => modelWindow(null),
+      window: modelWindow(null),
       conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
       // The real resolver over a real catalog envelope, so role narrowing is applied, not assumed.
       profile: async ({ availableTools, workMode }) => ({

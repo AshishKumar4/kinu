@@ -6,7 +6,7 @@ import type { FetchFunction } from '@ai-sdk/provider-utils';
 import { generateText } from 'ai';
 import * as v from 'valibot';
 import {
-  USAGE_FIELDS, UsageSchema, addUsage, normalizeUsage, usageReported, usageTotal, type Usage,
+  UsageSchema, addUsage, normalizeUsage, usageReported, usageTotal, type Usage,
 } from '../src/usage';
 
 /** Provider shapes go through the real SDK adapters, which fabricate `0` for fields the provider never sent.
@@ -428,10 +428,6 @@ describe('addUsage preserves absence', () => {
 });
 
 describe('UsageSchema is the durable gate', () => {
-  test('governs exactly the fields the type declares', () => {
-    expect(Object.keys(UsageSchema.entries).sort()).toEqual([...USAGE_FIELDS].sort());
-  });
-
   test('every field may be absent, and absence round-trips', () => {
     const parsed = v.parse(UsageSchema, JSON.parse(JSON.stringify({ input: 88, cacheRead: 0 })));
     expect(parsed).toEqual({ input: 88, cacheRead: 0 });

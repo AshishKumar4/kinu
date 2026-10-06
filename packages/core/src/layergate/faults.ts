@@ -78,7 +78,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     id: 'context-assembly/prefix-renderers-regress',
     layer: 'context-assembly',
     patches: ['compilePromptSurface', 'buildSystemPromptSync', 'admitAgentsMd'],
-    models: 'the surface compiler stops filtering unconfigured executors, a prefix section renderer drops a line, and AGENTS.md admission stops bounding what it reads: every file is materialized whatever its size',
+    models: 'the surface compiler stops filtering unconfigured executors, the prefix loses the AGENTS.md it was given, and AGENTS.md admission stops bounding what it reads: every file is materialized whatever its size',
     inject: (s) => ({
       ...s,
       compilePromptSurface: (opts) => {
@@ -86,8 +86,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
 
         return { ...surface, configuredExecutors: surface.executors };
       },
-      buildSystemPromptSync: (opts) =>
-        s.buildSystemPromptSync(opts).split('\n').filter((line) => !line.startsWith('- Inspect current code')).join('\n'),
+      buildSystemPromptSync: (opts) => s.buildSystemPromptSync({ ...opts, agentsMd: undefined }),
       admitAgentsMd: (candidates) => ({ admit: candidates, referenced: [] }),
     }),
   },
@@ -123,11 +122,11 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'context-budget/policy-regresses',
     layer: 'context-budget',
-    patches: ['contextWindowForModel', 'clampToolResult'],
-    models: 'the window table rots back to the default, and the clamp charges its marker on top of the cap instead of inside it',
+    patches: ['modelWindow', 'clampToolResult'],
+    models: 'a catalog window is guessed back to a default, and the clamp charges its marker on top of the cap instead of inside it',
     inject: (s) => ({
       ...s,
-      contextWindowForModel: () => ({ measured: false, window: 128_000 }),
+      modelWindow: () => ({ contextWindow: 128_000, modelOutputLimit: null }),
       clampToolResult: async (text) => {
         if (text.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) return text;
         const headLen = Math.floor(DEFAULT_TOOL_RESULT_MAX_CHARS * 0.5);
@@ -166,11 +165,10 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     id: 'compaction/handoff-contract-regresses',
     layer: 'compaction',
     patches: ['buildCompactionSummaryPrompt', 'wrapCompactionSummary'],
-    models: 'the pending-asks section falls out of the summary spec and the checkpoint preamble changes shape',
+    models: 'an update forgets the summary it updates, and the checkpoint preamble changes shape',
     inject: (s) => ({
       ...s,
-      buildCompactionSummaryPrompt: (input) =>
-        s.buildCompactionSummaryPrompt(input).replace(/## Pending User Asks\n[^\n]*\n\n/, ''),
+      buildCompactionSummaryPrompt: (input) => s.buildCompactionSummaryPrompt({ ...input, previousSummary: undefined }),
       wrapCompactionSummary: (summary) => `[CONTEXT CHECKPOINT]\n\n${summary}`,
     }),
   },

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { Result } from 'effect';
-import { admitReviewAnnotations, MAX_PLAN_ANNOTATIONS_BYTES } from '../src/plans/review';
+import { admitReviewAnnotations, MAX_PLAN_ANNOTATIONS_BYTES } from '../src/plans/annotation-admission';
 import { anchoredText, comparePaths, inReadingOrder } from '../src/read-models/change-view';
 import {
   changeNotesCard, initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, type ChangeNotesMessage, type NotedChanges,

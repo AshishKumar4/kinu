@@ -108,27 +108,12 @@ function sortExecutors(executors: PromptExecutorInfo[]): PromptExecutorInfo[] {
     executorSortKey(a.name) - executorSortKey(b.name) || a.name.localeCompare(b.name));
 }
 
-function uniqueExecutors(names: readonly string[] = []): PromptExecutorInfo[] {
-  const out = new Map<string, PromptExecutorInfo>();
-
-  for (const raw of names) {
-    const name = raw.trim();
-
-    if (!name) continue;
-    out.set(name, {
-      name,
-      available: true,
-      configured: true,
-      active: true,
-      status: 'active',
-    });
-  }
-
-  return sortExecutors([...out.values()]);
-}
-
+/** Registered names are runtimes the workspace has, active; either source is trimmed, deduplicated and sorted once. */
 export function uniquePromptExecutors(opts: Pick<PromptSurfaceOptions, 'executors' | 'registeredExecutors'>): PromptExecutorInfo[] {
-  const source = opts.executors ?? uniqueExecutors(opts.registeredExecutors);
+  const source = opts.executors ?? (opts.registeredExecutors ?? []).map((name): PromptExecutorInfo => ({
+    name, available: true, configured: true, active: true, status: 'active',
+  }));
+
   const out = new Map<string, PromptExecutorInfo>();
 
   for (const exec of source) {

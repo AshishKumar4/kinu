@@ -2,16 +2,14 @@ import { exists as nimbusExists, type Awaitable, type VFS } from '@nimbus-sh/cor
 /** Approval gating where a command reaches a shell (the workspace `Shell`, each provider's shell tools on register)
  *  and where the agent's tools reach a file. */
 
-import {
-  approveFileAccess, commandFilesOwner, gateExec, literalWords, onUserRoots, reviewProgram, reviewShellCommand,
-  STRICT_NO_CHANNEL_POLICY, type ApprovalResult, type FileAccess, type GatedExecutor, type ShellApprovalPolicy, type ShellCwd,
-} from '../safety/approval-gate';
+import { commandFilesOwner, literalWords, onUserRoots, reviewProgram, reviewShellCommand, type ApprovalResult, type FileAccess, type GatedExecutor } from '../safety/command-review';
+import { approveFileAccess, gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { asBytes, currentBytes } from '../safety/bound-write';
 import * as v from 'valibot';
 import { answeredRefusal } from './exec-result';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
 import type { CheckpointFiles, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
-import { busyShell, callJob, shellExecOptions } from './shell-session';
+import { busyShell, callJob, shellExecOptions, type ShellCwd } from './shell-session';
 import { requireBuild } from './work-mode';
 import { resolvedPath, shellReference, type PathPlanes } from '../vfs/resolve';
 import { KinuError, refusalOf } from '../obs/error';

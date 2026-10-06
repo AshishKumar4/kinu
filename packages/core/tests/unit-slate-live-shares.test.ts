@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initSlateLiveShareTables, SlateLiveShareStore } from '../src/slates/live-shares';
-import { WorkspaceLiveShares, type WorkspaceLiveSharesDeps } from '../src/slates/live-sharing';
+import { shareLiveSlate } from '../src/slates/live-sharing';
 import { grantAdmits, slateCapabilityGraph, type SlateBindingCatalog } from '../src/slates/capability-graph';
 import { parseSlateProject } from '../src/slates/project';
 import { makeExecRaw, makeSqlExec } from './helpers';
@@ -136,7 +136,7 @@ test('a socket-held request still records its calls after a thousand newer reque
   }
 });
 
-test('WorkspaceLiveShares cuts the grant the dialog approved and opens at the host URL', async () => {
+test('sharing a live slate cuts the grant the dialog approved and opens at the host URL', async () => {
   const { db, shares } = shareDb();
 
   try {
@@ -150,19 +150,12 @@ test('WorkspaceLiveShares cuts the grant the dialog approved and opens at the ho
       mcp: [], tools: [], tiers: [], slates: { issues: project },
     } satisfies SlateBindingCatalog;
 
-    const deps: WorkspaceLiveSharesDeps = {
-      workspace: 'my-workspace', shares,
-      catalog: async () => catalog,
-      shareUrl: async (handle) => `https://${handle}-token0-ws.kinu.run`,
-    };
+    const created = await shareLiveSlate({
+      shares, graph: slateCapabilityGraph({ slate: 'issues', workspace: 'my-workspace', catalog }), visibility: 'users',
+      approved: [{ slate: 'issues', binding: 'FILES', member: 'writeFile' }], fork: true,
+      url: async (handle) => `https://${handle}-token0-ws.kinu.run`,
+    });
 
-    const live = new WorkspaceLiveShares(deps);
-
-    const expected = slateCapabilityGraph({ slate: 'issues', workspace: 'my-workspace', catalog });
-
-    expect(await live.graph('issues')).toEqual(expected);
-
-    const created = await live.share('issues', 'users', [{ slate: 'issues', binding: 'FILES', member: 'writeFile' }]);
     expect(created.share.handle).toMatch(/^[a-f0-9]{10}$/);
     expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'writeFile')?.effect).toBe('mutate');
     expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'readFile')?.effect).toBe('read');
@@ -170,13 +163,13 @@ test('WorkspaceLiveShares cuts the grant the dialog approved and opens at the ho
     expect(created.share.grant.fork).toBe(true);
     expect(created.url).toBe(`https://${created.share.handle}-token0-ws.kinu.run`);
 
-    expect(live.list().map((share) => share.id)).toEqual([created.share.id]);
-    expect(live.byHandle(created.share.handle)?.id).toBe(created.share.id);
-    expect(live.read(created.share.id)).toEqual(created.share);
+    expect(shares.list().map((share) => share.id)).toEqual([created.share.id]);
+    expect(shares.byHandle(created.share.handle)?.id).toBe(created.share.id);
+    expect(shares.live(created.share.id)).toEqual(created.share);
 
-    live.revoke(created.share.id);
-    expect(() => live.read(created.share.id)).toThrow('no longer shared');
-    expect(live.byHandle(created.share.handle)).toBeUndefined();
+    shares.revoke(created.share.id);
+    expect(() => shares.live(created.share.id)).toThrow('no longer shared');
+    expect(shares.byHandle(created.share.handle)).toBeUndefined();
   } finally {
     db.close();
   }

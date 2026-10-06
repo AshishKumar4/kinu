@@ -770,7 +770,8 @@ test('the header shows the size the gate measured the last request at, not the s
   const agent = fakeClient({ name: 'meter' });
 
   const screen = await mountChat(agent.client);
-  await screen.waitFor('an unmeasured context', () => screen.frame().includes('ctx —/'));
+  // No catalog row names the fake model's window, so the unmeasured meter shows no fraction.
+  await screen.waitFor('an unmeasured context', () => screen.frame().includes('ctx — '));
 
   agent.emit({ type: 'turn-start', kind: 'user', text: 'long' });
   agent.emit({ type: 'broadcast', event: { type: 'context_fill', contextTokens: 1_500, contextWindow: 200_000 } });
@@ -853,7 +854,7 @@ test('/clear shows the emptied request\'s number, or none with the reason when i
 
     if (ends === 'measured') expect(screen.frame()).toContain('ctx ~3k/200k');
     else {
-      expect(screen.frame()).toContain('ctx —/');
+      expect(screen.frame()).toContain('ctx — ');
       expect(screen.frame()).toContain('Its size could not be measured');
       expect(screen.frame()).toContain('catalog is unreachable');
     }

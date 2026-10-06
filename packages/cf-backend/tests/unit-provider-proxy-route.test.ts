@@ -77,8 +77,10 @@ function setupEnv(stored: StoredCredential[]) {
     async listCredentials(_caller: UserCaller) {
       return stored.map((c) => ({ key: c.key, kind: 'bearer' as const, createdAt: 0, updatedAt: 0 }));
     },
-    async getCredentialBaseURL(_caller: UserCaller, key: string) {
-      return byKey.get(key)?.baseURL ?? null;
+    async getCredentialEndpoint(_caller: UserCaller, key: string) {
+      const baseURL = byKey.get(key)?.baseURL;
+
+      return baseURL === undefined ? null : { baseURL };
     },
     async getAuthHeaders(_caller: UserCaller, key: string) {
       return byKey.get(key)?.headers ?? null;

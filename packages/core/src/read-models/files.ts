@@ -7,7 +7,7 @@ import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 
 import {
   MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, listWithVfsOps,
-  readBoundedWithVfsOps, partialTreeRemovalMessage, removeTreeWithVfsOps,
+  readBoundedWithVfsOps, keptByRemoval, partialTreeRemovalMessage, removeTreeWithVfsOps,
 } from '../vfs/mounts';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { move } from '@nimbus-sh/core/vfs/move.js';
@@ -597,23 +597,16 @@ export function deleteExecutorPathOp(
     }
 
     const native = vfs.removeRecursive?.bind(vfs);
+    const kept = keptByRemoval(await (native ? native.call(vfs, path) : removeTreeWithVfsOps(vfs, path)));
 
-    if (native) {
-      await native.call(vfs, path);
-
-      return { ok: true };
-    }
-
-    const removal = await removeTreeWithVfsOps(vfs, path);
-
-    if (!removal.ok) {
+    if (kept !== null) {
       // No cause attached: the message already inlines it.
-      const reason = classifyErrorCode({ cause: removal.failed.cause }) ?? 'io';
+      const reason = classifyErrorCode({ cause: kept.failed.cause }) ?? 'io';
 
       return {
-        ...refusalOf(new KinuError(reason, partialTreeRemovalMessage(path, removal))),
-        removed: removal.removed,
-        remaining: removal.remaining,
+        ...refusalOf(new KinuError(reason, partialTreeRemovalMessage(path, kept))),
+        removed: kept.removed,
+        remaining: kept.remaining,
       };
     }
 

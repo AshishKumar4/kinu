@@ -861,7 +861,8 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
 });
 
 describe('LocalAgentSession — overflow recovery (context_length turn failures)', () => {
-  function overflowingModel(failures: number, answer = 'recovered'): LanguageModel {
+  // The refused request's size would become the window, which this fake's tiny retry overruns: it states a limit.
+  function overflowingModel(failures: number, answer = 'recovered', refusal = 'context_length_exceeded: maximum context length is 128000 tokens'): LanguageModel {
     let calls = 0;
     const base = fakeModel(answer);
 
@@ -872,7 +873,7 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
       doStream: async (options) => {
         calls += 1;
 
-        if (calls <= failures) throw new Error('context_length_exceeded: prompt is too long');
+        if (calls <= failures) throw new Error(refusal);
 
         return base.doStream(options);
       },
@@ -902,6 +903,22 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
 
     if (!armed) throw new Error('compaction state count row is missing');
     expect(armed.c).toBe(0);
+  });
+
+  // A model no catalog row names has an unknown window: the refusal's stated limit becomes the session's window,
+  // so the retry is admitted and compacted against it, not a guessed figure.
+  test('a refusal stating its limit measures the window the retry is admitted against', async () => {
+    const { db, session, events } = setup('unused', overflowingModel(1, 'recovered', 'prompt is too long: 213432 tokens > 200000 maximum'));
+    await session.send('build the thing', { id: crypto.randomUUID() });
+    await events.until(() => events.items.filter((e) => e.type === 'turn-end').length === 2);
+
+    const windows = (type: string) => db.query<{ window: number | null }, [string]>(
+      `SELECT COALESCE(json_extract(payload, '$.window'), json_extract(payload, '$.contextWindow')) AS window FROM run_events WHERE type = ? ORDER BY rowid`,
+    ).all(type).map((row) => row.window);
+
+    // Before the refusal nothing names a window; after it, the retry is admitted against the stated limit.
+    expect({ overflow: windows('context_overflow'), admitted: windows('context_admitted') })
+      .toEqual({ overflow: [200_000], admitted: [null, null, 200_000] });
   });
 
   test('a retry turn that fails again never enqueues a third turn (never loops)', async () => {

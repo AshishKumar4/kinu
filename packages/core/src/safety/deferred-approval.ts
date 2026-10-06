@@ -13,8 +13,11 @@ import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';
 import {
   formatApproval,
-  type ApprovalGrant, type ApprovalSpend, type ApprovalSpendOutcome,
-  type DeferredApprovalChannel, type ShellApprovalRequest,
+  type ApprovalGrant,
+  type ApprovalSpend,
+  type ApprovalSpendOutcome,
+  type DeferredApprovalChannel,
+  type ShellApprovalRequest,
 } from './approval-gate';
 import { boundWriteOf, type ApprovalContent, type BoundFileWrite } from './bound-write';
 import { nanoid } from '../utils/nanoid';

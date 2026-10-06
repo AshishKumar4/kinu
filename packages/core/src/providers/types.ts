@@ -82,6 +82,8 @@ export interface ProviderInfo {
 export interface AuthResolution {
   headers: Record<string, string>;
   baseURL?: string;
+  /** The window the owner declared on a custom endpoint's credential: every model it lists has it. */
+  contextWindow?: number;
   /** The stored key that answered. */
   credentialKey?: string;
 }

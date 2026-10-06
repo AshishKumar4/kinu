@@ -23,7 +23,7 @@ import {
   type PromptModelContext,
 } from './prompting/model-profile';
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan, type PromptCacheRoute } from './prompting/cache-breakpoints';
-import { DEFAULT_CACHE_RETENTION, type CacheRetention } from './providers/types';
+import { DEFAULT_CACHE_RETENTION, parseModelSpec, type CacheRetention } from './providers/types';
 import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import { modelStepMessages } from './prompting/tool-error-feedback';
@@ -32,7 +32,7 @@ import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality 
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import type { LostToolCall } from './tools/effect-claim';
-import { resolveModelWindow } from './context-window';
+import { modelWindow, type ModelWindow } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
@@ -89,7 +89,7 @@ export type ChatEvent = (
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
   | { type: 'error'; message: string }
   | { type: 'model-fallback'; from: string; to: string; reason: string }
-  | { type: 'context-admitted'; tokens: number; contextWindow: number }
+  | { type: 'context-admitted'; tokens: number; contextWindow: number | null }
   /** `text`: the answer, else what streamed, else a tool-result synthesis. `answer`: only the final step's text
    *  ({@link answerFromSteps}), absent when there is none. */
   | { type: 'done'; text: string; responseMessages: ModelMessage[]; answer?: string }
@@ -108,6 +108,8 @@ export interface ChatFallback {
   readonly spec: string;
   /** The media this model takes, so a tool result's image reaches it or leaves a note (`tool-result-images.ts`). */
   readonly accepts: ReadonlySet<MediaModality>;
+  /** Its own catalog window, which its attempt is assembled and compacted against. */
+  readonly window: ModelWindow;
   readonly bind: () => {
     readonly model: LanguageModel;
     readonly provider: string;
@@ -593,16 +595,16 @@ function suppressDeferredRejections(
   for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.usage]) deferred.then(undefined, ignore);
 }
 
-/** Provider prompt-cache plan; marker strategies re-roll tail breakpoints each step. Pass-through without opts.cache. */
-function turnCachePlan(opts: ChatOptions, turnMessages: readonly ModelMessage[], tools: ToolSet): CacheBreakpointPlan {
+/** The serving model's prompt-cache plan; marker strategies re-roll tail breakpoints each step. */
+function attemptCachePlan(opts: ChatOptions, route: PromptCacheRoute, turnMessages: readonly ModelMessage[], tools: ToolSet): CacheBreakpointPlan {
   return applyCacheBreakpoints({
-    providerId: opts.cache?.providerId,
-    modelId: opts.cache?.modelId ?? opts.modelContext?.id,
+    providerId: route.providerId,
+    modelId: route.modelId ?? opts.modelContext?.id,
     system: opts.system,
     messages: turnMessages,
     tools,
     sessionKey: opts.cache?.sessionKey ?? '',
-    retention: opts.cache?.retention,
+    retention: route.retention,
   });
 }
 
@@ -633,7 +635,7 @@ function dialectSpec(current: { readonly spec: string; readonly provider: string
 
 /** One chat turn; callers append its response messages to history. A cut turn yields `done`, then throws
  *  {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`. */
-function* admittedEvent(tokens: number | undefined, contextWindow: number): Generator<ChatEvent> {
+function* admittedEvent(tokens: number | undefined, contextWindow: number | null): Generator<ChatEvent> {
   if (tokens !== undefined) yield { type: 'context-admitted', tokens, contextWindow, source: 'native' };
 }
 
@@ -648,7 +650,7 @@ async function admitRequest(opts: ChatOptions) {
   // Extension tools never shadow a caller tool of the same name.
   const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
-  const window = resolveModelWindow(opts.modelContext?.id ?? '', opts.modelContext ?? null);
+  const window = modelWindow(opts.modelContext);
   const { contextWindow } = window;
 
   // Shared turn-context assembly (orchestrator/turn-context.ts); cf's beforeTurn runs the same function.
@@ -694,7 +696,7 @@ async function admitRequest(opts: ChatOptions) {
 }
 
 /** Only the transform's own fold may call a model. */
-export async function measureTurnRequest(opts: ChatOptions): Promise<{ readonly tokens: number; readonly contextWindow: number } | null> {
+export async function measureTurnRequest(opts: ChatOptions): Promise<{ readonly tokens: number; readonly contextWindow: number | null } | null> {
   const { admitted, window } = await admitRequest({ ...opts, stepContext: undefined });
 
   return admitted.admittedTokens === undefined ? null : { tokens: admitted.admittedTokens, contextWindow: window.contextWindow };
@@ -729,18 +731,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
       return { ...assembled, changed: base.changed };
     },
-    // A fallback's cache is its own provider's.
-    consume: step => stepContext.consume({ ...step, cache: servingFallback === undefined ? turnRoute : {
-      ...(current.provider !== undefined && { providerId: current.provider }), retention: turnRoute.retention,
-    } }),
+    consume: step => stepContext.consume({ ...step, cache: servingRoute }),
   };
 
-  const cache = turnCachePlan(opts, turnMessages, tools);
-  const rollTail = hasCacheMarkers(cache.strategy);
+  let servingRoute = turnRoute;
+  let cache = attemptCachePlan(opts, servingRoute, turnMessages, tools);
   const forcedInput = opts.transformTrigger === 'force' ? admittedTokens : undefined;
 
-  /** One attempt's provider options: the turn's cache, the serving model's server compaction, then its own. */
-  const optionsFor = (spec: string | undefined, served: number | undefined, own: ChatOptions['providerOptions']) => mergeProviderOptions(
+  /** One attempt's provider options: its cache's, the serving model's server compaction, then its own. */
+  const optionsFor = (spec: string | undefined, served: number | null | undefined, own: ChatOptions['providerOptions']) => mergeProviderOptions(
     mergeProviderOptions(cache.providerOptions, serverCompactionOptions(spec, served, forcedInput)), own);
 
   /** The model each attempt calls, with the media it takes: the turn's for the primary, its own for a fallback. */
@@ -835,13 +834,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     );
 
     const call = new ProviderCall(servingFallback);
+    const attempt = cache;
 
     const result = streamText({
       model: current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts),
-      instructions: cache.system,
+      instructions: attempt.system,
       maxRetries: route.callRetries,
       messages: await narrowedFor(request),
-      tools: withToolSchemaDialect(cache.tools, toolSchemaDialect(dialectSpec(current))),
+      tools: withToolSchemaDialect(attempt.tools, toolSchemaDialect(dialectSpec(current))),
       ...offeredTools,
       stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.stepFailure !== null],
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
@@ -866,11 +866,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         const prepared = composePrepareStep({
           extensions,
           abortSignal: signal,
-          cache: rollTail ? { strategy: cache.strategy } : null,
+          cache: hasCacheMarkers(attempt.strategy) ? { strategy: attempt.strategy } : null,
           prune: { contextWindow, modelOutputLimit },
           budget: opts.budget,
           dynamic: opts.dynamicContext,
-          destinationProviderId: opts.cache?.providerId,
+          destinationProviderId: servingRoute.providerId,
           meter,
           context: stepContextPlane,
           turnStart,
@@ -981,20 +981,21 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     return { steps, produced: paired, finishReason: call.lastFinishReason, interrupted: cut, failure: null };
   };
 
-  /** A model that compacts with another provider, or none, cannot read the request built for the last one: rebuilt. */
+  /** A fallback gets its own provider's cache, replay and options; one compacting elsewhere, or not at all, is rebuilt. */
   const takeOver = async (next: ChatFallback): Promise<void> => {
     const bound = next.bind();
-    const served = resolveModelWindow(next.spec, null).contextWindow;
+    const served = next.window.contextWindow;
     const rebuild = serverCompactor(next.spec) !== serverCompactor(serving.model);
 
     serving = { ...assembly, model: next.spec, contextWindow: served };
 
-    if (rebuild) {
-      initialContextAvailable = false;
-      const history = initialContext?.messages ?? assembly.history;
-      base = turnCachePlan(opts, (await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined })).messages, tools).messages;
-    }
+    if (rebuild) initialContextAvailable = false;
+    const history = initialContext?.messages ?? assembly.history;
+    const messages = rebuild ? (await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined })).messages : turnMessages;
 
+    servingRoute = { providerId: bound.provider, modelId: parseModelSpec(next.spec).modelId, retention: turnRoute.retention };
+    cache = attemptCachePlan(opts, servingRoute, messages, tools);
+    base = cache.messages;
     current = { ...bound, spec: next.spec, accepts: next.accepts, providerOptions: optionsFor(next.spec, served, bound.providerOptions) };
     servingFallback = next.spec;
     route.tried.push(next.spec);

@@ -21,7 +21,7 @@ import { ReportToolInputSchema } from '../tools/report-tool';
 import { TasksToolInputSchema } from '../tools/tasks-tool';
 import { WebToolInputSchema } from '../tools/web-tool';
 import { codemodeInputSchema } from '../tools/sandbox-contract';
-import { shellInputSchema } from '../tools/builtins';
+import { shellInputSchema } from '../tools/shell-tool';
 
 /** About twice the largest shipped section, so a runaway is refused before it is judged. */
 const PROMPT_SECTION_MAX_BYTES = 4800;

@@ -155,7 +155,8 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
     listModels: async () => ({
       models: ['fake-model', 'big-model', 'pinned-model'].map((id) => ({ id, label: id, provider: 'fake' })), failures: [],
     }),
-    modelInfo: async () => null,
+    // Claude's row as models.dev lists it: server-side compaction is sized against its window.
+    modelInfo: async (spec) => (spec === 'anthropic/claude-opus-4-7' ? { id: 'claude-opus-4-7', contextWindow: 1_000_000 } : null),
     getAuth: async () => null,
     // The fake vendor has no count endpoint, so the turn is assembled ungated.
     countInputTokens: async () => ({
@@ -214,6 +215,8 @@ function setup(model: LanguageModel, profileAuthority: CliProfileSource = async 
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('client-folder') });
   rt.actor.config.setLearning(false);
+  // Its model calls would count as summaries here; the shared-backend suite covers it.
+  rt.actor.config.setSleepTimeComputeEnabled(false);
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,

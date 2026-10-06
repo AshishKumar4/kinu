@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  extractJsonArray, extractJsonObject, jsonArrayOnlyInstruction, jsonObjectOnlyInstruction,
-  stripMarkdownFences,
+  extractJsonArray, extractJsonObject, stripMarkdownFences,
 } from '../src/index';
 
 describe('structured prompt helpers', () => {
@@ -26,11 +25,6 @@ describe('structured prompt helpers', () => {
   test('throws clear errors for missing JSON', () => {
     expect(() => extractJsonObject('no json')).toThrow(/no JSON object/);
     expect(() => extractJsonArray('no json')).toThrow(/no JSON array/);
-  });
-
-  test('instructions are strict and format-specific', () => {
-    expect(jsonObjectOnlyInstruction()).toContain('JSON object');
-    expect(jsonArrayOnlyInstruction()).toContain('JSON array');
   });
 });
 

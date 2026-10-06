@@ -1,4 +1,3 @@
-import { contextWindowForModel } from '../context-window';
 import { parseModelSpec, specWithoutAccount } from '../providers/types';
 
 export function modelDisplayName(spec: string | null | undefined): string {
@@ -17,10 +16,11 @@ export function modelDisplayName(spec: string | null | undefined): string {
   return listed === raw ? name : `${name} · ${parseModelSpec(raw).account ?? ''}`;
 }
 
-export function formatContextUsage(modelSpec: string | null | undefined, usedTokens: number | null, reportedContextWindow?: number): string {
-  const window = reportedContextWindow ?? contextWindowForModel(modelSpec ?? '').window;
+/** An unknown window shows the tokens alone. */
+export function formatContextUsage(usedTokens: number | null, contextWindow: number | null | undefined): string {
+  const used = `ctx ${usedTokens === null ? '—' : `~${formatTokenCount(usedTokens)}`}`;
 
-  return `ctx ${usedTokens === null ? '—' : `~${formatTokenCount(usedTokens)}`}/${formatTokenCount(window)}`;
+  return contextWindow === null || contextWindow === undefined ? used : `${used}/${formatTokenCount(contextWindow)}`;
 }
 
 function formatTokenCount(tokens: number): string {

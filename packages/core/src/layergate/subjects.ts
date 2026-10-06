@@ -21,7 +21,7 @@ import {
   promptCacheOptions,
   resolvePromptCacheStrategy,
 } from '../prompting/cache-breakpoints';
-import { contextWindowForModel } from '../context-window';
+import { modelWindow } from '../context-window';
 import { clampSerializedToolResult, clampToolResult } from '../tools/clamp';
 import { applyFileEdits, formatFileSlice } from '../tools/file-edit';
 import { scanFileWindow } from '../tools/file-scan';
@@ -37,7 +37,8 @@ import { renderForLLM } from '../events/hub/visibility';
 import { StepInjections } from '../prompting/step-injections';
 import { Inbox } from '../orchestrator/inbox';
 import { DrainScheduler } from '../orchestrator/drain-scheduler';
-import { formatApproval, gateExec, reviewCommand } from '../safety/approval-gate';
+import { reviewCommand } from '../safety/command-review';
+import { formatApproval, gateExec } from '../safety/approval-gate';
 import { argumentDigest } from '../safety/argument-digest';
 import { checkMisevolution } from '../safety/misevolution';
 import { drawArm, trialDecision } from '../evolution/trial-rules';
@@ -77,7 +78,7 @@ export interface PipelineSubjects {
   readonly cacheableSystem: typeof cacheableSystem;
   readonly promptCacheOptions: typeof promptCacheOptions;
 
-  readonly contextWindowForModel: typeof contextWindowForModel;
+  readonly modelWindow: typeof modelWindow;
   readonly clampToolResult: typeof clampToolResult;
   readonly clampSerializedToolResult: typeof clampSerializedToolResult;
 
@@ -154,7 +155,7 @@ export const SUBJECT_SOURCE = {
   cacheableSystem: 'prompting/cache-breakpoints.ts',
   promptCacheOptions: 'prompting/cache-breakpoints.ts',
 
-  contextWindowForModel: 'context-window.ts',
+  modelWindow: 'context-window.ts',
   clampToolResult: 'tools/clamp.ts',
   clampSerializedToolResult: 'tools/clamp.ts',
 
@@ -180,7 +181,7 @@ export const SUBJECT_SOURCE = {
   Inbox: 'orchestrator/inbox.ts',
   DrainScheduler: 'orchestrator/drain-scheduler.ts',
 
-  reviewCommand: 'safety/approval-gate.ts',
+  reviewCommand: 'safety/command-review.ts',
   formatApproval: 'safety/approval-gate.ts',
   gateExec: 'safety/approval-gate.ts',
   argumentDigest: 'safety/argument-digest.ts',
@@ -230,7 +231,7 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     cacheableSystem,
     promptCacheOptions,
 
-    contextWindowForModel,
+    modelWindow,
     clampToolResult,
     clampSerializedToolResult,
 

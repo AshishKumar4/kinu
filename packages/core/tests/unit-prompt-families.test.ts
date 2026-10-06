@@ -4,7 +4,7 @@ import { buildSystemPromptSync, type SystemPromptOptions } from '../src/prompt';
 import { estimateTokens } from '../src/llm';
 import { BUILTIN_ROLE_DEFINITIONS } from '../src/profiles/catalog';
 import { resolvePromptModelProfile, type PromptModelContext, type PromptModelFamily } from '../src/prompting/model-profile';
-import { LEAD_BRIEF, OPERATING_GUIDANCE, PROMPT_SECTIONS } from '../src/prompting/section-templates';
+import { LEAD_BRIEF, OPERATING_GUIDANCE, PROMPT_SECTIONS, promptFamilyDelta } from '../src/prompting/section-templates';
 import { PROMPT_MATRIX } from './fixtures/prompt-surface-matrix';
 
 const MODELS: Readonly<Record<PromptModelFamily, PromptModelContext>> = {
@@ -51,13 +51,18 @@ describe('family wording is a delta over the same typed sections', () => {
   test('only the selected family adds its paragraphs; Claude and unknown models keep the shared base', () => {
     const { rt } = createTestRuntime();
 
+    const deltas = [OPERATING_GUIDANCE, LEAD_BRIEF].flatMap((section) => Object.entries(MODELS).flatMap(([family, model]) => {
+      const text = promptFamilyDelta(section.id, resolvePromptModelProfile(model).family).trim();
+
+      return text ? [{ family, text }] : [];
+    }));
+
+    expect(new Set(deltas.map(({ family }) => family))).toEqual(new Set(['gpt', 'kimi', 'gemini']));
+
     for (const [family, model] of Object.entries(MODELS)) {
       const prompt = buildSystemPromptSync(rt, { ...full.opts, model });
 
-      expect(prompt.includes('Concrete implementation packets')).toBe(family === 'gpt');
-      expect(prompt.includes('Do something different from looped content.')).toBe(family === 'gemini');
-      expect(prompt.includes('Kimi models work best')).toBe(family === 'kimi');
-      expect(prompt.includes('GPT/Codex-style reasoning models')).toBe(family === 'gpt');
+      for (const delta of deltas) expect({ ...delta, shown: prompt.includes(delta.text) }).toEqual({ ...delta, shown: delta.family === family });
     }
 
     const withoutModel = (model: PromptModelContext) => buildSystemPromptSync(rt, { ...full.opts, model })
@@ -82,8 +87,6 @@ describe('family wording is a delta over the same typed sections', () => {
       });
 
       expect(prompt).toBe(baseline.replace(heading, heading.replace('## ', '## Evolved ')));
-      expect(prompt).toContain('Concrete implementation packets');
-      expect(prompt).toContain('GPT/Codex-style reasoning models');
     }
   });
 });

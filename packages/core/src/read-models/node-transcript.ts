@@ -8,7 +8,7 @@ import type { SqlExecutor } from '../types/primitives';
 import type { Usage } from '../usage';
 import type { HeadStep } from '../heads/types';
 import { HeadJournal } from '../heads/journal';
-import { readSearchTree } from './search-tree';
+import { ancestorChain, readSearchTree } from './search-tree';
 import { runName } from './fork-runs';
 import type { Page, PageRequest } from '../session/page';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -76,26 +76,8 @@ interface Branchy {
   readonly status: string;
 }
 
-/**
- * Root to `node` over rows already in hand. `seen` guards against parent chains that close on
- * themselves in resumed searches; a chain leaving the rows stops there.
- */
-function ancestorCrumbs<Row extends Branchy>(
-  node: Row,
-  rows: readonly Row[],
-  label: (row: Row) => string,
-): NodeTranscriptCrumb[] {
-  const byId = new Map(rows.map((row) => [row.id, row]));
-  const path: NodeTranscriptCrumb[] = [];
-  const seen = new Set<string>();
-
-  for (let cursor: Row | undefined = node; cursor && !seen.has(cursor.id);) {
-    seen.add(cursor.id);
-    path.unshift({ id: cursor.id, label: label(cursor), depth: cursor.depth, status: cursor.status });
-    cursor = cursor.parent_id ? byId.get(cursor.parent_id) : undefined;
-  }
-
-  return path;
+function ancestorCrumbs<Row extends Branchy>(node: Row, rows: readonly Row[], label: (row: Row) => string): NodeTranscriptCrumb[] {
+  return ancestorChain(node, rows).map((row) => ({ id: row.id, label: label(row), depth: row.depth, status: row.status }));
 }
 
 function readHeadTranscript(
