@@ -1,6 +1,6 @@
 {
   "//": "Typecheck for the standalone scripts that gate CI. Every .ts here is included by default: a maintained list silently excludes the next script someone forgets. `moduleDetection: force` makes that glob safe because scripts/ is a folder of runnable programs, not a package, and files with no import or export would otherwise share one global scope.",
-  "excluded": "The first four entries are declared compiler debt. scripts/typecheck-coverage.ts resolves this config through TypeScript and asserts that its four SCRIPT_TYPECHECK_DEBT rows are exactly the untypechecked scripts/*.ts files; delete both rows when each error is fixed. The remaining exclusions are workerd sources with their own checked configs.",
+  "excluded": "The first four entries are declared compiler debt. scripts/typecheck-coverage.ts resolves this config through TypeScript and asserts that its four SCRIPT_TYPECHECK_DEBT rows are exactly the untypechecked scripts/*.ts files; delete both rows when each error is fixed. The remaining three exclusions are workerd sources with their own checked configs.",
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
@@ -22,7 +22,7 @@
     "../packages/agent-core/drift.test.ts",
     "../packages/cf-backend/src/slate-vendor.d.ts"
   ],
-  "//exclude": "The first four are declared compiler debt. The rest are workerd sources, not Bun programs: they need @cloudflare/workers-types rather than [bun, node] and are compiled by the tsconfig.json beside them, which `bun run typecheck` runs. ci-runner/contract.ts is in both. Excluding them here is layering, not an exemption.",
+  "//exclude": "The first four are declared compiler debt. The last three are workerd sources, not Bun programs: they need @cloudflare/workers-types rather than [bun, node] and are compiled by the tsconfig.json beside them, which `bun run check` runs. Excluding them here is layering, not an exemption.",
   "exclude": [
     "eval.ts",
     "eval.test.ts",
@@ -30,13 +30,6 @@
     "schema-drift.ts",
     "worker-heap/driver.ts",
     "worker-heap/product.ts",
-    "worker-heap/kinu-product.d.ts",
-    "ci-runner/container.ts",
-    "ci-runner/env.ts",
-    "ci-runner/environments.ts",
-    "ci-runner/run.ts",
-    "ci-runner/shard.ts",
-    "ci-runner/timings.ts",
-    "ci-runner/worker.ts"
+    "worker-heap/kinu-product.d.ts"
   ]
 }

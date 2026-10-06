@@ -1,0 +1,16 @@
+{
+  "name": "kinu",
+  "environment": {
+    "base": "cloudflare/debian-trixie",
+    "setup": "scripts/cf-ci/setup.sh",
+    "install": "scripts/cf-ci/install.sh",
+    "key": ["bun.lock", "bunfig.toml", "package.json", "packages/*/package.json", "patches/**", "third_party/mossaic/**", "scripts/mossaic-sdk.ts"],
+    "smoke": "node_modules/.bin/bun --version && google-chrome --version"
+  },
+  "env": { "PATH": "{checkout}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin" },
+  "plan": { "command": ["bun", "scripts/ladder.ts", "--ci-plan", "--ci-target={target}", "--ci-costs={timings}"] },
+  "shard": {
+    "command": ["bun", "scripts/ladder.ts", "--tier=ci", "--ci-part={part}", "--ci-width={width}", "--ci-costs={timings}", "--verdicts={verdict}"],
+    "name": "part"
+  }
+}

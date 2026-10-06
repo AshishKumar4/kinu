@@ -39,7 +39,6 @@ import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
 import { checkCoverage, checkFileCoverage, pushRun, readFileTimings, readHostedCosts, requireCIGreen, withRunnerCosts } from './ci-verdicts';
-import { environmentKey, installInput, medians, recordSamples } from './ci-runner/contract';
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 
@@ -1211,12 +1210,13 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
     expect(reportCIVerdicts({ sha, part: 'all', rows: [{ run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'https://github.com/o/r/actions/runs/17', '')).toBe(false);
   });
 
-  // The container runner (scripts/ci-runner/) cuts the same units to its own width, sized from what it measured.
+  // The container runner (cf-ci, `.cf-ci.json`) cuts the same units to its own width, sized from what it measured.
   test('a container plan covers every CI row once at any width, sized from the runner\'s timings over the hosted ones', () => {
     const hosted = readHostedCosts();
     const expected = ciUnits(hosted).map((unit) => unit.gate.run).sort();
-    const label = ciUnits(hosted).find((unit) => unit.gate.phase !== 'hammer' && unit.gate.phase !== 'upload' && unit.gate.phase !== 'preflight')?.gate.label ?? '';
-    const measured = withRunnerCosts(hosted, { ...hosted, runUrl: 'kinu-ci-runner run', seconds: { [label]: 1e6 }, files: {} });
+    const unit = ciUnits(hosted).find((each) => each.gate.phase !== 'hammer' && each.gate.phase !== 'upload' && each.gate.phase !== 'preflight');
+    const label = unit?.gate.label ?? '';
+    const measured = withRunnerCosts(hosted, { rows: { [unit?.gate.run ?? '']: 1e6, 'a command no row runs': 5 }, files: {} }, new Map([[unit?.gate.run ?? '', label]]));
 
     for (const width of [1, 13, 40]) {
       const runs = ciParts(hosted, width).flatMap((part) => part.runs);
@@ -1334,31 +1334,5 @@ test('the second suite keeps its real provider', () => {
       expect(observed.total).toBe(1);
       expect(observed.failed.length).toBe(exit);
     }
-  });
-});
-
-describe('the container runner\'s contract', () => {
-  test('an environment is keyed by the install inputs alone, in any order, and moves when one of them does', async () => {
-    const paths = ['bun.lock', 'package.json', 'packages/core/package.json', 'patches/agents@0.26.0.patch', 'third_party/mossaic/sdk/src/index.ts', 'scripts/mossaic-sdk.ts', 'bunfig.toml'];
-    const ignored = ['packages/core/src/index.ts', 'scripts/ladder.ts', 'packages/core/tests/fixtures/package.json', 'README.md'];
-    const id = (digit: string) => digit.repeat(40);
-    const manifest = paths.map((path, index) => ({ path, id: id(String(index)) }));
-
-    const key = await environmentKey(manifest);
-    const reordered = await environmentKey([...manifest].reverse());
-    const relocked = await environmentKey([{ path: 'bun.lock', id: id('9') }, ...manifest.slice(1)]);
-
-    expect({ inputs: paths.filter(installInput), ignored: ignored.filter(installInput) }).toEqual({ inputs: paths, ignored: [] });
-    expect({ hex: /^[0-9a-f]{64}$/u.test(key), reordered: reordered === key, relocked: relocked === key }).toEqual({ hex: true, reordered: true, relocked: false });
-  });
-
-  test('a row\'s estimate is the median of its last five green runs: one slow run moves nothing, and old ones age out', () => {
-    let history: Record<string, number[]> = {};
-
-    for (const seconds of [900, 900, 900, 900, 1, 1, 1]) history = recordSamples(history, { aged: seconds });
-
-    for (const seconds of [100, 100, 900, 100]) history = recordSamples(history, { row: seconds });
-
-    expect(medians({ ...history, even: [1, 2, 3, 10] })).toEqual({ aged: 1, row: 100, even: 2.5 });
   });
 });

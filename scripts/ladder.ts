@@ -61,7 +61,7 @@ import { resourceCostFile, withResourceCosts } from './gate-cost';
 import {
   awaitCI, awaitUploadCI, checkCoverage, collectVerdicts, downloadVerdicts, findPushCI, readCIRun,
   writeCIRun, writeVerdicts, type CIPart, type CIVerdict, type CIVerdictFile,
-  checkFileCoverage, parseHostedCosts, readHostedCosts, readFileTimings, withRunnerCosts, type HostedCosts,
+  checkFileCoverage, parseRunnerTimings, readHostedCosts, readFileTimings, withRunnerCosts, type HostedCosts,
   writeHostedCosts, readVerdicts,
   requireCIGreen,
 } from './ci-verdicts';
@@ -3040,23 +3040,23 @@ export function ciWidth(costs: HostedCosts, target: number): number {
   return Math.max(1, Math.ceil(source.reduce((sum, unit) => sum + unit.seconds, 0) / target));
 }
 
-interface CIPlan {
-  readonly width: number;
-  readonly parts: CIPart[];
-  readonly split: { readonly run: string; readonly files: string[] }[];
-  readonly labels: Record<string, string>;
+/** A row a part must report, with the files a split suite must time, as `checkFileCoverage` holds GitHub's to. */
+type PlannedRow = string | { readonly name: string; readonly files: string[] };
+
+interface CIMatrix {
+  readonly include: { readonly part: string; readonly width: number; readonly rows: PlannedRow[] }[];
 }
 
-/** The container runner's plan for this tree: its parts, each split suite's files, and each run's label for timing. */
-function ciPlan(costs: HostedCosts, width: number): CIPlan {
-  const units = ciUnits(costs);
+/** The container runner's matrix (cf-ci, `.cf-ci.json`): one entry per part, naming the rows it must report. */
+function ciPlan(costs: HostedCosts, width: number): CIMatrix {
+  const split = new Set(ciUnits(costs).filter((unit) => unit.gate.ciShards !== undefined).map((unit) => unit.gate.run));
   const tracked = trackedTestFiles();
 
   return {
-    width,
-    parts: ciParts(costs, width),
-    split: units.filter((unit) => unit.gate.ciShards !== undefined).map((unit) => ({ run: unit.gate.run, files: claims(unit.gate.run, tracked) })),
-    labels: Object.fromEntries(units.map((unit) => [unit.gate.run, unit.gate.label])),
+    include: ciParts(costs, width).map((part) => ({
+      part: part.name, width,
+      rows: part.runs.map((run) => split.has(run) ? { name: run, files: claims(run, tracked) } : run),
+    })),
   };
 }
 
@@ -3630,14 +3630,17 @@ interface CIPlanInputs {
 }
 
 /** What a CI part is cut from: GitHub's eight parts over `ci-cost.json`, or the container runner's `--ci-width` over
- *  the costs it measured (`--ci-costs`). Every part of one run is given the same pair, so all cut the same plan. */
+ *  what it measured (`--ci-costs`, cf-ci's timings). Every part of one run is given the same pair, so all cut the same
+ *  plan. */
 function ciPlanInputs(): CIPlanInputs {
   const measured = argumentValue('ci-costs');
   const width = argumentValue('ci-width');
   const hosted = readHostedCosts();
 
+  const labels = new Map(ciUnits(hosted).map((unit) => [unit.gate.run, unit.gate.label]));
+
   return {
-    costs: measured === undefined ? hosted : withRunnerCosts(hosted, parseHostedCosts(readFileSync(measured, 'utf8'))),
+    costs: measured === undefined ? hosted : withRunnerCosts(hosted, parseRunnerTimings(readFileSync(measured, 'utf8')), labels),
     width: width === undefined ? HOSTED_SOURCE_PARTS : Number(width),
   };
 }
