@@ -903,7 +903,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           prune: { contextWindow, modelOutputLimit },
           budget: opts.budget,
           dynamic: opts.dynamicContext,
-          destinationProviderId: servingRoute.providerId,
+          destination: servingRoute,
           meter,
           context: stepContextPlane,
           turnStart,

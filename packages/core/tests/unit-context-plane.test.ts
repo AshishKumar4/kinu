@@ -606,7 +606,7 @@ async function twoStepTurns(prune: StepPruneBudget, output: (turn: number) => st
   const pipeline = {
     prune,
     dynamic: { ledger: new DynamicContextLedger(), snapshot: () => ({ recoveries: ['a finding proven by execution'] }) },
-    destinationProviderId: 'anthropic',
+    destination: { providerId: 'anthropic' },
     cache: { strategy: { kind: 'anthropic' as const } },
   };
 
