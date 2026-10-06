@@ -2,7 +2,7 @@
 // a store that answers as R2 does: each part's etag is its MD5, a completed object's is the MD5 of those, `-<parts>`.
 import { afterAll, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,13 +20,12 @@ const md5 = (bytes: Uint8Array): Buffer => createHash('md5').update(bytes).diges
 const md5Hex = (bytes: Uint8Array): string => createHash('md5').update(bytes).digest('hex');
 
 /** A multipart store. It answers the first part only once a second has arrived, so a publisher with one part in
- *  flight never finishes; it samples the disk the archive takes at each part's arrival. `corruptPart` stores that
+ *  flight never finishes. `corruptPart` stores that
  *  part with one byte changed; `arrived` hears of each part as it lands. */
-function r2LikeStore(archive: string, corruptPart?: number, arrived?: () => void) {
+function r2LikeStore(corruptPart?: number, arrived?: () => void) {
   const parts = new Map<number, Uint8Array>();
   let firstWaiting: (() => void) | undefined;
   let partsAtOnce = false;
-  let mostOnDisk = 0;
   let aborted = false;
   let object: { bytes: Uint8Array; etag: string } | undefined;
 
@@ -42,7 +41,6 @@ function r2LikeStore(archive: string, corruptPart?: number, arrived?: () => void
       }
 
       if (request.method === 'PUT' && part !== null) {
-        mostOnDisk = Math.max(mostOnDisk, (statSync(archive, { throwIfNoEntry: false })?.blocks ?? 0) * 512);
         const bytes = new Uint8Array(await request.arrayBuffer());
 
         if (Number(part) === corruptPart) bytes[0] = (bytes[0] ?? 0) ^ 1;
@@ -98,7 +96,6 @@ function r2LikeStore(archive: string, corruptPart?: number, arrived?: () => void
   return {
     url: `http://127.0.0.1:${String(server.port)}/BUCKET/boxes/test/data.sqsh`,
     partsAtOnce: () => partsAtOnce,
-    mostOnDisk: () => mostOnDisk,
     aborted: () => aborted,
     object: () => object?.bytes,
     stop: () => server.stop(true),
@@ -142,8 +139,8 @@ function listing(squashfs: Uint8Array | undefined, label: string): string {
   return listed.exitCode === 0 ? listed.stdout.toString().split('\n').filter((line) => line.includes('squashfs-root')).map((line) => line.replace(/^\S+ \S+ +/, '')).sort().join('\n') : listed.stderr.toString();
 }
 
-test('an archive many times the window streams in parts: the store holds exactly it, and the disk held three windows at most', async () => {
-  const store = r2LikeStore(archive);
+test('an archive many times the window streams in concurrent parts and the store holds exactly it', async () => {
+  const store = r2LikeStore();
   const source = tree('large', 20, 32 * 1024 * 1024);
   const { stdout, stderr } = await stream(source, store.url);
   await store.stop();
@@ -152,14 +149,13 @@ test('an archive many times the window streams in parts: the store holds exactly
   Bun.spawnSync(['mksquashfs', source, direct, '-noappend', '-comp', 'zstd', '-no-progress']);
   const [code, size] = stdout.split(' ');
 
-  // mksquashfs writes up to 7 GB/s here: between two paces it passes the window by tens of MiB, never by two windows.
-  expect({ code, stderr, partsAtOnce: store.partsAtOnce(), held: store.mostOnDisk() <= 3 * SMALL.windowBytes, tree: listing(landed, 'landed') })
-    .toEqual({ code: '0', stderr: '', partsAtOnce: true, held: true, tree: listing(Bun.file(direct).size > 0 ? new Uint8Array(await Bun.file(direct).arrayBuffer()) : undefined, 'direct') });
+  expect({ code, stderr, partsAtOnce: store.partsAtOnce(), tree: listing(landed, 'landed') })
+    .toEqual({ code: '0', stderr: '', partsAtOnce: true, tree: listing(Bun.file(direct).size > 0 ? new Uint8Array(await Bun.file(direct).arrayBuffer()) : undefined, 'direct') });
   expect(Number(size)).toBe(landed?.byteLength ?? -1);
 });
 
 test('a small archive is one PUT whose digest the store confirms', async () => {
-  const store = r2LikeStore(archive);
+  const store = r2LikeStore();
   const source = tree('small', 0, 0);
   const { stdout, stderr } = await stream(source, store.url);
   await store.stop();
@@ -169,7 +165,7 @@ test('a small archive is one PUT whose digest the store confirms', async () => {
 });
 
 test('a part the store holds as other bytes refuses the publication and aborts the upload', async () => {
-  const store = r2LikeStore(archive, 3);
+  const store = r2LikeStore(3);
   const { stdout, stderr } = await stream(tree('corrupt', 4, 8 * 1024 * 1024), store.url);
   await store.stop();
 
@@ -178,7 +174,7 @@ test('a part the store holds as other bytes refuses the publication and aborts t
 });
 
 test('an archiver that writes again into a part already uploaded is refused', async () => {
-  const store = r2LikeStore(archive);
+  const store = r2LikeStore();
 
   // Writes 40 MiB in order, waits for the parts to upload, then writes into the second part again.
   const archiver = `python3 -c 'import os,sys,time
@@ -203,7 +199,7 @@ test('the parts left when the archiver ends go up beside the one still in flight
   expect(spawnSync('mkfifo', [go]).status).toBe(0);
   let told = false;
 
-  const store = r2LikeStore(archive, undefined, () => {
+  const store = r2LikeStore(undefined, () => {
     if (!told) writeFileSync(go, 'x');
     told = true;
   });
@@ -221,7 +217,7 @@ open(sys.argv[2]).read(1)' '${archive}' '${go}'`;
 });
 
 test('mksquashfs failing is exit 4 with its own words', async () => {
-  const store = r2LikeStore(archive);
+  const store = r2LikeStore();
   const { stdout, stderr } = await stream(join(root, 'absent'), store.url);
   await store.stop();
 

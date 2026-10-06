@@ -95,7 +95,7 @@ const directory = (id: string) => attemptSync('invalid-input', () => `${ROOT}/${
 
 export class Processes {
   readonly #files: Files;
-  constructor(readonly container: Container) {
+  constructor(readonly container: Pick<Container, 'exec' | 'running'>) {
     this.#files = new Files(container);
   }
 

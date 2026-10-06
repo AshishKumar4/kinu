@@ -2,12 +2,13 @@
 // and pinned: an in-flight restoration must not read as `unstarted`.
 import { describe, expect, test } from 'bun:test';
 
-import { Devbox, gate, harness } from './support/devbox-harness';
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
+import { gate, harness } from './support/devbox-harness';
+import type { DevboxPolicy } from '../src/lifecycle';
+import { TestDevbox, TEST_DEVBOX_POLICY } from './support/test-devbox';
 
-class TestBox extends Devbox<unknown> {
+class TestBox extends TestDevbox<unknown> {
   protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, attachBudgetMs: 60_000, portWaitMs: 4, portProbeIntervalMs: 1 };
+    return { ...TEST_DEVBOX_POLICY, attachBudgetMs: 60_000 };
   }
 
   protected override get ambientCheckpoints(): boolean {

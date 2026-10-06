@@ -1,13 +1,10 @@
 // SDK audit (b), 2026-10-01: a preview reaches the port its Worker named, with that port's token only.
+import { TestDevbox } from './support/test-devbox';
 import { expect, test } from 'bun:test';
 
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
-import { Devbox, harness } from './support/devbox-harness';
+import { harness } from './support/devbox-harness';
 
-class PreviewBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class PreviewBox extends TestDevbox<unknown> {
 
   protected override get ambientCheckpoints(): boolean {
     return false;

@@ -98,7 +98,7 @@ const WorkerSchema = v.object({
       name: v.optional(v.string()),
       class_name: v.string(),
       scheduling_policy: v.literal('durable_object'),
-      images: v.record(v.string(), v.object({ image: v.string() })),
+      images: v.optional(v.record(v.string(), v.object({ image: v.string() }))),
     }),
   ]))),
   exports: v.optional(v.record(v.string(), v.union([
@@ -137,7 +137,7 @@ type Container = NonNullable<WorkerConfig['containers']>[number];
 
 /** The images a container's application can run, whichever scheduling policy names them. */
 export function containerImages(container: Container): string[] {
-  return 'images' in container ? Object.values(container.images).map((entry) => entry.image) : [container.image];
+  return 'image' in container ? [container.image] : Object.values(container.images ?? {}).map((entry) => entry.image);
 }
 
 /** A container with the name of the application it runs under. */

@@ -12,7 +12,6 @@ WORKDIR /build
 RUN tar -xzf source.tar.gz && cd squashfuse-0.1.103 && ./configure --disable-shared --disable-demo --disable-high-level --enable-low-level && make -j2
 
 FROM docker.io/cloudflare/sandbox@sha256:5bc187515bad0d9d486a4f1476f7d8ad39fe97c57965f044e4b0a0dcc93eac06 AS shim
-FROM node:22.23.2-bookworm-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9 AS node
 FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS bun
 # The tools a golden snapshot installs on cloudflare/debian-trixie (D65): an offline apt repository of the
 # packages named in `wanted` and their closure, pinned to one day of the Debian archive, and our binaries.
@@ -38,15 +37,3 @@ RUN cd /root && find usr -type f | LC_ALL=C sort | xargs sha256sum > /tmp/tools.
 
 FROM scratch AS tools
 COPY --from=pack /tools.tgz /tools.tgz
-
-FROM ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bash ca-certificates curl git python3 tmux tini fuse3 fuse-overlayfs squashfs-tools zstd s3fs=1.93-1build3 libfuse2t64 libzstd1 libstdc++6 && rm -rf /var/lib/apt/lists/*
-COPY --from=node /usr/local/ /usr/local/
-COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
-COPY --from=build /build/target/release/devbox-block-lower /usr/local/bin/devbox-block-lower
-COPY --from=squash /build/squashfuse-0.1.103/squashfuse_ll /usr/local/bin/devbox-squashfuse
-COPY --from=shim /usr/local/bin/sandbox-shim /usr/local/bin/sandbox-shim
-RUN mkdir -p /workspace /var/tmp/devbox && ln -s /usr/bin/fusermount3 /usr/local/bin/fusermount
-WORKDIR /
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["sleep", "infinity"]

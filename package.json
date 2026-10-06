@@ -90,7 +90,7 @@
     "gate:commit-message": "bun scripts/commit-hygiene.ts",
     "gate:agents-fields": "bun scripts/agents-fields.ts",
     "gate:infra": "bun scripts/infra-verify.ts",
-    "gate:devbox-e2e": "bun scripts/devbox-e2e.ts",
+    "gate:devbox-e2e": "bun scripts/devbox-container-tier.ts",
     "infra:provision": "bun scripts/infra-provision.ts",
     "infra:teardown": "bun scripts/infra-teardown.ts",
     "evals": "bun evals/scripts/sweep.ts && bun --bun vitest run --config evals/vitest.config.ts --reporter=./evals/src/reporter.ts --reporter=json",

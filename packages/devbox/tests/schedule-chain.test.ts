@@ -1,15 +1,12 @@
 // The box's schedule table is its lifeline and its bill: every self-re-arming chain keeps a successor,
 // and a row nobody owes must not exist, since the platform wakes the object for every row it holds.
 // Driven through native alarm dispatch, quiesce and checkpoint entrypoints.
+import { TestDevbox } from './support/test-devbox';
 import { describe, expect, test, vi } from 'bun:test';
 
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
-import { Devbox, harness, wakeWhileArmed, type FakeSandbox } from './support/devbox-harness';
+import { harness, wakeWhileArmed, type FakeSandbox } from './support/devbox-harness';
 
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class TestBox extends TestDevbox<unknown> {
 
   protected override get previewHost(): string | undefined {
     return 'preview.example';

@@ -15,6 +15,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
+import { AwsClient } from 'aws4fetch';
+import { deployedConfig } from './infra-manifest';
 import { r2ObjectSize } from './cloudflare-rest';
 
 const BLOCK_LOWER = join(import.meta.dir, '..', 'packages/devbox/block-lower');
@@ -33,6 +35,27 @@ const toolsKey = (sha256: string): string => `devbox-tools/${sha256}.tgz`;
 
 /** Under the 300 MiB that `wrangler r2 object put` takes. */
 const TOOLS_PART_BYTES = 256 * 1024 * 1024;
+
+/** Seed an eval fixture from staging's distribution artifact without building any local image. */
+export async function copyPinnedTools(bucket: string): Promise<void> {
+  const tools = pinnedTools();
+  const source = deployedConfig('staging').r2_buckets?.find(row => row.binding === 'BACKUP_BUCKET')?.bucket_name;
+  const accessKeyId = process.env['R2_ACCESS_KEY_ID'];
+  const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
+
+  if (source === undefined || accessKeyId === undefined || secretAccessKey === undefined) throw new Error('copying the staging tools requires its R2 credentials');
+  const client = new AwsClient({ accessKeyId, secretAccessKey, service: 's3', region: 'auto' });
+
+  for (const part of partsOf(tools)) {
+    const copied = await client.fetch(`https://${ACCOUNT}.r2.cloudflarestorage.com/${bucket}/${part.key}`, {
+      method: 'PUT', headers: { 'x-amz-copy-source': `/${source}/${part.key}` },
+    });
+
+    const body = await copied.text();
+
+    if (!copied.ok || body.includes('<Error>')) throw new Error(`the staging tools ${part.key} was not copied: ${String(copied.status)} ${body.slice(-300)}`);
+  }
+}
 
 /** Each part's key and size, in the order a box reads them. */
 function partsOf(tools: v.InferOutput<typeof ToolsRecord>): readonly { readonly key: string; readonly bytes: number }[] {

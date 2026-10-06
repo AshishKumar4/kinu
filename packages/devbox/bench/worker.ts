@@ -581,6 +581,7 @@ class BenchBox extends Devbox<BenchEnv> {
   protected override get registryToken(): string | undefined {
     return this.env.DEVBOX_REGISTRY_TOKEN;
   }
+  protected override get registryAccount(): string { return 'f44999d1ddda7012e9a87729eba250f1'; }
 
   protected override get peers(): BoxPeers | undefined {
     const boxes = this.env.SnapshotChainBox;

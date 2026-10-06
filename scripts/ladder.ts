@@ -1572,7 +1572,7 @@ export const LADDER: readonly Gate[] = [
     // substrate. Not one of their names starts with
     // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
     // tier: 89 tests that ran in no pipeline.
-    run: 'bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-e2e.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-container-tier.test.ts',
     label: 'Benchmark harness guarantees',
     tier: 'ci',
     // 7.00s: 221 tests over 15 files, median of 7.00 / 7.71 / 6.86 on the
@@ -2452,6 +2452,20 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'drives the DEPLOYED build with real machines, a real browser and the scripted model\'s Worker.' },
   },
   {
+    run: 'bun run gate:devbox-e2e',
+    label: 'Devbox contracts on real golden containers',
+    shared: 'browser',
+    phase: 'post-publish',
+    alone: 'uses the staging eval identity on its own throwaway Worker, application, bucket and boxes; the browser lane owns its desktop client.',
+    tier: 'deploy',
+    // 2026-10-06, dc20261006045352da6d8: 17 contracts and verified cleanup, 370 s whole run (D72).
+    seconds: 370,
+    catches: 'tools and FUSE missing from the real golden; lost exec bytes, unsafe process kills or trust; a broken desktop click; '
+      + 'snapshot and R2 recovery data loss, whole-file deltas, failed compaction, serial mounts and disk-pressure failures.',
+    blind: 'long snapshot lifetime, account saturation, the model path, and a product adapter no contract drives. No Docker image is built or started.',
+    inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },
+  },
+  {
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
     phase: 'post-publish',
@@ -2932,6 +2946,8 @@ export const CI_EXEMPT = {
     + 'build, and pointing it at the previous one would report the last deploy\'s product under '
     + "this pull request's name. It also creates workspaces, links real machines and spends "
     + 'model calls on a shared account, none of which belongs on a pull request.',
+  'bun run gate:devbox-e2e':
+    'needs staging eval authority and a Cloudflare session to create and remove throwaway real containers, R2 and snapshots; no pull request holds those credentials.',
   'bash scripts/product-flows-tier.sh':
     'has nothing to run against at CI: its subject is the deployment that just went up, as the '
     + 'eval identity, whose secret no pull request holds.',
