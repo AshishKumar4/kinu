@@ -99,7 +99,12 @@ export function resolvePromptCacheStrategy(
       return strategy;
     }
 
+    // A gateway OpenAI model speaks OpenAI's Responses API (`gatewayWireModel`).
     case 'my-gateway':
+      return modelId?.startsWith('openai/') === true
+        ? resolvePromptCacheStrategy('openai', modelId.slice('openai/'.length), retention)
+        : { kind: 'openai-compat', bodyNamespace: providerId, markers: false };
+
     case 'ai-gateway':
       return { kind: 'openai-compat', bodyNamespace: providerId, markers: false };
 

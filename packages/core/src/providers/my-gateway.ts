@@ -1,10 +1,10 @@
 // The user's own Cloudflare AI Gateway via their Workers AI OAuth credential (`ai-gateway` is the platform's).
-// Wire: POST {account}/ai/v1/chat/completions with `cf-aig-gateway-id`; specs are `my-gateway/{author}/{model}`.
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+// Wire: POST {account}/ai/v1/{chat/completions|responses} with `cf-aig-gateway-id`; specs are `my-gateway/{author}/{model}`.
 import type { LanguageModel } from 'ai';
 import { type ModelProvider, type ModelInfo, type ProviderDeps } from './types';
 import { authCacheKey, cloneModelInfos, settleModelList, StaleModelList } from './util';
-import { listModelsDevProviderModels } from './models-dev';
+import { getModelsDevWire, listModelsDevProviderModels } from './models-dev';
+import { createWireModel, deferredModel } from './wire-model';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from './cloudflare-oauth';
 import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
 import { Effect } from 'effect';
@@ -118,13 +118,27 @@ export function createMyGatewayProvider(): ModelProvider {
         mapError: (res, resolved) => mapGatewayError(res, modelId, resolved.headers['cf-aig-gateway-id']),
       });
 
-      return createOpenAICompatible({
-        name: MY_GATEWAY_PROVIDER_ID,
-        baseURL: placeholder,
-        fetch: customFetch,
-      }).chatModel(modelId);
+      return gatewayWireModel(MY_GATEWAY_PROVIDER_ID, modelId, { baseURL: placeholder, fetch: customFetch }, deps);
     },
   };
+}
+
+/** The account's endpoint on the worker, the signed-in proxy on the CLI. */
+export interface GatewayTransport {
+  readonly baseURL: string;
+  readonly fetch?: typeof fetch;
+  readonly headers?: Record<string, string>;
+}
+
+/** A gateway `{author}/{model}` speaks its author's own API where models.dev names one, else the unified chat API. */
+export function gatewayWireModel(name: string, modelId: string, transport: GatewayTransport, deps: Pick<ProviderDeps, 'fetch'>): LanguageModel {
+  const slash = modelId.indexOf('/');
+
+  return deferredModel(name, modelId, async () => {
+    const wire = slash < 0 ? null : await getModelsDevWire(modelId.slice(0, slash), modelId.slice(slash + 1), deps);
+
+    return createWireModel({ name, modelId, ...transport, protocol: wire?.protocol ?? 'chat-completions', reasoning: wire?.reasoning ?? false });
+  });
 }
 
 /** What one discovery pass learned; only an `authoritative` empty menu may be published and cached. */

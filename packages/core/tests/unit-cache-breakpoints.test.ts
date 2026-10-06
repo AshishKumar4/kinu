@@ -64,7 +64,8 @@ describe('resolvePromptCacheStrategy', () => {
     expect(resolvePromptCacheStrategy('codex', 'gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
     expect(resolvePromptCacheStrategy('openai-compat')).toEqual({ kind: 'openai-compat', bodyNamespace: 'openai-compat', markers: false });
     expect(resolvePromptCacheStrategy('openai-compat:groq', 'llama-4')).toEqual({ kind: 'openai-compat', bodyNamespace: 'openai-compat:groq', markers: false });
-    expect(resolvePromptCacheStrategy('my-gateway', 'openai/gpt-5.5')).toEqual({ kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false });
+    expect(resolvePromptCacheStrategy('my-gateway', 'openai/gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
+    expect(resolvePromptCacheStrategy('my-gateway', 'google/gemini-2.5-flash')).toEqual({ kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false });
     expect(resolvePromptCacheStrategy('ai-gateway', 'workers-ai/@cf/x')).toEqual({ kind: 'openai-compat', bodyNamespace: 'ai-gateway', markers: false });
   });
 
@@ -91,7 +92,7 @@ describe('resolvePromptCacheStrategy', () => {
     expect(resolvePromptCacheStrategy('openrouter', 'meta-llama/llama-4-maverick', 'long'))
       .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: false });
     expect(resolvePromptCacheStrategy('my-gateway', 'openai/gpt-5.5', 'long'))
-      .toEqual({ kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false });
+      .toEqual({ kind: 'openai-cache-key', ttl: '24h' });
   });
 
   test("retention 'short' is the default and is byte-identical to no opinion", () => {
@@ -99,7 +100,8 @@ describe('resolvePromptCacheStrategy', () => {
       { provider: 'anthropic', model: 'claude-opus-4-7', expected: { kind: 'anthropic' } },
       { provider: 'openai', model: 'gpt-5.5', expected: { kind: 'openai-cache-key' } },
       { provider: 'openrouter', model: 'anthropic/claude-sonnet-4.6', expected: { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true } },
-      { provider: 'my-gateway', model: 'openai/gpt-5.5', expected: { kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false } },
+      { provider: 'my-gateway', model: 'openai/gpt-5.5', expected: { kind: 'openai-cache-key' } },
+      { provider: 'my-gateway', model: 'google/gemini-2.5-flash', expected: { kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false } },
       { provider: 'workers-ai', model: '@cf/moonshotai/kimi-k2.6', expected: { kind: 'none' } },
     ];
 

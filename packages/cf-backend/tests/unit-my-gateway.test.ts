@@ -57,6 +57,13 @@ function chatCompletionResponse(model: string): Response {
   }), { headers: { 'content-type': 'application/json' } });
 }
 
+/** models.dev knows none of these authors, so each is sent on the gateway's unified chat API. */
+function uncatalogued(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
+  return asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => (requestUrl(input).startsWith('https://models.dev/')
+    ? Response.json({})
+    : await fetch(input, init)));
+}
+
 describe('my-gateway request shape', () => {
   test('routes through the account /ai/v1 endpoint with bearer + cf-aig-gateway-id', async () => {
     const seen: Array<{ url: string; auth: string | null; gateway: string | null; model: unknown }> = [];
@@ -64,7 +71,7 @@ describe('my-gateway request shape', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ gatewayId: 'prod-gw', token: 'cf-user-token' }),
-      fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetch: uncatalogued(asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         const body = parseJsonObject(await new Request(input, init).text());
         seen.push({
@@ -74,12 +81,12 @@ describe('my-gateway request shape', () => {
           model: body.model,
         });
 
-        return chatCompletionResponse('openai/gpt-4.1');
-      }),
+        return chatCompletionResponse('google/gemini-2.5-flash');
+      })),
     });
 
     const result = await generateText({
-      model: reg.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-test'),
+      model: reg.resolveModel('my-gateway/google/gemini-2.5-flash', 'kinu-test'),
       prompt: 'ping',
     });
 
@@ -88,7 +95,7 @@ describe('my-gateway request shape', () => {
     expect(seen[0].url).toBe(`${AI_BASE_URL}/chat/completions`);
     expect(seen[0].auth).toBe('Bearer cf-user-token');
     expect(seen[0].gateway).toBe('prod-gw');
-    expect(seen[0].model).toBe('openai/gpt-4.1');
+    expect(seen[0].model).toBe('google/gemini-2.5-flash');
   });
 
   test('a mid-flight 401 forces one refresh and retries with the fresh token', async () => {
@@ -97,7 +104,7 @@ describe('my-gateway request shape', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ token: 'cf-stale', freshToken: 'cf-fresh' }),
-      fetch: asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      fetch: uncatalogued(asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         wire.push(headers.get('authorization'));
 
@@ -108,7 +115,7 @@ describe('my-gateway request shape', () => {
         }
 
         return chatCompletionResponse('anthropic/claude-sonnet-4-5');
-      }),
+      })),
     });
 
     const result = await generateText({
@@ -356,9 +363,9 @@ describe('my-gateway error mapping', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ gatewayId: 'my-gw' }),
-      fetch: asFetchFunction(async () => new Response(JSON.stringify(body), {
+      fetch: uncatalogued(asFetchFunction(async () => new Response(JSON.stringify(body), {
         status, headers: { 'content-type': 'application/json' },
-      })),
+      }))),
     });
 
     try {
