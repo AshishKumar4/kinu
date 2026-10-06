@@ -603,6 +603,16 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
           capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
         },
       },
+      // `&devices=history`: a machine that refused an update, and one written before the registry recorded a sandbox.
+      ...(new URLSearchParams(location.search).get("devices") === "history" ? [{
+        id: "dev-3", label: "Lab box", os: "linux", hostname: "lab", connected: true, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
+        replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+        sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+        version: "0.2.0+older", servedVersion: "0.3.0+served", update: "refused", updateRefusal: "Bun 1.4.2 install failed: permission denied",
+      }, {
+        id: "dev-old", label: "Old box", os: "linux", hostname: "old", connected: false, createdAt: NOW - 90 * 864e5, lastSeenAt: null, expiresAt: null,
+        replacedAt: null, revokedAt: null, unstoppedAt: null,
+      }] : []),
       ...(frame === "devices" ? [{
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
@@ -1863,8 +1873,10 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
   }),
   // `&consent=waiting`: a device command already waiting.
-  listPendingConsents: () => (new URLSearchParams(location.search).get("consent") === "waiting"
-    ? [{ consentId: "c-1", deviceLabel: "studio", method: "exec", command: "git push origin main", createdAt: 1 }]
+  // `&consent=spoofed`: a command whose bidi and zero-width characters would show a reader a different command.
+  listPendingConsents: () => (["waiting", "spoofed"].includes(new URLSearchParams(location.search).get("consent") ?? "")
+    ? [{ consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1,
+      command: new URLSearchParams(location.search).get("consent") === "spoofed" ? "rm -rf ./build \u202E\u2066gpj.x\u200B" : "git push origin main" }]
     : []),
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
