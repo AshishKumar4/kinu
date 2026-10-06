@@ -191,11 +191,13 @@ describe('reachability gate, against the real tree', () => {
   } satisfies Record<string, string>;
 
   test('cutting the socket hook every workspace frame reaches leaves its channels unread', () => {
-    const hook = 'packages/cf-backend/src/hooks/use-kinu.ts';
+    const hook = ['packages/cf-backend/src/hooks/use-kinu.ts', 'packages/cf-backend/src/hooks/socket-frames.ts'];
     expect(findUnreadChannels(SOURCES).unread).toEqual([]);
 
     const cut = new Map(SOURCES);
-    cut.delete(hook);
+
+    for (const file of hook) cut.delete(file);
+
     expect(findUnreadChannels(cut).unread.map((channel) => channel.name)).toContain('signal_card');
   });
 

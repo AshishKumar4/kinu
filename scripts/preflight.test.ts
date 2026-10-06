@@ -56,7 +56,7 @@ const HEALTHY: Environment = {
   conflictedPaths: 0,
 };
 
-test('a different Bun than the checkout pins is an environment fault', () => {
+test('a different Bun build than the checkout installed is an environment fault', () => {
   for (const actual of ['1.4.0', '1.4.3']) {
     expect(judge({ ...HEALTHY, bun: { actual, pinned: '1.4.2' } })).toHaveLength(1);
   }

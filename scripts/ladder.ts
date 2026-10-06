@@ -39,13 +39,13 @@ import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline, writeFully 
 import { recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
-  CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
+  CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, storeAt, toolVersions,
 } from './ladder-cache';
-import type { GateCacheRequest, Plan } from './ladder-cache';
+import type { GateCacheRequest, Plan, Store, ToolVersions } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
-import type { Inputs } from './ladder-closure';
+import type { Closure, Inputs, Repo } from './ladder-closure';
 import {
   isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching,
   trackedFiles,
@@ -3049,6 +3049,67 @@ export function changedTestGate(gate: Gate, ref: string, tracked: readonly strin
   return undefined;
 }
 
+export interface TestProof {
+  readonly file: string;
+  readonly argv: readonly string[];
+  readonly request: GateCacheRequest;
+  readonly plan: Exclude<Plan, { readonly kind: 'uncacheable' }>;
+}
+
+/** A changed hook caches complete test files, never a native selection that may execute no tests. */
+export function testFileProofs(gate: Gate, repo: Repo, tools: ToolVersions, store: Store): TestProof[] | undefined {
+  if (gate.inputs.kind === 'live') return undefined;
+  const contents = new Map<string, string>();
+
+  const snapshot: Repo = { ...repo, read: (file) => {
+    const stored = contents.get(file);
+
+    if (stored !== undefined) return stored;
+    const source = repo.read(file);
+    contents.set(file, source);
+
+    return source;
+  } };
+
+  const run = gate.run.split(/\s+/).filter((word) => !word.startsWith('--changed=') && word !== '--passWithNoTests').join(' ');
+  const full = deriveClosure(run, gate.inputs, snapshot);
+
+  if (full.kind !== 'derived') return undefined;
+  const inputs: Inputs = { ...gate.inputs, env: full.env, corpus: full.corpus || gate.inputs.corpus };
+  const files = repo.claims(run);
+
+  if (files.length === 0) return undefined;
+  const proofs: TestProof[] = [];
+
+  for (const file of files) {
+    const argv = narrowedTo(run, file, repo.files);
+
+    if (argv === undefined || !((argv[0] === 'bun' && argv[1] === 'test') || argv[0] === 'vitest')) return undefined;
+
+    if (argv[0] === 'bun' && !argv.includes('--isolate')) argv.splice(2, 0, '--isolate');
+
+    const withoutImports: Inputs = { ...inputs, imports: undefined };
+    const fileInputs = deriveClosure(argv.join(' '), withoutImports, snapshot).kind === 'derived' ? withoutImports : inputs;
+    const request: GateCacheRequest = { run: argv.join(' '), inputs: fileInputs, repo: snapshot, tools, store };
+    const plan = planGate(request);
+
+    if (plan.kind === 'uncacheable') return undefined;
+    proofs.push({ file, argv, request, plan });
+  }
+
+  const prefix = proofs[0]?.argv.slice(0, -1).join(' ');
+
+  if (!proofs.every((proof) => proof.argv.slice(0, -1).join(' ') === prefix)) return undefined;
+
+  if (proofs.some((proof) => proof.plan.kind === 'hit')) {
+    const after = deriveClosure(run, gate.inputs, repo);
+
+    if (after.kind !== 'derived' || keyFor({ run, closure: full, repo: snapshot, tools }) !== keyFor({ run, closure: after, repo, tools })) return undefined;
+  }
+
+  return proofs;
+}
+
 /**
  * Every file a test runner would execute, from the one enumeration.
  *
@@ -3383,13 +3444,37 @@ function printMatrix(): void {
 function recordProof(
   plan: Extract<Plan, { kind: 'miss' }>,
   gate: GateCacheRequest,
-  result: { readonly seconds: number; readonly revision: string },
+  result: { readonly seconds: number; readonly revision: string; readonly execution?: string },
 ): boolean {
   const refused = recordGreen(plan, gate, result);
 
   if (refused !== undefined) console.log(`      not recorded: ${refused}`);
 
   return refused === undefined;
+}
+
+function recordTestFiles(
+  proofs: readonly TestProof[], repo: Repo,
+  result: { readonly execution: string; readonly seconds: number; readonly revision: string },
+): boolean {
+  const recorded = proofs.filter((proof) => proof.plan.kind === 'miss').map((proof) => {
+    if (proof.plan.kind !== 'miss') return true;
+
+    return recordProof(proof.plan, { ...proof.request, repo }, result);
+  });
+
+  return recorded.every(Boolean);
+}
+
+function cacheRunEnvironment(closure: Closure, argv: readonly string[]): ReturnType<typeof gateEnvironment> | undefined {
+  if (closure.kind !== 'derived') return undefined;
+  const env = gateEnvironment(closure);
+
+  if (argv.some((word) => word.startsWith('--changed=')) && closure.env.includes('KINU_WORKER_SOURCE_INPUTS')) {
+    env.KINU_WORKER_SOURCE_INPUTS = JSON.stringify(closure.corpus ? ['**/*'] : closure.files);
+  }
+
+  return env;
 }
 
 /** The scratch drive's temp root on the owner's box (AGENTS.md, Owner Preferences): unset, TMPDIR is the /tmp RAM
@@ -3730,7 +3815,7 @@ if (import.meta.main) {
   const deployPhase = phaseAsked === undefined || deployPhases.length !== phasesAsked.length ? undefined : deployPhases;
   const flag = process.argv.find((argument) => argument.startsWith('--tier='));
 
-  const asked = selectedGate === undefined && phaseAsked === undefined
+  const asked = (selectedGate === undefined || changedFrom !== undefined) && phaseAsked === undefined
     ? flag?.slice('--tier='.length) ?? (changedFrom === undefined ? undefined : 'commit')
     : 'deploy';
 
@@ -3764,7 +3849,7 @@ if (import.meta.main) {
   const changedByRun = new Map<string, Gate>();
 
   if (changedFrom !== undefined) {
-    for (const gate of tierRun('ci').filter((row) => (row.phase ?? 'source') === 'source')) {
+    for (const gate of tierRun('ci').filter((row) => (row.phase ?? 'source') === 'source' && (selectedGate === undefined || row.run === selectedGate.run))) {
       const selected = changedTestGate(gate, changedFrom, tracked);
 
       if (selected !== undefined) changedByRun.set(gate.run, selected);
@@ -3853,7 +3938,7 @@ if (import.meta.main) {
   // quiet one. A derived gate runs under exactly the environment its key
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
-  const caching = changedFrom === undefined && ciPart === undefined && !process.argv.includes('--no-cache');
+  const caching = cacheEnabled({ changedFrom, ciPart, noCache: process.argv.includes('--no-cache') });
   const tools = toolVersions(root);
   const store = storeAt(defaultStoreDirectory());
   const revision = fullRevision();
@@ -3866,10 +3951,23 @@ if (import.meta.main) {
   const notes = new Set<string>();
 
   // A gate's cache lookup, its header, and what the run needs; hits are settled here, in order.
-  const pending: { readonly index: number; readonly gate: Gate; readonly plan: ReturnType<typeof planGate> | undefined; readonly closure: ReturnType<typeof deriveClosure> }[] = [];
+  const pending: { readonly index: number; readonly gate: Gate; readonly plan: ReturnType<typeof planGate> | undefined;
+    readonly closure: ReturnType<typeof deriveClosure>; readonly proofs?: readonly TestProof[]; readonly argv?: readonly string[] }[] = [];
 
   for (const [index, gate] of gates.entries()) {
-    const plan = caching ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
+    const nativeChanged = changedFrom !== undefined && gate.run.split(/\s+/).some((word) => word.startsWith('--changed='));
+    const proofs = caching && nativeChanged ? testFileProofs(gate, repo, tools, store) : undefined;
+    const missing = proofs?.filter((proof) => proof.plan.kind === 'miss');
+
+    if (proofs !== undefined && missing?.length === 0) {
+      console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
+      console.log(`skip  ${gate.run}  hit ${String(proofs.length)} complete test-file proofs`);
+      skipped.push(gate.run);
+      continue;
+    }
+
+    const argv = missing === undefined ? undefined : [...(missing[0]?.argv.slice(0, -1) ?? []), ...missing.flatMap((proof) => proof.argv.slice(-1))];
+    const plan = caching && !nativeChanged ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
 
     if (plan?.kind === 'hit') {
       console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
@@ -3881,7 +3979,8 @@ if (import.meta.main) {
       continue;
     }
 
-    pending.push({ index, gate, plan, closure: plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo) });
+    pending.push({ index, gate, plan, proofs, argv,
+      closure: plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo) });
   }
 
   // THE WAVE. With more than one gate to run, a tier or a deploy phase admits them through `tierWave` (the measured
@@ -3948,9 +4047,17 @@ if (import.meta.main) {
   };
 
   const runPending = async (entry: (typeof pending)[number]): Promise<void> => {
-    const { index, gate, plan, closure } = entry;
+    const { index, gate, plan, closure, proofs } = entry;
     const header = `\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`;
     const lines: string[] = [];
+
+    if (proofs !== undefined) {
+      lines.push(`      file cache: ${String(proofs.filter((proof) => proof.plan.kind === 'hit').length)} hit, `
+        + `${String(proofs.filter((proof) => proof.plan.kind === 'miss').length)} complete file(s) to run`);
+    } else if (changedFrom !== undefined && gate.run.split(/\s+/).some((word) => word.startsWith('--changed='))) {
+      lines.push('      never cached: native changed selection has no complete per-file closure');
+      uncached.push(`${gate.run} — native changed selection has no complete per-file closure`);
+    }
 
     if (plan?.kind === 'uncacheable') {
       lines.push(`      never cached: ${plan.closure.why}`);
@@ -3969,13 +4076,9 @@ if (import.meta.main) {
     if (!concurrent) console.log([header, ...lines].join('\n'));
 
     const timingPath = resolve(root, 'bench-artifacts/ci/file-' + String(index) + '.json');
-    const argv = rowArgv(gate, tracked, deployPhase !== undefined, ciPart === undefined ? undefined : timingPath);
+    const argv = entry.argv === undefined ? rowArgv(gate, tracked, deployPhase !== undefined, ciPart === undefined ? undefined : timingPath) : [...entry.argv];
 
-    const env = closure.kind === 'derived' ? gateEnvironment(closure) : undefined;
-
-    if (changedFrom !== undefined && closure.kind === 'derived' && env !== undefined && closure.env.includes('KINU_WORKER_SOURCE_INPUTS')) {
-      env.KINU_WORKER_SOURCE_INPUTS = JSON.stringify(closure.corpus ? ['**/*'] : closure.files);
-    }
+    const env = cacheRunEnvironment(closure, argv);
 
     // Under the row's own silence bound: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
@@ -3997,6 +4100,14 @@ if (import.meta.main) {
     }
 
     if (reportOutcome(gate, outcome)) {
+      if (proofs !== undefined) {
+        const after = repoAt(root, (run, files) => claims(run, files));
+
+        if (recordTestFiles(proofs, after, { execution: argv.join(' '), seconds, revision })) recorded.push(gate.run);
+
+        return;
+      }
+
       // Only a miss re-enumerates the tree: `recordGreen` re-derives the
       // closure from what is on disk NOW, and no other path reads it.
       const proofRecorded = plan?.kind === 'miss' && recordProof(

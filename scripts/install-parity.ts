@@ -198,7 +198,9 @@ export function drift(locked: LockedTree, installed: readonly InstalledPackage[]
 
     if (wanted === undefined) {
       lines.push(`${entry.path} holds ${entry.version ?? 'no readable package'} where bun.lock installs nothing`);
-    } else if (entry.version !== wanted) {
+    // Measured 2026-10-06: Bun's canary tarballs report +commit build metadata that its lock omits.
+    // A lock that explicitly records metadata still requires that exact build.
+    } else if (entry.version !== wanted && (wanted.includes('+') || entry.version?.split('+')[0] !== wanted)) {
       lines.push(`${entry.path} holds ${entry.version ?? 'no readable package'} where bun.lock names ${wanted}`);
     }
   }
