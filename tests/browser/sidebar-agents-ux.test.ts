@@ -119,3 +119,39 @@ describe('the sidebar drills into a workspace\'s agents', () => {
     });
   });
 });
+
+// Before its first read answers, the sidebar says nothing about the account's workspaces: "No workspaces yet." then
+// would be a false statement, and to a reader indistinguishable from an account that has none.
+describe('the sidebar before the roster answers', () => {
+  test('it is drawn busy, never empty, and then shows what the read answered', async () => {
+    await withGallery(async (gallery) => {
+      for (const roster of ['held', 'empty'] as const) {
+        const page = await gallery.newPage();
+        await page.setViewport({ width: 1280, height: 900 });
+        await page.goto(`${gallery.origin}/gallery.html?frame=workspaceshell&roster=${roster}`, { waitUntil: 'load' });
+        await page.waitForSelector('nav[aria-label="Primary"]');
+
+        const list = () => page.evaluate(() => ({
+          busy: document.querySelector('[aria-busy="true"]') !== null,
+          empty: document.body.innerText.includes('No workspaces yet.'),
+          storefront: [...document.querySelectorAll('[data-rail] a[href^="/workspace/"]')].some((link) => link.textContent?.includes('Storefront')),
+        }));
+
+        try {
+          if (roster === 'held') {
+            expect(await list()).toEqual({ busy: true, empty: false, storefront: false });
+            await page.evaluate(() => window.dispatchEvent(new Event('gallery:roster-release')));
+            await page.waitForFunction(() => document.querySelector('[aria-busy="true"]') === null);
+            expect(await list()).toEqual({ busy: false, empty: false, storefront: true });
+          } else {
+            await page.waitForFunction(() => document.body.innerText.includes('No workspaces yet.'));
+            expect((await list()).busy).toBe(false);
+          }
+        } finally {
+          await page.evaluate(() => window.dispatchEvent(new Event('gallery:roster-release')));
+          await page.close();
+        }
+      }
+    });
+  });
+});

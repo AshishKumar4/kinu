@@ -132,7 +132,25 @@ describe('ladder-cache — the green path', () => {
     expect(ran).toEqual(['executed']);
     expect(entries(fx.store)).toHaveLength(1);
     expect(cacheEnabled({ changedFrom: 'HEAD', noCache: true })).toBe(false);
-    expect(cacheEnabled({ changedFrom: 'HEAD', ciPart: 'source', noCache: false })).toBe(false);
+  });
+
+  // m2081, m1912: every CI part reran its whole assigned suites, so an unchanged suite was proved again on each push.
+  test('a CI part reuses an unchanged row\'s green proof with the file walls it measured; a hammer run never does', () => {
+    const fx = fixture({ 'scripts/a.test.ts': GREEN });
+    const repo = fx.repo();
+    const run = 'bun scripts/a.test.ts';
+    const first = planGate({ run, inputs: DERIVED, repo, tools: fx.tools, store: fx.store });
+
+    if (first.kind !== 'miss') throw new Error(`expected a miss, got ${first.kind}`);
+    recordGreen(first, { run, inputs: DERIVED, repo, tools: fx.tools, store: fx.store }, { seconds: 4, revision: 'a'.repeat(40), timings: { 'scripts/a.test.ts': 3.5 } });
+    const again = planGate({ run, inputs: DERIVED, repo: fx.repo(), tools: fx.tools, store: fx.store });
+
+    expect({
+      source: cacheEnabled({ ciPart: 'source-3', noCache: false }),
+      upload: cacheEnabled({ ciPart: 'upload', noCache: false }),
+      hammer: cacheEnabled({ ciPart: 'hammer-2', noCache: false }),
+      reused: again.kind === 'hit' ? { revision: again.entry.revision, timings: again.entry.timings } : again.kind,
+    }).toEqual({ source: true, upload: true, hammer: false, reused: { revision: 'a'.repeat(40), timings: { 'scripts/a.test.ts': 3.5 } } });
   });
 
   test('after a green run, a rerun hits every cacheable gate and names the hash, the revision and the closure size', () => {

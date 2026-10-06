@@ -76,6 +76,16 @@ test('the prompt-cache rates step down in size: EMA, then last and mean, then p9
     expect(mean).toBe(last);
     expect(p95).toBeLessThan(mean ?? p95);
     expect(p99).toBe(p95);
+
+    // Each rate stands under its own label: the fixture's EMA 0.91, last 0.94, mean 0.88, p95 0.97, p99 0.99.
+    const rates = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('dl dt')]
+      .map((label) => [label.textContent?.trim() ?? '', Number.parseFloat(label.nextElementSibling?.textContent ?? '')])));
+
+    expect(rates).toMatchObject({ EMA: 91, Last: 94, Mean: 88, p95: 97, p99: 99 });
+
+    // A provider that reports no cache counters shows no rate at all, never an invented 0%.
+    await page.goto(`${origin}/gallery.html?frame=activitycache&cache=unreported`, { waitUntil: 'networkidle0' });
+    expect(await page.evaluate(() => ({ rates: document.querySelectorAll('dl dt').length, percent: document.body.innerText.includes('%') }))).toEqual({ rates: 0, percent: false });
     await page.close();
   });
 });

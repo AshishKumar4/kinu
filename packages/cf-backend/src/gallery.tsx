@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
-import { followJobOutput, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
+import { delegatedTaskMetadata, followJobOutput, summarizeSteps, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -794,6 +794,13 @@ const ROSTER_SOCKET_REFUSED = galleryQuery.get("rosterSocket") === "refused";
 
 const SESSION_EXPIRED = galleryQuery.get("session") === "expired";
 
+/** `&roster=held` holds every roster read until `gallery:roster-release`; `&roster=empty` answers an account with none. */
+const ROSTER_READ = galleryQuery.get("roster");
+
+const rosterRelease = Promise.withResolvers<void>();
+
+window.addEventListener("gallery:roster-release", () => rosterRelease.resolve());
+
 const galleryRosterSockets: GalleryRosterSocket[] = [];
 
 Object.assign(window, { galleryRosterSockets });
@@ -864,6 +871,14 @@ const ANONYMOUS_WORKSPACE = frame === 'workspacepage'
 
 if (ANONYMOUS_WORKSPACE) STUB.set('/api/user/profile', null);
 
+function rosterRead(search: URLSearchParams): Promise<Response> {
+  if (SESSION_EXPIRED) return Promise.resolve(fixtureJson({ error: "Sign in again." }, 401));
+
+  const answer = () => fixtureJson(ROSTER_READ === "empty" ? { entries: [], total: 0, nextCursor: null, counts: galleryRosterCounts() } : rosterAnswer(search));
+
+  return ROSTER_READ === "held" ? rosterRelease.promise.then(answer) : Promise.resolve(answer());
+}
+
 /** Every path fetched, so a gate can prove what the page did not read. */
 function touchFixture(): Response {
   const root = document.documentElement;
@@ -903,9 +918,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     // Cloned per call: a `Response` body reads once and the provider has several reads in flight here.
     if (frame === "rosterauthority") return rosterAuthorityHold.promise.then((held) => held.clone());
 
-    if (SESSION_EXPIRED) return Promise.resolve(fixtureJson({ error: "Sign in again." }, 401));
-
-    return Promise.resolve(fixtureJson(rosterAnswer(roster.searchParams)));
+    return rosterRead(roster.searchParams);
   }
 
   const response = STUB.get(path);
@@ -1461,7 +1474,8 @@ const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "pan
 
 if (AGENTS_PANEL) {
   seedGalleryChat([
-    msg({ id: "ca-u1", role: "user", createdAt: NOW - 6 * 60e3, parts: [{ type: "text", text: "Audit every coupon rule against the campaign table." }] }),
+    // Hired by Main: its task arrives as an event naming the hirer, never as the person speaking.
+    msg({ id: "ca-u1", role: "user", createdAt: NOW - 6 * 60e3, metadata: delegatedTaskMetadata("main", "build"), parts: [{ type: "text", text: "Audit every coupon rule against the campaign table." }] }),
     msg({ id: "ca-a1", role: "assistant", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Two rules skip the expiry check; both are in pricing.ts." }] }),
   ], hostedActorSocketPath("coupon-auditor"));
 
@@ -4978,6 +4992,10 @@ const ACTIVITY_CACHE_HIT = {
   samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, p99: 0.99, emaAlpha: 0.2, warms: 2,
 };
 
+/** `&cache=unreported`: a provider that sends no cache counters, as the steps summarize it. */
+const ACTIVITY_CACHE_SHOWN = new URLSearchParams(location.search).get("cache") === "unreported"
+  ? summarizeSteps([{ usage: { input: 100 } }], { windowLimit: 200 }).cacheHit : ACTIVITY_CACHE_HIT;
+
 /** One nested label and one spent: a dollar cap, a token cap, blended pricing, and a `spent` badge. */
 const ACTIVITY_MISSIONS: WorkspaceSpend["missions"] = [
   {
@@ -6228,7 +6246,7 @@ async function mount() {
     ["activity", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />, entries: ["/"] }],
     ["activityclean", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />, entries: ["/"] }],
     ["activityempty", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />, entries: ["/"] }],
-    ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>, entries: ["/"] }],
+    ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_SHOWN} /></div>, entries: ["/"] }],
     ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
     ["jobstreaming", { node: <JobStreamingFrame />, entries: ["/"] }],

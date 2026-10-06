@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { parseJsonValue, redactPayload } from '@kinu.run/core';
+import { CHECKPOINTS_UNAVAILABLE_NO_GIT, parseJsonValue, redactPayload } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
 
@@ -1388,6 +1388,25 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
       expect(body).not.toContain('read its rules from the campaign table');
       expect(body).not.toContain('File history is unavailable');
       await page.close();
+    });
+  });
+
+  // m268: a device store that cannot answer is never reported as a turn that changed nothing.
+  test('a device that keeps no history and a turn that changed no files are told apart, and neither offers device files', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const notes: Record<string, string> = {};
+
+      for (const listing of ['nogit', 'none'] as const) {
+        const page = await newPage();
+        await openDialog(page, origin, `&checkpoints=${listing}`);
+        expect(await revertAttributes(page, 'data-revert-action')).toEqual(['conversation']);
+        notes[listing] = await page.$eval('[data-device-history]', (element) => element.textContent ?? '');
+        await page.close();
+      }
+
+      expect(notes.nogit).toContain(CHECKPOINTS_UNAVAILABLE_NO_GIT);
+      expect(notes.none).not.toContain(CHECKPOINTS_UNAVAILABLE_NO_GIT);
+      expect(notes.nogit).not.toBe(notes.none);
     });
   });
 
