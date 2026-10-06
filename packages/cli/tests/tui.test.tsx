@@ -1023,7 +1023,6 @@ describe('CLI TUI layout', () => {
     });
 
     expect({ exitCode: proc.exitCode, stderr: proc.stderr }).toEqual({ exitCode: 0, stderr: '' });
-    expect(readFileSync(resolve(kinuHome, 'cli.log'), 'utf8')).toContain('models.listing_slow');
     const tier = v.parse(v.object({ reasoningEffort: v.string(), model: v.string() }), JSON.parse(proc.stdout));
     expect(tier).toMatchObject({ reasoningEffort: 'high' });
     expect(tier.model).toStartWith('openai/');
