@@ -5,7 +5,7 @@
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import { modelMessageSchema, type ModelMessage } from 'ai';
-import { JsonValueSchema, isParsedJsonObject, type JsonObject, type JsonValue } from '../utils/json';
+import { isParsedJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import * as v from 'valibot';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
@@ -21,15 +21,11 @@ export type StoredValue = JsonValue;
 const NativeValueSchema: v.GenericSchema<NativeValue> = v.lazy(() => NativeValueOptions);
 
 const NativeValueOptions: v.GenericSchema<NativeValue> = v.union([
-  v.string(), v.number(), v.boolean(), v.null(), v.undefined(),
+  v.string(), v.pipe(v.number(), v.finite()), v.boolean(), v.null(), v.undefined(),
   v.instance(Uint8Array), v.instance(ArrayBuffer), v.instance(URL),
   v.array(NativeValueSchema),
   v.record(v.string(), NativeValueSchema),
 ]);
-
-const NativeScalarSchema = v.union([v.string(), v.number(), v.boolean(), v.null()]);
-
-const StoredValueSchema: v.GenericSchema<StoredValue> = JsonValueSchema;
 
 /** `bytes` lets the decoder detect truncation; `buffer` restores an `ArrayBuffer` source type. */
 const BinaryEnvelopeSchema = v.object({
@@ -62,8 +58,7 @@ function encodeValue(value: NativeValue): StoredValue {
 
   if (isNativeArray(value)) return value.map(encodeValue);
 
-  // Non-finite numbers are refused, as the stored schema refuses them.
-  if (v.is(NativeScalarSchema, value)) return v.parse(StoredValueSchema, value);
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
   const mapped: Record<string, StoredValue> = {};
 
   for (const key of Object.keys(value)) {

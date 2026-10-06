@@ -146,6 +146,25 @@ export async function ask(model: never, prompt: string, spend: never): Promise<s
 `,
   },
   {
+    rule: "model-method-boundary",
+    at: "packages/core/src",
+    bad: `declare const model: { doStream(): Promise<unknown> };
+export async function stream(): Promise<unknown> {
+  return model.doStream();
+}
+`,
+    good: `declare function wrapLanguageModel(input: {
+  model: unknown;
+  middleware: { wrapStream(options: { doStream(): Promise<unknown> }): Promise<unknown> };
+}): unknown;
+export function stream(model: unknown): unknown {
+  return wrapLanguageModel({ model, middleware: {
+    wrapStream: async ({ doStream }) => doStream(),
+  } });
+}
+`,
+  },
+  {
     rule: "no-cli-credential-flag",
     // A credential in argv: readable from the process list and kept by every command log.
     bad: `declare function run(argv: readonly string[]): void;

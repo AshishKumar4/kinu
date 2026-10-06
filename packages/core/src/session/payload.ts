@@ -5,7 +5,7 @@ import * as v from 'valibot';
 
 import { KinuError } from '../obs/error';
 import { sha256Hex } from '../safety/argument-digest';
-import { JsonValueSchema, JsonObjectSchema, type JsonValue, type JsonObject } from '../utils/json';
+import { parseJsonValue, JsonObjectSchema, type JsonValue, type JsonObject } from '../utils/json';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { SPILL_DIRS } from '../context-budget';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -50,9 +50,9 @@ export class SessionPayloadReader {
   }
 
   private readJson(payload: SessionPayload): Effect.Effect<JsonValue, KinuError> {
-    if (payload.json !== null) return Effect.sync(() => v.parse(JsonValueSchema, JSON.parse(payload.json ?? '')));
+    if (payload.json !== null) return Effect.sync(() => parseJsonValue(payload.json ?? ''));
 
-    return Effect.map(this.readBytes(payload.path, payload.digest), (bytes) => v.parse(JsonValueSchema, JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))));
+    return Effect.map(this.readBytes(payload.path, payload.digest), (bytes) => parseJsonValue(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
   }
 
   resolveMedia(descriptor: JsonObject): Promise<JsonObject> {

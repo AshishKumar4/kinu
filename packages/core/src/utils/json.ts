@@ -26,8 +26,7 @@ export function isJsonObject(value: JsonValue): value is JsonObject {
 
 /** One-step check; only for values JSON by construction. Otherwise use {@link isJsonObject}. */
 export function isParsedJsonObject(value: JsonValue): value is JsonObject {
-  return value !== null && !Array.isArray(value)
-    && !v.is(StringSchema, value) && !v.is(NumberSchema, value) && !v.is(BooleanSchema, value);
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /** No walk, no copy: JSON by construction. */
