@@ -3748,3 +3748,81 @@ describe('the home creation form, as a browser submits it', () => {
     });
   });
 });
+
+/** Two files dropped one after the other, each under the cap but over it together: the one dropped first is kept,
+ *  the other is refused by name, and only what was kept goes out with the words. */
+describe('attachments at the message cap', () => {
+  test('two drops that together exceed the cap keep the first, refuse the second by name, and send only the first', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      const pane = '[data-agent-pane="checkout-fixes/main"]';
+      await page.waitForSelector(`${pane} textarea:not([disabled])`);
+
+      // Two separate drops in one task: both read their files while the other is still being read.
+      await page.$eval(pane, (node) => {
+        const drop = (name: string) => {
+          const files = new DataTransfer();
+          files.items.add(new File([new Uint8Array(640 * 1024)], name, { type: 'application/octet-stream' }));
+          node.dispatchEvent(new DragEvent('dragover', { dataTransfer: files, bubbles: true, cancelable: true }));
+          node.dispatchEvent(new DragEvent('drop', { dataTransfer: files, bubbles: true, cancelable: true }));
+        };
+
+        drop('first.bin');
+        drop('second.bin');
+      });
+
+      const composer = `${pane} [data-composer-root]`;
+      await page.waitForFunction((at) => (document.querySelector(at)?.textContent ?? '').includes('second.bin'), {}, composer);
+
+      const shown = await page.$eval(composer, (root) => ({
+        chips: [...root.querySelectorAll('button[aria-label^="Remove "]')].map((button) => button.getAttribute('aria-label')),
+        refusal: [...root.querySelectorAll('*')].map((node) => node.textContent ?? '').find((text) => text.includes('did not fit')) ?? '',
+      }));
+
+      expect(shown.chips).toEqual(['Remove first.bin']);
+      expect(shown.refusal).toContain('second.bin');
+
+      await page.type(`${pane} textarea`, 'Here are the files');
+      await page.click(`${pane} button[aria-label="Send"]`);
+      await page.waitForFunction(() => document.documentElement.dataset.galleryChatSent !== undefined);
+      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:first.bin', 'text:Here are the files']);
+      await page.close();
+    });
+  });
+});
+
+/** Mid-turn, Branch runs the draft's words beside the turn: it is offered only while there are words to run, never for
+ *  attachments alone. A composer showing a status row keeps that row's Retry and stays usable. */
+describe('the composer while a turn runs and under a status row', () => {
+  test('Branch follows the words in the draft, not its attachments; a status row keeps its retry and the composer', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1100, height: 1200 });
+      await page.goto(`${origin}/gallery.html?frame=composer`, { waitUntil: 'networkidle0' });
+      const live = '[data-gallery-composer="live"]';
+      const branch = () => page.$$eval(`${live} button`, (buttons) => buttons.some((button) => button.textContent?.trim() === 'Branch'));
+
+      expect(await branch()).toBe(true);
+      await page.$eval(`${live} textarea`, (box) => { box.select(); });
+      await page.keyboard.press('Backspace');
+      await page.waitForFunction((at) => ![...document.querySelectorAll(`${at} button`)].some((button) => button.textContent?.trim() === 'Branch'), {}, live);
+
+      const attach = await page.$(`${live} input[type="file"]`);
+      const file = `${process.env.TMPDIR ?? '/tmp'}/branch-attachment.csv`;
+      await Bun.write(file, 'cart,total\n1,20\n');
+      await attach?.uploadFile(file);
+      await page.waitForFunction((at) => (document.querySelector(at)?.textContent ?? '').includes('branch-attachment.csv'), {}, live);
+      expect(await branch()).toBe(false);
+
+      await page.type(`${live} textarea`, 'try the other fix');
+      await page.waitForFunction((at) => [...document.querySelectorAll(`${at} button`)].some((button) => button.textContent?.trim() === 'Branch'), {}, live);
+
+      const notice = '[data-gallery-composer="notice"]';
+      expect(await page.$$eval(`${notice} button`, (buttons) => buttons.some((button) => button.textContent?.trim() === 'Retry'))).toBe(true);
+      expect(await page.$(`${notice} textarea:not([disabled])`)).not.toBeNull();
+      await page.close();
+    });
+  });
+});

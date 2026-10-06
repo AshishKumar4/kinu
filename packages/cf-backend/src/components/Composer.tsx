@@ -190,7 +190,6 @@ export function Composer({
   notices, mode, attachments, modelPicker, onBranch, textareaRef,
 }: ComposerProps) {
   const empty = value.trim() === "" && (attachments?.parts.length ?? 0) === 0;
-  const hasFailedAttachment = (attachments?.failed?.length ?? 0) > 0;
   const streaming = liveness.kind === "live";
   const stranded = liveness.kind === "stranded";
   // A branch runs the draft's words as a parallel head: attachments alone give it nothing to run.
@@ -277,7 +276,7 @@ export function Composer({
                 <span className="hidden @[30rem]:inline p-meta">Branch</span>
               </button>
             )}
-            <SendControls streaming={streaming} empty={empty} blocked={disabled || hasFailedAttachment} stopping={stopping}
+            <SendControls streaming={streaming} empty={empty} blocked={disabled} stopping={stopping}
               onSend={onSend} onStop={() => { setStopping(true); onStop(); }} />
           </div>
         </div>
