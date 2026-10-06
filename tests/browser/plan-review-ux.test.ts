@@ -736,8 +736,12 @@ describe('deciding a plan', () => {
       await held.waitForFunction(() => document.documentElement.dataset.galleryDecisions === '1');
       expect(await decisionEnabled(held, 'Approve')).toBe(false);
       await held.evaluate(() => window.dispatchEvent(new CustomEvent('gallery:decision-answer', { detail: null })));
-      // Answered: the plan settles, or its controls come back; either way the second press sent nothing.
-      await held.waitForFunction(() => [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].every((button) => !button.disabled));
+      // Answered: the plan settles and Approve goes, or Approve comes back; either way the second press sent nothing.
+      await held.waitForFunction(() => {
+        const approve = [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].find((button) => button.textContent?.includes('Approve'));
+
+        return approve === undefined || !approve.disabled;
+      });
       expect(await decisions(held)).toBe(1);
       await held.close();
 
