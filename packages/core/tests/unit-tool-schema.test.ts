@@ -1,14 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { asSchema, jsonSchema, tool, type ToolSet } from 'ai';
 import { mcpToolKey } from '../src/tools/mcp-naming';
-import { describeMcpTool, servedMcpDescriptors } from '../src/tools/mcp-surface';
+import { describeMcpTool, McpToolSurfaceCache, type SerializableToolDescriptor } from '../src/tools/mcp-surface';
 import { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from '../src/tools/tool-schema';
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { runChat, UNBOUNDED_STEPS, type ChatEvent } from '../src/chat';
+import { runChat, type ChatEvent } from '../src/chat';
 import { conversationsFor } from './helpers';
 
 /** An MCP tool whose schema uses what providers reject: `$schema`, `const`, `oneOf`, a boolean subschema, a root `anyOf`. */
@@ -123,7 +123,7 @@ describe('built-in input schemas per provider', () => {
     const results: Extract<ChatEvent, { type: 'tool-result' }>[] = [];
 
     for await (const event of runChat({
-      model, modelSpec: spec, system: 's', history: [{ role: 'user', content: 'go' }], stopWhen: UNBOUNDED_STEPS,
+      model, modelSpec: spec, system: 's', history: [{ role: 'user', content: 'go' }],
       tools: buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
     })) {
       if (event.type === 'tool-result') results.push(event);
@@ -170,7 +170,7 @@ describe('MCP tool names', () => {
     expect(mcpToolKey('github', 'create_issue')).toBe('mcp_github_create_issue');
   });
 
-  test('tools whose keys would collide are all offered, each under its own key', () => {
+  test('tools whose keys would collide are all offered, each under its own key', async () => {
     // `a.b` and `a_b` sanitize alike; server `x_y` + tool `z` and server `x` + tool `y_z` join alike.
     const described = [['srv', 'a.b'], ['srv', 'a_b'], ['x_y', 'z'], ['x', 'y_z'], ['srv', 'plain']].map(([server = '', name = '']) => {
       const answer = describeMcpTool({ id: server, name: server }, { name, inputSchema: { type: 'object' } });
@@ -180,7 +180,12 @@ describe('MCP tool names', () => {
       return answer.admitted;
     });
 
-    const keys = servedMcpDescriptors(described).map((descriptor) => descriptor.toolKey);
+    // Admitted as a turn admits them: through the surface cache, against a window that carries every one.
+    let admitted: readonly SerializableToolDescriptor[] = [];
+    const cache = new McpToolSurfaceCache(async (descriptors) => { admitted = descriptors; });
+
+    await cache.refresh(async () => ({ descriptors: described, unavailable: [] }), { contextWindow: 200_000, modelOutputLimit: null, nativeToolTokens: 0 });
+    const keys = admitted.map((descriptor) => descriptor.toolKey);
 
     expect(keys).toHaveLength(5);
     expect(new Set(keys).size).toBe(5);

@@ -2,7 +2,7 @@
 // a logical actor of the forked workspace, with actor-keyed rows in the one store
 // (no per-head scratch database), so a head can take a claimed turn.
 
-import type { LanguageModel, ToolSet } from 'ai';
+import type { ToolSet } from 'ai';
 import {
   type HeadRuntime, type HeadGrounding, type HeadInput, type HeadSeat,
   type WebSearchProvider, type CodemodeProvider,
@@ -19,14 +19,9 @@ import type { CLIRuntime } from './runtime';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 
 export interface CLIHeadRuntimeDeps {
-  /** Read per spawn: a resolver session claims its model on first turn, so it may
-   *  not exist when the runtime is built. */
-  model: () => LanguageModel;
   /** Profile the merge's `judge` route resolves against; read per merge. */
   profile: () => Promise<ResolvedTurnProfile>;
   bindMergeModel: RouteModelBinder;
-  /** The model a head that names one runs on; a spec it cannot resolve fails that head. */
-  resolveModel: (spec: string) => LanguageModel;
   parentRuntime: CLIRuntime;
   webSearch: WebSearchProvider;
   /** Extra codemode namespaces, without `agents.*`/`agent.*`: a head never inherits authority to delegate. */
@@ -55,7 +50,6 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
     spawnHead: async (input) => spawnSeatedHead(input, {
       seat: deps.hostHead,
-      model: async () => headModel(input, deps),
       codemodeTool: (seat) => hostedCodemodeTool(seat.actor, deps.codemodeExtras()),
       webSearch: deps.webSearch,
       split: () => (request) => runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request),
@@ -72,11 +66,6 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   };
 
   return deps.grounding ? { ...runtime, grounding: deps.grounding } : runtime;
-}
-
-/** A head that names no model runs on the session's. */
-function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps) {
-  return input.model ? { model: deps.resolveModel(input.model), spec: input.model } : { model: deps.model(), spec: null };
 }
 
 /**

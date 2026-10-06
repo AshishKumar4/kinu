@@ -270,9 +270,11 @@ describe('the genesis turn names the workspace over its stand-in', () => {
     expect(namingCalls).toHaveLength(1);
     expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: STAND_IN, nameOrigin: 'auto' });
 
-    // The retry is due once its backoff has passed on the platform clock; the alarm's pass replays it.
+    // The retry is due once its backoff has passed on the platform clock; the alarm's pass replays it, and the
+    // title closes in its own fiber rather than inside the alarm's job.
     setSystemTime(new Date(Date.now() + TERMINAL_EFFECT_RETRY_CEILING_MS));
     await harness.agent.terminalRetryPass();
+    await joinHarnessFibers();
     expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: 'OAuth Callback Audit', nameOrigin: 'auto' });
 
     await turns.run('What did you find?');

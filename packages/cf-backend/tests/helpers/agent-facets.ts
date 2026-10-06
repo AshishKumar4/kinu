@@ -2,7 +2,9 @@
 import { Database } from 'bun:sqlite';
 import { WORKSPACE_ROOT } from '@kinu.run/core';
 import type { AgentContext } from 'agents';
-import { AgentFacet, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
+import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
+import { agentCallsThrough } from '../../src/dynamic-worker-slots';
+import { attempt } from '@kinu.run/core/obs';
 import { AgentDatabase } from '../../src/agent-facet/agent-database';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import { agentStateShellId, type AgentFacetPlacement, type AgentWorkspaceHost } from '../../src/agent-facets';
@@ -10,8 +12,10 @@ import { agentStateShellId, type AgentFacetPlacement, type AgentWorkspaceHost } 
 const databases = new Map<string, Database>();
 
 export interface InProcessAgentFacets {
-  open(placement: AgentFacetPlacement, workspace: AgentWorkspaceHost): Promise<AgentFacet>;
+  open(placement: AgentFacetPlacement, workspace: AgentWorkspaceHost): Promise<AgentFacetCalls>;
   drop(storageKey: string): void;
+  /** Every open agent's chat runs nothing and its settled turns' effects have closed. */
+  idle(): Promise<void>;
   reset(storageKey: string): void;
   /** Every live-output call an agent's isolate made to the workspace, in order: each is an RPC in production. */
   traceCalls(): readonly string[];
@@ -42,22 +46,49 @@ export function agentDatabase(storageKey: string): Database {
   const db = new Database(':memory:');
 
   databases.set(storageKey, db);
-  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, memory: unreachable, program: unreachable, sayToParent: unreachable });
+  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable });
 
   return db;
 }
 
 export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => AgentContext): InProcessAgentFacets {
-  const live = new Map<string, AgentFacet>();
+  const live = new Map<string, OpenFacet>();
+  // Two calls that race to open one agent reach one isolate, as a stub's do.
+  const opening = new Map<string, Promise<OpenFacet>>();
   const traceCalls: string[] = [];
 
   contextOver = makeCtx;
 
   return {
     open: async (placement, host) => {
-      const held = live.get(placement.storageKey);
+      const key = placement.storageKey;
 
-      if (held !== undefined) return held;
+      const held = opening.get(key) ?? openFacet(placement, host).then((opened) => {
+        live.set(key, opened);
+
+        return opened;
+      });
+
+      opening.set(key, held);
+
+      return (await held).calls;
+    },
+    reset: (storageKey) => {
+      live.get(storageKey)?.lost.abort(new Error("the agent's isolate reset"));
+      live.delete(storageKey);
+      opening.delete(storageKey);
+    },
+    traceCalls: () => traceCalls,
+    idle: async () => { await Promise.all([...live.values()].map(({ facet }) => facet.idle())); },
+    drop: (storageKey) => {
+      live.delete(storageKey);
+      opening.delete(storageKey);
+      databases.get(storageKey)?.close();
+      databases.delete(storageKey);
+    },
+  };
+
+  async function openFacet(placement: AgentFacetPlacement, host: AgentWorkspaceHost) {
       const db = agentDatabase(placement.storageKey);
       const session = await sessionOrFailure(host.session());
       const stateSession = await sessionOrFailure(host.stateSession());
@@ -82,14 +113,20 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           guard: (...args) => host.guard(...args),
           debit: (...args) => host.debit(...args),
           prepareTurn: (turnId) => host.prepareTurn(turnId),
-          profile: (turnId, tools, mode) => host.profile(turnId, tools, mode),
+          prepareChat: (request) => host.prepareChat(request),
+          chatEvent: (event) => host.chatEvent(event),
+          owedReport: (...args) => host.owedReport(...args),
+          parentReport: (report) => host.parentReport(report),
+          autoTitle: (subject) => host.autoTitle(subject),
+          hireAdvisor: (advisor) => host.hireAdvisor(advisor),
+          armWake: (atMs) => host.armWake(atMs),
+          birthContext: (drainTurnId) => host.birthContext(drainTurnId),
+          steerSkills: (text, alreadyActive) => host.steerSkills(text, alreadyActive),
           advise: (review) => host.advise(review),
           enqueueTurn: (input) => host.enqueueTurn(input),
           executeTool: (call) => host.executeTool(call),
           observe: (lines, call) => host.observe(lines, call),
           answerMetadata: (turnId, narration) => host.answerMetadata(turnId, narration),
-          finishTurn: (turnId, end) => host.finishTurn(turnId, end),
-          failTurn: (turnId, failure, figures) => host.failTurn(turnId, failure, figures),
           getAuth: (key, opts) => host.getAuth(key, opts),
           listCredentials: () => host.listCredentials(),
           relayDevice: (provider) => host.relayDevice(provider),
@@ -98,6 +135,8 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           forwardCodex: (callId, request) => host.forwardCodex(callId, request),
           cancelCodex: (callId) => host.cancelCodex(callId),
           sayToParent: (signal) => host.sayToParent(signal),
+          reportModelCall: (report) => host.reportModelCall(report),
+          reportModelOperation: (event) => host.reportModelOperation(event),
         },
         WORKSPACE_NAME: placement.workspaceName,
         SHELL_ID: placement.shellId,
@@ -107,17 +146,30 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       };
 
       const facet = new AgentFacet(makeCtx(db, placement.storageKey), env);
+      const lost = new AbortController();
 
-      live.set(placement.storageKey, facet);
+      // A reset isolate fails every call it still held, as a dropped RPC does.
+      const calls = agentCallsThrough((call) => attempt({ doing: "calling an agent's isolate", otherwise: 'io' }, () => untilLost(call(facet), lost.signal)));
 
-      return facet;
-    },
-    reset: (storageKey) => { live.delete(storageKey); },
-    traceCalls: () => traceCalls,
-    drop: (storageKey) => {
-      live.delete(storageKey);
-      databases.get(storageKey)?.close();
-      databases.delete(storageKey);
-    },
-  };
+      return { facet, calls, lost };
+  }
+}
+
+interface OpenFacet {
+  readonly facet: AgentFacet;
+  readonly calls: AgentFacetCalls;
+  readonly lost: AbortController;
+}
+
+async function untilLost<A>(work: Promise<A>, lost: AbortSignal): Promise<A> {
+  const reset = Promise.withResolvers<never>();
+  const cut = (): void => { reset.reject(lost.reason); };
+
+  lost.addEventListener('abort', cut, { once: true });
+
+  try {
+    return await Promise.race([work, reset.promise]);
+  } finally {
+    lost.removeEventListener('abort', cut);
+  }
 }

@@ -187,7 +187,8 @@ async function run(input: {
   const { rt, db } = createTestRuntime();
   const logger = createRecordingLogger();
   const cancel = new AbortController();
-  const seats = hostedSeatsOver({ rt, db });
+  const model = scriptedNodes([input.branch0, input.branch1], cancel);
+  const seats = hostedSeatsOver({ rt, db, model: () => model });
   let seated = 0;
 
   const deps: SwarmRunDeps = {
@@ -202,7 +203,7 @@ async function run(input: {
 
       return await seats.hostNode(node);
     },
-    model: () => scriptedNodes([input.branch0, input.branch1], cancel),
+    model: () => model,
     mode: 'build',
     logger,
     signal: cancel.signal,

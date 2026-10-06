@@ -12,13 +12,14 @@ import {
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes
+  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes,
+  initPendingSendTables, initTerminalEffectTable, PendingSendStore,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentTurnActivity, AgentTurnOpening, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
+import type { AgentTurnActivity, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
 import type { AgentWorkspace } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
@@ -109,6 +110,7 @@ export class AgentDatabase {
       readonly home: string;
       readonly state: () => NimbusSandboxHandle;
       readonly enqueueTurn: BackendHost['enqueueTurn'];
+      readonly turnInFlight: () => boolean;
       readonly program: AgentWorkspace['program'];
       readonly memory: AgentWorkspace['memory'];
       readonly sayToParent: AgentWorkspace['sayToParent'];
@@ -120,12 +122,15 @@ export class AgentDatabase {
       transactionSync: (write) => storage.transactionSync(write),
       exec: { exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) },
     });
+    initPendingSendTables((ddl) => { storage.sql.exec(ddl); });
+    initTerminalEffectTable((ddl) => { storage.sql.exec(ddl); });
   }
 
   /** Writes only when the workspace's rows changed, so a read of an unchanged agent writes nothing. */
   adopt(snapshot: AgentSnapshot): void {
     const unchanged = holds(this.storage, 'workspace_identity', snapshot.identity)
-      && snapshot.lineage.every((row) => holds(this.storage, 'workspace_actors', row) && holdsConfig(this.storage, row.actor_id ?? null, snapshot.config));
+      && snapshot.lineage.every((row) => holds(this.storage, 'workspace_actors', row) && holdsConfig(this.storage, row.actor_id ?? null, snapshot.config))
+      && snapshot.scaffold.every((row) => holds(this.storage, 'scaffold_versions', row));
 
     if (!unchanged) {
       this.storage.transactionSync(() => {
@@ -137,6 +142,11 @@ export class AgentDatabase {
         }
 
         for (const row of snapshot.config) upsertRow(this.storage, 'actor_config', row);
+
+        for (const row of snapshot.scaffold) {
+          this.storage.sql.exec("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND version != ? AND status = 'current'", row.actor_id ?? null, row.version ?? null);
+          upsertRow(this.storage, 'scaffold_versions', row);
+        }
       });
     }
 
@@ -258,7 +268,7 @@ export class AgentDatabase {
     return {
       broadcast: () => undefined,
       enqueueTurn: (input) => this.workspace.enqueueTurn(input),
-      turnInFlight: () => false,
+      turnInFlight: () => this.workspace.turnInFlight(),
       closed: () => false,
       setTimer: (fn, ms) => {
         setTimeout(() => detach(attempt({ doing: "running an agent's debounced drain", otherwise: 'io' }, fn).pipe(
@@ -270,7 +280,7 @@ export class AgentDatabase {
   }
 
   prepare(turnId: string, prepared: PreparedAgentTurn): void {
-    this.priced = { model: prepared.model, pricing: prepared.pricing };
+    this.priced = { model: prepared.sources.model, pricing: prepared.pricing };
     this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(turnId, ...args) };
     this.storage.transactionSync(() => {
       void this.sql`UPDATE scaffold_versions SET status = 'historical'
@@ -358,22 +368,6 @@ export class AgentDatabase {
     return await inheritedContextFromTranscript(this.readable().transcript);
   }
 
-  async open(opening: AgentTurnOpening): Promise<void> {
-    const bound = this.actorHost().bindStores(this.reference());
-    const history = bound.stores.history;
-    const rows = history.transcript(CHAT_SESSION_ID);
-
-    if (rows.has(opening.id)) return;
-
-    const message = await history.admitInput({
-      id: opening.id, turnId: opening.id, message: opening.message, assertOwner: () => bound.handle.assertCurrent(),
-    });
-
-    const prepared = await rows.prepareUser({ id: opening.id, turnId: opening.id, message, metadata: opening.metadata });
-
-    this.storage.transactionSync(() => rows.appendUser(prepared));
-  }
-
   async recover(): Promise<AgentRecovery> {
     const host = this.actorHost();
 
@@ -393,7 +387,6 @@ export class AgentDatabase {
     };
   }
 
-
   async answer(completion: NonNullable<HeadReport['canonicalCompletion']>, metadata: JsonObject | null): Promise<void> {
     const transcript = this.transcript();
 
@@ -411,16 +404,11 @@ export class AgentDatabase {
     return await this.readable().transcript.history(limit);
   }
 
+  /** Or reserved and not yet written. */
   admitted(id: string): boolean {
-    return this.readable().transcript.has(id);
-  }
+    const { actor, transcript } = this.readable();
 
-  reopen(): string {
-    return settleSync(Effect.suspend(() => {
-      const opener = this.storage.transactionSync(() => this.transcript().reopenNewestTurn());
-
-      return opener === null ? Effect.fail(new KinuError('bad_input', 'There is no message to retry.')) : Effect.succeed(opener.id);
-    }));
+    return transcript.has(id) || new PendingSendStore(this.sql, actor.actorId).has(id);
   }
 
   interrupt(turnId: string): void {
@@ -437,13 +425,4 @@ export class AgentDatabase {
 
     return created;
   }
-
-  clear(): void {
-    const reference = this.reference();
-
-    this.actorHost().bindStores(reference).stores.history.clearConversation(CHAT_SESSION_ID, () => this.actorHost().hosted(reference)?.session.inFlight === true
-      ? Effect.fail(new KinuError('denied', 'Stop the active turn before clearing its conversation'))
-      : Effect.void);
-  }
-
 }

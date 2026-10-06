@@ -13,9 +13,11 @@ import { usageReported, type Usage } from '../usage';
 import type { TurnAccumulator } from './turn-accumulator';
 import type { TurnSteering } from './turn-steering';
 import {
-  planOverflowRecovery,
+  planOverflowRecovery, statedContextLimit,
   type OverflowRecoveryDecision,
 } from '../turn-failure';
+import type { ChatEvent } from '../chat';
+import type { ContextMeasures } from '../events/recorder';
 import { diagnostics, toKinuError, settleLoggedSync } from '../obs/index';
 
 /** Structural; both backends pass their RunEventRecorder. */
@@ -295,6 +297,51 @@ export function applyOverflowRecovery(opts: {
   if (recovery.forceCompaction) opts.state.armCompaction(opts.sessionKey);
 
   return recovery;
+}
+
+export interface ExecutionContextLedger {
+  readonly state: CompactionTriggerState;
+  readonly key: string;
+  readonly recorder: TurnRunRecorder & { readContextMeasures(): ContextMeasures };
+}
+
+export interface SettledExecution {
+  readonly runId: string | null;
+  readonly failure: string | null;
+  readonly turnWasOverflowRetry: boolean;
+  readonly lastPromptTokens: number | undefined;
+  readonly historyLength: number;
+  readonly contextWindow: number | null;
+  readonly model: string | undefined;
+}
+
+/** Whether the turn is retried once on a folded history. */
+export function settleExecutionContext(ledger: ExecutionContextLedger, settled: SettledExecution): boolean {
+  persistMeasuredPromptTokens(ledger.state, ledger.key, settled.lastPromptTokens, settled.historyLength);
+
+  if (settled.failure === null) return false;
+
+  const recovery = applyOverflowRecovery({
+    error: settled.failure, lastPromptTokens: settled.lastPromptTokens, contextWindow: settled.contextWindow,
+    turnWasOverflowRetry: settled.turnWasOverflowRetry, state: ledger.state, sessionKey: ledger.key,
+  });
+
+  const refused = Math.max(ledger.recorder.readContextMeasures().gate?.tokens ?? 0, settled.lastPromptTokens ?? 0);
+  const window = statedContextLimit(settled.failure) ?? (refused > 0 ? refused : null);
+
+  if (recovery.failureClass === 'context_length' && settled.model !== undefined && window !== null && settled.runId !== null) {
+    ledger.recorder.emit(settled.runId, { type: 'context_overflow', model: settled.model, window });
+  }
+
+  return recovery.enqueueRetry;
+}
+
+export function recordExecutionEvent(recorder: TurnRunRecorder, runId: string | null, event: ChatEvent): void {
+  if (runId === null) return;
+
+  if (event.type === 'model-fallback') recorder.emit(runId, { type: 'model_fallback', from: event.from, to: event.to, reason: event.reason });
+
+  if (event.type === 'context-admitted') recorder.emit(runId, { type: 'context_admitted', tokens: event.tokens, contextWindow: event.contextWindow });
 }
 
 /** A settled turn, as the credit decision below reads it. */

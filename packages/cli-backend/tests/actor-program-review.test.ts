@@ -110,7 +110,7 @@ test('hosted polled cancellation refuses a promoted direct effect without a sign
   const model = unusedModel();
 
   const report = await runHeadInference(headInput(), {
-    ...headLoopSeams(rt), clock: REAL_CLOCK, model, capture: new HeadCapture(), workspaceLayout: 'private-scratch',
+    ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, capture: new HeadCapture(),
     isAborted: () => true, abortReason: () => 'already cancelled',
     tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
   });
@@ -167,7 +167,7 @@ for (const program of programs) test(`${program.name} preserves reasoning and ac
   const deltas: Array<{ kind: string; text: string }> = [];
 
   const report = await runHeadInference(headInput(), {
-    ...headLoopSeams(rt), clock: REAL_CLOCK, model, tools, capture, workspaceLayout: 'private-scratch', isAborted: () => false,
+    ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, tools, capture, isAborted: () => false,
     reportMessages: produced => { messages.push(...produced); },
     reportDelta: (kind, text) => { deltas.push({ kind, text }); },
   });
@@ -236,7 +236,7 @@ test('a custom model call preserves completed tool messages when its next reques
   } });
 
   const running = runHeadInference(headInput(), {
-    ...headLoopSeams(rt), clock: REAL_CLOCK, model, capture: new HeadCapture(), workspaceLayout: 'private-scratch',
+    ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, capture: new HeadCapture(),
     signal: abort.signal, isAborted: () => abort.signal.aborted,
     tools: { probe: tool({ inputSchema, execute: async () => value }) },
     reportMessages: produced => { messages.push(...produced); },

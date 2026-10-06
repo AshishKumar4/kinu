@@ -366,6 +366,8 @@ describe('LocalAgentSession — plan review', () => {
     const { db, agent, events } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
       { answer: 'Plan submitted for review.' },
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
     ]);
 
     // A subordinate reports to whoever hired it, so a plan has no owner to decide it
@@ -377,12 +379,14 @@ describe('LocalAgentSession — plan review', () => {
     });
 
     try {
-      await expect(agent.enqueueTurn({ text: 'Draft a plan.', metadata: { kinuMode: 'plan' } }))
-        .rejects.toThrow('delegated task reports its result instead');
+      // A Plan task runs in Plan, as a hosted hire's does; it reports its result, it submits nothing for review.
+      expect(await agent.enqueueTurn({ text: 'Draft a plan.', metadata: { kinuMode: 'plan' } })).toEqual({ status: 'queued' });
 
       await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
-      expect(events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan'))
-        .toMatchObject({ success: false });
+      const submissions = events.filter((event) => event.type === 'tool-result' && event.toolName === 'submit_plan');
+
+      expect(submissions).toHaveLength(2);
+      expect(submissions.every((event) => event.type === 'tool-result' && !event.success)).toBe(true);
       expect(await agent.getActivePlanReview()).toBeNull();
     } finally {
       await agent.end();

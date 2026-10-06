@@ -1,6 +1,5 @@
 /** Canonical system-prompt builder for both surfaces. Wording lives in `prompting/section-templates.ts`; this
  *  file decides branches and slots, so sections are evolvable without their conditions. */
-import type { ModelMessage } from 'ai';
 import type { AgentRuntime } from './types/agent-runtime';
 import {
   BUILTIN_TOOL_SPECS,
@@ -353,26 +352,4 @@ export function buildSystemPromptSync(
     renderAgentNames(surface, render),
     renderRoleSection(surface, render),
   ].filter(Boolean).join('\n\n');
-}
-
-export interface AssignedTurnFraming {
-  readonly system: string;
-  readonly messages: readonly ModelMessage[];
-}
-
-/**
- * Framing for a parent-assigned turn, shared by both backends so a hosted hire is framed as an agent rather
- * than a fork. The brief is the opening user message; the hire wording follows from `report` being on the surface.
- */
-export function assignedTurnFraming(
-  rt: AgentRuntime,
-  input: {
-    readonly brief: string;
-    readonly surface: SystemPromptOptions;
-  },
-): AssignedTurnFraming {
-  return {
-    system: buildSystemPromptSync(rt, input.surface),
-    messages: [{ role: 'user', content: input.brief }],
-  };
 }

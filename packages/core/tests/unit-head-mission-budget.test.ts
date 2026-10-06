@@ -15,7 +15,7 @@ import { usageTotal } from '../src/usage';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { fixtureCompaction, hostedSeatsOver } from './helpers-actor-host';
 
 function steppingModel(perStep: { input: number; output: number; stopAfter?: number }): LanguageModel {
   let step = 0;
@@ -64,21 +64,20 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
 }
 
 /** The mission ledger is a separate database so the counting seam sees only the governor's statements. */
-async function hostedHead() {
+async function hostedHead(model: LanguageModel) {
   const { rt, testSql } = createTestRuntime();
 
-  return hostedSeatsOver({ rt, db: testSql.db }).seat('head-mission', 'swarm');
+  return hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('head-mission', 'swarm');
 }
 
 async function runHead(mission: MissionScope | null, opts: { stopAfter?: number } = {}) {
   const capture = new HeadCapture();
 
   const deps: Parameters<typeof runHeadInference>[1] = {
-    ...await hostedHead(),
-    model: steppingModel({ input: 1_000, output: 200, ...opts }),
+    ...await hostedHead(steppingModel({ input: 1_000, output: 200, ...opts })),
+    compaction: fixtureCompaction(),
     tools: buildHeadAccumulatorTools(capture),
     capture,
-    workspaceLayout: 'shared-workspace',
     clock: REAL_CLOCK, isAborted: () => false,
   };
 

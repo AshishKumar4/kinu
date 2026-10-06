@@ -7,6 +7,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
+import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, createTestActorsOver, unobservedSearchSeams, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
@@ -654,13 +655,13 @@ function nodeModel(opts: {
 async function workspace(): Promise<{
   rt: AgentRuntime;
   db: Database;
-  activation: () => SwarmRunDeps['hostNode'];
+  activation: (model: () => LanguageModel) => SwarmRunDeps['hostNode'];
 }> {
   const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
   await writeText(rt.storage.vfs, REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
 
-  return { rt, db, activation: () => hostedSeatsOver({ rt, db }).hostNode };
+  return { rt, db, activation: (model) => hostedSeatsOver({ rt, db, model }).hostNode };
 }
 
 function inlineFiber() {
@@ -723,7 +724,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: () => first.model, mode: 'build', logger: log },
+      { reportModelCall: unobservedSpend, rt, hostNode: activation(() => first.model), model: () => first.model, mode: 'build', logger: log },
       resolved(),
     );
 
@@ -760,7 +761,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
 
     const deps: AgentsToolDeps = {
       mode: 'build', swarms: true,
-      swarm: { rt, hostNode: activation(), model: () => second.model, ...unobservedSearchSeams() },
+      swarm: { rt, hostNode: activation(() => second.model), model: () => second.model, ...unobservedSearchSeams() },
       budget: governor,
     };
 
@@ -887,7 +888,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const first = nodeModel({ freezeFromStart: 1, frozenNodes: FLAT_SEARCH.branches });
 
     const frozen = runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: () => first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode: activation(() => first.model), model: () => first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(FLAT_SEARCH),
     );
 
@@ -913,7 +914,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const { fiber, settled } = inlineFiber();
 
     const agents = createAgentsTool({
-      mode: 'build', swarms: true, swarm: { rt, hostNode: activation(), model: () => second.model, ...unobservedSearchSeams() },
+      mode: 'build', swarms: true, swarm: { rt, hostNode: activation(() => second.model), model: () => second.model, ...unobservedSearchSeams() },
     });
 
     const runner = new BackgroundJobRunner({
@@ -1006,7 +1007,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const first = nodeModel({ freezeFromStart: 3 });
 
     const frozen = runSwarm(
-      { reportModelCall: unobservedSpend, rt, hostNode: activation(), model: () => first.model, mode: 'build', logger: createRecordingLogger() },
+      { reportModelCall: unobservedSpend, rt, hostNode: activation(() => first.model), model: () => first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
 
@@ -1026,7 +1027,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
 
     // A second host: an eviction is what destroys the first one's admitted turns.
     const agents = createAgentsTool({
-      mode: 'build', swarms: true, swarm: { rt, hostNode: activation(), model: () => second.model, ...unobservedSearchSeams() },
+      mode: 'build', swarms: true, swarm: { rt, hostNode: activation(() => second.model), model: () => second.model, ...unobservedSearchSeams() },
     });
 
     const runner = new BackgroundJobRunner({
@@ -1076,7 +1077,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
   test('a run the re-drive REFUSED is retired, and the agent is told', async () => {
     // No durable job: nothing can re-enter the run, so retirement must still fire.
     const { rt, db, activation } = await workspace();
-    const hostNode = activation();
+    const hostNode = activation(() => first.model);
     const sql = rt.storage.sql;
     const journal = new HeadJournal(sql, rt.actor);
     const first = nodeModel({ freezeFromStart: 3 });
@@ -1112,7 +1113,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // A run marked `interrupted` by an earlier activation must still settle when a later gate refuses it;
     // gating on this activation having marked something would strand its rows.
     const { rt, activation } = await workspace();
-    const hostNode = activation();
+    const hostNode = activation(() => first.model);
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
@@ -1183,7 +1184,7 @@ describe('the start-of-life sweep reaches registry-only jobs', () => {
 describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
   test('a refused run\'s ledger row is failed, and the surface stops calling it running', async () => {
     const { rt, activation } = await workspace();
-    const hostNode = activation();
+    const hostNode = activation(() => first.model);
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
@@ -1214,7 +1215,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
 
   test('a claimed run keeps its ledger row for the re-entry to settle', async () => {
     const { rt, activation } = await workspace();
-    const hostNode = activation();
+    const hostNode = activation(() => first.model);
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
@@ -1308,7 +1309,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
 describe('a named swarm is called by its name', () => {
   test('the name reaches the root row and the run summary', async () => {
     const { rt, activation } = await workspace();
-    const hostNode = activation();
+    const hostNode = activation(() => model.model);
     const sql = rt.storage.sql;
 
     const named = resolveSwarm({
@@ -1332,7 +1333,7 @@ describe('a named swarm is called by its name', () => {
 
   test('a composition with no name falls back to its provenance label', async () => {
     const { rt, activation } = await workspace();
-    const hostNode = activation();
+    const hostNode = activation(() => model.model);
     const sql = rt.storage.sql;
     const model = nodeModel();
     await runSwarm(
@@ -1379,7 +1380,7 @@ function jobResultReport(result: string | null) {
 describe('a second search over a task already running is refused', () => {
   test('no new root, no new ledger row, and the refusal names the run to wait for', async () => {
     const { rt, activation } = await workspace();
-    const hostNode = activation();
+    const hostNode = activation(() => second.model);
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const log = createRecordingLogger();

@@ -94,7 +94,8 @@ describe('turn-pipeline correctness wiring', () => {
     const held = Promise.withResolvers<void>();
     const seen: Array<ReasoningEffort | null> = [];
 
-    const tools = { probe: tool({
+    // Named as a builtin: a turn sends only the tools its profile admits, and a stray name is none of them.
+    const tools = { file: tool({
       inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {}, additionalProperties: false }),
       execute: async () => {
         // The status the tab reads, asked from inside the detached tool's own context.
@@ -115,7 +116,7 @@ describe('turn-pipeline correctness wiring', () => {
     };
 
     const turnA = await admit('low');
-    const probe = turnA?.tools?.probe;
+    const probe = turnA?.tools?.file;
 
     if (!probe) throw new Error('the admitted tool is missing');
 

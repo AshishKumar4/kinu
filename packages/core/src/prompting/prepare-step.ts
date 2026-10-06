@@ -5,11 +5,11 @@
  */
 
 import { Effect } from 'effect';
-import { settleSync } from '../obs/effect';
+import { settle, settleSync } from '../obs/effect';
 import type { ModelMessage, SystemModelMessage } from 'ai';
 import type { TurnContextMeter } from '../context-meter';
 import type { ExtensionHost } from '../extension';
-import { MissionBudgetExhausted, type MissionGovernor } from '../mission-budget';
+import { MissionBudgetExhausted, type SpendGate } from '../mission-budget';
 import { markCacheTail, type PromptCacheRoute, type PromptCacheStrategy } from './cache-breakpoints';
 import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
 import { normalizeReplayForDestination } from './replay-normalization';
@@ -47,7 +47,7 @@ export interface StepPipeline {
   readonly cache?: StepCachePlan | null | undefined;
   /** Step-prune budget; null/absent skips the pruning pass. */
   readonly prune?: StepPruneBudget | null | undefined;
-  readonly budget?: MissionGovernor | undefined;
+  readonly budget?: SpendGate | undefined;
   readonly dynamic?: StepDynamicContext | undefined;
   /** Replayed tool ids/reasoning are normalized for this provider right before cache markers and measurement. */
   readonly destinationProviderId?: string | undefined;
@@ -74,10 +74,20 @@ export interface StepPrepareContext {
 /** Step overrides, or `undefined` when unchanged; synchronous unless an extension must finish I/O. Throws
  *  {@link MissionBudgetExhausted} on a spent cap, after the governor wrote `budget_exhausted`. */
 export function composePrepareStep(pipeline: StepPipeline, ctx: StepPrepareContext): StepPrepareResult | Promise<StepPrepareResult> {
-  const refusal = pipeline.budget?.guard('model_call');
+  const refusal = pipeline.budget?.guard('model_call') ?? null;
 
-  if (refusal) return settleSync(Effect.die(new MissionBudgetExhausted(refusal)));
+  if (refusal instanceof Promise) {
+    return settle(Effect.flatMap(Effect.promise(() => refusal), (ruled) => (ruled === null
+      ? Effect.promise(async () => await preparedStep(pipeline, ctx))
+      : Effect.die(new MissionBudgetExhausted(ruled)))));
+  }
 
+  if (refusal !== null) return settleSync(Effect.die(new MissionBudgetExhausted(refusal)));
+
+  return preparedStep(pipeline, ctx);
+}
+
+function preparedStep(pipeline: StepPipeline, ctx: StepPrepareContext): StepPrepareResult | Promise<StepPrepareResult> {
   if (pipeline.context !== undefined) return pipeline.context.base().then(base => {
     if (base.changed) pipeline.dynamic?.ledger.reset();
 

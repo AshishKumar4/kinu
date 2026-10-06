@@ -488,8 +488,8 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
   // The worker's own signal, so the owner can stop it and leave its siblings running.
   const own = workerSignal(signal);
   const release = workers?.register(id, own.stop);
-  // A per-child copy, so `nodeDeps` keeps the run-level model and the search's signal.
-  const perChild = agentNodes && routed !== undefined ? { ...nodeDeps, model: assignedModel } : { ...nodeDeps };
+  // A per-child copy, so `nodeDeps` keeps the search's signal.
+  const perChild = { ...nodeDeps };
   perChild.signal = own.signal;
 
   const run = await runNodeAgent({

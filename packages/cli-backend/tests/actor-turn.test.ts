@@ -128,8 +128,8 @@ test('the real head caller executes its selected program and retains its produce
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
     loop: defaultLoopOrigin('swarm'),
   }, {
-    ...headLoopSeams(rt), clock: REAL_CLOCK, model: chat.model, tools: {}, capture: new HeadCapture(),
-    workspaceLayout: 'private-scratch', isAborted: () => false,
+    ...headLoopSeams(rt, { model: () => chat.model }), clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(),
+    isAborted: () => false,
     reportMessages: messages => { produced.push(...messages); },
   });
 
@@ -154,8 +154,8 @@ test('separate model calls inside a selected head program share its real mission
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
     loop: defaultLoopOrigin('swarm'),
   }, {
-    ...headLoopSeams(rt), clock: REAL_CLOCK, model: chat.model, tools: {}, capture: new HeadCapture(), mission,
-    workspaceLayout: 'private-scratch', isAborted: () => false,
+    ...headLoopSeams(rt, { model: () => chat.model }), clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), mission,
+    isAborted: () => false,
   });
 
   expect(report.status).toBe('budget_exceeded');

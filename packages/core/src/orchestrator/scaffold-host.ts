@@ -5,7 +5,7 @@ import { runChat, type ChatOptions } from '../chat';
 import { ExtensionHost, type KinuExtension } from '../extension';
 import { evidenceWindow } from '../utils/evidence-window';
 import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
-import { addUsage, type Usage } from '../usage';
+import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from '../usage';
 import type { CallAccount } from '../providers/quota';
 import { decodeJsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
@@ -33,7 +33,7 @@ export interface ScaffoldBridgeOpts extends ScaffoldRunControl {
   modelContext?: ChatOptions['modelContext'];
   /** Resolved per call so mid-turn rebuilds land. */
   tools: () => ToolSet;
-  streamOptions?: Pick<ChatOptions, 'providerOptions' | 'onStep' | 'stopWhen'> & Pick<KinuExtension, 'prepareStep'>;
+  streamOptions?: Pick<ChatOptions, 'providerOptions' | 'onStep' | 'stopWhen' | 'budget'> & Pick<KinuExtension, 'prepareStep'>;
   /** Absent means the scaffold's spend is attributed to nothing. */
   spend?: ModelCallSpend;
 }
@@ -88,12 +88,20 @@ async function* streamScaffoldChat(
       signal: opts.signal, extensions,
       providerOptions: opts.streamOptions?.providerOptions,
       stopWhen: opts.streamOptions?.stopWhen,
+      // Charged here: the turn records a program's boundary only.
+      ...(opts.streamOptions?.budget !== undefined && { budget: opts.streamOptions.budget }),
       onToolOutput: part => {
         outputs.set(part.toolCallId, { type: 'tool-output-available', toolCallId: part.toolCallId,
           output: part.output, preliminary: part.preliminary });
       },
       onStep: async (step, messages) => {
         modelId = step.response.modelId;
+        const stepUsage = normalizeUsage(step.usage);
+
+        if (usageReported(stepUsage)) {
+          opts.streamOptions?.budget?.debit(usageTotal(stepUsage) ?? 0, { calls: 1, usage: stepUsage, ...(opts.spec !== undefined && { spec: opts.spec }) });
+        }
+
         await opts.streamOptions?.onStep?.(step, messages);
       },
     })) {

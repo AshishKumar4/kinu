@@ -10,7 +10,7 @@ import type { JsonValue } from '../src/utils/json';
 import { actorJobsFor, createTestWorkspace, conversationsFor } from './helpers';
 import { buildHeadToolSet } from '../src/heads/head-tools';
 import { jsonSchema, tool, type LanguageModel, type ModelMessage } from 'ai';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { fixtureCompaction, hostedSeatsOver } from './helpers-actor-host';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
@@ -25,6 +25,7 @@ import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/utils/evidence-window';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { getRunEvents } from '../src/read-models/runs';
+import { profileCatalogDigest } from '../src/profiles/catalog';
 
 /** One text step, finishReason 'stop', so the head ends in a single step. */
 function fakeHeadModel(answer: string, opts?: { throwError?: string; usage?: { inputTokens: number; outputTokens: number } }): LanguageModel {
@@ -71,12 +72,11 @@ const deps = async (
   over?: Partial<HeadInferenceDeps>,
 ): Promise<HeadInferenceDeps> => {
   const { rt, testSql } = createTestRuntime();
-  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'swarm');
+  const seat = await hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('head-under-test', 'swarm');
 
   return {
-    actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
-    model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, ...over,
-    workspaceLayout: over?.workspaceLayout ?? 'shared-workspace',
+    actor: seat.actor, runId: seat.runId, sources: seat.sources, compaction: fixtureCompaction(),
+    tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, ...over,
   };
 };
 
@@ -138,15 +138,36 @@ describe('runHeadInference — report assembly', () => {
     const base = await deps(fakeHeadModel('done'));
     const served: string[] = [];
 
-    const profile: HeadInferenceDeps['profile'] = async (request) => {
-      const resolved = await base.profile(request);
-      served.push(resolved.profile.tier.model);
+    const sources: HeadInferenceDeps['sources'] = {
+      ...base.sources,
+      profileInputs: async () => {
+        const inputs = await base.sources.profileInputs();
+        const tester = inputs.envelope.catalog.roles.tester;
 
-      return { ...resolved, profile: { ...resolved.profile, tier: { ...resolved.profile.tier, replaced: 'anthropic/claude-retired' } } };
+        if (tester === undefined) throw new Error('the fixture must declare its tester role');
+
+        const catalog = {
+          ...inputs.envelope.catalog,
+          roles: { ...inputs.envelope.catalog.roles, tester: { ...tester, tier: 'deep' } },
+          tiers: { ...inputs.envelope.catalog.tiers, deep: { model: 'anthropic/claude-retired' } },
+        };
+
+        return {
+          envelope: { ...inputs.envelope, catalog, digest: profileCatalogDigest(catalog) },
+          provider: { ...inputs.provider, availableModels: [...inputs.provider.availableModels, 'anthropic/claude-current'] },
+        };
+      },
+      models: { ...base.sources.models, resolve: (spec) => {
+        served.push(spec);
+
+        return base.sources.models.resolve(spec);
+      } },
     };
 
-    await runHeadInference(headInput(), { ...base, profile });
+    const report = await runHeadInference(headInput(), { ...base, sources });
 
+    expect(report.status).toBe('completed');
+    expect(served).toEqual(['fake/test-model']);
     expect(getRunEvents(base.actor.stores.eventRecorder, base.runId).filter((event) => event.type === 'model_fallback')).toMatchObject([
       { type: 'model_fallback', from: 'anthropic/claude-retired', to: served[0], reason: 'its provider no longer lists it' },
     ]);
@@ -398,17 +419,17 @@ describe('durable delegated turn opening', () => {
 
   test('an explicitly empty working revision is authoritative, not a new birth', async () => {
     const { rt, testSql } = createTestRuntime();
-    const first = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'agent');
+    const model = fakeHeadModel('Child answer.');
+    const first = await hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('empty-reader', 'agent');
     await first.actor.session.restoreHistory([]);
-    const restored = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'agent');
+    const restored = await hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('empty-reader', 'agent');
 
     try {
       await restored.actor.session.restoreWorkingHistory();
 
       const report = await runHeadInference(headInput(), {
-        ...restored, model: fakeHeadModel('Child answer.'), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-        workspaceLayout: 'shared-workspace',
-        framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: 'New assignment.' }] },
+        ...restored, compaction: fixtureCompaction(), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
+        brief: () => 'Read the ledger.', opening: [{ role: 'user', content: 'New assignment.' }],
         delegation: { assignmentId: 'assignment-a', birthContext: [{ role: 'user', content: 'Do not resurrect this birth prefix.' }] },
       });
 
@@ -450,19 +471,18 @@ describe('durable delegated turn opening', () => {
         };
       } });
 
-      let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'agent');
+      let seat = await hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('durable-reader', 'agent');
 
       const run = async (assignmentId: string) => runHeadInference(headInput(), {
-        ...seat, model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-        workspaceLayout: 'shared-workspace',
-        framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: 'Check this ledger.' }] },
+        ...seat, compaction: fixtureCompaction(), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
+        brief: () => 'Read the ledger.', opening: [{ role: 'user', content: 'Check this ledger.' }],
         delegation: { assignmentId, birthContext: [{ role: 'user', content: 'Frozen birth prefix.' }] },
       });
 
       try {
         expect((await run('assignment-a')).status).toBe('completed');
 
-        if (cold) seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'agent');
+        if (cold) seat = await hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('durable-reader', 'agent');
         expect((await run('assignment-a')).status).toBe('completed');
         expect((await run('assignment-b')).status).toBe('completed');
 
@@ -481,25 +501,24 @@ describe('durable delegated turn opening', () => {
 
   test('a staged replacement survives delegation opening and cold restore without resurrecting the birth seed', async () => {
     const { rt, testSql } = createTestRuntime();
-    let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'agent');
     const model = fakeHeadModel('Child answer.');
+    let seat = await hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('edited-reader', 'agent');
 
     const run = (assignmentId: string, edit: boolean) => runHeadInference(headInput(), {
-      ...seat, model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-      workspaceLayout: 'shared-workspace',
-      framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: assignmentId }] },
+      ...seat, compaction: fixtureCompaction(), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
+      brief: () => 'Read the ledger.', opening: [{ role: 'user', content: assignmentId }],
       delegation: { assignmentId, birthContext: [{ role: 'user', content: 'Original birth prefix.' }] },
-      profile: async (input) => {
+      sources: { ...seat.sources, profileInputs: async () => {
         if (edit) await seat.actor.session.restoreHistory([{ role: 'user', content: 'Edited working prefix.' }]);
 
-        return seat.profile(input);
-      },
+        return seat.sources.profileInputs();
+      } },
     });
 
     try {
       expect((await run('assignment-a', false)).status).toBe('completed');
       expect((await run('assignment-b', true)).status).toBe('completed');
-      seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'agent');
+      seat = await hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('edited-reader', 'agent');
       expect((await run('assignment-c', false)).status).toBe('completed');
       expect(seat.actor.session.history).toEqual([
         { role: 'user', content: 'Edited working prefix.' },

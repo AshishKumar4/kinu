@@ -27,7 +27,7 @@ import { DEFAULT_CACHE_RETENTION, parseModelSpec, type CacheRetention } from './
 import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import { modelStepMessages } from './prompting/tool-error-feedback';
-import type { MissionGovernor } from './mission-budget';
+import type { SpendGate } from './mission-budget';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
@@ -157,7 +157,7 @@ export interface ChatOptions {
   /** The subset of `tools` the model may call; the rest stay wired for execution. Absent, all are offered. */
   activeTools?: readonly string[];
   /** A label whose cumulative cap is spent declines the next request. */
-  budget?: MissionGovernor;
+  budget?: SpendGate;
   /** An extra stop reason; there is no step cap to combine with (see UNBOUNDED_STEPS). */
   stopWhen?: StopCondition<ToolSet>;
   /** Each finished step, raw and as its own recorded messages, awaited, since the sink may be another DO the next request
@@ -175,7 +175,7 @@ export interface ChatOptions {
  * Never stop: there is no per-turn step bound. The SDK defaults to `stepCountIs(1)`, so an omitted `stopWhen` would
  * end every turn after one step.
  */
-export const UNBOUNDED_STEPS: StopCondition<ToolSet> = () => false;
+const UNBOUNDED_STEPS: StopCondition<ToolSet> = () => false;
 
 /** Prefixes recorded in durable failure prose by the removed silence watchdog; the classifier below reads them. */
 const RATE_LIMITED_TURN_PREFIX = 'Turn ended by provider rate limiting:';

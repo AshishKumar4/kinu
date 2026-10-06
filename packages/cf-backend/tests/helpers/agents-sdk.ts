@@ -117,14 +117,6 @@ export async function joinHarnessKeepAlives(agent: workersModule.DurableObject):
   while (open !== undefined && open.size > 0) await Promise.allSettled(open);
 }
 
-export function holdHarnessFiber(body: Promise<unknown>): void {
-  harnessFiberBodies.add(body);
-
-  const release = (): void => { harnessFiberBodies.delete(body); };
-
-  body.then(release, release);
-}
-
 /** Resolves when every `runFiber` body started so far has settled. */
 export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);

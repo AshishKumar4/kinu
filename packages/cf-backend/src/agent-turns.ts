@@ -1,48 +1,39 @@
-/** The workspace half of an agent-isolate turn (D9). */
+/** The workspace half of an agent's turns (D9): their tools and sources. */
 import { asSchema, type ToolSet } from 'ai';
-import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { hold, KinuError, logged, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
-  AgentOpenTurns, encodeModelMessageValues, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
-  type ActorReference, type DynamicContext, type HostedActor, type ModelPricing, type ResolvedTurnProfile, type WorkMode,
-  type HeadInput, type HeadInferenceDeps, type HeadReport, type SqlExecutor, type MissionBudgetPort, type Executor,
+  AgentOpenTurns, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
+  BUILTIN_TOOL_NAMES,
+  type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type WorkMode,
+  type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type Executor,
 } from '@kinu.run/core';
-import {
-  prepareHostedTurn, settleHostedTask,
-  type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn,
-} from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
+import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
   seams(): HostedActorSeams;
-  deliver(reference: ActorReference, task: AgentTurnTask): Promise<void>;
-  interrupt(reference: ActorReference, turnId: string): Promise<void>;
-  holds(reference: ActorReference, turnId: string): Promise<boolean>;
-  dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
+  reference(actorId: string): ActorReference;
+  run(reference: ActorReference, task: AgentTurnTask): Promise<AgentTurnEnd>;
+  interrupt(reference: ActorReference, turnId: string | null): Promise<void>;
   pricing(spec: string): ModelPricing | null;
-  window(spec: string): Promise<PreparedAgentTurn['window']>;
   accounts(): Readonly<Record<string, string>>;
-  live(actorId: string): boolean;
 }
 
-export interface AgentTurnHooks {
-  begin(): Promise<void>;
-  ended(end: AgentTurnEnd): Promise<void>;
-  failed(failure: KinuError): Promise<void>;
-  after(): Promise<void>;
-  lost(): Promise<void>;
+export interface ChatTurnRequest {
+  readonly turnId: string | null;
+  readonly mode: WorkMode;
+  readonly userText: string;
+  readonly parentDriven: boolean;
 }
 
-interface PendingTurn {
+interface OpenTurn {
   readonly reference: ActorReference;
   readonly request: HostedTurnRequest;
-  readonly hooks: AgentTurnHooks;
   prepared: PreparedHostedTurn | null;
-  profile?: ResolvedTurnProfile;
-  delivered: boolean;
-  over: boolean;
-  readonly done: ReturnType<typeof Promise.withResolvers<void>>;
+  /** Over the turn's own tools, as its isolate resolves it. */
+  profile: ResolvedTurnProfile | null;
 }
 
 async function describe(tools: ToolSet): Promise<AgentToolDescriptor[]> {
@@ -55,137 +46,86 @@ async function describe(tools: ToolSet): Promise<AgentToolDescriptor[]> {
 }
 
 export class AgentTurns {
-  private readonly pending = new Map<string, PendingTurn>();
+  private readonly open = new Map<string, OpenTurn>();
 
-  out(): boolean {
-    return [...this.pending.values()].some((pending) => pending.delivered && !pending.over);
-  }
+  private readonly chats = new Map<string, string>();
+
+  private readonly waiting = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
 
   constructor(private readonly deps: AgentTurnsDeps) {}
 
-  start(reference: ActorReference, request: HostedTurnRequest, hooks: AgentTurnHooks): Promise<void> {
-    const pending: PendingTurn = {
-      reference, request, hooks, prepared: null, delivered: false, over: false, done: Promise.withResolvers<void>(),
-    };
-
-    this.pending.set(request.sequenceId, pending);
-
-    return settle(attempt({ doing: "handing a delegated turn to the agent's own isolate", otherwise: 'io' }, async () => {
-      await hooks.begin();
-      await this.deps.deliver(reference, { sequenceId: request.sequenceId, body: request.body, mode: request.mode });
-      pending.delivered = true;
-    }).pipe(Effect.catch((failure) => this.closing(pending, { failure }))));
-  }
-
-  async run(reference: ActorReference, input: HeadInput, inference: HeadInferenceDeps): Promise<HeadReport> {
-    const result = Promise.withResolvers<Effect.Effect<HeadReport, KinuError>>();
+  async run(reference: ActorReference, input: HeadInput, inference: RunInference): Promise<HeadReport> {
     const opened = { actorId: reference.actorId, turnId: input.id };
     const ledger = new AgentOpenTurns(this.deps.sql);
     const interruptions: Promise<void>[] = [];
-    const interrupt = () => { interruptions.push(this.interruptRun(reference, input.id)); };
+    const cut = () => { interruptions.push(this.interruptRun(reference, input.id)); };
 
-    inference.signal?.addEventListener('abort', interrupt, { once: true });
+    const request: HostedTurnRequest = { sequenceId: input.id, body: input.task, mode: input.mode, parentDriven: false, run: { input, inference } };
 
-    const after = async () => {
-      inference.signal?.removeEventListener('abort', interrupt);
+    this.open.set(input.id, { reference, request, prepared: null, profile: null });
+    ledger.open(opened, Date.now());
+    inference.signal?.addEventListener('abort', cut, { once: true });
+
+    try {
+      if (inference.isAborted()) cut();
+      const { activity: _activity, narration: _narration, figures: _figures, produced, errorMessage, ...report } = await this.deps.run(reference, { sequenceId: input.id, body: input.task, mode: input.mode });
+
+      if (produced !== undefined) inference.reportMessages?.(decodeModelMessageValues(produced));
+
+      return {
+        ...report,
+        errorMessage: errorMessage ?? undefined,
+        fileChanges: inference.capture.files.snapshot(),
+        ...(inference.isAborted() && { status: 'aborted', errorMessage: inference.abortReason?.() ?? errorMessage ?? undefined }),
+      };
+    } finally {
+      inference.signal?.removeEventListener('abort', cut);
       ledger.close(opened);
-    };
-
-    await this.start(reference, { sequenceId: input.id, body: input.task, mode: input.mode, run: { input, inference } }, {
-      begin: async () => { ledger.open(opened, Date.now()); },
-      ended: async ({ activity: _activity, narration: _narration, produced, errorMessage, ...report }) => {
-        result.resolve(attempt({ doing: 'receiving an isolated swarm turn', otherwise: 'io' }, async (): Promise<HeadReport> => {
-          if (produced !== undefined) inference.reportMessages?.(produced);
-
-          return {
-            ...report,
-            errorMessage: errorMessage ?? undefined,
-            fileChanges: inference.capture.files.snapshot(),
-            ...(inference.isAborted() && { status: 'aborted', errorMessage: inference.abortReason?.() ?? errorMessage ?? undefined }),
-          };
-        }));
-      },
-      failed: async (failure) => { result.resolve(Effect.fail(failure)); },
-      after,
-      lost: async () => {
-        result.resolve(Effect.fail(new KinuError('io', "The agent's isolate reset before its turn ended.")));
-        await after();
-      },
-    });
-
-    if (inference.isAborted()) await this.interruptRun(reference, input.id);
-
-    const outcome = await result.promise;
-    await Promise.all(interruptions);
-
-    return await settle(outcome);
+      this.close(input.id);
+      await Promise.all(interruptions);
+    }
   }
 
-  interruptRun(reference: ActorReference, turnId: string): Promise<void> {
-    return settle(attempt({ doing: 'interrupting a swarm turn in its own isolate', otherwise: 'io' },
-      () => this.deps.interrupt(reference, turnId)).pipe(Effect.catch((failure) => Effect.sync(() => {
-        diagnostics.failure('agent.interrupt_failed', failure, { actor: reference.actorId });
-      }))));
+  private async interruptRun(reference: ActorReference, turnId: string): Promise<void> {
+    await hold(logged('agent.run_interrupt_failed', { doing: 'interrupting a run in its own isolate', otherwise: 'io' }, () => this.deps.interrupt(reference, turnId)));
   }
 
-  reconcile(): Promise<void> {
-    return settle(Effect.forEach(this.pending.values(), (pending) => (pending.over || !pending.delivered ? Effect.void : attempt(
-      { doing: "asking an agent's isolate for the turn it holds", otherwise: 'io' },
-      () => this.deps.holds(pending.reference, pending.request.sequenceId),
-    ).pipe(
-      Effect.catch((failure) => Effect.sync(() => {
-        diagnostics.failure('agent.holds_unanswered', failure, { actor: pending.reference.actorId });
-
-        return true;
-      })),
-      Effect.flatMap((held) => (held || pending.over ? Effect.void : this.closing(pending, { lost: true }))),
-    )), { discard: true }));
+  chatOpened(actorId: string, turnId: string): void {
+    this.chats.set(actorId, turnId);
   }
 
-  private closing(
-    pending: PendingTurn, outcome: { readonly end: AgentTurnEnd } | { readonly failure: KinuError } | { readonly lost: true },
-  ): Effect.Effect<void> {
-    pending.over = true;
+  chatClosed(actorId: string): void {
+    const turnId = this.chats.get(actorId);
 
-    const settling = 'lost' in outcome
-      ? attempt({ doing: "recovering a turn an agent's isolate lost", otherwise: 'io' }, () => {
-        diagnostics.event('agent.turn_lost', { actor: pending.reference.actorId, turn: pending.request.sequenceId });
+    this.chats.delete(actorId);
 
-        return pending.hooks.lost();
-      })
-      : attempt({ doing: 'settling a delegated turn the agent finished', otherwise: 'io' }, async () => {
-        if ('end' in outcome) {
-          await pending.hooks.ended(outcome.end);
-
-          if (!this.deps.live(pending.reference.actorId) || pending.request.run !== undefined) return;
-          await settleHostedTask(this.deps.seams(), this.prepared(pending), pending.request, outcome.end);
-        } else {
-          await pending.hooks.failed(outcome.failure);
-        }
-      }).pipe(Effect.andThen(() => attempt({ doing: 'closing the books on a delegated turn', otherwise: 'io' }, () => pending.hooks.after())));
-
-    return settling.pipe(
-      Effect.catch((failure) => Effect.sync(() => {
-        diagnostics.failure('subordinate.delegated_turn_settle_failed', failure, { actor: pending.reference.actorId });
-      })),
-      Effect.ensuring(this.release(pending)),
-    );
+    if (turnId !== undefined) this.close(turnId);
   }
 
-  /** A re-driven lost turn reuses its id. */
-  private release(pending: PendingTurn): Effect.Effect<void> {
-    return Effect.sync(() => {
-      if (this.pending.get(pending.request.sequenceId) === pending) this.pending.delete(pending.request.sequenceId);
-      pending.done.resolve();
-    });
+  private close(turnId: string): void {
+    const turn = this.open.get(turnId);
+
+    this.open.delete(turnId);
+
+    if (turn === undefined || this.inFlight(turn.reference.actorId)) return;
+    this.waiting.get(turn.reference.actorId)?.resolve();
+    this.waiting.delete(turn.reference.actorId);
   }
 
-  private running(actorId: string): PendingTurn | null {
-    for (const pending of this.pending.values()) {
-      if (pending.reference.actorId === actorId && !pending.over) return pending;
+  private running(actorId: string): string | null {
+    const chat = this.chats.get(actorId);
+
+    if (chat !== undefined) return chat;
+
+    for (const [turnId, turn] of this.open) {
+      if (turn.reference.actorId === actorId && turn.request.run !== undefined) return turnId;
     }
 
     return null;
+  }
+
+  inFlightAny(): boolean {
+    return this.chats.size > 0 || [...this.open.values()].some((turn) => turn.request.run !== undefined);
   }
 
   inFlight(actorId: string): boolean {
@@ -193,88 +133,130 @@ export class AgentTurns {
   }
 
   async settled(actorId: string): Promise<void> {
-    await Promise.all([...this.pending.values()].filter((pending) => pending.reference.actorId === actorId)
-      .map((pending) => pending.done.promise));
+    if (!this.inFlight(actorId)) return;
+    const waiting = this.waiting.get(actorId) ?? Promise.withResolvers<void>();
+
+    this.waiting.set(actorId, waiting);
+    await waiting.promise;
   }
 
   async idle(): Promise<void> {
-    while (this.pending.size > 0) await Promise.all([...this.pending.values()].map((pending) => pending.done.promise));
+    while (this.inFlightAny()) {
+      const actors = new Set([...this.chats.keys(), ...[...this.open.values()].map((turn) => turn.reference.actorId)]);
+
+      await Promise.all([...actors].map((actorId) => this.settled(actorId)));
+    }
   }
 
   async interrupt(actorId: string): Promise<void> {
-    const pending = this.running(actorId);
+    const turnId = this.running(actorId);
 
-    if (pending !== null) await this.deps.interrupt(pending.reference, pending.request.sequenceId);
+    if (turnId !== null) await this.deps.interrupt(this.deps.reference(actorId), this.chats.has(actorId) ? null : turnId);
   }
 
   currentTurn(actorId: string): string | null {
-    return this.running(actorId)?.request.sequenceId ?? null;
+    return this.running(actorId);
   }
 
   async beforeRetirement(actorId: string, interrupt: boolean): Promise<void> {
-    const pending = this.running(actorId);
+    if (!this.inFlight(actorId)) return;
 
-    if (pending === null) return;
+    if (interrupt) return await this.interrupt(actorId);
 
-    if (interrupt) return await this.deps.interrupt(pending.reference, pending.request.sequenceId);
-
-    return await settle(Effect.fail(new KinuError('denied', 'This actor holds a turn in flight; retire it once the turn settles.')));
+    return settleSync(Effect.fail(new KinuError('denied', 'This actor holds a turn in flight; retire it once the turn settles.')));
   }
 
-  turn(actorId: string, turnId: string): PendingTurn {
-    const pending = this.pending.get(turnId);
+  turn(actorId: string, turnId: string): OpenTurn {
+    const turn = this.open.get(turnId);
 
-    if (pending !== undefined && pending.reference.actorId === actorId) return pending;
+    if (turn !== undefined && turn.reference.actorId === actorId) return turn;
 
-    return settleSync(Effect.fail(new KinuError('missing', `No delegated turn ${turnId} is open for this agent in the workspace.`)));
+    return settleSync(Effect.fail(new KinuError('missing', `No turn ${turnId} is open for this agent in the workspace.`)));
   }
 
-  prepared(pending: PendingTurn): PreparedHostedTurn {
-    if (pending.prepared !== null) return pending.prepared;
+  prepared(turn: OpenTurn): PreparedHostedTurn {
+    if (turn.prepared !== null) return turn.prepared;
 
-    return settleSync(Effect.fail(new KinuError('denied', 'The agent called a tool before its turn was prepared.')));
+    return settleSync(Effect.fail(new KinuError('denied', 'The agent called the workspace before its turn was prepared.')));
   }
 
-  private mode(pending: PendingTurn): WorkMode {
-    return pending.request.mode === 'plan' ? 'plan' : pending.profile?.workMode ?? pending.request.mode;
+  /** A workspace that restarted mid-turn reads a chat turn again. */
+  private async reread(actorId: string, call: Pick<AgentToolCall, 'turnId' | 'mode'>): Promise<void> {
+    const known = this.open.get(call.turnId);
+
+    if (known !== undefined && (known.prepared !== null || known.request.run !== undefined)) return;
+    await this.prepareChat(actorId, { turnId: call.turnId, mode: call.mode, userText: '', parentDriven: call.turnId.startsWith('programmatic:') });
   }
 
-  private dynamic(pending: PendingTurn): DynamicContext {
-    const { turn, tools } = this.prepared(pending);
-    const active = pending.profile ?? turn.profile.profile;
-    const run = pending.request.run?.inference;
+  private mode(turn: OpenTurn, prepared: PreparedHostedTurn): WorkMode {
+    return turn.request.mode === 'plan' ? 'plan' : prepared.turn.profile.profile.workMode;
+  }
 
-    return run === undefined ? this.deps.dynamic(turn.actor, active, tools) : run.dynamic(active, tools);
+  private dynamic(turn: OpenTurn, prepared: PreparedHostedTurn): DynamicContext {
+    const { tools, sources } = prepared;
+
+    return sources.dynamic({ memoryTail: undefined, activeSkills: null })(turn.profile ?? prepared.turn.profile.profile, tools);
+  }
+
+  async prepareChat(actorId: string, request: ChatTurnRequest): Promise<PreparedAgentTurn> {
+    const turnId = request.turnId ?? crypto.randomUUID();
+
+    const turn: OpenTurn = {
+      reference: this.deps.reference(actorId),
+      request: { sequenceId: turnId, body: request.userText, mode: request.mode, parentDriven: request.parentDriven },
+      prepared: null,
+      profile: null,
+    };
+
+    if (request.turnId !== null) this.open.set(turnId, turn);
+
+    return await this.read(turn);
   }
 
   async prepare(actorId: string, turnId: string): Promise<PreparedAgentTurn> {
-    const pending = this.turn(actorId, turnId);
-    const prepared = await prepareHostedTurn(this.deps.seams(), pending.reference, pending.request);
-    const run = pending.request.run?.inference;
+    return await this.read(this.turn(actorId, turnId));
+  }
 
-    pending.prepared = prepared;
-    const { actor } = prepared.turn;
+  private async read(turn: OpenTurn): Promise<PreparedAgentTurn> {
+    const prepared = await prepareHostedTurn(this.deps.seams(), turn.reference, turn.request);
+    const run = turn.request.run?.inference;
+
+    turn.prepared = prepared;
+    const { actor, input } = prepared.turn;
+
+    turn.profile = (await this.deps.seams().profile({ actor, availableTools: Object.keys(prepared.tools), workMode: turn.request.mode })).profile;
     const version = await actor.runtime.identity.scaffold.version();
 
-    const scaffold = actor.runtime.storage.sql<StoredRow>`
-      SELECT * FROM scaffold_versions WHERE actor_id = ${actor.record.actorId} AND version = ${version}`[0];
+    const scaffold = this.scaffold(actor, version);
+    const mode = this.mode(turn, prepared);
 
-    if (scaffold === undefined) return settleSync(Effect.fail(new KinuError('missing', "The agent's selected scaffold has no stored version.")));
+    const sources = await materializeTurnSources(
+      {
+        ...prepared.sources,
+        toolset: () => prepared.tools,
+        externalTools: async () => ({}),
+        wiredToolNames: () => Object.keys(prepared.tools).filter((name) => !BUILTIN_TOOL_NAMES.has(name)),
+        codemodeCapabilities: () => [],
+      },
+      { userText: input.task, workMode: mode, ...(input.model !== undefined && { model: input.model }) },
+    );
+
+    const brief = run?.brief?.(callableToolNames(mode, prepared.tools));
 
     return {
-      input: prepared.turn.input,
+      input,
       runId: run?.runId ?? crypto.randomUUID(),
       ...(run === undefined && { birthContext: encodeModelMessageValues(prepared.birthContext) }),
-      model: prepared.model,
-      window: await this.deps.window(prepared.model),
+      sources,
       pricing: this.deps.pricing(prepared.model),
       accounts: this.deps.accounts(),
       scaffold,
       languages: actor.runtime.executor.languages,
-      ...(prepared.framing !== undefined && { framing: { system: prepared.framing.system, messages: encodeModelMessageValues(prepared.framing.messages) } }),
-      workspaceLayout: run?.workspaceLayout ?? 'shared-workspace',
+      ...(brief !== undefined && { brief }),
+      opening: encodeModelMessageValues(run === undefined ? [] : run.opening ?? buildHeadMessages(input)),
       tools: await describe(prepared.tools),
-      dynamic: this.dynamic(pending),
+      dynamic: this.dynamic(turn, prepared),
+      reviewsTurns: actor.session.reviewsTurns,
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
       trace: run?.reportStep !== undefined || run?.reportDelta !== undefined,
       resume: run?.resume !== undefined,
@@ -282,29 +264,38 @@ export class AgentTurns {
     };
   }
 
-  async profile(actorId: string, turnId: string, availableTools: readonly string[], workMode: WorkMode): Promise<AgentTurnProfile> {
-    const pending = this.turn(actorId, turnId);
-    const run = pending.request.run?.inference;
+  scaffold(actor: PreparedHostedTurn['turn']['actor'], version: number): StoredRow {
+    const row = actor.runtime.storage.sql<StoredRow>`
+      SELECT * FROM scaffold_versions WHERE actor_id = ${actor.record.actorId} AND version = ${version}`[0];
 
-    const resolved = await (run === undefined
-      ? this.deps.seams().profile({ actor: this.prepared(pending).turn.actor, availableTools, workMode })
-      : run.profile({ availableTools, workMode }));
+    if (row !== undefined) return row;
 
-    pending.profile = resolved.profile;
-
-    return { ...resolved, dynamic: this.dynamic(pending) };
+    return settleSync(Effect.fail(new KinuError('missing', "The agent's selected scaffold has no stored version.")));
   }
 
-  async advise(actorId: string, { turnId, turn, reachable, mode }: AgentReview): Promise<void> {
-    const pending = this.turn(actorId, turnId);
-    const advise = pending.request.run?.inference.advise;
+  ownerDriven(actorId: string, turnId: string): boolean {
+    const turn = this.open.get(turnId);
 
-    if (advise !== undefined) return await advise(turn, reachable, mode);
-    const { session } = this.prepared(pending).turn.actor;
+    return turn !== undefined && turn.reference.actorId === actorId && !turn.request.parentDriven;
+  }
+
+  reports(actorId: string, turnId: string): PreparedHostedTurn['turn']['reports'] | null {
+    const turn = this.open.get(turnId);
+
+    return turn !== undefined && turn.reference.actorId === actorId ? turn.prepared?.turn.reports ?? null : null;
+  }
+
+  async advise(actorId: string, { turnId, turn: completed, reachable, mode }: AgentReview): Promise<void> {
+    const turn = this.turn(actorId, turnId);
+    const advise = turn.request.run?.inference.advise;
+
+    if (advise !== undefined) return await advise(completed, reachable, mode);
+
+    const { session } = this.prepared(turn).turn.actor;
 
     if (!session.orchestrator.improvementLanesOpen('completed', mode)) return;
 
-    await session.hireAdvisor(session.advisorSnapshot(turn, reachable));
+    await session.hireAdvisor(session.advisorSnapshot(completed, reachable));
   }
 
   async trace(actorId: string, turnId: string, event: AgentTrace): Promise<void> {
@@ -333,20 +324,23 @@ export class AgentTurns {
   }
 
   async program(actorId: string, turnId: string, ...[code, providers, opts]: Parameters<Executor['execute']>) {
-    const pending = this.turn(actorId, turnId);
-    const { actor } = this.prepared(pending).turn;
+    const turn = this.turn(actorId, turnId);
+    const prepared = this.prepared(turn);
+    const { actor } = prepared.turn;
     const supplied = Array.isArray(providers) ? providers : [{ name: 'codemode', fns: providers }];
-    const signal = pending.request.run?.inference.signal;
+    const signal = turn.request.run?.inference.signal;
     const control = signal === undefined ? {} : { signal };
 
-    return await actor.runtime.executor.execute(code, [...supplied, ...scaffoldProviders(actor.runtime, control, this.mode(pending))], opts);
+    return await actor.runtime.executor.execute(code, [...supplied, ...scaffoldProviders(actor.runtime, control, this.mode(turn, prepared))], opts);
   }
-  async execute(actorId: string, { turnId, callId, name, input }: AgentToolCall): Promise<AgentToolAnswer> {
-    const pending = this.turn(actorId, turnId);
-    const prepared = this.prepared(pending);
-    const execute = prepared.tools[name]?.execute;
 
-    if (execute === undefined) return settleSync(Effect.fail(new KinuError('bad_input', `The agent called ${name}, which its turn's tool surface does not hold.`)));
+  async execute(actorId: string, call: AgentToolCall): Promise<AgentToolAnswer> {
+    await this.reread(actorId, call);
+    const turn = this.turn(actorId, call.turnId);
+    const prepared = this.prepared(turn);
+    const execute = prepared.tools[call.name]?.execute;
+
+    if (execute === undefined) return settleSync(Effect.fail(new KinuError('bad_input', `The agent called ${call.name}, which its turn's tool surface does not hold.`)));
 
     const { capture } = prepared.turn;
 
@@ -355,7 +349,7 @@ export class AgentTurns {
       toolCalls: capture.toolCalls.length, childHeadIds: capture.childHeadIds.length,
     };
 
-    const output = await runWorkModeInvocation(this.mode(pending), () => execute(input, { toolCallId: callId, messages: [], context: undefined }));
+    const output = await runWorkModeInvocation(this.mode(turn, prepared), () => execute(call.input, { toolCallId: call.callId, messages: [], context: undefined }));
 
     return {
       output,
@@ -366,15 +360,7 @@ export class AgentTurns {
         toolCalls: capture.toolCalls.slice(before.toolCalls),
         childHeadIds: capture.childHeadIds.slice(before.childHeadIds),
       },
-      dynamic: this.dynamic(pending),
+      dynamic: this.dynamic(turn, prepared),
     };
-  }
-
-  finish(actorId: string, turnId: string, end: AgentTurnEnd): Promise<void> {
-    return settle(this.closing(this.turn(actorId, turnId), { end }));
-  }
-
-  fail(actorId: string, turnId: string, failure: string): Promise<void> {
-    return settle(this.closing(this.turn(actorId, turnId), { failure: new KinuError('io', failure) }));
   }
 }

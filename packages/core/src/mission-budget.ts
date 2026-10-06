@@ -453,6 +453,26 @@ export interface MissionScope {
   readonly port: MissionBudgetPort;
 }
 
+/** An actor's governor, or a run's mission across a port. */
+export interface SpendGate {
+  guard(seam: MissionSeam): MissionBudgetRefusal | null | Promise<MissionBudgetRefusal | null>;
+  debit(tokens: number, opts: { readonly calls?: number; readonly usage?: Usage; readonly spec?: string }): void;
+}
+
+/** A debit lands before the next guard reads the ledger. */
+export function missionGate(mission: MissionScope): SpendGate {
+  let charged: Promise<void> = Promise.resolve();
+
+  return {
+    guard: async (seam) => {
+      await charged;
+
+      return await mission.port.guard(seam, mission.labels);
+    },
+    debit: (tokens, opts) => { charged = charged.then(() => mission.port.debit(tokens, { ...opts, labels: mission.labels })); },
+  };
+}
+
 function localMissionPort(governor: MissionGovernor): MissionBudgetPort {
   return {
     async guard(seam, labels) { return governor.guard(seam, labels); },

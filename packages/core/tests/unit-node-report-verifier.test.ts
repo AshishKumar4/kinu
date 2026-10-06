@@ -7,6 +7,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
+import type { LanguageModel } from 'ai';
 import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -30,7 +31,7 @@ function promptStage(refused: boolean, accepted: boolean): string {
   return 'first';
 }
 
-function reportTwice(seen: string[]): NodeAgentDeps['model'] {
+function reportTwice(seen: string[]): LanguageModel {
   return scriptedTurnModel({
     modelId: 'fake-reporter',
     doGenerate: ({ prompt }) => {
@@ -65,7 +66,7 @@ function reportTwice(seen: string[]): NodeAgentDeps['model'] {
 }
 
 /** A model that reports a broken answer and never fixes it. */
-function reportOnceBroken(): NodeAgentDeps['model'] {
+function reportOnceBroken(): LanguageModel {
   return scriptedTurnModel({
     modelId: 'fake-stubborn',
     doGenerate: ({ prompt }) => {
@@ -94,14 +95,14 @@ function reportOnceBroken(): NodeAgentDeps['model'] {
 }
 
 function fixture(over: {
-  readonly model: NodeAgentDeps['model'];
+  readonly model: LanguageModel;
   readonly gradeReport?: NodeAgentDeps['gradeReport'];
 }) {
   const { rt, db } = createTestRuntime();
   initHeadsTables(rt.storage.execRaw);
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
   // One hosted actor per node id, over this runtime's one database.
-  const seats = hostedSeatsOver({ rt, db });
+  const seats = hostedSeatsOver({ rt, db, model: () => over.model });
 
   const input: NodeAgentInput = {
     nodeId: 'n1', rootId: 'r1', parentId: null, depth: 1,
@@ -118,7 +119,7 @@ function fixture(over: {
 
   const deps: NodeAgentDeps = {
     reportModelCall: unobservedSpend,
-    hostNode: seats.hostNode, model: over.model, journal,
+    hostNode: seats.hostNode, journal,
     logger: createRecordingLogger(),
   };
 

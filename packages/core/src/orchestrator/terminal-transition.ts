@@ -49,6 +49,8 @@ export interface TerminalTransitionDeps {
   readonly settled: () => Promise<void>;
 }
 
+export type TerminalCloseHold = (transition: TerminalTransition, close: () => Promise<void>) => void;
+
 /** Owns the ordering: claim before the first effect, disposition before release, close only on an empty owed set, prune after close. */
 export class TerminalTransitions {
   /** Callers never reach past this for the claim, the close or the sweep. */
@@ -127,7 +129,7 @@ export class TerminalTransitions {
     /** Called once, before any durable write; used only on a first attempt. */
     readonly declare: () => readonly OwedEffect[];
     /** The backend decides what stays alive for the thunk. */
-    readonly hold: (transition: TerminalTransition, close: () => Promise<void>) => void;
+    readonly hold: TerminalCloseHold;
   }): Promise<void> {
     const { transition, declare, hold } = input;
     // Built first: a throw here must not leave an open claim with no rows, which recovery reads as finished.
@@ -241,13 +243,21 @@ export class TerminalTransitions {
   }
 
   /** Every input comes off its row; {@link end} closes only if nothing is still owed. */
-  async resume(transition: TerminalTransition): Promise<void> {
-    await this.ledger.replayOwed(this.sequenceId(transition), this.inFlight);
-    this.end(transition);
+  /** Detached effects close under `hold`. */
+  async resume(transition: TerminalTransition, hold?: TerminalCloseHold): Promise<void> {
+    const run = await this.ledger.drive(this.sequenceId(transition), this.inFlight);
+
+    const close = async (): Promise<void> => {
+      await run.reported;
+      this.end(transition);
+    };
+
+    if (hold === undefined) await close();
+    else hold(transition, close);
   }
 
-  /** Reads the roster from storage. Never throws: one unrecoverable response must not stop the next. */
-  async resumeAll(): Promise<void> {
+  /** Never throws. A wake passes `hold`, so no detached effect holds the wake's job. */
+  async resumeAll(hold?: TerminalCloseHold): Promise<void> {
     for (const transition of this.incomplete()) {
       if (this.ledger.waitingOnOwner(this.sequenceId(transition))) continue;
 
@@ -255,7 +265,7 @@ export class TerminalTransitions {
       if (!this.enter(transition)) continue;
 
       try {
-        await this.resume(transition);
+        await this.resume(transition, hold);
       } catch (err) {
         this.leave(transition);
         diagnostics.failure('turn.terminal_resume_failed', toKinuError({
@@ -336,8 +346,8 @@ export class TerminalTransitions {
   }
 
   /** Idempotent: re-arms from what is left. */
-  async replayOwedAndRearm(): Promise<void> {
-    await this.resumeAll();
+  async replayOwedAndRearm(hold?: TerminalCloseHold): Promise<void> {
+    await this.resumeAll(hold);
     const next = this.nextRetryAt();
 
     if (next !== null) await this.deps.scheduleRetry(next);

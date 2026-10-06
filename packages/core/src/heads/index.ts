@@ -77,7 +77,7 @@ export {
 export {
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
-  type HeadInferenceDeps, type HeadWorkspaceLayout,
+  type HeadInferenceDeps, type RunInference, type HeadWorkspaceLayout,
 } from './head-inference';
 
 export { spawnSeatedHead, type HeadSeat, type SeatedHeadDeps } from './seated-head';

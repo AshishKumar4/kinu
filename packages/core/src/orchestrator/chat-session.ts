@@ -25,7 +25,7 @@ import type { CacheWarmingLane } from '../providers/cache-warming';
 import { DEFAULT_CACHE_RETENTION } from '../providers/types';
 import { serverCompactor, SERVER_COMPACTION_MIN_TOKENS } from '../providers/server-compaction';
 import type { ToolOutcome } from '../tools/outcome';
-import { OVERFLOW_RETRY_EVENT, statedContextLimit } from '../turn-failure';
+import { OVERFLOW_RETRY_EVENT } from '../turn-failure';
 import type {
   BroadcastEvent, EnqueueTurnResult, ProgrammaticTurn, PromptFile,
 } from '../types/backend-host';
@@ -42,8 +42,8 @@ import { turnInputMessage, type LandedSteerRow, type PendingSendRow, type Pendin
 import type { OwedEffect } from './terminal-effects';
 import type { TerminalTransition, TerminalTransitions } from './terminal-transition';
 import {
-  applyOverflowRecovery, classifyRunEnd, closeTurnRun, creditedTurnId, openTurnRun,
-  owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, persistMeasuredPromptTokens, snapshotCompletedTurn,
+  classifyRunEnd, closeTurnRun, creditedTurnId, openTurnRun, recordExecutionEvent, settleExecutionContext,
+  owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, snapshotCompletedTurn,
   type CompactionTriggerState, type RunEndClassification, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
 import { answerParts, type SessionTranscript, type PreparedConversationEntry } from '../session/transcript';
@@ -56,6 +56,7 @@ import { TURN_END_METADATA_KEY } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tools/task-store';
 import { inheritedAsModelMessage } from '../heads/head-inference';
+import type { SerializedMessage } from '../types/heads';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
 
@@ -230,10 +231,10 @@ export interface ChatSessionPorts {
   /** A reminder fired behind such work would race its wake. */
   hasPendingAsyncWake(): boolean;
   steerSkills(text: string): Promise<string | null>;
-  /** A backend with no review surface refuses a plan turn at admission. */
-  planTurnRefusal(): string | null;
   /** Asked at dequeue; false drops the turn. */
   stillOwed(metadata: JsonObject | undefined): boolean;
+  /** Where the assignment lives in another database (a facet's hirer's). */
+  birthContext?(drainTurnId: string): Promise<readonly SerializedMessage[]>;
   /** The session drives it because both instants it needs are the session's; the policy is the lane's. */
   readonly cacheWarming?: CacheWarmingLane;
 }
@@ -372,24 +373,6 @@ export class ChatSession {
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
 
-  /** Arms the forced compaction and says whether to retry; a too-long refusal also records the window it measured. */
-  private recoverOverflow(prepared: PreparedTurn, error: string, turnWasOverflowRetry: boolean): boolean {
-    const lastPromptTokens = this.actorSession.orchestrator.acc.lastPromptTokens;
-
-    const recovery = applyOverflowRecovery({
-      error, lastPromptTokens, contextWindow: prepared.contextWindow, turnWasOverflowRetry, state: this.compactionState, sessionKey: prepared.sessionKey,
-    });
-
-    const model = prepared.execution.chat.modelSpec ?? prepared.execution.chat.modelContext?.id;
-    const refused = Math.max(this.eventRecorder.readContextMeasures().gate?.tokens ?? 0, lastPromptTokens ?? 0);
-    const window = statedContextLimit(error) ?? (refused > 0 ? refused : null);
-
-    if (recovery.failureClass === 'context_length' && model !== undefined && window !== null && this.runId !== null) {
-      this.eventRecorder.emit(this.runId, { type: 'context_overflow', model, window });
-    }
-
-    return recovery.enqueueRetry;
-  }
   /** Open on purpose, so the wake reconcile must not seal them. */
   drivenRuns(): readonly string[] {
     return [...new Set([this.runId, this.reopenedRunId].filter((runId): runId is string => runId !== null))];
@@ -436,12 +419,6 @@ export class ChatSession {
       this.pump();
 
       return Promise.resolve({ status: 'queued' });
-    }
-
-    if (workModeForTurnMetadata(input.metadata) === 'plan') {
-      const refusal = this.ports.planTurnRefusal();
-
-      if (refusal !== null) return Promise.reject(new Error(refusal));
     }
 
     // During shutdown: 'skipped' sends the caller down its durable path; the next run drains it.
@@ -1050,19 +1027,28 @@ export class ChatSession {
     return this.turnTrial === null ? snapshot : { ...snapshot, trial: this.turnTrial };
   }
 
-  private recordModelFallback(event: Extract<ChatEvent, { type: 'model-fallback' }>): void {
-    if (this.runId !== null) this.eventRecorder.emit(this.runId, { type: 'model_fallback', from: event.from, to: event.to, reason: event.reason });
-    this.emit({ type: 'broadcast', event: { type: 'model_fallback', message: `${event.to} took over from ${event.from}: ${event.reason}` } });
+  /** Everything here may throw; runOpenedTurn owns what that means. */
+  private async birthContext(drainTurnId: string): Promise<readonly SerializedMessage[]> {
+    return await this.ports.birthContext?.(drainTurnId) ?? subordinateTurnContext(this.eventLog, drainTurnId);
   }
 
-  /** Everything here may throw; runOpenedTurn owns what that means. */
+  private settleContext(item: QueueItem, prepared: PreparedTurn, failure: string | null): boolean {
+    const { chat } = prepared.execution;
+
+    return settleExecutionContext({ state: this.compactionState, key: prepared.sessionKey, recorder: this.eventRecorder }, {
+      runId: this.runId, failure, turnWasOverflowRetry: item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT,
+      lastPromptTokens: this.actorSession.orchestrator.acc.lastPromptTokens, historyLength: prepared.historyLength,
+      contextWindow: prepared.contextWindow, model: chat.modelSpec ?? chat.modelContext?.id,
+    });
+  }
+
   private async runTurn(item: QueueItem, eventName: string | undefined, lease: ActorTurnLease): Promise<void> {
     const input: ChatTurnInput = item;
 
     await this.actorSession.openTurnInput(lease, {
       item: input,
       message: turnInputMessage(input),
-      birthContext: async (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
+      birthContext: async (drainTurnId) => (await this.birthContext(drainTurnId)).map(inheritedAsModelMessage),
     });
 
     // Before this turn's request voids the lane.
@@ -1102,11 +1088,10 @@ export class ChatSession {
       // Any tool result is progress on the last reminder.
       if (event.type === 'tool-result') this.taskReminders.noteToolResult();
 
-      if (event.type === 'model-fallback') this.recordModelFallback(event);
+      recordExecutionEvent(this.eventRecorder, this.runId, event);
 
-      // Durable beside the turn's steps: a reload reads it and never measures.
-      if (event.type === 'context-admitted' && this.runId !== null) {
-        this.eventRecorder.emit(this.runId, { type: 'context_admitted', tokens: event.tokens, contextWindow: event.contextWindow });
+      if (event.type === 'model-fallback') {
+        this.emit({ type: 'broadcast', event: { type: 'model_fallback', message: `${event.to} took over from ${event.from}: ${event.reason}` } });
       }
 
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
@@ -1117,14 +1102,9 @@ export class ChatSession {
 
     const fullText = execution.text;
     const interrupted = execution.interrupted;
-    let runError: string | null = null;
-    let overflowRetry = false;
+    const { failure, runError } = renderedFailure(execution.failure);
 
-    if (execution.failure !== null) {
-      const message = renderThrownChain({ cause: execution.failure });
-      runError = message.slice(0, 500);
-      overflowRetry = this.recoverOverflow(prepared, message, item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT);
-    }
+    const overflowRetry = this.settleContext(item, prepared, failure);
 
     // Classified once: the classifier also files the mid-work defect.
     const facts: RunEndFacts = {
@@ -1191,7 +1171,6 @@ export class ChatSession {
     const { turn, owed, transition } = commit.committed;
 
     try {
-      persistMeasuredPromptTokens(this.compactionState, prepared.sessionKey, this.actorSession.orchestrator.acc.lastPromptTokens, prepared.historyLength);
       // The lane decides whether the prefix is worth keeping.
       this.armCacheWarm(prepared);
 
@@ -1508,4 +1487,17 @@ function normalizePromptInput(
   input: string | { text: string; files: ReadonlyArray<PromptFile> },
 ): PromptInputParts {
   return v.is(v.string(), input) ? { text: input } : input;
+}
+
+interface RenderedFailure {
+  readonly failure: string | null;
+  /** As the turn's run records it. */
+  readonly runError: string | null;
+}
+
+function renderedFailure(cause: Error | null): RenderedFailure {
+  if (cause === null) return { failure: null, runError: null };
+  const failure = renderThrownChain({ cause });
+
+  return { failure, runError: failure.slice(0, 500) };
 }
