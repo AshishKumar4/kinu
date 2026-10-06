@@ -8,7 +8,6 @@ import {
   createChatGptProvider,
   accountDeps,
   specModelInfo,
-  createOpenAICompatProvider,
   createProviderProxyFetch,
   listModelsDevProviderModels,
   generateReported,
@@ -242,8 +241,6 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     chatgpt: createChatGptProvider(),
     codex: undefined,
     opencode: createOpenCodeProvider(),
-    compat: Object.keys(credentials.openaiCompat ?? {}).sort().flatMap((name) => (name === 'default' ? []
-      : [createOpenAICompatProvider(`openai-compat:${name}`)])),
     appTitle: 'Kinu CLI',
   });
 

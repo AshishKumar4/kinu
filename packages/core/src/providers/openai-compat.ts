@@ -4,6 +4,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { baseCredentialKey } from '../credentials/accounts';
+import type { DynamicProviderSource } from './registry';
 import type { AuthResolution, ModelInfo, ModelProvider } from './types';
 import { createAuthedFetch, positiveInteger } from './util';
 import { withSseTerminal } from './sse-terminal';
@@ -33,6 +34,28 @@ function credKeyFor(providerId: string): string {
   }
 
   return providerId;
+}
+
+export function createNamedEndpointSource(): DynamicProviderSource {
+  const providers = new Map<string, ModelProvider>();
+
+  return {
+    id: 'openai-compat',
+    label: 'OpenAI-compatible endpoints',
+    get(providerId) {
+      if (!providerId.startsWith('openai-compat:')) return undefined;
+      const provider = providers.get(providerId) ?? createOpenAICompatProvider(providerId);
+
+      providers.set(providerId, provider);
+
+      return provider;
+    },
+    async listIds(deps) {
+      const names = (await deps.listCredentialKeys?.() ?? []).flatMap((key) => openAICompatNameOf(key) ?? []);
+
+      return [...new Set(names)].filter((name) => name !== 'default').sort().map((name) => `openai-compat:${name}`);
+    },
+  };
 }
 
 export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelProvider {

@@ -11,6 +11,8 @@ import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '.
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
 
 export interface DynamicProviderSource {
+  readonly id: string;
+  readonly label: string;
   /** Must be optimistic: catalog membership is validated at request time. */
   get(providerId: string): ModelProvider | undefined;
   /** Ids currently servable (stored credential ∩ catalog). */
@@ -46,8 +48,6 @@ export interface ProviderRegistry {
   /** The stored credential `spec` authenticates with, found without authenticating; null when none would serve. */
   credentialFor(spec: string, deps: ProviderDeps): Promise<string | null>;
 }
-
-const CATALOG_SOURCE_ID = 'catalog';
 
 const SLOW_LISTING_MS = 2_000;
 
@@ -129,35 +129,35 @@ function providerFailureReason({ error }: { error: unknown }): string {
 export function createProviderRegistry(): ProviderRegistry {
   const ordered: ModelProvider[] = [];
   const byId = new Map<string, ModelProvider>();
-  let dynamic: DynamicProviderSource | null = null;
+  const dynamic: DynamicProviderSource[] = [];
 
   /** Static plus servable dynamic providers; a dynamic enumeration failure is one reported failure. */
   function allProviders(deps: ProviderDeps): Effect.Effect<{ providers: ModelProvider[]; failures: ProviderFailure[] }> {
-    const providers = [...ordered];
-    const source = dynamic;
+    return Effect.gen(function* () {
+      const providers = [...ordered];
+      const failures: ProviderFailure[] = [];
 
-    if (!source) return Effect.succeed({ providers, failures: [] });
+      for (const source of dynamic) {
+        const listed = yield* Effect.result(Effect.tryPromise({ try: () => source.listIds(deps), catch: (cause) => cause }));
 
-    return Effect.match(Effect.tryPromise({ try: () => source.listIds(deps), catch: (cause) => ({ cause }) }), {
-      onSuccess: (ids) => {
-        for (const id of ids) {
-          if (byId.has(id)) continue;
-          const provider = source.get(id);
+        if (Result.isFailure(listed)) {
+          failures.push({ provider: source.id, label: source.label, reason: providerFailureReason({ error: listed.failure }) });
+          continue;
+        }
+
+        for (const id of listed.success) {
+          const provider = providers.some((p) => p.id === id) ? undefined : source.get(id);
 
           if (provider) providers.push(provider);
         }
+      }
 
-        return { providers, failures: [] };
-      },
-      onFailure: (failed) => ({
-        providers,
-        failures: [{ provider: CATALOG_SOURCE_ID, label: 'models.dev catalog', reason: providerFailureReason({ error: failed.cause }) }],
-      }),
+      return { providers, failures };
     });
   }
 
   function providerFor(providerId: string): ModelProvider | undefined {
-    return byId.get(providerId) ?? dynamic?.get(providerId);
+    return byId.get(providerId) ?? dynamic.reduce<ModelProvider | undefined>((found, source) => found ?? source.get(providerId), undefined);
   }
 
   /** Probes concurrently, answering in registration order; no deadline, which would read slow as absent. */
@@ -185,11 +185,9 @@ export function createProviderRegistry(): ProviderRegistry {
         }));
     },
     registerDynamic(source) {
-      return settleSync(dynamic
-        ? Effect.die(new Error('Dynamic provider source already registered'))
-        : Effect.sync(() => { dynamic = source; }));
+      dynamic.push(source);
     },
-    get(id) { return byId.get(id); },
+    get(id) { return providerFor(id); },
     canResolve(id) { return providerFor(id) !== undefined; },
 
     list() { return [...ordered]; },
