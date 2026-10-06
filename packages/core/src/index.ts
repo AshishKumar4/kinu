@@ -76,7 +76,7 @@ export {
 } from './identity/fork';
 
 export {
-  type ForkSnapshotHead, type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow,
+  type ForkSnapshotHead, type ForkCraftedToolRow, type ForkConfigRow,
 } from './identity/fork-rows';
 
 export {
@@ -1052,7 +1052,6 @@ export { oneAtATime } from './utils/one-at-a-time';
 
 export { markStoreChanged, storeRevision } from '@kinu.run/agent-utils';
 
-export { searchMemoryChunks } from '@kinu.run/agent-utils/memory';
 
 export { ISOLATED_BUN_FLAGS, isolatedBunArgs } from './utils/bun-isolation';
 
@@ -1124,7 +1123,7 @@ export {
 } from './memory/hybrid-search';
 
 // Memory writes
-export { memoryBytes, reconcileMemoryIndex } from './memory/note';
+export { memoryBytes } from './memory/note';
 
 
 export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';

@@ -364,10 +364,7 @@ export function shrinkGroups(
 export const BLIND_SPOTS: readonly string[] = [
   'A COPY WHOSE ONLY EDIT IS ITS SQL OR ITS JSX TAGS — NOT DETECTED. Query text '
   + '(a tagged template or the first argument of `.exec`) and intrinsic JSX tags '
-  + 'stay in the fingerprint, so one algorithm over two tables is two bodies. '
-  + 'Live pairs: `craftedToolRows`/`memoryChunkRows` in '
-  + '`packages/core/src/identity/fork-transfer.ts` and '
-  + '`stageCraftedTools`/`stageMemoryChunks` in `fork-writer.ts`.',
+  + 'stay in the fingerprint, so one algorithm over two tables is two bodies.',
   'DUPLICATED POLICY IN DIFFERENT CODE SHAPES — NOT DETECTED. Two '
   + 'implementations of one rule with different structure share no fingerprint. '
   + 'Only identical structure is governed here.',

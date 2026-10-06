@@ -713,6 +713,59 @@ test('the file tool shows the agent a screenshot the rung moved out, from the li
   });
 });
 
+// The notes and the scaffold are real files now, so nothing on the machine's side may reach past their read-only mounts.
+describe('main\'s state keeps its writer, whatever path reaches it', () => {
+  test('a link in the folder to the memory notes reads them, and a write or removal through it is refused', async () => {
+    const { state, project } = roots('cwd-plane-state-link');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
+    const memory = join(state, 'jarvis', 'home', 'main', 'memory');
+    symlinkSync(memory, join(project, 'notes-link'));
+    const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
+
+    expect(await file({ action: 'read', path: 'notes-link/MEMORY.md' })).toContain('learned something');
+    await expect(file({ action: 'write', path: 'notes-link/MEMORY.md', content: 'forged' })).rejects.toThrow('EROFS');
+    expect(await refusalOf(() => writeText(rt.storage.vfs, join(project, 'notes-link/MEMORY.md'), 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.unlink(join(project, 'notes-link/MEMORY.md')))).toBe('EROFS');
+    expect(readFileSync(join(memory, 'MEMORY.md'), 'utf8')).toContain('learned something');
+  });
+
+  test('removing or moving main\'s home is refused before any of its notes or its scaffold goes', async () => {
+    const { state, project } = roots('cwd-plane-state-remove');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    const home = join(state, 'jarvis', 'home', 'main');
+
+    const plane = present(rt.storage.vfs.removeRecursive && rt.storage.vfs.rename ? rt.storage.vfs : undefined, 'a plane that removes and moves');
+
+    expect(await refusalOf(() => plane.removeRecursive?.(home))).toBe('EBUSY');
+    expect(await refusalOf(() => plane.rename?.(join(home, 'memory'), join(project, 'stolen')))).toBe('EBUSY');
+    expect(existsSync(join(home, 'memory/MEMORY.md'))).toBe(true);
+    expect(existsSync(join(home, 'scaffold/agent.js'))).toBe(true);
+  });
+});
+
+// Locally a shell edits a note beside the memory tool: a search finds the words the note holds now, and only those.
+describe('the memory notes, edited by the shell', () => {
+  test('a search finds the new word an edit put in, not the old one, and a removed note leaves no hit', async () => {
+    const { state, project } = roots('cwd-plane-memory-journey');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    const note = join(state, 'jarvis', 'home', 'main', 'memory', 'deploy.md');
+    await rt.memory.write('memory/deploy.md', 'wrangler staging deploy succeeded\n');
+    await rt.memory.index('memory/deploy.md');
+    await rt.memory.write('memory/cache.md', 'redis eviction tuned for staging\n');
+    await rt.memory.index('memory/cache.md');
+    const shell = present(rt.shell, 'the workspace shell');
+
+    expect((await shell.exec(`printf 'kubernetes ingress now fronts staging\\n' > '${note}'`)).exitCode).toBe(0);
+    expect((await rt.memory.search('kubernetes', 5)).map((hit) => hit.path)).toEqual(['memory/deploy.md']);
+    expect(await rt.memory.search('wrangler', 5)).toEqual([]);
+
+    expect((await shell.exec(`rm '${note}'`)).exitCode).toBe(0);
+    expect(await rt.memory.search('kubernetes', 5)).toEqual([]);
+    expect((await rt.memory.search('staging', 1)).map((hit) => hit.path)).toEqual(['memory/cache.md']);
+  });
+});
+
 describe('SOUL.md is the workspace\'s own file', () => {
   // SOUL.md is a real file of the own space: the agent edits it from its file tool or its shell, and the next turn reads it.
   test('an edit of SOUL.md, by the file tool or the shell, is the soul the next turn reads', async () => {

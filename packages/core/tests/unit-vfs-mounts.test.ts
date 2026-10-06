@@ -547,14 +547,26 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		});
 
 		const realUnlink = device.unlink.bind(device);
+		const realRmdir = device.rmdir?.bind(device);
 
+		const held = (path: string): void => {
+			if (path === '/home/dev/build/deep') throw new VfsError('EACCES', 'held open', path);
+		};
+
+		// The directory is held however the walk removes it.
 		device.unlink = async (path) => {
-			if (path === '/home/dev/build/deep') {
-				throw new VfsError('EACCES', 'held open', path);
-			}
+			held(path);
 
 			return realUnlink(path);
 		};
+
+		if (realRmdir !== undefined) {
+			device.rmdir = async (path) => {
+				held(path);
+
+				return realRmdir(path);
+			};
+		}
 
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
 
@@ -568,9 +580,10 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(error.message).toContain('/home/dev/build/deep/two.js');
 		expect(error.message).toContain('/home/dev/build/out.js');
 		expect(error.message).toContain('still present');
+		// As `rm -r` does, the walk goes on past a refusal: what it could remove is gone, the held directory and its parents stay.
 		expect(await exists(device, '/home/dev/build/deep/two.js')).toBe(false);
 		expect(await exists(device, '/home/dev/build/deep')).toBe(true);
-		expect(await exists(device, '/home/dev/build/out.js')).toBe(true);
+		expect(await exists(device, '/home/dev/build/out.js')).toBe(false);
 	});
 
 	test('removeTreeWithVfsOps names an absent path instead of quietly succeeding', async () => {

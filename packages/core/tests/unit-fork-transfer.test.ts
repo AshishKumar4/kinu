@@ -28,7 +28,7 @@ const OWNER: ForkWriteTarget = {
 
 /** No rows and no files. */
 const EMPTY_COUNTS: ForkSectionCounts = {
-  agentConfig: 0, craftedTools: 0, memoryChunks: 0,
+  agentConfig: 0, craftedTools: 0,
   sessionMessages: 0, conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
   files: 0,
 };
@@ -39,7 +39,7 @@ type FrameBody = UnsealedForkFrame extends infer Frame
     : never
   : never;
 
-type RowSections = Pick<ForkContent, 'agentConfig' | 'craftedTools' | 'memoryChunks' | 'sessionMessages'
+type RowSections = Pick<ForkContent, 'agentConfig' | 'craftedTools' | 'sessionMessages'
   | 'conversationEntries' | 'conversationEntryParts' | 'contextMembers'>;
 
 /** A source workspace with a three-turn conversation, seeded through the production writers. */
@@ -92,7 +92,6 @@ function framesFor(recorded: readonly ForkFrame[], opts: {
       ...begin.counts,
       agentConfig: rows.agentConfig.length,
       craftedTools: rows.craftedTools.length,
-      memoryChunks: rows.memoryChunks.length,
       sessionMessages: rows.sessionMessages.length,
       conversationEntries: rows.conversationEntries.length,
       conversationEntryParts: rows.conversationEntryParts.length,
@@ -112,8 +111,6 @@ function framesFor(recorded: readonly ForkFrame[], opts: {
   for (const batch of batches(rows.agentConfig)) push({ kind: 'agentConfig', rows: batch });
 
   for (const batch of batches(rows.craftedTools)) push({ kind: 'craftedTools', rows: batch });
-
-  for (const batch of batches(rows.memoryChunks)) push({ kind: 'memoryChunks', rows: batch });
 
   for (const batch of batches(rows.sessionMessages)) push({ kind: 'sessionMessages', rows: batch });
 
@@ -236,7 +233,6 @@ describe('fork transfer receiver', () => {
       members: ws.sql<{ entry_id: string; position: number; message_id: string }>`
         SELECT entry_id, position, message_id FROM context_memberships WHERE to_revision IS NULL ORDER BY position`,
       tools: ws.sql<{ name: string }>`SELECT name FROM crafted_tools ORDER BY name`,
-      chunks: ws.sql<{ id: string; hash: string }>`SELECT id, hash FROM memory_note_chunks ORDER BY id`,
       config: ws.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config ORDER BY key`,
       lineage: readForkLineage(ws.sql),
     });

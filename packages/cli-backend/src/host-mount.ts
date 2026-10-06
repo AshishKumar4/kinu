@@ -35,7 +35,7 @@ function throwVfsError(input: { error: unknown; syscall: string; path: string })
   throw toVfsError(input.error, input.syscall, input.path);
 }
 
-type HostFiles = VFS & Required<Pick<VFS, 'readRange'>>;
+type HostFiles = VFS & Required<Pick<VFS, 'readRange' | 'rmdir' | 'rename' | 'readlink'>>;
 
 async function hostIo<T>(syscall: string, path: string, op: () => Promise<T>): Promise<T> {
   try {
@@ -71,8 +71,18 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
     }),
     async unlink(path) {
       await snapshot(path, 'file delete');
-      await hostIo('rm', path, () => fs.rm(path, { recursive: true, force: true }));
+      await hostIo('unlink', path, () => fs.unlink(path));
     },
+    async rmdir(path) {
+      await snapshot(path, 'file delete');
+      await hostIo('rmdir', path, () => fs.rmdir(path));
+    },
+    async rename(from, to) {
+      await snapshot(from, 'file move');
+      await snapshot(to, 'file move');
+      await hostIo('rename', from, () => fs.rename(from, to));
+    },
+    readlink: (path) => hostIo('readlink', path, () => fs.readlink(path)),
     mkdir: (path, opts) => hostIo('mkdir', path, async () => { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }),
     readRange: (path, offset, length) => hostIo('read', path, async () => {
       const handle = await fs.open(path, 'r');
@@ -97,6 +107,9 @@ function rootedFiles(root: string, files: HostFiles): HostFiles {
     readdir: (path) => files.readdir(at(path)),
     stat: (path, options) => files.stat(at(path), options),
     unlink: (path) => files.unlink(at(path)),
+    rmdir: (path) => files.rmdir(at(path)),
+    rename: (from, to) => files.rename(at(from), at(to)),
+    readlink: (path) => files.readlink(at(path)),
     mkdir: (path, opts) => files.mkdir(at(path), opts),
     readRange: (path, offset, length) => files.readRange(at(path), offset, length),
   };
@@ -143,13 +156,15 @@ export type LocalPlane = MountedVfs & { readonly namespace: CompositeVFS };
 /** The machine's files as its shell names them; only the folder is snapshotted. */
 export function localFilePlane(input: LocalFilePlane): LocalPlane {
   linkFolder(input.space, input.folder);
-  const namespace = new CompositeVFS(createHostMountVFS(input.folder, input.checkpoints), { resolvesPaths: true });
-  namespace.mount(input.space, spaceFiles(input.space), { resolvesPaths: true });
-  namespace.mount(join(input.space, FOLDER_LINK), rootedFiles(input.folder, createHostMountVFS(input.folder, input.checkpoints)), { resolvesPaths: true });
+  // The host's own links are the namespace's to follow, as the kernel's are, so no link reaches past a mount's rule.
+  const namespace = new CompositeVFS(createHostMountVFS(input.folder, input.checkpoints));
+  namespace.mount(input.space, spaceFiles(input.space));
 
   for (const dir of READ_ONLY_STATE) {
     const at = join(input.space, agentHome(MAIN_AGENT), dir);
-    namespace.mount(at, rootedFiles(at, createHostMountVFS(at, undefined)), { resolvesPaths: true, readOnly: true });
+    // A mount point is a directory, and the home above it one the space holds, so a path through it is the space's.
+    mkdirSync(at, { recursive: true });
+    namespace.mount(at, rootedFiles(at, createHostMountVFS(at, undefined)), { readOnly: true });
   }
 
   const views = input.views.map((view) => ({ ...view, at: join(input.space, view.name) }));
@@ -160,7 +175,7 @@ export function localFilePlane(input: LocalFilePlane): LocalPlane {
     });
   }
 
-  const files = withMountTable({ namespace: async () => namespace, home: input.folder }, views);
+  const files = withMountTable({ namespace: async () => namespace, home: input.folder, writesParents: true }, views);
 
   const removable = (path: string, syscall: string): Effect.Effect<string, VfsError> => (workspacePath(path, input.folder) === input.folder
     ? Effect.fail(syscallError('EACCES', syscall, path, { detail: 'the workspace\'s folder cannot be removed' }))
@@ -176,9 +191,10 @@ export function localFilePlane(input: LocalFilePlane): LocalPlane {
 }
 
 /** The folder and the own space are the agent's; past them, the user is asked. A link in either is judged by where it points. */
-export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space'>, planes: PathPlanes): FileReach {
+export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space'>, planes: PathPlanes, plane: Pick<LocalPlane, 'resolve'>): FileReach {
   return {
     planes,
+    resolve: (path, follow) => plane.resolve(path, { follow }),
     userRoots: () => [],
     locate: (path, op) => {
       const at = workspacePath(path, input.folder);

@@ -86,7 +86,7 @@ index 6596a5ef206b7b3404e850b1167f13cfc6bd71e6..8331d43bf59e37e8e0d4ce8bff4803a7
      if (!entryPoints || entryPoints.some((e) => typeof e !== 'string'))
          refuse('Nimbus\'s bundler takes entryPoints as a list of paths');
 diff --git a/dist/vfs/composite.d.ts b/dist/vfs/composite.d.ts
-index 8d85e0b2c44ac31da55b241d5fed4e9907e9183d..0fe2c332095ac0f86df3dddfcde2e334c64017a6 100644
+index 8d85e0b2c44ac31da55b241d5fed4e9907e9183d..7b7f79662b09f5399c84009990e0b1f8f29b45cc 100644
 --- a/dist/vfs/composite.d.ts
 +++ b/dist/vfs/composite.d.ts
 @@ -97,6 +97,32 @@ export interface Principal {
@@ -122,12 +122,21 @@ index 8d85e0b2c44ac31da55b241d5fed4e9907e9183d..0fe2c332095ac0f86df3dddfcde2e334
  export interface MountOptions {
      /** Stated in every refusal while the source answers null. */
      absentReason?: (principal: Principal) => string;
-@@ -241,6 +267,13 @@ export declare class CompositeVFS implements VFS {
+@@ -241,6 +267,22 @@ export declare class CompositeVFS implements VFS {
      mounts(): readonly MountInfo[];
      /** The mount point `path` is on ('/' for the root), whether or not its source is present. */
      mountOf(path: string): string;
 +    /** Kinu patch (Nimbus ask #23): where `path` lands for this view, so an embedder can reach a backend's own extras. */
 +    routeOf(path: string): MountRoute;
++    /**
++     * Kinu patch (Nimbus ask #23): `path` as this view's own lookup resolves it, every link followed (the last one too
++     * unless `follow` is false), so a caller decides on the path the operation will reach. `creating` lets missing
++     * directories pass, as a recursive mkdir does.
++     */
++    resolvePath(path: string, options?: {
++        follow?: boolean;
++        creating?: boolean;
++    }): Promise<string>;
 +    /** Kinu patch (Nimbus ask #24): `observer` hears every writeFile, writeFileIfRevision, unlink and rename that lands. */
 +    observeWrites(observer: CompositeWriteObserver): () => void;
 +    /** What each observer asked to know of `path` before a mutation; read as this view, never failing it. */
@@ -137,7 +146,7 @@ index 8d85e0b2c44ac31da55b241d5fed4e9907e9183d..0fe2c332095ac0f86df3dddfcde2e334
       * Whether the namespace answers `path` itself rather than the root
       * backend alone: a path on another mount, a directory above a mount point
 diff --git a/dist/vfs/composite.js b/dist/vfs/composite.js
-index b74db76e46b531212ceb44acb5239be5dd3b974a..ba3993727927a17decfff0591a94b427f049b9c4 100644
+index b74db76e46b531212ceb44acb5239be5dd3b974a..804de3c899c8e2e32dde6b85c3fc0d29dee26b1a 100644
 --- a/dist/vfs/composite.js
 +++ b/dist/vfs/composite.js
 @@ -167,7 +167,7 @@ export class CompositeVFS {
@@ -149,7 +158,7 @@ index b74db76e46b531212ceb44acb5239be5dd3b974a..ba3993727927a17decfff0591a94b427
              this.viewer = { cred: null };
              const refs = new Map();
              this.views = { refs, gone: new FinalizationRegistry((key) => {
-@@ -497,6 +497,46 @@ export class CompositeVFS {
+@@ -497,6 +497,54 @@ export class CompositeVFS {
      mountOf(path) {
          return this.route(normalizePath(path)).mount.point;
      }
@@ -162,6 +171,14 @@ index b74db76e46b531212ceb44acb5239be5dd3b974a..ba3993727927a17decfff0591a94b427
 +        if (gone !== null)
 +            return { point: gone.point, path: rel, source: null, readOnly, absentReason: this.absent(gone, at).message };
 +        return { point: mount.point, path: rel, source: this.backend(mount), readOnly };
++    }
++    /**
++     * Kinu patch (Nimbus ask #23): `path` as this view's own lookup resolves it, every link followed (the last one too
++     * unless `follow` is false), so a caller decides on the path the operation will reach. `creating` lets missing
++     * directories pass, as a recursive mkdir does.
++     */
++    async resolvePath(path, options) {
++        return reported({ syscall: 'realpath', path }, () => this.resolve(path, options?.follow ?? true, false, options?.creating ?? false));
 +    }
 +    /** Kinu patch (Nimbus ask #24): `observer` hears every writeFile, writeFileIfRevision, unlink and rename that lands. */
 +    observeWrites(observer) {
@@ -196,7 +213,7 @@ index b74db76e46b531212ceb44acb5239be5dd3b974a..ba3993727927a17decfff0591a94b427
      /**
       * Whether the namespace answers `path` itself rather than the root
       * backend alone: a path on another mount, a directory above a mount point
-@@ -1593,7 +1633,7 @@ export class CompositeVFS {
+@@ -1593,7 +1641,7 @@ export class CompositeVFS {
      /** `parents`: make the missing directories above where the write lands first (mkdir -p), as the write's own lookup resolves it. */
      async writeFile(path, data, options) {
          const mode = options?.mode === undefined ? undefined : { mode: options.mode };
@@ -205,7 +222,7 @@ index b74db76e46b531212ceb44acb5239be5dd3b974a..ba3993727927a17decfff0591a94b427
      }
      /** `parents`: as writeFile's. */
      async writeRange(path, offset, bytes, options) {
-@@ -1649,13 +1689,25 @@ export class CompositeVFS {
+@@ -1649,13 +1697,21 @@ export class CompositeVFS {
          return reported({ syscall: 'mkdir', path }, () => this.mkdirAt(path, options, false));
      }
      async unlink(path) {
@@ -219,21 +236,17 @@ index b74db76e46b531212ceb44acb5239be5dd3b974a..ba3993727927a17decfff0591a94b427
 -        return reported({ syscall: 'rename', path: from, dest: to }, () => this.renameAt(from, to, false));
 +        if (this.table.observers.size === 0)
 +            return reported({ syscall: 'rename', path: from, dest: to }, () => this.renameAt(from, to, false));
-+        // The bytes that move are read wherever either end is watched.
-+        const [left, replaced] = await Promise.all([
-+            this.baselines(from, (observer) => observer.needsBaseline(from, this.viewer) || observer.needsBaseline(to, this.viewer)),
-+            this.baselines(to),
-+        ]);
++        // The bytes that move are read once, whatever either end's baseline asks: they are what `to` holds after.
++        const [left, replaced] = await Promise.all([this.baselines(from, () => true), this.baselines(to)]);
 +        await reported({ syscall: 'rename', path: from, dest: to }, () => this.renameAt(from, to, false));
-+        for (const [observer, baseline] of left) {
-+            const moved = baseline.before ?? null;
-+            observer.record({ path: from, ...baseline, after: null, principal: this.viewer });
-+            observer.record({ path: to, ...replaced.get(observer), after: moved, principal: this.viewer });
++        for (const [observer, moved] of left) {
++            observer.record({ path: from, ...(observer.needsBaseline(from, this.viewer) ? moved : {}), after: null, principal: this.viewer });
++            observer.record({ path: to, ...replaced.get(observer), after: moved.before ?? null, principal: this.viewer });
 +        }
      }
      async removeRecursive(path) {
          return reported({ syscall: 'rm', path }, () => this.removeAt(path, false));
-@@ -1676,7 +1728,7 @@ export class CompositeVFS {
+@@ -1676,7 +1732,7 @@ export class CompositeVFS {
          return reported({ syscall: 'utime', path }, () => this.onMutation(path, true, false, 'changed', (ops, rel, at) => this.method(ops, 'utimes', at)(rel, atimeMs, mtimeMs)));
      }
      async writeFileIfRevision(path, data, expected) {
@@ -329,7 +342,7 @@ index 88a06305c4e73ca2f1509f6a4b779baf6aa874bc..0619a9f7544b8f790b4b7d6aa9cd02af
    if (!entryPoints || entryPoints.some((e) => typeof e !== 'string')) refuse('Nimbus\'s bundler takes entryPoints as a list of paths');
    if (options.outfile && entryPoints.length !== 1) refuse('outfile needs exactly one entry point');
 diff --git a/src/vfs/composite.ts b/src/vfs/composite.ts
-index 876aee5dcc7a90ee604d2bb79f5d31f34b5cbd1e..c0e9745ad521804627421db27358e78bd552bc5d 100644
+index 876aee5dcc7a90ee604d2bb79f5d31f34b5cbd1e..99a3fcc223a4c05f48244bd0b92517e9e3c597a4 100644
 --- a/src/vfs/composite.ts
 +++ b/src/vfs/composite.ts
 @@ -157,6 +157,35 @@ export interface Principal {
@@ -386,7 +399,7 @@ index 876aee5dcc7a90ee604d2bb79f5d31f34b5cbd1e..c0e9745ad521804627421db27358e78b
        this.viewer = { cred: null };
        const refs = new Map<string, WeakRef<CompositeVFS>>();
        this.views = { refs, gone: new FinalizationRegistry((key: string) => {
-@@ -673,6 +704,61 @@ export class CompositeVFS implements VFS {
+@@ -673,6 +704,70 @@ export class CompositeVFS implements VFS {
      return this.route(normalizePath(path)).mount.point;
    }
  
@@ -400,6 +413,15 @@ index 876aee5dcc7a90ee604d2bb79f5d31f34b5cbd1e..c0e9745ad521804627421db27358e78b
 +    if (gone !== null) return { point: gone.point, path: rel, source: null, readOnly, absentReason: this.absent(gone, at).message };
 +
 +    return { point: mount.point, path: rel, source: this.backend(mount), readOnly };
++  }
++
++  /**
++   * Kinu patch (Nimbus ask #23): `path` as this view's own lookup resolves it, every link followed (the last one too
++   * unless `follow` is false), so a caller decides on the path the operation will reach. `creating` lets missing
++   * directories pass, as a recursive mkdir does.
++   */
++  async resolvePath(path: string, options?: { follow?: boolean; creating?: boolean }): Promise<string> {
++    return reported({ syscall: 'realpath', path }, () => this.resolve(path, options?.follow ?? true, false, options?.creating ?? false));
 +  }
 +
 +  /** Kinu patch (Nimbus ask #24): `observer` hears every writeFile, writeFileIfRevision, unlink and rename that lands. */
@@ -448,7 +470,7 @@ index 876aee5dcc7a90ee604d2bb79f5d31f34b5cbd1e..c0e9745ad521804627421db27358e78b
    /**
     * Whether the namespace answers `path` itself rather than the root
     * backend alone: a path on another mount, a directory above a mount point
-@@ -1724,8 +1810,8 @@ export class CompositeVFS implements VFS {
+@@ -1724,8 +1819,8 @@ export class CompositeVFS implements VFS {
    /** `parents`: make the missing directories above where the write lands first (mkdir -p), as the write's own lookup resolves it. */
    async writeFile(path: string, data: Uint8Array, options?: { mode?: number; parents?: boolean }): Promise<void> {
      const mode = options?.mode === undefined ? undefined : { mode: options.mode };
@@ -459,7 +481,7 @@ index 876aee5dcc7a90ee604d2bb79f5d31f34b5cbd1e..c0e9745ad521804627421db27358e78b
    }
  
    /** `parents`: as writeFile's. */
-@@ -1787,7 +1873,7 @@ export class CompositeVFS implements VFS {
+@@ -1787,7 +1882,7 @@ export class CompositeVFS implements VFS {
    }
  
    async unlink(path: string): Promise<void> {
@@ -468,28 +490,24 @@ index 876aee5dcc7a90ee604d2bb79f5d31f34b5cbd1e..c0e9745ad521804627421db27358e78b
    }
  
    async rmdir(path: string): Promise<void> {
-@@ -1795,7 +1881,19 @@ export class CompositeVFS implements VFS {
+@@ -1795,7 +1890,15 @@ export class CompositeVFS implements VFS {
    }
  
    async rename(from: string, to: string): Promise<void> {
 -    return reported({ syscall: 'rename', path: from, dest: to }, () => this.renameAt(from, to, false));
 +    if (this.table.observers.size === 0) return reported({ syscall: 'rename', path: from, dest: to }, () => this.renameAt(from, to, false));
-+    // The bytes that move are read wherever either end is watched.
-+    const [left, replaced] = await Promise.all([
-+      this.baselines(from, (observer) => observer.needsBaseline(from, this.viewer) || observer.needsBaseline(to, this.viewer)),
-+      this.baselines(to),
-+    ]);
++    // The bytes that move are read once, whatever either end's baseline asks: they are what `to` holds after.
++    const [left, replaced] = await Promise.all([this.baselines(from, () => true), this.baselines(to)]);
 +    await reported({ syscall: 'rename', path: from, dest: to }, () => this.renameAt(from, to, false));
 +
-+    for (const [observer, baseline] of left) {
-+      const moved = baseline.before ?? null;
-+      observer.record({ path: from, ...baseline, after: null, principal: this.viewer });
-+      observer.record({ path: to, ...replaced.get(observer), after: moved, principal: this.viewer });
++    for (const [observer, moved] of left) {
++      observer.record({ path: from, ...(observer.needsBaseline(from, this.viewer) ? moved : {}), after: null, principal: this.viewer });
++      observer.record({ path: to, ...replaced.get(observer), after: moved.before ?? null, principal: this.viewer });
 +    }
    }
  
    async removeRecursive(path: string): Promise<VfsRemoval> {
-@@ -1825,7 +1923,8 @@ export class CompositeVFS implements VFS {
+@@ -1825,7 +1928,8 @@ export class CompositeVFS implements VFS {
    }
  
    async writeFileIfRevision(path: string, data: Uint8Array, expected: VfsRevision): Promise<VfsCasResult> {

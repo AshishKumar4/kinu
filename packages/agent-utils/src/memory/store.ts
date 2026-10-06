@@ -29,6 +29,12 @@ export interface MemoryIndexDelta {
 
 export type NoteReader = (path: string) => Promise<string | null>;
 
+/** A note's size and mtime as it was indexed: one that differs changed under the index. */
+export interface NoteStamp {
+	readonly size: number;
+	readonly mtimeMs: number;
+}
+
 /** The note holds the text; rows keep lines and hash, FTS5 the terms. */
 export function initMemoryChunkTables(sql: SqlExecutor): void {
 	void sql`
@@ -41,6 +47,13 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 		)
 	`;
 	void sql`CREATE INDEX IF NOT EXISTS idx_mc_path ON memory_note_chunks(path)`;
+	void sql`
+		CREATE TABLE IF NOT EXISTS memory_note_files (
+			path     TEXT PRIMARY KEY,
+			size     INTEGER NOT NULL,
+			mtime_ms REAL    NOT NULL
+		)
+	`;
 	void sql`
 		CREATE VIRTUAL TABLE IF NOT EXISTS memory_note_chunks_fts USING fts5(
 			text,
@@ -85,16 +98,15 @@ export class MemoryStore {
 		}
 	}
 
-	hasChunks(path: string): boolean {
-		return this.sql<{ id: string }>`SELECT id FROM memory_note_chunks WHERE path = ${path} LIMIT 1`.length > 0;
+	/** Each indexed note's stamp, by path. */
+	stamps(): Map<string, NoteStamp> {
+		const rows = this.sql<{ path: string; size: number; mtime_ms: number }>`SELECT path, size, mtime_ms FROM memory_note_files`;
+
+		return new Map(rows.map((row) => [row.path, { size: row.size, mtimeMs: row.mtime_ms }]));
 	}
 
-	isEmpty(): boolean {
-		return this.sql<{ id: string }>`SELECT id FROM memory_note_chunks LIMIT 1`.length === 0;
-	}
-
-	/** (Re)index a file into FTS5 (source of truth) and return the delta for the vector index. */
-	async indexFile(path: string, content: string): Promise<MemoryIndexDelta> {
+	/** (Re)index a note as `stamp` found it, or, with no stamp, forget a note that is gone; the vector index's delta. */
+	async indexFile(path: string, content: string, stamp?: NoteStamp): Promise<MemoryIndexDelta> {
 		const chunks = await chunkMarkdown(content);
 
 		const existing = this.sql<{ id: string; hash: string }>`
@@ -128,6 +140,14 @@ export class MemoryStore {
 				void this.sql`DELETE FROM memory_note_chunks WHERE id = ${id}`;
 				deletedIds.push(id);
 			}
+		}
+
+		if (stamp === undefined) void this.sql`DELETE FROM memory_note_files WHERE path = ${path}`;
+		else {
+			void this.sql`
+				INSERT INTO memory_note_files (path, size, mtime_ms) VALUES (${path}, ${stamp.size}, ${stamp.mtimeMs})
+				ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime_ms = excluded.mtime_ms
+			`;
 		}
 
 		return { upserted, deletedIds };
@@ -179,14 +199,14 @@ async function chunkTexts<Row extends ChunkRow>(rows: readonly Row[], read: Note
 	}));
 }
 
-export interface NoteIndex {
+interface NoteIndex {
 	readonly sql: SqlExecutor;
 	readonly read: NoteReader;
 	readonly reindex?: (path: string) => Promise<void>;
 }
 
 /** Strict all-term page, then partial matches up to `limit`. */
-export async function searchMemoryChunks({ sql, read, reindex }: NoteIndex, query: string, limit = 10): Promise<MemorySearchResult[]> {
+async function searchMemoryChunks({ sql, read, reindex }: NoteIndex, query: string, limit = 10): Promise<MemorySearchResult[]> {
 	if (!query.trim()) return [];
 
 	const ranked = (): FtsRow[] => searchFts(query, limit, (match, capacity) => runFtsQuery(sql, match, capacity), (row) => row.id);

@@ -10,7 +10,7 @@ import type {
   AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome, VfsMount,
 } from '@kinu.run/core';
-import type { Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
+import type { Memory, Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
 import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, chmodSync, writeSync } from 'node:fs';
@@ -159,8 +159,17 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
   return (ddl: string) => db.exec(ddl);
 }
 
+/** The memory of the workspace whose database `db` is, as its memory tool reads and searches it. */
+export function workspaceMemory(db: Database): Memory {
+  const notes = agentStateFiles(db);
+  const store = new MemoryStore(notes, makeSql(db));
+  store.ensureSchema();
+
+  return adaptMemory(store, notes);
+}
+
 /** Main's home beside `db`, as real files. */
-export function agentStateFiles(db: Database): Pick<VFS, 'readFile'> {
+export function agentStateFiles(db: Database): ReturnType<typeof agentHomeFiles> {
   return workspaceHome(db);
 }
 
@@ -440,7 +449,7 @@ function buildCLIRuntime(
   const agentVfs = localFilePlane({ folder: cwd, space, views, checkpoints });
 
   // Only the agent's tools: the shell and the owner's views keep `agentVfs`.
-  const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', localFileReach({ folder: cwd, space }, planes), approvalPolicy);
+  const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', localFileReach({ folder: cwd, space }, planes, agentVfs), approvalPolicy);
 
   const limits = hostResourceLimits();
 
@@ -655,7 +664,7 @@ async function buildCLIHeadRuntime(
   ];
 
   const agentVfs = localFilePlane({ folder, space, views, checkpoints: parent.checkpoints });
-  const reach = localFileReach({ folder, space }, parent.planes);
+  const reach = localFileReach({ folder, space }, parent.planes, agentVfs);
 
   // Heard on its own plane, and on its parent's under its own actor.
   const unobserved = writeObserver === undefined ? [] : [

@@ -14,7 +14,7 @@ import { isVfsError, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-erro
 import { CompositeVFS, normalizePath, type MountRoute, type Principal } from '@nimbus-sh/core/vfs/composite.js';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { observeNamespace, type WriteObserver } from './write-events';
-import { move } from '@nimbus-sh/core/vfs/move.js';
+import { move, type MoveFs } from '@nimbus-sh/core/vfs/move.js';
 import { workspacePath } from './workspace-path';
 
 export interface VfsMount {
@@ -238,6 +238,11 @@ export interface VfsMountRouting {
 	mounts(): readonly VfsMount[];
 	/** The user's writable mount roots, connected or not. */
 	userRoots(): readonly string[];
+	/**
+	 * `path` as the namespace's own lookup resolves it, links followed (the last one unless `follow` is false): the one
+	 * path a gate decides on and the operation then reaches. A path whose directories are not there yet passes as named.
+	 */
+	resolve(path: string, options?: { follow?: boolean }): Promise<string>;
 }
 
 export type MountedVfs = VFS & Required<Pick<VFS, 'rename' | 'removeRecursive' | 'readRange'>> & VfsMountRouting & CheckpointFiles;
@@ -317,15 +322,46 @@ function checkedMounts(mounts: readonly VfsMount[]): readonly VfsMount[] {
 	return mounts;
 }
 
+/** A VFS `move` walks, whose links on an asynchronous mount are awaited (the composite's own realpath is synchronous). */
+function movable(files: VFS): MoveFs {
+	if (!(files instanceof CompositeVFS)) return files;
+
+	return {
+		readFile: files.readFile.bind(files),
+		writeFile: files.writeFile.bind(files),
+		readdir: files.readdir.bind(files),
+		stat: files.stat.bind(files),
+		unlink: files.unlink.bind(files),
+		mkdir: files.mkdir.bind(files),
+		rmdir: files.rmdir.bind(files),
+		rename: files.rename.bind(files),
+		readlink: files.readlink.bind(files),
+		symlink: files.symlink.bind(files),
+		chmod: files.chmod.bind(files),
+		utimes: files.utimes.bind(files),
+		realpath: (path) => files.realpathAsync(path),
+	};
+}
+
+interface Landing {
+	readonly files: VFS;
+	readonly path: string;
+	readonly resolved: string;
+	readonly route: MountRoute | null;
+}
+
 /** A namespace holding a table's mounts already (the workspace's own), and where a relative path starts on it. */
 export interface MountedNamespace {
 	readonly namespace: () => Promise<CompositeVFS>;
 	readonly home: string;
+	/** A write makes its missing directories, as a host's file tool does. */
+	readonly writesParents?: true;
 }
 
 /** `base` extended by `mounts`, a relative path staying in `base`; or a namespace already holding them. */
 export function withMountTable(base: VFS | MountedNamespace, mounts: readonly VfsMount[]): MountedVfs {
 	const plane = 'namespace' in base ? base : ownNamespace(base, mounts);
+	const parents = 'namespace' in base && base.writesParents === true;
 	const relative: VFS | { readonly home: string } = 'namespace' in base ? { home: base.home } : base;
 	const byName = new Map(checkedMounts(mounts).map((mount) => [mount.name, mount]));
 
@@ -336,19 +372,24 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		return byName.has(name) ? name : null;
 	};
 
-	const landing = async (path: string): Promise<{ readonly files: VFS; readonly path: string; readonly route: MountRoute | null }> => {
+	/**
+	 * Where `path` lands: the VFS that serves it and the path it takes, and, on the namespace, the path its links resolve
+	 * to and that path's route, which every decision here reads, so a link cannot carry an op past the mount it reaches.
+	 */
+	const landing = async (path: string, follow = true): Promise<Landing> => {
 		let absolute = path;
 
 		if (!path.startsWith('/')) {
-			if (!('home' in relative)) return { files: relative, path, route: null };
+			if (!('home' in relative)) return { files: relative, path, resolved: path, route: null };
 			absolute = workspacePath(path, relative.home);
 		}
 
 		const namespace = await plane.namespace();
 		// Lexical, as the approval gate reads the path it decides on.
 		const normal = normalizePath(absolute);
+		const resolved = await namespace.resolvePath(normal, { follow, creating: true });
 
-		return { files: namespace, path: normal, route: namespace.routeOf(normal) };
+		return { files: namespace, path: normal, resolved, route: namespace.routeOf(resolved) };
 	};
 
 	const via = async <T>(path: string, op: (files: VFS, at: string) => Awaitable<T>): Promise<T> => {
@@ -375,7 +416,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		mounts: () => [...mounts],
 		userRoots: () => userRoots,
 		stat: async (path, options) => {
-			const target = await landing(path);
+			const target = await landing(path, options?.follow !== false);
 
 			if (target.route !== null && target.route.source === null) {
 				return settle(Effect.fail(new VfsError('ENXIO', target.route.absentReason ?? target.route.point, path)));
@@ -384,43 +425,28 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			return target.files.stat(target.path, options);
 		},
 		readFile: (path) => via(path, (files, at) => files.readFile(at)),
-		writeFile: (path, data) => via(path, (files, at) => files.writeFile(at, data)),
+		writeFile: (path, data) => via(path, (files, at) => (parents && files instanceof CompositeVFS ? files.writeFile(at, data, { parents: true }) : files.writeFile(at, data))),
 		readdir: (path) => via(path, (files, at) => files.readdir(at)),
 		mkdir: (path, options) => via(path, (files, at) => files.mkdir(at, options)),
 		unlink: (path) => via(path, (files, at) => files.unlink(at)),
 		async rename(from, to) {
-			const [source, target] = await Promise.all([landing(from), landing(to)]);
-			const own = mounted(source.route);
+			const [source, target] = await Promise.all([landing(from, false), landing(to, false)]);
 
-			// One mounted tree without its own rename moves bytes as `mv` does.
-			if (own !== null && source.route !== null && target.route?.point === source.route.point && own.rename === undefined
-				&& source.route.path !== '/' && target.route.path !== '/' && !source.route.readOnly) {
-				return move(own, source.route.path, target.route.path);
-			}
+			if (source.route === null && target.route === null) return move(source.files, source.path, target.path);
 
-			const rootward = (route: MountRoute | null): boolean => route === null || route.point === '/';
-
-			if (source.files === target.files && rootward(source.route) && rootward(target.route) && (source.route?.source ?? source.files).rename === undefined) {
-				return move(source.route?.source ?? source.files, source.route?.path ?? source.path, target.route?.path ?? target.path);
+			// One tree whose backend moves nothing in place: the bytes move as `mv` moves them, by the namespace's own rules.
+			if (source.route?.point === target.route?.point && source.route?.source !== null && source.route?.source.rename === undefined) {
+				return move(movable(source.files), source.path, target.path);
 			}
 
 			return source.files.rename?.(source.path, target.path);
 		},
 		async removeRecursive(path) {
-			const target = await landing(path);
-			const own = mounted(target.route);
+			const { files, path: at } = await landing(path, false);
 
-			// A mounted tree without its own removal is walked here, up to its first refusal.
-			if (own !== null && target.route !== null && own.removeRecursive === undefined && target.route.path !== '/' && !target.route.readOnly) {
-				refuseKept(target.route.path, keptByRemoval(await removeTreeWithVfsOps(own, target.route.path)));
-
-				return;
-			}
-
-			const { files } = target;
-
-			refuseKept(target.path, keptByRemoval(await (files.removeRecursive === undefined ? removeTreeWithVfsOps(files, target.path) : files.removeRecursive(target.path))));
+			refuseKept(at, keptByRemoval(await (files.removeRecursive === undefined ? removeTreeWithVfsOps(files, at) : files.removeRecursive(at))));
 		},
+		resolve: async (path, options) => (await landing(path, options?.follow ?? true)).resolved,
 		// A plane with no ranged read refuses rather than whole-reading; only `readBoundedWithVfsOps` may whole-read.
 		// ENOTSUP, not EPERM: callers like the `file` scan fall back on this code.
 		readRange: (path, offset, length) => settle(optional(path, 'this plane serves no ranged read', (files, at, route) => (

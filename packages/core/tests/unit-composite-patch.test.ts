@@ -30,6 +30,22 @@ describe('routeOf', () => {
   });
 });
 
+describe('resolvePath', () => {
+  // A link in one backend can lead into another mount: a caller that judges the lexical path judges the wrong one.
+  test('follows a root link into a mount, keeps the last link unfollowed when asked, and lets mkdir -p pass', async () => {
+    const root = new MemoryVFS();
+    const plane = new CompositeVFS(root);
+    plane.mount('/pc', new MemoryVFS(), { resolvesPaths: true });
+    await plane.mkdir('/home/main', { recursive: true });
+    await plane.symlink('/pc/laptop', '/home/main/pc-link');
+
+    expect(await plane.resolvePath('/home/main/pc-link/notes.md')).toBe('/pc/laptop/notes.md');
+    expect(await plane.resolvePath('/home/main/pc-link', { follow: false })).toBe('/home/main/pc-link');
+    await expect(plane.resolvePath('/home/main/missing/deeper')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await plane.resolvePath('/home/main/missing/deeper', { creating: true })).toBe('/home/main/missing/deeper');
+  });
+});
+
 describe('observeWrites', () => {
   function watched(needsBaseline = true) {
     const plane = new CompositeVFS(new MemoryVFS());
@@ -71,6 +87,18 @@ describe('observeWrites', () => {
       { path: '/from.txt', before: 'moved', after: null },
       { path: '/to.txt', before: null, after: 'moved' },
     ]);
+  });
+
+  // A head's report asks no baseline for a name it already touched, yet the name a rename fills still holds bytes.
+  test('a rename between names the observer stopped asking about still reports the bytes that moved', async () => {
+    const { plane, events } = watched(false);
+    await writeText(plane, '/a.txt', 'kept');
+    await writeText(plane, '/b.txt', 'gone');
+    await plane.unlink('/b.txt');
+    events.length = 0;
+    await plane.rename('/a.txt', '/b.txt');
+
+    expect(events.map(({ path, after }) => ({ path, after }))).toEqual([{ path: '/a.txt', after: null }, { path: '/b.txt', after: 'kept' }]);
   });
 
   test('a write that fails, or loses its revision, reports nothing', async () => {

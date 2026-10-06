@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import type { LLMProviderConfig } from '@kinu.run/core';
 import {
-  initWorkspaceSchema, initActorStateSchema, reconcileMemoryIndex, summarizeSoul,
+  initWorkspaceSchema, initActorStateSchema, summarizeSoul,
   getCurrentScaffoldVersion, memoryBytes,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, soulIn, waitOnSharedWrites, type CLIRuntime } from './runtime';
@@ -74,10 +74,7 @@ export function openWorkspaceCLI(
     const searchNodeCount = sql<{ c: number }>`
       SELECT COUNT(*) as c FROM search_nodes WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
 
-    const notes = rt.agentStateVfs ?? rt.storage.vfs;
-    // A restored workspace carries its notes, never their index: it is rebuilt from them here.
-    yield* Effect.promise(() => reconcileMemoryIndex(rt.memory, rt.memoryStore, notes));
-    const memorySize = yield* Effect.promise(async () => memoryBytes(notes));
+    const memorySize = yield* Effect.promise(async () => memoryBytes(rt.agentStateVfs ?? rt.storage.vfs));
 
     return {
       rt,

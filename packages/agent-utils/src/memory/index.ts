@@ -1,4 +1,4 @@
-export { MemoryStore, initMemoryChunkTables, searchMemoryChunks } from "./store";
+export { MemoryStore, initMemoryChunkTables } from "./store";
 
 export type { IndexedChunk, MemoryIndexDelta, NoteReader } from "./store";
 

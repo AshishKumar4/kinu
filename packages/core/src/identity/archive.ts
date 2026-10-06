@@ -76,6 +76,7 @@ const EXCLUDED_TABLES = {
   // Derived from the notes the archive carries: the next open indexes them.
   memory_note_chunks: true,
   memory_note_chunks_fts: true,
+  memory_note_files: true,
 } satisfies Record<string, true>;
 
 function isInternalTable(name: string): boolean {

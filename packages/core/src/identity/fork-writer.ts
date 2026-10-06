@@ -17,7 +17,6 @@ import type {
   ForkConversationEntryPartRow,
   ForkConversationEntryRow,
   ForkCraftedToolRow,
-  ForkMemoryChunkRow,
   ForkSessionMessageRow,
   ForkSnapshotHead,
 } from './fork-rows';
@@ -48,7 +47,6 @@ export interface ForkWriteTarget {
 export const ForkSectionCountsSchema = v.object({
   agentConfig: v.number(),
   craftedTools: v.number(),
-  memoryChunks: v.number(),
   sessionMessages: v.number(),
   conversationEntries: v.number(),
   conversationEntryParts: v.number(),
@@ -113,6 +111,7 @@ export class ForkTargetWriter {
     markStoreChanged(this.target);
     void this.target`DELETE FROM memory_note_chunks_fts`;
     void this.target`DELETE FROM memory_note_chunks`;
+    void this.target`DELETE FROM memory_note_files`;
     void this.target`DELETE FROM actor_config WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM fork_lineage`;
     void this.target`DELETE FROM conversation_entry_parts WHERE actor_id = ${actorId}`;
@@ -143,20 +142,6 @@ export class ForkTargetWriter {
     }
 
     this.staging.count({ craftedTools: rows.length });
-  }
-
-  /** The parent's memory index; the text goes to FTS terms only. */
-  stageMemoryChunks(rows: readonly ForkMemoryChunkRow[]): void {
-    for (const c of rows) {
-      void this.target`DELETE FROM memory_note_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_note_chunks WHERE id = ${c.id})`;
-      void this.target`
-        INSERT OR REPLACE INTO memory_note_chunks (id, path, start_line, end_line, hash)
-        VALUES (${c.id}, ${c.path}, ${c.start_line}, ${c.end_line}, ${c.hash})
-      `;
-      void this.target`INSERT INTO memory_note_chunks_fts (rowid, text) SELECT rowid, ${c.text} FROM memory_note_chunks WHERE id = ${c.id}`;
-    }
-
-    this.staging.count({ memoryChunks: rows.length });
   }
 
   /** Carried messages under this target's actor; request, output slot and ingress id do not cross. */

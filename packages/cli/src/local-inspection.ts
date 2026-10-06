@@ -79,14 +79,13 @@ import {
   type AccountSpend,
   MEMORY_PATH,
   missionOf,
-  searchMemoryChunks,
   type MemorySearchResult,
 } from '@kinu.run/core';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { classify, tolerateAsync } from '@kinu.run/core/obs';
 import {
   agentStateFiles, makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
-  openWorkspaceCLI, resolverModelPlane, soulOf,
+  openWorkspaceCLI, resolverModelPlane, soulOf, workspaceMemory,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveLocalAgent } from './config';
@@ -243,16 +242,15 @@ export function readLocalMemory(name: string): Promise<string> {
 }
 
 /** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */
-/** The agent's own ranked search over the same index, each hit read from its note; a hit its note no longer holds is left out. */
+/** The agent's own search, as its memory tool runs it: a note a shell changed is indexed again first, so its new words are found. */
 export function searchLocalMemory(name: string, query: string, limit = 10): Promise<MemorySearchResult[]> {
   const window = boundedInt(limit, 10, 1, Number.MAX_SAFE_INTEGER);
 
   return withLocalDbAsync(name, async (db) => {
     if (!tableExists(db, 'memory_note_chunks_fts')) return [];
-    const notes = agentStateFiles(db);
 
-    return searchMemoryChunks({ sql: makeSql(db), read: async (path) => await tolerateAsync(() => readText(notes, path), 'enoent') ?? null }, query, window);
-  });
+    return workspaceMemory(db).search(query, window);
+  }, 'write');
 }
 
 export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {

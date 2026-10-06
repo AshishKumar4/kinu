@@ -157,6 +157,37 @@ describe('adaptMemory — a note changed under its index', () => {
     expect(await memory.search('wrangler', 5)).toEqual([]);
     expect([...vs.live.values()].map((chunk) => chunk.text)).toEqual(['kubernetes ingress now fronts staging']);
   });
+
+  test('a note no index row names yet is found by the next search, however much else is indexed', async () => {
+    const { store, files, config } = createStore();
+    const vs = fakeVectorStore();
+    const memory = adaptMemory(store, files, { store: vs.store, config });
+
+    // A restore that stopped partway: one note indexed, the other only on disk.
+    await memory.write(PATH, 'wrangler staging deploy succeeded');
+    await memory.index(PATH);
+    await writeText(files, 'memory/2026-10-07.md', 'kubernetes ingress now fronts staging');
+
+    expect((await memory.search('kubernetes', 5)).map((hit) => hit.path)).toEqual(['memory/2026-10-07.md']);
+    expect([...vs.live.values()].map((chunk) => chunk.text).sort()).toEqual(['kubernetes ingress now fronts staging', 'wrangler staging deploy succeeded']);
+  });
+
+  test('a note a shell removed or renamed leaves no hit and no vector under its old name', async () => {
+    const { store, files, config } = createStore();
+    const vs = fakeVectorStore();
+    const memory = adaptMemory(store, files, { store: vs.store, config });
+    await memory.write(PATH, 'wrangler staging deploy succeeded');
+    await memory.write('memory/gone.md', 'postgres replica lag alert');
+    await memory.index(PATH);
+    await memory.index('memory/gone.md');
+
+    await files.rename(PATH, 'memory/deploys.md');
+    await files.unlink('memory/gone.md');
+
+    expect(await memory.search('postgres', 5)).toEqual([]);
+    expect((await memory.search('wrangler', 5)).map((hit) => hit.path)).toEqual(['memory/deploys.md']);
+    expect([...vs.live.keys()].every((id) => id.startsWith('memory/deploys.md:'))).toBe(true);
+  });
 });
 
 describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () => {

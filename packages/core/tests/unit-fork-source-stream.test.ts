@@ -53,9 +53,6 @@ function rowPayloadBytes(frame: ForkFrame): number {
     case 'craftedTools':
       return frame.rows.reduce((total, row) => total + bytes(row.name) + bytes(row.description)
         + bytes(row.code), 0);
-    case 'memoryChunks':
-      return frame.rows.reduce((total, row) => total + bytes(row.id) + bytes(row.path)
-        + bytes(row.hash) + bytes(row.text), 0);
     case 'sessionMessages':
       return frame.rows.reduce((total, row) => total + bytes(row.message_id) + bytes(row.role)
         + bytes(row.native_content_kind) + bytes(row.origin) + bytes(row.envelope_json)
@@ -123,7 +120,6 @@ describe('forkTransferFrames source streamer', () => {
     expect(begin.counts).toEqual({
       agentConfig: carried.agentConfig.length,
       craftedTools: carried.craftedTools.length,
-      memoryChunks: carried.memoryChunks.length,
       sessionMessages: carried.sessionMessages.length,
       conversationEntries: carried.conversationEntries.length,
       conversationEntryParts: carried.conversationEntryParts.length,

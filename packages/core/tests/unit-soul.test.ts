@@ -12,6 +12,7 @@ import { bootstrapScaffold } from '../src/scaffold/bootstrap';
 import { getCurrentScaffoldVersion, readScaffoldVersion } from '../src/scaffold/versions';
 import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers';
 import { createMemoryVfs } from '@kinu.run/test-utils';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { workspaceSoul, writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
@@ -46,6 +47,27 @@ describe('the soul is a file', () => {
     const { vfs, seal } = freshWorkspace();
     await seal('   \n  ');
     expect(await readSoul(vfs)).toBeNull();
+  });
+
+  // The owner's write runs as uid 0: through a link an agent left at SOUL.md it would overwrite the file the link names.
+  test('an owner write replaces a link at SOUL.md with the file, and never writes through it', async () => {
+    const db = new Database(':memory:');
+    initAllTables(makeExecRaw(db), makeSql(db));
+    const bundle = createWorkspaceBundle(db);
+    await writeWorkspaceSoul(bundle, '# Atlas\n');
+    const { root } = await bundle.privileged();
+    const cred = { uid: 2_001, gid: 2_001 };
+    const home = provisionAgentHome(root, 'agent-a', cred);
+    const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
+    kernel.writeFile(`${home}/private.md`, 'agent-a only');
+    kernel.unlink(SOUL_FILE);
+    kernel.symlink(`${home}/private.md`, SOUL_FILE);
+
+    await writeWorkspaceSoul(bundle, '# Owner\n');
+
+    expect(new TextDecoder().decode(kernel.readFile(`${home}/private.md`))).toBe('agent-a only');
+    expect(kernel.lstat(SOUL_FILE)).toMatchObject({ type: 'file', mode: expect.any(Number) });
+    expect(await workspaceSoul(bundle)).toBe('# Owner\n');
   });
 
   // The owner set it at birth; any agent of the workspace edits it after, from its shell or its file tool alike.

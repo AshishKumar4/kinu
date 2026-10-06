@@ -1,4 +1,4 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Keeps the Vectorize index in step with the FTS5 memory store; separate from runtime.ts to stay dependency-light. */
 
 import { Effect } from 'effect';
@@ -8,6 +8,7 @@ import { type VectorStore } from './vector-store';
 
 import { AGENT_CONFIG_KEYS } from '../config/store';
 import { readTailWithVfsOps } from '../vfs/mounts';
+import { MEMORY_DIR } from './note';
 import type { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { diagnostics, settle, toKinuError } from "../obs/index";
 
@@ -31,16 +32,35 @@ export interface MemoryVectors {
 export function adaptMemory(
   store: MemoryStore, files: VFS & Required<Pick<VFS, 'readRange'>>, vectors?: MemoryVectors,
 ): Memory {
+  /** Whether `path` is a file whose stamp differs from the one it was indexed at: a shell changed it under the index. */
+  const changed = async (path: string, stamps = store.stamps()): Promise<boolean> => {
+    const stat = await files.stat(path);
+    const indexed = stamps.get(path);
+
+    if (stat === null || stat.type !== 'file') return indexed !== undefined;
+
+    return indexed === undefined || indexed.size !== stat.size || indexed.mtimeMs !== stat.mtimeMs;
+  };
+
+  /** Every note whose stamp moved, a note no index row names yet, and every indexed one now gone, indexed again. */
+  const refresh = async (): Promise<void> => {
+    const stamps = store.stamps();
+    const notes = await notePaths(files);
+
+    for (const path of new Set([...notes, ...[...stamps.keys()].filter((known) => known.startsWith(MEMORY_DIR))])) {
+      if (await changed(path, stamps)) await memory.index(path);
+    }
+  };
+
   const memory: Memory = {
     write: (path, content) => store.writeFile(path, content),
     append: (path, content) => store.appendToFile(path, content),
     index(path) {
       return settle(Effect.gen(function* () {
         const content = yield* Effect.promise(() => store.readFile(path));
-
-        // Only a missing file is skipped: an emptied one indexes to no chunks, and its old ones leave.
-        if (content === null) return;
-        const delta = yield* Effect.promise(() => store.indexFile(path, content));
+        const stat = content === null ? null : yield* Effect.promise(async () => files.stat(path));
+        // A note that is gone leaves the index with its chunks; an emptied one indexes to none.
+        const delta = yield* Effect.promise(() => store.indexFile(path, content ?? '', stat === null ? undefined : { size: stat.size, mtimeMs: stat.mtimeMs }));
 
         if (vectors === undefined || !vectors.store.available) return;
         const vectorStore = vectors.store;
@@ -58,12 +78,16 @@ export function adaptMemory(
         })));
       }));
     },
-    // A note a shell changed under the index is re-chunked when it is found or read, so no stale chunk is served.
-    search: (query, limit) => store.search(query, limit, async (path) => memory.index(path)),
+    // A shell edits notes beside the memory tool: a search first re-indexes every note that moved, so its new words are found.
+    async search(query, limit) {
+      await refresh();
+
+      return store.search(query, limit, async (path) => memory.index(path));
+    },
     async read(path) {
       const content = await store.readFile(path);
 
-      if (content !== null && store.hasChunks(path)) await memory.index(path);
+      if (await changed(path)) await memory.index(path);
 
       return content;
     },
@@ -71,6 +95,21 @@ export function adaptMemory(
   };
 
   return memory;
+}
+
+/** Every markdown note under the memory directory, by its relative path. */
+async function notePaths(files: VFS, dir = MEMORY_DIR.slice(0, -1)): Promise<string[]> {
+  if (!await exists(files, dir)) return [];
+  const out: string[] = [];
+
+  for (const entry of await files.readdir(dir)) {
+    const path = `${dir}/${entry.name}`;
+
+    if (entry.type === 'directory') out.push(...await notePaths(files, path));
+    else if (entry.type === 'file' && path.endsWith('.md')) out.push(path);
+  }
+
+  return out;
 }
 
 /** Bounded so a large memory table embeds across several boots. */

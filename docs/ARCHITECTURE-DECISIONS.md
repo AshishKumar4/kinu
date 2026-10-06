@@ -306,8 +306,11 @@ notes and the scaffold are files of `home/main/`; the notes and the scaffold
 are read-only mounts to the file tool (the memory tool and the loop's writer
 change them). Conversations, the memory index, jobs and settings stay in
 `agent.db`: that is data, not files. The index keeps no text of its own: a
-contentless FTS5 reads each hit from its note and re-chunks one a shell
-changed. `/context` (a rendering of the conversation) and `/skills` (the
+contentless FTS5 reads each hit from its note, and every search first re-chunks
+the notes whose size or modified time moved from their stamp, so a note a shell
+wrote is found by the words it holds now; a fork carries the notes, not the
+index. The gate judges where a path lands (`resolvePath`, NIMBUS-ASKS #23), so a
+link into `/pc` is the user's file. `/context` (a rendering of the conversation) and `/skills` (the
 builtins and the workspace's own skills) stay views at `<space>/<name>`, which
 the prompt names as the file tool's alone. `/shared`, never bound locally, is
 gone there, and so are the agent view and `core/vfs/observe.ts`: heads hear
@@ -322,7 +325,9 @@ row, the kernel 0444 seal resealed from it at every boot and turn start, the
 soul frame of a fork and the file tool's "set from Settings" refusals. The
 schema genesis moved with it, so a local database from before is refused, not
 opened without its soul. Pinned by "an agent with its own uid edits SOUL.md"
-(red at 0644, the soul at 0664) and its cloud and CLI flows.
+(red at 0644, the soul at 0664) and its cloud and CLI flows. The owner's write
+is uid 0's, so it replaces a link an agent left at `SOUL.md` rather than
+writing through it, and a hired subordinate's turn reads the file as it stands.
 
 W4. A workspace delete is the object's own storage wipe (`destroy()`, whose
 `deleteAll()` takes every agent facet's database with the workspace's), with

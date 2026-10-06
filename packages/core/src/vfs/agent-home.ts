@@ -4,6 +4,7 @@
  * merge-back; tmp is 0o700. Both planes act as the agent's credential, or its own tool writes get `EACCES`.
  */
 
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -213,24 +214,35 @@ export function settleWorkspaceRoot(kernel: Pick<RootMoveVfs, 'stat' | 'chown' |
   }
 }
 
-export type SoulVfs = Pick<CredentialedVfs, 'readdir' | 'lstat' | 'writeFile' | 'chown' | 'chmod'>;
+export type SoulVfs = Pick<CredentialedVfs, 'readdir' | 'lstat' | 'writeFile' | 'unlink' | 'chown' | 'chmod'>;
 
 /** Main owns SOUL.md and the workspace group writes it: every agent of the workspace carries that group. */
 const SOUL_MODE = 0o664;
 
 /** SOUL.md, with `content` where given, as an ordinary file of the workspace that every agent of it edits. */
 export function provisionWorkspaceSoul(kernel: SoulVfs, content?: string | Uint8Array): void {
-  if (content !== undefined) kernel.writeFile(SOUL_FILE, content);
+  const present = (): boolean => kernel.readdir(WORKSPACE_ROOT).some((entry) => entry.name === SOUL_PATH);
 
-  if (!kernel.readdir(WORKSPACE_ROOT).some((entry) => entry.name === SOUL_PATH)) return;
-  const entry = kernel.lstat(SOUL_FILE);
+  return settleSync(Effect.gen(function* () {
+    // Written as uid 0, so never through an entry an agent put there: a link is replaced by the file, a directory refused.
+    if (content !== undefined) {
+      const there = present() ? kernel.lstat(SOUL_FILE).type : null;
 
-  // A directory or link an agent left there is its own; only the file is shared.
-  if (entry.type !== 'file') return;
+      if (there === 'symlink') kernel.unlink(SOUL_FILE);
+      else if (there !== null && there !== 'file') return yield* Effect.fail(new VfsError('EISDIR', `${SOUL_FILE} is a ${there}, not the workspace's SOUL.md`, SOUL_FILE));
+      kernel.writeFile(SOUL_FILE, content);
+    }
 
-  if (entry.uid !== SESSION_UID || entry.gid !== WORKSPACE_GID) kernel.chown(SOUL_FILE, SESSION_UID, WORKSPACE_GID);
+    if (!present()) return;
+    const entry = kernel.lstat(SOUL_FILE);
 
-  if ((entry.mode & 0o7777) !== SOUL_MODE) kernel.chmod(SOUL_FILE, SOUL_MODE);
+    // A directory or link an agent left there is its own; only the file is shared.
+    if (entry.type !== 'file') return;
+
+    if (entry.uid !== SESSION_UID || entry.gid !== WORKSPACE_GID) kernel.chown(SOUL_FILE, SESSION_UID, WORKSPACE_GID);
+
+    if ((entry.mode & 0o7777) !== SOUL_MODE) kernel.chmod(SOUL_FILE, SOUL_MODE);
+  }));
 }
 
 export type SlatesMoveVfs = RootMoveVfs & Pick<CredentialedVfs, 'mkdir' | 'lstat' | 'getDefaultAcl' | 'setDefaultAcl'>;

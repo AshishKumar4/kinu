@@ -1105,7 +1105,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return assignedTurnFraming(turn.runtime, {
       brief: turn.input.task,
       surface: {
-        soulOverride: this.getSoulText(),
+        // Read for this turn: the owner or any agent may have changed SOUL.md since main's last one.
+        soulOverride: await this.loadSoulText(),
         executors: turn.runtime.executionRouter?.listExecutors() ?? [],
         availableTools: Object.keys(tools).filter(
           (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),

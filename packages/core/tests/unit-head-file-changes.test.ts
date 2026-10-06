@@ -1,6 +1,7 @@
 import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
+import { MemoryVFS } from '@nimbus-sh/core/vfs/memory.js';
 import { observeNamespace } from '../src/vfs/write-events';
 import { HeadFileChanges } from '../src/heads/file-changes';
 
@@ -95,6 +96,21 @@ describe('HeadFileChanges — the review a parent gets', () => {
     await writeText(vfs, '/f.ts', 'different\n');
     await writeText(vfs, '/f.ts', 'same\n');
     expect(changes.snapshot()).toEqual([]);
+  });
+
+  // Both names were touched already, so the report asks for no baseline at either; the moved bytes still land at `to`.
+  test('a rename onto a name the head wrote and removed reports the file that now sits there', async () => {
+    const changes = new HeadFileChanges();
+    const vfs = new CompositeVFS(new MemoryVFS(), { resolvesPaths: true });
+    observeNamespace(vfs, changes);
+    await writeText(vfs, '/a.ts', 'one\ntwo\n');
+    await writeText(vfs, '/b.ts', 'scratch\n');
+    await vfs.unlink('/b.ts');
+    await vfs.rename('/a.ts', '/b.ts');
+
+    expect(changes.snapshot()).toEqual([
+      { path: '/b.ts', status: 'added', added: 2, removed: 0 },
+    ]);
   });
 
   test('a file created and then deleted is not a change', async () => {

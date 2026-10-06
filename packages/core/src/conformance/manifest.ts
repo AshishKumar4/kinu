@@ -61,14 +61,14 @@ const TEAM_RECURSES = {
   cli: WIRED,
 } satisfies RootStatuses;
 
-/** Nimbus tables: `createWorkspace` opens Nimbus over the host database every actor shares. */
+const LAZY_ON_FIRST_USE = (what: string): CapabilityStatus => ({ lazy: `created on first use by ${what}, not at boot` });
+
+/** Nimbus tables: hosted, `createWorkspace` opens Nimbus over the host database every actor shares; locally files are real. */
 const NIMBUS_BASE = {
   'cf-orchestrator': WIRED,
   'cf-subordinate': WIRED,
-  cli: WIRED,
+  cli: LAZY_ON_FIRST_USE("a cloud archive's import, whose store lands there before its files move to the own space"),
 } satisfies RootStatuses;
-
-const LAZY_ON_FIRST_USE = (what: string): CapabilityStatus => ({ lazy: `created on first use by ${what}, not at boot` });
 
 const NAMED_SHELL_STATE = {
   'cf-orchestrator': LAZY_ON_FIRST_USE("a named shell's first command"),
@@ -377,6 +377,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
 
     memory_note_chunks: EVERYWHERE,
     memory_note_chunks_fts: EVERYWHERE,
+    memory_note_files: EVERYWHERE,
     crafted_tools_fts: EVERYWHERE,
 
     // Created by their consumers' constructors (evolution/engine.ts, mission-budget.ts).

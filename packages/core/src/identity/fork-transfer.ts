@@ -4,7 +4,6 @@
  * chunks they name that the target does not hold.
  */
 
-import { hashText } from '@kinu.run/agent-utils/memory';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import * as v from 'valibot';
@@ -37,7 +36,6 @@ import {
   ForkConversationEntryRowSchema,
   ForkConversationEntryPartRowSchema,
   ForkContextMemberRowSchema,
-  ForkMemoryChunkRowSchema,
   ForkCraftedToolRowSchema,
   ForkConfigRowSchema,
   type ForkConfigRow,
@@ -45,15 +43,14 @@ import {
   type ForkConversationEntryPartRow,
   type ForkConversationEntryRow,
   type ForkCraftedToolRow,
-  type ForkMemoryChunkRow,
   type ForkSessionMessageRow,
 } from './fork-rows';
 import { ForkSectionCountsSchema, ForkTargetWriter, forkResultOf, type ForkResult, type ForkStagedCounts } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
 /** Fork transfer protocol version; a receiver refuses one it does not implement. Bump when an older
- *  receiver would misread the frame union. v4 carries files as Nimbus export pages and chunks. */
-export const FORK_TRANSFER_VERSION = 4;
+ *  receiver would misread the frame union. v5 carries no memory index: the target derives it from the notes. */
+export const FORK_TRANSFER_VERSION = 5;
 
 /** Payload bytes per frame: a quarter of `do.facet.rpc_bytes`, leaving headroom for clone metadata and envelope. */
 export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
@@ -62,7 +59,6 @@ export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.val
 export const FORK_ROW_SECTIONS = [
   'agentConfig',
   'craftedTools',
-  'memoryChunks',
   'sessionMessages',
   'conversationEntries',
   'conversationEntryParts',
@@ -113,7 +109,6 @@ const ForkFrameSchema = v.variant('kind', [
   }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('agentConfig'), rows: v.array(ForkConfigRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('craftedTools'), rows: v.array(ForkCraftedToolRowSchema) }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('memoryChunks'), rows: v.array(ForkMemoryChunkRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('sessionMessages'), rows: v.array(ForkSessionMessageRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntries'), rows: v.array(ForkConversationEntryRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntryParts'), rows: v.array(ForkConversationEntryPartRowSchema) }),
@@ -248,9 +243,6 @@ function craftedToolPayloadBytes(row: ForkCraftedToolRow): number {
   return utf8Bytes(row.name) + utf8Bytes(row.description) + utf8Bytes(row.code);
 }
 
-function memoryChunkPayloadBytes(row: ForkMemoryChunkRow): number {
-  return utf8Bytes(row.id) + utf8Bytes(row.path) + utf8Bytes(row.hash) + utf8Bytes(row.text);
-}
 
 /** Message content is the one unbounded conversation field: inline `content_json` is a whole message's parts. */
 function sessionMessagePayloadBytes(row: ForkSessionMessageRow): number {
@@ -316,32 +308,6 @@ async function* craftedToolRows(sql: SqlExecutor): AsyncGenerator<ForkCraftedToo
   }
 }
 
-async function* listed<Row>(rows: readonly Row[]): AsyncGenerator<Row> {
-  for (const row of rows) yield row;
-}
-
-/** Each row's text read from its pinned note; a row the note no longer holds stays. */
-async function memoryChunkRows(sql: SqlExecutor, pinned: ForkPinnedFiles): Promise<ForkMemoryChunkRow[]> {
-  const notes = new Map<string, string[] | null>();
-
-  const linesOf = (path: string): string[] | null => {
-    const note = `${WORKSPACE_ROOT}/${path}`;
-
-    if (!notes.has(path)) notes.set(path, pinned.kind(note) === 'file' ? new TextDecoder().decode(pinned.readFile(note)).split('\n') : null);
-
-    return notes.get(path) ?? null;
-  };
-
-  const rows: ForkMemoryChunkRow[] = [];
-
-  for (const row of sql<Omit<ForkMemoryChunkRow, 'text'>>`SELECT id, path, start_line, end_line, hash FROM memory_note_chunks ORDER BY rowid`) {
-    const text = linesOf(row.path)?.slice(row.start_line - 1, row.end_line).join('\n');
-
-    if (text !== undefined && await hashText(text) === row.hash) rows.push({ ...row, text });
-  }
-
-  return rows;
-}
 
 /** Conversation sections, read one message or one entry's parts at a time to bound the sender. */
 async function* sessionMessageRows(
@@ -427,13 +393,11 @@ export async function* forkTransferFrames(
     ];
 
     const conversation = forkConversationCounts(source.sql, actorId, plan);
-    const memoryChunks = await memoryChunkRows(source.sql, pinned);
 
     const counts: ForkSectionCounts = {
       agentConfig: source.sql<{ key: string }>`SELECT key FROM actor_config WHERE actor_id = ${actorId}`
         .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)).length,
       craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
-      memoryChunks: memoryChunks.length,
       ...conversation,
       files: imports.length,
     };
@@ -501,9 +465,6 @@ export async function* forkTransferFrames(
           break;
         case 'craftedTools':
           yield* yieldRows(section, craftedToolRows(source.sql), craftedToolPayloadBytes);
-          break;
-        case 'memoryChunks':
-          yield* yieldRows(section, listed(memoryChunks), memoryChunkPayloadBytes);
           break;
         case 'sessionMessages':
           yield* yieldRows(
@@ -706,7 +667,6 @@ export class ForkTransferReceiver {
 
     if (frame.kind === 'agentConfig') this.writer.stageAgentConfig(frame.rows);
     else if (frame.kind === 'craftedTools') this.writer.stageCraftedTools(frame.rows);
-    else if (frame.kind === 'memoryChunks') this.writer.stageMemoryChunks(frame.rows);
     else if (frame.kind === 'sessionMessages') this.writer.stageSessionMessages(frame.rows);
     else if (frame.kind === 'conversationEntries') this.writer.stageConversationEntries(frame.rows);
     else if (frame.kind === 'conversationEntryParts') this.writer.stageConversationEntryParts(frame.rows);
@@ -756,7 +716,6 @@ export class ForkTransferReceiver {
       const shortfall = [
         ['agentConfig', staged.declared.agentConfig, taken.agentConfig],
         ['craftedTools', staged.declared.craftedTools, taken.craftedTools],
-        ['memoryChunks', staged.declared.memoryChunks, taken.memoryChunks],
         ['sessionMessages', staged.declared.sessionMessages, taken.sessionMessages],
         ['conversationEntries', staged.declared.conversationEntries, taken.conversationEntries],
         ['conversationEntryParts', staged.declared.conversationEntryParts, taken.conversationEntryParts],

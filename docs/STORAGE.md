@@ -101,6 +101,11 @@ erDiagram
     memory_note_chunks_fts {
         TEXT text "Contentless FTS5 terms (BM25); the note holds the text"
     }
+    memory_note_files {
+        TEXT path PK "Note path"
+        INTEGER size "Bytes when indexed"
+        REAL mtime_ms "Modified time when indexed"
+    }
     crafted_tools {
         TEXT name PK "Tool name (snake_case)"
         TEXT description "What the tool does"
@@ -420,11 +425,13 @@ and `memory_note_chunks_fts` is contentless (`content=''`,
 split into chunks with a line-aware sliding window (`DEFAULT_CHUNK_TARGET_CHARS`
 1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320); the hash lets the next pass skip
 unchanged chunks. Search is FTS5 MATCH with BM25 ranking, and each hit's snippet
-is read from its note. A note whose lines no longer hash to its chunk (a shell
-edited it) is re-chunked when it is found or read, and a hit still stale is
-never served. An archive carries the notes and no index, which the next open
-rebuilds from them (`reconcileMemoryIndex`); a fork carries each chunk's row with
-its text read from the pinned note.
+is read from its note. `memory_note_files` stamps each indexed note with the
+size and modified time it had; before every search the notes under `memory/`
+are listed and any whose stamp differs, or that has none (a shell wrote it,
+edited it, or it came with an archive or fork), is re-chunked, and a stamped
+note that is gone loses its chunks. A read re-chunks a changed note too, and a
+hit whose lines no longer hash is never served. An archive and a fork carry the
+notes and no index: the target's first search builds it from them.
 `sanitizeFtsQuery` removes operators and stop words. When the AND query
 returns nothing, search falls back to OR-joined tokens.
 

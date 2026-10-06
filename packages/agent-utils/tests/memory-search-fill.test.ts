@@ -111,7 +111,7 @@ describe("MemoryStore.search reads its hits from their notes", () => {
 		files.files.delete("memory/gone.md");
 
 		expect(await store.search("postgres", 5)).toEqual([]);
-		expect(store.isEmpty()).toBe(true);
+		expect(sql<{ n: number }>`SELECT count(*) AS n FROM memory_note_chunks`[0]?.n).toBe(0);
 	});
 
 	test("the index keeps no copy of a note's text", () => {

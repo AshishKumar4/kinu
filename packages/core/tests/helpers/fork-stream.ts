@@ -131,7 +131,6 @@ export function reassemble(frames: readonly ForkFrame[]) {
     cut: begin.head.cut,
     agentConfig: frames.flatMap((frame) => (frame.kind === 'agentConfig' ? frame.rows : [])),
     craftedTools: frames.flatMap((frame) => (frame.kind === 'craftedTools' ? frame.rows : [])),
-    memoryChunks: frames.flatMap((frame) => (frame.kind === 'memoryChunks' ? frame.rows : [])),
     sessionMessages: frames.flatMap((frame) => (frame.kind === 'sessionMessages' ? frame.rows : [])),
     conversationEntries: frames.flatMap((frame) => (frame.kind === 'conversationEntries' ? frame.rows : [])),
     conversationEntryParts: frames.flatMap((frame) => (frame.kind === 'conversationEntryParts' ? frame.rows : [])),
