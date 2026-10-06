@@ -265,7 +265,8 @@ function readBeat(page: Page): Promise<Beat> {
  *  either flakes under load or pays for itself on every run. */
 async function settled(page: Page): Promise<void> {
   await page.waitForFunction(async () => {
-    const scene = document.querySelector('svg > g');
+    // The tree's own zoom group: any other SVG on the page (a chat tab's mascot) is not the scene.
+    const scene = document.querySelector('svg:has(g.mcts-bands) > g');
 
     if (scene === null) return false;
     const before = scene.getAttribute('transform') ?? '';
