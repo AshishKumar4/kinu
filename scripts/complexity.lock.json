@@ -102,10 +102,6 @@
       "complexity": 34
     },
     {
-      "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput",
-      "complexity": 33
-    },
-    {
       "key": "scripts/wired.ts#findEntrypoints>walk#2",
       "complexity": 33
     },

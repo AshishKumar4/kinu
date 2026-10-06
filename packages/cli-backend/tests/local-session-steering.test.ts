@@ -915,7 +915,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
-      // The live turn is the first stream: method cannot distinguish kinds, and `session.send` opens it before `session.branch`.
+      // The live turn is the first stream: method cannot distinguish kinds, and `session.send` opens it before `session.branchTurn`.
       doStream: async ({ prompt, abortSignal }) => {
         streams += 1;
 
@@ -983,7 +983,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 
     const turn = session.send('original question', { id: crypto.randomUUID() });
     await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
-    expect(session.branch('what about the other approach?')).toBe(true);
+    expect(session.branchTurn('what about the other approach?')).toMatchObject({ accepted: true });
     await session.flushEvents();
     expect(branchEvents(events.items)).toMatchObject([{ status: 'running', task: 'what about the other approach?' }]);
 
@@ -1021,7 +1021,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 
     const turn = session.send('original question', { id: crypto.randomUUID() });
     await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
-    session.branch('try it the other way');
+    expect(session.branchTurn('try it the other way')).toMatchObject({ accepted: true });
     release();
     await turn;
     await events.until(() => branchEvents(events.items).some((e) => e.status === 'settled'));
@@ -1049,7 +1049,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 
     const turn = session.send('original question', { id: crypto.randomUUID() });
     await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
-    expect(session.branch('redirect')).toBe(true);
+    expect(session.branchTurn('redirect')).toMatchObject({ accepted: true });
     release();
     await turn;
     await events.until(() => branchEvents(events.items).some((e) => e.status === 'error'));
@@ -1083,7 +1083,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 
     const turn = session.send('long task', { id: crypto.randomUUID() });
     await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
-    expect(session.branch('redirect')).toBe(true);
+    expect(session.branchTurn('redirect')).toMatchObject({ accepted: true });
     session.interrupt();
     await turn;
     await events.until(() => branchEvents(events.items).some((e) => e.status === 'error'));
@@ -1093,12 +1093,6 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
       .toContain('did not complete');
     expect(session.latestAlternateTakes()).toBeNull();
     await session.end();
-  });
-
-  test('branch with no active turn returns false', () => {
-    const { session } = setup('idle');
-    expect(session.branch('nothing running')).toBe(false);
-    expect(session.branch('   ')).toBe(false);
   });
 
   test('a branch of a turn under a mission budget charges that mission', async () => {
@@ -1111,7 +1105,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     await session.createTimerTrigger({ atMs: fireAt, label: 'nightly review', trust: 'owner', missionLabel: 'q3' });
     await session.fireDueTriggers(fireAt);
     await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
-    expect(session.branch('check the release notes instead')).toBe(true);
+    expect(session.branchTurn('check the release notes instead')).toMatchObject({ accepted: true });
     release();
     await events.until(() => branchEvents(events.items).some((e) => e.status === 'settled'));
 

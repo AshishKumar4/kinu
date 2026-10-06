@@ -39,19 +39,26 @@ export const PromptFileSchema: v.GenericSchema<PromptFile> = v.object({
   url: v.string(),
 });
 
-export function steerUserMessage(drained: ReadonlyArray<UserSteer>): ModelMessage {
-  const text = drained.map((steer) => steer.text).join('\n\n');
-  const files = drained.flatMap((steer) => steer.files ?? []);
+/** Attachments as file parts (convertToModelMessages' FileUIPart shape), then the text. */
+export function turnInputMessage(input: { readonly text: string; readonly files?: ReadonlyArray<PromptFile> }): ModelMessage {
+  const files = input.files ?? [];
 
-  if (files.length === 0) return { role: 'user', content: text };
+  if (files.length === 0) return { role: 'user', content: input.text };
 
   return {
     role: 'user',
     content: [
       ...files.map((f) => ({ type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename })),
-      { type: 'text' as const, text },
+      { type: 'text' as const, text: input.text },
     ],
   };
+}
+
+export function steerUserMessage(drained: ReadonlyArray<UserSteer>): ModelMessage {
+  return turnInputMessage({
+    text: drained.map((steer) => steer.text).join('\n\n'),
+    files: drained.flatMap((steer) => steer.files ?? []),
+  });
 }
 
 /** Marks a durable user row as a landed steer. */

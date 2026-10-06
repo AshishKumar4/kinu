@@ -11,7 +11,7 @@ import { testOwner } from './helpers/user-do';
 import { userRoutes } from '../src/user/routes';
 import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { createCloudWorkspaceForUser, type CloudWorkspaceRegistry } from '../src/user/workspace-create';
-import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
+import { claimOwnedWorkspace, ownedByAnotherAccount } from '../src/user/workspace-ownership';
 import {
   unstartedOrchestratorHarness, orchestratorHarness, reactivateOrchestratorHarness, workspaceFiles,
 } from './helpers/actor-harness';
@@ -250,7 +250,7 @@ describe('cloud agent ownership safety', () => {
       ...workspaceObject({}),
       async claimOwner(userId: string) {
         calls.push(`claim:${userId}`);
-        throw new Error('Agent owned by a different user');
+        throw ownedByAnotherAccount('jarvis belongs to another account');
       },
       async destroyAgent(ownerUserId: string) {
         calls.push(`destroy:${ownerUserId}`);
@@ -295,7 +295,7 @@ describe('cloud agent ownership safety', () => {
           displayName: 'Jarvis',
           purpose: 'Help with software projects',
         },
-      })).rejects.toThrow('Agent owned by a different user');
+      })).rejects.toThrow('jarvis belongs to another account');
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -326,7 +326,7 @@ describe('cloud agent ownership safety', () => {
     };
 
     const orchestrator = workspaceObject({
-      async claimOwner() { throw new Error('Agent owned by a different user'); },
+      async claimOwner() { throw ownedByAnotherAccount('jarvis belongs to another account'); },
     });
 
     const env = {
@@ -348,7 +348,7 @@ describe('cloud agent ownership safety', () => {
         input: {
           name: 'jarvis', displayName: 'Jarvis', purpose: 'Help with software projects',
         },
-      })).rejects.toThrow('Agent owned by a different user');
+      })).rejects.toThrow('jarvis belongs to another account');
     } finally {
       globalThis.fetch = originalFetch;
     }

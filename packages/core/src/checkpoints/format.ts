@@ -1,7 +1,10 @@
-// Shadow-git checkpoint store format shared with the dependency-free pc-agent daemon, which pins the same
-// literals; checkpoint-parity.test.ts and unit-checkpoint-format.test.ts break until both sides match.
+// Shadow-git store format for both engines; the daemon carries it generated (`scripts/daemon-checkpoint-format.ts`).
 
 import type { CheckpointTurnMeta } from './types';
+
+export const DEFAULT_CHECKPOINT_KEEP = 50;
+
+export const CHECKPOINTS_UNAVAILABLE_NO_GIT = 'checkpoints unavailable: git not found';
 
 export const CHECKPOINT_REF_PREFIX = 'refs/kinu';
 
@@ -18,7 +21,11 @@ export const CHECKPOINT_EXCLUDES = [
 
 /** Null meta marks out-of-turn snapshots (pre-restore). */
 export function checkpointSubject(meta: CheckpointTurnMeta | null, reason: string): string {
-  const clean = (s: string) => s.replace(/[\r\n|]/g, ' ').trim() || '-';
+  const clean = (field: string) => {
+    const spaced = field.replace(/[\r\n|]/g, ' ').trim();
+
+    return spaced === '' ? '-' : spaced;
+  };
 
   return `turn=${clean(meta?.turnId ?? '-')} session=${clean(meta?.sessionId ?? '-')} ${clean(reason)}`;
 }
@@ -55,29 +62,41 @@ const UNINDEXED_FILE = /^error: unable to index file '(.+?)'$/;
 
 const ADD_FAILED = /^fatal: adding files failed$/;
 
-export interface StagingDiagnosis {
+interface StagingDiagnosis {
   /** Paths git could not read, sorted; absent from the tree and named in the reason. */
   unreadable: string[];
   /** Any other diagnostic, verbatim; non-empty means staging failed. */
   unexplained: string[];
 }
 
-export function diagnoseStaging(stderr: string): StagingDiagnosis {
+function diagnoseStaging(stderr: string): StagingDiagnosis {
   const lines = stderr.split('\n').map((line) => line.trim()).filter(Boolean);
   const unreadable = new Set<string>();
 
   for (const line of lines) {
     const denied = UNREADABLE_DIR.exec(line) ?? UNREADABLE_FILE.exec(line);
-    const path = denied?.[1];
+    const file = denied?.[1];
 
-    if (path !== undefined) unreadable.add(path);
+    if (file !== undefined) unreadable.add(file);
   }
 
   return {
-    unreadable: [...unreadable].sort(),
+    unreadable: [...unreadable].sort((left, right) => (left < right ? -1 : 1)),
     // Two passes so a consequence line is judged against the whole denial set.
     unexplained: lines.filter((line) => !isDenial(line, unreadable)),
   };
+}
+
+/** `code` null: git never finished (a signal, an overfull buffer), so its index is partial whatever it printed. */
+export function stagingOutcome(code: number | null, stderr: string): { readonly unreadable: string[] } | { readonly failure: string } {
+  if (code === null) return { failure: 'checkpoint staging failed: git add did not finish' };
+  const diagnosis = diagnoseStaging(stderr);
+
+  if (diagnosis.unexplained.length > 0 || (code !== 0 && diagnosis.unreadable.length === 0)) {
+    return { failure: `checkpoint staging failed: ${stderr.trim()}` };
+  }
+
+  return { unreadable: diagnosis.unreadable };
 }
 
 function isDenial(line: string, unreadable: ReadonlySet<string>): boolean {
@@ -87,9 +106,9 @@ function isDenial(line: string, unreadable: ReadonlySet<string>): boolean {
   const unindexed = UNINDEXED_FILE.exec(line);
 
   if (unindexed) {
-    const path = unindexed[1];
+    const file = unindexed[1];
 
-    return path !== undefined && unreadable.has(path);
+    return file !== undefined && unreadable.has(file);
   }
 
   return ADD_FAILED.test(line) && unreadable.size > 0;

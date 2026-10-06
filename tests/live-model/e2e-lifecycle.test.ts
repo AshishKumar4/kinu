@@ -25,7 +25,6 @@ import {
   type LanguageModel, type ModelMessage, type ToolSet, type StepResult,
 } from 'ai';
 import {
-  collectStepText,
   EvolutionEngine,
   type LLMProviderConfig,
   type CompletedTurn,
@@ -34,7 +33,7 @@ import {
 } from '../../packages/core/src/index';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
-import { buildEvalAgentSurface, createStepToolCallLog } from './harness';
+import { buildEvalAgentSurface, collectStepText, createStepToolCallLog } from './harness';
 import { localTargetFolder, provisionLocalTarget, type LocalTarget } from './target-local';
 import { seedTranscriptEntry, EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
 recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM, } from '@kinu.run/test-utils';

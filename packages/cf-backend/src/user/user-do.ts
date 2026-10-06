@@ -155,13 +155,13 @@ import {
   type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
   type McpPresetId, mcpPresetById,
   describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor,
+  validateMcpServerInput, validateMcpServerName, parseAllowedTools, parseMcpHeaders, type McpTransport,
 } from '@kinu.run/core';
 import {
-  validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
-  parseMcpHeaders, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession,
+  mapConnectionStatus, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession,
   storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, readUndiscoveredToolList,
   mcpListingRefusals,
-  type McpPresetAvailability, type McpServerSummary, type McpToolListing, type McpTransport,
+  type McpPresetAvailability, type McpServerSummary, type McpToolListing,
 } from './mcp';
 import {
   acceptRosterSocket, isRosterSocket, libraryTiles, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, unreportedWorkspaces,
@@ -169,6 +169,7 @@ import {
 } from './roster';
 import { deletePictures, picturePrefix } from '../slates/pictures';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
+import { notInRegistry } from './workspace-ownership';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner,
   issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, resetAccount,
@@ -806,7 +807,7 @@ export class UserDO extends Agent<Env> {
     validateWorkspaceName(workspaceName);
 
     if (!this.workspaceRegistered(workspaceName)) {
-      throw new KinuError('missing', `Workspace ${workspaceName} is not in your registry.`);
+      throw notInRegistry(`Workspace ${workspaceName} is not in your registry.`);
     }
 
     return this.reconcileWorkspaceCapability(workspaceName, presentedHash);

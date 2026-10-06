@@ -7,7 +7,7 @@ import type { JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
 import type { ContextSelection, SessionContext } from './context';
 import type { SessionMessages, MessageReference, PreparedMessage } from './messages';
-import type { SessionPayload } from './payload';
+import { storedPayload, type SessionPayload } from './payload';
 
 /** The unselected context whose revisions are this actor's request lists. */
 const REQUEST_LINEAGE = 'requests';
@@ -34,14 +34,10 @@ export interface PreparedRequestBundle {
 interface RequestRow { request_id: string; turn_id: string; run_id: string; epoch: number; revision: number; step_index: number | null; context_id: string; context_revision: number; metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null }
 
 function requestOf(row: RequestRow): Effect.Effect<PreparedRequest, KinuError> {
-  let metadata: SessionPayload;
-
-  if (row.metadata_json !== null && row.metadata_path === null && row.metadata_digest === null) metadata = { json: row.metadata_json, path: null, digest: null };
-  else if (row.metadata_json === null && row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
-  else return Effect.fail(new KinuError('io', 'invalid prepared request metadata reference'));
-
-  return Effect.succeed({ id: row.request_id, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, revision: row.revision, step: row.step_index,
-    source: { contextId: row.context_id, revision: row.context_revision }, metadata });
+  return Effect.map(storedPayload(row.metadata_json, row.metadata_path, row.metadata_digest), (metadata) => ({
+    id: row.request_id, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, revision: row.revision, step: row.step_index,
+    source: { contextId: row.context_id, revision: row.context_revision }, metadata,
+  }));
 }
 
 /** Immutable prepared-request evidence; never a source for working-context replay. */

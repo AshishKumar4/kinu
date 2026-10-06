@@ -2674,7 +2674,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.stores.config;
   }
 
-  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext?: AgentsSwarmDeps['originContext'], compactShared?: AgentsSwarmDeps['compactShared']): AgentsSwarmDeps {
+  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext: NonNullable<AgentsSwarmDeps['originContext']>, compactShared?: AgentsSwarmDeps['compactShared']): AgentsSwarmDeps {
     const seams = this.hostedSeams();
 
     return {

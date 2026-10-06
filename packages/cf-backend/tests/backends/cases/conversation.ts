@@ -92,6 +92,26 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
     },
   },
   {
+    title: 'a redirect branches only a running Build turn: a Plan turn refuses it before any head runs',
+    covers: ['branchTurn'],
+    async run({ surface, holdTurn }) {
+      await expect(surface.branchTurn('   ')).rejects.toThrow('branchTurn requires the redirect text');
+      expect(await surface.branchTurn('Try the other route.'))
+        .toEqual({ accepted: false, reason: 'No turn is running: send it as a normal message instead.' });
+
+      const planning = await holdTurn('Plan the migration.', 'plan');
+
+      try {
+        expect(await surface.branchTurn('Just do it in parallel.'))
+          .toEqual({ accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' });
+      } finally {
+        await planning.release();
+      }
+
+      expect(await surface.latestAlternateTakes()).toBeNull();
+    },
+  },
+  {
     title: 'an optimisation with no low-rated turns has nothing to learn from, and no model runs',
     covers: ['runOptimization'],
     async run({ surface }) {

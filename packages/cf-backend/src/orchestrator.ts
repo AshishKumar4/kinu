@@ -128,7 +128,7 @@ import {
   type ChangelogEntry, type ChangelogRevertResult,
   listAlternateTakeSets, latestAlternateTakeSet,
   type AlternateTakeSet, type TakePickOutcome,
-  startBranchHead, newBranchId, PendingSendStore,
+  startBranchHead, newBranchId, admitBranch, type BranchTurnResult, PendingSendStore,
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
@@ -207,6 +207,7 @@ import * as v from 'valibot';
 import { Hono } from 'hono';
 import { beneath, rawPath, rethrow } from './api/context';
 import { experienceLibraryOver } from './user/experience-library';
+import { ownedByAnotherAccount } from './user/workspace-ownership';
 import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
@@ -1145,7 +1146,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * hire/ask/send/list/dismiss vanish from the enum rather than refusing.
    */
   private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
-    const swarm = this.swarmDeps(turn.runtime, () => turn.model);
+    const swarm = this.swarmDeps(turn.runtime, () => turn.model, () => this.agentStores(turn.actor.handle.actorId).workingContext());
 
     const deps: AgentsToolDeps = {
       mode: turn.input.mode,
@@ -2264,7 +2265,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }
 
       if (current !== userId) {
-        return yield* new KinuError('denied', `Agent owned by a different user (stored=${current.slice(0, 8)}..., caller=${userId.slice(0, 8)}...)`);
+        return yield* ownedByAnotherAccount(`Agent owned by a different user (stored=${current.slice(0, 8)}..., caller=${userId.slice(0, 8)}...)`);
       }
 
       // No scaffold probe here: this runs on every authenticated request. An interrupted bootstrap
@@ -3630,20 +3631,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * The pair settles into Alternate Takes on this turn; progress streams as 'branch_status'.
    */
   @callable()
-  branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
+  branchTurn(text: string): Promise<BranchTurnResult> {
     return settle(Effect.gen({ self: this }, function* () {
-      const task = text.trim();
+      const admitted = yield* admitBranch(text, { inFlight: this._inFlight, workMode: this.turnWorkMode() });
 
-      if (!task) return yield* new KinuError('bad_input', 'branchTurn requires the redirect text');
-
-      if (!this._inFlight) {
-        return { accepted: false, reason: 'No turn is running: send it as a normal message instead.' };
-      }
-
-      if (this.turnWorkMode() === 'plan') {
-        return { accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' };
-      }
-
+      if ('accepted' in admitted) return admitted;
+      const { task } = admitted;
       const runtime = this.getCFHeadRuntime();
 
       if (!runtime) {

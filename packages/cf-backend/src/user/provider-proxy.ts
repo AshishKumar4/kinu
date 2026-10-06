@@ -18,8 +18,9 @@ import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import { validateCredentialKey } from '@kinu.run/core';
 import { Cause, Effect } from 'effect';
 import { authoredRefusal, diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
-import { beneath } from '../api/context';
-import { inferenceProxyGate, type CliEnv } from '../cli/routes';
+import { beneath, type FamilyEnv } from '../api/context';
+import { inferenceProxyGate, type CliBearerEnv, type CliBearerVariables } from '../api/cli-bearer';
+import type { CliAuthAuthority } from '../cli/auth-store';
 
 /** Client view of a proxyable credential; never carries secret material. `baseURL` is set for
  * openai-compat credentials; `failure` marks an unreadable entry without failing the listing. */
@@ -41,9 +42,11 @@ const STRIPPED_REQUEST_HEADERS: readonly string[] = [
 
 export type ProxyCredentialSource = Pick<UserDO, 'listCredentials' | 'getCredentialBaseURL' | 'getAuthHeaders'>;
 
-export const providerProxyRoutes = new Hono<CliEnv>();
+type ProxyAuthority = CliAuthAuthority & ProxyCredentialSource;
 
-providerProxyRoutes.use(`${PROVIDER_PROXY_PATH}/*`, beneath(PROVIDER_PROXY_PATH, inferenceProxyGate));
+export const providerProxyRoutes = new Hono<FamilyEnv<CliBearerEnv<ProxyAuthority>, CliBearerVariables<ProxyAuthority>>>();
+
+providerProxyRoutes.use(`${PROVIDER_PROXY_PATH}/*`, beneath(PROVIDER_PROXY_PATH, inferenceProxyGate()));
 
 providerProxyRoutes.get(`${PROVIDER_PROXY_PATH}/credentials`, (c) => settle(Effect.gen(function* () {
   const owner = yield* Effect.promise(() => ownerCaller(c.env));

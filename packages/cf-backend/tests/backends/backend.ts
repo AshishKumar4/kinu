@@ -5,8 +5,9 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  * and does nothing else, so a behaviour one backend changes on its own fails in that backend, by name.
  */
 import { Database } from 'bun:sqlite';
-import { initWorkspaceSchema, type ActorHandle, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
-import { scratchDir, scratchPath, scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
+import type { LanguageModel } from 'ai';
+import { initWorkspaceSchema, type ActorHandle, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
+import { scratchDir, scratchPath, scriptedTurnModel, sqlOver, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import {
   historyOver, orchestratorHarness, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
@@ -50,7 +51,7 @@ type SameCall =
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
   | 'listRefinements' | 'showRefinement' | 'decideRefinement'
-  | 'revertConversation' | 'runOptimization';
+  | 'revertConversation' | 'runOptimization' | 'branchTurn';
 
 /** The cf signature, answered asynchronously: the CLI's synchronous answers are awaited the same way. */
 type Answer<K extends SameCall> = OrchestratorAgent[K] extends (...args: infer A) => infer R
@@ -82,8 +83,60 @@ export interface SharedBackend {
   /** Snapshot `dir` into the store this backend's checkpoint methods read, as a turn's first
    *  mutation there does: the owner's device for cf, this machine for the CLI. */
   readonly snapshot: (dir: string, turn: CheckpointTurnMeta) => Promise<void>;
+  /** Opens a turn of `mode` on the main actor and holds it at its model call until released, so a case
+   *  acts while a turn runs. */
+  readonly holdTurn: (text: string, mode: WorkMode) => Promise<HeldTurn>;
   /** Ends what opening the backend started, so no work it tracks outlives the case. */
   readonly end?: () => Promise<void>;
+}
+
+export interface HeldTurn {
+  /** Lets the turn answer and resolves once it has ended. */
+  release(): Promise<void>;
+}
+
+/** The answer every turn gives, unless a case holds it first. */
+const DONE_ANSWER = {
+  content: [{ type: 'text', text: 'done' }],
+  finishReason: { unified: 'stop', raw: undefined },
+  usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+    outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+} satisfies ScriptedTurnResult;
+
+/** The main actor's model on both backends: it answers 'done', or parks a held turn's call until release. */
+function turnGate() {
+  let held: { readonly arrived: ReturnType<typeof Promise.withResolvers<void>>; readonly released: ReturnType<typeof Promise.withResolvers<void>> } | null = null;
+
+  const model = scriptedTurnModel({ doGenerate: async () => {
+    const hold = held;
+
+    if (hold !== null) {
+      held = null;
+      hold.arrived.resolve();
+      await hold.released.promise;
+    }
+
+    return DONE_ANSWER;
+  } });
+
+  return {
+    model,
+    /** Starts `open`, a turn that resolves once it has ended, and resolves once that turn reaches the model. */
+    async hold(open: () => Promise<void>): Promise<HeldTurn> {
+      const hold = { arrived: Promise.withResolvers<void>(), released: Promise.withResolvers<void>() };
+      held = hold;
+      const opened = open();
+      // A refused open rejects here instead of waiting on a call that never comes.
+      await Promise.race([hold.arrived.promise, opened.then(async () => hold.arrived.promise)]);
+
+      return {
+        release: async () => {
+          hold.released.resolve();
+          await opened;
+        },
+      };
+    },
+  };
 }
 
 /** The cf Durable Object, in process over bun:sqlite, owned by a real UserDO whose one device is the
@@ -96,6 +149,8 @@ async function cloudflare(): Promise<SharedBackend> {
   const harness = orchestratorHarness(undefined, { userDO: device.userDO, workspace: WORKSPACE, ownerUserId: 'test-user-do' });
   harness.agent.harnessHoldsCapability(device.workspace.workspaceToken);
   const { agent, db } = harness;
+  const gate = turnGate();
+  agent.harnessSupplyTurnModel(gate.model);
 
   return {
     name: 'cf',
@@ -104,6 +159,7 @@ async function cloudflare(): Promise<SharedBackend> {
     files: workspaceFiles(agent),
     history: historyOver(harness),
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
+    holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), mode)),
     surface: {
       getReasoningEffort: () => agent.getReasoningEffort(),
       setReasoningEffort: (effort) => agent.setReasoningEffort(effort),
@@ -153,6 +209,7 @@ async function cloudflare(): Promise<SharedBackend> {
       revertConversation: (entryId) => agent.revertConversation(entryId),
       runOptimization: (target) => agent.runOptimization(target),
       send: (text, id) => sentTurn(agent, text, id ?? crypto.randomUUID()),
+      branchTurn: (text) => agent.branchTurn(text),
     },
   };
 }
@@ -162,22 +219,14 @@ const NO_ENDPOINT: LLMProviderConfig = {
   name: 'workers-ai', baseURL: 'http://127.0.0.1:9/v1', headers: {}, model: '@cf/zai-org/glm-5.3',
 };
 
-/** The session's own model; a case that reaches a model scripts its answer. */
-const DONE_MODEL = scriptedTurnModel({ doGenerate: () => ({
-  content: [{ type: 'text', text: 'done' }],
-  finishReason: { unified: 'stop', raw: undefined },
-  usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-    outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-}) });
-
 /** The real resolver, so specs normalise as they do for an owner, answering every call with the
- *  scripted model: a turn a case causes runs offline. */
-function scriptedResolver(): LocalModelResolver {
+ *  backend's turn model: a turn a case causes runs offline. */
+function scriptedResolver(model: LanguageModel): LocalModelResolver {
   const real = createLocalModelResolver({ llm: NO_ENDPOINT, credentials: {} });
 
   return {
     normalizeSpecSync: (spec) => real.normalizeSpecSync(spec),
-    resolveModel: () => DONE_MODEL,
+    resolveModel: () => model,
     credentialFor: (spec) => real.credentialFor(spec),
     listProviders: () => real.listProviders(),
     listModels: () => real.listModels(),
@@ -194,12 +243,13 @@ function cli(): SharedBackend {
   const rt = createCLIRuntime(db, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
   const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
   rt.checkpoints = checkpoints;
-  const modelResolver = scriptedResolver();
+  const gate = turnGate();
+  const modelResolver = scriptedResolver(gate.model);
 
   rt.actor.config.setLearning(false);
 
   const session = new LocalAgentSession({
-    rt, db, model: DONE_MODEL, modelResolver, onEvent: () => {},
+    rt, db, model: gate.model, modelResolver, onEvent: () => {},
   });
 
   return {
@@ -213,6 +263,7 @@ function cli(): SharedBackend {
       checkpoints.beginTurn(turn);
       await checkpoints.ensureCheckpoint(dir);
     },
+    holdTurn: (text, mode) => gate.hold(async () => { await session.send(text, { id: crypto.randomUUID(), mode }); }),
     surface: {
       getReasoningEffort: async () => session.getReasoningEffort(),
       setReasoningEffort: async (effort) => session.setReasoningEffort(effort),
@@ -262,6 +313,7 @@ function cli(): SharedBackend {
       revertConversation: (entryId) => session.revertConversation(entryId),
       runOptimization: (target) => session.runOptimization(target),
       send: async (text, id) => { await session.send(text, { id: id ?? crypto.randomUUID() }); },
+      branchTurn: async (text) => session.branchTurn(text),
     },
   };
 }

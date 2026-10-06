@@ -8,9 +8,26 @@ import { ERROR_STATUS, ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/co
 import { classifyTransientDO, retryTransientDO } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { Effect, Result } from 'effect';
-import { diagnostics, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { carriesCauseCode, diagnostics, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
 
 export type WorkspaceRegistry = Pick<UserDO, 'hasWorkspace' | 'ensureWorkspaceCapability'>;
+
+/** The two refusals read here across DO RPC, told apart by a code in their cause, which RPC keeps. */
+const OWNED_BY_ANOTHER_ACCOUNT = 'owned_by_another_account';
+
+const NOT_IN_REGISTRY = 'not_in_registry';
+
+export function ownedByAnotherAccount(message: string): KinuError {
+  return new KinuError('denied', message, { cause: { code: OWNED_BY_ANOTHER_ACCOUNT, message } });
+}
+
+export function notInRegistry(message: string): KinuError {
+  return new KinuError('missing', message, { cause: { code: NOT_IN_REGISTRY, message } });
+}
+
+export function isOwnedByAnotherAccount(input: { cause: unknown }): boolean {
+  return carriesCauseCode(input, OWNED_BY_ANOTHER_ACCOUNT);
+}
 
 /** Generic below because the resolved stub is handed back to the caller. */
 export type WorkspaceOwnerClaim = Pick<OrchestratorAgent, 'claimOwner'>;
@@ -77,9 +94,8 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
 
     if (Result.isFailure(claimed)) {
       const e = claimed.failure.cause;
-      const message = renderThrownChain({ cause: e });
 
-      if (/owned by a different user/i.test(message)) return refused<Agent>(403, `Workspace ${workspaceName} belongs to another account.`);
+      if (isOwnedByAnotherAccount({ cause: e })) return refused<Agent>(403, `Workspace ${workspaceName} belongs to another account.`);
 
       const transient = classifyTransientDO({ cause: e });
 
@@ -101,11 +117,10 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
 
     if (Result.isFailure(provisioned)) {
       const e = provisioned.failure.cause;
-      const message = renderThrownChain({ cause: e });
 
       // Registry contradiction refutes a cached proof; evict so deletion sticks without
       // cross-isolate invalidation.
-      if (/not in your registry/i.test(message)) {
+      if (carriesCauseCode({ cause: e }, NOT_IN_REGISTRY)) {
         forgetWorkspaceMembership(userId, workspaceName);
 
         return refused<Agent>(404, `Workspace ${workspaceName} is not in your registry.`);

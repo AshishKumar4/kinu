@@ -1,11 +1,8 @@
 /** Per-user MCP: UserDO + MCPClientManager need the Worker runtime, so this covers the pure helpers and the orchestrator adapter. */
 import { describe, test, expect } from 'bun:test';
+import { mapConnectionStatus, mcpCredentialTransport } from '../src/user/mcp';
 import {
-  validateMcpServerInput,
-  parseAllowedTools, mapConnectionStatus,
-  parseMcpHeaders, mcpCredentialTransport,
-} from '../src/user/mcp';
-import {
+  validateMcpServerInput, parseAllowedTools, parseMcpHeaders,
   isMcpToolKey, mcpToolKey, stepContextLimit,
   describeMcpTool, McpToolSurfaceCache, toolSurfaceTokens, omitEmptyOptionalArgs, type McpSurfaceBudget,
   type SerializableToolDescriptor,

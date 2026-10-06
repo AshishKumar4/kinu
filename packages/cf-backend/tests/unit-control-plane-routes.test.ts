@@ -20,6 +20,7 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import { sqlExec } from './helpers/user-do';
 import type { ControlEnv } from '../src/control-plane/routes';
 import type { WorkspaceEntry } from '../src/user/user-do';
+import { ownedByAnotherAccount } from '../src/user/workspace-ownership';
 
 mockAgentsSdk();
 
@@ -215,9 +216,7 @@ function harness(options: World = {}): Harness {
       }
 
       if (current !== userId) {
-        throw new Error(
-          `Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`,
-        );
+        throw ownedByAnotherAccount(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
       }
 
       return { owner: current, capabilityHash: null };

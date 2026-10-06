@@ -41,7 +41,7 @@ import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/u
 import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
-import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
+import { turnInputMessage, type LandedSteerRow, type PendingSendRow, type PendingSendStore, type UserSteer } from './inbox';
 import type { OwedEffect } from './terminal-effects';
 import type { TerminalTransition, TerminalTransitions } from './terminal-transition';
 import {
@@ -133,17 +133,6 @@ interface TurnContinuation {
   readonly openOutputs: readonly string[];
 }
 
-
-/** Attachments as file parts (convertToModelMessages' FileUIPart shape), then the text. */
-export function turnInputMessage(item: Pick<ChatTurnInput, 'text' | 'files'>): ModelMessage {
-  const fileParts = (item.files ?? []).map((f) => ({
-    type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
-  }));
-
-  return fileParts.length > 0
-    ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
-    : { role: 'user', content: item.text };
-}
 
 
 /** May throw: the session records the failure and the loop continues. */

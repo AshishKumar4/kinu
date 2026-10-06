@@ -889,8 +889,8 @@ export function jobsOver(db: Database): BackgroundJobStore {
 
 /** The owner's words through the public send, resolved once the turn they open has run, as the CLI's send resolves:
  *  a lap count cannot bound a cf turn, which asks the owner's device over a real tunnel. */
-export async function sentTurn(agent: HarnessOrchestratorAgent, text: string, id: string): Promise<void> {
-  await agent.send(text, id);
+export async function sentTurn(agent: HarnessOrchestratorAgent, text: string, id: string, mode?: WorkMode): Promise<void> {
+  await agent.send(text, id, [], mode);
   await agent.harnessChatLoop.pumpPromise;
 }
 

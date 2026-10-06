@@ -392,7 +392,7 @@ export {
 } from './turn-failure';
 
 export {
-  createVercelAILLM, collectStepText, createChatModel, estimateTokens,
+  createVercelAILLM, createChatModel, estimateTokens,
   // Surfaces import this instead of retyping the number.
   CHARS_PER_TOKEN,
 } from './llm';
@@ -865,16 +865,16 @@ export {
 // Steer-as-Branch
 export {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, STEER_BRANCH_RUN_ID_PREFIX,
-  newBranchId, isSteerBranchRunId, branchHeadId,
+  newBranchId, isSteerBranchRunId, branchHeadId, admitBranch,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch,
   branchOutcomeFromJournal,
-  type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
+  type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle, type BranchTurnResult,
   type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
 } from './steer-branch';
 
 // Inbox: the one way anything reaches an agent.
 export {
-  Inbox, readSignalId, PromptFileSchema,
+  Inbox, readSignalId, PromptFileSchema, turnInputMessage,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   describeLandedSteers, initPendingSendTables, PendingSendStore,
   type UserSteerDeps, type AcceptedSteer,
@@ -976,7 +976,7 @@ export {
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult, type DeviceExecOutput,
-  DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, isDeviceFailure, type DeviceMethod,
+  DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, type DeviceMethod,
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_CHATGPT, DEVICE_RELAY, DeviceChatGptStatusSchema, EGRESS_ROUTE_HEADER,
   type DeviceChatGptMethod, type DeviceChatGptStatus, type DeviceRelayRequest, type RelayedProvider,
@@ -1079,7 +1079,7 @@ export {
 
 // File checkpoints
 export {
-  DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, summarizeRestorePlan,
+  CHECKPOINTS_NO_DEVICE, summarizeRestorePlan,
   checkpointAvailability, deviceHistoryNote, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
   CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema, FileRestoreResultSchema,
   type FileCheckpoints, type FileCheckpointReads, type CheckpointTurnMeta, type CheckpointAvailability,
@@ -1089,11 +1089,12 @@ export {
 
 export { deviceFileCheckpoints, type DeviceRpcHub, type DeviceCheckpointsInput } from './checkpoints/device';
 
-// Shadow-git store format: cross-engine contract, pinned by the pc-agent parity test.
+// Shadow-git store format, both engines'.
 export {
+  DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT,
   CHECKPOINT_REF_PREFIX, CHECKPOINT_WORKDIR_MARKER, CHECKPOINT_EXCLUDES,
   checkpointSubject, parseCheckpointSubject, checkpointRefTimestampMs,
-  checkpointReason, diagnoseStaging, type StagingDiagnosis,
+  checkpointReason, stagingOutcome,
 } from './checkpoints/format';
 
 // Semantic memory
@@ -1598,7 +1599,7 @@ export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type Actor
 
 
 export {
-  ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
+  ChatSession, type ChatSessionOptions, type ChatSessionPorts, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
@@ -2480,6 +2481,11 @@ export {
 } from './utils/spawned-output';
 
 export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';
+
+export {
+  validateMcpServerInput, validateMcpServerName, parseAllowedTools, parseMcpHeaders,
+  type McpServerInput, type McpTransport,
+} from './mcp/servers';
 
 export type {
   AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,

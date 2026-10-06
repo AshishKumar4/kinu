@@ -70,7 +70,7 @@ async function branchHeadRun(gateway: StubbedAiBinding) {
   await turns.openInFlight('u-live', 'a-live');
   const branch = await workspace.agent.branchTurn('read the parser');
 
-  if (branch.branchId === undefined) throw new Error(`the branch was refused: ${branch.reason ?? 'no reason'}`);
+  if (!branch.accepted) throw new Error(`the branch was refused: ${branch.reason}`);
   await turns.settle({ messageId: 'a-live', text: 'the answer' });
   await workspace.agent.harnessJoinDetachedFibers();
 

@@ -264,7 +264,9 @@ test('the setup token never rides in a URL: /login takes it in a password field 
   const signIn = await page(`/login?setup=${encodeURIComponent(SETUP_TOKEN)}`);
 
   expect(signIn).toContain('Set up or recover the owner');
-  expect(signIn).toContain('aria-describedby="recovery-status" /></label>\n      <p class="status" id="recovery-status"');
+  // The recovery field names the status line that reads its outcome to a screen reader.
+  expect(signIn).toContain('aria-describedby="recovery-status"');
+  expect(signIn).toContain('id="recovery-status"');
   expect(signIn).not.toContain('owner@example.com');
   expect(signIn).not.toContain(encodeURIComponent(SETUP_TOKEN));
 });

@@ -154,7 +154,6 @@
   "packages/core/src/layergate/faults.ts#LOCALIZATION_OTHER_MAX_PP (unreached-export)",
   "packages/core/src/layergate/faults.ts#LOCALIZATION_OWN_MIN_PP (unreached-export)",
   "packages/core/src/layergate/subjects.ts#SUBJECT_SOURCE (unreached-export)",
-  "packages/core/src/llm.ts#collectStepText (unreached-export)",
   "packages/core/src/mcts/evaluation.ts#isParseFailure (unreached-export)",
   "packages/core/src/mcts/evaluation.ts#judgeCallBudget (unreached-export)",
   "packages/core/src/memory/note.ts#MEMORY_TAIL_MAX_CHARS (unreached-export)",
