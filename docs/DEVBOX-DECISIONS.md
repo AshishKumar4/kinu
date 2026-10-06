@@ -4069,6 +4069,103 @@ block-sized edits. DirectoryBackup's eager whole-directory restore is not
 that fallback. It stays an SDK export, not a Devbox dependency. No logged
 decision is reversed and no new backup mechanism is built.
 
+D75. Keep D66's native-snapshot primary and the current R2 fallback for this
+release; s3backer, ZeroFS and JuiceFS are viable filesystems, not drop-in
+replacements for that lifecycle (2026-10-06, m1967; the commit carrying
+this entry). No filesystem dependency or daemon is added to the product.
+ZeroFS is the next candidate worth a full fallback comparison, not a
+proved improvement or an admitted replacement. D73 consolidates what
+Devbox still owns beyond SDK 1.0's Files, mount and backup clients.
+
+All three ran on eval-owned throwaway Workers, real Medium containers
+forked from the pinned trixie golden, and their own R2 buckets. There was
+no local Docker filesystem and no production/staging workspace. The
+payload was 64 MiB of random bytes plus SQLite WAL. The three reads below
+each reopened the filesystem after removing its client cache. Every data
+SHA matched its original; each SQLite database reopened with row `7`.
+These are small compatibility and persistence measurements, not a ranking
+at the sizes the product serves. Cache geometries were not equalized, and
+the object store's own cache and placement were not controlled.
+
+| Backend, configuration | First write, ms | Explicit durability barrier, ms | Client-cache-cold attach, ms (n=3) | 64 MiB read, ms (n=3) |
+|---|---:|---:|---|---|
+| s3backer `1.5.4-2+b2`, 512 MiB sparse device, ext4 loop mount, 128 KiB blocks, 128 MiB cache | 155 | 53,969 | 2,749 / 2,869 / 2,536 | 26,124 / 19,870 / 13,788 |
+| ZeroFS `2.3.5`, S3 metadata/data, 9P FUSE client, 1 GB disk and 0.2 GB memory cache | 2,689 | 128 | 6,099 / 6,108 / 5,026 | 2,394 / 2,076 / 1,232 |
+| JuiceFS `1.4.1`, S3 data, local SQLite metadata, 1,024 MiB cache | 799 | 11 | 551 / 553 / 879 | 1,144 / 632 / 494 |
+
+Do not treat the first s3backer write's return as durable: its subsequent
+barrier carried the outstanding work. Initial ext4 formatting took
+26,172 ms; the initial s3backer start was 715 ms and the loop mount 476 ms.
+ZeroFS's initial server/client start was 6,054 ms. JuiceFS format took
+1,475 ms and its first mount 561 ms. No row above substitutes a buffered
+write's return for a persistence claim.
+
+The runs and source evidence are in these reports. Each records its
+revision and dirty digest; the code was committed as `9ec0ed074`.
+
+- s3backer: `dc2026100606455875abb`,
+  `/mnt/local/kinu/tmp/kinu-devbox-contracts-lyqbK3/report.json`.
+- ZeroFS: `dc202610060625548b2e3`,
+  `/mnt/local/kinu/tmp/kinu-devbox-contracts-Y3rbQK/report.json`.
+- JuiceFS: `dc2026100605595892b07`,
+  `/mnt/local/kinu/tmp/kinu-devbox-contracts-XNfyci/report.json`.
+
+Every Worker, application, bucket and recorded snapshot tag was deleted
+and checked absent. ZeroFS's release archive was checked against
+`367b2e79…`; JuiceFS's against `01ee09a2…`. Earlier combined probes taught
+two instrumentation lessons, not filesystem failures: externally
+unmounting the ZeroFS FUSE client does not end its process, and a single
+long HTTP wait can expire independently of guest work. The final ZeroFS
+control unmounted, killed both its owned client and server, cleared their
+cache, and verified data and WAL on all three starts. The final driver
+ran a detached guest job and polled its recorded exit; it added no
+filesystem timeout or retry policy.
+
+Against the chosen design:
+
+- s3backer genuinely supplies a block device, with ext4 providing POSIX,
+  locking and WAL. It stores filesystem metadata in those blocks too,
+  so it needs no separate database. The real kernel supported its FUSE
+  and loop mounts. It adds a writable virtual device, geometry/growfs,
+  cache flush and writer ownership to the box's lifecycle; its normal
+  block writes do not themselves publish the box's immutable fallback
+  pointer. D68 already rejected changing the primary to a virtual disk
+  merely to make block tracking cheap. This small trial does not reverse
+  that decision or prove a root snapshot plus s3backer eviction contract.
+- ZeroFS puts metadata in an object-backed LSM and file contents in
+  compressed/encrypted immutable segments. Its upstream v2.3.5 architecture
+  and configuration were read: it has writer fencing, checkpoints and
+  read replicas; explicit fsync seals data then flushes metadata. It is
+  not dismissed as a directory archive or as lacking persistence. It
+  could replace substantial custom fallback machinery. But these trials
+  used direct R2 S3 credentials, not D41's binding-backed route. ZeroFS
+  requires conditional puts for fencing; the current route's PUT handler
+  does not apply `onlyIf`. The binding adapter, snapshot-mounted-state
+  restart, complete isolation/fencing, 18 GB disk-pressure path and
+  D63's long session are unproved. Admit that full comparison before
+  replacing the fallback; do not ship a second filesystem beside it.
+- JuiceFS is fast here and supports the required file operations. It
+  separates data blocks from namespace/extent metadata. After the test
+  removed its SQLite metadata database, the intact R2 data could not
+  mount: `unformatted volume, please run "juicefs format" first` (n=1).
+  That is the configuration tested, not a claim that JuiceFS has no
+  metadata backup facility: background jobs were disabled, and metadata
+  dump/restore was not tested. A root snapshot can carry the SQLite
+  database, but the independent R2 fallback would still need its own
+  durable metadata path. Its supported Redis/SQL/TiKV engines are not a
+  supplied Cloudflare binding. Adding that owner or service is not a
+  reduction of the selected snapshot/R2 design without a complete proof.
+
+The admitted product comparator remains D68's five-run Medium workload at
+0.25, 2, 10 and 18 GB, plus D63's long session. D72 reran the current
+hybrid's snapshot/lost-snapshot/plain recovery, block/WAL, compaction,
+missing baseline, streaming/disk-pressure, parallel mount and lost
+inventory controls on real containers. None of these small filesystem
+trials establishes an O(1)/O(log n) readiness bound for arbitrary metadata,
+full-root package persistence, snapshot eviction, stale-writer isolation,
+or a long-lived branch. Keep the design already proved; keep the ZeroFS
+follow-up bounded by those same admission rows.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
