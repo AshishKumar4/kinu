@@ -15,14 +15,14 @@ import * as v from 'valibot';
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
-  type CompactionStateStore,
+  type CompactionExtension, type CompactionStateStore,
 } from '@kinu.run/compaction';
 import type {
   ChatOptions,
   TurnContinuity, FiberCtx,
   LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding,
   BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
-  ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
+  ActiveSkillSet, TurnSkillSurface, FactsStore,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   DeferredApproval, DeferredApprovalAnswer,
@@ -467,7 +467,7 @@ export class LocalAgentSession {
   };
 
   private readonly compactionState: CompactionStateStore;
-  private readonly compactionExtension: KinuExtension;
+  private readonly compactionExtension: CompactionExtension;
 
   private extraTools: ToolSet = {};
   /** `externalToolsFor` the running turn's profile, which `eval` reads during the turn. */
@@ -2497,6 +2497,7 @@ export class LocalAgentSession {
       // picks the spec; a swarm with a profile refuses rather than run the caller's model.
       resolveModel: (spec: string) => this.resolveModelForSpec(spec),
       windowOf: (spec) => this.modelCatalog.windowFor(spec),
+      compactShared: this.compactionExtension.compactShared,
       // Nodes work in the folder the user opened, on the shared plane: a real folder has no uid registry for a private home.
       provisionNodeHome: () => (node) => nodeWorkspace(node),
     };

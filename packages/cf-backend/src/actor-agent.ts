@@ -45,8 +45,8 @@ import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, hold, logged, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
-  createCompactionExtension, createSharedPrefixCompactor, createVfsTranscriptStore,
-  createCompactionStateStore, createModelSummarizer, COMPACTION_PRESETS,
+  createCompactionExtension, createVfsTranscriptStore, type CompactionExtension,
+  createCompactionStateStore, createModelSummarizer,
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
 import { convertToModelMessages } from "ai";
@@ -84,7 +84,7 @@ import {
   // (see turn-failure.ts).
   TurnAccumulator, AgentOrchestrator, ActorSession, ChatSession, type AgentOrchestratorDeps, type BackendHost,
   type ChatTurnInput, type ComposedRequest, type PreparedTurn, type OwedTerminalEffectsInput, type ActorTurnLease, type ActorExecutionInput,
-  type KinuExtension, type OwedEffect,
+  type OwedEffect,
   type InlineSteer,
   type AgentsToolAction,
   type AgentsToolDeps,
@@ -1542,11 +1542,11 @@ export abstract class ActorAgent extends Agent<Env> {
     this.logActivity(activity, compactionLogDetail(message, detail));
   }
 
-  /** Handed to every turn; core adds the inbox's own turn extension itself. */
-  private _compactionExtension: KinuExtension | null = null;
+  /** Handed to every turn (core adds the inbox's own turn extension itself), and to the swarm for its shared prefix. */
+  private _compaction: CompactionExtension | null = null;
 
-  protected registerCompactionExtension(): void {
-    this._compactionExtension = createCompactionExtension({
+  protected compaction(): CompactionExtension {
+    this._compaction ??= createCompactionExtension({
       ports: {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
         plans: this.compactionState.plans,
@@ -1567,7 +1567,12 @@ export abstract class ActorAgent extends Agent<Env> {
       model: () => this.effectiveModelSpec(),
       attachments: { files: () => this.rt },
     });
-    this.extensions.register(this._compactionExtension);
+
+    return this._compaction;
+  }
+
+  protected registerCompactionExtension(): void {
+    this.extensions.register(this.compaction());
   }
 
   /** Tags ride the WebSocket attachment, so the rpc gate, both identities and the pane's chat room
@@ -2697,20 +2702,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
 
-    const swarm = this.swarmDeps(this.rt, () => this.getModel(), () => this.turnOriginContext(), createSharedPrefixCompactor({
-        ports: {
-          transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
-          plans: this.compactionState.plans,
-          logger: this.compactionLogger,
-        },
-        archive: this.compactionState.archive,
-        summarize: createModelSummarizer(() => this.getModel(), {
-          source: 'compaction', report: (report) => this.reportModelCall(report),
-          operations: this.modelOperations,
-        }),
-        // Explicitly the light preset, matching every other production compaction path.
-        profile: COMPACTION_PRESETS.light,
-      }));
+    const swarm = this.swarmDeps(this.rt, () => this.getModel(), () => this.turnOriginContext(), this.compaction().compactShared);
 
     const deps: AgentsToolDeps = {
       mode: workMode,

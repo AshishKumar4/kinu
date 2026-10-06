@@ -100,7 +100,17 @@ interface PrefixUpgradeInputs {
   readonly rollingSummaryAttempted: boolean;
 }
 
-export function createCompactionExtension(deps: CompactionExtensionDeps): KinuExtension {
+/** The extension a backend registers, and the swarm's shared-prefix half of the same ladder (`SwarmRunDeps.compactShared`). */
+export type CompactionExtension = KinuExtension & { readonly compactShared: SharedPrefixCompactor };
+
+export function createCompactionExtension(deps: CompactionExtensionDeps): CompactionExtension {
+  return {
+    ...compactionExtension(deps),
+    compactShared: sharedPrefixCompactor(compactionExtension({ ...deps, ephemeral: NO_EPHEMERAL_PLANE, onOutcome: undefined, model: undefined })),
+  };
+}
+
+function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
   const profile = deps.profile ?? { ...COMPACTION_PRESETS.light, triggerPercent: COMPACTION_TRIGGER_PERCENT };
   const { attachments, model } = deps;
   const spec: LadderSpec = attachments === undefined || model === undefined ? kinuSpec : { ...kinuSpec, attachments: kinuAttachments(attachments, model) };
@@ -396,33 +406,17 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
 /** The swarm prefix never contains dynamic-context blocks, so the first rung has nothing to drop. */
 const NO_EPHEMERAL_PLANE: EphemeralContextPlane = { dropSuperseded: () => 0 };
 
-export interface SharedPrefixCompactorDeps {
-  /** The archived range lands in the workspace VFS, readable by the node's own file tools. */
-  ports: EnginePorts;
-  archive: ArchiveIndexStore;
-  summarize: (prompt: string) => Promise<string>;
-  profile?: CompactionProfile;
-}
-
-/**
- * Swarm half of the compaction seam (`SwarmRunDeps.compactShared`): the same ladder, entered once per
- * branch point. The caller owns the policy, so this always forces; keyed by the branch point's durable
- * id so re-entry replays byte-stably and siblings share one cacheable prefix.
- */
-export function createSharedPrefixCompactor(
-  deps: SharedPrefixCompactorDeps,
-): (
+type SharedPrefixCompactor = (
   messages: readonly ModelMessage[],
   basis: { readonly contextWindow: number; readonly key: string },
-) => Promise<readonly ModelMessage[]> {
-  const extension = createCompactionExtension({
-    ports: deps.ports,
-    archive: deps.archive,
-    summarize: deps.summarize,
-    profile: deps.profile,
-    ephemeral: NO_EPHEMERAL_PLANE,
-  });
+) => Promise<readonly ModelMessage[]>;
 
+/**
+ * The swarm's half: the same ladder, entered once per branch point. The caller owns the policy, so this always
+ * forces; keyed by the branch point's durable id so re-entry replays byte-stably and siblings share one cacheable
+ * prefix.
+ */
+function sharedPrefixCompactor(extension: KinuExtension): SharedPrefixCompactor {
   return async (messages, basis) => {
     if (messages.length === 0) return messages;
 

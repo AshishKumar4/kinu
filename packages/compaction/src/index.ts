@@ -8,10 +8,9 @@ export { type AttachmentDeps } from './attachments';
 
 export {
   createCompactionExtension,
-  createSharedPrefixCompactor,
+  type CompactionExtension,
   type CompactionExtensionDeps,
   type CompactionOutcomeEvent,
-  type SharedPrefixCompactorDeps,
 } from './extension';
 
 export {

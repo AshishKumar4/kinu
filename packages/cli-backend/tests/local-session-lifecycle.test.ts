@@ -20,7 +20,8 @@ import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { staticModelPlane } from '../src/profile-authority';
 import { OS_LEASE_PROCESS } from '../src/agent-host/lease-process';
 import * as v from 'valibot';
-import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, swarmsOn, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, } from './helpers/local-session';
+import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, swarmsOn, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, SEARCH_ASK, SEARCH_TASK, textStream, toolCallStream, } from './helpers/local-session';
 
 const jobStatus = (db: Database, id: string) => jobColumn(db, id, 'status');
 
@@ -1634,5 +1635,69 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(1);
     expect(ratings(db)).toBe(0);
     await nextExec.end();
+  });
+});
+
+// cf hands every swarm the shared-prefix compactor; the CLI handed none, so an over-window parent reached its children whole.
+describe('a swarm child\'s inherited context', () => {
+  const REFERENCE = 'export function solve(input, oracle) {\n  let seen = 0;\n  for (let i = 0; i < input.n; i += 1) seen = oracle.step(seen);\n  return seen;\n}\n';
+  const BODY = '\nconst oracle = { step: meter((seen) => seen + 1) };\nconst decode = (out) => (out === undefined || out === null ? null : out);\nemitTrials([trial({ n: P.n }, oracle, decode, P.n)]);\n';
+
+  test('the branch point after an over-window parent node is compacted by the session\'s own compaction', async () => {
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake-model',
+      doStream: async (options) => {
+        const offered = (options.tools ?? []).map((tool) => tool.name);
+        const roles = options.prompt.map((message) => message.role);
+        const step = roles.filter((role) => role === 'tool').length;
+
+        if (offered.includes('agents')) {
+          const stream = step === 0
+            ? toolCallStream('agents', {
+              action: 'swarm', task: SEARCH_TASK, preset: 'custom', from: 'optimise', label: 'inherited', branches: 1, depth: 2,
+              objective: { kind: 'scalar', metric: 'ms', unit: 'ms', direction: 'minimise', scale: 'linear', target: 1, verify: { kind: 'exec-ratio', spec: { params: { n: 3 }, reference: REFERENCE, body: BODY, targetOps: 3, lowerBoundOps: 1 } } },
+              config: { unit: { kind: 'answer' }, context: 'inherit', expand: 'sample', score: { kind: 'verify' }, advance: { kind: 'best-first' }, carry: { kind: 'none' } },
+            }, usage)
+            : textStream('Searched.', usage);
+
+          return { stream, response: { headers: {} } };
+        }
+
+        // A node reads four large outputs before it answers, so its transcript passes 85% of the 30k window.
+        const reads = offered.length > 0 && step < 4 && (step > 0 || !roles.includes('assistant'));
+
+        const stream = reads
+          ? toolCallStream('eval', { code: `return 'x'.repeat(40000) + ${String(step)};` }, usage)
+          : textStream(`\`\`\`javascript\n${REFERENCE}\`\`\``, usage);
+
+        return { stream, response: { headers: {} } };
+      },
+    });
+
+    const { session } = setupWithResolver({
+      normalizeSpecSync: (spec) => namedSpec(spec) ?? 'openai-compatible/house-model',
+      resolveModel: () => model,
+      listProviders: async () => [],
+      listModels: async () => ({ models: [], failures: [] }),
+      modelInfo: async () => ({ id: 'house-model', label: 'house', capabilities: ['tools', 'streaming'], contextWindow: 30_000 }),
+      ...resolverRest,
+    });
+
+    const logger = createRecordingLogger();
+    const restore = setDiagnosticsSink(logger);
+
+    try {
+      await session.send(SEARCH_ASK, { id: crypto.randomUUID() });
+      await session.settleBackgroundWork();
+    } finally {
+      restore();
+      await session.end();
+    }
+
+    const barrier = logger.emitted.flatMap((entry) => (entry.event === 'swarm.context_compacted' || entry.event === 'swarm.compaction_absent' ? [entry.event] : []));
+
+    expect(barrier).toEqual(['swarm.context_compacted']);
   });
 });
