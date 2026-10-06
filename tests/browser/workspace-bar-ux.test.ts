@@ -283,6 +283,20 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     });
   });
 
+  // A visit the roster refused for any other reason is a failure the page names, and the workspace stays open.
+  test('a visit that failed for another reason is reported, and the workspace stays open', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 800 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&visit=failed`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => (document.querySelector('[data-composer-root]')?.textContent ?? '').includes('the roster is unavailable'));
+
+      expect(await page.$('[data-workspace-gone]')).toBeNull();
+      expect(await page.$('[data-composer-root] textarea:not([disabled])')).not.toBeNull();
+      await page.close();
+    });
+  });
+
   test('on a phone, a workspace that cannot connect still offers the menu', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();

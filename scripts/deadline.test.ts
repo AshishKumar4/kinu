@@ -116,6 +116,24 @@ describe('a run under a deadline', () => {
     expect(holdsMemory(process.pid, exited)).toBe(false);
   });
 
+  test('a child that exits while being identified is no leftover, by either ownership route', async () => {
+    for (const caller of ['children', 'marked']) {
+      const child = spawnTest([process.execPath, join(import.meta.dir, 'fixtures/deadline/identified-child.ts'), caller, 'exiting'], { stdout: 'pipe', stderr: 'pipe' });
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code, `${stdout}\n${stderr}`).toBe(0);
+    }
+  });
+
+  test('a live child with an empty cmdline read is still ended, by either ownership route', async () => {
+    for (const caller of ['children', 'marked']) {
+      for (const mode of ['live', 'exec']) {
+        const child = spawnTest([process.execPath, join(import.meta.dir, 'fixtures/deadline/identified-child.ts'), caller, mode], { stdout: 'pipe', stderr: 'pipe' });
+        const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        expect(code, `${stdout}\n${stderr}`).toBe(0);
+      }
+    }
+  });
+
   // Review of d35c1060fe: a child that drops the run's mark (`env -i`) and holds the output pipes kept the run open
   // for its whole life after the shell exited, with no bound watching.
   test('a process that drops the run\'s mark and holds its output is still the run\'s, and is ended', async () => {
