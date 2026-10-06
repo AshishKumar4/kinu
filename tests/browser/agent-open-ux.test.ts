@@ -9,6 +9,8 @@ import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 const AUDITOR_PANE = '[data-agent-pane="checkout-fixes/agents/coupon-auditor"]';
 
+const REFINER_PANE = '[data-agent-pane="checkout-fixes/agents/refiner"]';
+
 /** A message only the coupon auditor's own transcript holds. */
 const AUDITOR_SAID = 'Two rules skip the expiry check';
 
@@ -64,11 +66,33 @@ describe('opening an agent shows its live chat in the main chat area', () => {
         await page.click('.p-tabstrip button[aria-label="Work"]');
         // The frame's plan awaits review, so the tab opens on it.
         await page.click('[data-back-to-work]');
+        // A task one past a head names its owner and offers no door: there is no conversation of its own to open.
+        expect(await page.evaluate(() => document.body.textContent?.includes('Serialize gift-card lines · packages/cart/src/serializer.ts'))).toBe(true);
+        expect(await page.$('button[aria-label="Open packages/cart/src/serializer.ts\'s conversation"]')).toBeNull();
         await page.click('button[aria-label="Open Coupon auditor\'s conversation"]');
         await page.waitForSelector(AUDITOR_PANE);
         await page.waitForFunction((pane, said) => document.querySelector(pane)?.textContent?.includes(said), {}, AUDITOR_PANE, AUDITOR_SAID);
 
         expect(await chatShows(page, AUDITOR_PANE)).toBe(true);
+        await page.close();
+      });
+    });
+
+    test(`from a background helper's row in the Work tab, on a ${viewport}`, async () => {
+      await withGallery(async (gallery) => {
+        const page = await workspace(gallery, viewport);
+
+        if (viewport === 'phone') await page.click('.p-bar [data-inspector-toggle]');
+
+        await page.click('.p-tabstrip button[aria-label="Work"]');
+        await page.click('[data-back-to-work]');
+        await page.waitForSelector('[data-helper-row]');
+        // The refiner works in the background with no tab, so Now lists it; a hired agent has a place of its own and is not listed.
+        expect(await page.$$eval('[data-helper-row]', (rows) => rows.map((row) => row.getAttribute('data-helper-row')))).toEqual(['a-refine']);
+        await page.click('[data-helper-row="a-refine"]');
+        await page.waitForSelector(REFINER_PANE);
+
+        expect(await chatShows(page, REFINER_PANE)).toBe(true);
         await page.close();
       });
     });

@@ -740,17 +740,18 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
 }
 
 /** The workspace's own pages, under the bar the chats share. */
-function WorkspaceView({ view, workspace, title, state, agents, open }: {
+function WorkspaceView({ view, workspace, title, state, agents, open, clearMain }: {
   view: string;
   workspace: string;
   title: string;
   state: WorkspaceState;
   agents: readonly PanelAgent[];
   open: (agent: PanelAgent) => void;
+  clearMain: () => void;
 }) {
   const logo = useWorkspaceRoster().entries.find((entry) => entry.name === workspace)?.logo;
 
-  if (view === "settings") return <WorkspaceSettings workspace={workspace} title={title} logo={logo} state={state} />;
+  if (view === "settings") return <WorkspaceSettings workspace={workspace} title={title} logo={logo} state={state} clearMain={clearMain} />;
 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
 
@@ -1101,7 +1102,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
       {bar}
 
       {view !== undefined && <WorkspaceView view={view} workspace={agentId} title={shownTitle} state={state} agents={agentsPanel.list}
-        open={(agent) => { detach(Effect.promise(async () => agentsPanel.open(agent))); }} />}
+        open={(agent) => { detach(Effect.promise(async () => agentsPanel.open(agent))); }} clearMain={() => setClearingMain(true)} />}
       {view === undefined && (
       <WorkbenchPanels
         ref={workbench}
@@ -1318,8 +1319,9 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
       )}
 
       <MainClearDialog open={clearingMain} agents={agentsPanel.list} onClose={() => setClearingMain(false)}
-        // Reset in the same press: an in-flight first page would otherwise restore the cleared messages.
-        onClear={async () => { state.clearHistory(); history.reset(); }} />
+        // Only once the server has cleared: a refusal stays in the dialog over the transcript it kept. The paged
+        // history resets with it, or an in-flight first page would restore the cleared messages.
+        onClear={async () => { await state.clearConversation(); history.reset(); }} />
 
       {revertFor !== null && <RevertTurnDialog
         messageId={revertFor}
