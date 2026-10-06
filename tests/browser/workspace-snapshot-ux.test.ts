@@ -132,53 +132,79 @@ test('a delayed snapshot cannot overwrite any surface refreshed after it was adm
 });
 
 
-/** The gallery socket's record of what the page did: forced redials, failures still scripted when it redialled, snapshot reads. */
-function socketRecord(page: Page): Promise<{ redials: number; redialAt: number | null; snapshotReads: number; scripted: number }> {
+/** The gallery socket's record of what the page did: forced redials, calls failed, snapshot reads. */
+function socketRecord(page: Page): Promise<{ redials: number; failedCalls: number; snapshotReads: number }> {
   return page.evaluate(() => {
     const root = document.documentElement.dataset;
 
     return {
       redials: Number(root.galleryRedials ?? '0'),
-      redialAt: root.galleryRedialAt === undefined ? null : Number(root.galleryRedialAt),
+      failedCalls: Number(root.galleryFailedCalls ?? '0'),
       snapshotReads: Number(root.gallerySnapshotReads ?? '0'),
-      scripted: (root.galleryRpcFailures ?? '').split(',').filter(Boolean).length,
     };
   });
 }
 
+/** The workspace page on its Files tab, its listing read, with its socket in `socket` from then on. */
+async function filesOnSocket(page: Page, origin: string, socket: 'dead' | 'refusing'): Promise<void> {
+  await page.setViewport({ width: 1920, height: 1100 });
+  await page.goto(`${origin}/gallery.html?frame=workspacepage&workspaceFault=1`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('[data-composer-root]');
+  // The stub's first open belongs to the initial connection, so a later one is the page's reconnect.
+  await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
+  await page.click('button[title="Files"]');
+  await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('before.txt'));
+  await page.evaluate((mode) => {
+    document.documentElement.dataset.workspaceRevision = 'current';
+    document.documentElement.dataset.gallerySocket = mode;
+  }, socket);
+}
+
+/** Presses Files' Refresh and waits until its reads failed or the page redialled. */
+async function refreshFailing(page: Page): Promise<void> {
+  const before = await socketRecord(page);
+
+  await page.click('[aria-label="Refresh"]');
+  await page.waitForFunction((was) => {
+    const root = document.documentElement.dataset;
+
+    return Number(root.galleryFailedCalls ?? '0') > was.failedCalls || Number(root.galleryRedials ?? '0') > was.redials;
+  }, {}, before);
+}
+
 /**
- * A socket that still claims to be open but answers nothing is only noticed by its calls timing out. Three timeouts in
- * a row condemn it and the page redials once, then re-reads what it shows; a fast refusal in between is proof the
- * origin is alive and starts the count again.
+ * A socket that still claims to be open but answers nothing is only noticed by its calls timing out: a run of
+ * timeouts condemns it, the page redials once, and the fresh socket's re-read shows the workspace as it is now.
  */
-test('a socket open but answering nothing is redialled after three timeouts in a row, and the page re-reads', async () => {
+test('a socket open but answering nothing is redialled once, and the page re-reads', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
-    await page.setViewport({ width: 1920, height: 1100 });
-    await page.goto(`${origin}/gallery.html?frame=workspacepage&workspaceFault=1`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('[data-composer-root]');
-    await page.click('button[title="Files"]');
-    await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('before.txt'));
 
-    // Two timeouts, a refusal, then three timeouts: only the last three are in a row.
-    await page.evaluate(() => {
-      document.documentElement.dataset.workspaceRevision = 'current';
-      document.documentElement.dataset.galleryRpcFailures = 'timeout,timeout,fast,timeout,timeout,timeout';
-    });
+    await filesOnSocket(page, origin, 'dead');
 
-    for (let presses = 0; (await socketRecord(page)).scripted > 0; presses += 1) {
-      if (presses > 12) throw new Error(`Refresh drained no scripted failure: ${JSON.stringify(await socketRecord(page))}`);
-      const before = (await socketRecord(page)).scripted;
-
-      await page.click('[aria-label="Refresh"]');
-      await page.waitForFunction((was) => (document.documentElement.dataset.galleryRpcFailures ?? '').split(',').filter(Boolean).length < was, {}, before);
+    for (let presses = 0; (await socketRecord(page)).redials === 0; presses += 1) {
+      if (presses > 6) throw new Error(`no redial after ${String(presses)} refreshes: ${JSON.stringify(await socketRecord(page))}`);
+      await refreshFailing(page);
     }
 
     await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('current.txt'));
+    expect((await socketRecord(page)).redials).toBe(1);
+    await page.close();
+  });
+});
+
+/** Calls refused at once prove the origin is there: however many fail, the page keeps its socket. */
+test('calls the origin refuses at once never condemn the socket', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    await filesOnSocket(page, origin, 'refusing');
+
+    for (let presses = 0; presses < 4; presses += 1) await refreshFailing(page);
     const record = await socketRecord(page);
 
-    // One redial, made on the last timeout and not before.
-    expect({ redials: record.redials, redialAt: record.redialAt }).toEqual({ redials: 1, redialAt: 0 });
+    expect(record.failedCalls).toBeGreaterThanOrEqual(4);
+    expect(record.redials).toBe(0);
     await page.close();
   });
 });
@@ -239,6 +265,8 @@ test('two waiting device commands are decided independently, and a refused decis
     await page.setViewport({ width: 1440, height: 900 });
     await page.goto(`${origin}/gallery.html?frame=workspacepage&consent=two`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[data-device-bind="c-2"]');
+    // The stub's first open belongs to the initial connection, so a later one is the page's reconnect.
+    await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
     expect(await consentCards(page)).toEqual(['c-1', 'c-2']);
 
     await pressButtonIn(page, '[data-device-bind="c-1"]', 'Use studio');
@@ -250,7 +278,10 @@ test('two waiting device commands are decided independently, and a refused decis
     expect(await consentCards(page)).toEqual(['c-1']);
 
     // The waiting list is read again: the refused command is still waiting, and still says why.
+    const reads = await page.evaluate(() => Number(document.documentElement.dataset.galleryConsentReads ?? '0'));
+
     await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
+    await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryConsentReads ?? '0') > was, {}, reads);
     await page.waitForFunction(() => document.querySelector('[data-device-bind="c-1"]') !== null);
     expect(await consentCards(page)).toEqual(['c-1']);
     expect(await page.evaluate(() => document.body.textContent?.includes('device hub unavailable'))).toBe(true);

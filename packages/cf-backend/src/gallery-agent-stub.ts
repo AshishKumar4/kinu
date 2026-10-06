@@ -91,17 +91,18 @@ export function galleryClearChat(path: string): void {
 }
 
 /**
- * `data-gallery-rpc-failures`: the workspace socket's next calls fail in order, one entry each, as a dead-but-open
- * socket's do (`timeout`, the SDK's own rejection) or as a live origin refusing (`fast`).
+ * `data-gallery-socket`: `dead`, every workspace-socket call times out with the SDK's own rejection until a redial, as
+ * an open socket whose peer is gone does; `refusing`, every call is refused at once, as a live origin does.
+ * `data-gallery-failed-calls` counts the calls failed either way.
  */
-function nextCallFailure(method: string): Error | null {
+function socketFailure(method: string): Error | null {
 	const root = document.documentElement.dataset;
-	const [next, ...rest] = (root.galleryRpcFailures ?? "").split(",").filter(Boolean);
+	const mode = root.gallerySocket;
 
-	if (next === undefined) return null;
-	root.galleryRpcFailures = rest.join(",");
+	if (mode !== "dead" && mode !== "refusing") return null;
+	root.galleryFailedCalls = String(Number(root.galleryFailedCalls ?? "0") + 1);
 
-	return next === "timeout" ? new Error(`RPC call to ${method} timed out after 30000ms`) : new Error("the origin refused the call");
+	return mode === "dead" ? new Error(`RPC call to ${method} timed out after 30000ms`) : new Error("the origin refused the call");
 }
 
 /** A connection whose calls resolve from the frame fixture; terminal mode never opens. */
@@ -131,7 +132,7 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 			readyState: 1,
 			connectionError: terminalClose,
 			call: <T,>(method: string, args: unknown[] = []): Promise<T> => {
-				const failure = options.path === undefined || options.path === "" ? nextCallFailure(method) : null;
+				const failure = options.path === undefined || options.path === "" ? socketFailure(method) : null;
 
 				if (failure === null && served !== null) return served<T>(method, args);
 
@@ -150,8 +151,9 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 				const root = document.documentElement.dataset;
 
 				root.galleryRedials = String(Number(root.galleryRedials ?? "0") + 1);
-				// How many scripted failures were still to come when the page gave up on the socket.
-				root.galleryRedialAt = String((root.galleryRpcFailures ?? "").split(",").filter(Boolean).length);
+
+				// A fresh socket reaches the peer a dead one lost.
+				if (root.gallerySocket === "dead") delete root.gallerySocket;
 				reopen();
 			},
 			deliver: (raw) => {

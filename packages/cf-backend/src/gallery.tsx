@@ -2186,7 +2186,10 @@ const TWO_CONSENTS = [
  */
 function galleryConsents(): JsonValue {
   const asked = new URLSearchParams(location.search).get("consent");
-  const resolved = (document.documentElement.dataset.galleryConsentsResolved ?? "").split(",");
+  const root = document.documentElement.dataset;
+  const resolved = (root.galleryConsentsResolved ?? "").split(",");
+
+  root.galleryConsentReads = String(Number(root.galleryConsentReads ?? "0") + 1);
 
   if (asked === "two") return TWO_CONSENTS.filter((consent) => !resolved.includes(consent.consentId));
 
