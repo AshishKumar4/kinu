@@ -109,9 +109,14 @@ export const TIERS = ['local', 'commit', 'push', 'ci', 'deploy', 'evals'] as con
  * imported red is reported, and no verified record is written until CI and the live rows are all green.
  * The hammer phase identifies its isolated CI part, not a local serial tail.
  */
-export const DEPLOY_PHASES = ['preflight', 'upload', 'post-publish', 'source', 'hammer'] as const;
+export const DEPLOY_PHASES = ['preflight', 'upload', 'post-publish', 'source', 'hammer', 'soak'] as const;
 
 export type DeployPhase = (typeof DEPLOY_PHASES)[number];
+
+/** A row whose subject is the deployment: its cost is the live run's, not a quiet box's table figure. */
+export function readsDeployment(gate: Gate): boolean {
+  return gate.phase === 'post-publish' || gate.phase === 'soak';
+}
 
 /** The shared hang bound for a gate that declares none: seconds it may write nothing (scripts/deadline.ts). A gate
  *  that prints only its verdict is silent for its whole run, so this stays at the slowest such gate's length; a
@@ -2499,19 +2504,19 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bash scripts/eval-pass-tier.sh',
     label: 'One trial of every eval task, on the deployment',
-    phase: 'post-publish',
-    alone: 'runs after the upload and the smoke gate, in the wave of the tiers against the deployment and the local '
-      + 'source gates (L18): its subject is the DEPLOYED build, driven as eval-service on its own eval workspaces '
-      + 'and seeded data, on the models the evals measure. No other row acts as eval-service, so none shares its '
-      + 'workspaces or its model account, and it attaches no machine, so it stands outside the fleet first-run counts.',
+    phase: 'soak',
+    alone: 'is the deploy\'s soak (L24): started once the deployment serves, never awaited, so a real model\'s minutes '
+      + 'are outside the deploy\'s 20-minute wall and its red outside the deploy\'s verdict. Its subject is the DEPLOYED '
+      + 'build, driven as eval-service on its own eval workspaces and seeded data, on the models the evals measure. No '
+      + 'other row acts as eval-service, so none shares its workspaces or its model account.',
     tier: 'deploy',
     // The eval lane's measurement on production, 2026-09-30: one trial of each task, all at once, took 4 to
     // 7 minutes. Between two lines of a run the longest gap was 13 s, and inside one trial 67 s (a model
     // step and its checks), well inside the shared silence bound.
     seconds: 420,
     catches: 'an eval task that fails outright on the build that just shipped: a trial whose workspace, turn or '
-      + 'checks break on the deployment, reported in that deploy\'s own report with the trial\'s evidence beside '
-      + 'it, and a trial that stops advancing, which its silence bound ends.',
+      + 'checks break on the deployment, reported in that deploy\'s report as a soak red with the trial\'s evidence '
+      + 'beside it, and a trial that stops advancing, which its silence bound ends.',
     blind: 'a pass rate. One trial says nothing about a task that fails one time in three: the statistics are '
       + '.github/workflows/evals.yml\'s, which the deploy dispatches against the same deployment and whose '
       + 'Verdict a promotion waits for.',
@@ -3844,7 +3849,7 @@ if (import.meta.main) {
   }
 
   const repo = repoAt(root, (run, files) => claims(run, files));
-  const phaseRows = deployPhase === undefined ? undefined : phaseWave(deployPhase, withResourceCosts(readCosts(), deployOrder().filter((gate) => gate.phase === 'post-publish').map((gate) => gate.run)));
+  const phaseRows = deployPhase === undefined ? undefined : phaseWave(deployPhase, withResourceCosts(readCosts(), deployOrder().filter(readsDeployment).map((gate) => gate.run)));
 
   const phaseGates = phaseRows === undefined ? tierRun(tier) : localDeployGates(phaseRows.map(({ gate }) => gate));
   const declared = selectedGate === undefined ? phaseGates : [selectedGate];

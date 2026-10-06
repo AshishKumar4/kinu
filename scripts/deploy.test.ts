@@ -408,12 +408,13 @@ describe("deploy gate", () => {
   // that read the deployment share one wave with the source rows after it; the
   // hammer, whose subject is contention, is last and alone (L18).
   test("every gate outside the source wave declares its phase and why it runs there", () => {
-    expect(DEPLOY_PHASES).toEqual(["preflight", "upload", "post-publish", "source", "hammer"]);
+    expect(DEPLOY_PHASES).toEqual(["preflight", "upload", "post-publish", "source", "hammer", "soak"]);
     const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, phaseGates(phase)]));
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
     expect(byPhase.upload).toEqual(["bun scripts/secret-scan.ts", "bun run gate:infra"]);
-    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bun run gate:devbox-e2e", "bash scripts/product-flows-tier.sh", "bash scripts/eval-pass-tier.sh"]);
+    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bun run gate:devbox-e2e", "bash scripts/product-flows-tier.sh"]);
     expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
+    expect(byPhase.soak).toEqual(["bash scripts/eval-pass-tier.sh"]);
     expect(byPhase.source?.length).toBe(PLAN.length - 8);
 
     for (const gate of LADDER) {
