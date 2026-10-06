@@ -29,6 +29,7 @@ interface AccountChange {
   readonly what: string; readonly path: string; readonly method: string; readonly body?: JsonValue; readonly parks?: true;
   /** What the account's ChatGPT plan read answers: a machine's sign-in reaches the web only through that read (SIWC-08). */
   readonly planChanged?: boolean;
+  readonly claudeConnected?: boolean;
 }
 
 const CHANGES: AccountChange[] = [
@@ -40,6 +41,8 @@ const CHANGES: AccountChange[] = [
   { what: 'a Codex sign-in completes', path: '/codex/poll', method: 'POST', body: {} },
   { what: 'the web first sees a ChatGPT sign-in made on a machine', path: '/chatgpt', method: 'GET', planChanged: true },
   { what: 'the web reads a ChatGPT plan that has not changed', path: '/chatgpt', method: 'GET', planChanged: false, parks: true },
+  { what: 'a Claude sign-in finishes', path: '/claude/finish', method: 'POST', body: { code: 'the-code#state' }, claudeConnected: true },
+  { what: 'Claude refuses the sign-in exchange', path: '/claude/finish', method: 'POST', body: { code: 'the-code#state' }, claudeConnected: false, parks: true },
 ];
 
 test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the owner must fix resumes or stays parked', async (change) => {
@@ -83,6 +86,9 @@ test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the own
           : { ok: false, kind: 'conflict', currentVersion: 28, currentDigest: 'd' };
       },
       async listActiveWorkspaces() { return [{ name: 'harness-parent', displayName: 'Harness', createdAt: 1, nameOrigin: 'user' as const }]; },
+      async finishClaudeSignIn() {
+        return change.claudeConnected === true ? { connected: true } : { connected: false, error: 'Claude refused the sign-in: invalid_grant' };
+      },
       async chatgptPlan(): Promise<ChatGptPlanStatus> {
         return {
           device: { id: 'dev-1', label: 'studio' },
@@ -110,7 +116,7 @@ test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the own
 
   if (change.parks === true) {
     expect({ status: answered?.status, effect: effect(), fact: fact() })
-      .toEqual({ status: change.planChanged === false ? 200 : 409, effect: ['parked'], fact: null });
+      .toEqual({ status: change.what.startsWith('a profile catalog') ? 409 : 200, effect: ['parked'], fact: null });
 
     return;
   }

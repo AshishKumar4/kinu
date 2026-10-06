@@ -1492,14 +1492,19 @@ route stores), kept out of the answer, the stream and the transcript, and the
 request opens at the ask before it. Proven against a fixture of the documented
 item and the SDK's mapping (`contract-server-compaction.test.ts`,
 `unit-extension.test.ts`); live acceptance is unmeasured.
-The ChatGPT plan's routes (`chatgpt`, `codex`) take no threshold. As OpenAI's
-own client does (oh-my-pi's Codex compaction V2, after codex-rs
-`compact_remote_v2.rs`), the step whose input reached the trigger, or the
-turn's first after `/compact`, ends in a `compaction_trigger` item; the answer
-is the compaction item alone, and the turn goes on from it. Unstored, the item
-is replayed whole (id and encrypted content). Proven on a CLI session against a
-fake of the unstored backend (`cli-backend/tests/plan-compaction.test.ts`);
-live acceptance awaits `probe-chatgpt-compact.ts`. OpenCode is not asked.
+The ChatGPT plan's API route (`chatgpt`, api.openai.com) compacts as the direct
+route does, by `context_management`; it refuses a `compaction_trigger` item (400
+`subscription_sharing_unsupported_capability`) and answered a request past its
+threshold with `compaction, message, compaction`, the item alone then carrying the
+context (measured on the owner's plan, 2026-10-06). A later request opens at the
+latest compaction item, as OpenAI's guide says it may. The Codex backend
+(`codex`) takes no threshold: as OpenAI's own client does (`oh-my-pi`'s Codex
+compaction V2, after codex-rs `compact_remote_v2.rs`), the step whose input
+reached the trigger, or the turn's first after `/compact`, ends in a
+`compaction_trigger` item and the turn goes on from the item it answers; that
+route is unprobed. Unstored, an item is replayed whole (id and encrypted
+content). Both are proven on a CLI session against a fake of each backend
+(`cli-backend/tests/plan-compaction.test.ts`). OpenCode is not asked.
 
 ## Open
 

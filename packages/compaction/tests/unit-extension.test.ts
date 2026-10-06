@@ -624,7 +624,7 @@ describe('summaries', () => {
 
   // OpenAI's server-side compaction (developers.openai.com/api/docs/guides/compaction) leaves an encrypted item, which
   // @ai-sdk/openai keeps as a `custom` part; the request opens at the ask before it, as for Claude's summary.
-  test('a GPT-5 model on OpenAI gets no better-compact summary, and the request opens at its compaction item', async () => {
+  test('a GPT-5 model on OpenAI gets no better-compact summary, and the request opens at its latest compaction item', async () => {
     const server = rig();
     const messages: ModelMessage[] = [];
 
@@ -645,7 +645,23 @@ describe('summaries', () => {
       user('next ask'),
     ];
 
-    expect({ server: server.prompts, sent: await server.transform(compacted, { model: 'openai/gpt-5.5' }) }).toEqual({ server: [], sent: compacted.slice(2) });
+    expect({ server: server.prompts, sent: await server.transform(compacted, { model: 'openai/gpt-5.5' }) }).toEqual({ server: [], sent: compacted.slice(3) });
+
+    // A response can carry two items (`compaction, message, compaction`, measured 2026-10-06); the latest replaces the rest.
+    const twice: ModelMessage[] = [
+      user('the ask the provider compacted at'),
+      assistant([
+        { type: 'custom', kind: 'openai.compaction', providerOptions: { openai: { type: 'compaction', itemId: 'cmp_1', encryptedContent: 'FIRST' } } },
+        { type: 'text', text: 'ok' },
+        { type: 'custom', kind: 'openai.compaction', providerOptions: { openai: { type: 'compaction', itemId: 'cmp_2', encryptedContent: 'LATEST' } } },
+      ]),
+      user('next ask'),
+    ];
+
+    expect(await server.transform(twice, { model: 'chatgpt/gpt-6.1-sol' })).toEqual([
+      assistant([{ type: 'custom', kind: 'openai.compaction', providerOptions: { openai: { type: 'compaction', itemId: 'cmp_2', encryptedContent: 'LATEST' } } }]),
+      user('next ask'),
+    ]);
   });
 
   // RomanticOrangutan, 2026-10-05: the compatible adapter drops OpenAI's encrypted item, so a fallback that cannot read
