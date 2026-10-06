@@ -2679,8 +2679,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Titling source for the root, and inherited by agents the owner adds. */
-  protected ownMission(): string {
-    return missionOf(this.getSoulText()) ?? '';
+  protected async ownMission(): Promise<string> {
+    return missionOf(await this.loadSoulText()) ?? '';
   }
 
   /** UserDO is authoritative for the shown name; the manual-rename refusal lives in its

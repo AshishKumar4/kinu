@@ -3588,7 +3588,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * The workspace's purpose as this actor knows it: the auto-title source, and what an
    * added agent inherits. Each root answers from wherever its mission durably lives.
    */
-  protected abstract ownMission(): string;
+  protected abstract ownMission(): Promise<string>;
 
   /**
    * Failures propagate so the durable caller keeps the row owed and the ledger retries it.
