@@ -710,3 +710,143 @@ describe('a search, as it happens', () => {
     expect(workingAfterDecay, 'the working mark never expired').toBe(0);
   });
 });
+
+/** Each node the scene draws, keyed by its search and id: its status, its parent, whether it is folded. */
+function drawnNodes(page: Page): Promise<{ key: string; status: string; parent: string | null; folded: boolean }[]> {
+  return page.$$eval('g.mcts-node', (nodes) => nodes.map((node) => {
+    const search = node.closest('g.mcts-region')?.getAttribute('data-run') ?? '';
+    const parent = node.getAttribute('data-parent');
+
+    return {
+      key: `${search}/${node.getAttribute('data-node') ?? ''}`,
+      status: node.getAttribute('data-status') ?? '',
+      parent: parent === null ? null : `${search}/${parent}`,
+      folded: node.hasAttribute('data-folded'),
+    };
+  }));
+}
+
+/**
+ * Folding hides what was abandoned and nothing else: a pruned or failed branch keeps its own node, folded, and shows
+ * none of its children; every node with no abandoned branch above it stays, a settled search's own root included,
+ * though settling marks that root pruned; and Expand brings every node back.
+ */
+test('folding hides exactly the abandoned branches, never a search itself, and expanding restores them', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1280, height: 1238 });
+    await page.goto(`${origin}/gallery.html?frame=forks`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('g.mcts-node[data-node]');
+    await settled(page);
+
+    const before = await drawnNodes(page);
+    const byKey = new Map(before.map((node) => [node.key, node]));
+
+    const abandoned = (id: string | null): boolean => {
+      const node = id === null ? undefined : byKey.get(id);
+
+      return node !== undefined && node.parent !== null && (node.status === 'pruned' || node.status === 'failed');
+    };
+
+    const underAbandoned = (id: string): boolean => {
+      for (let at = byKey.get(id)?.parent ?? null; at !== null; at = byKey.get(at)?.parent ?? null) if (abandoned(at)) return true;
+
+      return false;
+    };
+
+    const parents = new Set(before.flatMap((node) => (node.parent === null ? [] : [node.parent])));
+
+    // The fixture has something to fold, or this proves nothing.
+    expect(before.some((node) => abandoned(node.key) && parents.has(node.key))).toBe(true);
+
+    await page.click('button[aria-label="Fold abandoned branches"]');
+    await settled(page);
+    const after = await drawnNodes(page);
+    const shown = new Set(after.map((node) => node.key));
+
+    expect(after.filter((node) => node.parent !== null && underAbandoned(node.key))).toEqual([]);
+    expect(before.filter((node) => !underAbandoned(node.key) && !shown.has(node.key))).toEqual([]);
+    expect(after.filter((node) => abandoned(node.key) && parents.has(node.key)).every((node) => node.folded)).toBe(true);
+
+    await page.click('button[aria-label="Expand every branch"]');
+    await settled(page);
+    expect((await drawnNodes(page)).map((node) => node.key).sort()).toEqual(before.map((node) => node.key).sort());
+    await page.close();
+  });
+});
+
+/** The explorer's footer and the scores and depths of the nodes it summarises. */
+async function readExplorer(page: Page) {
+  return page.evaluate(() => {
+    const number = (selector: string) => {
+      const text = document.querySelector(selector)?.textContent;
+
+      return text === undefined || text === null ? null : Number.parseFloat(text);
+    };
+
+    const nodes = [...document.querySelectorAll('g.mcts-node[data-node]')].map((node) => ({
+      status: node.getAttribute('data-status'),
+      depth: Number(node.getAttribute('data-depth')),
+      value: node.hasAttribute('data-value') ? Number(node.getAttribute('data-value')) : null,
+    }));
+
+    return { branches: number('[data-tree-branches]'), depth: number('[data-tree-depth]'), winner: number('[data-tree-winner]'), nodes };
+  });
+}
+
+/**
+ * The explorer's footer agrees with the tree it draws: one branch per node under the root, the deepest stored depth,
+ * and the winner's score is the chosen branch's, never a higher-scoring branch the search did not choose.
+ */
+test('the explorer names the chosen branch as the winner and counts the tree it draws', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    let settledOnWinner = 0;
+
+    for (const frame of ['forkfull', 'forkswarmfull']) {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('g.mcts-node[data-node]');
+      await settled(page);
+      const seen = await readExplorer(page);
+      const chosen = seen.nodes.find((node) => node.status === 'terminal' && node.value !== null);
+
+      expect({ frame, branches: seen.branches, depth: seen.depth })
+        .toEqual({ frame, branches: seen.nodes.length - 1, depth: Math.max(...seen.nodes.map((node) => node.depth)) });
+      expect(seen.winner).toBe(chosen?.value === undefined || chosen.value === null ? null : Math.round(chosen.value * 100));
+
+      if (seen.winner !== null) settledOnWinner += 1;
+      await page.close();
+    }
+
+    // At least one search settled on a winner, so the footer's winner was read at all.
+    expect(settledOnWinner).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * What a run's own journal says reaches the page: a fan-in vertex is drawn as one, and only the nodes the engine
+ * spawned as fan-ins are; a run that reached nothing says so above its tree, in the words of the branch that failed.
+ */
+test('fan-in vertices are the nodes the engine fanned in, and a run that reached nothing names its branch\'s cause', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const swarm = await newPage();
+    await swarm.setViewport({ width: 1280, height: 900 });
+    await swarm.goto(`${origin}/gallery.html?frame=forkswarmfull`, { waitUntil: 'networkidle0' });
+    await swarm.waitForSelector('g.mcts-node[data-node]');
+    // The fixture's two vertices are the heads spawned as `fan-in over k parents`; every expansion is a sibling.
+    expect(await swarm.$$eval('g.mcts-node', (nodes) => nodes.filter((node) => node.querySelector('rect.mcts-fan-in') !== null)
+      .map((node) => node.getAttribute('data-node') ?? '').sort((a, b) => a.localeCompare(b)))).toEqual(['sw004', 'sw009']);
+    await swarm.close();
+
+    const refused = await newPage();
+    await refused.setViewport({ width: 1280, height: 900 });
+    await refused.goto(`${origin}/gallery.html?frame=forkrefused`, { waitUntil: 'networkidle0' });
+    await refused.waitForSelector('[data-run-refusal]');
+    const note = await refused.$eval('[data-run-refusal]', (element) => ({ reason: element.getAttribute('data-run-refusal'), text: element.textContent ?? '' }));
+
+    expect(note.reason).toBe('failed');
+    expect(note.text).toContain('Every node failed to provision a home');
+    await refused.close();
+  });
+});
