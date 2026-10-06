@@ -1482,6 +1482,8 @@ export async function fireSoonestWake(agent: Pick<HarnessOrchestratorAgent, 'ala
 /** A recording owner-UserDO binding, in place of the refusing default. */
 export interface RecordedUserPlaneCalls {
   warmConnections: UserCaller[];
+  /** The account's active workspaces, this one among them, as the peers tool reads them. */
+  workspaces?: readonly { readonly name: string; readonly displayName: string }[];
   /** Set to make `userMcp_warmConnections` reject. */
   failWarm: Error | null;
   /** Set to make `userMcp_toolDescriptors` reject with this error; unset, the read is unreachable. */
@@ -1610,6 +1612,8 @@ export function makeEnv(
 
             return { applied: true };
           },
+          listActiveWorkspaces: async () => (userPlane?.workspaces ?? []).map((workspace) => ({ ...workspace, createdAt: 1, nameOrigin: 'user' as const })),
+          hasWorkspace: async (_caller: UserCaller, name: string) => (userPlane?.workspaces ?? []).some((workspace) => workspace.name === name),
           userMcp_warmConnections: async (caller: UserCaller): Promise<{ servers: number }> => {
             userPlane?.warmConnections.push(caller);
 

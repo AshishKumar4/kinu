@@ -39,5 +39,9 @@ it('two workspaces each log three ways, and every line is filed under its own wo
   expect(installs.length).toBeGreaterThan(0);
   expect(new Set(installs.map((line) => line.index))).toEqual(new Set(workspaces.map((name) => analyticsDigest(name))));
 
+  // The `startups` panel counts rows: one activation is one row, under its own workspace.
+  const startups = workspaces.map((name) => lines.filter((line) => line.event === 'actor.startup' && line.index === analyticsDigest(name)).length);
+  expect(startups).toEqual([1, 1]);
+
   expect(lines.filter((line) => line.index === '')).toEqual([]);
 });

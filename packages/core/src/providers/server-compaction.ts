@@ -21,21 +21,23 @@ const FORCED_TRIGGER = 0.9;
 /** Anthropic's compatibility list: Opus and Sonnet from 4.6, Fable and Mythos from 5, and Mythos Preview. */
 const COMPACTING = /^claude-(?:(opus|sonnet)-(\d+)(?:-(\d{1,2}))?(?!\d)|(fable|mythos)-(\d+)|mythos-preview)/u;
 
-/** OpenAI's guide lists no models; Kinu asks the GPT-5 family on the direct Responses API route. */
-const OPENAI_COMPACTING = /^gpt-5/u;
+/** OpenAI's guide lists no models; GPT-5 and later, on every route that speaks api.openai.com's Responses API
+ *  (`gpt-6.1-sol` compacted there on the ChatGPT plan, measured 2026-10-06). */
+const OPENAI_COMPACTING = /^gpt-(?:[5-9]|\d{2,})/u;
 
-/** No threshold on the plan's routes: a step asks by a trailing `compaction_trigger` (ADR P3). */
-const PLAN_ROUTE = /^(?:codex|chatgpt)(?:@[^/]*)?\//u;
+/** The Codex backend takes no threshold: a step asks by a trailing `compaction_trigger` (ADR P3). The plan's API route
+ *  refuses that item (400 `subscription_sharing_unsupported_capability`, 2026-10-06) and takes the threshold. */
+const CODEX_ROUTE = /^codex(?:@[^/]*)?\//u;
 
 /** Whose summary a model reads and writes: only that provider's adapters carry it. */
 export type ServerCompactor = 'anthropic' | 'openai';
 
 /** The provider a model compacts with, or null for a model compacted the local way. */
 export function serverCompactor(spec: string | undefined): ServerCompactor | null {
-  if (PLAN_ROUTE.test(spec ?? '')) return 'openai';
-  const match = /^(anthropic|claude|openai)(?:@[^/]*)?\/(?:.*\/)?([^/]+)$/u.exec(spec ?? '');
+  if (CODEX_ROUTE.test(spec ?? '')) return 'openai';
+  const match = /^(anthropic|claude|openai|chatgpt)(?:@[^/]*)?\/(?:.*\/)?([^/]+)$/u.exec(spec ?? '');
 
-  if (match?.[1] === 'openai') return OPENAI_COMPACTING.test(match[2] ?? '') ? 'openai' : null;
+  if (match?.[1] === 'openai' || match?.[1] === 'chatgpt') return OPENAI_COMPACTING.test(match[2] ?? '') ? 'openai' : null;
   const model = COMPACTING.exec(match?.[2] ?? '');
 
   if (model === null) return null;
@@ -52,7 +54,7 @@ export function serverCompactionOptions(
   const threshold = triggerTokens(contextWindow);
   const vendor = serverCompactor(spec);
 
-  if (vendor === null || PLAN_ROUTE.test(spec ?? '') || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
+  if (vendor === null || CODEX_ROUTE.test(spec ?? '') || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
 
   const value = forcedInput === undefined
     ? threshold
@@ -68,7 +70,7 @@ export function compactionTriggerOptions(
 ): ProviderOptions | undefined {
   const threshold = triggerTokens(contextWindow);
 
-  if (!PLAN_ROUTE.test(spec ?? '') || inputTokens === undefined || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
+  if (!CODEX_ROUTE.test(spec ?? '') || inputTokens === undefined || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
 
   return inputTokens >= (forced ? SERVER_COMPACTION_MIN_TOKENS : threshold) ? { openai: { compactionTrigger: true } } : undefined;
 }

@@ -337,15 +337,6 @@ export const REVIEWED_ADVISORIES = {
       + 'a lockfile refresh clears all five: accepted until that refresh, not indefinitely.',
     ids: [1124268, 1124271, 1124272, 1124276, 1138769],
   },
-  'shell-quote': {
-    reason: 'TRANSITIVE: the only edge is @opentui/react -> react-devtools-core '
-      + '(^1.6.1), a devtools bridge no shipped code path starts, and the quadratic '
-      + 'parse() is called by no tracked source. No fixed release exists either: the '
-      + 'advisory covers <=1.8.4, which is the latest publish. Deleting the direct '
-      + '@kinu.run/agent-utils declaration does not clear the id, because the package '
-      + 'stays in the graph underneath.',
-    ids: [1123944],
-  },
   valibot: {
     reason: 'direct: the root manifest and @kinu.run/cf-backend both require ^1.4.1. record() '
       + 'issue paths can make flatten() throw for an inherited Object property name, and '

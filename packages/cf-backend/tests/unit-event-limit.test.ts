@@ -30,7 +30,8 @@ function chatDescriptor(text: string): IngressDescriptor {
   };
 }
 
-function seededWorkspace() {
+/** Seeded once: every case only reads. */
+const seeded = (() => {
   const harness = orchestratorHarness();
 
   for (let i = 0; i < SEEDED_EVENTS; i++) {
@@ -38,7 +39,7 @@ function seededWorkspace() {
   }
 
   return { resolveAgent: () => Promise.resolve(harness.agent), harness };
-}
+})();
 
 /** The events path reads no binding; the route secret is reached only on trigger creation. */
 const NO_BINDING_READ: HubEnv = {};
@@ -76,8 +77,7 @@ const BOUNDED_QUERIES: readonly { readonly name: string; readonly query: string;
 describe('the events route closes `limit` before it can reach SQL', () => {
   for (const bound of BOUNDED_QUERIES) {
     test(bound.name, async () => {
-      const { resolveAgent } = seededWorkspace();
-      expect(await eventsVia(resolveAgent, bound.query)).toEqual({ status: 200, count: bound.count });
+      expect(await eventsVia(seeded.resolveAgent, bound.query)).toEqual({ status: 200, count: bound.count });
     });
   }
 });
@@ -86,7 +86,7 @@ describe('a direct RPC cannot ask for more than the route may', () => {
   // `listRecentEvents` (CLI RPC, cli/rpc-gate.ts) and `listRecentEventsWire` (cross-DO, rpc-surface.ts)
   // reach the object with no route in the path, the bypass a route-only fix leaves open.
   test('the RPC applies the same bounds with no route in the path', async () => {
-    const { harness } = seededWorkspace();
+    const { harness } = seeded;
 
     const countOf = async (opts: { variant?: string; since?: number; limit?: number }) =>
       (await harness.agent.listRecentEvents(opts)).length;
@@ -101,15 +101,5 @@ describe('a direct RPC cannot ask for more than the route may', () => {
     expect(await countOf({ limit: 1e9 })).toBe(UNTRUSTED_CEILING);
     expect(await countOf({ limit: -1, variant: 'chat' })).toBe(1);
     expect(await countOf({ since: Number.NaN, limit: 3 })).toBe(3);
-  });
-
-  test('the RPC carries the same ceiling', async () => {
-    const { harness } = seededWorkspace();
-
-    const countOf = async (opts: { limit?: number }): Promise<number> =>
-      (await harness.agent.listRecentEvents(opts)).length;
-
-    expect(await countOf({ limit: -1 })).toBe(1);
-    expect(await countOf({ limit: 1e9 })).toBe(UNTRUSTED_CEILING);
   });
 });
