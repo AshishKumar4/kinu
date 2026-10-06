@@ -7,7 +7,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
+import { restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, TURN_END_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
@@ -104,7 +104,7 @@ import type {
 import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
-import { galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -2016,6 +2016,26 @@ const HISTORY_UNEVEN = new URLSearchParams(location.search).get("historyUneven")
 
 const HISTORY_PICTURE = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220"><rect width="480" height="220" fill="#3a3530"/><text x="24" y="120" fill="#e8dcc4" font-size="28">chart</text></svg>')}`;
 
+/**
+ * `gallery:live-window` with `{ rows, edited?, cleared? }`: the socket's live window moves to those history rows, `edited`
+ * saying more live than stored; `cleared` is another tab's clear, which empties the store too.
+ */
+const LiveWindowSchema = v.object({ rows: v.array(v.number()), edited: v.optional(v.number()), cleared: v.optional(v.boolean()) });
+
+window.addEventListener("gallery:live-window", (event: Event) => {
+  const asked = v.parse(LiveWindowSchema, event instanceof CustomEvent ? event.detail : null);
+
+  if (asked.cleared === true) document.documentElement.dataset.historyCleared = "1";
+
+  const entries = asked.rows.map((index) => {
+    const row = historyRow(index);
+
+    return index === asked.edited ? { ...row, content: `${row.content} Edited live.` } : row;
+  });
+
+  galleryChatWindow("", restoredRows(entries));
+});
+
 function historyRow(index: number): ChatHistoryEntry {
   const id = `hist-${String(index).padStart(5, "0")}`;
   const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
@@ -2044,7 +2064,8 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
 
   asks.historyAsks = String(Number(asks.historyAsks ?? 0) + 1);
   asks.historyReads = `${asks.historyReads ?? ""} ${cursor === undefined ? "newest" : `${String(cursor.before - limit)}-${String(cursor.before)}`}`;
-  const held = Math.min(cursor?.before ?? HISTORY_ROWS, HISTORY_ROWS);
+  const stored = asks.historyCleared === "1" ? 0 : HISTORY_ROWS;
+  const held = Math.min(cursor?.before ?? stored, stored);
   const from = Math.max(0, held - limit);
   const items = Array.from({ length: held - from }, (_, offset) => historyRow(from + offset));
   const settled = Promise.withResolvers<void>();

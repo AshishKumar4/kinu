@@ -74,6 +74,13 @@ export function galleryServerPush(raw: string): void {
 	for (const agent of live) agent.deliver(raw);
 }
 
+const windows = new Map<string, Set<(messages: readonly UIMessage[]) => void>>();
+
+/** As the server's `cf_agent_chat_messages` frame lands: every window on the chat at `path` now shows `messages`. */
+export function galleryChatWindow(path: string, messages: readonly UIMessage[]): void {
+	for (const show of windows.get(path) ?? []) show(messages);
+}
+
 /** As the server answers a clear: the chat at `path` is emptied, then every window on it is told to empty. */
 export function galleryClearChat(path: string): void {
 	seededChats.delete(path);
@@ -196,6 +203,14 @@ export function useAgentChat(options: { agent: GalleryAgent }) {
 
 		return () => { window.removeEventListener("gallery:settle-send", settle); };
 	}, []);
+
+	useEffect(() => {
+		const shown = windows.get(agent.path) ?? new Set();
+
+		windows.set(agent.path, shown.add(setMessages));
+
+		return () => { shown.delete(setMessages); };
+	}, [agent.path]);
 
 	useEffect(() => {
 		const onMessage = (event: Event) => {
