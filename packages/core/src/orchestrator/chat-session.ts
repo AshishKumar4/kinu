@@ -1,10 +1,7 @@
 /**
- * ChatSession: the one turn loop, shared by both backends through {@link ChatSessionPorts} and
- * {@link ChatTransport}. Invariants: one turn at a time, and every started turn terminates (one
- * `turn-end`, a closed run, a released lease); a send while a turn exists splices into it; every
- * accepted send is durable before it is acknowledged; the commit is one transaction; leftovers rerun as
- * one user-origin turn; restart replays pending sends and owed effects; an interrupted turn continues
- * once, under the run it was open in.
+ * The one turn loop for both backends. One turn at a time; every started turn ends (one `turn-end`, a closed
+ * run, a released lease); a mid-turn send splices in; a send is durable before acknowledged; leftovers rerun as
+ * one turn; restart replays pending sends and owed effects; an interrupted turn continues once, in its run.
  */
 
 import type { TrialTurn } from '../evolution/trial-rules';
@@ -204,10 +201,7 @@ export interface ComposedRequest {
   readonly sessionKey: string;
 }
 
-/**
- * What `/compact` did: folded the conversation into Better Compact's summary; armed the next request to ask a model
- * that compacts server-side to; or nothing, for a conversation under what that provider compacts.
- */
+/** `/compact` folded into Better Compact's summary, armed a server-side compaction, or found nothing to fold. */
 export type CompactOutcome = 'folded' | 'armed' | 'nothing';
 
 /** Each port is asked per call, never captured. */
@@ -386,10 +380,7 @@ export class ChatSession {
   }
   get closed(): boolean { return this.ended; }
 
-  /**
-   * Non-zero while a terminal transition runs on the pump's stack: {@link enqueueTurn} then answers at
-   * admission, since awaiting execution from inside the pump would deadlock.
-   */
+  /** Non-zero while a terminal transition runs on the pump's stack, where awaiting execution would deadlock. */
   private settlingDepth = 0;
 
   /** Self-starts the pump when idle. A re-announcement of an already recorded fact starts no turn and answers 'queued'. */
@@ -675,8 +666,7 @@ export class ChatSession {
       .then((outcome) => settleEffect(Result.isSuccess(outcome) ? Effect.succeed(outcome.success) : Effect.fail(outcome.failure)));
   }
 
-  /** One revision at a time; a turn waits for the one in flight, so its own measure is the newer. `run` settles its own
-   *  failure, so the revision a turn awaits never rejects. */
+  /** One revision at a time, so a turn's own measure is the newer; `run` settles its failure, so this never rejects. */
   private revise<T>(run: () => Promise<T>): Promise<T> {
     const ran = (this.revision ?? Promise.resolve()).then(run);
     const revision = ran.then(() => undefined);
@@ -1238,10 +1228,7 @@ export class ChatSession {
     });
   }
 
-  /**
-   * The answer, its run verdict and the frozen roster in one commit, since `resumeAll()` finds claims.
-   * Uses the raw handle: `rt.storage.sql` and `db` share the connection. Never throws.
-   */
+  /** Answer, run verdict and frozen roster in one commit, since `resumeAll()` finds claims. Never throws. */
   private commitTurn(input: {
     readonly item: QueueItem;
     readonly turnId: string;

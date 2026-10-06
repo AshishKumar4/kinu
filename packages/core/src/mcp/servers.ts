@@ -33,10 +33,7 @@ const HeaderRecordSchema = v.pipe(
 
 const StringArraySchema = v.array(v.string());
 
-/**
- * One spelling per endpoint: identity, stored row and credential origin derive from it.
- * Fragment dropped; path and query kept verbatim (`/mcp` and `/mcp/` differ).
- */
+/** One spelling per endpoint: fragment dropped; path and query kept (`/mcp` and `/mcp/` differ). */
 function canonicalMcpUrl(serverUrl: string): string {
   const url = new URL(serverUrl);
   url.hash = '';
@@ -44,11 +41,7 @@ function canonicalMcpUrl(serverUrl: string): string {
   return url.href;
 }
 
-/**
- * Fails with a user-readable message. Requires https, or http on localhost/127.0.0.1/[::1].
- * Returns the canonical URL; empty `headers` omitted, `allowedTools: []` kept (expose nothing).
- * A preset add takes name, URL and transport from the catalog; `serverUrl` is optional there.
- */
+/** https, or http on loopback; `allowedTools: []` exposes nothing; a preset's catalog fields win. */
 export function validateMcpServerInput(input: JsonValue): McpServerInput {
   return settleSync(Effect.gen(function* () {
     const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
@@ -80,8 +73,7 @@ export function validateMcpServerInput(input: JsonValue): McpServerInput {
       return yield* new KinuError('bad_input', '`serverUrl` must use https:// (http:// allowed only for localhost).');
     }
 
-    // Credentials belong in sealed `headers`; `serverUrl` is plaintext and Workers `fetch`
-    // rejects URLs with userinfo.
+    // Credentials belong in sealed `headers`: `serverUrl` is plaintext.
     if (parsed.username !== '' || parsed.password !== '') {
       return yield* new KinuError('bad_input', '`serverUrl` must not carry a username or password: put credentials in `headers`.');
     }
@@ -143,7 +135,7 @@ function toolAllowlist(value: JsonValue): Effect.Effect<string[], KinuError> {
   });
 }
 
-/** Absent → custom server; a non-catalog id is an error. The preset's fields can't be overridden. */
+/** Absent: a custom server. */
 function presetOf(presetId: JsonValue | undefined): Effect.Effect<McpPreset | undefined, KinuError> {
   if (presetId === undefined || presetId === null) return Effect.succeed(undefined);
   const parsedPresetId = v.safeParse(v.string(), presetId);
@@ -154,7 +146,6 @@ function presetOf(presetId: JsonValue | undefined): Effect.Effect<McpPreset | un
   return preset ? Effect.succeed(preset) : Effect.fail(new KinuError('bad_input', `Unknown MCP preset '${parsedPresetId.output}'.`));
 }
 
-/** Non-blank, at most 64 chars after trim (the stored, indexed value). */
 function serverName(name: JsonValue): Effect.Effect<string, KinuError> {
   const parsed = v.safeParse(v.string(), name);
 

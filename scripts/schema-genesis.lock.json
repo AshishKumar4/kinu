@@ -1128,7 +1128,7 @@
     "bytes BLOB NOT NULL",
     "PRIMARY KEY (id, revision)"
   ],
-  "sleep_time_updates@packages/cf-backend/src/orchestrator.ts": [
+  "sleep_time_updates@packages/core/src/orchestrator/sleep-time-lane.ts": [
     "effect_key TEXT PRIMARY KEY",
     "update_json TEXT NOT NULL"
   ],

@@ -63,7 +63,7 @@ import { TierIdSchema,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES,
-  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, readMission,
+  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, readMission, SleepTimeLane, initSleepTimeUpdatesTable,
   branchesTerminalEffect, chatTerminalEffects,
   SUBORDINATE_REPORT_STATUSES,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
@@ -524,6 +524,7 @@ export class LocalAgentSession {
     this.eventLog = orchestration.eventLog;
 
     initTerminalEffectTable(this.rt.storage.execRaw);
+    initSleepTimeUpdatesTable(this.rt.storage.execRaw);
     // `turn_id` is NULL when the send queued while the actor was idle.
     initPendingSendTables(this.rt.storage.execRaw);
     const pendingSends = new PendingSendStore(this.rt.storage.sql, this.rt.actor.actorId);
@@ -1287,11 +1288,14 @@ export class LocalAgentSession {
 
   /** End: finish started evolution, settle detached fibers, disconnect MCP. Unfinished work carries over. */
   async end(): Promise<void> {
+    this.sleepTime.lastClientLeft();
     this.chat.close();
     this.lifetime.abort();
     this.clearLocalAlarm();
     // Stops a retry timer firing into a session whose stores are closed.
     this.clearTerminalRetry();
+
+    if (this.sleepTimeTimer) clearTimeout(this.sleepTimeTimer);
     const t0 = Date.now();
     await this.actorSession.orchestrator.settleEvolution();
     const t1 = Date.now();
@@ -1481,6 +1485,12 @@ export class LocalAgentSession {
     // A local session opens on the owner's command, the one moment here a parked refusal may answer differently.
     await this.terminal.releaseParked();
     await this.recoverTerminalTransitions();
+    // A session that ended is a client that left: its idle or closed-session run falls due now.
+    this.tracked(async () => {
+      await this.sleepTime.wake(Date.now());
+      this.sleepTime.clientArrived();
+      this.scheduleSleepTimeWake();
+    });
   }
 
   /**
@@ -1906,6 +1916,8 @@ export class LocalAgentSession {
     }
 
     parts.autoTitle = { mission };
+    // The workspace's own conversation compresses into its facts; a hire's does not, as on cf.
+    parts.sleepTime = this.rt.actor.parentActorId === null;
 
     // One claimed effect; the sequence id is the parent's dedupe key, so a replay is recognised.
     if (input.owedReport !== null && relay !== null) {
@@ -1918,7 +1930,7 @@ export class LocalAgentSession {
     }
 
     // No `turnEndExtensions` (runChat fires them in-stream), no `eventReplies` (startup's
-    // `reclaimStrandedEventDeliveries` covers them), no `craftedToolsUsed`/`sleepTime`/`autoGepa` lanes here.
+    // `reclaimStrandedEventDeliveries` covers them), no `craftedToolsUsed`/`autoGepa` lanes here.
     return declareTerminalRoster(facts, parts);
   }
 
@@ -1927,6 +1939,8 @@ export class LocalAgentSession {
     const relay = this.parentRelay;
 
     const base = {
+      sleep_time: this.sleepTime.effect(),
+
       branches: branchesTerminalEffect({
         sql: this.rt.storage.sql,
         actor: this.rt.actor,
@@ -2102,6 +2116,31 @@ export class LocalAgentSession {
 
   private terminalRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private terminalRetryAt = Infinity;
+
+  /** The main actor's sleep-time lane; its idle wake is an unref'd timer, so it never holds the process open. */
+  private get sleepTime(): SleepTimeLane {
+    return new SleepTimeLane({
+      sql: this.rt.storage.sql, actor: this.rt.actor, config: this.config, facts: this.factsStore,
+      transcript: () => this.stores.history.transcript(CHAT_SESSION_ID), llm: () => this.rt.fastLlm ?? this.rt.llm,
+      transactionSync: (write) => this.rt.storage.transactionSync(write),
+      armWake: () => { this.scheduleSleepTimeWake(); }, workspace: this.rt.actor.actorId,
+    });
+  }
+
+  private scheduleSleepTimeWake(): void {
+    if (this.sleepTimeTimer) clearTimeout(this.sleepTimeTimer);
+    this.sleepTimeTimer = null;
+    const at = this.sleepTime.nextWakeAt();
+
+    if (at === null || this.chat.closed) return;
+    this.sleepTimeTimer = setTimeout(() => {
+      this.sleepTimeTimer = null;
+      this.tracked(() => this.sleepTime.wake(Date.now()));
+    }, Math.max(0, at - Date.now()));
+    this.sleepTimeTimer.unref();
+  }
+
+  private sleepTimeTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Test-only deterministic cut point in the terminal sequence; null in production. */
   protected terminalEffectFault: TerminalEffectFault | null = null;

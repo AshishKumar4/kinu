@@ -14,6 +14,8 @@ export {
   type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
+export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
+
 export {
   TerminalTransitions, TERMINAL_TRANSITION_CALL_ID,
   type TerminalTransition, type TerminalDisposition, type TerminalTransitionDeps,

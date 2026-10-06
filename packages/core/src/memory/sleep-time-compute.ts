@@ -1,6 +1,4 @@
-// Sleep-time compute (arXiv:2504.13171): between turns, a background fork rewrites agent_facts
-// so the next turn starts from a denser state. Runs on a cadence ({@link sleepTimeDue}), never
-// on a workspace's first turn; long-conversation summarization belongs to Session compaction.
+// Sleep-time compute (arXiv:2504.13171): between turns, a fork rewrites agent_facts; the lane is orchestrator/sleep-time-lane.ts.
 
 import * as v from 'valibot';
 import { Effect } from 'effect';
@@ -54,7 +52,7 @@ export interface SleepTimeTurn {
 }
 
 export interface SleepTimeWindow {
-  /** Saturates at the caller's read bound; a read covering `everyTurns` + 1 answers decides as the full transcript would. */
+  /** Saturates at the caller's read bound. */
   readonly completedTurns: number;
   readonly lastRunTurn: number | null;
   /** Key the run is recorded under; the next window starts after it. */
@@ -64,7 +62,7 @@ export interface SleepTimeWindow {
   readonly inputPending: boolean;
 }
 
-/** The walk stops at the answer the last run was keyed on; user rows newer than the newest answer belong to no window. */
+/** Stops at the answer the last run was keyed on; user rows past the newest answer are in no window. */
 export function sleepTimeWindow(
   newestFirst: readonly ConversationProjection[],
   processed: (answerId: string) => boolean,

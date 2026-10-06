@@ -214,6 +214,8 @@ function setup(model: LanguageModel, profileAuthority: CliProfileSource = async 
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('client-folder') });
   rt.actor.config.setLearning(false);
+  // Its model calls would count as summaries here; the shared-backend suite covers it.
+  rt.actor.config.setSleepTimeComputeEnabled(false);
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,

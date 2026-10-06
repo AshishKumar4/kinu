@@ -144,10 +144,7 @@ import {
   checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore, deviceFileCheckpoints,
   type CheckpointAvailability, type FileCheckpointListing, type FileCheckpointReads,
   type FileRestorePlan, type FileRestoreResult,
-  runSleepTimeCompute, applySleepTimeUpdate,
-  SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
-  type SleepTimeUpdate, type SleepTimeWindow,
-  effectAlreadyDone, recordEffectDone,
+  SleepTimeLane, initSleepTimeUpdatesTable,
   // Core owns the ingress gates; this actor owns the transports in front of them
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
@@ -273,24 +270,11 @@ const LeasedRowSchema = v.object({ id: v.string() });
  * answers truncated and the wake drains the rest on the next frame.
  */
 
-/** Tombstone scope marking a turn's sleep-time window consumed, by an update or a definitive failure. */
-const SLEEP_TIME_PROCESSED = 'sleep_time';
-
-/** Millisecond instants in `actor_config`. `settledAt` present means an unprocessed
- *  completed turn awaits a run; `closedAt` is when the last client connection closed. */
-const SLEEP_TIME_SETTLED_AT = 'sleep_time_settled_at';
-
-const SLEEP_TIME_CLOSED_AT = 'sleep_time_closed_at';
-
 const ANSWERED_TURNS_KEPT = 32;
 
 const SANDBOX_STARTING = 'sandbox_starting';
 
 const SANDBOX_REFUSED = 'sandbox_refused';
-
-/** Covers one more answer than `SLEEP_TIME_CADENCE.everyTurns` plus steers, so the
- *  window decides every trigger as the whole transcript would. */
-const SLEEP_TIME_READ_ROWS = (SLEEP_TIME_CADENCE.everyTurns + 1) * 8;
 
 /** Smaller than the fiber sweep's row budget: each sealed head costs a durable report write
  *  and a broadcast. A pass that fills either budget arms the maintenance wake. */
@@ -1852,7 +1836,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.cacheWarming.nextWarmAt(),
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
       // and the phase releases that record whenever it refuses.
-      this.nextSleepTimeWakeAt(),
+      this.sleepTime.nextWakeAt(),
       this.pictureCapture() === null ? null : this.pictures.nextDueAt(),
     );
   }
@@ -2344,6 +2328,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return declareTerminalRoster(facts, this.rosterParts(input, readMission(this.boundSql)));
   }
 
+  /** Built per use: the actor handle and the fast lane are this activation's. */
+  private get sleepTime(): SleepTimeLane {
+    return new SleepTimeLane({
+      sql: this.boundSql, actor: this.actorHandle(), config: this.config, facts: this.facts,
+      transcript: () => this.chatTranscript, llm: () => this.rt.fastLlm ?? this.rt.llm,
+      transactionSync: (write) => this.ctx.storage.transactionSync(write),
+      armWake: () => { this.armDurableWake(); }, workspace: this.name,
+    });
+  }
+
   private rosterParts(input: OwedTerminalEffectsInput, mission: string | null): TerminalTurnParts {
     const parts: TerminalTurnParts = {
       // Over the row the transcript is about to persist, so a cut turn's announcement replays from it.
@@ -2410,30 +2404,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         journal: this.headJournal,
       }),
 
-      sleep_time: terminalEffect({
-        // No recorded input: evidence is the transcript, read at run time.
-        input: v.object({}),
-        // The ledger distinguishes definitive failure from work that remains owed.
-        run: async () => {
-          if (!this.config.getSleepTimeComputeEnabled()) return { status: 'completed', detail: 'the lane is off' };
-          const window = await this.sleepTimeWindow();
-
-          // Turn-count trigger: a turn below the cadence is left for a later turn or the idle and
-          // closed-tab wakes. The logged event is joined by workerd probes beside `memory.facts_compressed`.
-          if (!sleepTimeDue(window)) {
-            this.armSleepTimeWake(window);
-            diagnostics.event('memory.facts_deferred', {
-              workspace: this.name, completedTurns: window.completedTurns, unprocessed: window.turns.length,
-            });
-
-            return { status: 'completed', detail: 'the cadence is not due' };
-          }
-
-          await this.runSleepTimeCompute(window);
-
-          return { status: 'completed' };
-        },
-      }),
+      sleep_time: this.sleepTime.effect(),
 
       auto_title: terminalEffect({
         input: v.object({ subject: v.string(), standIn: v.optional(v.boolean()) }),
@@ -2464,88 +2435,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 
-  /**
-   * `lastRunTurn` is derived from the newest answer tombstoned as read, so a wake and a
-   * turn-count trigger cannot both run over one set of turns.
-   */
-  private async sleepTimeWindow(): Promise<SleepTimeWindow> {
-    return sleepTimeWindow(
-      await this.chatTranscript.newestFirst(SLEEP_TIME_READ_ROWS),
-      (answerId) => effectAlreadyDone(this.boundSql, this.actorHandle(), SLEEP_TIME_PROCESSED, answerId),
-    );
-  }
-
-  /**
-   * Armed only when a wake could run; otherwise the row is cleared, avoiding the one-second
-   * loop documented on `nextWakeAt`.
-   */
-  private armSleepTimeWake(window: SleepTimeWindow): void {
-    if (window.completedTurns < 2 || window.turns.length === 0) {
-      this.config.delete(SLEEP_TIME_SETTLED_AT);
-
-      return;
-    }
-
-    this.config.set(SLEEP_TIME_SETTLED_AT, String(Date.now()));
-    this.armDurableWake();
-  }
-
-  private sleepTimeInstant(key: string): number | null {
-    const raw = this.config.get(key);
-    const at = raw === null ? Number.NaN : Number(raw);
-
-    return Number.isFinite(at) ? at : null;
-  }
-
-  private nextSleepTimeWakeAt(): number | null {
-    return sleepTimeWakeAt({
-      settledAt: this.sleepTimeInstant(SLEEP_TIME_SETTLED_AT),
-      closedAt: this.sleepTimeInstant(SLEEP_TIME_CLOSED_AT),
-    });
-  }
-
-  /**
-   * Runs the idle and closed-tab triggers; returns whether a run landed. The window is re-read, not
-   * carried from the arm. A window nothing can run over releases the settled instant.
-   */
-  private async runSleepTimeIfDue(now: number): Promise<boolean> {
-    const settledAt = this.sleepTimeInstant(SLEEP_TIME_SETTLED_AT);
-
-    if (settledAt === null) return false;
-    // A lane switched off after the arm also releases the instant.
-    const window = this.config.getSleepTimeComputeEnabled() ? await this.sleepTimeWindow() : null;
-
-    if (window === null || window.completedTurns < 2 || window.turns.length === 0 || window.inputPending) {
-      this.config.delete(SLEEP_TIME_SETTLED_AT);
-
-      return false;
-    }
-
-    const closedAt = this.sleepTimeInstant(SLEEP_TIME_CLOSED_AT);
-
-    const due = sleepTimeDue({
-      completedTurns: window.completedTurns,
-      lastRunTurn: window.lastRunTurn,
-      idleMs: now - settledAt,
-      ...(closedAt !== null && { lastConnectionClosedMs: now - closedAt }),
-    });
-
-    if (!due) return false;
-    await this.runSleepTimeCompute(window);
-
-    return true;
-  }
-
-  /** The grace is not armed here; the fold reads this instant beside the settled one, so a
-   * reconnect inside the grace clears it. */
   protected override lastConnectionClosed(): void {
-    this.config.set(SLEEP_TIME_CLOSED_AT, String(Date.now()));
-    this.armDurableWake();
+    this.sleepTime.lastClientLeft();
     this.watchDeviceStatus(false);
   }
 
   protected override connectionOpened(): void {
-    this.config.delete(SLEEP_TIME_CLOSED_AT);
+    this.sleepTime.clientArrived();
     this.overviewChanged();
     this.watchDeviceStatus(true);
     this.recheckSandboxRestore();
@@ -2603,77 +2499,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.detachOwned(Effect.asVoid(Effect.promise(() => this.rt.deviceTransport.refreshStatus())));
 
     return { watching: true };
-  }
-
-  private async runSleepTimeCompute(window: SleepTimeWindow): Promise<void> {
-    const key = window.newestId;
-
-    if (key === null) return;
-
-    try {
-      // The newest answer keys the window even if a later turn committed before replay.
-      const stored = this.recordedSleepTimeUpdate(key);
-
-      const update = stored ?? await runSleepTimeCompute(this.rt.fastLlm ?? this.rt.llm, {
-        turns: window.turns,
-        currentFacts: this.facts.all()
-          .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
-          .map(f => ({ key: f.key, value: f.value, confidence: f.confidence })),
-      });
-
-      if (stored === undefined) this.persistSleepTimeUpdate(key, update);
-
-      // The fact writes and consumed-window marker commit together; replay never repeats a prefix.
-      const summary = this.ctx.storage.transactionSync(() => {
-        const applied = applySleepTimeUpdate(this.facts, update);
-
-        this.finishSleepTimeWindow(key);
-
-        return applied;
-      });
-
-      diagnostics.event('memory.facts_compressed', {
-        workspace: this.name,
-        upserted: summary.upserted,
-        decayed: summary.decayed,
-        skipped: summary.skipped,
-      });
-    } catch (err) {
-      const failure = toKinuError({
-        doing: 'compressing the recent turns into agent facts',
-        cause: err,
-        otherwise: 'unavailable',
-      });
-
-      if (isDefinitiveTerminalFailure(failure.code)) {
-        this.ctx.storage.transactionSync(() => { this.finishSleepTimeWindow(key); });
-      }
-
-      diagnostics.failure('memory.fact_compression_failed', failure);
-      throw failure;
-    }
-  }
-
-  private finishSleepTimeWindow(key: string): void {
-    recordEffectDone(this.boundSql, this.actorHandle(), { scope: SLEEP_TIME_PROCESSED, key });
-    void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
-    this.config.delete(SLEEP_TIME_SETTLED_AT, SLEEP_TIME_CLOSED_AT);
-  }
-
-  /** The update a previous attempt already paid for, so a replay applies it without a new call. */
-  private recordedSleepTimeUpdate(key: string): SleepTimeUpdate | undefined {
-    const row = this.sql<{ update_json: string }>`
-      SELECT update_json FROM sleep_time_updates WHERE effect_key = ${key}`[0];
-
-    return row === undefined
-      ? undefined
-      : v.parse(SleepTimeUpdateSchema, JSON.parse(row.update_json));
-  }
-
-  private persistSleepTimeUpdate(key: string, update: SleepTimeUpdate): void {
-    void this.sql`INSERT INTO sleep_time_updates (effect_key, update_json)
-      VALUES (${key}, ${JSON.stringify(update)})
-      ON CONFLICT(effect_key) DO NOTHING`;
   }
 
   /** Titling source for the root, and inherited by agents the owner adds. */
@@ -3118,12 +2943,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initWebhookIngressTables(this.ctx.storage.sql);
     initSubordinateRosterTable(this.ctx.storage.sql);
 
-    // Persisting the paid-for answer between model call and fact mutation makes a replay
-    // apply the same update instead of buying another.
-    execRaw(`CREATE TABLE IF NOT EXISTS sleep_time_updates (
-      effect_key  TEXT PRIMARY KEY,
-      update_json TEXT NOT NULL
-    )`);
+    initSleepTimeUpdatesTable(execRaw);
     // Keyed per actor and message, as a thumb is: the thumbs re-score reads this table.
     execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
       actor_id   TEXT NOT NULL,
@@ -3416,10 +3236,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A failed sleep-time run is not retried by this chain; the settled instant is released first so
       // it cannot answer due on every re-arm. The next completed turn re-arms.
       await tick.span('alarm.sleep_time', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
-        const ran = yield* Effect.promise(() => this.runSleepTimeIfDue(now));
+        const ran = yield* Effect.promise(() => this.sleepTime.runIfDue(now));
         span.setAttribute('kinu.sleep_time_ran', ran);
       }), (failed) => Effect.suspend(() => {
-        this.config.delete(SLEEP_TIME_SETTLED_AT);
+        this.sleepTime.releaseWake();
 
         return phaseFailed(span, { doing: 'running the sleep-time compute this wake was armed for', otherwise: 'unavailable' }, (failure) => {
           if (isDefinitiveTerminalFailure(failure.code)) {
