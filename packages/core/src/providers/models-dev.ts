@@ -9,7 +9,7 @@ import type { JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { diagnostics, renderThrownChain, settle } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';
-import type { WireProtocol } from './wire-model';
+import { sdkWire, type WireProtocol } from './wire-model';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 
@@ -234,9 +234,7 @@ function modelsDevModel(providerId: string, modelId: string, fetchFn: typeof fet
 }
 
 function wireOf({ info, model }: FoundModel): ModelsDevWire {
-  const npm = model?.provider?.npm ?? info.npm;
-
-  return { protocol: npm === '@ai-sdk/openai' ? 'responses' : 'chat-completions', reasoning: model?.reasoning === true };
+  return { protocol: sdkWire(model?.provider?.npm ?? info.npm), reasoning: model?.reasoning === true };
 }
 
 /** Metadata for every provider; throws when the catalog cannot be read rather than returning an empty list. */

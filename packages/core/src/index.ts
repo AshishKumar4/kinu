@@ -2236,7 +2236,7 @@ export {
 
 export { createWorkersAIProvider } from './providers/workers-ai-provider';
 
-export { createWireModel } from './providers/wire-model';
+export { createWireModel, deferredModel, sdkWire, type WireProtocol } from './providers/wire-model';
 
 export {
   type AnyToolPart,
