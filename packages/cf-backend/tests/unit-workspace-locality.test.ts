@@ -6,11 +6,11 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { createHostedWorkspace, mountActorFiles, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
+import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
 import {
-  agentCred, agentIdentity, mossaicVfs, provisionAgentHome, renderSoulMarkdown, settledWorkspaceSoul, sharedDriveMount, withMountTable,
+  agentCred, agentIdentity, mossaicVfs, provisionAgentHome, renderSoulMarkdown, settledWorkspaceSoul, sharedDriveMount, workspaceFilePlane, WORKSPACE_ROOT,
   initWorkspaceActorTable, WORKSPACE_IDENTITY_DDL, writeWorkspaceSoul, type JsonValue,
 } from '@kinu.run/core';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -345,10 +345,14 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const drive = mossaicVfs(fakeMossaic().tenant('owner'));
     await writeText(drive, '/notes.md', 'from the Drive\n');
     const box = workspace.box('agent:main');
-    box.mountTable?.(withMountTable(workspace.bundle.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]));
+    const { files } = workspaceFilePlane(box, { mounts: [sharedDriveMount(() => drive, () => 'no Drive in this test')], principal: {}, home: WORKSPACE_ROOT });
 
     expect((await box.exec('ls /')).stdout.split(/\s+/)).toEqual(expect.arrayContaining(['home', 'shared']));
     expect(await box.exec('cat /shared/notes.md')).toMatchObject({ stdout: 'from the Drive\n', exitCode: 0 });
+    // One namespace: the file tool reads the shell's own mount, and a write through either is seen by the other.
+    expect(await readText(files, '/shared/notes.md')).toBe('from the Drive\n');
+    await writeText(files, '/shared/from-tool.md', 'tool\n');
+    expect(await box.exec('cat /shared/from-tool.md')).toMatchObject({ stdout: 'tool\n', exitCode: 0 });
   });
 
   test('a table serves until its disposer runs, and an older disposer leaves a newer table standing', async () => {
@@ -363,7 +367,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const drive = mossaicVfs(fakeMossaic().tenant('owner'));
     await writeText(drive, '/notes.md', 'from the Drive\n');
-    const mounted = () => withMountTable(workspace.bundle.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]);
+    const mounted = () => [sharedDriveMount(() => drive, () => 'no Drive in this test')];
     const box = workspace.box('agent:main');
     const first = box.mountTable?.(mounted());
     box.mountTable?.(mounted());
@@ -389,10 +393,10 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const drive = mossaicVfs(fakeMossaic().tenant('owner'));
     const root = workspace.box('agent:main');
-    mountActorFiles(root, withMountTable(workspace.bundle.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]), { rootActor: true, cred: undefined });
+    workspaceFilePlane(root, { mounts: [sharedDriveMount(() => drive, () => 'no Drive in this test')], principal: {}, home: WORKSPACE_ROOT });
 
-    const branch = mountActorFiles(workspace.box('branch:b1'), withMountTable(workspace.bundle.vfs, []), { rootActor: false, cred: undefined });
-    branch?.();
+    const branch = workspaceFilePlane(workspace.box('branch:b1'), { mounts: [], principal: { actor: 'b1' }, home: WORKSPACE_ROOT });
+    branch.unmount();
 
     expect((await root.exec('ls /')).stdout.split(/\s+/)).toContain('shared');
   });

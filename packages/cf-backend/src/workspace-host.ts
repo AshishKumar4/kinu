@@ -14,8 +14,7 @@ import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/cor
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { MountedVfs, ObjectNamespace } from '@kinu.run/core';
-import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { ObjectNamespace } from '@kinu.run/core';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, HostedSession, HostedSessionScope, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
 import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
@@ -328,7 +327,8 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     session: async (scope) => (await runtime()).session(scope),
     box: (scope) => workspaceBox({
       runtime, ports: portRegistry, ctx: deps.ctx, files, scope, previewUrl: deps.previewUrl, previewGates,
-      mountTable: (plane, cred) => bundle.mountTable(plane, cred),
+      mountTable: (mounts, principal) => bundle.mountTable(mounts, principal),
+      namespace: (principal) => bundle.namespace(principal),
     }),
     facetManager: async () => (await compose()).facets,
     ports: async () => (await compose()).ports,
@@ -461,6 +461,7 @@ function workspaceBox(deps: {
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   previewGates(port: number, handle: string): Promise<PreviewGates>;
   mountTable: NonNullable<NimbusSandboxHandle['mountTable']>;
+  namespace: NonNullable<NimbusSandboxHandle['namespace']>;
 }): NimbusSandboxHandle {
   const { runtime, scope } = deps;
   const shellId = (name: string): string => `agent:${sha256Hex(`${scope}\u0000${name}`)}`;
@@ -528,14 +529,7 @@ function workspaceBox(deps: {
       ),
     },
     mountTable: deps.mountTable,
+    namespace: deps.namespace,
   };
 }
 
-/** An actor with no uid of its own (a branch) has no shell, so it must not take the session user's table. */
-export function mountActorFiles(
-  box: Pick<NimbusSandboxHandle, 'mountTable'>, files: MountedVfs, owner: { readonly rootActor: boolean; readonly cred: VfsCred | undefined },
-): (() => void) | undefined {
-  if (!owner.rootActor && owner.cred === undefined) return undefined;
-
-  return box.mountTable?.(files, owner.cred);
-}

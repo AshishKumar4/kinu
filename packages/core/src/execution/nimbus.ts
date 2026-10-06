@@ -6,7 +6,8 @@ import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { OutputSink, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { collectExecStream, type ExecChunk, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
-import type { MountedVfs } from '../vfs/mounts';
+import type { VfsMount, WorkspacePrincipal } from '../vfs/mounts';
+import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { atVfsPath } from '../vfs/errno';
 import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { workspacePath } from '../vfs/workspace-path';
@@ -168,7 +169,8 @@ export interface NimbusSandboxHandle {
     url?(port: number): string | undefined;
   };
   /** See `WorkspaceBundle.mountTable`; absent on a remote box. */
-  mountTable?(plane: MountedVfs, cred?: VfsCred): () => void;
+  mountTable?(mounts: readonly VfsMount[], principal?: WorkspacePrincipal): () => void;
+  namespace?(principal?: WorkspacePrincipal): Promise<CompositeVFS>;
 }
 
 export interface NimbusSessionOpts {

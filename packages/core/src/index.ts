@@ -1073,9 +1073,9 @@ export {
 } from './skills/drive';
 
 export {
-  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
+  withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
-  type VfsMount, type MountableProvider, type MountedVfs,
+  type VfsMount, type MountableProvider, type MountedVfs, type WorkspacePrincipal,
   type VfsListedEntry,
 } from './vfs/mounts';
 

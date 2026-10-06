@@ -8,7 +8,8 @@ import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
 
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
+import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, workspaceFilePlane, type VfsMount, type WorkspacePrincipal } from '../src/vfs/mounts';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
@@ -624,6 +625,11 @@ describe('a live mount point is a directory of this plane', () => {
 
 });
 
+/** The file tool's plane on `bundle`'s one namespace, the shell's own: `principal`'s view holds `mounts`. */
+function shared(bundle: ReturnType<typeof createWorkspaceBundle>, mounts: readonly VfsMount[], principal: WorkspacePrincipal = {}) {
+	return workspaceFilePlane(bundle, { mounts, principal, home: WORKSPACE_ROOT }).files;
+}
+
 describe('the workspace shell serves the same mount table (#22)', () => {
 	/** A workspace whose session user holds `/shared` (a Drive), `/sandbox` (any ranged tree) and an absent `/pc`. */
 	async function workspaceWithMounts() {
@@ -633,10 +639,10 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		const container = mossaicVfs(store.tenant('container'));
 		await writeText(drive, '/notes.md', 'from the Drive\n');
 		await container.mkdir('/workspace', { recursive: true });
-		bundle.mountTable(withMountTable(bundle.vfs, [
+		shared(bundle, [
 			mountOf('shared', drive), mountOf('sandbox', container), mountOf('pc', null, 'no device connected'),
 			{ ...mountOf('context', fakeTree({ 'notes.md': 'history' })), storeView: true },
-		]));
+		]);
 
 		return { shell: bundle.shell, drive, container };
 	}
@@ -694,9 +700,8 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		provisionAgentHome(root, 'agent-a', cred);
 		confineAgentTmp(confiner, 'agent-a', cred);
 		const fleet = fakeTree({ '/laptop/notes.md': 'a', '/studio/notes.md': 'b' });
-		const table = withMountTable(bundle.vfs, [mountOf('pc', fleet)]);
-		bundle.mountTable(table);
-		bundle.mountTable(table, agentCred(cred));
+		shared(bundle, [mountOf('pc', fleet)]);
+		shared(bundle, [mountOf('pc', fleet)], { cred: agentCred(cred) });
 		const agent = await bundle.asAgent({ cred: agentCred(cred), home: agentHome('agent-a'), tmp: agentTmpRoot('agent-a') });
 
 		for (const command of ['mount', 'df -a', 'cat /proc/mounts']) {
@@ -717,8 +722,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 			const bundle = createWorkspaceBundle(new Database(':memory:'));
 			const calls: string[] = [];
 			const backend = counted(fakeTree({ '/home/me/a/b/c.txt': 'deep' }), calls);
-			const table = withMountTable(bundle.vfs, [mountOf(name, backend)]);
-			bundle.mountTable(table);
+			const table = shared(bundle, [mountOf(name, backend)]);
 
 			// Walked a component at a time, this `cat` asked the backend 35 times (25 of them a stat of an ancestor); now
 			// `cat` asks only of the file it names, as it would of a local one.
@@ -746,7 +750,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 			},
 		};
 
-		bundle.mountTable(withMountTable(bundle.vfs, [mountOf('pc', device)]));
+		shared(bundle, [mountOf('pc', device)]);
 
 		expect(await bundle.shell.exec('cat /pc/home/me/project/notes.md')).toMatchObject({ stdout: 'consented', exitCode: 0 });
 		expect((await bundle.shell.exec('cat /pc/etc/passwd')).exitCode).not.toBe(0);
@@ -778,7 +782,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		};
 
 		const view = deviceFiles(transport, { consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', scope: async () => 'root' });
-		bundle.mountTable(withMountTable(bundle.vfs, [mountOf('pc', view)]));
+		shared(bundle, [mountOf('pc', view)]);
 
 		expect(await bundle.shell.exec('cat /pc/home/dev/notes.txt')).toMatchObject({ stdout: 'consented', exitCode: 0 });
 
@@ -791,8 +795,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 	test('a read-only mount refuses every write from the shell and the file plane, and keeps its bytes', async () => {
 		const bundle = createWorkspaceBundle(new Database(':memory:'));
 		const skills = fakeTree({ '/kept.md': 'kept' });
-		const table = withMountTable(bundle.vfs, [{ ...mountOf('skills', skills), readOnly: true }]);
-		bundle.mountTable(table);
+		const table = shared(bundle, [{ ...mountOf('skills', skills), readOnly: true }]);
 
 		expect((await bundle.shell.exec('echo changed > /skills/kept.md')).exitCode).not.toBe(0);
 		await expect(writeText(table, '/skills/kept.md', 'changed')).rejects.toMatchObject({ code: 'EROFS' });

@@ -7,10 +7,8 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell, createShellSession,
-  observeWrites,
-
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
-  withMountTable, standardMounts, contextMount, skillsMount,
+  workspaceFilePlane, standardMounts, contextMount, skillsMount, type WorkspacePrincipal,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
   withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
@@ -27,7 +25,6 @@ import {
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
 import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type PortHolders, cloudPlanes } from '@kinu.run/core';
 import type { ActorReference, HostedNodeHome, TierRefusals } from '@kinu.run/core';
-import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
@@ -278,10 +275,6 @@ export function createCFRuntime(
     ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution)
     : originVfs;
 
-  const observedWorkspaceVfs = hooks.workspaceObserver
-    ? observeWrites(baseWorkspaceVfs, hooks.workspaceObserver)
-    : baseWorkspaceVfs;
-
   const memoryStore = new MemoryStore(originVfs, sql);
   memoryStore.ensureSchema();
 
@@ -379,8 +372,14 @@ export function createCFRuntime(
     }));
   }
 
-  const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
-  const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
+  // Its own uid's view, or the session user's under its actor id.
+  let principal: WorkspacePrincipal = actor.rootActor ? {} : { actor: actor.actor.actorId };
+
+  if (hooks.workspaceExecution !== undefined) principal = { cred: hooks.workspaceExecution.cred };
+
+  const { files: agentFileVfs, unmount } = workspaceFilePlane(workspaceBox, {
+    mounts, principal, home, ...(hooks.workspaceObserver !== undefined && { observer: hooks.workspaceObserver }),
+  });
 
   const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
     planes, userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
@@ -584,7 +583,7 @@ export function createCFRuntime(
     },
   };
 
-  if (unmount !== undefined) runtime.release = unmount;
+  runtime.release = unmount;
 
   return runtime;
 }

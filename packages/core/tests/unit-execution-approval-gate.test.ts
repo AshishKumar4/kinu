@@ -14,7 +14,7 @@ import { type FilesOwner } from '../src/safety/command-review';
 import { type ShellApprovalPolicy, type ShellApprovalRequest } from '../src/safety/approval-gate';
 import { createShellSession } from '../src/execution/shell-session';
 
-import { withMountTable } from '../src/vfs/mounts';
+import { withMountTable, workspaceFilePlane } from '../src/vfs/mounts';
 import { skillsMount } from '../src/skills/view';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { present } from '@kinu.run/test-utils';
@@ -390,8 +390,11 @@ function workspaceOverDevice() {
   const db = new Database(':memory:');
   const workspace = createWorkspaceBundle(db);
   const { device, removed } = deviceProject();
-  const mounted = withMountTable(workspace.vfs, [{ name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' }]);
-  workspace.mountTable(mounted);
+
+  const { files: mounted } = workspaceFilePlane(workspace, {
+    mounts: [{ name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' }], principal: {}, home: WORKSPACE_ROOT,
+  });
+
   const asked: string[] = [];
 
   const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots() });
