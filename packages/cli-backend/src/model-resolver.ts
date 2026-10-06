@@ -1,4 +1,3 @@
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
@@ -30,6 +29,8 @@ import {
   type AgentModelEntry,
   type ModelInfo,
   cloudProxyBaseURL,
+  createWireModel,
+  gatewayWireModel,
   type CloudProxyProviderId,
   type ModelMenu,
   type ModelProvider,
@@ -543,12 +544,15 @@ function createCloudProxyProvider(opts: {
     },
     // A relay: the worker's transport spends the call's retry allowance, so the header must reach it unspent.
     createModel(modelId, deps): LanguageModel {
-      return createOpenAICompatible({
-        name: opts.id,
+      const transport = {
         baseURL,
         headers: { Authorization: `Bearer ${opts.cloud.token}`, [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
         ...(opts.fetch !== undefined && { fetch: opts.fetch }),
-      }).chatModel(modelId);
+      };
+
+      return opts.id === 'my-gateway'
+        ? gatewayWireModel(opts.id, modelId, transport)
+        : createWireModel({ name: opts.id, modelId, ...transport, protocol: 'chat-completions', reasoning: false });
     },
   };
 }

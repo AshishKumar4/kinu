@@ -2,7 +2,7 @@
 // Augments `Cloudflare.Env`, which `cloudflare:test` and `cloudflare:workers` both read.
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type {
-  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, StreamLifecycleDO, TransactionDO,
+  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, StreamLifecycleDO, TransactionDO,
 } from './worker';
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
@@ -17,7 +17,7 @@ import type { SocketCallProbeAgent } from './socket-call-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
-import type { AddressedAnswers, AlarmAfterDestroy } from './addressed-name-shapes';
+import type { AddressedAnswers, AlarmAfterDestroy, FailedStartAnswers } from './addressed-name-shapes';
 import type { CraftedFromNodeObservation, OnePlaneObservation, RelayedAnswer } from './agent-facet-shapes';
 import type { AttributedLine } from './attribution-shapes';
 import type {
@@ -31,7 +31,6 @@ import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { CodemodeLauncher } from '../../src/codemode-sandbox';
-import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
@@ -183,6 +182,11 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   hashes(): Promise<Record<'ws-alpha' | 'ws-beta', string | null>>;
   reset(): Promise<{ ok: true; workspaces: number }>;
   freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null; workspaceCount: number } | null>;
+  refuseTeardownOf(workspace: string, refuse: boolean): Promise<void>;
+  pendingDeletes(): Promise<string[]>;
+  receivedFrom(): Promise<string[]>;
+  ownerDeleted(ownerUserId: string): Promise<void>;
+  resetRefused(): Promise<string>;
 }
 
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
@@ -206,8 +210,8 @@ interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
   claimAndEvict(workspace: string): Promise<string>;
   idThenNamed(workspace: string): Promise<AddressedAnswers>;
   rpcFirst(workspace: string): Promise<{ before: number; spend: string; after: number }>;
-  destroyAfterFailedStart(workspace: string): Promise<{ evicted: string; spend: string; destroyed: string }>;
-  siblingStarts(): Promise<{ spend: string; starts: number }>;
+  failedStartThenDestroy(workspace: string): Promise<FailedStartAnswers>;
+  siblingStarts(): Promise<{ spend: string; starts: number; alarm: string; left: { identity: number; actors: number } }>;
   alarmAfterDestroy(workspace: string): Promise<AlarmAfterDestroy>;
 }
 
@@ -339,7 +343,6 @@ declare global {
       NEIGHBOUR: DurableObjectNamespace<NeighbourDO>;
       GATED: DurableObjectNamespace<GatedDO>;
       TRANSACTION: DurableObjectNamespace<TransactionDO>;
-      SOCKET: DurableObjectNamespace<SocketDO>;
       ALARMED: DurableObjectNamespace<AlarmDO>;
       CACHE_WARM_PROBE: DurableObjectNamespace<CacheWarmProbeDO>;
       EVICTION_PROBE: DurableObjectNamespace<EvictionProbeDO>;
@@ -379,7 +382,6 @@ declare global {
       ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
       SEALED_ORCHESTRATOR: DurableObjectNamespace<SealedOrchestratorRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
-  DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       LOADER: WorkerLoader;
       /** The production Worker entry hosted by `public-surface-probe`, WebSocket upgrades included. */
       PUBLIC_SURFACE: Fetcher;

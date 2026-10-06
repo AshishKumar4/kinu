@@ -2,12 +2,10 @@
 // providers and auth, reading auth.json at request time and proxying requests.
 
 import { Cause, Effect } from 'effect';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createOpenAI } from '@ai-sdk/openai';
 import {
-  asFetchFunction, JsonObjectSchema, statelessResponses, withRateLimitRetry,
+  asFetchFunction, createWireModel, JsonObjectSchema, withRateLimitRetry,
 } from '@kinu.run/core';
-import { wrapLanguageModel, type LanguageModel } from 'ai';
+import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '@kinu.run/core/obs';
 import { existsSync, readFileSync } from 'node:fs';
@@ -385,18 +383,10 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): Effect.Effect<LanguageMod
       });
     });
 
-    if (useResponsesAPI) {
-      return wrapLanguageModel({
-        model: createOpenAI({ name: OPENCODE_PROVIDER_ID, baseURL: placeholder, apiKey: 'placeholder', fetch: customFetch }).responses(modelId),
-        middleware: statelessResponses(reasoning),
-      });
-    }
-
-    return createOpenAICompatible({
-      name: OPENCODE_PROVIDER_ID,
-      baseURL: placeholder,
-      fetch: customFetch,
-    }).chatModel(modelId);
+    return createWireModel({
+      name: OPENCODE_PROVIDER_ID, modelId, baseURL: placeholder, fetch: customFetch,
+      protocol: useResponsesAPI ? 'responses' : 'chat-completions', reasoning,
+    });
   });
 }
 

@@ -285,6 +285,7 @@ json_field() {
 # anything; `upload`, the account gate and the secret scan, before any upload;
 # 'post-publish', the tiers against the deployment, in one wave with 'source',
 # only what CI cannot host. The isolated hammer runs on GitHub, not after this wave (L23).
+# 'soak', the real-model eval pass, starts once the deployment serves and is never awaited (L24).
 # A gate's row in scripts/ladder.ts declares which, and why.
 #
 # `run_phase <phase[,phase]>` runs to the end and says whether anything went red;
@@ -944,8 +945,17 @@ dispatch_evals() {
   report dispatched "the evals of $KINU_SHA from $branch, every task ten times on staging against production" "$KINU_EVALS_URL"
 }
 
+# THE SOAK (L24): one trial of every eval task on the deployment, on the models the evals measure. Started once the
+# deployment serves and never awaited, so a real model's minutes are outside this deploy's 20-minute wall and its red
+# outside this deploy's verdict: the soak writes into this report's soak section and renders it again when it ends.
+start_soak() {
+  setsid nohup bash -c 'bun scripts/ladder.ts --deploy-phase=soak; bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak' \
+    >"$KINU_DEPLOY_REPORT/soak.log" 2>&1 </dev/null &
+  report dispatched "the eval soak, one trial of every task on $KINU_EVAL_ORIGIN; its reds re-render this report" "$KINU_DEPLOY_REPORT/soak.log"
+}
+
 if [ "$KINU_PROMOTE" = "1" ]; then
-  if [ -z "$KINU_TIERS_WHY" ]; then run_phase post-publish; else skip_phase post-publish "$KINU_TIERS_WHY"; fi
+  if [ -z "$KINU_TIERS_WHY" ]; then start_soak; run_phase post-publish; else skip_phase post-publish "$KINU_TIERS_WHY"; fi
   mark tiers
 else
   # Started first, so its hours run while the wave runs here. Without its run
@@ -955,6 +965,7 @@ else
       || step_red evals "the evals" "evals.yml was not dispatched for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"
   fi
   if [ -z "$KINU_TIERS_WHY" ]; then
+    start_soak
     run_phase post-publish,source
   else
     skip_phase post-publish "$KINU_TIERS_WHY"
@@ -1005,7 +1016,7 @@ fi
 #
 # Every red above is a test's. These are staging's own signals for the version
 # this deploy published, read through `scripts/prod-logs.ts version` once the
-# tiers and the eval pass have driven it, with zero users the traffic being our
+# tiers have driven it (the soak may still run), with zero users the traffic being our
 # own: an invocation that ended in an uncaught exception or that the platform
 # ended, a terminal effect that failed or was left owed, an object woken as
 # often as the product calls a wake loop, by startups or by alarms. Each is a

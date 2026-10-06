@@ -57,6 +57,13 @@ function chatCompletionResponse(model: string): Response {
   }), { headers: { 'content-type': 'application/json' } });
 }
 
+/** models.dev knows none of these authors, so each is sent on the gateway's unified chat API. */
+function uncatalogued(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
+  return asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => (requestUrl(input).startsWith('https://models.dev/')
+    ? Response.json({})
+    : await fetch(input, init)));
+}
+
 describe('my-gateway request shape', () => {
   test('routes through the account /ai/v1 endpoint with bearer + cf-aig-gateway-id', async () => {
     const seen: Array<{ url: string; auth: string | null; gateway: string | null; model: unknown }> = [];
@@ -64,7 +71,7 @@ describe('my-gateway request shape', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ gatewayId: 'prod-gw', token: 'cf-user-token' }),
-      fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetch: uncatalogued(asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         const body = parseJsonObject(await new Request(input, init).text());
         seen.push({
@@ -74,12 +81,12 @@ describe('my-gateway request shape', () => {
           model: body.model,
         });
 
-        return chatCompletionResponse('openai/gpt-4.1');
-      }),
+        return chatCompletionResponse('google/gemini-2.5-flash');
+      })),
     });
 
     const result = await generateText({
-      model: reg.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-test'),
+      model: reg.resolveModel('my-gateway/google/gemini-2.5-flash', 'kinu-test'),
       prompt: 'ping',
     });
 
@@ -88,7 +95,7 @@ describe('my-gateway request shape', () => {
     expect(seen[0].url).toBe(`${AI_BASE_URL}/chat/completions`);
     expect(seen[0].auth).toBe('Bearer cf-user-token');
     expect(seen[0].gateway).toBe('prod-gw');
-    expect(seen[0].model).toBe('openai/gpt-4.1');
+    expect(seen[0].model).toBe('google/gemini-2.5-flash');
   });
 
   test('a mid-flight 401 forces one refresh and retries with the fresh token', async () => {
@@ -97,7 +104,7 @@ describe('my-gateway request shape', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ token: 'cf-stale', freshToken: 'cf-fresh' }),
-      fetch: asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      fetch: uncatalogued(asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         wire.push(headers.get('authorization'));
 
@@ -107,12 +114,12 @@ describe('my-gateway request shape', () => {
           });
         }
 
-        return chatCompletionResponse('anthropic/claude-sonnet-4-5');
-      }),
+        return chatCompletionResponse('xai/grok-4.7');
+      })),
     });
 
     const result = await generateText({
-      model: reg.resolveModel('my-gateway/anthropic/claude-sonnet-4-5', 'kinu-test'),
+      model: reg.resolveModel('my-gateway/xai/grok-4.7', 'kinu-test'),
       prompt: 'ping',
     });
 
@@ -146,25 +153,20 @@ describe('my-gateway availability gating', () => {
 });
 
 describe('my-gateway model discovery', () => {
+  /** The gateway's own catalog rows, in the ids its REST API takes (models.dev `cloudflare-ai-gateway`, 2026-10-06). */
   const modelsDevBody = JSON.stringify({
-    openai: {
-      id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], npm: '@ai-sdk/openai',
+    'cloudflare-ai-gateway': {
+      id: 'cloudflare-ai-gateway', name: 'Cloudflare AI Gateway', npm: 'ai-gateway-provider',
       models: {
-        'gpt-4.1': { id: 'gpt-4.1', name: 'GPT-4.1', tool_call: true, limit: { context: 1047576 } },
+        'openai/gpt-4.1': { id: 'openai/gpt-4.1', name: 'GPT-4.1', tool_call: true, limit: { context: 1047576 }, provider: { npm: '@ai-sdk/openai' } },
+        'anthropic/claude-sonnet-4.5': { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', tool_call: true, limit: { context: 200000 }, provider: { npm: '@ai-sdk/anthropic' } },
+        'xai/grok-4.7': { id: 'xai/grok-4.7', name: 'Grok 4.7', tool_call: true, limit: { context: 256000 } },
       },
     },
-    google: {
-      id: 'google', name: 'Google', env: ['GEMINI_API_KEY'], npm: '@ai-sdk/google',
-      models: {
-        'gemini-2.5-pro': { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tool_call: true, reasoning: true, limit: { context: 1048576 } },
-      },
-    },
-    anthropic: {
-      id: 'anthropic', name: 'Anthropic', env: ['ANTHROPIC_API_KEY'], npm: '@ai-sdk/anthropic',
-      models: {
-        'claude-sonnet-4-5': { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', tool_call: true, limit: { context: 200000 } },
-      },
-    },
+    // OpenAI's and Google's own ids are REST ids too, and these rows are absent from the gateway's.
+    openai: { id: 'openai', npm: '@ai-sdk/openai', models: { 'gpt-6.1-sol': { id: 'gpt-6.1-sol', name: 'GPT 6.1 Sol', tool_call: true } } },
+    google: { id: 'google', npm: '@ai-sdk/google', models: { 'gemini-2.5-pro': { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tool_call: true } } },
+    anthropic: { id: 'anthropic', npm: '@ai-sdk/anthropic', models: { 'claude-sonnet-4-5': { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', tool_call: true } } },
   });
 
   function discoveryFetch(opts: {
@@ -203,7 +205,7 @@ describe('my-gateway model discovery', () => {
     });
   }
 
-  test('lists models for the gateway BYOK providers, ids prefixed with the wire author', async () => {
+  test('with no credits, lists the catalog rows of authors with a stored key, in the ids the gateway takes', async () => {
     const urls: string[] = [];
 
     const reg = createAgentProviderRegistry({
@@ -214,9 +216,8 @@ describe('my-gateway model discovery', () => {
 
     const models = await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
     const ids = models.map((m) => m.id).sort();
-    // google-ai-studio (gateway slug) → google (wire author + models.dev id);
-    // the workers-ai slug is the bespoke workers-ai provider's territory.
-    expect(ids).toEqual(['google/gemini-2.5-pro', 'openai/gpt-4.1']);
+    // No catalog row is authored `google-ai-studio` or `workers-ai`; Workers AI is its own provider.
+    expect(ids).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
     expect(models.find((m) => m.id === 'openai/gpt-4.1')?.contextWindow).toBe(1047576);
     expect(urls.some((u) => u.includes('/ai-gateway/gateways/byok-gw/provider_configs'))).toBe(true);
   });
@@ -251,7 +252,7 @@ describe('my-gateway model discovery', () => {
     expect(overlapped).toBe(true);
   });
 
-  test('positive Unified Billing balance adds the billable provider set', async () => {
+  test('a positive Unified Billing balance pays for every row of the gateway\'s catalog', async () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ gatewayId: 'credits-gw', token: `t-${Math.random()}` }),
@@ -259,10 +260,8 @@ describe('my-gateway model discovery', () => {
     });
 
     const models = await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps);
-    const ids = models.map((m) => m.id);
-    expect(ids).toContain('openai/gpt-4.1');
-    expect(ids).toContain('anthropic/claude-sonnet-4-5');
-    expect(ids).toContain('google/gemini-2.5-pro');
+    // Anthropic's own `claude-sonnet-4-5` is no REST id; the gateway's row is.
+    expect(models.map((m) => m.id).sort()).toEqual(['anthropic/claude-sonnet-4.5', 'google/gemini-2.5-pro', 'openai/gpt-4.1', 'openai/gpt-6.1-sol', 'xai/grok-4.7']);
   });
 
   test('denied management reads narrow the menu to empty instead of throwing', async () => {
@@ -316,17 +315,17 @@ describe('my-gateway model discovery', () => {
 
     const provider = present(reg.registry.get('my-gateway'), 'the my-gateway provider');
 
-    expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
+    expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
 
     // Past the catalog TTL, so the cache is consulted rather than short-circuited.
     try {
       upstream = 'down';
       setSystemTime(new Date(Date.now() + 61_000));
-      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
+      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
 
       upstream = 'ok';
       setSystemTime(new Date(Date.now() + 61_000));
-      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
+      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
     } finally {
       setSystemTime();
     }
@@ -356,9 +355,9 @@ describe('my-gateway error mapping', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ gatewayId: 'my-gw' }),
-      fetch: asFetchFunction(async () => new Response(JSON.stringify(body), {
+      fetch: uncatalogued(asFetchFunction(async () => new Response(JSON.stringify(body), {
         status, headers: { 'content-type': 'application/json' },
-      })),
+      }))),
     });
 
     try {

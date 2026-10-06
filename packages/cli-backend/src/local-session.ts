@@ -26,7 +26,7 @@ import type {
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   DeferredApproval, DeferredApprovalAnswer,
   AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps, TemporaryAgentPort,
-  MissingCapability, DynamicApproval,
+  DynamicContextInput, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
@@ -1200,8 +1200,7 @@ export class LocalAgentSession {
     this.extraTools = await this.mcpSurface.refresh(async () => served, {
       contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit, nativeToolTokens: toolSurfaceTokens(this.tools),
     });
-    // Unavailable or deferred servers are named in the live context so the model can explain their absence.
-    this.mcpUnavailable = this.mcpSurface.unavailable.map((u) => ({ source: `MCP server "${u.server}"`, reason: u.reason }));
+    this.mcpUnavailable = this.mcpSurface.unavailable;
     const deferred = this.mcpSurface.deferred;
 
     for (const d of deferred) {
@@ -1213,7 +1212,7 @@ export class LocalAgentSession {
     for (const d of deferred) this.mcpDeferred.add(d.server);
   }
 
-  private mcpUnavailable: MissingCapability[] = [];
+  private mcpUnavailable: NonNullable<DynamicContextInput['unavailableMcp']> = [];
 
   /** Run pending drains now, bypassing debounce; the daemon's tick calls this before end(). */
   flushPendingDrains(): Promise<void> {
@@ -2226,7 +2225,8 @@ export class LocalAgentSession {
       turn: turnOf.turn,
       ...(turnOf.activeSkills !== undefined && { activeSkills: turnOf.activeSkills }),
       memoryTail,
-      missingCapabilities: this.mcpUnavailable,
+      unavailableMcp: this.mcpUnavailable,
+      missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
       approvals: () => {
         const items = [...this.deferrals.approvals()];
@@ -2724,7 +2724,7 @@ export class LocalAgentSession {
       tools,
       runtime: this.runtimeFacts(profile),
       memoryTail: undefined,
-      missingCapabilities: this.mcpUnavailable,
+      missingCapabilities: [],
       subordinateDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),
     });

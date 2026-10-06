@@ -26,6 +26,8 @@ export const CLOUDFLARE_AI_GATEWAY_CRED_KEY = 'cloudflare.ai-gateway';
 // (no separate Read scope) and `aig.run` covers inference.
 export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.write aig.run offline_access';
 
+/** Created on an account's first authenticated request to it; no other id is (developers.cloudflare.com/ai-gateway/
+ *  configuration/manage-gateway, updated 2026-09-15; changelog 2026-03-02). */
 const DEFAULT_CLOUDFLARE_AI_GATEWAY_ID = 'default';
 
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';

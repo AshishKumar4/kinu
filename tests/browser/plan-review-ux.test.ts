@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
+import * as v from 'valibot';
 
 import { unruledClasses, withGallery, type Gallery } from '../../scripts/gallery-harness';
 
@@ -552,5 +553,83 @@ describe('a plan review sends nothing of its own', () => {
   test('display math draws through KaTeX, and a link inside it is never a control', () => {
     expect(observed.codePath.math).toMatchObject({ rendered: true, links: 0 });
     expect(observed.codePath.math.tex).toContain('\\frac{\\text{saved}}');
+  });
+});
+
+/** Adds a comment on the whole plan through its own control, and sends it. */
+async function addGlobalComment(page: Page, text: string): Promise<void> {
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[data-plan-document] button, [data-plan-review-root] button')]
+    .find((button) => button.textContent?.trim() === 'Global comment')?.click());
+  await page.waitForSelector('[role="dialog"][aria-label="Global plan comment"] textarea');
+  await page.type('[role="dialog"][aria-label="Global plan comment"] textarea', text);
+  await page.keyboard.down('Control');
+  await page.keyboard.press('Enter');
+  await page.keyboard.up('Control');
+  await page.waitForFunction(() => document.querySelector('[role="dialog"][aria-label="Global plan comment"]') === null);
+}
+
+const decisionEnabled = (page: Page, label: string) => page.evaluate((name) => {
+  const button = [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].find((each) => each.textContent?.includes(name));
+
+  return button !== undefined && !button.disabled;
+}, label);
+
+const landedSaves = async (page: Page) => v.parse(v.array(v.array(v.string())),
+  JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryAnnotationsSaved ?? '[]')));
+
+/** Annotations are saved one write at a time with the newest set landing last; a refused save is named and the next
+ *  edit saves everything; no decision is offered while a save is pending, and the decision carries every comment. */
+describe('annotating a plan', () => {
+  test('rapid comments save in order, one at a time, and the decision waits for them and carries them', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openFrame(newPage, origin, { frame: 'planreview', mode: 'dark', viewport: { width: 1280, height: 900 }, params: { annotationSaves: 'held' } });
+      await page.waitForSelector('[data-plan-review-root]');
+
+      await addGlobalComment(page, 'Cover the guest cart first');
+      await addGlobalComment(page, 'Keep the refusal shape');
+      expect(await decisionEnabled(page, 'Request changes')).toBe(false);
+
+      // Let each held save land in turn: one is waiting, then it lands, until the newest has.
+      for (const landed of [1, 2]) {
+        await page.waitForFunction(() => document.documentElement.dataset.galleryAnnotationsWaiting === '1');
+        await page.evaluate(() => window.dispatchEvent(new Event('gallery:annotation-save')));
+        await page.waitForFunction((count) => JSON.parse(document.documentElement.dataset.galleryAnnotationsSaved ?? '[]').length === count, {}, landed);
+      }
+
+      await page.waitForFunction(() => [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].some((button) => button.textContent?.includes('Request changes') && !button.disabled));
+
+      const saves = await landedSaves(page);
+
+      expect(saves.at(-1)).toEqual(['Cover the guest cart first', 'Keep the refusal shape']);
+      expect(await page.evaluate(() => document.documentElement.dataset.galleryAnnotationsMostInFlight)).toBe('1');
+
+      // The decision saves the comments once more before it is sent.
+      await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].find((button) => button.textContent?.includes('Request changes'))?.click());
+      await page.waitForFunction(() => document.documentElement.dataset.galleryAnnotationsWaiting === '1');
+      await page.evaluate(() => window.dispatchEvent(new Event('gallery:annotation-save')));
+      await page.waitForFunction(() => (document.documentElement.dataset.galleryPlanFeedback ?? '').length > 0);
+      const feedback = await page.evaluate(() => document.documentElement.dataset.galleryPlanFeedback ?? '');
+
+      expect(feedback).toContain('Cover the guest cart first');
+      expect(feedback).toContain('Keep the refusal shape');
+      await page.close();
+    });
+  });
+
+  test('a refused save is named, and the next comment saves every comment', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openFrame(newPage, origin, { frame: 'planreview', mode: 'dark', viewport: { width: 1280, height: 900 }, params: { annotationSaves: 'fail-first' } });
+      await page.waitForSelector('[data-plan-review-root]');
+
+      await addGlobalComment(page, 'Cover the guest cart first');
+      await page.waitForFunction(() => document.body.innerText.includes('the plan store is busy'));
+      expect(await landedSaves(page)).toEqual([]);
+
+      await addGlobalComment(page, 'Keep the refusal shape');
+      await page.waitForFunction(() => JSON.parse(document.documentElement.dataset.galleryAnnotationsSaved ?? '[]').length === 1);
+      expect(await landedSaves(page)).toEqual([['Cover the guest cart first', 'Keep the refusal shape']]);
+      expect(await page.evaluate(() => document.body.innerText.includes('the plan store is busy'))).toBe(false);
+      await page.close();
+    });
   });
 });

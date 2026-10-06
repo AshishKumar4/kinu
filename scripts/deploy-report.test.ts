@@ -55,29 +55,30 @@ finish
     }
   });
 
-  test('owned deploy wall over twenty minutes is red; the longest eval trial is named and excluded, never killed', () => {
+  // m1973, m1976: the budget subtracted the longest eval trial, so a deploy far over twenty minutes was reported within it.
+  test('the whole deploy, start to verdict, is held to twenty minutes; the eval soak\'s red is its own, never the deploy\'s', () => {
     const input = (seconds: number) => ({
       dir: '/reports/budget', meta: META, entries: [
         { kind: 'mark' as const, mark: 'end', seconds },
-        { kind: 'timing' as const, phase: 'upload', what: 'secret scan', command: 'bun run security-scan', seconds: 73.5 },
         { kind: 'timing' as const, phase: 'post-publish', what: 'product flows', command: 'bash scripts/product-flows-tier.sh', seconds: 524 },
+        { kind: 'red' as const, phase: 'soak', what: 'One trial of every eval task', command: 'bash scripts/eval-pass-tier.sh', verdict: 'exit 1',
+          reproduce: 'bash scripts/eval-pass-tier.sh', finding: 'chess trial 1 failed its checks', log: '/reports/budget/soak.log', tail: ['chess: 0/3 checks'] },
       ],
-      evals: [{ status: 'passed', duration: 1_600_000, meta: { harness: { run: {
+      evals: [{ status: 'failed', duration: 1_600_000, meta: { harness: { run: {
         session: { metadata: { taskId: 'chess', taskVersion: 'v1', evalCommit: META.sha, productSha: META.sha, arm: 'product', trial: 1 }, events: [] },
         usage: { model: 'muse', metadata: { steps: [] } }, errors: [],
         output: { metrics: { modelTurns: 0, toolCalls: 0, toolErrors: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
       } } } } satisfies Assertion],
     });
 
-    const at = renderReport(input(2800));
-    const over = renderReport(input(2801));
+    const at = renderReport(input(1200));
+    const over = renderReport(input(1201));
 
-    expect(at.summary.reds).toEqual([]);
-    expect(over.summary.reds).toEqual(['budget: owned deployment wall']);
-    expect(over.text).toContain('chess / muse / product / trial 1');
+    expect({ at: at.summary.reds, over: over.summary.reds }).toEqual({ at: [], over: ['budget: deployment wall'] });
+    expect(at.text).toContain('Soak, after the verdict');
+    expect(at.text).toContain('chess trial 1 failed its checks');
     expect(over.text).toContain('product flows');
-    expect(over.text).toContain('524');
-    expect(over.summary.totalSeconds).toBe(2801);
+    expect(over.summary.totalSeconds).toBe(1201);
   });
 
   test('current and previous cache measurements stay separate at both deployment and trial scope', () => {

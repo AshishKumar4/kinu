@@ -92,7 +92,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
   async written(): Promise<AttributedLine[]> {
     return written
       .map((point) => v.parse(WrittenLine, { event: point.blobs?.[2], index: point.indexes?.[0] }))
-      .filter((line) => line.event.startsWith('probe.') || line.event === 'analytics.sink_installed');
+      .filter((line) => line.event.startsWith('probe.') || line.event === 'analytics.sink_installed' || line.event === 'actor.startup');
   }
 }
 

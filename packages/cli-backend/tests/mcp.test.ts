@@ -1,5 +1,5 @@
 // Local MCP integration: stdio server connect, tool exposure, call proxying, merge into a local turn.
-import { describe, test, expect, spyOn } from 'bun:test';
+import { afterAll, beforeAll, describe, test, expect, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { jsonSchema, tool, type LanguageModel } from 'ai';
@@ -12,7 +12,7 @@ import { connectMcpServers } from '../src/mcp';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { createLocalProfileAuthority, resolverModelPlane } from '../src/profile-authority';
-import { scratchPath, scriptedTurnModel, toolExecute, scratchDir } from '@kinu.run/test-utils';
+import { scratchPath, scriptedTurnModel, toolExecute, scratchDir, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -203,52 +203,79 @@ describe('connectMcpServers', () => {
   });
 });
 
+const USAGE = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
+
+/** One session and one echo server for every surface case: a session's startup and an MCP connection cost seconds
+ *  each, and no case here depends on another's turn. Each case sets the script its turns answer from. */
 describe('LocalAgentSession MCP surface', () => {
+  let script: (options: ScriptedTurnOptions) => ScriptedTurnResult = () => ({
+    content: [{ type: 'text', text: 'ok' }], finishReason: { unified: 'stop', raw: undefined }, usage: USAGE, warnings: [],
+  });
+
+  const shared = sessionWithModel(scriptedTurnModel({ doGenerate: (options) => script(options) }));
+
+  beforeAll(async () => { await shared.session.connectMcp(mcpServers()); });
+  afterAll(async () => { await shared.session.end(); });
+
   test.each([false, true])('MCP isError=%s decides the eval call outcome, not content fields', async (fail) => {
     const text = '{"reason":"denied","error":"historical incident"}';
     const code = `return await tools["mcp_echo_echo"](${JSON.stringify({ text, fail })});`;
+    const toolCallId = `mcp-outcome-${String(fail)}`;
     let step = 0;
 
-    const model = scriptedTurnModel({ doGenerate: () => ({
-      content: ++step === 1
-        ? [{ type: 'tool-call', toolCallId: 'mcp-outcome', toolName: 'eval', input: JSON.stringify({ code }) }]
-        : [{ type: 'text', text: 'done' }],
-      finishReason: { unified: step === 1 ? 'tool-calls' : 'stop', raw: undefined },
-      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
-      warnings: [],
-    }) });
+    script = () => (++step === 1
+      ? { content: [{ type: 'tool-call', toolCallId, toolName: 'eval', input: JSON.stringify({ code }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage: USAGE, warnings: [] }
+      : { content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage: USAGE, warnings: [] });
 
-    const { session, events } = sessionWithModel(model);
+    await shared.session.send('Call the MCP tool.', { id: crypto.randomUUID() });
+    const result = shared.events.find((event) => event.type === 'tool-result' && event.toolName === 'eval' && event.toolCallId === toolCallId);
 
-    try {
-      await session.connectMcp(mcpServers());
-      await session.send('Call the MCP tool.', { id: crypto.randomUUID() });
-      const result = events.find((event) => event.type === 'tool-result' && event.toolName === 'eval');
-
-      if (fail) {
-        expect(result).toMatchObject({ success: false, result: expect.stringContaining('remote failure') });
-      } else {
-        expect(result).toMatchObject({ success: true, output: { result: 'echo: ' + text } });
-      }
-    } finally { await session.end(); }
+    if (fail) {
+      expect(result).toMatchObject({ success: false, result: expect.stringContaining('remote failure') });
+    } else {
+      expect(result).toMatchObject({ success: true, output: { result: 'echo: ' + text } });
+    }
   });
 
   test('connected MCP tools appear in /tools and reach the next turn through eval, not as native tools', async () => {
     let captured: CapturedRequest = { native: [], prompt: '' };
-    const { session } = sessionWithModel(capturingModel((request) => { captured = request; }));
 
-    try {
-      await session.connectMcp(mcpServers());
-      expect(session.toolNames()).toContain('mcp_echo_echo');
-      expect(session.describeTools().some((t) => t.name === 'mcp_echo_echo' && t.description.includes('Echo'))).toBe(true);
+    script = (options) => {
+      captured = { native: (options.tools ?? []).map((t) => t.name), prompt: JSON.stringify(options.prompt) };
 
-      await session.send('which tools can you see?', { id: crypto.randomUUID() });
-      expect(captured.native).toContain('eval');
-      expect(captured.native).not.toContain('mcp_echo_echo');
-      expect(captured.prompt).toContain('tools[\\"mcp_echo_echo\\"]');
-    } finally {
-      await session.end();
+      return { content: [{ type: 'text', text: 'ok' }], finishReason: { unified: 'stop', raw: undefined }, usage: USAGE, warnings: [] };
+    };
+
+    expect(shared.session.toolNames()).toContain('mcp_echo_echo');
+    expect(shared.session.describeTools().some((t) => t.name === 'mcp_echo_echo' && t.description.includes('Echo'))).toBe(true);
+
+    await shared.session.send('which tools can you see?', { id: crypto.randomUUID() });
+    expect(captured.native).toContain('eval');
+    expect(captured.native).not.toContain('mcp_echo_echo');
+    expect(captured.prompt).toContain('tools[\\"mcp_echo_echo\\"]');
+  });
+});
+
+// m1984: a turn that cannot reach MCP tools, as `eval` is their only way in, was still told which servers were down.
+describe('a server that is down is named only to a turn that can reach MCP tools', () => {
+  test('a build turn is told the server is down; a planning turn, whose eval is refused, is told nothing of MCP', async () => {
+    const told: Record<string, boolean> = {};
+
+    for (const role of ['task', 'planner'] as const) {
+      let prompt = '';
+      const { session } = sessionWithModel(capturingModel((request) => { prompt = request.prompt; }));
+
+      try {
+        await session.connectMcp({ ...mcpServers(), down: { command: 'node', args: [scratchPath('mcp', 'no-such-server.mjs')] } });
+        await session.setRole(role);
+        await session.send('what can you reach?', { id: crypto.randomUUID() });
+        told[role] = prompt.includes('MCP server \\"down\\"');
+      } finally {
+        await session.end();
+      }
     }
+
+    expect(told).toEqual({ task: true, planner: false });
   });
 });
 

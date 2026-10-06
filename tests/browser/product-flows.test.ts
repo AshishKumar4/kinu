@@ -18,7 +18,7 @@ import {
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
-import { FLOW_PROBE, FLOW_SLATE } from '../../scripts/flows-script';
+import { FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE } from '../../scripts/flows-script';
 import { rowVerdicts } from '../../scripts/row-verdicts';
 
 interface FlowVerdicts {
@@ -102,6 +102,10 @@ describe('a workspace made from the home page answers its mission', () => {
     // #21: the panel opened by itself once a "hello" turn ended.
     expect(verdictOf(observed.firstAnswer, 'first-answer').inspectorWidth).toBeLessThanOrEqual(INSPECTOR_SHUT_PX);
   });
+
+  test('the mission stays its brief, never replayed as a message the person sent', () => {
+    expect(verdictOf(observed.firstAnswer, 'first-answer').missionSent).toBe(false);
+  });
 });
 
 describe("an agent made with '+', messaged and renamed is all there on return", () => {
@@ -159,6 +163,13 @@ describe('a file the agent wrote shows where a reader looks for it', () => {
   test('the Changes tab appears and lists it as a change', () => {
     expect(verdictOf(observed.writtenFile, 'written-file').changedPaths.some((path) => path.endsWith(FLOW_PROBE))).toBe(true);
   });
+
+  test('a file the shell wrote is a change too, and marking the set reviewed clears both', () => {
+    const flow = verdictOf(observed.writtenFile, 'written-file');
+
+    expect(flow.changedPaths.some((path) => path.endsWith(FLOW_SHELL_PROBE))).toBe(true);
+    expect(flow.afterReview).toEqual([]);
+  });
 });
 
 describe('a slate the agent built shows its running preview', () => {
@@ -167,6 +178,14 @@ describe('a slate the agent built shows its running preview', () => {
 
     expect(slate.slateTab).toBe(true);
     expect(slate.frameText).toContain(FLOW_SLATE.page);
+  });
+
+  // The page is the agent's own React through the vendored bundle and `kinu:slate`; Bump goes to the slate's method.
+  test('its React page runs, hears its host, and its button reaches the slate\'s own method', () => {
+    const slate = verdictOf(observed.slate, 'slate-preview');
+
+    expect(slate.bumped).toBe('2');
+    expect(slate.hosted).toBe(true);
   });
 });
 

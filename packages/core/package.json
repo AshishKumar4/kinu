@@ -33,7 +33,7 @@
     "@ai-sdk/provider-utils": "^5.0.53",
     "@kinu.run/agent-utils": "workspace:*",
     "@nimbus-sh/core": "0.15.0",
-    "@nimbus-sh/fabric": "0.10.0",
+    "@nimbus-sh/fabric": "^0.10.0",
     "acorn": "^8.17.0",
     "ai": "7.0.127",
     "effect": "4.0.0-rc.117",

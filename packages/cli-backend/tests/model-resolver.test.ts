@@ -8,9 +8,9 @@ import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } f
 import { createFileOAuthStore } from '../src/oauth-store';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { asFetchFunction } from '@kinu.run/core';
+import { asFetchFunction, requestUrl } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend } from '@kinu.run/test-utils';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend, WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
@@ -62,7 +62,17 @@ describe('createLocalModelResolver', () => {
       for (const withSession of [false, true]) {
         rt.actor.config.setLearning(false);
 
-        if (withSession) session = new LocalAgentSession({ rt, db, modelResolver: createLocalModelResolver({ llm }), onEvent: () => {} });
+        // The session's menu is no part of a lane's retries: the live models.dev read took 4.8 s of this test. The
+        // catalog is the fixture's; any other listing is refused at once.
+        const catalog = asFetchFunction(async (input, init) => {
+          const url = requestUrl(input);
+
+          if (url === 'https://models.dev/api.json') return Response.json(WORKERS_AI_MODELS_DEV);
+
+          return url.startsWith(server.url.origin) ? await fetch(input, init) : new Response('not here', { status: 404 });
+        });
+
+        if (withSession) session = new LocalAgentSession({ rt, db, modelResolver: createLocalModelResolver({ llm, fetch: catalog }), onEvent: () => {} });
 
         for (const retries of [0, 1]) {
           requests = 0;
@@ -634,6 +644,14 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
           model: body.model,
         });
 
+        if (request.url.endsWith('/responses')) {
+          return Response.json({
+            id: 'resp_1', object: 'response', created_at: 0, model: v.parse(v.string(), body.model), status: 'completed', error: null, incomplete_details: null,
+            output: [{ id: 'msg_1', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'ok', annotations: [] }] }],
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
+          });
+        }
+
         return Response.json({
           id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: v.parse(v.string(), body.model),
           choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
@@ -644,12 +662,16 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 
     try {
       const origin = `http://127.0.0.1:${server.port}`;
+      const menuFetch = cloudMenuFetch(origin);
 
+      // A gateway OpenAI model speaks OpenAI's Responses API, as models.dev's SDK for it says.
       const resolver = createLocalModelResolver({
         llm: proxyLLMConfig(origin),
         credentials: {},
         cloud: { origin, token: CLOUD_TOKEN },
-        fetch: cloudMenuFetch(origin),
+        fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => (requestUrl(input).startsWith('https://models.dev/')
+          ? Response.json({ openai: { id: 'openai', npm: '@ai-sdk/openai', models: { 'gpt-4.1': { id: 'gpt-4.1', tool_call: true } } } })
+          : await menuFetch(input, init))),
       });
 
       const viaWorkersAI = await generateText({
@@ -662,7 +684,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       const viaGateway = await generateText({ model: resolver.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-jarvis'), prompt: 'ping' });
       expect(viaGateway.text).toBe('ok');
 
-      expect(seen.map((s) => s.path)).toEqual(['/api/user/ai/v1/chat/completions', '/api/user/ai/v1/chat/completions']);
+      expect(seen.map((s) => s.path)).toEqual(['/api/user/ai/v1/chat/completions', '/api/user/ai/v1/responses']);
       expect(wireCalls).toBe(2);
       expect(seen.map((s) => s.model)).toEqual([DEFAULT_WORKERS_AI_MODEL_ID, 'openai/gpt-4.1']);
 

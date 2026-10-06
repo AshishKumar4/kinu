@@ -192,6 +192,9 @@ describe('the default model', () => {
       { send: 'mock\r' },
       { wait: 'Default model', timeout: 15 },
       { send: '\r' },
+      // Blank: the endpoint's window is unknown.
+      { wait: 'Context window in tokens', timeout: 10 },
+      { send: '\r' },
       { wait: 'openai-compat/alpha-model', timeout: 15 },
     ], false);
     await inTerminal(machine, ['provider', 'connect', 'openai', '--local'], [
@@ -220,6 +223,8 @@ describe('the default model', () => {
       { send: '\r' },
       { wait: 'Default model', timeout: 10 },
       { send: 'typed-model\r' },
+      { wait: 'Context window in tokens', timeout: 10 },
+      { send: '\r' },
       { wait: 'openai-compat/typed-model', timeout: 15 },
     ], false);
 

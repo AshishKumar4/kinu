@@ -253,8 +253,7 @@ const BOUNDARY: ReadonlyArray<{
   { file: "g06.test.ts", code: "spawnSync('bash', ['-n', script], { cwd: repo });", caught: false },
   { file: "g07.test.ts", code: "await Bun.$`ls -la ${dir}`;", caught: false },
   // A test that merely ASSERTS about a git command line is not a spawn. This row is why the
-  // `sh -c` evasion below is left alone: catching it means reading argument strings, and this
-  // shape is real — packages/cf-backend/tests/unit-tool-call-grouping.test.ts is full of it.
+  // `sh -c` evasion below is left alone: catching it means reading argument strings.
   { file: "g08.test.ts", code: "expect(describeCommand('git commit -m x')).toBe('Git commit');", caught: false },
   // A `.exec(…)` on a call result is a method on an in-process API object — the hosted workspace
   // shell is isomorphic-git over SQLite, with no child process behind it — never a spawn.

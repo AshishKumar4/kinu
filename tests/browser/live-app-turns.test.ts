@@ -2,11 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
-import { PACED_SILENCE_MS, RECONNECT_STEPS } from '../../scripts/scripted-model';
+import { DROPPED_FILE_ARRIVED, PACED_SILENCE_MS, RECONNECT_STEPS } from '../../scripts/scripted-model';
 import { liveRows } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-turns', [
-  'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'unsent-answer', 'state',
+  'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'unsent-answer', 'dropped-file', 'state',
 ]);
 
 /** An answer keeps each step's text where it streamed: its steps drawn while it waits, the same blocks and then the
@@ -98,5 +98,12 @@ describe('the live app boots on its own Durable Object state', () => {
 
   test('nothing but this run stood in that state', () => {
     expect(verdictOf(observed.state, 'state').foreign).toEqual([]);
+  });
+});
+
+// Issue #33: dropped on the chat, a file goes out with the next message and the agent's turn reads it.
+describe('a file dropped on the chat reaches the agent', () => {
+  test('the turn it went out with read the file\'s contents', () => {
+    expect(verdictOf(observed.droppedFile, 'dropped-file').answer).toContain(DROPPED_FILE_ARRIVED);
   });
 });

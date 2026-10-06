@@ -81,6 +81,44 @@ describe('the models section keeps every control reachable by name', () => {
     });
   });
 
+  // The picker lists models in the server's preference order, keeps the chosen one first, and narrows on every word.
+  test('a tier\'s picker searches by provider and name, picks a model, and then lists it first', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
+
+      const picker = '[data-model-picker="deep model"]';
+      const search = 'input[aria-label="Search deep model"]';
+      const options = () => page.$$eval('[role="option"]', (rows) => rows.map((row) => (row.textContent ?? '').replace(/Test$/u, '')));
+
+      const open = async () => {
+        await page.click(picker);
+        await page.waitForSelector(search);
+      };
+
+      await page.waitForSelector(picker);
+      await open();
+      expect(await options()).toEqual(['Llama 4', 'Claude Opus 4.7']);
+
+      await page.type(search, 'ANTHROPIC opus');
+      await page.waitForFunction(() => document.querySelectorAll('[role="option"]').length === 1);
+      expect(await options()).toEqual(['Claude Opus 4.7']);
+      await page.type(search, ' gemini');
+      await page.waitForFunction(() => document.querySelectorAll('[role="option"]').length === 0);
+
+      await page.$eval(search, (input) => { input.select(); });
+      await page.keyboard.press('Backspace');
+      await page.waitForFunction(() => document.querySelectorAll('[role="option"]').length === 2);
+      await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((row) => row.textContent?.startsWith('Claude'))?.click());
+      await page.waitForFunction((at) => document.querySelector(at)?.textContent?.includes('Claude Opus 4.7') === true, {}, picker);
+
+      await open();
+      expect(await options()).toEqual(['Claude Opus 4.7', 'Llama 4']);
+      await page.close();
+    });
+  });
+
   test('tier rows and the role editor expose their controls by accessible name', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();

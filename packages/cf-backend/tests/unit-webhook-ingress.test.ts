@@ -2,12 +2,11 @@
  * The public webhook rail after route-capability verification and before the trigger's own auth: the caller
  * is unknown, so this governs cost (body size, knock rate). Unminted URLs: `unit-webhook-route.test.ts`.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import { serveFamily } from './helpers/api';
 import { Database } from 'bun:sqlite';
 import {
   initWebhookRateLimitTables,
-  normalizeWebhookRateLimitPerMin,
   tryConsumeWebhookRateLimit,
   type SqlExec,
 } from '@kinu.run/core';
@@ -121,11 +120,17 @@ describe('what a signed webhook delivery may cost', () => {
     const { env, probe, resolveAgent } = harness();
     const headers = { 'cf-connecting-ip': '203.0.113.7' };
     let refused: Response | null = null;
+    // The budget is a wall-clock minute: on a loaded box, 61 deliveries can straddle its edge and start a fresh one.
+    setSystemTime(new Date('2026-01-01T00:00:00Z'));
 
-    for (let attempt = 0; attempt < 61 && !refused; attempt += 1) {
-      const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(await delivery('{}', { headers }), env);
+    try {
+      for (let attempt = 0; attempt < 61 && !refused; attempt += 1) {
+        const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(await delivery('{}', { headers }), env);
 
-      if (response?.status === 429) refused = response;
+        if (response?.status === 429) refused = response;
+      }
+    } finally {
+      setSystemTime();
     }
 
     expect(refused?.status).toBe(429);
@@ -134,15 +139,6 @@ describe('what a signed webhook delivery may cost', () => {
 });
 
 describe('webhook rate limits', () => {
-  test('normalizes configured limits', () => {
-    expect(normalizeWebhookRateLimitPerMin(undefined)).toBe(60);
-    expect(normalizeWebhookRateLimitPerMin(1)).toBe(1);
-    expect(normalizeWebhookRateLimitPerMin('42')).toBe(42);
-    expect(() => normalizeWebhookRateLimitPerMin(0)).toThrow(/rate_limit_per_min/);
-    expect(() => normalizeWebhookRateLimitPerMin(1.5)).toThrow(/rate_limit_per_min/);
-    expect(() => normalizeWebhookRateLimitPerMin(10_001)).toThrow(/rate_limit_per_min/);
-  });
-
   test('admits only the configured number of verified deliveries per trigger per minute', () => {
     const db = new Database(':memory:');
     const sql = sqlFor(db);

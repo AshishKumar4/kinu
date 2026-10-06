@@ -245,7 +245,7 @@ requirements:
       - packages/cf-backend/src/user/user-do.ts#UserDO.setCredential
       - packages/cf-backend/src/user/user-do.ts#UserDO.deleteCredential
       - packages/cf-backend/src/user/user-do.ts#UserDO.getAuthHeaders
-      - packages/cf-backend/src/user/user-do.ts#UserDO.rewrapCredentials
+      - packages/cf-backend/src/user/credentials.ts#UserCredentials.rewrapCredentials
     remainingEvidence:
       - The cipher's guarantees are premises satisfied by the transparent cipher; AES-GCM's confidentiality and the key id's freedom from HMAC collisions are assumed, not proved
       - The fixture runs the deployed envelope; the UserDO's list, set and delete, and its private credentialAad, are modelled but not exercised, because they need a workerd Durable Object
@@ -300,13 +300,13 @@ requirements:
       - Kinu.Safety.DeviceToken.two_copies_cannot_alternate
       - Kinu.Safety.DeviceToken.one_holder_is_never_revoked
     tsRefs:
-      - packages/cf-backend/src/user/user-do.ts#DEVICE_CONNECT_TICKET_TTL_MS
+      - packages/cf-backend/src/user/devices.ts#DEVICE_CONNECT_TICKET_TTL_MS
       - packages/cf-backend/src/user/user-do.ts#UserDO.issueDeviceConnectTicket
       - packages/cf-backend/src/user/user-do.ts#UserDO.verifyDeviceConnectTicket
       - packages/cf-backend/src/user/user-do.ts#UserDO.verifyDeviceToken
-      - packages/cf-backend/src/user/user-do.ts#UserDO.acceptDeviceSocket
-      - packages/cf-backend/src/user/user-do.ts#UserDO.rotateDeviceToken
-      - packages/cf-backend/src/user/user-do.ts#UserDO.revokeOnTokenReuse
+      - packages/cf-backend/src/user/devices.ts#UserDevices.acceptDeviceSocket
+      - packages/cf-backend/src/user/devices.ts#UserDevices.rotateDeviceToken
+      - packages/cf-backend/src/user/devices.ts#UserDevices.revokeOnTokenReuse
     remainingEvidence:
       - A connection is one step, ticket and rotation together; a socket that fails between the two, and two connections of one device inside one ticket's minute, are outside the model
       - Every connection falls inside the token's absolute window and the retired tokens' retention, both DEVICE_TOKEN_TTL_MS; outside them the hub refuses without revoking, which the model leaves out

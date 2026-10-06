@@ -7,14 +7,12 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ai-sdk/openai": "4.0.83",
-    "@ai-sdk/openai-compatible": "3.0.62",
     "@ai-sdk/provider": "4.0.21",
     "@cloudflare/codemode": "0.5.2",
     "@kinu.run/agent-utils": "workspace:*",
     "@kinu.run/compaction": "workspace:*",
     "@kinu.run/core": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@nimbus-sh/core": "0.15.0",
     "ai": "7.0.127",
     "effect": "4.0.0-rc.117",

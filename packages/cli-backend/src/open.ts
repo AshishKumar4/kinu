@@ -47,9 +47,6 @@ export function openWorkspaceCLI(
   return settle(Effect.gen(function* () {
     waitOnSharedWrites(db);
     const sql = makeSql(db);
-    // Set on open, not at creation: `kinu create` publishes the file with no sidecars,
-    // and a WAL database is unreadable without its `-shm`.
-    db.exec('PRAGMA journal_mode = WAL');
 
     let identity: OpenedWorkspaceIdentity;
 

@@ -588,7 +588,7 @@ describe('a Durable Object constructor is held to the synchronous start rule', (
   test('cut the wire: a row loop planted in the real UserDO constructor path goes red', () => {
     const file = 'packages/cf-backend/src/user/user-do.ts';
     const real = present(SOURCES.get(file), `the ${file} source`);
-    const anchor = '    this._inflight.releaseAbandonedClaims();\n';
+    const anchor = '    this.devices._inflight.releaseAbandonedClaims();\n';
     expect(real).toContain(anchor);
     const planted = real.replace(anchor, `${anchor}    for (const row of this.ctx.storage.sql.exec('SELECT id FROM user_devices')) this.ctx.storage.sql.exec('DELETE FROM user_devices WHERE id = ?', row.id);\n`);
     const found = auditConstructors(new Map([...SOURCES, [file, planted]]), ['UserDO']).violations;

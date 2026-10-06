@@ -190,9 +190,7 @@ function passesEnv(node: ESTree.CallExpression): boolean {
  *
  * The first three need name resolution this rule does not have, and the fourth
  * needs to read shell strings inside argument arrays — which would fire on every
- * test that merely ASSERTS about a git command line, of which this repo has
- * several (`unit-tool-call-grouping.test.ts` expects `describeCommand('git commit
- * -m "fix"')`). The fifth is the price of the chained-`.exec` carve-out above: a
+ * test that merely ASSERTS about a git command line. The fifth is the price of the chained-`.exec` carve-out above: a
  * real spawn spelled as a method on a call result is indistinguishable from the
  * hosted shell without types. Each is a narrower hole than the ones closed
  * above, and none is worth a matcher that cries wolf. The gate beside this rule

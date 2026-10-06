@@ -214,6 +214,10 @@ function buildCLIRuntime(
 ): CLIRuntime {
   waitOnSharedWrites(db);
   db.exec('PRAGMA foreign_keys = ON');
+
+  // WAL with NORMAL: a commit waits on no fsync. A process crash keeps every commit; a power loss can roll back the
+  // last few, never corrupt the file. A rollback-journal file keeps FULL, where NORMAL could corrupt it.
+  if (db.query<{ journal_mode: string }, []>('PRAGMA journal_mode').get()?.journal_mode === 'wal') db.exec('PRAGMA synchronous = NORMAL');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
 

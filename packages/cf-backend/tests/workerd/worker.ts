@@ -39,7 +39,6 @@ export { CodemodeEgress } from '../../src/codemode-egress';
 export { CodemodeLauncher } from '../../src/codemode-sandbox';
 
 // Readiness refusal as data: it cannot ride an error class over RPC.
-export { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 
 // A long effect must not let other events in mid-run: the scheduler rule `settle` enforces.
 export { EffectAtomicityProbeDO } from './effect-atomicity-probe';
@@ -253,85 +252,6 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
       rosterStatus: this.ctx.storage.sql.exec<{ status: string }>(
         "SELECT status FROM actor_subordinates WHERE name = 'relay'",
       ).one().status,
-    };
-  }
-}
-
-/** A schema, not a type: an attachment outlives the code that wrote it, so it is untrusted input. */
-const DeviceAttachmentSchema = v.object({
-  device: v.string(),
-  probe: v.optional(v.object({
-    present: v.array(v.string()),
-    probedAt: v.number(),
-  })),
-});
-
-type DeviceAttachment = v.InferOutput<typeof DeviceAttachmentSchema>;
-
-/**
- * Hibernatable socket attachments survive an isolate reset; in-memory fields do not.
- * The bun fake makes `serializeAttachment` a no-op, so only workerd can host this.
- */
-export class SocketDO extends DurableObject<Cloudflare.Env> {
-  /** What a reset takes: in-memory state like `DeviceConsentRegistry.inflight`. */
-  private readonly waiting = new Map<string, string>();
-
-  override async fetch(request: Request): Promise<Response> {
-    const deviceId = new URL(request.url).searchParams.get('device') ?? 'unknown';
-    const pair = new WebSocketPair();
-    this.ctx.acceptWebSocket(pair[1], [`device:${deviceId}`]);
-    pair[1].serializeAttachment({ device: deviceId });
-
-    return new Response(null, { status: 101, webSocket: pair[0] });
-  }
-
-  /**
-   * An attachment is structured-cloned, not JSON-encoded: a `Set` survives as a `Set`
-   * and `DeviceAttachmentSchema` then rejects it. `asSet` is that trap.
-   */
-  recordProbe(deviceId: string, asSet: boolean): void {
-    const socket = this.liveSocket(deviceId);
-
-    if (!socket) throw new Error(`no live socket for ${deviceId}`);
-    const present = ['node', 'python3'];
-    socket.serializeAttachment({
-      device: deviceId,
-      probe: { present: asSet ? new Set(present) : present, probedAt: 1 },
-    });
-  }
-
-  /** Null when the parse fails: the attachment is untrusted on the way back. */
-  probeRecord(deviceId: string): DeviceAttachment | null {
-    const socket = this.liveSocket(deviceId);
-
-    if (!socket) return null;
-    const parsed = v.safeParse(DeviceAttachmentSchema, socket.deserializeAttachment());
-
-    return parsed.success ? parsed.output : null;
-  }
-
-  isConnected(deviceId: string): boolean {
-    return this.liveSocket(deviceId) !== null;
-  }
-
-  private liveSocket(deviceId: string): WebSocket | null {
-    for (const ws of this.ctx.getWebSockets(`device:${deviceId}`)) {
-      if (ws.readyState === WebSocket.OPEN) return ws;
-    }
-
-    return null;
-  }
-
-  /** Same fact in a field and in storage, so a reset takes exactly one. */
-  async raise(consentId: string): Promise<void> {
-    this.waiting.set(consentId, 'pending');
-    await this.ctx.storage.put(`consent:${consentId}`, 'pending');
-  }
-
-  async settled(consentId: string): Promise<{ inMemory: boolean; inStorage: boolean }> {
-    return {
-      inMemory: this.waiting.has(consentId),
-      inStorage: (await this.ctx.storage.get<string>(`consent:${consentId}`)) !== undefined,
     };
   }
 }

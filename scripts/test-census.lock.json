@@ -1,42 +1,6 @@
 {
-  "measured": "31a6c9c64: 1380 test files, 1180 runnable suites, 13482 tests, 50 runners, 1702 non-public product members, 10248 product function bodies",
+  "measured": "27a89290f: 1344 test files, 1141 runnable suites, 13311 tests, 50 runners, 1682 non-public product members, 10394 product function bodies",
   "entries": [
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: only a resolved write reads as copied :: expected side computed by the code under test",
-      "count": 3,
-      "plants": [
-        {
-          "defect": "a failed write labelled as copied",
-          "file": "packages/cf-backend/src/hooks/use-copy.ts",
-          "edits": [
-            [
-              "if (status === \"failed\") return \"Could not copy\";",
-              "if (status === \"failed\") return \"Copied\";"
-            ]
-          ]
-        },
-        {
-          "defect": "a failed write labelled as if nothing had happened",
-          "file": "packages/cf-backend/src/hooks/use-copy.ts",
-          "edits": [
-            [
-              "if (status === \"failed\") return \"Could not copy\";",
-              "if (status === \"failed\") return \"Copy\";"
-            ]
-          ]
-        },
-        {
-          "defect": "a resolved write not acknowledged",
-          "file": "packages/cf-backend/src/hooks/use-copy.ts",
-          "edits": [
-            [
-              "if (status === \"copied\") return \"Copied\";",
-              "if (status === \"copied\") return \"Copy\";"
-            ]
-          ]
-        }
-      ]
-    },
     {
       "key": "tautology_suspect :: packages/core/src/skills/skills.test.ts :: render order is name order, so the same active set is byte-identical however it was activated :: expected side computed by the code under test",
       "count": 1,

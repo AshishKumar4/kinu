@@ -2233,9 +2233,12 @@ export {
 export {
   MY_GATEWAY_PROVIDER_ID,
   createMyGatewayProvider,
+  gatewayWireModel,
 } from './providers/my-gateway';
 
 export { createWorkersAIProvider } from './providers/workers-ai-provider';
+
+export { createWireModel } from './providers/wire-model';
 
 export {
   type AnyToolPart,

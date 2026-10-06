@@ -5,6 +5,7 @@
  */
 import { getAgentByName, type AgentContext } from 'agents';
 import { ownerCaller } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { USER_DO_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { UserDO } from '../../src/user/user-do';
@@ -31,14 +32,28 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type ClaimTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator, 'claimOwner' | 'getWorkspaceCapabilityHash'>;
 
+/** Workspaces whose teardown is refused; one isolate holds every object of this probe. */
+const refusingTeardown = new Set<string>();
+
+/** The production workspace, refusing its teardown when named, as a sandbox that will not stop refuses it. */
+export class OrchestratorAgent extends ProductionOrchestrator {
+  override async destroyAgent(ownerUserId: string): Promise<{ ok: true }> {
+    if (refusingTeardown.has(this.name)) throw new Error('container refused to stop');
+
+    return super.destroyAgent(ownerUserId);
+  }
+}
+
+const PROBE_METHODS = ['seed', 'counts', 'hashes', 'reset', 'freshProfile', 'refuseTeardownOf', 'pendingDeletes', 'receivedFrom', 'ownerDeleted', 'resetRefused'];
+
 const ACCOUNT_TABLE_PREFIXES = ['user_', 'device_', 'cli_', 'codex_'];
 
 export class AccountResetProbeDO extends UserDO {
   constructor(ctx: AgentContext, env: ConstructorParameters<typeof UserDO>[1]) {
     super(ctx, env);
 
-    for (const name of ['seed', 'counts', 'hashes', 'reset', 'freshProfile']) Reflect.deleteProperty(this, name);
-    sealRpcSurface(this, [...USER_DO_RPC_SURFACE, 'seed', 'counts', 'hashes', 'reset', 'freshProfile']);
+    for (const name of PROBE_METHODS) Reflect.deleteProperty(this, name);
+    sealRpcSurface(this, [...USER_DO_RPC_SURFACE, ...PROBE_METHODS]);
   }
 
   private async workspaceTarget(workspace: string): Promise<ClaimTarget> {
@@ -59,6 +74,9 @@ export class AccountResetProbeDO extends UserDO {
 
     await this.sharesReceived_add(owner, {
       ownerUserId: 'f'.repeat(32), ownerEmail: 'sam@example.test', workspace: 'their-ws', shareId: 'share-1',
+    });
+    await this.sharesReceived_add(owner, {
+      ownerUserId: 'e'.repeat(32), ownerEmail: 'ana@example.test', workspace: 'her-ws', shareId: 'share-2',
     });
     this.ctx.storage.sql.exec(
       `INSERT INTO user_mcp_servers (id, name, server_url, transport) VALUES ('srv-1', 'github', 'https://mcp.example/v1', 'auto')`,
@@ -91,6 +109,36 @@ export class AccountResetProbeDO extends UserDO {
     }
 
     return counts;
+  }
+
+  async refuseTeardownOf(workspace: string, refuse: boolean): Promise<void> {
+    if (refuse) refusingTeardown.add(workspace);
+    else refusingTeardown.delete(workspace);
+  }
+
+  async pendingDeletes(): Promise<string[]> {
+    return this.ctx.storage.sql.exec<{ name: string }>(`SELECT name FROM user_workspaces WHERE delete_pending = 1 ORDER BY name`).toArray().map((row) => row.name);
+  }
+
+  /** Who the received shares name. */
+  async receivedFrom(): Promise<string[]> {
+    return (await this.sharesReceived_list(await ownerCaller(this.env))).map((row) => row.ownerEmail).sort();
+  }
+
+  /** Another owner deleted their account: their delete tells each recipient to forget them (`forgetSharesGiven`). */
+  async ownerDeleted(ownerUserId: string): Promise<void> {
+    await this.sharesReceived_forget(await ownerCaller(this.env), ownerUserId);
+  }
+
+  /** A delete a workspace refuses, answered as its thrown chain: a rejection crossing to the runner is reported unhandled. */
+  async resetRefused(): Promise<string> {
+    try {
+      await this.reset();
+
+      return 'deleted';
+    } catch (cause) {
+      return renderThrownChain({ cause });
+    }
   }
 
   async reset(): Promise<{ ok: true; workspaces: number }> {

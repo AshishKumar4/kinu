@@ -49,8 +49,7 @@ tester.run("anti-slop/no-ambient-git-in-tests", noAmbientGitInTestsRule, {
     // Bun's single-object form with the environment named.
     { code: "Bun.spawnSync({ cmd: ['git', 'log'], cwd: repo, env: gitEnv() });", filename: test },
     // ASSERTING about a git command line is not spawning one. This is why the `sh -c` evasion is
-    // left alone: catching it means reading argument strings, and this shape is real —
-    // unit-tool-call-grouping.test.ts is full of it.
+    // left alone: catching it means reading argument strings.
     { code: "expect(describeCommand('git commit -m x')).toBe('Git commit');", filename: test },
     { code: "spawnSync('sh', ['-c', 'git commit -m seed'], { cwd: repo });", filename: test },
     // Known missed, on the record rather than rediscovered: each needs name resolution this rule

@@ -13,7 +13,7 @@
  *   bun scripts/deploy-report.ts note <dir> <phase> <what> <finding>    a step of the deploy's own that went red
  *   bun scripts/deploy-report.ts dispatched <dir> <what> <url>          work the deploy started and does not wait for
  *   bun scripts/deploy-report.ts mark <dir> <mark> <seconds>            when the deploy reached <mark>
- *   bun scripts/deploy-report.ts render <dir>                           write report.md; print its path; exit 1 on a red
+ *   bun scripts/deploy-report.ts render <dir> [after-soak]              write report.md; print its path; exit 1 on a red
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -70,6 +70,16 @@ function identity(entry: ReportEntry): string | undefined {
   if (entry.kind === 'step') return `${entry.phase}: ${entry.what}`;
 
   return undefined;
+}
+
+/** The real-model evals run after the deploy's verdict (L24): a red there is the soak's finding, never the deploy's. */
+const SOAK = 'soak';
+
+const soaked = (entry: ReportEntry): boolean => (entry.kind === 'red' || entry.kind === 'step') && entry.phase === SOAK;
+
+/** The deploy's own reds, the soak's excluded. */
+function deployReds(entries: readonly ReportEntry[]): ReportEntry[] {
+  return entries.filter((entry) => identity(entry) !== undefined && !soaked(entry));
 }
 
 function entriesOf(dir: string): ReportEntry[] {
@@ -184,21 +194,14 @@ function trialName(trial: Assertion): string {
   return `${taskId} / ${run.usage.model} / ${arm} / trial ${String(index)}`;
 }
 
-function longestTrial(evals: readonly Assertion[] = []): Assertion | undefined {
-  return evals.reduce<Assertion | undefined>((longest, trial) => longest === undefined || trial.duration > longest.duration ? trial : longest, undefined);
-}
 
-/** Report-only: work finishes normally. The model's critical trial is named beside the wall we own. */
-function budgetRed(seconds: number | undefined, longest: Assertion | undefined): ReportEntry | undefined {
+/** Report-only: work finishes normally. The whole deploy, start to verdict, against 20 minutes (L24); the soak runs after. */
+function budgetRed(seconds: number | undefined): ReportEntry | undefined {
   if (seconds === undefined) return undefined;
 
-  const critical = (longest?.duration ?? 0) / 1000;
-  const owned = seconds - critical;
-
-  return owned <= 1200 ? undefined : {
-    kind: 'step', phase: 'budget', what: 'owned deployment wall',
-    finding: `The deploy took ${seconds.toFixed(1)} s; excluding ${longest === undefined ? 'no eval trial' : `${trialName(longest)} (${critical.toFixed(1)} s)`}, `
-      + `the owned wall was ${owned.toFixed(1)} s, over the 1200 s budget. No work was cancelled or omitted.`,
+  return seconds <= 1200 ? undefined : {
+    kind: 'step', phase: 'budget', what: 'deployment wall',
+    finding: `The deploy took ${seconds.toFixed(1)} s from its start to its verdict, over the 1200 s budget. No work was cancelled or omitted.`,
   };
 }
 
@@ -258,7 +261,7 @@ function readReport(dir: string): ReportInput {
     try {
       evals = trials(parseResults('deploy', readFileSync(file, 'utf8')));
     } catch (error) {
-      entries.push({ kind: 'step', phase: 'post-publish', what: 'eval report', finding: String(error) });
+      entries.push({ kind: 'step', phase: SOAK, what: 'eval report', finding: String(error) });
     }
   }
 
@@ -346,9 +349,9 @@ function redSections(reds: readonly ReportEntry[], isNew: (entry: ReportEntry) =
 export function renderReport(input: ReportInput): RenderedReport {
   const { dir, meta, entries, previous, evals } = input;
   const marks = new Map(entries.flatMap((entry) => (entry.kind === 'mark' ? [[entry.mark, entry.seconds] as const] : [])));
-  const longest = longestTrial(evals);
-  const budget = meta.mode === 'gates-only' ? undefined : budgetRed(marks.get('end'), longest);
-  const reds = [...entries.filter((entry) => identity(entry) !== undefined), ...budget === undefined ? [] : [budget]];
+  const budget = meta.mode === 'gates-only' ? undefined : budgetRed(marks.get('end'));
+  const reds = [...deployReds(entries), ...budget === undefined ? [] : [budget]];
+  const soak = entries.filter(soaked);
   const carried = new Set(previous?.summary.reds ?? []);
   const isNew = (entry: ReportEntry): boolean => !carried.has(identity(entry) ?? '');
   const skipped = entries.flatMap((entry) => (entry.kind === 'skipped' ? [`- ${entry.phase}: \`${entry.what}\`, because ${entry.why}`] : []));
@@ -361,7 +364,6 @@ export function renderReport(input: ReportInput): RenderedReport {
     `| ${entry.phase}: ${entry.what} | ${entry.seconds.toFixed(1)} | ${entry.silence === undefined ? '—' : entry.silence.toFixed(1)} | \`${entry.command}\` |`);
 
   const ended = marks.get('end');
-  const critical = (longest?.duration ?? 0) / 1000;
 
   const lines = [
     ...headerLines(input, marks, { reds: reds.length, fresh: reds.filter(isNew).length, skipped: skipped.length }),
@@ -370,8 +372,10 @@ export function renderReport(input: ReportInput): RenderedReport {
     ...section('Notices, not reds', notices),
     ...section('Started, not awaited', dispatched),
     ...section('Deployment budget', ended === undefined || meta.mode === 'gates-only' ? [] : [
-      `Whole deploy: ${ended.toFixed(1)} s. Longest eval trial: ${longest === undefined ? 'none' : trialName(longest)} (${critical.toFixed(1)} s). `
-        + `Owned wall: ${(ended - critical).toFixed(1)} s / 1200 s — ${budget === undefined ? 'within budget' : 'RED'}. This budget never cancels work or cuts coverage.`,
+      `Whole deploy, start to verdict: ${ended.toFixed(1)} s / 1200 s — ${budget === undefined ? 'within budget' : 'RED'}. This budget never cancels work or cuts coverage.`,
+    ]),
+    ...section('Soak, after the verdict', soak.length === 0 ? [] : [
+      `${String(soak.length)} red in the eval soak, which ran after this deploy's verdict and is no red of it.`, ...redSections(soak, () => true),
     ]),
     ...section('Rows, longest first', rowTimes.length === 0 ? [] : ['| row | seconds | longest silence (seconds) | command |', '| --- | ---: | ---: | --- |', ...rowTimes]),
     ...section('Eval cache usage', cacheLines(evals, previous)),
@@ -413,13 +417,13 @@ if (import.meta.main) {
 
   if (command === 'budget' && rest.length === 1) {
     const input = readReport(first);
-    const red = input.meta.mode === 'gates-only' ? undefined : budgetRed(Number(rest[0]), longestTrial(input.evals));
+    const red = input.meta.mode === 'gates-only' ? undefined : budgetRed(Number(rest[0]));
 
     if (red?.kind === 'step') console.error(red.finding);
-    process.exit(red === undefined && input.entries.every((entry) => identity(entry) === undefined) ? 0 : 1);
+    process.exit(red === undefined && deployReds(input.entries).length === 0 ? 0 : 1);
   }
 
-  if (command === 'render' && rest.length === 0) {
+  if (command === 'render' && (rest.length === 0 || (rest.length === 1 && rest[0] === 'after-soak'))) {
     const input = readReport(first);
     const { meta } = input;
     const index = join(REPORTS, meta.environment, 'index.jsonl');
@@ -435,7 +439,10 @@ if (import.meta.main) {
 
     writeFileSync(join(first, 'report.md'), text);
     writeFileSync(join(first, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
-    appendFileSync(index, `${JSON.stringify(summary)}\n`);
+
+    // The soak's re-render keeps its deploy's place in the index: a later deploy's line may follow the first render.
+    if (rest.length === 0) appendFileSync(index, `${JSON.stringify(summary)}\n`);
+
     console.log(`deploy report: ${join(first, 'report.md')} — ${String(summary.reds.length)} red, ${String(summary.skipped)} not run`);
     process.exit(summary.reds.length === 0 ? 0 : 1);
   }

@@ -643,10 +643,13 @@ describe('pc-agent command cancellation', () => {
     const dir = scratchDir('pc-agent-disconnect');
     const waiting = commandWithDescendant(dir, 'waiting');
     const ws = recorder();
+    const registeredBefore = v.parse(v.number(), pcAgent.inFlight.size());
     handle({ id: rpcId(250), method: 'exec', params: [waiting.command] }, ws.socket);
     const abandoned = await waiting.pidOf(ws.answerTo(rpcId(250)));
     expect(alive(abandoned)).toBe(true);
-    await supervisorState(rpcId(250));
+    // The supervisor's state file can precede the daemon's registration: while `starting` still owns that record,
+    // a sweep leaves it to the start. This test drops an already registered command; the preceding test drops a start.
+    await settled(() => (pcAgent.inFlight.size() === registeredBefore + 1 ? true : undefined), 'the running command to be registered');
 
     // Settles only once the kill is confirmed and rejects when unproven; polling `kill(pid, 0)` cannot tell
     // "not yet" from "never". Selected by request id: the sweep terminates every abandoned command at once.

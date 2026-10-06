@@ -93,11 +93,23 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     });
   });
 
-  test('a chat renames in its tab and deletes after a confirmation; Main renames and never deletes', async () => {
+  // m2051: every tab renames and has a ×, as today. A chat's × deletes it; Main's clears its conversation and Main stays.
+  test('a chat renames in its tab and deletes after a confirmation; Main\'s × clears its conversation and Main stays', async () => {
     await withGallery(async ({ newPage, origin }) => {
-      const page = await openWorkspacePage(newPage, origin);
-      expect(await page.$(`${CHATS} [data-agent-tab="main"] button[aria-label="Delete Main"]`)).toBeNull();
-      expect(await page.$(`${CHATS} [data-agent-tab="main"] button[aria-label="Rename Main"]`)).not.toBeNull();
+      const page = await openWorkspacePage(newPage, origin, '&transcript=revert');
+      const main = `${CHATS} [data-agent-tab="main"]`;
+      const chatText = () => page.$eval('#chat', (column) => column.textContent ?? '');
+
+      expect(await page.$(`${main} button[aria-label="Delete Main"]`)).toBeNull();
+      expect(await page.$(`${main} button[aria-label="Rename Main"]`)).not.toBeNull();
+      await page.waitForFunction(() => (document.querySelector('#chat')?.textContent ?? '').length > 300);
+      const before = await chatText();
+
+      await page.hover(`${main} a`);
+      await page.click(`${main} button[aria-label="Clear Main"]`);
+      await page.waitForSelector('[role="dialog"]');
+      await clickDialogButton(page, 'Cancel');
+      expect(await chatText()).toBe(before);
 
       await startChat(page, 'Audit the coupon rules');
       await waitForNewChatOpen(page);
@@ -123,6 +135,13 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await clickDialogButton(page, 'Delete');
       await page.waitForFunction((chats) => document.querySelector(`${chats} [data-active]`)?.getAttribute('data-agent-tab') === 'main', {}, CHATS);
       expect(await page.evaluate((chats) => document.querySelector(chats)?.textContent ?? '', CHATS)).not.toContain('Payments triage');
+
+      await page.hover(`${main} a`);
+      await page.click(`${main} button[aria-label="Clear Main"]`);
+      await page.waitForSelector('[role="dialog"]');
+      await clickDialogButton(page, 'Clear');
+      await page.waitForFunction((was) => (document.querySelector('#chat')?.textContent ?? '').length < was * 0.6, {}, before.length);
+      expect(await openTab(page)).toBe('Main');
       await page.close();
     });
   });
@@ -260,6 +279,41 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       // Nothing is left that would ask again: the page, its reads and its socket are gone.
       expect(await page.$('[data-composer-root]')).toBeNull();
       expect(await page.evaluate(() => document.documentElement.dataset.galleryAgentsOpen)).toBe('0');
+      await page.close();
+    });
+  });
+
+  // A visit the roster refused for any other reason is a failure the page names, and the workspace stays open.
+  test('a visit that failed for another reason is reported, and the workspace stays open', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 800 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&visit=failed`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => (document.querySelector('[data-composer-root]')?.textContent ?? '').includes('the roster is unavailable'));
+
+      expect(await page.$('[data-workspace-gone]')).toBeNull();
+
+      // A partial failure informs; it never blocks: a draft can still be sent. The visit is asked again on reconnect.
+      const notice = await page.$eval('[data-composer-root]', (root) => ({
+        alert: root.querySelector('[role="alert"]') !== null,
+        status: root.querySelector('[role="status"]') !== null,
+      }));
+
+      expect(notice).toEqual({ alert: false, status: true });
+      await page.type('[data-composer-root] textarea', 'Look at the cart');
+      expect(await page.$('[data-composer-root] button[aria-label="Send"]:not([disabled])')).not.toBeNull();
+      await page.close();
+    });
+  });
+
+  test('a workspace whose first read failed is an alert that offers a retry', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 800 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&snapshot=failed`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-composer-root] [role="alert"]');
+
+      expect(await page.$$eval('[data-composer-root] [role="alert"] button', (buttons) => buttons.some((button) => /retry/i.test(button.textContent ?? '')))).toBe(true);
       await page.close();
     });
   });

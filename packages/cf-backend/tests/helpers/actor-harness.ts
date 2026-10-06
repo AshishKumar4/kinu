@@ -1475,12 +1475,19 @@ export async function fireSoonestWake(agent: Pick<HarnessOrchestratorAgent, 'ala
 /** A recording owner-UserDO binding, in place of the refusing default. */
 export interface RecordedUserPlaneCalls {
   warmConnections: UserCaller[];
+  /** The account's active workspaces, this one among them, as the peers tool reads them. */
+  workspaces?: readonly { readonly name: string; readonly displayName: string }[];
   /** Set to make `userMcp_warmConnections` reject. */
   failWarm: Error | null;
   /** Set to make `userMcp_toolDescriptors` reject with this error; unset, the read is unreachable. */
   failDescriptors?: Error;
-  /** The owner's MCP tools, served as the UserDO serves them; each call is recorded and answered by `answerMcp`. */
-  mcp?: { readonly descriptors: readonly SerializableToolDescriptor[]; readonly calls: Array<{ tool: string; args: JsonValue }>; readonly answer: JsonValue };
+  /** The owner's MCP tools, served as the UserDO serves them; each call is recorded and answered by `answerMcp`.
+   *  `cold`: the UserDO isolate holds no connection until a warm succeeds, and until then names the server
+   *  unavailable as `user/mcp-servers.ts` does, so only a warmed turn is offered its tools. */
+  mcp?: {
+    readonly descriptors: readonly SerializableToolDescriptor[]; readonly calls: Array<{ tool: string; args: JsonValue }>; readonly answer: JsonValue;
+    cold?: boolean;
+  };
   /** How many times the object asked for its tool descriptors. */
   descriptorReads?: number;
   /** Set to make the egress-vault listing reject; unset, it answers empty. */
@@ -1516,6 +1523,8 @@ export interface HarnessActorWorld {
   versionId?: string;
   /** The `send_email` binding at `env.EMAIL`; unset, the workspace has no mail route. */
   email?: SendEmail;
+  /** The Analytics Engine datasets the object's turns, tools and jobs write rows to (`helpers/analytics-engine.ts`). */
+  analytics?: Pick<Env, 'AGENT_METRICS' | 'CONTROL_PLANE_OPS'>;
   /** The container binding at `env.KinuDevbox`: the runtime registers the sandbox executor over it.
    *  Unset, the workspace has no container. */
   container?: boolean;
@@ -1570,6 +1579,7 @@ export function makeEnv(
     ...platformGatewayEnv(world?.aiGateway),
     ...(world?.versionId !== undefined && { CF_VERSION_METADATA: { id: world.versionId, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
+    ...world?.analytics,
     ...(world?.previewHostSuffix !== undefined && { PREVIEW_HOST_SUFFIX: world.previewHostSuffix }),
     ...(world?.container === true && {
       KinuDevbox: {
@@ -1595,15 +1605,25 @@ export function makeEnv(
 
             return { applied: true };
           },
+          listActiveWorkspaces: async () => (userPlane?.workspaces ?? []).map((workspace) => ({ ...workspace, createdAt: 1, nameOrigin: 'user' as const })),
+          hasWorkspace: async (_caller: UserCaller, name: string) => (userPlane?.workspaces ?? []).some((workspace) => workspace.name === name),
           userMcp_warmConnections: async (caller: UserCaller): Promise<{ servers: number }> => {
             userPlane?.warmConnections.push(caller);
 
             if (userPlane?.failWarm) throw userPlane.failWarm;
 
+            if (userPlane?.mcp !== undefined) userPlane.mcp.cold = false;
+
             return { servers: 1 };
           },
           userMcp_toolDescriptors: async (): Promise<string> => {
             if (userPlane) userPlane.descriptorReads = (userPlane.descriptorReads ?? 0) + 1;
+
+            if (userPlane?.mcp?.cold === true) {
+              const servers = [...new Set(userPlane.mcp.descriptors.map((tool) => tool.serverName))];
+
+              return JSON.stringify({ descriptors: [], unavailable: servers.map((server) => ({ server, reason: 'not connected when this turn opened' })) });
+            }
 
             if (userPlane?.mcp !== undefined && userPlane.failDescriptors === undefined) {
               return JSON.stringify({ descriptors: userPlane.mcp.descriptors, unavailable: [] });

@@ -475,6 +475,18 @@ function sinceServerSummary(messages: readonly ModelMessage[], by: ServerCompact
   while (summary >= 0 && !carriesServerSummary(messages[summary], by)) summary--;
 
   if (summary < 0) return [...messages];
+
+  const held = messages[summary];
+
+  // OpenAI's latest compaction item carries the context and everything before it may go (developers.openai.com/api/
+  // docs/guides/compaction); a response can carry two (`compaction, message, compaction`, measured 2026-10-06).
+  if (by === 'openai' && held?.role === 'assistant' && Array.isArray(held.content)) {
+    const parts = held.content;
+    const latest = parts.map((part) => part.type === 'custom' && isServerCompaction(part.providerOptions, by)).lastIndexOf(true);
+
+    if (latest >= 0) return [{ ...held, content: parts.slice(latest) }, ...messages.slice(summary + 1)];
+  }
+
   let ask = summary - 1;
 
   while (ask >= 0 && messages[ask]?.role !== 'user') ask--;

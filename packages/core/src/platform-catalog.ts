@@ -373,7 +373,7 @@ export const PLATFORM_CATALOG = {
     origin: 'platform',
     bounds: 'duration',
     evidence: 'proven-by-probe',
-    provenance: 'packages/cf-backend/tests/unit-do-init-gate.test.ts:14-19, scripts/do-init-gate.ts:8-18',
+    provenance: 'packages/cf-backend/tests/workerd/do-init-gate.test.ts:1-8, scripts/do-init-gate.ts:8-18',
     date: '2026-08-16',
     trigger: 'a blockConcurrencyWhile callback still pending ~30 s after the gate opened',
     onBreach:
@@ -437,7 +437,7 @@ export const PLATFORM_CATALOG = {
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
-    provenance: 'packages/cf-backend/tests/unit-do-init-gate.test.ts:17-19',
+    provenance: 'packages/cf-backend/tests/workerd/do-init-gate.test.ts:4-5',
     date: '2026-08-16',
     trigger: 'a pure read issued against an object already inside a long await',
     onBreach:

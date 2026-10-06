@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-06",
-  "files": 3034,
-  "functions": 78541,
+  "files": 3003,
+  "functions": 78314,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -254,10 +254,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>paneFrame",
-      "complexity": 28
-    },
-    {
       "key": "packages/cli/src/config.ts#resolveLLMConfig",
       "complexity": 28
     },
@@ -315,10 +311,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/ui/BrandMark.tsx#providerBrand",
-      "complexity": 27
-    },
-    {
-      "key": "packages/cf-backend/src/gallery.tsx#workspacePageRpc",
       "complexity": 27
     },
     {

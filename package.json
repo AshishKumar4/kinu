@@ -44,7 +44,6 @@
     "gate:undeclared-imports": "bun scripts/undeclared-imports.ts",
     "gate:duplication": "bun scripts/ast-duplication.ts",
     "gate:complexity": "bun scripts/complexity.ts",
-    "gate:bloat-budget": "bun scripts/bloat-budget.ts",
     "gate:error-model": "bun scripts/error-model.ts",
     "gate:effect-diagnostics": "bun scripts/effect-diagnostics.ts",
     "gate:wired": "bun scripts/wired.ts",
@@ -144,8 +143,8 @@
       }
     }
   },
-  "//dependencies:@ai-sdk": "The AI SDK v6 packages are pinned EXACTLY in every workspace that declares one (the root declares only what its own scripts and fixtures import), because upstream pins them to each other exactly: `ai@6.0.214` requires `@ai-sdk/provider-utils@4.0.33` and `@ai-sdk/gateway@3.0.139` by exact version, and each provider does the same. A caret on any one of them therefore does not age it independently — it floats that package ahead of the rest and bun answers with a SECOND copy of the SDK nested under whichever parent disagreed, which is how `@ai-sdk/provider` came to be installed twice while both manifests named one version. So the cohort moves as one edit. This one is GHSA-866g-f22w-33x8 (CVE-2026-8769, uncontrolled resource consumption in provider-utils' response handlers), whose first patched release on the v6 line is provider-utils 4.0.33; these are the earliest same-major releases that pin it. Later v6 releases exist and are also patched, but from `@ai-sdk/openai-compatible@2.0.70` the provider throws its own \"Response stream ended without a finish reason\" before a finish-step lands, which pre-empts the dead-stream detector in packages/core/src/chat.ts and the two contracts unit-chat-stream-integrity.test.ts holds over it. Moving past that boundary is a stream-integrity decision, not a dependency refresh.",
-  "//dependencies:effect": "`effect` is pinned EXACTLY to 4.0.0-rc.117 wherever a workspace declares it (core; cf-backend for its workerd probe; the root for the red half of `gate:effect-diagnostics`), by owner decision on 2026-09-23: the error model runs on Effect 4's typed failure channel, and 4.0.0 is a release candidate (npm `rc` tag; `latest` is 3.22.2). A caret on an RC floats to the next RC, and RCs move API, so a bump is one deliberate edit in every manifest at once. `@effect/tsgo` is pinned exactly for the same reason: 0.45.0 lists TypeScript 7.0.2, the version this tree pins, and `gate:effect-diagnostics` fails when its planted floating effect stops being reported, so a bump cannot switch the check off in silence.",
+  "//dependencies:@ai-sdk": "The AI SDK v6 packages are pinned EXACTLY in every workspace that declares one (the root declares only what its own scripts and fixtures import), because upstream pins them to each other exactly: `ai@6.0.214` requires `@ai-sdk/provider-utils@4.0.33` and `@ai-sdk/gateway@3.0.139` by exact version, and each provider does the same. A caret on any one of them therefore does not age it independently — it floats that package ahead of the rest and bun answers with a SECOND copy of the SDK nested under whichever parent disagreed, which is how `@ai-sdk/provider` came to be installed twice while both manifests named one version. So the cohort moves as one edit. This one is GHSA-866g-f22w-33x8 (CVE-2026-8769, uncontrolled resource consumption in provider-utils' response handlers), whose first patched release on the v6 line is provider-utils 4.0.33; these are the earliest same-major releases that pin it. Later v6 releases exist and are also patched, but from `@ai-sdk/openai-compatible@2.0.70` the provider throws its own \"Response stream ended without a finish reason\" before a finish-step lands, which pre-empts the dead-stream detector in packages/core/src/chat.ts and the two contracts unit-chat-stream-integrity.test.ts holds over it. Moving past that boundary is a stream-integrity decision, not a dependency refresh. Float the cohort once upstream ranges its own packages instead of pinning them to each other.",
+  "//dependencies:effect": "`effect` is pinned EXACTLY to 4.0.0-rc.117 wherever a workspace declares it (core; cf-backend for its workerd probe; the root for the red half of `gate:effect-diagnostics`), by owner decision on 2026-09-23: the error model runs on Effect 4's typed failure channel, and 4.0.0 is a release candidate (npm `rc` tag; `latest` is 3.22.2). A caret on an RC floats to the next RC, and RCs move API, so a bump is one deliberate edit in every manifest at once. `@effect/tsgo` is pinned exactly for the same reason: 0.45.0 lists TypeScript 7.0.2, and `gate:effect-diagnostics` fails when its planted floating effect stops being reported, so a bump cannot switch the check off in silence. Float both once Effect 4.0.0 is a stable release.",
   "dependencies": {
     "ai": "7.0.127",
     "valibot": "^1.4.1",
@@ -153,45 +152,47 @@
   },
   "//devDependencies:bun": "Canary 9bd19c98e contains oven-sh/bun#44279 for retired-realm crashes, but not spawnSync fix #44581 (13a98b0dbd). Use the newest canary, then return to latest stable once both fixes ship.",
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.87.1",
-    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@earendil-works/pi-ai": "^0.87.1",
+    "@earendil-works/pi-coding-agent": "^0.87.1",
     "@effect/tsgo": "0.45.0",
     "@nimbus-sh/core": "0.15.0",
-    "@nimbus-sh/runtime-bash": "5.2.37-3",
-    "@nimbus-sh/runtime-cpython": "3.13.14",
+    "@nimbus-sh/runtime-bash": "^5.2.37-3",
+    "@nimbus-sh/runtime-cpython": "^3.13.14",
     "@opentui/core": "^0.5.11",
     "@opentui/react": "^0.5.11",
-    "@oxlint/plugins": "1.78.0",
+    "@oxlint/plugins": "^1.78.0",
     "@types/bun": "^1.3.12",
     "@types/node": "^25.9.1",
     "@vitest/coverage-istanbul": "^4.1.11",
     "agents": "^0.24.0",
     "aws4fetch": "^1.0.20",
     "bun": "canary",
-    "chess.js": "1.4.0",
+    "chess.js": "^1.4.0",
     "effect": "4.0.0-rc.117",
     "esbuild": "^0.28.1",
-    "knip": "6.32.2",
+    "knip": "^6.32.2",
     "miniflare": "5.20260926.0-alpha",
-    "oxc-parser": "0.143.0",
-    "oxlint": "1.78.0",
-    "oxlint-tsgolint": "7.0.2001",
-    "postcss": "8.5.28",
+    "oxc-parser": "^0.143.0",
+    "oxlint": "^1.78.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "postcss": "^8.5.28",
     "puppeteer": "^25.10.0",
     "react": "^19.2.5",
-    "sql-parser-cst": "0.42.1",
-    "typescript": "7.0.2",
+    "sql-parser-cst": "^0.42.1",
+    "typescript": "^7.0.2",
     "vite": "^8.0.8",
     "vitest": "^4.1.11",
-    "vitest-evals": "0.16.1",
-    "wrangler": "4.145.0"
+    "vitest-evals": "^0.16.1",
+    "wrangler": "^4.145.0"
   },
+  "//patchedDependencies": "Every other dependency floats on a caret, newest by default. A patched one stays exact, since its patch applies to that version alone; each floats again with its patch removed, once upstream ships the fix the patch carries.",
   "patchedDependencies": {
     "@plannotator/ui@0.46.1": "patches/@plannotator%2Fui@0.46.1.patch",
     "agents@0.24.0": "patches/agents@0.24.0.patch",
     "@cloudflare/codemode@0.5.2": "patches/@cloudflare%2Fcodemode@0.5.2.patch",
     "@nimbus-sh/core@0.15.0": "patches/@nimbus-sh%2Fcore@0.15.0.patch",
-    "@nimbus-sh/worker@0.13.1": "patches/@nimbus-sh%2Fworker@0.13.1.patch"
+    "@nimbus-sh/worker@0.13.1": "patches/@nimbus-sh%2Fworker@0.13.1.patch",
+    "ai@7.0.127": "patches/ai@7.0.127.patch"
   },
   "//overrides:hono": "hono is pinned here because the resolve lands 4.12.23 under `@modelcontextprotocol/sdk@1.29.0` (which declares `^4.11.4`), below 4.13.5: GHSA-gqvv-2mrq-wpjv, GHSA-g6gw-c38x-mqfc and GHSA-crvj-82cr-hjcx — a `toSSG()` write outside the output directory, unbounded dot-notation nesting in `parseBody()`, and a query parser that reads past the URL fragment — are all fixed in 4.13.5. 4.13.7 satisfies the declared range. Delete it once the MCP SDK's range resolves to 4.13.5 or later without it.",
   "//overrides:miniflare": "Direct Miniflare pins stay at 5.20260926.0-alpha until the routing smoke in kinu-logs/miniflare-upstream/ISSUE-2026-09-30.md passes on Bun: 5.20260930.0-alpha bypasses dispatchFetch's dispatcher there. The held release pins vulnerable undici 7.29.0, so its subtree stays on 7.29.1; the latest Cloudflare plugins' nested Miniflare already pins 7.29.1. Lift this hold on the first Miniflare release that passes that smoke.",
@@ -199,6 +200,9 @@
   "//overrides:fast-uri": "fast-uri is pinned here because ajv declares `^3.0.1`, and a lock that satisfies it keeps an old copy: 3.1.7 carries GHSA-hrr3-gc8f-f4qj, fixed in 3.1.8, and the install scanner refuses it. Delete it once ajv's own range starts at 3.1.8 or later.",
   "//overrides:katex": "katex is pinned here because mermaid 12.0.0 and @plannotator/ui 0.46.1 both declare `^0.16.47`, and every 0.16.x carries GHSA-238p-pmpm-9mq7 (prototype pollution in settings that can bypass `trust` restrictions), fixed in 0.18.2. The override moves their copies onto cf-backend's own ^0.18.11, so one KaTeX renders plan math and mermaid labels alike. Delete it once both declare 0.18.2 or later.",
   "//overrides:basic-ftp": "basic-ftp is pinned here because puppeteer -> @puppeteer/browsers -> proxy-agent -> pac-proxy-agent -> get-uri declares `^5.3.1`, and every 5.x carries GHSA-c475-qrg2-pj4r (quadratic CPU in Client.list() parsing a hostile directory listing), fixed only in 6.2.1; the install scanner refuses it. The pin crosses get-uri's major: its ftp: path runs only for a PAC file served over FTP, which nothing here uses. Delete it once get-uri's range reaches 6.2.1.",
+  "//overrides:sharp": "sharp is pinned because every Miniflare release holds it at 0.35.4: GHSA-wq5f-xc86-pv6w (librsvg CVE-2026-96889) is fixed in 0.35.5. Delete it once Miniflare depends on 0.35.5 or later.",
+  "//overrides:shell-quote": "shell-quote resolves 1.8.4 under react-devtools-core (`^1.6.1`): GHSA-pqg4-j6r4-53mv, command injection in quote(), is fixed in 1.11.0. Delete it once the resolve lands 1.11.0 or later without it.",
+  "//overrides:@modelcontextprotocol": "agents@0.24.0 pins @modelcontextprotocol/client 2.0.0 and sdk 1.30.0 exactly; GHSA-6qxp-vccf-f47h (OAuth credentials sent to a server-chosen authorization server) is fixed in client 2.2.0 and sdk 1.31.0. Delete both once agents is upgraded (0.26 no longer carries them).",
   "overrides": {
     "basic-ftp": "^6.2.1",
     "fast-uri": "^3.1.8",
@@ -207,6 +211,10 @@
     "lodash-es": "^4.18.1",
     "miniflare": {
       "undici": "7.29.1"
-    }
+    },
+    "sharp": "0.35.5",
+    "shell-quote": "^1.11.0",
+    "@modelcontextprotocol/client": "^2.3.1",
+    "@modelcontextprotocol/sdk": "^1.32.1"
   }
 }

@@ -6,11 +6,13 @@ import {
   InvalidResponseDataError,
   NoOutputGeneratedError,
   streamText,
+  wrapLanguageModel,
   type ModelMessage,
   type ToolSet,
   type LanguageModel,
   type TextPart,
   type ToolCallPart,
+  type PrepareStepResult,
   type StepResult,
   type StopCondition,
   type TextStreamPart,
@@ -37,7 +39,7 @@ import type { CountableRequest, InputTokenCount } from './providers/input-tokens
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
-import { isServerCompaction, serverCompactionOptions, serverCompactor } from './providers/server-compaction';
+import { compactionTriggerOptions, isServerCompaction, serverCompactionOptions, serverCompactor, sinceLatestCompaction } from './providers/server-compaction';
 import { describeProviderError, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
@@ -224,6 +226,16 @@ function stepText(step: AnswerStep): string {
   return step.content.flatMap((part) => (part.type === 'text' && !isServerCompaction(part.providerMetadata) ? [part.text] : [])).join('');
 }
 
+function carriesCompaction(step: AnswerStep | undefined): boolean {
+  return step?.content.some((part) => part.type === 'custom' && isServerCompaction(part.providerMetadata)) === true;
+}
+
+function endsAtCompaction(steps: readonly AnswerStep[]): boolean {
+  const last = steps.at(-1);
+
+  return carriesCompaction(last) && (last?.toolCalls?.length ?? 0) === 0 && last !== undefined && stepText(last) === '';
+}
+
 /** The final step's text, or null to keep what streamed (earlier prose is narration); a toolless `length`-cut step
  *  joins its continuation. */
 function answerFromSteps(
@@ -313,10 +325,26 @@ class ProviderCall {
   /** When the step's request left (`prepareStep`): a cache warm counts its TTL from there
    *  (docs/research/harness/anthropic-sources.md §2). */
   private stepSentAt = Date.now();
+  private requestBody: unknown;
   /** A finished step whose record or hook failed; the SDK drops a step-callback throw (ai 6.0.214 `notify`). */
   stepFailure: { readonly doing: string; readonly cause: unknown } | null = null;
 
   constructor(private readonly fallback: string | undefined) {}
+
+  /** The seal consumes the wire body for cache warming; SDK step and stream replay retain none. */
+  model(model: LanguageModel): LanguageModel {
+    if (typeof model === 'string') return model;
+
+    return wrapLanguageModel({ model, middleware: {
+      specificationVersion: 'v4',
+      wrapStream: async ({ doStream }) => {
+        const { request, ...answer } = await doStream();
+        this.requestBody = request?.body;
+
+        return answer;
+      },
+    } });
+  }
 
   /** Each step's request starts from the call's input and the seal's answers: ai 7 would carry the last step's
    *  rewrite (markers, weave) and its raw tool outputs into the next one. */
@@ -347,9 +375,8 @@ class ProviderCall {
     const account = callAccountOf(step.response);
     const egress = step.response.headers?.[EGRESS_ROUTE_HEADER];
     const { modelId } = step.response;
-    const { body } = step.request;
-    // The SDK keeps each step record until the call ends; left there, each body is a copy of the transcript.
-    Reflect.deleteProperty(step.request, 'body');
+    const body = this.requestBody;
+    this.requestBody = undefined;
     const calls = new Map(step.content.flatMap((part) => (part.type === 'tool-call' ? [[part.toolCallId, part] as const] : [])));
 
     const toolResults = step.content.flatMap((part) => {
@@ -738,9 +765,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   let cache = attemptCachePlan(opts, servingRoute, turnMessages, tools);
   const forcedInput = opts.transformTrigger === 'force' ? admittedTokens : undefined;
 
-  /** One attempt's provider options: its cache's, the serving model's server compaction, then its own. */
+  /** One attempt's provider options: its cache's, the serving model's server compaction, then its own. OpenAI's is
+   *  asked per step, from what the step replays. */
   const optionsFor = (spec: string | undefined, served: number | null | undefined, own: ChatOptions['providerOptions']) => mergeProviderOptions(
-    mergeProviderOptions(cache.providerOptions, serverCompactionOptions(spec, served, forcedInput)), own);
+    mergeProviderOptions(cache.providerOptions, serverCompactor(spec) === 'openai' ? undefined : serverCompactionOptions(spec, served, forcedInput)), own);
 
   /** The model each attempt calls, with the media it takes: the turn's for the primary, its own for a fallback. */
   let current = {
@@ -837,7 +865,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const attempt = cache;
 
     const result = streamText({
-      model: current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts),
+      model: call.model(current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts)),
       instructions: attempt.system,
       maxRetries: route.callRetries,
       messages: await narrowedFor(request),
@@ -848,8 +876,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       experimental_repairToolCall: repairToolCall(),
       abortSignal: signal,
       headers: { [PROVIDER_RETRIES_HEADER]: String(route.callRetries) },
-      // A cache warm replays a step's request body, which ai 7 leaves out unless asked.
-      include: { requestBody: true },
+      include: { requestBody: false },
       // The SDK default console.error dumped raw provider payloads; the rethrow below is the one place failures read.
       onError: ({ error }) => { call.streamError = error; },
       onToolExecutionStart: ({ toolCall }) => { call.dispatched(toolCall); },
@@ -862,6 +889,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       prepareStep: ({ stepNumber, initialMessages, steps }) => {
         const messages = call.requestStarting(initialMessages);
         stepSpans.start(stepOffset + stepNumber);
+        const opening = stepOffset + stepNumber === 0;
+        const previous = steps.at(-1);
+
+        // Never asked again right after its own compaction.
+        const trigger = carriesCompaction(previous) ? undefined
+          : compactionTriggerOptions(current.spec, serving.contextWindow, opening ? admittedTokens : previous?.usage.inputTokens, opening && forcedInput !== undefined);
 
         const prepared = composePrepareStep({
           extensions,
@@ -876,7 +909,17 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           turnStart,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
 
-        return prepared instanceof Promise ? prepared.then((done) => done ?? { messages }) : prepared ?? { messages };
+        const asked = (done: PrepareStepResult<ToolSet>) => {
+          const threshold = serverCompactor(current.spec) === 'openai'
+            ? serverCompactionOptions(current.spec, serving.contextWindow, opening ? forcedInput : undefined, sinceLatestCompaction(done?.messages ?? messages))
+            : undefined;
+
+          const extra = mergeProviderOptions(trigger, threshold);
+
+          return extra === undefined || done === undefined ? done : { ...done, providerOptions: mergeProviderOptions(done.providerOptions, extra) };
+        };
+
+        return prepared instanceof Promise ? prepared.then((done) => asked(done ?? { messages })) : asked(prepared ?? { messages });
       },
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
         async transform(part, controller) {
@@ -1034,6 +1077,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // the same prefix plus everything produced, so nothing is replayed. A second `length` finish is partial completion.
   if (!interrupted && first.finishReason === OUTPUT_LIMIT_REACHED) {
     const continued = yield* callChain(first.steps.length, first.produced);
+    steps = [...steps, ...continued.steps];
+    responseMessages = [...responseMessages, ...continued.produced];
+    interrupted = continued.interrupted;
+  }
+
+  if (!interrupted && endsAtCompaction(steps)) {
+    const continued = yield* callChain(steps.length, responseMessages);
     steps = [...steps, ...continued.steps];
     responseMessages = [...responseMessages, ...continued.produced];
     interrupted = continued.interrupted;

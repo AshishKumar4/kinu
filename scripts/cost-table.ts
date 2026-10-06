@@ -13,7 +13,7 @@
  */
 import { assertMeasured, finding } from './gate-ratchet';
 import { COST_TABLE, type CostTable, QUIET_LOAD, readCosts } from './gate-cost';
-import { LADDER, deployOrder } from './ladder';
+import { LADDER, deployOrder, readsDeployment } from './ladder';
 
 /** What is wrong with `costs` against the rows the ladder declares, one line per fault. */
 export function costTableFaults(costs: CostTable, gates = LADDER, planned = deployOrder()): string[] {
@@ -22,7 +22,7 @@ export function costTableFaults(costs: CostTable, gates = LADDER, planned = depl
   return [
     ...Object.keys(costs.rows).filter((run) => !runs.has(run)).map((run) => `a figure for a row that is no longer a gate: ${run}`),
     ...planned
-      .filter((gate) => gate.phase !== 'post-publish')
+      .filter((gate) => !readsDeployment(gate))
       .flatMap((gate) => {
         const cost = costs.rows[gate.run];
 

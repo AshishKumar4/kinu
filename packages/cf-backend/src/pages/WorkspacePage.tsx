@@ -14,7 +14,7 @@ import {
 } from "@kinu.run/core";
 import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, Rpc, TakePickOutcome } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
-import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
+import { useActorChat, useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
@@ -449,18 +449,30 @@ function SwarmNodePane({ main, node, ownerPath, agent, rosterLoaded }: {
   return <SwarmNodeColumn main={main} ownerPath={ownerPath} runId={runId} nodeId={nodeId} agent={agent} />;
 }
 
+function MainClearDialog({ open, agents, onClear, onClose }: {
+  open: boolean;
+  agents: readonly PanelAgent[];
+  onClear: () => Promise<void>;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+
+  return <DeleteChatDialog title={agents.find((agent) => agent.key === MAIN_AGENT.key)?.label ?? MAIN_AGENT.label} clears onConfirm={onClear} onClose={onClose} />;
+}
+
 /** The workspace's own pages share the chat route's key, so the socket and the bar stay mounted across them. */
 const WORKSPACE_VIEW = "/workspace/:agentId/:view";
 
-/** Main keeps its chat and takes a new title only; a chat the person opened can be renamed or deleted. */
+/** Main is the workspace's own chat: its × clears the conversation and Main stays. A chat the person opened is deleted. */
 function chatTab(workspace: string, agent: PanelAgent, actions: {
   renameMain: (title: string) => Promise<void>;
   renameChat: (path: string, title: string) => Promise<void>;
+  clearMain: () => void;
   remove: (path: string) => void;
 }): ChatTab {
   const path = agent.open.kind === "chat" ? agent.open.path : null;
 
-  if (path === null) return { agent, to: `/workspace/${workspace}`, rename: actions.renameMain };
+  if (path === null) return { agent, to: `/workspace/${workspace}`, rename: actions.renameMain, remove: actions.clearMain, clears: true };
 
   return {
     agent, to: helperBase(workspace, path).slice(0, -1),
@@ -525,7 +537,7 @@ function SubordinateChatColumn({
   title: string;
   input: boolean;
 }) {
-  const state = useKinu({ workspace, subordinate: subName });
+  const state = useActorChat({ workspace, subordinate: subName });
   const live = state.liveness.kind === "live";
   const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
 
@@ -667,7 +679,7 @@ function loadNotices(error: WorkspaceNotice | null, onRetry: () => void): Compos
 type WorkspaceState = ReturnType<typeof useKinu>;
 
 /** The workspace's bar, with the dialogs its delete controls open. */
-function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view, subName, inspector }: {
+function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view, subName, inspector, clearMain }: {
   workspace: string;
   title: string;
   editValue: string;
@@ -677,6 +689,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   view: string | undefined;
   subName: string | undefined;
   inspector: InspectorControl | null;
+  clearMain: () => void;
 }) {
   const navigate = useNavigate();
   const drawer = useLayoutDrawer();
@@ -688,6 +701,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   const chats = agents.filter((agent) => agent.tab).map((agent) => chatTab(workspace, agent, {
     renameMain: async (name) => { await state.rpc("renameMainChat", [name]); },
     renameChat: async (path, name) => { await state.renameSubordinate(path, name); },
+    clearMain,
     remove: (path) => setDeleting({ title: agent.label, path }),
   }));
 
@@ -715,7 +729,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
       {removing && <RemoveWorkspaceDialog workspace={{ name: workspace, displayName: editValue }} onClose={() => setRemoving(false)} />}
       {deleting && (
         <DeleteChatDialog title={deleting.title} onClose={() => setDeleting(null)}
-          onDelete={async () => {
+          onConfirm={async () => {
             await state.dismissSubordinate(deleting.path, false);
 
             if (subName === deleting.path) await navigate(`/workspace/${workspace}`);
@@ -989,6 +1003,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   // Device file restore exists only while a device is connected; overwriting real files gets
   // its own confirm, preceded by a safety snapshot.
   const [revertFor, setRevertFor] = useState<string | null>(null);
+  const [clearingMain, setClearingMain] = useState(false);
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
   const [restorePlan, setRestorePlan] = useState<DeviceRestorePlan | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -1043,7 +1058,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
 
   const bar = (
     <WorkspaceBar workspace={agentId} title={shownTitle} editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
-      state={state} agents={agentsPanel.list} shown={shownAgent} view={view} subName={subName} inspector={inspectorControl} />
+      state={state} agents={agentsPanel.list} shown={shownAgent} view={view} subName={subName} inspector={inspectorControl}
+      clearMain={() => setClearingMain(true)} />
   );
 
   // Never unmount on transient WS errors.
@@ -1300,6 +1316,10 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
           })))}
         />
       )}
+
+      <MainClearDialog open={clearingMain} agents={agentsPanel.list} onClose={() => setClearingMain(false)}
+        // Reset in the same press: an in-flight first page would otherwise restore the cleared messages.
+        onClear={async () => { state.clearHistory(); history.reset(); }} />
 
       {revertFor !== null && <RevertTurnDialog
         messageId={revertFor}

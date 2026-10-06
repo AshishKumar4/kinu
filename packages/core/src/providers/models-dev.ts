@@ -9,6 +9,7 @@ import type { JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { diagnostics, renderThrownChain, settle } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';
+import type { WireProtocol } from './wire-model';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 
@@ -187,10 +188,14 @@ export function getModelsDevProvider(
   }));
 }
 
-export interface ModelsDevModelEndpoint {
-  readonly baseURL: string;
-  readonly protocol: 'responses' | 'chat-completions';
+/** The API a catalog model speaks: its SDK's, which a model may override. */
+export interface ModelsDevWire {
+  readonly protocol: WireProtocol;
   readonly reasoning: boolean;
+}
+
+export interface ModelsDevModelEndpoint extends ModelsDevWire {
+  readonly baseURL: string;
 }
 
 /** A model can override its provider's SDK and endpoint in models.dev. */
@@ -199,8 +204,21 @@ export function getModelsDevModelEndpoint(
   modelId: string,
   deps: Pick<ProviderDeps, 'fetch'>,
 ): Promise<ModelsDevModelEndpoint | null> {
-  return settle(Effect.gen(function* () {
-    const data = yield* catalog(deps.fetch, DEFAULT_TTL_MS);
+  return settle(Effect.map(modelsDevModel(providerId, modelId, deps.fetch), (found) => {
+    if (found === null) return null;
+    const baseURL = concreteAPI(found.model?.provider?.api) ?? modelsDevCompatBaseURL(found.info);
+
+    return baseURL === null ? null : { baseURL, ...wireOf(found) };
+  }));
+}
+
+interface FoundModel {
+  readonly info: ModelsDevProviderInfo;
+  readonly model: ModelsDevModel | undefined;
+}
+
+function modelsDevModel(providerId: string, modelId: string, fetchFn: typeof fetch | undefined): Effect.Effect<FoundModel | null> {
+  return Effect.map(catalog(fetchFn, DEFAULT_TTL_MS), (data) => {
     const provider = data[providerId];
 
     if (!provider) return null;
@@ -208,14 +226,14 @@ export function getModelsDevModelEndpoint(
     const model = Object.entries(provider.models ?? {})
       .find(([key, entry]) => (nonEmptyString({ value: entry.id }) ?? key) === modelId)?.[1];
 
-    const info = providerInfoFromModelsDev(providerId, provider);
-    const npm = model?.provider?.npm ?? info.npm;
-    const baseURL = concreteAPI(model?.provider?.api) ?? modelsDevCompatBaseURL(info);
+    return { info: providerInfoFromModelsDev(providerId, provider), model };
+  });
+}
 
-    if (baseURL === null) return null;
+function wireOf({ info, model }: FoundModel): ModelsDevWire {
+  const npm = model?.provider?.npm ?? info.npm;
 
-    return { baseURL, protocol: npm === '@ai-sdk/openai' ? 'responses' : 'chat-completions', reasoning: model?.reasoning === true };
-  }));
+  return { protocol: npm === '@ai-sdk/openai' ? 'responses' : 'chat-completions', reasoning: model?.reasoning === true };
 }
 
 /** Metadata for every provider; throws when the catalog cannot be read rather than returning an empty list. */
