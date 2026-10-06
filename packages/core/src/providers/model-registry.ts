@@ -76,14 +76,18 @@ export function specModelInfo(registry: ProviderRegistry, deps: ProviderDeps, sp
   return catalogModelInfo(registry.get(provider), accountDeps(deps, provider, account), modelId);
 }
 
-/** A servable explicit choice, else Workers AI's default; never the first menu entry, a paid BYO provider. */
+/**
+ * A servable explicit choice, else Workers AI's default; never the first menu entry, a paid BYO provider. A model
+ * whose provider's listing failed is unconfirmed, not absent, so it counts as servable.
+ */
 export function defaultSpecFor(
   configured: string | null | undefined,
   availableSpecs: readonly string[],
+  unlisted: ReadonlySet<string>,
 ): string | null {
-  if (configured && availableSpecs.includes(configured)) return configured;
+  const servable = (spec: string) => availableSpecs.includes(spec) || unlisted.has(parseModelSpec(spec).provider);
 
-  return availableSpecs.includes(DEFAULT_WORKERS_AI_MODEL_SPEC)
-    ? DEFAULT_WORKERS_AI_MODEL_SPEC
-    : null;
+  if (configured && servable(configured)) return configured;
+
+  return servable(DEFAULT_WORKERS_AI_MODEL_SPEC) ? DEFAULT_WORKERS_AI_MODEL_SPEC : null;
 }

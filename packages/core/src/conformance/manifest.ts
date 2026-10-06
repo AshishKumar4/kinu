@@ -249,6 +249,8 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // KINU-N028; the prompt builder reads it every turn.
     instruction_approvals: EVERYWHERE,
     plan_reviews: EVERYWHERE,
+    // Shared schema; only cf records into it (the devbox egress and the GitHub MCP).
+    github_activity: EVERYWHERE,
     compaction_state: EVERYWHERE,
     compaction_archive: EVERYWHERE,
     imported_experience: EVERYWHERE,

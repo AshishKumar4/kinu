@@ -594,12 +594,13 @@ function suppressDeferredRejections(
 }
 
 /** Provider prompt-cache plan; marker strategies re-roll tail breakpoints each step. Pass-through without opts.cache. */
-function turnCachePlan(opts: ChatOptions, turnMessages: readonly ModelMessage[]): CacheBreakpointPlan {
+function turnCachePlan(opts: ChatOptions, turnMessages: readonly ModelMessage[], tools: ToolSet): CacheBreakpointPlan {
   return applyCacheBreakpoints({
     providerId: opts.cache?.providerId,
     modelId: opts.cache?.modelId ?? opts.modelContext?.id,
     system: opts.system,
     messages: turnMessages,
+    tools,
     sessionKey: opts.cache?.sessionKey ?? '',
     retention: opts.cache?.retention,
   });
@@ -734,7 +735,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     } }),
   };
 
-  const cache = turnCachePlan(opts, turnMessages);
+  const cache = turnCachePlan(opts, turnMessages, tools);
   const rollTail = hasCacheMarkers(cache.strategy);
   const forcedInput = opts.transformTrigger === 'force' ? admittedTokens : undefined;
 
@@ -840,7 +841,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       instructions: cache.system,
       maxRetries: route.callRetries,
       messages: await narrowedFor(request),
-      tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(current))),
+      tools: withToolSchemaDialect(cache.tools, toolSchemaDialect(dialectSpec(current))),
       ...offeredTools,
       stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.stepFailure !== null],
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
@@ -991,7 +992,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     if (rebuild) {
       initialContextAvailable = false;
       const history = initialContext?.messages ?? assembly.history;
-      base = turnCachePlan(opts, (await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined })).messages).messages;
+      base = turnCachePlan(opts, (await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined })).messages, tools).messages;
     }
 
     current = { ...bound, spec: next.spec, accepts: next.accepts, providerOptions: optionsFor(next.spec, served, bound.providerOptions) };

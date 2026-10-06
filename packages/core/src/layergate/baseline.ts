@@ -76,7 +76,7 @@ export const LOCKED_BASELINE: Baseline = {
   'step-pipeline/prune-under-budget-noop': '22a0e850add468a3',
   'step-pipeline/request-cache-routing': '07b8e7d48c2fd598',
   'step-pipeline/tail-markers-bounded': '28736f2849d646c8',
-  'step-pipeline/turn-cache-plan': '8de065f417f6333d',
+  'step-pipeline/turn-cache-plan': '055882401b66f84e',
   'subordinate-runtime/file-parts-never-inherit-payloads': '3b682d5bba04c63b',
   'subordinate-runtime/inherited-context-digest': 'ba86199c3b33a663',
   'subordinate-runtime/role-narrowing': 'eace2134ab6dd091',

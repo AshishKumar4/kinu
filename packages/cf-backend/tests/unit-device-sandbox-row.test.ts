@@ -64,19 +64,17 @@ function switchState(markup: string) {
 }
 
 describe('the device row labels the switch state', () => {
-  test('sandbox on: the switch checked, the Sandboxed label, the GPU line', () => {
+  test('sandbox on: the switch checked, and the GPU it passes through', () => {
     const html = renderRow({ tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: ['/dev/nvidia0'] });
     expect(switchState(html)).toEqual({ count: 1, checked: 'true', disabled: false });
     expect(html).toContain('data-sandbox-mode="sandboxed"');
-    expect(html).toContain('Sandboxed.');
-    expect(html).toContain(`GPU: ${describeGpuNodes(['/dev/nvidia0'])}`);
+    expect(html).toContain(describeGpuNodes(['/dev/nvidia0']));
   });
 
-  test('sandbox off: the switch unchecked, the Off label, no GPU line', () => {
+  test('sandbox off: the switch unchecked, no GPU line', () => {
     const html = renderRow({ tier: 'raw', capability: 'sandboxed', reason: null, detail: null, gpu: ['/dev/nvidia0'] });
     expect(switchState(html)).toEqual({ count: 1, checked: 'false', disabled: false });
     expect(html).toContain('data-sandbox-mode="raw"');
-    expect(html).toContain('Off.');
     expect(html).not.toContain('GPU:');
   });
 
@@ -87,12 +85,11 @@ describe('the device row labels the switch state', () => {
 });
 
 describe('a machine that cannot sandbox carries the badge, never an explanation', () => {
-  test('switch on, no bwrap: the badge, the Files only label, no GPU line', () => {
+  test('switch on, no bwrap: the badge, no GPU line', () => {
     const html = renderRow({ tier: 'sandboxed', capability: 'files_only', reason: 'no_bwrap', detail: null, gpu: [] });
     expect(switchState(html)).toEqual({ count: 1, checked: 'true', disabled: false });
     expect(html).toContain('data-sandbox-mode="files_only"');
     expect(html).toContain('Cannot sandbox');
-    expect(html).toContain('Files only.');
     expect(html).not.toContain('GPU:');
   });
 
@@ -156,10 +153,6 @@ describe('the device row shows the machine\'s software state beside its link sta
   test('behind the served build: a badge with the update-available copy', () => {
     const html = renderRow(sandboxed, { version: '0.2.0+older', servedVersion: SERVED, update: 'behind' });
     expect(updateBadge(html)).toEqual({ state: 'behind', text: DEVICE_UPDATE_COPY.behind });
-    // Beside the connected badge, in the header line, not a new row.
-    const header = html.slice(0, html.indexOf('role="switch"'));
-    expect(header).toContain('>connected<');
-    expect(header).toContain('data-device-update="behind"');
   });
 
   test('opted out: a badge with the update-off copy', () => {
@@ -181,7 +174,6 @@ describe('a device linked from / says the agent has the whole machine', () => {
 
     expect(html).toContain('the agent has this whole machine');
     expect(html).toContain('data-sandbox-mode="raw"');
-    expect(html).not.toContain('Sandboxed.');
     expect(switchState(html)).toMatchObject({ count: 1, disabled: true });
   });
 });

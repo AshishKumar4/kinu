@@ -120,7 +120,7 @@ describe('a node in a shipped agents.swarm run shares the origin plane', () => {
   test('every node of the run reports the shared plane', async () => {
     const rt = cliRuntime('swarm-node-home-shared');
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() });
+    const settled = await runShippedSwarm({ rt, model: () => answeringModel(), hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     expect(settled.map((node) => node.isolation))

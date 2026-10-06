@@ -88,6 +88,7 @@ export interface PendingAttachments {
   readonly parts: readonly FileUIPart[];
   readonly refusal: string | null;
   readonly add: (files: FileList | null | undefined) => void;
+  readonly offer: (parts: readonly FileUIPart[]) => void;
   readonly remove: (index: number) => void;
   readonly clear: () => void;
 }
@@ -148,6 +149,7 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
     }));
   }, [limitBytes]);
 
+  const offer = useCallback((parts: readonly FileUIPart[]) => { dispatch({ kind: "offer", parts, oversized: [] }); }, []);
   const remove = useCallback((index: number) => { dispatch({ kind: "remove", index }); }, []);
   const clear = useCallback(() => { dispatch({ kind: "clear" }); }, []);
 
@@ -165,5 +167,5 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
       : `${capacityRefusal} ${state.conversionFailure}`;
   }, [limitBytes, state.conversionFailure, state.refused]);
 
-  return { parts: state.parts, refusal, add, remove, clear };
+  return { parts: state.parts, refusal, add, offer, remove, clear };
 }

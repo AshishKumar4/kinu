@@ -7,12 +7,11 @@ import { Effect } from "effect";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
 import {
-  StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon, ArrowUpIcon, PlusIcon,
-  WarningCircleIcon, InfoIcon, CheckCircleIcon, FileIcon, XIcon,
+  StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon, ArrowUpIcon,
+  WarningCircleIcon, InfoIcon, CheckCircleIcon,
 } from "@phosphor-icons/react";
-import type { FileUIPart } from "ai";
 import { fmtSpan, type TurnLiveness } from "@kinu.run/core";
-import { AttachmentChip } from "@/components/AttachmentChip";
+import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
 import type { WorkspaceNotice } from "@/hooks/use-kinu";
 import { composing } from "@/components/ui/form";
 
@@ -166,45 +165,6 @@ function ModeSegment({ value, onChange, disabled }: {
   );
 }
 
-/** Dedupe by item/File identity only: files with identical metadata can hold different bytes. */
-function pastedFiles(data: DataTransfer): FileList {
-  const { files, items } = data;
-
-  if (files.length < 2) return files;
-  const seenItems = new Set<DataTransferItem>();
-  const seenFiles = new Set<File>();
-  const unique = new DataTransfer();
-
-  for (const item of items) {
-    if (item.kind !== "file" || seenItems.has(item)) continue;
-    seenItems.add(item);
-    const file = item.getAsFile();
-
-    if (file === null || seenFiles.has(file)) continue;
-    seenFiles.add(file);
-    unique.items.add(file);
-  }
-
-  // DataTransfer.files is authoritative when items supply no matching files.
-  return unique.files.length === 0 || unique.files.length === files.length ? files : unique.files;
-}
-
-/**
- * Presence comes from string flavors, never content. An HTML-only flavor contributes its rendered
- * text, falling back to the raw string.
- */
-function pastedText(data: DataTransfer): string {
-  const plain = data.getData("text/plain");
-
-  if (plain !== "") return plain;
-  const html = data.getData("text/html");
-
-  if (html === "") return "";
-  const rendered = new DOMParser().parseFromString(html, "text/html").body.textContent;
-
-  return rendered === null || rendered === "" ? html : rendered;
-}
-
 export interface ComposerProps {
   value: string;
   onValueChange: (value: string) => void;
@@ -217,14 +177,7 @@ export interface ComposerProps {
   onRecover?: () => Promise<string | null>;
   notices?: readonly ComposerNotice[];
   mode?: { value: ChatMode; onChange: (mode: ChatMode) => void };
-  attachments?: {
-    parts: readonly FileUIPart[];
-    onAdd: (files: FileList | null | undefined) => void;
-    onRemove: (index: number) => void;
-    /** Send stays disabled until each failed upload is removed. */
-    failed?: readonly string[];
-    onRemoveFailed?: (index: number) => void;
-  };
+  attachments?: AttachmentsControl;
   /** Passed in so the composer stays renderable without a socket. */
   modelPicker?: ReactNode;
   /** Offered only mid-stream, never in Plan mode. */
@@ -236,12 +189,12 @@ export function Composer({
   value, onValueChange, onSend, placeholder, disabled, liveness, onStop, onRecover,
   notices, mode, attachments, modelPicker, onBranch, textareaRef,
 }: ComposerProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const empty = value.trim() === "" && (attachments?.parts.length ?? 0) === 0;
   const hasFailedAttachment = (attachments?.failed?.length ?? 0) > 0;
   const streaming = liveness.kind === "live";
   const stranded = liveness.kind === "stranded";
-  const canBranch = Boolean(onBranch) && streaming && !empty && mode?.value !== "plan";
+  // A branch runs the draft's words as a parallel head: attachments alone give it nothing to run.
+  const canBranch = Boolean(onBranch) && streaming && value.trim() !== "" && mode?.value !== "plan";
   const [stopping, setStopping] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const recoverLabel = RECOVER_LABEL[recovering ? "busy" : "idle"];
@@ -255,27 +208,7 @@ export function Composer({
     // @container: the action row collapses to icons in a narrow chat column.
     <div data-composer-root className="@container mx-auto w-full max-w-[820px] px-3 pb-3 sm:px-5 sm:pb-4"
       onPaste={(e) => {
-        if (!attachments) return;
-        const files = pastedFiles(e.clipboardData);
-
-        if (files.length === 0) return; // a plain text paste — the browser's own insertion is right
-        attachments.onAdd(files);
-        const text = pastedText(e.clipboardData);
-
-        // Never infer file-only from string content: a filename can be the intended text.
-        if (text === "") {
-          e.preventDefault();
-
-          return;
-        }
-
-        // A plain flavor inserts natively (caret, undo stack). HTML-only needs
-        // plain-text insertion because a textarea cannot take rich content.
-        if (e.clipboardData.getData("text/plain") !== "") return;
-        e.preventDefault();
-
-        if (e.target instanceof HTMLTextAreaElement && document.execCommand("insertText", false, text)) return;
-        onValueChange(value === "" ? text : `${value}\n${text}`);
+        if (attachments) pasteAttachments(e, attachments, (text) => onValueChange(value === "" ? text : `${value}\n${text}`));
       }}>
       {notices && notices.length > 0 && (
         <div className="mb-2 space-y-1.5">
@@ -284,29 +217,7 @@ export function Composer({
       )}
 
       <div className="p-composer">
-        {attachments && (attachments.parts.length > 0 || hasFailedAttachment) && (
-          <div className="flex flex-wrap gap-1.5 px-3 pt-3">
-            {attachments.parts.map((part, i) => (
-              <AttachmentChip key={`${part.filename ?? "file"}-${i}`} part={part}
-                onRemove={() => attachments.onRemove(i)} />
-            ))}
-            {(attachments.failed ?? []).map((name, i) => (
-              <span key={`failed-${name}-${i}`}
-                className="inline-flex max-w-56 items-center gap-1.5 rounded-md border p-border p-fill px-1.5 py-1 p-meta p-text-2"
-                title={`Could not attach ${name}`}>
-                <FileIcon size={13} className="shrink-0 p-text-3" />
-                <span className="truncate font-mono">{name}</span>
-                <span className="shrink-0 font-medium p-warning">failed</span>
-                {attachments.onRemoveFailed && (
-                  <button type="button" onClick={() => attachments.onRemoveFailed?.(i)} aria-label={`Remove ${name}`}
-                    className="p-btn-ghost cursor-pointer p-0.5">
-                    <XIcon size={11} />
-                  </button>
-                )}
-              </span>
-            ))}
-          </div>
-        )}
+        {attachments && <AttachmentTray attachments={attachments} />}
 
         <InputArea ref={textareaRef} value={value} onValueChange={onValueChange}
           onKeyDown={(e) => {
@@ -334,16 +245,7 @@ export function Composer({
           className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-[18px] pt-3.5 pb-1 !bg-transparent !text-[15px] !leading-6 pointer-coarse:!text-[16px] !shadow-none !outline-none !ring-0 focus:!ring-0" />
 
         <div className="flex flex-wrap items-center gap-x-1 gap-y-1.5 px-2.5 pt-1 pb-2.5">
-          {attachments && (
-            <>
-              <input ref={fileInputRef} type="file" multiple className="hidden"
-                onChange={(e) => { attachments.onAdd(e.currentTarget.files); e.currentTarget.value = ""; }} />
-              <button type="button" onClick={() => fileInputRef.current?.click()} disabled={disabled}
-                className="p-composer-round" aria-label="Attach files" title="Attach files">
-                <PlusIcon size={16} />
-              </button>
-            </>
-          )}
+          {attachments && <AttachButton attachments={attachments} disabled={disabled} />}
 
           {mode && (
             <ModeSegment value={mode.value} onChange={mode.onChange} disabled={disabled || streaming} />

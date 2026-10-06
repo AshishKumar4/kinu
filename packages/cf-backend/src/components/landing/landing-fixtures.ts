@@ -41,10 +41,11 @@ export const LANDING_TAB_PRESENCE: TabPresence = { explorations: false, work: tr
 
 const NO_FIGURES = { activeMs: 0, cacheEma: null };
 
-/** The frame's chats: Main at work, and one waiting on the person. */
+/** A project's day-to-day chats. */
 export const LANDING_CHATS: readonly PanelAgent[] = [
   { key: 'main', label: 'Main', category: 'main', activity: 'working', parent: null, open: { kind: 'chat', path: null }, tab: true, input: true, figures: NO_FIGURES },
-  { key: 'actor-migration', label: 'Migration plan', category: 'user', activity: 'waiting', parent: 'main', open: { kind: 'chat', path: 'migration-plan' }, tab: true, input: true, figures: NO_FIGURES },
+  { key: 'actor-gift-cards', label: 'Should checkout support gift cards?', category: 'user', activity: 'waiting', parent: 'main', open: { kind: 'chat', path: 'gift-cards' }, tab: true, input: true, figures: NO_FIGURES },
+  { key: 'actor-cart', label: 'Speed up cart render', category: 'user', activity: 'working', parent: 'main', open: { kind: 'chat', path: 'cart-render' }, tab: true, input: true, figures: NO_FIGURES },
 ];
 
 /** Served by the `landing.tsx` fetch shim; the frame's workspace is first so the rail marks it open. */
@@ -52,9 +53,9 @@ const QUIET = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latest
 
 export const LANDING_ROSTER = {
   entries: [
-    { name: 'checkout-fixes', displayName: 'Checkout coupon bug', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
-    { name: 'perf-audit', displayName: 'Perf audit — landing', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
-    { name: 'email-triage', displayName: 'Email triage automation', createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
+    { name: 'checkout-fixes', displayName: 'Storefront', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+    { name: 'perf-audit', displayName: 'Dew', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
+    { name: 'email-triage', displayName: 'Support inbox', createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
   ].map((entry) => ({ ...entry, overview: { ...QUIET, slates: [], shares: [] }, decisions: 0 })),
   total: 3,
   nextCursor: null,

@@ -29,8 +29,13 @@ function tool(
 
 const text = (content: string): TextUIPart => ({ type: 'text', text: content });
 
-const kinds = (parts: readonly Part[]) =>
-  groupMessageParts(parts).map((b) => (b.kind === 'fold' ? `fold(${b.parts.length})` : b.part.type));
+function kindOf(block: ReturnType<typeof groupMessageParts>[number]): string {
+  if (block.kind === 'part') return block.part.type;
+
+  return block.kind === 'fold' ? `fold(${block.parts.length})` : 'reasoning';
+}
+
+const kinds = (parts: readonly Part[]) => groupMessageParts(parts).map(kindOf);
 
 /** `count` finished reads, their ids starting at `from`. */
 const reads = (count: number, from = 1): ToolUIPart[] =>
@@ -129,6 +134,17 @@ describe('grouping a turn into blocks', () => {
     const reasoning: ReasoningUIPart = { type: 'reasoning', text: 'hm' };
     expect(kinds([reasoning, text('a')]))
       .toEqual(['reasoning', 'text']);
+  });
+
+  test('thinking that runs on, across steps, is one block, its parts in order', () => {
+    const thought = (content: string): ReasoningUIPart => ({ type: 'reasoning', text: content });
+
+    const blocks = groupMessageParts([
+      thought('Planning the greeting'), { type: 'step-start' }, thought('Composing the question'), text('Hello'), thought('After'),
+    ]);
+
+    expect(blocks.map((block) => (block.kind === 'reasoning' ? block.parts.map((part) => part.text) : kindOf(block))))
+      .toEqual([['Planning the greeting', 'Composing the question'], 'text', ['After']]);
   });
 
   test('a read that returned a preview never folds', () => {

@@ -1237,7 +1237,7 @@ describe('the landing frames reuse the app rail', () => {
     }
 
     expect(rail.visible).toBeTrue();
-    expect(rail.roster).toContain('Checkout coupon bug');
+    expect(rail.roster).toContain('Storefront');
     expect(rail.roster).toContain('ashish@example.com');
   });
 

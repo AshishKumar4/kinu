@@ -12,11 +12,11 @@ import {
 } from '@kinu.run/core';
 import { createWorkersAIProvider } from '@kinu.run/core';
 import { createMyGatewayProvider } from '@kinu.run/core';
-import { createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
+import { createAIGatewayProvider, type ProviderEnv } from '@kinu.run/core';
 import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
 import { requestUrl } from '@kinu.run/core';
 
-const providerDeps = (env: Parameters<typeof resolvePlatformGateway>[0]) => ({
+const providerDeps = (env: ProviderEnv) => ({
   env,
   sessionAffinity: 'kinu-test',
   getAuth: async () => null,

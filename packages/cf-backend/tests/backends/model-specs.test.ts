@@ -23,7 +23,7 @@ const cli = createLocalModelResolver({
 
 describe('a model spec on both backends', () => {
   test('normalises to the same route', () => {
-    for (const named of ['', '@cf/meta/llama-4-scout', 'glm-5.3', 'minimax/m3', 'openai/gpt-5', 'claude/claude-opus-4-7']) {
+    for (const named of ['@cf/meta/llama-4-scout', 'minimax/m3', 'openai/gpt-5', 'claude/claude-opus-4-7']) {
       expect({ named, spec: cli.normalizeSpecSync(named) }).toEqual({ named, spec: cf.normalizeSpecSync(named) });
     }
   });

@@ -202,7 +202,7 @@ async function run(input: {
 
       return await seats.hostNode(node);
     },
-    model: scriptedNodes([input.branch0, input.branch1], cancel),
+    model: () => scriptedNodes([input.branch0, input.branch1], cancel),
     mode: 'build',
     logger,
     signal: cancel.signal,

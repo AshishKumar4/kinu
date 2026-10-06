@@ -34,7 +34,7 @@ const COUPON_REACH: readonly ReachGroup[] = [
     ],
   },
   {
-    binding: "Files", kind: "Checkout coupon bug", members: [
+    binding: "Files", kind: "Storefront", members: [
       { name: "readFile", what: "Reads files in the workspace", change: false, allowed: true },
       { name: "writeFile", what: "Changes files in the workspace", change: true, allowed: true },
     ],
@@ -47,7 +47,7 @@ const GAME_SLATE: SlateItem = {
 };
 
 const COUPON_SLATE: SlateItem = {
-  id: "coupon-board", title: "Coupon board", workspace: "checkout-fixes", workspaceTitle: "Checkout coupon bug",
+  id: "coupon-board", title: "Coupon board", workspace: "checkout-fixes", workspaceTitle: "Storefront",
   updated: "12m", preview: coupons, access: { kind: "people", people: [SAM, LEE] }, reach: COUPON_REACH,
   keyAt: "src/config.ts, line 4",
 };
@@ -56,23 +56,23 @@ const SLATES: readonly SlateItem[] = [
   GAME_SLATE,
   COUPON_SLATE,
   {
-    id: "landing-perf", title: "Landing perf report", workspace: "perf-audit", workspaceTitle: "Perf audit — landing",
+    id: "landing-perf", title: "Landing perf report", workspace: "perf-audit", workspaceTitle: "Dew",
     updated: "2h", preview: { kind: "slate", art: "perf" },
   },
   {
-    id: "receipts", title: "Receipts ledger", workspace: "email-triage", workspaceTitle: "Email triage automation",
+    id: "receipts", title: "Receipts ledger", workspace: "email-triage", workspaceTitle: "Support inbox",
     updated: "1d", preview: { kind: "slate", art: "ledger" },
   },
   {
-    id: "release", title: "Release checklist", workspace: "checkout-fixes", workspaceTitle: "Checkout coupon bug",
+    id: "release", title: "Release checklist", workspace: "checkout-fixes", workspaceTitle: "Storefront",
     updated: "3d", preview: { kind: "slate", art: "release" },
   },
   {
-    id: "palette", title: "Token palette", workspace: "design-sys", workspaceTitle: "Design system v2",
+    id: "palette", title: "Token palette", workspace: "design-sys", workspaceTitle: "Kinu website",
     updated: "5d", preview: { kind: "slate", art: "palette" },
   },
   {
-    id: "issue-board", title: "Issue board", workspace: "checkout-fixes", workspaceTitle: "Checkout coupon bug",
+    id: "issue-board", title: "Issue board", workspace: "checkout-fixes", workspaceTitle: "Storefront",
     updated: "1w", preview: issues, access: { kind: "link" }, reach: COUPON_REACH.filter((group) => group.binding === "GitHub"),
   },
 ];
@@ -87,7 +87,7 @@ const GIVEN: readonly GivenItem[] = [
   { id: "coupon-board", kind: "live", title: "Coupon board", access: { kind: "people", people: [SAM, LEE] }, preview: coupons },
   { id: "issue-board", kind: "live", title: "Issue board", access: { kind: "link" }, preview: issues, status: "Paused today: limit reached" },
   { id: "landing-perf", kind: "blueprint", title: "Landing perf report", access: { kind: "link" }, preview: { kind: "cover", hue: 262, letter: "L" } },
-  { id: "checkout-fixes", kind: "workspace", title: "Checkout coupon bug", access: { kind: "people", people: [SAM] }, preview: { kind: "cover", hue: 212, letter: "C" } },
+  { id: "checkout-fixes", kind: "workspace", title: "Storefront", access: { kind: "people", people: [SAM] }, preview: { kind: "cover", hue: 212, letter: "C" } },
 ];
 
 const ROOT: readonly DriveEntry[] = [
@@ -192,7 +192,7 @@ const DIALOGS = {
   "share-blueprint": { kind: "share", subject: COUPON_BOARD, pane: "blueprint" },
   "share-workspace": {
     kind: "share", pane: "workspace",
-    subject: { kind: "workspace", title: "Checkout coupon bug", owner: ME, access: { kind: "people", people: [SAM] } },
+    subject: { kind: "workspace", title: "Storefront", owner: ME, access: { kind: "people", people: [SAM] } },
   },
   stop: { kind: "stop", title: "Coupon board", who: "Sam Lee and Lee Park" },
 } satisfies Record<string, Dialog>;

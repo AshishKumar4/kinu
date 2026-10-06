@@ -1,13 +1,12 @@
 /**
- * Outbound email outbox (agent-core SPEC §7.4). The idempotency key becomes a stable `Message-ID`,
- * so a re-drive of a pending intent is deduped downstream rather than delivered twice.
+ * Outbound email outbox (agent-core SPEC §7.4): a key already sent is never sent again. Email Service writes the
+ * Message-ID itself and refuses one we set (developers.cloudflare.com/email-service/reference/headers, read
+ * 2026-10-05), so a send whose answer was lost is sent once more.
  */
 
-import { argumentDigest } from '../safety/argument-digest';
 import { Effect } from 'effect';
 import { scheduledOutbox, type Outbox, type OutboxDisposition } from './outbox';
 import { type SqlExec } from '../types/primitives';
-import * as v from 'valibot';
 import { diagnostics, renderThrownChain, settle, toKinuError } from "../obs/index";
 
 interface EmailAddress {
@@ -28,15 +27,13 @@ interface EmailSender {
 }
 
 export type OutboundSendResult =
-  | { status: 'sent'; messageId: string }
-  | { status: 'deduped'; messageId: string }
-  | { status: 'failed'; messageId: string; error: string };
+  | { status: 'sent' }
+  | { status: 'deduped' }
+  | { status: 'failed'; error: string };
 
 const MAX_SEND_ATTEMPTS = 8;
 
 const RETRY_BASE_MS = 30_000;
-
-const MESSAGE_ID_HEADER = 'Message-ID';
 
 export class EmailOutbox {
   private readonly outbox: Outbox<OutboundEmailMessage, EmailSender>;
@@ -74,28 +71,17 @@ export class EmailOutbox {
     message: OutboundEmailMessage,
     now: number,
   ): Promise<OutboundSendResult> {
-    const stableId = messageIdFor(key, message.from);
-
-    const stamped: OutboundEmailMessage = {
-      ...message,
-      headers: { ...message.headers, [MESSAGE_ID_HEADER]: stableId },
-    };
-
     // `retry-now`: asking again clears backoff and revives a dead letter; a sent key stays final.
-    const { id } = await this.outbox.queue(stamped, { dedupeKey: key, now, onDuplicate: 'retry-now' });
-    const queued = this.outbox.status(id);
+    const { id } = await this.outbox.queue(message, { dedupeKey: key, now, onDuplicate: 'retry-now' });
 
-    if (queued?.state === 'sent') {
-      return { status: 'deduped', messageId: messageIdOf(queued.message) ?? stableId };
-    }
+    if (this.outbox.status(id)?.state === 'sent') return { status: 'deduped' };
 
     await this.outbox.drain(now, { context: binding });
     const settled = this.outbox.status(id);
-    const messageId = messageIdOf(settled?.message) ?? stableId;
 
-    if (settled?.state === 'sent') return { status: 'sent', messageId };
+    if (settled?.state === 'sent') return { status: 'sent' };
 
-    return { status: 'failed', messageId, error: settled?.lastError ?? 'the send did not complete' };
+    return { status: 'failed', error: settled?.lastError ?? 'the send did not complete' };
   }
 
   async reconcile(binding: EmailSender, now: number): Promise<number> {
@@ -107,23 +93,4 @@ export class EmailOutbox {
   nextRetryAt(): number | null {
     return this.outbox.nextRetryAt();
   }
-}
-
-function messageIdFor(key: string, from: OutboundEmailMessage['from']): string {
-  return `<kinu.${argumentDigest(key)}@${emailDomainOf(from)}>`;
-}
-
-function messageIdOf(message: OutboundEmailMessage | null | undefined): string | null {
-  return message?.headers?.[MESSAGE_ID_HEADER] ?? null;
-}
-
-function emailDomainOf(from: OutboundEmailMessage['from']): string {
-  const address = emailAddressText(from);
-  const at = address.lastIndexOf('@');
-
-  return at >= 0 ? address.slice(at + 1) : 'kinu.local';
-}
-
-function emailAddressText(address: string | EmailAddress): string {
-  return v.is(v.string(), address) ? address : address.email;
 }

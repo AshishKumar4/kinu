@@ -2,10 +2,9 @@
 import { describe, expect, test } from 'bun:test';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 
-import { assessAdmissibility, outcomeRow, projectRunEventProvenance, scratchDir, subgoalOutcome, TASK_OUTCOME,
+import { assessAdmissibility, outcomeRow, projectRunEventProvenance, runToExit, scratchDir, subgoalOutcome, TASK_OUTCOME,
   type EvalObservation } from '@kinu.run/test-utils';
 import { isFirstRunSuite, trackedFiles } from '../../scripts/sources';
 import {
@@ -33,7 +32,7 @@ const RUNNER_ENV = (): NodeJS.ProcessEnv => ({ ...process.env, PATH: `${dirname(
  *  the predicate `scripts/sources.ts` exports for it. */
 const onDisk = trackedFiles().filter(isFirstRunSuite).sort();
 
-test('a red in either project reds the tier, which still reports spend and keeps its reports', () => {
+test('a red in either project reds the tier, which still reports spend and keeps its reports', async () => {
   const root = scratchDir('first-run-shell-retention');
   const scripts = join(root, 'scripts');
   const bin = join(root, 'node_modules', '.bin');
@@ -62,12 +61,12 @@ case "$1" in
 esac
 `, { mode: 0o755 });
 
-  const run = spawnSync('bash', [join(scripts, 'first-run-tier.sh')], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`,
+  const run = await runToExit(['bash', join(scripts, 'first-run-tier.sh')], {
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`,
       REPORT_FIXTURE: reports, KINU_EVAL_WEB_IDENTITY: 'fixture-identity' },
   });
 
-  expect(run.status).toBe(42);
+  expect(run.exitCode).toBe(42);
   // Both accounts the cases act as run on the scripted model, each put there with its own bearer.
   expect(readFileSync(join(reports, 'scripted'), 'utf8').trim().split('\n').sort())
     .toEqual(['https://kinu.run devices fixture-token', 'https://kinu.run scripted fixture-token']);
@@ -138,23 +137,23 @@ describe('the first-run corpus is the set this tier runs', () => {
       .toEqual([]);
   });
 
-  test('the fleet cases run one at a time, the rest beside them, and together they are the corpus', () => {
+  test('the fleet cases run one at a time, the rest beside them, and together they are the corpus', async () => {
     // The account's device fleet is the one thing cases share: two-machines
     // measures what happens when exactly two machines are live, so a sibling's
     // daemon beside it is a third machine in the measurement. Asked of vitest
     // itself, per project, so the partition is what the runner selects.
-    const selected = (project: string): string[] => {
-      const listed = spawnSync(RUNTIME, ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts',
-        '--project', project, '--filesOnly', '--json'], { env: RUNNER_ENV(), cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
+    const selected = async (project: string): Promise<string[]> => {
+      const listed = await runToExit([RUNTIME, '--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts',
+        '--project', project, '--filesOnly', '--json'], { env: RUNNER_ENV(), cwd: join(import.meta.dirname, '../..') });
 
-      expect(listed.status, listed.stderr).toBe(0);
+      expect(listed.exitCode, listed.stderr).toBe(0);
 
       return v.parse(v.array(v.object({ file: v.string() })), JSON.parse(listed.stdout))
         .map(({ file }) => relative(join(import.meta.dirname, '../..'), file)).sort();
     };
 
-    const fleet = selected(FIRST_RUN_PROJECTS.fleet);
-    const cases = selected(FIRST_RUN_PROJECTS.cases);
+    const fleet = await selected(FIRST_RUN_PROJECTS.fleet);
+    const cases = await selected(FIRST_RUN_PROJECTS.cases);
     expect(fleet).toEqual(fleetCases());
     expect(fleet.length).toBeGreaterThan(0);
     expect(cases.filter((file) => fleet.includes(file))).toEqual([]);
@@ -171,13 +170,13 @@ describe('the first-run corpus is the set this tier runs', () => {
     expect(firstRunConfig.test?.testTimeout).toBe(0);
   });
 
-  test('every case loads under the tier\'s own runner', () => {
+  test('every case loads under the tier\'s own runner', async () => {
     // Collecting a case imports it, under Bun as the tier runs it, which the partition above never does. On
     // 2026-09-25 35 cases failed there at import (`import { z } from 'zod'` in core came back undefined), and only a
     // deploy's post-publish wave would have shown it.
-    const listed = spawnSync(RUNTIME, ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts', '--json'], { env: RUNNER_ENV(), cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
+    const listed = await runToExit([RUNTIME, '--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts', '--json'], { env: RUNNER_ENV(), cwd: join(import.meta.dirname, '../..') });
 
-    expect(listed.status, listed.stderr).toBe(0);
+    expect(listed.exitCode, listed.stderr).toBe(0);
   });
 });
 

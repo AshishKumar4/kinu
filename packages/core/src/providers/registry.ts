@@ -7,7 +7,7 @@ import type {
 import { parseModelSpec } from './types';
 import { StaleModelList } from './util';
 import { Effect, Result } from 'effect';
-import { KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
 
 export interface DynamicProviderSource {
@@ -48,6 +48,8 @@ export interface ProviderRegistry {
 }
 
 const CATALOG_SOURCE_ID = 'catalog';
+
+const SLOW_LISTING_MS = 2_000;
 
 /** As {@link accountDeps} picks, without authenticating; null where it finds none or refuses. */
 async function chosenCredentialKey(deps: ProviderDeps, providerId: string, key: string, named?: string): Promise<string | null> {
@@ -168,11 +170,15 @@ export function createProviderRegistry(): ProviderRegistry {
   function probeEach<T>(
     providers: readonly ModelProvider[],
     probe: (provider: ModelProvider) => Promise<T>,
-  ): Effect.Effect<Array<{ readonly provider: ModelProvider; readonly result: Result.Result<T, unknown> }>> {
-    return Effect.forEach(providers, (provider) => Effect.map(
-      Effect.result(Effect.tryPromise({ try: () => probe(provider), catch: (cause) => cause })),
-      (result) => ({ provider, result }),
-    ), { concurrency: 'unbounded' });
+  ): Effect.Effect<Array<{ readonly provider: ModelProvider; readonly result: Result.Result<T, unknown>; readonly ms: number }>> {
+    return Effect.forEach(providers, (provider) => {
+      const started = Date.now();
+
+      return Effect.map(
+        Effect.result(Effect.tryPromise({ try: () => probe(provider), catch: (cause) => cause })),
+        (result) => ({ provider, result, ms: Date.now() - started }),
+      );
+    }, { concurrency: 'unbounded' });
   }
 
   return {
@@ -238,11 +244,18 @@ export function createProviderRegistry(): ProviderRegistry {
         }));
 
         // `null`: unavailable, which is not a failure.
-        for (const probed of yield* probeEach(providers, async (p) => {
+        const probes = yield* probeEach(providers, async (p) => {
           const own = accountDeps(deps, p.id);
 
           return await p.isAvailable(own) ? await p.listModels(own) : null;
-        })) {
+        });
+
+        const slowest = probes.reduce<(typeof probes)[number] | null>((worst, probed) => (worst === null || probed.ms > worst.ms ? probed : worst), null);
+
+        // A slow listing is one a dropped connection can cut; this names who held it.
+        if (slowest !== null && slowest.ms >= SLOW_LISTING_MS) diagnostics.event('models.listing_slow', { provider: slowest.provider.id, ms: slowest.ms });
+
+        for (const probed of probes) {
           if (Result.isFailure(probed.result)) {
             const error = probed.result.failure;
 

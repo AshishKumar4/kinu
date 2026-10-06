@@ -97,14 +97,14 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
       }), { provider: opts.credKey, source: String(res.status) });
     }
 
-    if (!res.ok && opts.mapError) return opts.mapError(res, resolved);
+    // Repair the endpoint's trailing duplicate usage chunk, which can zero cached_tokens.
+    if (res.ok) return repairSseCachedUsage(res);
+
+    if (opts.mapError) return inProviderWords(await opts.mapError(res, resolved));
 
     // A 401 after the forced refresh is a dead shared login, answered here for consumers without a mapper.
     // A mapper keeps first refusal: a gateway 401 can carry a more specific cause (2021).
-    if (res.status === 401) return errorResponse(401, DEAD_CLOUDFLARE_LOGIN);
-
-    // Repair the endpoint's trailing duplicate usage chunk, which can zero cached_tokens.
-    return repairSseCachedUsage(res);
+    return res.status === 401 ? errorResponse(401, DEAD_CLOUDFLARE_LOGIN) : inProviderWords(res);
   });
 }
 
@@ -168,9 +168,21 @@ function extractGatewayError(body: string): GatewayErrorDetail {
     : { code: error.code ?? null, message: error.message ?? null };
 }
 
-export function errorResponse(status: number, message: string): Response {
-  return new Response(
-    JSON.stringify({ error: { message } }),
-    { status, headers: { 'content-type': 'application/json' } },
-  );
+export function errorResponse(status: number, message: string, code?: number): Response {
+  const error = code === undefined ? { message } : { message, code: String(code) };
+
+  return new Response(JSON.stringify({ error }), { status, headers: { 'content-type': 'application/json' } });
+}
+
+/** A refusal in Cloudflare's v4 envelope, in the OpenAI shape the SDK adapters read, so its own code and words
+ *  reach the user rather than the status text. */
+async function inProviderWords(res: Response): Promise<Response> {
+  const body = await res.text();
+  const decoded = tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
+  const envelope = v.safeParse(V4ErrorSchema, decoded);
+  const first = envelope.success ? envelope.output.errors[0] : undefined;
+
+  if (first?.message !== undefined) return errorResponse(res.status, first.message, first.code);
+
+  return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
 }

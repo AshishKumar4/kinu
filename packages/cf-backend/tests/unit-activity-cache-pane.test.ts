@@ -1,31 +1,31 @@
+// Defends: a rate under another's label, and an unreported counter drawn as 0%. Type scale: the browser suite.
 import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { summarizeSteps } from '@kinu.run/core';
 import { CacheBlock } from '../src/components/surfaces/ActivitySurface';
 
+/** Each `<dt>` label with the visible text of the `<dd>` after it, in order. */
+const metrics = (html: string): [string, string][] =>
+  [...html.matchAll(/<dt[^>]*>([^<]*)<\/dt><dd[^>]*>(.*?)<\/dd>/g)].map((match) => [match[1] ?? '', (match[2] ?? '').replace(/<[^>]+>/g, '')]);
+
 describe('the Activity prompt-cache panel', () => {
-  test('EMA leads; last and mean retain row size; p95 and p99 use metadata size', () => {
+  test('each rate stands under its own label, EMA first, over the steps it sampled', () => {
     const { cacheHit } = summarizeSteps(Array.from({ length: 100 }, (_, index) => ({
       usage: { input: 100, cacheRead: index + 1 },
     })), { windowLimit: 200 });
 
     const html = renderToStaticMarkup(createElement(CacheBlock, { cacheHit }));
 
-    expect(html.indexOf('>EMA<')).toBeLessThan(html.indexOf('>Last<'));
-    expect(html).toContain('text-[22px] leading-none p-text');
-    expect(html).toMatch(/>Last<\/dt><dd><span class="[^"]*p-row-text p-text[^"]*">100\.0%/);
-    expect(html).toMatch(/>Mean<\/dt><dd><span class="[^"]*p-row-text p-text[^"]*">50\.5%/);
-    expect(html).toMatch(/>p95<\/dt><dd><span class="[^"]*p-meta p-text-2[^"]*">95\.0%/);
-    expect(html).toMatch(/>p99<\/dt><dd><span class="[^"]*p-meta p-text-2[^"]*">99\.0%/);
+    expect(metrics(html)).toEqual([['EMA', expect.stringMatching(/%$/)], ['Last', '100.0%'], ['Mean', '50.5%'], ['p95', '95.0%'], ['p99', '99.0%']]);
     expect(html).toContain('100 sampled steps');
   });
 
-  test('unreported cache counters do not render invented zero percentiles', () => {
+  test('unreported cache counters render no rate at all, never an invented zero', () => {
     const { cacheHit } = summarizeSteps([{ usage: { input: 100 } }], { windowLimit: 200 });
     const html = renderToStaticMarkup(createElement(CacheBlock, { cacheHit }));
 
-    expect(html).toContain('there is no');
-    expect(html).not.toContain('0.0%');
+    expect(metrics(html)).toEqual([]);
+    expect(html).not.toContain('%');
   });
 });

@@ -17,6 +17,6 @@ describe('markdown renders code without leaking its own parse tree', () => {
 
     expect(html).not.toContain('node=');
     expect(html).not.toContain('[object Object]');
-    expect(html).toContain('<code class="p-code-inline">tiny</code>');
+    expect([...html.matchAll(/<code\b[^>]*>([^<]*)<\/code>/g)].map((match) => match[1])).toEqual(['tiny', 'second']);
   });
 });

@@ -61,6 +61,11 @@ function asksThePerson(sql: SqlExecutor, actorId: string): boolean {
       && sql<{ x: number }>`SELECT 1 AS x FROM plan_reviews WHERE actor_id = ${actorId} AND status = 'pending' LIMIT 1`.length > 0);
 }
 
+function deviceAsks(sql: SqlExecutor, now: number): boolean {
+  return tableExists(sql, 'device_consent_requests')
+    && sql<{ x: number }>`SELECT 1 AS x FROM device_consent_requests WHERE expires_at > ${now} LIMIT 1`.length > 0;
+}
+
 function lastTurnFailed(sql: SqlExecutor, actorId: string): boolean {
   return tableExists(sql, 'actor_turn_claims')
     && sql<{ outcome: string | null }>`SELECT outcome FROM actor_turn_claims WHERE actor_id = ${actorId} ORDER BY claimed_at DESC LIMIT 1`[0]?.outcome === 'error';
@@ -220,7 +225,8 @@ export async function readWorkspaceAgents(input: {
 
   const main: PanelAgent = {
     key: 'main', label: root.config.getChatTitle() ?? 'Main', category: 'main', parent: null,
-    activity: chatActivity(sql, root.actorId, turnOpen(sql, root.actorId) || input.queued || turnOwed(walk, root)),
+    // A device's consent request names no actor: it is the workspace's, so Main is the chat that needs the person.
+    activity: deviceAsks(sql, walk.now) ? 'waiting' : chatActivity(sql, root.actorId, turnOpen(sql, root.actorId) || input.queued || turnOwed(walk, root)),
     open: { kind: 'chat', path: null }, tab: true, input: true, actorId: root.actorId, figures: NO_FIGURES,
   };
 

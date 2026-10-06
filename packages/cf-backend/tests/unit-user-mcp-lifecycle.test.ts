@@ -2,17 +2,18 @@
 // credentials never reach the SDK as data, and only a transport 401 forces reconnect.
 import { describe, expect, test } from 'bun:test';
 import {
-  createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
+  createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
   dropLiveMcpFetch, failNextMcpRemove, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
-  recordedMcpToolCalls, resetRecordedMcp, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer, seedUndiscoveredMcpTools,
+  recordedMcpToolCalls, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer, seedUndiscoveredMcpTools,
   type RecordedMcpTransport,
 } from './helpers/agents-sdk';
 import { storedMcpOptionsCarryCredential, validateMcpServerInput } from '../src/user/mcp';
 import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import type { McpToolSurface } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
 import { refusedSseConnect, refusedToolCall } from './helpers/mcp-transport';
@@ -35,6 +36,16 @@ function persistedServerOptions(id: string): string {
   if (row.server_options === null) throw new Error(`SDK row ${id} persisted no options`);
 
   return row.server_options;
+}
+
+const OWNER_ID = '0123456789abcdef0123456789abcdef';
+
+async function stopMessage(call: Promise<string>): Promise<string> {
+  try {
+    return `answered ${await call}`;
+  } catch (error) {
+    return renderThrownChain({ cause: error });
+  }
 }
 
 function harness(options?: TestUserDOOptions): TestUserDO {
@@ -663,7 +674,47 @@ describe('a caller stops the MCP call it made', () => {
     const call = h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'do_thing', args: {}, id: 'call-7' });
 
     await h.userDO.userMcp_cancelCall(owner, 'call-7');
-    await expect(call).rejects.toThrow('Its caller stopped the MCP tool call.');
+    expect(await stopMessage(call)).toBe('The MCP tool call stopped before its server answered.: Its caller stopped the MCP tool call.');
+    expect(recordedMcpToolAborts()).toEqual([expect.objectContaining({ code: 'cancelled' })]);
+    h.close();
+  });
+
+  // Release review, 2026-10-05: a stopped call waiting for its session's renewal kept its place among the calls in
+  // flight until an unrelated call finished, since a renewal waits for every call still on the old session.
+  test('a stopped call waiting for its server\'s session to be renewed settles at once, while the call the renewal waits for runs on', async () => {
+    const h = harness();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    seedMcpSession('srv1', 's1');
+    const owner = await testOwner();
+    const ended = await refusedToolCall({ status: 404, body: 'session ended' });
+    const call = (id: string) => h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'do_thing', args: {}, id });
+
+    holdNextMcpToolCall();
+    const running = call('call-running');
+    failNextMcpToolCall(ended);
+    const renewing = call('call-renewing');
+
+    await h.userDO.userMcp_cancelCall(owner, 'call-renewing');
+    expect(await stopMessage(renewing)).toContain('Its caller stopped the MCP tool call.');
+    expect(recordedMcpToolAborts()).toEqual([]);
+
+    await h.userDO.userMcp_cancelCall(owner, 'call-running');
+    expect(await stopMessage(running)).toContain('Its caller stopped the MCP tool call.');
+    h.close();
+  });
+
+  // Release review, 2026-10-05: deleting a workspace revoked its token first, so its MCP calls ran on and it could not cancel them.
+  test('deleting a workspace stops the MCP calls it is making', async () => {
+    const h = harness({ durableObjectId: OWNER_ID });
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    const token = await provisionTestWorkspace(h, 'leaving');
+    holdNextMcpToolCall();
+    const call = h.userDO.userMcp_callTool({ workspaceToken: token }, { serverId: 'srv1', name: 'do_thing', args: {}, id: 'call-leaving' });
+
+    await h.userDO.removeWorkspace(await testOwner(), 'leaving', OWNER_ID);
+    expect(await stopMessage(call)).toContain('Workspace "leaving" was deleted, so its MCP tool calls stop.');
     expect(recordedMcpToolAborts()).toEqual([expect.objectContaining({ code: 'cancelled' })]);
     h.close();
   });

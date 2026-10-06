@@ -616,6 +616,36 @@ export class ChatSession {
     if (this.runningAnnouncement?.startsWith(prefix) === true) this.stop();
   }
 
+  /**
+   * Retry: the turn the newest user message `id` opened runs again under it. Its completed steps stay in the context
+   * and the transcript, so their work is not done again and the next call follows the last of them; an answer the
+   * failure left empty is dropped.
+   */
+  retry(id: string): Promise<SendLanding> {
+    return settleEffect(Effect.gen({ self: this }, function* () {
+      if (this.turnInFlight()) return yield* Effect.fail(new KinuError('denied', 'Stop the turn that is running before you retry.'));
+      const opening = this.transcript.read(id);
+
+      if (opening === null || this.transcript.newestUserId() !== id) return yield* Effect.fail(new KinuError('bad_input', 'Only the newest message can be retried.'));
+      const answer = this.transcript.at(opening.position + 1);
+
+      if (answer?.role === 'assistant' && answer.parts.length === 0 && this.transcript.count() === answer.position + 1) this.transcript.truncate(answer.position);
+      const message = yield* Effect.promise(() => this.transcript.message(id));
+      const metadata = yield* Effect.promise(() => this.transcript.metadata(id));
+      const landing = Promise.withResolvers<SendLanding>();
+
+      this.landings.set(id, landing);
+      this.queue.push({
+        text: message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '',
+        kind: 'user', turnId: id, ...(metadata !== undefined && { metadata }),
+        settle: (failure) => { this.settleLandings([id], failure ?? 'turn'); },
+      });
+      this.pump();
+
+      return yield* attemptInItsWords('unavailable', () => landing.promise);
+    }));
+  }
+
   /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
   async revertTo(entryId: string): Promise<void> {
     await this.actorSession.revertConversation(this.sessionId, entryId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void);

@@ -75,7 +75,7 @@ function shownSteps(page: Page): Promise<string[]> {
 }
 
 /** The requested welcome step is accessible and the profile name is filled. */
-async function expectStep(page: Page, step: 0 | 1 | 2): Promise<void> {
+async function expectStep(page: Page, step: number): Promise<void> {
   expect(await shownSteps(page)).toEqual([ONBOARDING_STEP_IDS[step]]);
 
   if (step === 0) {
@@ -89,7 +89,7 @@ async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport:
   const body = await page.evaluate(() => document.body.innerText);
   expect(body).toContain('Workspaces');
 
-  for (const name of ['Checkout coupon bug', 'Perf audit', 'Email triage automation', 'Design system v2']) {
+  for (const name of ['Storefront', 'Dew', 'Support inbox', 'Kinu website']) {
     expect(body).toContain(name);
   }
 
@@ -121,17 +121,17 @@ async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport:
   await page.waitForFunction(
     () => document.querySelectorAll('[data-workspaces-view] a').length === 1,
   );
-  expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Checkout coupon bug');
+  expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Storefront');
   await page.click('[data-segment="all"]');
   await page.waitForFunction(
     () => document.querySelectorAll('[data-workspaces-view] a').length === 5,
   );
 
-  await page.type('[aria-label="Search workspaces"]', 'perf');
+  await page.type('[aria-label="Search workspaces"]', 'dew');
   await page.waitForFunction(
     () => document.querySelectorAll('[data-workspaces-view] a').length === 1,
   );
-  expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Perf audit');
+  expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Dew');
 }
 
 /** Is the delete-everything button awake? Asked in the page, so the polled
@@ -256,12 +256,40 @@ describe('account panels', () => {
         expect(await page.$eval('[data-connect-command]', (code) => code.textContent ?? '')).toContain('--connect');
         await clickByText(page, '[data-chatgpt-connect] button', 'Cancel');
 
-        // Here: the sign-in opens at OpenAI, and the address the browser lands on is pasted back.
+        // Here: the sign-in opens at OpenAI, and the address the browser lands on is pasted back. A sign-in
+        // cancelled at OpenAI is spent: starting again fetches a fresh link and clears the old address.
         await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here');
         await page.waitForSelector('[data-chatgpt-way="here"] input');
+        await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?error=access_denied&state=xyz');
+        await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish');
+        const starts = await page.evaluate(() => Number(document.documentElement.dataset.galleryPasteStarts ?? '0'));
+        await clickByText(page, '[data-chatgpt-way="here"] button', 'Start again');
+        await page.waitForFunction((before) => Number(document.documentElement.dataset.galleryPasteStarts ?? '0') > before, {}, starts);
+        await page.waitForSelector('[data-chatgpt-way="here"] input');
+        expect(await page.$eval('[data-chatgpt-way="here"] input', (input) => input.value)).toBe('');
+
         await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
         await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish');
+        // Signed in: the row says so at once, before anything else is touched, and the welcome says what it means.
+        await page.waitForFunction(() => document.querySelector('[data-provider="ChatGPT"]')?.textContent?.includes('Connected') === true
+          && document.querySelector('[data-chatgpt-connect]') === null);
         await page.waitForFunction(() => document.body.textContent?.includes("You're using your ChatGPT plan") === true);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('a model listing that fails hides no provider, and says so with a retry', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'setupmodal&panel=providers&models=fail', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('[role="dialog"]');
+        await settleAccountFixture(page);
+        await page.waitForSelector('[data-provider="Cloudflare AI"]');
+        await page.waitForSelector('[data-settings-resource="your connected models"][data-resource-state="error"]');
+        expect(await page.$('[data-provider="ChatGPT"]')).not.toBeNull();
       } finally {
         await page.close();
       }
@@ -343,13 +371,57 @@ describe('account panels', () => {
     });
   });
 
+  test('setup asks for a default model from the connected ones, and saves it as the account default', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, `welcome&step=${String(ONBOARDING_STEP_IDS.indexOf('model'))}`, 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-welcome-step="model"] [data-model-picker="Default model"]');
+        await page.click('[data-welcome-step="model"] [data-model-picker="Default model"]');
+        await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+        await clickByText(page, '[role="option"]', 'Claude Opus 4.7');
+        await page.waitForSelector('[data-default-model="anthropic/claude-opus-4-7"]');
+
+        const saved = await page.evaluate(async () => {
+          const envelope: unknown = await (await fetch('/api/user/profile-catalog')).json();
+
+          return JSON.stringify(envelope);
+        });
+
+        expect(saved).toContain('"default":{"model":"anthropic/claude-opus-4-7"');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('setup offers tools to connect, and every step can be passed by', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'welcome&step=1', 'light', 'mobile');
+
+      try {
+        for (const id of ['providers', 'model', 'tools', 'showcase']) {
+          await page.waitForFunction((want) => document.querySelector(`[data-welcome-step="${want}"]`)?.getAttribute('aria-hidden') !== 'true', {}, id);
+
+          if (id === 'tools') await page.waitForSelector('[data-welcome-step="tools"] [data-plugin-source]');
+
+          if (id !== 'showcase') await clickByText(page, 'button', 'Next');
+        }
+
+        expect(await page.$$eval('button', (nodes) => nodes.some((node) => node.textContent?.trim() === 'Finish setup'))).toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('the welcome wizard renders each step at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
       
 
       for (const theme of ['dark', 'light'] as const) {
         for (const viewport of ['desktop', 'mobile'] as const) {
-          for (const step of [0, 1, 2] as const) {
+          for (const step of ONBOARDING_STEP_IDS.keys()) {
             const page = await freshPage(gallery, `welcome&step=${String(step)}`, theme, viewport);
 
             try {
@@ -366,6 +438,27 @@ describe('account panels', () => {
       }
 
       
+    });
+  });
+
+  test('an account with no name starts blank, wears its email\'s letter, and moves on without saving an empty name', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'welcome&step=0&noname=1', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('[aria-label="Your name"]');
+        expect(await page.$eval('[aria-label="Your name"]', (el) => (el instanceof HTMLInputElement ? el.value : null))).toBe('');
+        expect(await page.$eval('[data-welcome-step="profile"] [data-avatar]', (el) => el.textContent?.trim())).toBe('N');
+
+        // Typed and cleared again: Next moves on, and no empty name reaches the account.
+        await page.type('[aria-label="Your name"]', 'x');
+        await page.keyboard.press('Backspace');
+        await clickByText(page, 'button', 'Next');
+        await page.waitForFunction(() => document.querySelector('[data-welcome-step="profile"]')?.getAttribute('aria-hidden') === 'true');
+        expect(await page.evaluate(() => document.documentElement.dataset.galleryProfilePatches ?? '0')).toBe('0');
+      } finally {
+        await page.close();
+      }
     });
   });
 
@@ -439,7 +532,7 @@ describe('account panels', () => {
               // workspace button is absent on the home route by design.)
               const rail = await home.evaluate(() => document.querySelector('aside')?.innerText ?? '');
               expect(rail).toContain('WORKSPACES');
-              expect(rail).toContain('Checkout coupon bug');
+              expect(rail).toContain('Storefront');
               expect(rail).toContain('ashish@example.com');
               
 

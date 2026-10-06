@@ -28,6 +28,11 @@ const HttpSchema = v.array(HttpCallSchema);
 /** The attachment the queue probes splice, byte-stable from the reservation through the replay. */
 const ATTACHMENT_URL = 'data:image/png;base64,iVBORw0KGgo=';
 
+/** A new workspace's logo is drawn by its own model too; a test counting turns leaves that call out. */
+function drawsLogo(call: HttpCall): boolean {
+  return call.users.some((message) => message.startsWith('Draw the logo'));
+}
+
 function carriesAttachment(call: HttpCall): boolean {
   return call.fileParts.some((parts) => parts.some((part) => part.type === 'image_url' && part.url === ATTACHMENT_URL));
 }
@@ -37,7 +42,7 @@ describe('two real turns over the HTTP model seam', () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('signal-queue-driver'));
 
     const conversation = v.parse(QueuedConversationSchema, await root.queuedConversation('signal'));
-    const calls = conversation.http.filter((call) => call.model === 'probe-queue');
+    const calls = conversation.http.filter((call) => call.model === 'probe-queue' && !drawsLogo(call));
 
     // Its MCP caller got its answer at admission beside the held turn, as a mid-turn splice's caller does.
     expect(conversation.task?.status).toBe('queued');
@@ -59,7 +64,7 @@ describe('two real turns over the HTTP model seam', () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('yield-queue-driver'));
 
     const calls = v.parse(QueuedConversationSchema, await root.queuedConversation('yield')).http
-      .filter((call) => call.model === 'probe-queue');
+      .filter((call) => call.model === 'probe-queue' && !drawsLogo(call));
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.users.filter((text) => !text.startsWith('<'))).toEqual(['QUEUE-OWNER']);
@@ -69,7 +74,7 @@ describe('two real turns over the HTTP model seam', () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('queue-driver'));
 
     const conversation = v.parse(QueuedConversationSchema, await root.queuedConversation('chat'));
-    const calls = conversation.http.filter((call) => call.model === 'probe-queue');
+    const calls = conversation.http.filter((call) => call.model === 'probe-queue' && !drawsLogo(call));
 
     expect(calls).toHaveLength(2);
     const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
@@ -93,7 +98,7 @@ describe('two real turns over the HTTP model seam', () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('peer-queue-driver'));
 
     const calls = v.parse(QueuedConversationSchema, await root.queuedConversation('peer')).http
-      .filter((call) => call.model === 'probe-queue');
+      .filter((call) => call.model === 'probe-queue' && !drawsLogo(call));
 
     // A message arriving behind a queued user turn rides that turn's first step, so the drain's
     // brief is the rerun's second user message.
@@ -130,7 +135,7 @@ describe('two real turns over the HTTP model seam', () => {
 
     const done = await coldRoot.completeQueuedConversation(prepared);
 
-    const calls = v.parse(HttpSchema, done.http).filter((call) => call.model === 'probe-queue');
+    const calls = v.parse(HttpSchema, done.http).filter((call) => call.model === 'probe-queue' && !drawsLogo(call));
 
     const realUsers = (call: (typeof calls)[number]) => call.conversation
       .filter((m) => m.role === 'user' && !m.content.startsWith('<') && !m.content.startsWith('Continue your previous response'))

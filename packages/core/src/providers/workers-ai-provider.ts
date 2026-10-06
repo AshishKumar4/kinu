@@ -7,7 +7,7 @@ import { DEFAULT_WORKERS_AI_MODEL_ID, SESSION_AFFINITY_HEADER } from './workers-
 import { listModelsDevProviderModels } from './models-dev';
 import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
 import { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
-import { WORKERS_AI_FALLBACK_MODEL_CATALOG, WORKERS_AI_PREFERRED_MODEL_IDS } from './workers-ai-catalog';
+import { WORKERS_AI_PREFERRED_MODEL_IDS } from './workers-ai-catalog';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 
 export function createWorkersAIProvider(deploymentBinding?: Parameters<typeof createDirectWorkersAIFetch>[0]): ModelProvider {
@@ -23,7 +23,7 @@ export function createWorkersAIProvider(deploymentBinding?: Parameters<typeof cr
     },
     unavailableReason: () => 'Cloudflare OAuth login is required for Workers AI billing.',
     listModels: (deps): Promise<ModelInfo[]> => listModelsDevProviderModels('cloudflare-workers-ai', deps, {
-      fallback: WORKERS_AI_FALLBACK_MODEL_CATALOG,
+      required: true,
       preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
     }),
     createModel(modelId, deps): LanguageModel {

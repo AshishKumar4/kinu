@@ -43,7 +43,6 @@ const CloudflareUserSchema = v.object({
   id: v.union([v.string(), v.number()]), email: v.string(),
   first_name: v.optional(v.nullable(v.string())),
   last_name: v.optional(v.nullable(v.string())),
-  username: v.optional(v.nullable(v.string())),
 });
 
 const GitHubUserSchema = v.object({
@@ -549,14 +548,13 @@ function cloudflareUserResultToProfile(result: JsonValue | undefined): Effect.Ef
     const firstName = stringClaim(user.first_name);
     const lastName = stringClaim(user.last_name);
     const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
-    const username = stringClaim(user.username);
 
     return {
       provider: 'cloudflare',
       providerSub: id,
       email,
       emailVerified: true,
-      displayName: fullName === '' ? username : fullName,
+      displayName: fullName === '' ? null : fullName,
     } satisfies OAuthProfile;
   });
 }

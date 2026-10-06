@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
-import { createMockFetch, createTestActors, createTestSql, unobservedSpend } from '@kinu.run/test-utils';
+import { createMockFetch, createTestActors, createTestSql, unobservedSpend, WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils';
 import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
 import type { ModelRelayHub } from '../src/egress/codex-egress-route';
 import { NO_RELAY_MACHINE } from './helpers/user-credentials';
@@ -16,7 +16,6 @@ import type { LanguageModel } from 'ai';
 import type { CredentialHeaders } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import { platformGatewayEnv, stubAiBinding } from './helpers/platform-gateway';
-import { WORKERS_AI_FALLBACK_MODEL_CATALOG } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
 
 /** `LanguageModel` is `string | LanguageModelV3`; resolvers hand back the object half. */
@@ -94,7 +93,7 @@ describe('OwnedModelServices', () => {
       'workers-ai', 'my-gateway', 'ai-gateway', 'codex', 'claude', 'openai',
       'anthropic', 'openrouter', 'openai-compat',
     ]);
-    const model = resolved(services.resolveModel());
+    const model = resolved(services.resolveModel(`ai-gateway/${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
     expect(model.provider).toBe('ai-gateway.chat');
     expect(model.modelId).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
@@ -261,17 +260,8 @@ function catalogDown() {
 /** models.dev answering with the Workers AI list only: a complete listing for an account with no catalog credential.
  *  The catalog memo is keyed by the fetch it came through, so it does not outlive this mock. */
 function catalogUp() {
-  const models = Object.fromEntries(WORKERS_AI_FALLBACK_MODEL_CATALOG.map((model) => [model.id.replace(/^@cf\//, ''), {
-    id: model.id,
-    name: model.label,
-    tool_call: true,
-    reasoning: (model.reasoningEfforts?.length ?? 0) > 0,
-    reasoning_options: [{ type: 'effort', values: [...model.reasoningEfforts ?? []] }],
-    limit: { context: model.contextWindow },
-  }]));
-
   const mock = createMockFetch([
-    { match: 'models.dev/api.json', respond: { status: 200, body: { 'cloudflare-workers-ai': { models } } } },
+    { match: 'models.dev/api.json', respond: { status: 200, body: WORKERS_AI_MODELS_DEV } },
   ]);
 
   globalThis.fetch = mock.fetch;
@@ -294,23 +284,24 @@ describe('OwnedModelServices — the provider snapshot', () => {
     });
   });
 
-  test('revision moves when only the failure set moves', async () => {
+  test('a failed catalog lists no guessed models, and its revision is not a clean one\'s', async () => {
     catalogDown();
     const degraded = (await degradedServices().profileProviderSnapshot()).snapshot;
 
     catalogUp();
     const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
 
-    expect([...degraded.availableModels].sort()).toEqual([...clean.availableModels].sort());
+    expect(degraded.availableModels.filter((spec) => spec.startsWith('ai-gateway/'))).toEqual([]);
+    expect(clean.availableModels.length).toBeGreaterThan(0);
     expect(clean.unavailableProviders).toEqual([]);
     // Different revisions: nothing keyed on revision may serve a partial picture as complete.
     expect(degraded.revision).not.toBe(clean.revision);
   });
 
   test("a stored effort a listed model lacks is sent as one it declares, read off the snapshot's listing", async () => {
-    catalogDown();
+    catalogUp();
     const { snapshot } = await snapshotServices(null).profileProviderSnapshot();
-    // GLM 5.3 as the platform gateway lists it; it declares low, medium and high.
+    // GLM 5.3 as models.dev lists it on the platform gateway; it declares low, high and max.
     const glm = snapshot.availableModels.find((spec) => spec.endsWith(`/${DEFAULT_WORKERS_AI_MODEL_ID}`));
 
     if (glm === undefined) throw new Error('the platform gateway lists no GLM 5.3');
@@ -432,7 +423,7 @@ describe('OwnedModelServices — the provider snapshot', () => {
     // The snapshot reads the credential revision before the listing: a change landing mid-sweep
     // must
     // never be cached.
-    const mock = catalogDown();
+    const mock = catalogUp();
     const upstream = globalThis.fetch;
     const held = Promise.withResolvers<void>();
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -531,10 +522,9 @@ describe('a degraded listing versus a confirmed-missing model', () => {
     };
   }
 
+  /** A degraded listing may name nothing, so the default tier falls to the built-in model. */
   function resolveWith(provider: ProviderCatalogSnapshot, deep: string = PINNED) {
-    const defaultModel = provider.availableModels[0];
-
-    if (!defaultModel) throw new Error('fixture needs at least one available model');
+    const defaultModel = provider.availableModels[0] ?? `ai-gateway/${DEFAULT_WORKERS_AI_MODEL_SPEC}`;
 
     return resolveTurnProfile({
       envelope: envelopeWithDeepPin(defaultModel, deep),

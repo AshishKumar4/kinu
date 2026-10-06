@@ -71,11 +71,11 @@ function AgentRow({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgentsP
   const figures = figuresLine(agent.figures);
 
   return (
-    <button type="button" onClick={() => panel.open(agent)} data-agent-row={agent.key}
+    <button type="button" onClick={() => panel.open(agent)} data-agent-row={agent.key} data-status={agent.activity}
       aria-current={shown ? "page" : undefined} title={figures === "" ? undefined : figures}
-      className={`flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2.5 pr-3 text-left transition-colors ${navRowCls(shown)}`}>
+      className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2.5 pr-3 text-left transition-colors ${navRowCls(shown)}`}>
       <span className="flex w-[13px] shrink-0 justify-center"><AgentStatusMark activity={agent.activity} /></span>
-      <span className="min-w-0 flex-1 truncate p-row-text">{agent.label}</span>
+      <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{agent.label}</span>
     </button>
   );
 }
@@ -96,7 +96,7 @@ function AgentGroup({ title, members, panel }: { title: string; members: readonl
       <div className="p-fold" data-folded={open ? undefined : ""}>
         <div inert={!open}>
           <ul className="p-nest ml-4 max-h-[40vh] overflow-y-auto">
-            {members.map((agent) => <li key={agent.key}><AgentRow agent={agent} panel={panel} /></li>)}
+            {members.map((agent) => <AgentBranch key={agent.key} agent={agent} panel={panel} />)}
           </ul>
         </div>
       </div>

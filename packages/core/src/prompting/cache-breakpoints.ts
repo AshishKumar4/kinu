@@ -2,7 +2,8 @@
  * Prompt-cache breakpoints: a closed provider-id → strategy map and pure marker placement, applied by both backends
  * at assembly (Workers AI affinity is set at model construction, `agentAffinityKey`). Anthropic layout (hermes
  * `system_and_3`, in the 4-breakpoint cap): last tool, end of system, and two rolled onto the tail every step, so
- * each request reads the previous one's prefix.
+ * each request reads the previous one's prefix. The strategy's one TTL marks all of them: Anthropic refuses a TTL
+ * that rises along tools → system → messages.
  */
 import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -352,10 +353,12 @@ export interface PromptCachePlan {
 
 export interface CacheBreakpointInput extends PromptCachePlanInput {
   messages: ReadonlyArray<ModelMessage>;
+  tools: ToolSet;
 }
 
 export interface CacheBreakpointPlan extends PromptCachePlan {
   messages: ModelMessage[];
+  tools: ToolSet;
 }
 
 /** The request's cache strategy, system, options and marked tail, for `runChat`. */
@@ -366,6 +369,7 @@ export function applyCacheBreakpoints(input: CacheBreakpointInput): CacheBreakpo
     strategy,
     system: cacheableSystem(input.system, strategy),
     messages: markCacheTail(input.messages, strategy),
+    tools: withLastToolMarked(input.tools, strategy),
   };
 
   const providerOptions = promptCacheOptions(strategy, input.sessionKey);
@@ -375,25 +379,12 @@ export function applyCacheBreakpoints(input: CacheBreakpointInput): CacheBreakpo
   return plan;
 }
 
-/**
- * Mark the last tool with an Anthropic ephemeral breakpoint; tools precede
- * system+messages in Anthropic's prefix order. Inert for other providers, so set
- * unconditionally at tool-build time. Mutates in place. `none` leaves tools unmarked.
- */
-export function markLastToolForAnthropicCache(
-  tools: ToolSet,
-  retention: CacheRetention = DEFAULT_CACHE_RETENTION,
-): void {
-  if (retention === 'none') return;
-  const keys = Object.keys(tools);
-  const key = keys.at(-1);
+/** The tool surface with its last tool carrying the strategy's breakpoint; only the Anthropic adapters read a tool's. */
+function withLastToolMarked(tools: ToolSet, strategy: PromptCacheStrategy): ToolSet {
+  const key = Object.keys(tools).at(-1);
+  const last = key === undefined ? undefined : tools[key];
 
-  if (key === undefined) return;
-  const last = tools[key];
+  if (key === undefined || last === undefined || markerNamespace(strategy) !== 'anthropic') return tools;
 
-  if (last === undefined) return;
-  last.providerOptions = {
-    ...last.providerOptions,
-    anthropic: { cacheControl: ephemeral(retention === 'long' ? '1h' : undefined) },
-  };
+  return { ...tools, [key]: { ...last, providerOptions: mergeMarker(last.providerOptions, 'anthropic', markerTtl(strategy)) } };
 }

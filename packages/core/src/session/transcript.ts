@@ -385,13 +385,17 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return rows;
   }
 
-  lastUserMetadataReference(): SessionPayload | null {
+  newestUserId(): string | null {
     this.actor.assertCurrent();
 
-    const newest = this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}
-      AND role = 'user' ORDER BY position DESC LIMIT 1`[0];
+    return this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}
+      AND role = 'user' ORDER BY position DESC LIMIT 1`[0]?.id ?? null;
+  }
 
-    return newest === undefined ? null : this.read(newest.id)?.metadata ?? null;
+  lastUserMetadataReference(): SessionPayload | null {
+    const newest = this.newestUserId();
+
+    return newest === null ? null : this.read(newest)?.metadata ?? null;
   }
 
   async lastUserMetadata(): Promise<JsonObject | undefined> {
@@ -553,7 +557,12 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
   truncate(position: number): void {
     this.atomic(() => {
       this.actor.assertCurrent();
-      void this.sql`DELETE FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND position >= ${position}`;
+      const { actorId } = this.actor;
+
+      // Explicit, not left to the cascade: a retried turn re-records its message under the same id.
+      void this.sql`DELETE FROM conversation_entry_parts WHERE actor_id=${actorId} AND session_id=${this.sessionId}
+        AND entry_id IN (SELECT id FROM conversation_entries WHERE actor_id=${actorId} AND session_id=${this.sessionId} AND position >= ${position})`;
+      void this.sql`DELETE FROM conversation_entries WHERE actor_id=${actorId} AND session_id=${this.sessionId} AND position >= ${position}`;
     });
   }
 

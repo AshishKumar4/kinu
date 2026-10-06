@@ -2,7 +2,7 @@ import { Tooltip } from "@cloudflare/kumo";
 import { WarningCircleIcon } from "@phosphor-icons/react";
 import type { AgentActivity } from "@kinu.run/core";
 
-/** Three readings by shape as well as hue; an agent at rest, done or stopped shows nothing. */
+/** Read by shape as well as hue; at rest, done or stopped, nothing. */
 const SIGNAL: Partial<Record<AgentActivity, { readonly kind: "working" | "waiting" | "failed"; readonly label: string }>> = {
   working: { kind: "working", label: "Working" },
   waiting: { kind: "waiting", label: "Needs you" },

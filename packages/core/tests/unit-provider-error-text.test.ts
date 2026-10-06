@@ -7,10 +7,11 @@ import type { LanguageModel } from 'ai';
 import type { JsonValue } from '../src/utils/json';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
-  describeProviderError, providerFailureFacts, toProviderError, runChat,
+  describeProviderError, providerFailureFacts, toProviderError, runChat, createMyGatewayProvider, createWorkersAIProvider, asFetchFunction,
+  type ModelCallDeps,
 } from '../src/index';
 import {
-  KinuError, createRecordingLogger, setDiagnosticsSink,
+  KinuError, createRecordingLogger, renderThrownChain, setDiagnosticsSink,
 } from '../src/obs/index';
 
 interface CircularProviderError {
@@ -248,5 +249,30 @@ describe('runChat provider failures', () => {
       restore();
       consoleError.mockRestore();
     }
+  });
+});
+
+// Production, 2026-10-05: Cloudflare's /ai/v1 answers a refusal in its v4 envelope, which the turn showed as "Bad Request".
+describe('a Cloudflare AI refusal reaches the user in Cloudflare\'s words', () => {
+  /** The body the account endpoint sent for an unknown model (measured 2026-10-05). */
+  const REFUSED = { errors: [{ message: 'AiError: No such model: No such model workers-ai/@cf/zai-org/glm-5.3 or task', code: 5007 }], success: false, result: {}, messages: [] };
+
+  const deps: ModelCallDeps = {
+    env: {}, sessionAffinity: 'kinu-test',
+    fetch: asFetchFunction(async () => Response.json(REFUSED, { status: 400, statusText: 'Bad Request' })),
+    getAuth: async () => ({ baseURL: 'https://api.cloudflare.com/client/v4/accounts/A/ai/v1', headers: { Authorization: 'Bearer t', 'cf-aig-gateway-id': 'default' } }),
+    hasCredential: async () => true,
+  };
+
+  test.each([
+    ['my-gateway', () => createMyGatewayProvider().createModel('workers-ai/@cf/zai-org/glm-5.3', deps)],
+    ['workers-ai', () => createWorkersAIProvider(undefined).createModel('@cf/zai-org/glm-5.3', deps)],
+  ] as const)('through %s, the code and message Cloudflare sent', async (_route, model) => {
+    const thrown = await rejectionOf(() => runToCompletion(model()));
+    const shown = renderThrownChain({ cause: thrown });
+
+    expect(shown).toContain('No such model');
+    expect(shown).toContain('5007');
+    expect(shown).not.toContain('Bad Request');
   });
 });

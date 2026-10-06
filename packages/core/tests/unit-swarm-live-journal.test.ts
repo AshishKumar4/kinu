@@ -101,7 +101,7 @@ async function run(announce?: AnnounceHeadActivity) {
     rt,
     // A real seat per node over this runtime's database; the journal is read back through `rt.actor`.
     hostNode: hostedSeatsOver({ rt, db }).hostNode,
-    model: reportingNode(),
+    model: () => reportingNode(),
     mode: 'build',
     logger: createRecordingLogger(),
   };

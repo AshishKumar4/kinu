@@ -14,6 +14,7 @@ import { revokeShare } from "@/lib/shared-api";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { useWorkspaceRpc } from "@/hooks/use-kinu";
 import { Modal } from "@/components/ui/Modal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { ForkDialog } from "@/components/shared/ForkDialog";
@@ -68,36 +69,6 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
           onFocus={(event) => event.currentTarget.select()} className={inputCls} aria-invalid={value !== "" && !valid} />
         {error !== null && <div role="alert" className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
       </form>
-    </Modal>
-  );
-}
-
-function ConfirmDialog({ title, body, action, onConfirm, onClose, marker }: {
-  title: string; body: ReactNode; action: string; onConfirm: () => Promise<void>; onClose: () => void; marker: `data-${string}`;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const confirm = (): void => {
-    setBusy(true);
-    setError(null);
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => onConfirm());
-      onClose();
-    }), showing((chain) => {
-      setError(chain);
-      setBusy(false);
-    }))));
-  };
-
-  return (
-    <Modal title={title} onClose={onClose} busy={busy} maxWidthClass="max-w-sm"
-      footer={<>
-        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton danger {...{ [marker]: "" }} onClick={confirm} disabled={busy}>{busy ? `${action}…` : action}</FilledButton>
-      </>}>
-      <p className="p-row-text p-text-2">{body}</p>
-      {error !== null && <div role="alert" className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
     </Modal>
   );
 }
@@ -238,7 +209,7 @@ function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps
   );
 }
 
-/** New, or New skill in the Skills folder: the page's one action, always in the same place. */
+/** New, or New skill in Skills: the page's one action, in one place. */
 export function PrimaryAction({ inSkills, ...rest }: NewProps & { readonly inSkills: boolean }) {
   if (!inSkills) return <NewMenu {...rest} />;
 
@@ -295,9 +266,10 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
       );
     case "delete":
       return (
-        <ConfirmDialog title={`Delete ${dialog.entry.name}?`} action="Delete" marker="data-drive-delete-confirm"
-          body={<>This deletes <span className="font-medium p-text">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</>}
-          onConfirm={() => act(() => deleteEntry(joinDir(folder, dialog.entry.name)))} onClose={onClose} />
+        <ConfirmDialog title={`Delete ${dialog.entry.name}?`} action="Delete" marker="data-drive-delete-confirm" maxWidthClass="max-w-sm"
+          onConfirm={() => act(() => deleteEntry(joinDir(folder, dialog.entry.name)))} onClose={onClose}>
+          <p className="p-row-text p-text-2">This deletes <span className="font-medium p-text">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</p>
+        </ConfirmDialog>
       );
     case "add-skill":
       return <AddSkillDialog onClose={onClose} onAdded={onSkillAdded} />;
@@ -305,15 +277,16 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
       return <DriveShareSheet slate={dialog.slate} onClose={() => { onClose(); onSharesChanged(); }} onListingPending={() => onSharesChanged("pending")} />;
     case "stop":
       return (
-        <ConfirmDialog title={`Stop sharing ${dialog.row.title}?`} action="Stop sharing" marker="data-drive-stop-confirm"
-          body={`${whoLoses(dialog.row)} access right away, and the link stops working. You can share it again later.`}
+        <ConfirmDialog title={`Stop sharing ${dialog.row.title}?`} action="Stop sharing" marker="data-drive-stop-confirm" maxWidthClass="max-w-sm"
           onConfirm={() => settle(Effect.gen(function* () {
             const workspace = dialog.row.workspace;
 
             if (workspace === undefined) return yield* Effect.die(new Error("this share names no workspace"));
             onSharesChanged((yield* Effect.promise(async () => revokeShare({ workspace, share: dialog.row.share }))).listing);
           }))}
-          onClose={onClose} />
+          onClose={onClose}>
+          <p className="p-row-text p-text-2">{`${whoLoses(dialog.row)} access right away, and the link stops working. You can share it again later.`}</p>
+        </ConfirmDialog>
       );
     case "fork":
       return dialog.row.kind === "live"
