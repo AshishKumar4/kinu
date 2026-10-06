@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { CHECKPOINTS_UNAVAILABLE_NO_GIT, parseJsonValue, redactPayload } from '@kinu.run/core';
+import { CHECKPOINTS_UNAVAILABLE_NO_GIT, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
 
@@ -1226,6 +1226,139 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
         (buttons) => buttons.filter((button) => button.innerText.includes('settled') || button.innerText.includes('graded turns')).length,
       )).toBe(1);
 
+      await page.close();
+    });
+  });
+});
+
+/** Each row of `?frame=provenance` as a reader meets it: whose bubble, which card, and what each drained event says. */
+function readProvenance(page: Page) {
+  return page.$$eval('[data-chat-row]', (rows) => Object.fromEntries(rows.map((row) => [row.getAttribute('data-chat-row') ?? '', {
+    bubble: row.querySelector('.p-user-bubble') !== null,
+    card: row.querySelector('[data-signal-card]') !== null,
+    systemEvent: row.querySelector('[data-system-event]')?.getAttribute('data-system-event') ?? null,
+    advisor: row.querySelector('[data-advisor-severity]')?.getAttribute('data-advisor-severity') ?? null,
+    events: [...row.querySelectorAll('[data-drained-event]')].map((event) => ({
+      variant: event.getAttribute('data-drained-event'),
+      replyExpected: event.hasAttribute('data-reply-expected'),
+      source: event.firstElementChild?.textContent ?? '',
+      brief: event.lastElementChild?.textContent ?? '',
+    })),
+    text: row.textContent ?? '',
+    height: row.getBoundingClientRect().height,
+  }])));
+}
+
+/** The loose cards in the workspace's thread, each by its state and the briefs it lists. */
+function threadCards(page: Page): Promise<{ state: string | null; briefs: string[] }[]> {
+  return page.$$eval('.p-thread-column [data-signal-card]', (cards) => cards.map((card) => ({
+    state: card.getAttribute('data-signal-card'),
+    briefs: [...card.querySelectorAll('[data-drained-event]')].map((event) => event.lastElementChild?.textContent ?? ''),
+  })));
+}
+
+/** Has the workspace's server send `frames` on the open connection, in order. */
+function pushFrames(page: Page, frames: JsonObject[]): Promise<void> {
+  return page.evaluate((all) => {
+    for (const detail of all) window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail }));
+  }, frames);
+}
+
+const webhookCard = (id: string, brief: string, state = 'pending') => ({
+  type: 'signal_card', id, state, metadata: { kinuEvent: 'event_drain' }, text: `- [webhook] from stripe: ${brief}`,
+});
+
+/**
+ * A turn the person did not type never wears their bubble, whichever way it was written: an operator's words from
+ * an MCP client or a steer re-run keep theirs, and a harness, a job, an advisor or a drained batch get a card. The
+ * drains are core's own text, so a card reads what the agent was told.
+ */
+describe('whose words a turn is', () => {
+  test('only what the person said is a bubble, and a drained batch lists each event it carried', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 900, height: 2400 });
+      await page.goto(`${origin}/gallery.html?frame=provenance`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-chat-row="drain-idle"] [data-drained-event]');
+
+      const rows = await readProvenance(page);
+      const row = (id: string) => present(rows[id], `the ${id} row`);
+
+      for (const id of ['typed', 'mcp', 'programmatic:steer']) expect([id, row(id).bubble, row(id).card]).toEqual([id, true, false]);
+
+      for (const id of ['job', 'job-bare', 'invented', 'harness', 'adv-nit', 'adv-concern', 'adv-blocker', 'drain-delegated', 'drain-idle']) {
+        expect([id, row(id).bubble, row(id).card]).toEqual([id, false, true]);
+      }
+
+      // The workspace's first turn is its own provenance: stored, never drawn.
+      expect(row('genesis')).toMatchObject({ bubble: false, card: false, text: '', height: 0 });
+      expect(row('job').text).toContain('research');
+      expect([row('invented').systemEvent, row('harness').systemEvent]).toEqual(['a_kind_invented_tomorrow', 'system']);
+      expect(['adv-nit', 'adv-concern', 'adv-blocker'].map((id) => row(id).advisor)).toEqual(['nit', 'concern', 'blocker']);
+
+      // Delegated work: the report names who sent it, and only the peer's ask waits on an answer, whose how-to stays the agent's.
+      const [report, ask] = row('drain-delegated').events;
+      expect(row('drain-delegated').events.map((event) => [event.variant, event.replyExpected])).toEqual([['subordinate_report', false], ['peer_agent', true]]);
+      expect(report?.source).toContain('cli-auditor');
+      expect(ask?.source).toContain('atlas');
+      expect(ask?.brief).toContain('which shape?');
+      expect(row('drain-delegated').text).not.toContain('event_id');
+
+      // The rest drain apart: a schedule whose label holds a colon keeps its whole label as the brief.
+      const [timer, mail] = row('drain-idle').events;
+      expect([timer?.variant, mail?.variant]).toEqual(['timer', 'email']);
+      expect(timer?.brief).toBe('background-job-wake:job-7');
+      expect(mail?.source).toContain('ops@example.com');
+      expect(mail?.brief).toContain('exit 1');
+
+      // A report of several lines opens to all of them.
+      await page.click('[data-chat-row="drain-delegated"] [data-drained-event="subordinate_report"]');
+      expect(await page.$eval('[data-chat-row="drain-delegated"] [data-drained-event="subordinate_report"]', (event) => (event.lastElementChild instanceof HTMLElement ? event.lastElementChild.innerText : '')))
+        .toContain('Report line one.\nReport line two.');
+      await page.close();
+    });
+  });
+
+  test('a signal keeps one card from delivery to the agent, a re-delivery reuses it, and an undelivered one leaves', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column');
+      const cardsBriefing = async (brief: string) => (await threadCards(page)).filter((card) => card.briefs.includes(brief));
+
+      await pushFrames(page, [webhookCard('sig-life', 'a refund of 12.00 settled')]);
+      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('a refund of 12.00 settled') === true);
+      expect(await cardsBriefing('a refund of 12.00 settled')).toEqual([{ state: 'pending', briefs: ['a refund of 12.00 settled'] }]);
+
+      await pushFrames(page, [{ type: 'signal_card', id: 'sig-life', state: 'shown' }]);
+      await page.waitForSelector('.p-thread-column [data-signal-card="shown"]');
+      expect(await cardsBriefing('a refund of 12.00 settled')).toEqual([{ state: 'shown', briefs: ['a refund of 12.00 settled'] }]);
+
+      // Delivered again after it was shown: the same card, pending once more and saying the new words.
+      await pushFrames(page, [webhookCard('sig-life', 'a refund of 12.00 settled twice')]);
+      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('settled twice') === true);
+      expect(await cardsBriefing('a refund of 12.00 settled')).toEqual([]);
+      expect(await cardsBriefing('a refund of 12.00 settled twice')).toEqual([{ state: 'pending', briefs: ['a refund of 12.00 settled twice'] }]);
+
+      // Transitions for a card this page never saw open, and frames that are no card, draw nothing; the next real card is the proof they were heard.
+      const before = (await threadCards(page)).length;
+      await pushFrames(page, [
+        { type: 'signal_card', id: 'sig-life', state: 'undelivered' },
+        { type: 'signal_card', id: 'sig-unseen', state: 'shown' },
+        { type: 'signal_card', id: 'sig-bare', state: 'pending' },
+        { type: 'signal_card', id: 'sig-odd', state: 'elsewhere', text: 'odd', metadata: { kinuEvent: 'event_drain' } },
+        webhookCard('sig-after', 'a payout of 3.00 settled'),
+      ]);
+      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('a payout of 3.00 settled') === true);
+      expect(await cardsBriefing('a refund of 12.00 settled twice')).toEqual([]);
+      expect((await threadCards(page)).length).toBe(before);
+
+      // Cards keep arrival order, and a flood keeps the newest fifty.
+      await pushFrames(page, Array.from({ length: 60 }, (_, at) => webhookCard(`sig-flood-${String(at)}`, `flood ${String(at).padStart(2, '0')}`)));
+      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('flood 59') === true);
+      const flood = (await threadCards(page)).flatMap((card) => card.briefs).filter((brief) => brief.startsWith('flood'));
+      expect(flood).toEqual(Array.from({ length: 50 }, (_, at) => `flood ${String(at + 10)}`));
       await page.close();
     });
   });
@@ -2720,6 +2853,67 @@ describe('WorkTab draws a section only when it has something to show', () => {
       expect(journal?.badge).toBe(String(all));
       // Jobs and Self-changes partition that same feed, so they add back up.
       expect(jobs + self).toBe(all);
+      await page.close();
+    });
+  });
+});
+
+/** What the running job's card prints, a line per row, with the name it goes by above it. */
+function latestOutput(page: Page): Promise<{ name: string; lines: string[] }> {
+  return page.$eval('[aria-label="Latest output"]', (output) => ({
+    name: output.parentElement?.firstElementChild?.textContent ?? '',
+    lines: (output.textContent ?? '').split('\n'),
+  }));
+}
+
+/**
+ * Now shows the work in hand as it runs: a running job prints its last lines, says where its sender dropped bytes
+ * and how many, and keeps up as it prints. Under it the journal is every settled thing, newest first, whatever kind.
+ */
+describe('Work keeps up with what is happening and what happened', () => {
+  test('a running job shows its last lines with each drop in place, and moves on as it prints', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 430, height: 1400 });
+      // The sender dropped 1.2 MB before its first line and 4 KB before its fifth.
+      await page.goto(`${origin}/gallery.html?frame=work&lane=streaming&lines=6&lost=1258291,0,0,0,4096`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Latest output"]');
+
+      const { name, lines } = await latestOutput(page);
+
+      // Named by its label, then its short id.
+      expect(name).toBe('workspace: bun run build4e1a77c0');
+      // Four lines of its own; the drop before them is told first and the one between them where it fell.
+      expect(lines.filter((line) => !line.includes('omitted'))).toEqual(['warn: chunk vendor.js is 1.4 MB after minify', 'compiled 120 modules', 'compiled 248 modules', 'compiled 377 modules']);
+      expect(lines[0]).toContain('1.2 MB');
+      expect(lines[3]).toContain('4.0 KB');
+      // Only the job still running prints; a settled one shows its outcome.
+      expect(await page.$$eval('[aria-label="Latest output"]', (outputs) => outputs.length)).toBe(1);
+
+      await page.goto(`${origin}/gallery.html?frame=work&lane=streaming&lines=4&live=1`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => document.querySelector('[aria-label="Latest output"]')?.textContent?.endsWith('compiled 248 modules') === true);
+      expect((await latestOutput(page)).lines).toEqual(['resolving 412 packages', 'warn: chunk vendor.js is 1.4 MB after minify', 'compiled 120 modules', 'compiled 248 modules']);
+      await page.close();
+    });
+  });
+
+  test('the journal interleaves settled jobs, closed tasks and self-changes, newest first', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 430, height: 2400 });
+      await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
+      await waitForWorkSection(page, 'Journal');
+
+      const rows = await page.evaluate(() => [...[...document.querySelectorAll('section')]
+        .find((node) => node.querySelector('.p-label')?.textContent === 'Journal')?.querySelector('div.p-group')?.children ?? []]
+        .map((row) => row.textContent ?? ''));
+
+      // Each fixture row by something only it says, in the order the fixture's times put them; a closed task names whose it was.
+      const order = ['changed nothing', 'tool preamble', 'bisect_migration', '2f8b1d04', 'coupon docs page · main', 'SAVE20 coupon 500 · main', 'percentage coupons', 'Stage the rollout · courier', '9d3c6e11'];
+
+      expect(rows.map((row) => order.findIndex((marker) => row.includes(marker)))).toEqual(order.map((_, at) => at));
+      // The running job is Now's, not the journal's.
+      expect(rows.some((row) => row.includes('7c1e4a92'))).toBe(false);
       await page.close();
     });
   });

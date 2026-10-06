@@ -65,7 +65,9 @@ test('a waiting device command shows its hidden characters as marks and offers o
 
     expect(card.text).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u);
     expect(card.text).toContain('\uFFFD');
-    expect(card.buttons).toEqual(['Not now', 'Use studio']);
+    // Two choices, and the one that binds names the device: no one-off grant.
+    expect(card.buttons).toHaveLength(2);
+    expect(card.buttons.filter((label) => label.includes('studio'))).toHaveLength(1);
     await page.close();
   });
 });

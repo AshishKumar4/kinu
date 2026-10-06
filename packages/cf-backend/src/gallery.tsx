@@ -80,12 +80,12 @@ import UserSettingsPage from "@/pages/UserSettingsPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
-  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
+  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
-  type AdvisorSeverity, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
+  type AdvisorSeverity, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc } from "@kinu.run/core";
@@ -4598,10 +4598,11 @@ const BUILD_LINES = [
 
 const BUILD_JOB_ID = "bgjob-4e1a77c0";
 
-function buildTail(lines: number, lost: number): JobOutputTail {
+/** `lost[n]` is the bytes the sender dropped just before line n. */
+function buildTail(lines: number, lost: readonly number[]): JobOutputTail {
   return BUILD_LINES.slice(0, lines).reduce<JobOutputTail | undefined>((tail, line, at) => followJobOutput(tail, {
-    type: JOB_OUTPUT_EVENT, jobId: BUILD_JOB_ID, seq: at + 1, dropped: at === 0 ? lost : 0,
-    chunks: [{ stream: line.startsWith("warn:") ? "stderr" : "stdout", text: `${line}\n`, ...(at === 0 && lost > 0 && { omitted: lost }) }],
+    type: JOB_OUTPUT_EVENT, jobId: BUILD_JOB_ID, seq: at + 1, dropped: lost[at] ?? 0,
+    chunks: [{ stream: line.startsWith("warn:") ? "stderr" : "stdout", text: `${line}\n`, ...((lost[at] ?? 0) > 0 && { omitted: lost[at] }) }],
   }), undefined) ?? { seq: 0, chunks: [], omitted: 0 };
 }
 
@@ -4615,7 +4616,7 @@ function buildingJob(output: JobOutputTail): BackgroundJob {
 function useBuildingJob(): BackgroundJob {
   const params = new URLSearchParams(location.search);
   const live = params.get("live") === "1";
-  const lost = Math.max(Number(params.get("lost") ?? 0) || 0, 0);
+  const lost = (params.get("lost") ?? "").split(",").map((bytes) => Math.max(Number(bytes) || 0, 0));
   const [lines, setLines] = useState(Math.min(Math.max(Number(params.get("lines") ?? 4) || 4, 1), BUILD_LINES.length));
 
   useEffect(() => {
@@ -5497,15 +5498,75 @@ const ADVISOR_NOTES = {
   blocker: "The migration drops coupons.kind while the old worker is still deployed. Roll the worker first or every checkout 500s.",
 } satisfies Record<AdvisorSeverity, string>;
 
-/** Core's rank order; metadata is the pair `classifyProgrammaticTurn` reads, taken from core. Held to the classifier in `tests/unit-background-event.test.ts`. */
+/** Core's rank order; metadata is the pair `classifyProgrammaticTurn` reads, taken from core. */
 const ADVISOR_MESSAGES: UIMessage[] = ADVISOR_SEVERITIES.map((severity) => msg({
   id: `adv-${severity}`, role: "user",
   metadata: { kinuEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: severity },
   parts: [{ type: "text", text: ADVISOR_NOTES[severity] }],
 }));
 
-function AdvisorFrame() {
-  return <MessageColumn messages={ADVISOR_MESSAGES} />;
+const DRAINED_EVENT = {
+  trace_id: "trace-1", caused_by: null, trust: "external", priority: "background", payload_visibility: "full",
+  received_at: 0, reply_channel: null, dedupe_key: null,
+} as const;
+
+/** Core's own drain text, so the card reads what the agent was given. Plan and Build never share a batch, so delegated work and the rest are two. */
+const DRAIN_BATCHES = {
+  delegated: [
+    {
+      ...DRAINED_EVENT, id: "ev-report", ingress: "subordinate", variant: "subordinate_report",
+      payload: { from_subordinate: "cli-auditor", status: "completed", content: "Report line one.\nReport line two.", sequence_id: "seq-1", kinu_mode: "build" },
+    },
+    {
+      ...DRAINED_EVENT, id: "ev-ask", ingress: "peer_async", variant: "peer_agent",
+      payload: {
+        from_agent_name: "atlas", from_user_id: "u1", topic: "schema", body: "which shape?", sender_event_id: "out-1",
+        reply_expected: true, kinu_mode: "build",
+      },
+    },
+  ],
+  idle: [
+    { ...DRAINED_EVENT, id: "ev-timer", ingress: "timer_alarm", variant: "timer", payload: { label: "background-job-wake:job-7", trigger_id: "x", scheduled_fire_at: 0 } },
+    {
+      ...DRAINED_EVENT, id: "ev-mail", ingress: "email_inbound", variant: "email",
+      payload: {
+        from: "ops@example.com", to: "agent@example.com", subject: "Deploy failed", body_text: "exit 1",
+        message_id: null, in_reply_to: null, references: null, attachments: [],
+      },
+    },
+  ],
+} satisfies Record<string, KinuEvent[]>;
+
+const said = (text: string) => [{ type: "text" as const, text }];
+
+const GENESIS = workspaceGenesisSignal("Audit the OAuth callback flow.");
+
+/** Every way a turn reaches the transcript, each under its own id: what the person said keeps their bubble, and nothing else does. */
+const PROVENANCE_MESSAGES: UIMessage[] = [
+  msg({ id: "genesis", role: "user", metadata: { kinuEvent: GENESIS?.kind ?? "", signalId: "sig-genesis" }, parts: said(GENESIS?.text ?? "") }),
+  msg({ id: "typed", role: "user", parts: said("Audit the checkout flow.") }),
+  msg({ id: "mcp", role: "user", metadata: { kinuEvent: "mcp", kinuAuthor: "operator" }, parts: said("Run the release checklist.") }),
+  msg({ id: "programmatic:steer", role: "user", metadata: { kinuAuthor: "operator" }, parts: said("Use the staging database instead.") }),
+  msg({ id: "job", role: "user", metadata: { kinuEvent: "background_job", kind: "research", status: "failed" }, parts: said("background job failed") }),
+  msg({ id: "job-bare", role: "user", metadata: { kinuEvent: "background_job" }, parts: said("background job finished") }),
+  msg({ id: "invented", role: "user", metadata: { kinuEvent: "a_kind_invented_tomorrow" }, parts: said("Something new happened.") }),
+  msg({ id: "harness", role: "user", metadata: { kinuAuthor: "harness" }, parts: said("[Runtime check] The tree is clean.") }),
+  ...ADVISOR_MESSAGES,
+  ...Object.entries(DRAIN_BATCHES).map(([id, events]) => msg({
+    id: `drain-${id}`, role: "user", metadata: { kinuEvent: "event_drain" }, parts: said(buildDrainBatch(events)?.text ?? ""),
+  })),
+];
+
+function ProvenanceFrame() {
+  return (
+    <div className="flex justify-center p-bg p-text min-h-screen">
+      <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
+        {PROVENANCE_MESSAGES.map((message) => (
+          <div key={message.id} data-chat-row={message.id}><MessageView message={message} onFork={() => {}} /></div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 const BRAIN_MEMORY = "## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n"
@@ -6477,7 +6538,7 @@ async function mount() {
   else if (frame === "qualityretry") node = <QualityRetryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "toolrun") node = <ToolRunScaleFrame secrets={new URLSearchParams(location.search).get("secrets") === "1"} />;
-  else if (frame === "advisor") node = <AdvisorFrame />;
+  else if (frame === "provenance") node = <ProvenanceFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;
