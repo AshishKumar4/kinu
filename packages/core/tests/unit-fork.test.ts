@@ -534,11 +534,11 @@ describe('a workspace fork', () => {
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
-    tgt.execRaw('DROP TABLE memory_chunks_fts');
-    tgt.execRaw('DROP TABLE memory_chunks');
-    tgt.execRaw('CREATE TABLE memory_chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, content TEXT NOT NULL)');
+    tgt.execRaw('DROP TABLE memory_note_chunks_fts');
+    tgt.execRaw('DROP TABLE memory_note_chunks');
+    tgt.execRaw('CREATE TABLE memory_note_chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, content TEXT NOT NULL)');
 
-    await expect(forkInto(src, tgt, { untilMessageId: 'm1' })).rejects.toThrow(/memory_chunks/);
+    await expect(forkInto(src, tgt, { untilMessageId: 'm1' })).rejects.toThrow(/memory_note_chunks/);
   });
 
   test('a target that cannot take actor_config fails instead of keeping its bootstrap name', async () => {

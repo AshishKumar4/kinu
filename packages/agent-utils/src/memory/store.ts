@@ -1,6 +1,6 @@
 import type { SqlExecutor } from "../types";
 import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
-import { chunkMarkdown } from "./chunker";
+import { chunkMarkdown, hashText } from "./chunker";
 import { searchFts } from "./query";
 import type { MemorySearchResult } from "./query";
 
@@ -8,7 +8,9 @@ const SNIPPET_MAX_CHARS = 700;
 
 const utf8 = new TextEncoder();
 
-interface FtsRow { id: string; path: string; start_line: number; end_line: number; text: string; rank: number }
+interface ChunkRow { id: string; path: string; start_line: number; end_line: number; hash: string }
+
+interface FtsRow extends ChunkRow { rank: number }
 
 /** A memory chunk with its verbatim text. Declared here because core depends on agent-utils. */
 export interface IndexedChunk {
@@ -25,24 +27,25 @@ export interface MemoryIndexDelta {
 	deletedIds: string[];
 }
 
-/** Standalone so workspace schema init needs no store. */
+export type NoteReader = (path: string) => Promise<string | null>;
+
+/** The note holds the text; rows keep lines and hash, FTS5 the terms. */
 export function initMemoryChunkTables(sql: SqlExecutor): void {
 	void sql`
-		CREATE TABLE IF NOT EXISTS memory_chunks (
+		CREATE TABLE IF NOT EXISTS memory_note_chunks (
 			id         TEXT PRIMARY KEY,
 			path       TEXT    NOT NULL,
 			start_line INTEGER NOT NULL,
 			end_line   INTEGER NOT NULL,
-			hash       TEXT    NOT NULL,
-			text       TEXT    NOT NULL
+			hash       TEXT    NOT NULL
 		)
 	`;
-	void sql`CREATE INDEX IF NOT EXISTS idx_mc_path ON memory_chunks(path)`;
+	void sql`CREATE INDEX IF NOT EXISTS idx_mc_path ON memory_note_chunks(path)`;
 	void sql`
-		CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts USING fts5(
+		CREATE VIRTUAL TABLE IF NOT EXISTS memory_note_chunks_fts USING fts5(
 			text,
-			content='memory_chunks',
-			content_rowid='rowid'
+			content='',
+			contentless_delete=1
 		)
 	`;
 }
@@ -82,12 +85,20 @@ export class MemoryStore {
 		}
 	}
 
+	hasChunks(path: string): boolean {
+		return this.sql<{ id: string }>`SELECT id FROM memory_note_chunks WHERE path = ${path} LIMIT 1`.length > 0;
+	}
+
+	isEmpty(): boolean {
+		return this.sql<{ id: string }>`SELECT id FROM memory_note_chunks LIMIT 1`.length === 0;
+	}
+
 	/** (Re)index a file into FTS5 (source of truth) and return the delta for the vector index. */
 	async indexFile(path: string, content: string): Promise<MemoryIndexDelta> {
 		const chunks = await chunkMarkdown(content);
 
 		const existing = this.sql<{ id: string; hash: string }>`
-			SELECT id, hash FROM memory_chunks WHERE path = ${path}
+			SELECT id, hash FROM memory_note_chunks WHERE path = ${path}
 		`;
 
 		const existingMap = new Map(existing.map((r) => [r.id, r.hash]));
@@ -100,12 +111,12 @@ export class MemoryStore {
 
 			if (existingMap.get(id) === chunk.hash) continue;
 
-			void this.sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE id = ${id})`;
+			void this.sql`DELETE FROM memory_note_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_note_chunks WHERE id = ${id})`;
 			void this.sql`
-				INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text)
-				VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash}, ${chunk.text})
+				INSERT OR REPLACE INTO memory_note_chunks (id, path, start_line, end_line, hash)
+				VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash})
 			`;
-			void this.sql`INSERT INTO memory_chunks_fts (rowid, text) SELECT rowid, text FROM memory_chunks WHERE id = ${id}`;
+			void this.sql`INSERT INTO memory_note_chunks_fts (rowid, text) SELECT rowid, ${chunk.text} FROM memory_note_chunks WHERE id = ${id}`;
 			upserted.push({ id, path, startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
 		}
 
@@ -113,8 +124,8 @@ export class MemoryStore {
 
 		for (const [id] of existingMap) {
 			if (!newIds.has(id)) {
-				void this.sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE id = ${id})`;
-				void this.sql`DELETE FROM memory_chunks WHERE id = ${id}`;
+				void this.sql`DELETE FROM memory_note_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_note_chunks WHERE id = ${id})`;
+				void this.sql`DELETE FROM memory_note_chunks WHERE id = ${id}`;
 				deletedIds.push(id);
 			}
 		}
@@ -122,45 +133,87 @@ export class MemoryStore {
 		return { upserted, deletedIds };
 	}
 
-	/** Page of indexed chunks ordered by `id`, for resumable semantic-index backfill. */
-	allChunksAfter(afterId: string, limit: number): IndexedChunk[] {
-		const rows = this.sql<{ id: string; path: string; start_line: number; end_line: number; text: string }>`
-			SELECT id, path, start_line, end_line, text FROM memory_chunks
+	/** A backfill page; `next` is null after the last. */
+	async allChunksAfter(afterId: string, limit: number): Promise<{ readonly chunks: IndexedChunk[]; readonly next: string | null }> {
+		const rows = this.sql<ChunkRow>`
+			SELECT id, path, start_line, end_line, hash FROM memory_note_chunks
 			WHERE id > ${afterId} ORDER BY id LIMIT ${limit}
 		`;
 
-		return rows.map((r) => ({ id: r.id, path: r.path, startLine: r.start_line, endLine: r.end_line, text: r.text }));
+		const chunks = (await chunkTexts(rows, (path) => this.readFile(path))).flatMap(({ row, text }) => (text === null ? [] : [{
+			id: row.id, path: row.path, startLine: row.start_line, endLine: row.end_line, text,
+		}]));
+
+		return { chunks, next: rows.length < limit ? null : rows.at(-1)?.id ?? null };
 	}
 
-	search(query: string, limit = 10): MemorySearchResult[] {
-		return searchMemoryChunks(this.sql, query, limit);
+	async search(query: string, limit = 10, reindex: (path: string) => Promise<void> = async (path) => this.reindex(path)): Promise<MemorySearchResult[]> {
+		return searchMemoryChunks({ sql: this.sql, read: (path) => this.readFile(path), reindex }, query, limit);
+	}
+
+	private async reindex(path: string): Promise<void> {
+		await this.indexFile(path, await this.readFile(path) ?? '');
 	}
 }
 
-/** Ranked hits: strict all-term page, then partial matches up to `limit`. */
-export function searchMemoryChunks(sql: SqlExecutor, query: string, limit = 10): MemorySearchResult[] {
+/** Null where the note's lines no longer hash to the row. */
+async function chunkTexts<Row extends ChunkRow>(rows: readonly Row[], read: NoteReader): Promise<Array<{ row: Row; text: string | null }>> {
+	const notes = new Map<string, Promise<string[] | null>>();
+
+	const linesOf = (path: string): Promise<string[] | null> => {
+		let lines = notes.get(path);
+
+		if (lines === undefined) {
+			lines = read(path).then((content) => content?.split("\n") ?? null);
+			notes.set(path, lines);
+		}
+
+		return lines;
+	};
+
+	return Promise.all(rows.map(async (row) => {
+		const lines = await linesOf(row.path);
+		const text = lines?.slice(row.start_line - 1, row.end_line).join("\n") ?? null;
+
+		return { row, text: text !== null && await hashText(text) === row.hash ? text : null };
+	}));
+}
+
+export interface NoteIndex {
+	readonly sql: SqlExecutor;
+	readonly read: NoteReader;
+	readonly reindex?: (path: string) => Promise<void>;
+}
+
+/** Strict all-term page, then partial matches up to `limit`. */
+export async function searchMemoryChunks({ sql, read, reindex }: NoteIndex, query: string, limit = 10): Promise<MemorySearchResult[]> {
 	if (!query.trim()) return [];
 
-	const rows = searchFts(query, limit, (match, capacity) => runFtsQuery(sql, match, capacity), (row) => row.id);
+	const ranked = (): FtsRow[] => searchFts(query, limit, (match, capacity) => runFtsQuery(sql, match, capacity), (row) => row.id);
+	let hits = await chunkTexts(ranked(), read);
+	const stale = [...new Set(hits.filter((hit) => hit.text === null).map((hit) => hit.row.path))];
+
+	if (stale.length > 0 && reindex !== undefined) {
+		for (const path of stale) await reindex(path);
+		hits = await chunkTexts(ranked(), read);
+	}
 
 	// bm25() is more negative for better matches; |rank|/(1+|rank|) keeps the score monotone with relevance.
-	return rows.map((r) => ({
+	return hits.flatMap(({ row: r, text }) => (text === null ? [] : [{
 		path: r.path,
 		startLine: r.start_line,
 		endLine: r.end_line,
-		snippet: r.text.length > SNIPPET_MAX_CHARS
-			? r.text.slice(0, SNIPPET_MAX_CHARS) + "..."
-			: r.text,
+		snippet: text.length > SNIPPET_MAX_CHARS ? text.slice(0, SNIPPET_MAX_CHARS) + "..." : text,
 		score: Math.abs(r.rank) / (1 + Math.abs(r.rank)),
-	}));
+	}]));
 }
 
 function runFtsQuery(sql: SqlExecutor, ftsQuery: string, limit: number): FtsRow[] {
 	return sql<FtsRow>`
-		SELECT mc.id, mc.path, mc.start_line, mc.end_line, mc.text, bm25(memory_chunks_fts) AS rank
-		FROM memory_chunks_fts
-		JOIN memory_chunks mc ON mc.rowid = memory_chunks_fts.rowid
-		WHERE memory_chunks_fts MATCH ${ftsQuery}
+		SELECT mc.id, mc.path, mc.start_line, mc.end_line, mc.hash, bm25(memory_note_chunks_fts) AS rank
+		FROM memory_note_chunks_fts
+		JOIN memory_note_chunks mc ON mc.rowid = memory_note_chunks_fts.rowid
+		WHERE memory_note_chunks_fts MATCH ${ftsQuery}
 		ORDER BY rank ASC, mc.rowid ASC
 		LIMIT ${limit}
 	`;

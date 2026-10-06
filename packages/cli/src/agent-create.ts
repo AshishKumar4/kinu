@@ -14,7 +14,7 @@ import {
 import { ensureDefaultTier, loadActiveProfile } from './default-model';
 import { readDefaultTier } from './profiles';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { makeSql, makeWorkspaceSchemaSql, soulIn, soulWriter } from '@kinu.run/cli-backend';
+import { makeSql, makeWorkspaceSchemaSql, soulIn, workspaceHome } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
   agentDir,
@@ -188,7 +188,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   try {
     db.exec('PRAGMA journal_mode = WAL');
     // The slug (`workspace_identity.name`) addresses the workspace; the title heads SOUL.md and MEMORY.md.
-    const rt = await createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig, writeSoul: soulWriter(db) });
+    const rt = await createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = rt.actor.config;
 

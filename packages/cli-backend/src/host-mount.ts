@@ -4,12 +4,13 @@ import type { VFS, VfsDirentType } from '@nimbus-sh/core/vfs/vfs.js';
  * bound shell's shadow-git checkpoints, so /undo covers them.
  */
 
-import { lstatSync, readlinkSync, realpathSync, type Dirent } from 'node:fs';
+import { lstatSync, mkdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, type Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Effect } from 'effect';
 import type { FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsMount } from '@kinu.run/core';
-import { FOLDER_SUBTREE, SLATES_ROOT, WORKSPACE_ROOT, withMountTable, workspacePath } from '@kinu.run/core';
+import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, withMountTable, workspacePath } from '@kinu.run/core';
+import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { settle, tolerate, tolerateAsync } from '@kinu.run/core/obs';
 
@@ -34,7 +35,15 @@ function throwVfsError(input: { error: unknown; syscall: string; path: string })
   throw toVfsError(input.error, input.syscall, input.path);
 }
 
-function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): VFS {
+type HostFiles = VFS & Required<Pick<VFS, 'readRange'>>;
+
+async function hostIo<T>(syscall: string, path: string, op: () => Promise<T>): Promise<T> {
+  try {
+    return await op();
+  } catch (error) { throwVfsError({ error, syscall, path }); }
+}
+
+function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): HostFiles {
   const snapshot = async (path: string, reason: string): Promise<void> => {
     if (!checkpoints) return;
     const workdir = checkpoints.workdirForPath(path);
@@ -42,93 +51,44 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
   };
 
   return {
-    async readFile(path) {
-      try {
-        return new Uint8Array(await fs.readFile(path));
-      } catch (error) { throwVfsError({ error, syscall: 'open', path }); }
-    },
+    readFile: (path) => hostIo('open', path, async () => new Uint8Array(await fs.readFile(path))),
     async writeFile(path, data) {
       await snapshot(path, 'file write');
-
-      try {
+      await hostIo('open', path, async () => {
         await fs.mkdir(dirname(path), { recursive: true });
         await fs.writeFile(path, data);
-      } catch (error) { throwVfsError({ error, syscall: 'open', path }); }
+      });
     },
-    async readdir(path) {
-      try {
-        return (await fs.readdir(path, { withFileTypes: true })).map((entry) => ({ name: entry.name, type: hostDirentType(entry) }));
-      }
-      catch (error) { throwVfsError({ error, syscall: 'scandir', path }); }
-    },
-    async stat(path, options) {
-      try {
-        const stat = await tolerateAsync(() => options?.follow === false ? fs.lstat(path) : fs.stat(path), 'enoent');
+    readdir: (path) => hostIo('scandir', path, async () => (await fs.readdir(path, { withFileTypes: true }))
+      .map((entry) => ({ name: entry.name, type: hostDirentType(entry) }))),
+    stat: (path, options) => hostIo(options?.follow === false ? 'lstat' : 'stat', path, async () => {
+      const stat = await tolerateAsync(() => options?.follow === false ? fs.lstat(path) : fs.stat(path), 'enoent');
 
-        if (stat === undefined) return null;
-        const type = stat.isSymbolicLink() ? 'symlink' as const : 'file' as const;
+      if (stat === undefined) return null;
+      const type = stat.isSymbolicLink() ? 'symlink' as const : 'file' as const;
 
-        return { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDirectory() ? 'directory' : type };
-      } catch (error) { throwVfsError({ error, syscall: options?.follow === false ? 'lstat' : 'stat', path }); }
-    },
+      return { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDirectory() ? 'directory' : type };
+    }),
     async unlink(path) {
       await snapshot(path, 'file delete');
-
-      try { await fs.rm(path, { recursive: true, force: true }); }
-      catch (error) { throwVfsError({ error, syscall: 'rm', path }); }
+      await hostIo('rm', path, () => fs.rm(path, { recursive: true, force: true }));
     },
-    async mkdir(path, opts) {
-      try { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }
-      catch (error) { throwVfsError({ error, syscall: 'mkdir', path }); }
-    },
+    mkdir: (path, opts) => hostIo('mkdir', path, async () => { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }),
+    readRange: (path, offset, length) => hostIo('read', path, async () => {
+      const handle = await fs.open(path, 'r');
+
+      try {
+        const out = new Uint8Array(length);
+        const { bytesRead } = await handle.read(out, 0, length, offset);
+
+        return out.subarray(0, bytesRead);
+      } finally { await handle.close(); }
+    }),
   };
-}
-
-/** `own`: the own-space path a path names, or null; `real`: where it is on this machine. */
-interface LocalPaths {
-  readonly own: (path: string) => string | null;
-  readonly real: (path: string) => string;
-}
-
-/**
- * Core's own-space paths (`/home/main`, `/slates`, a view's root) land in `space` as on the cloud; a relative one in the folder.
- * The one mapping the file plane routes by and its approval judges by, so every spelling of a path lands where it is judged.
- */
-function localPaths(folder: string, space: string, views: readonly string[]): LocalPaths {
-  const aliases = [WORKSPACE_ROOT, SLATES_ROOT, ...views.map((name) => `/${name}`)];
-  const absolute = (path: string): string => workspacePath(path, folder);
-
-  const named = (path: string): string | null => {
-    const at = absolute(path);
-
-    if (at === space || at.startsWith(`${space}/`)) return at.slice(space.length) || '/';
-
-    return aliases.some((alias) => at === alias || at.startsWith(`${alias}/`)) ? at : null;
-  };
-
-  // `/local` in the own space is the folder, as the resolver names it (`<space>/local/x` is the folder's `x`).
-  const inFolder = (at: string): string | null => (at === FOLDER_SUBTREE || at.startsWith(`${FOLDER_SUBTREE}/`) ? at.slice(FOLDER_SUBTREE.length) : null);
-
-  const own = (path: string): string | null => {
-    const at = named(path);
-
-    return at === null || inFolder(at) !== null ? null : at;
-  };
-
-  const real = (path: string): string => {
-    const at = named(path);
-    const inside = at === null ? null : inFolder(at);
-
-    if (inside !== null) return join(folder, inside);
-
-    return at === null ? absolute(path) : join(space, at);
-  };
-
-  return { own, real };
 }
 
 /** Real files under `root`, named from `/`. */
-function rootedFiles(root: string, files: VFS): VFS {
+function rootedFiles(root: string, files: HostFiles): HostFiles {
   const at = (path: string): string => join(root, workspacePath(path, '/'));
 
   return {
@@ -138,86 +98,92 @@ function rootedFiles(root: string, files: VFS): VFS {
     stat: (path, options) => files.stat(at(path), options),
     unlink: (path) => files.unlink(at(path)),
     mkdir: (path, opts) => files.mkdir(at(path), opts),
+    readRange: (path, offset, length) => files.readRange(at(path), offset, length),
   };
 }
+
+/** An agent's home in the space as real files; a relative path is the home's. */
+export function agentHomeFiles(space: string, agent: string): HostFiles {
+  const home = join(space, agentHome(agent));
+
+  return rootedFiles(home, createHostMountVFS(home, undefined));
+}
+
+/** The space named from its root, as `vfs://` names it. */
+export function spaceFiles(space: string): HostFiles {
+  return rootedFiles(space, createHostMountVFS(space, undefined));
+}
+
+/** `<space>/local` links the folder, as `vfs://local` names it. */
+const FOLDER_LINK = FOLDER_SUBTREE.slice(1);
+
+function linkFolder(space: string, folder: string): void {
+  const at = join(space, FOLDER_LINK);
+  const entry = lstatSync(at, { throwIfNoEntry: false });
+
+  // Anything but a link there is someone's own.
+  if (entry !== undefined && (!entry.isSymbolicLink() || readlinkSync(at) === folder)) return;
+  mkdirSync(space, { recursive: true });
+  rmSync(at, { force: true });
+  symlinkSync(folder, at);
+}
+
+/** Read-only to the file tool: the memory tool and the loop's writer change them. */
+const READ_ONLY_STATE = ['memory', 'scaffold', '.kinu/agents'];
 
 export interface LocalFilePlane {
   readonly folder: string;
   readonly space: string;
-  /** Mounted on the own space as on the cloud. */
   readonly views: readonly VfsMount[];
   readonly checkpoints: FileCheckpoints | undefined;
 }
 
-/** Every real path of the machine, the own space served as the cloud serves its own. Only the folder is snapshotted. */
-export function localFilePlane(input: LocalFilePlane): MountedVfs {
-  const machine = withMountTable(createHostMountVFS(input.folder, input.checkpoints), []);
-  const folderFiles = rootedFiles(input.folder, createHostMountVFS(input.folder, input.checkpoints));
+export type LocalPlane = MountedVfs & { readonly namespace: CompositeVFS };
 
-  // The own space lists the folder where the resolver names it, `vfs://local`; its files are reached through `localPaths`, never this mount.
-  const folder: VfsMount = {
-    name: FOLDER_SUBTREE.slice(1), files: () => folderFiles, absentReason: () => 'the folder is always mounted', filesOwner: 'agent',
-  };
+/** The machine's files as its shell names them; only the folder is snapshotted. */
+export function localFilePlane(input: LocalFilePlane): LocalPlane {
+  linkFolder(input.space, input.folder);
+  const namespace = new CompositeVFS(createHostMountVFS(input.folder, input.checkpoints), { resolvesPaths: true });
+  namespace.mount(input.space, spaceFiles(input.space), { resolvesPaths: true });
+  namespace.mount(join(input.space, FOLDER_LINK), rootedFiles(input.folder, createHostMountVFS(input.folder, input.checkpoints)), { resolvesPaths: true });
 
-  const own = withMountTable(rootedFiles(input.space, createHostMountVFS(input.space, undefined)), [...input.views, folder]);
-  const paths = localPaths(input.folder, input.space, input.views.map((view) => view.name));
+  for (const dir of READ_ONLY_STATE) {
+    const at = join(input.space, agentHome(MAIN_AGENT), dir);
+    namespace.mount(at, rootedFiles(at, createHostMountVFS(at, undefined)), { resolvesPaths: true, readOnly: true });
+  }
 
-  const route = (path: string): { readonly files: MountedVfs; readonly path: string } => {
-    const named = paths.own(path);
+  const views = input.views.map((view) => ({ ...view, at: join(input.space, view.name) }));
 
-    return named === null ? { files: machine, path: paths.real(path) } : { files: own, path: named };
-  };
+  for (const view of views) {
+    namespace.mount(view.at, () => view.files(), {
+      resolvesPaths: true, absentReason: () => view.absentReason(), ...(view.readOnly === true && { readOnly: true }),
+    });
+  }
 
-  const on = <T>(path: string, op: (files: MountedVfs, at: string) => T): T => {
-    const at = route(path);
+  const files = withMountTable({ namespace: async () => namespace, home: input.folder }, views);
 
-    return op(at.files, at.path);
-  };
-
-  const removable = (path: string, syscall: string): Effect.Effect<{ readonly files: MountedVfs; readonly path: string }, VfsError> => {
-    const at = route(path);
-
-    return (at.files === own ? at.path === '/' : at.path === input.folder)
-      ? Effect.fail(syscallError('EACCES', syscall, path, { detail: 'the workspace\'s own directory and its folder cannot be removed' }))
-      : Effect.succeed(at);
-  };
+  const removable = (path: string, syscall: string): Effect.Effect<string, VfsError> => (workspacePath(path, input.folder) === input.folder
+    ? Effect.fail(syscallError('EACCES', syscall, path, { detail: 'the workspace\'s folder cannot be removed' }))
+    : Effect.succeed(path));
 
   return {
-    mountOf: (path) => on(path, (files, at) => (files === own ? own.mountOf(at) : null)),
-    mountPoints: () => own.mountPoints(),
-    mounts: () => own.mounts(),
-    userRoots: () => own.userRoots().flatMap((root) => [root, join(input.space, root)]),
-    readFile: (path) => on(path, (files, at) => files.readFile(at)),
-    readRange: (path, offset, length) => on(path, (files, at) => files.readRange(at, offset, length)),
-    writeFile: (path, data) => on(path, (files, at) => files.writeFile(at, data)),
-    writeFileWithReport: async (path, data) => {
-      await on(path, (files, at) => files.writeFile(at, data));
-
-      return null;
-    },
-    readdir: (path) => on(path, (files, at) => files.readdir(at)),
-    stat: (path, options) => on(path, (files, at) => files.stat(at, options)),
-    mkdir: (path, opts) => on(path, (files, at) => files.mkdir(at, opts)),
-    unlink: (path) => settle(Effect.flatMap(removable(path, 'unlink'), (at) => Effect.promise(async () => at.files.unlink(at.path)))),
-    removeRecursive: (path) => settle(Effect.flatMap(removable(path, 'rm'), (at) => Effect.promise(async () => at.files.removeRecursive(at.path)))),
-    rename: (from, to) => settle(Effect.flatMap(Effect.all([removable(from, 'rename'), removable(to, 'rename')]), ([a, b]) => {
-      const viewed = [a, b].some((at) => at.files === own && own.mountOf(at.path) !== null);
-
-      return Effect.promise(async () => (viewed ? own.rename(a.files === own ? a.path : from, b.files === own ? b.path : to) : machine.rename(paths.real(from), paths.real(to))));
-    })),
+    ...files,
+    namespace,
+    unlink: (path) => settle(Effect.flatMap(removable(path, 'unlink'), (at) => Effect.promise(async () => files.unlink(at)))),
+    removeRecursive: (path) => settle(Effect.flatMap(removable(path, 'rm'), (at) => Effect.promise(async () => files.removeRecursive(at)))),
+    rename: (from, to) => settle(Effect.flatMap(Effect.all([removable(from, 'rename'), removable(to, 'rename')]), ([a, b]) => Effect.promise(async () => files.rename(a, b)))),
   };
 }
 
 /** The folder and the own space are the agent's; past them, the user is asked. A link in either is judged by where it points. */
-export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space' | 'views'>, planes: PathPlanes): FileReach {
-  const paths = localPaths(input.folder, input.space, input.views.map((view) => view.name));
-
+export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space'>, planes: PathPlanes): FileReach {
   return {
     planes,
     userRoots: () => [],
     locate: (path, op) => {
+      const at = workspacePath(path, input.folder);
       // A removal acts on the entry itself, so its own name is not followed.
-      const hostPath = op === 'delete' ? join(landing(dirname(paths.real(path))), basename(paths.real(path))) : landing(paths.real(path));
+      const hostPath = op === 'delete' ? join(landing(dirname(at)), basename(at)) : landing(at);
 
       return { hostPath, outside: ![input.folder, input.space].some((root) => withinRoot(landing(root), hostPath)) };
     },

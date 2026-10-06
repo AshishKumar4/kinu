@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
 import {
-  AGENT_STATE_PATHS, FOLDER_SUBTREE, SLATES_ROOT, archiveFileTree, isAgentStatePath,
+  FOLDER_SUBTREE, SLATES_ROOT, archiveFileTree,
   type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,
 } from '@kinu.run/core';
 import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
@@ -69,15 +69,11 @@ export function localArchiveTarget(roots: LocalArchiveRoots): ArchiveFileTarget 
   };
 }
 
-/** Moves a restored store's files to `target`, except agent state, which stays. */
-export function publishStoreFiles(store: VFS & Required<Pick<VFS, 'removeRecursive'>>, target: ArchiveFileTarget): Promise<void> {
-  const holdsState = (path: string): boolean => AGENT_STATE_PATHS.some((root) => root.startsWith(`${path}/`));
-
+/** Moves a restored store's files to `target`: locally every file is a real one, agent state too. Its directories stay, empty. */
+export function publishStoreFiles(store: VFS, target: ArchiveFileTarget): Promise<void> {
   const move = (path: string): Effect.Effect<void, KinuError> => Effect.gen(function* () {
     for (const entry of yield* Effect.promise(async () => store.readdir(path))) {
       const child = `${path}/${entry.name}`;
-
-      if (isAgentStatePath(child)) continue;
 
       if (entry.type === 'file') {
         const data = yield* Effect.promise(async () => store.readFile(child));
@@ -86,8 +82,6 @@ export function publishStoreFiles(store: VFS & Required<Pick<VFS, 'removeRecursi
       } else if (entry.type === 'directory') {
         yield* Effect.promise(() => target.mkdir(child.slice(1), { recursive: true }));
         yield* move(child);
-
-        if (!holdsState(child)) yield* Effect.promise(async () => store.removeRecursive(child));
       } else {
         return yield* new KinuError('unsupported', `A local workspace keeps files and directories; this archive's ${child} is a ${entry.type}.`);
       }

@@ -147,11 +147,11 @@ describe('normalizeObservedTables', () => {
   test('drops sqlite bookkeeping and FTS5 shadows, keeps the virtual table', () => {
     const observed = normalizeObservedTables([
       'conversation_entries', 'sqlite_sequence',
-      'memory_chunks_fts', 'memory_chunks_fts_data', 'memory_chunks_fts_idx',
-      'memory_chunks_fts_content', 'memory_chunks_fts_docsize', 'memory_chunks_fts_config',
+      'memory_note_chunks_fts', 'memory_note_chunks_fts_data', 'memory_note_chunks_fts_idx',
+      'memory_note_chunks_fts_content', 'memory_note_chunks_fts_docsize', 'memory_note_chunks_fts_config',
     ]);
 
-    expect([...observed].sort()).toEqual(['conversation_entries', 'memory_chunks_fts']);
+    expect([...observed].sort()).toEqual(['conversation_entries', 'memory_note_chunks_fts']);
   });
 
   test('keeps a _data-suffixed real table when no virtual parent exists', () => {

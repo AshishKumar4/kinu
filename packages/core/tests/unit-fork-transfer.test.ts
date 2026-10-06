@@ -236,7 +236,7 @@ describe('fork transfer receiver', () => {
       members: ws.sql<{ entry_id: string; position: number; message_id: string }>`
         SELECT entry_id, position, message_id FROM context_memberships WHERE to_revision IS NULL ORDER BY position`,
       tools: ws.sql<{ name: string }>`SELECT name FROM crafted_tools ORDER BY name`,
-      chunks: ws.sql<{ id: string; text: string }>`SELECT id, text FROM memory_chunks ORDER BY id`,
+      chunks: ws.sql<{ id: string; hash: string }>`SELECT id, hash FROM memory_note_chunks ORDER BY id`,
       config: ws.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config ORDER BY key`,
       lineage: readForkLineage(ws.sql),
     });

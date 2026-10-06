@@ -36,7 +36,7 @@ async function scenario(body: string): Promise<JsonObject> {
     const { Database } = await import('bun:sqlite');
     const { createWorkspace } = await import('@kinu.run/core/workspace-birth');
     const { initWorkspaceSchema } = await import('@kinu.run/core');
-    const { DriverLeaseHold, makeExecRaw, makeSql, makeWorkspaceSchemaSql, soulWriter } =
+    const { DriverLeaseHold, makeExecRaw, makeSql, makeWorkspaceSchemaSql, workspaceHome } =
       await import('./packages/cli-backend/src/index.ts');
     const { leaseHolder } = await import('./packages/cli-backend/tests/driver-lease-probe.ts');
     const { resolveLLMConfig, upsertAgentConfig } = await import('./packages/cli/src/config.ts');
@@ -49,7 +49,7 @@ async function scenario(body: string): Promise<JsonObject> {
     {
       const seed = new Database(dbPath);
       seed.exec('PRAGMA journal_mode = WAL');
-      await createWorkspace(seed, { name: 'leasebot', purpose: 'lease', llm: resolveLLMConfig(), writeSoul: soulWriter(seed) });
+      await createWorkspace(seed, { name: 'leasebot', purpose: 'lease', llm: resolveLLMConfig(), home: workspaceHome(seed) });
       initWorkspaceSchema(makeWorkspaceSchemaSql(seed));
       seed.close();
     }

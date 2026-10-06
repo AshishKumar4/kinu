@@ -3,18 +3,18 @@ import { exists, readText as nimbusReadText, type Awaitable, writeText } from '@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync, readlinkSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import type { AgentRuntime, DeferredApprovalChannel, LLMProviderConfig, ShellApprovalOutcome, WriteEvent, WriteObserver } from '@kinu.run/core';
-import { ConversationSearchStore, buildBuiltinTools, discoverSkills, initWorkspaceSchema, reviewCommand, SLATES_ROOT, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
+import { ConversationSearchStore, buildBuiltinTools, discoverSkills, initWorkspaceSchema, reviewCommand, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { present, scratchDir, spawnTest, toolExecute } from '@kinu.run/test-utils';
 import {
   createCLIRuntime, createHostShell, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
-  type CLIRuntime, soulWriter, soulIn,
+  type CLIRuntime, workspaceHome, soulIn,
 } from '../src/runtime';
 import { createHeadRuntime } from './actor-fixture';
 import { registerLocalActor } from '@kinu.run/core';
@@ -63,7 +63,7 @@ async function openedWorkspace(state: string, name: string, cwd: string) {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
-  await createWorkspace(db, { name, purpose: `Test agent ${name}`, llm: DUMMY_LLM, writeSoul: soulWriter(db) });
+  await createWorkspace(db, { name, purpose: `Test agent ${name}`, llm: DUMMY_LLM, home: workspaceHome(db) });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   return openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd });
@@ -173,8 +173,8 @@ describe('a fork over the bound directory', () => {
     expect(readFileSync(join(project, 'head-output.md'), 'utf8')).toBe('what the head found');
     expect(await readText(parent, 'head-output.md')).toBe('what the head found');
 
-    // The split reports this head's changes only if the observer wraps the plane it writes through.
-    expect(written.map((event) => event.path)).toEqual(['head-output.md']);
+    // The split hears this head's changes where they land, named as the shell names them.
+    expect(written.map((event) => event.path)).toEqual([join(project, 'head-output.md')]);
 
     const headShell = head.shell;
 
@@ -219,11 +219,13 @@ describe('addressing the bound directory', () => {
     const removeTree = present(rt.storage.vfs.removeRecursive?.bind(rt.storage.vfs), 'the mounted removal route');
     await writeText(rt.storage.vfs, 'keep.txt', 'the project survives');
 
-    for (const anchor of [project, space]) {
-      await expect(rename(anchor, join(state, 'renamed'))).rejects.toMatchObject({ code: 'EACCES' });
-      await expect(rt.storage.vfs.unlink(anchor)).rejects.toMatchObject({ code: 'EACCES' });
-      await expect(removeTree(anchor)).rejects.toMatchObject({ code: 'EACCES' });
-    }
+    await expect(rename(project, join(state, 'renamed'))).rejects.toMatchObject({ code: 'EACCES' });
+    await expect(rt.storage.vfs.unlink(project)).rejects.toMatchObject({ code: 'EACCES' });
+    await expect(removeTree(project)).rejects.toMatchObject({ code: 'EACCES' });
+    // The own space is a mount point of the one namespace, which answers as POSIX does one.
+    await expect(rename(space, join(state, 'renamed'))).rejects.toMatchObject({ code: 'EBUSY' });
+    await expect(rt.storage.vfs.unlink(space)).rejects.toMatchObject({ code: 'EISDIR' });
+    await expect(removeTree(space)).rejects.toMatchObject({ code: 'EBUSY' });
 
     expect(readFileSync(join(project, 'keep.txt'), 'utf8')).toBe('the project survives');
     expect(existsSync(join(space, 'agent.db'))).toBe(true);
@@ -231,19 +233,20 @@ describe('addressing the bound directory', () => {
     expect(readdirSync(state).filter((entry) => entry.startsWith('.nimbus-move-') || entry === 'renamed')).toEqual([]);
   });
 
-  test('a relative path and the real path name the folder\'s file; the own space\'s spellings name its own', async () => {
+  // One namespace, the shell's: an absolute path is the machine's, so the own space is its real path or `vfs://`.
+  test('a relative path and the real path name the folder\'s file; the own space is its real path or vfs://', async () => {
     const { state, project } = roots('cwd-plane-addresses');
     const rt = agentRuntime(state, 'solo', project);
     const space = join(state, 'solo');
 
     await writeText(rt.storage.vfs, 'notes/one.md', 'one');
-    await writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/notes/own.md`, 'own');
+    await writeText(rt.toolFiles, 'vfs://home/main/notes/own.md', 'own');
 
     expect(await readText(rt, 'notes/one.md')).toBe('one');
     expect(await readText(rt, join(project, 'notes/one.md'))).toBe('one');
     expect(await readText(rt, join(space, 'home/main/notes/own.md'))).toBe('own');
     expect(readdirSync(join(project, 'notes'))).toEqual(['one.md']);
-    expect((await rt.storage.vfs.readdir(WORKSPACE_ROOT)).map(({ name }) => name)).toEqual(['notes']);
+    expect(await refusalOf(() => rt.storage.vfs.readdir(`${WORKSPACE_ROOT}/notes`))).toBe('ENOENT');
   });
 
   /** The agent's `file` tool and codemode's `workspace.writeFile`, with a user who answers `answer`. */
@@ -361,7 +364,8 @@ describe('addressing the bound directory', () => {
     expect(readdirSync(outside)).toEqual([]);
 
     await file({ action: 'write', path: join(space, 'local', 'plain.txt'), content: 'in the folder' });
-    expect([readFileSync(join(project, 'plain.txt'), 'utf8'), existsSync(join(space, 'local'))]).toEqual(['in the folder', false]);
+    // `<space>/local` is the folder's link, so the shell follows it as the file tool does.
+    expect([readFileSync(join(project, 'plain.txt'), 'utf8'), readlinkSync(join(space, 'local'))]).toEqual(['in the folder', project]);
 
     await rt.toolFiles.unlink(join(space, 'local', 'linked'));
     expect([existsSync(join(project, 'linked')), existsSync(outside), asked.length]).toEqual([false, true, spellings.length]);
@@ -436,7 +440,7 @@ describe('addressing the bound directory', () => {
     writeFileSync(join(state, 'solo', 'home', 'main', 'skills', 'review.md'), '---\nname: review\ndescription: Review a change\n---\nName every risk.\n');
     const rt = agentRuntime(state, 'solo', project);
 
-    const found = await discoverSkills(rt.storage.vfs, { admissionTokens: 100_000 });
+    const found = await discoverSkills(rt.ownFiles, { admissionTokens: 100_000 });
 
     expect(found.skills.find((skill) => skill.name === 'review')?.source).toBe('vfs');
   });
@@ -576,11 +580,10 @@ describe('the shell over the bound directory', () => {
 });
 
 describe('what an opened workspace puts where', () => {
-  test('SOUL.md is a file of the own space and memory is the agent plane\'s; the folder holds neither', async () => {
+  test('SOUL.md, the memory notes and the scaffold are files of main\'s home; the folder holds none of them', async () => {
     const { state, project } = roots('cwd-plane-opened');
     const { rt, info } = await openedWorkspace(state, 'jarvis', project);
 
-    // Neither is in the folder: SOUL.md is in the workspace's own space, memory in its state plane.
     expect(info.soul).toContain('jarvis');
     expect(info.purpose).toBe('Test agent jarvis');
     expect(info.memorySize).toBeGreaterThan(0);
@@ -594,31 +597,30 @@ describe('what an opened workspace puts where', () => {
     expect(await exists(rt.storage.vfs, 'memory/MEMORY.md')).toBe(false);
     expect(await exists(rt.storage.vfs, 'scaffold/agent.js')).toBe(false);
 
-    const agentState = rt.agentStateVfs;
+    const home = join(state, 'jarvis', 'home', 'main');
 
-    if (!agentState) throw new Error('an opened workspace must expose its own state plane');
-    expect(await exists(agentState, 'SOUL.md')).toBe(false);
-    expect(await exists(rt.storage.vfs, '/home/main/SOUL.md')).toBe(true);
-    expect(await exists(agentState, 'memory/MEMORY.md')).toBe(true);
-    expect(await exists(agentState, 'scaffold/agent.js')).toBe(true);
+    expect(readFileSync(join(home, 'memory/MEMORY.md'), 'utf8')).toContain('learned something');
+    expect(readFileSync(join(home, 'scaffold/agent.js'), 'utf8')).toBe('// evolved\n');
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe(info.soul);
   });
 });
 
 describe('the agent\'s own state in a placed workspace', () => {
-  test('memory and the scaffold read at /agent, and nothing writes through it', async () => {
-    const { state, project } = roots('cwd-plane-agent-view');
+  // A note changes through the memory tool and a loop through its versioned writer; the file tool only reads them.
+  test('the file tool reads the memory notes and the scaffold where they are, and never writes them', async () => {
+    const { state, project } = roots('cwd-plane-agent-state');
     const { rt } = await openedWorkspace(state, 'jarvis', project);
     await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
     await rt.identity.scaffold.write('// evolved\n');
+    const home = join(state, 'jarvis', 'home', 'main');
 
-    expect((await rt.storage.vfs.readdir('/agent')).map(({ name }) => name).sort()).toEqual(['memory', 'scaffold']);
-    expect(await readText(rt, '/agent/memory/MEMORY.md')).toContain('learned something');
-    expect(await readText(rt, '/agent/scaffold/agent.js')).toBe('// evolved\n');
-    expect(await exists(rt.storage.vfs, '/agent/workspace.db')).toBe(false);
+    expect(await readText(rt, join(home, 'memory/MEMORY.md'))).toContain('learned something');
+    expect(await nimbusReadText(rt.toolFiles, 'vfs://home/main/scaffold/agent.js')).toBe('// evolved\n');
 
-    expect(await refusalOf(() => writeText(rt.storage.vfs, '/agent/memory/MEMORY.md', 'forged'))).toBe('EROFS');
-    expect(await refusalOf(() => rt.storage.vfs.unlink('/agent/scaffold/agent.js'))).toBe('EROFS');
-    expect(await refusalOf(() => rt.storage.vfs.mkdir('/agent/memory/more', { recursive: true }))).toBe('EROFS');
+    expect(await refusalOf(() => writeText(rt.toolFiles, 'vfs://home/main/memory/MEMORY.md', 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.unlink(join(home, 'scaffold/agent.js')))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.mkdir(join(home, 'memory/more'), { recursive: true }))).toBe('EROFS');
+    expect(readFileSync(join(home, 'memory/MEMORY.md'), 'utf8')).toContain('learned something');
     expect(readdirSync(project)).toEqual([]);
   });
 });
@@ -671,8 +673,8 @@ test('the agent\'s own space is real files beside its database, and only its wor
   const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
 
   expect(await file({ action: 'write', path: 'vfs://slates/board/index.ts', content: 'board' })).toMatchObject({ reference: 'vfs://slates/board/index.ts' });
-  expect(await file({ action: 'write', path: `${SLATES_ROOT}/widgets/package.json`, content: '{}' })).toMatchObject({ ok: true });
-  expect(await file({ action: 'write', path: `${WORKSPACE_ROOT}/notes.md`, content: 'scratch' })).toMatchObject({ ok: true });
+  expect(await file({ action: 'write', path: join(space, 'slates/widgets/package.json'), content: '{}' })).toMatchObject({ ok: true });
+  expect(await file({ action: 'write', path: 'vfs://home/main/notes.md', content: 'scratch' })).toMatchObject({ ok: true });
   expect(await file({ action: 'write', path: 'src/app.ts', content: 'work' })).toMatchObject({ reference: 'local://src/app.ts' });
 
   expect(readFileSync(join(space, 'slates/board/index.ts'), 'utf8')).toBe('board');
@@ -710,12 +712,12 @@ describe('SOUL.md is the workspace\'s own file', () => {
     const dbPath = join(state, 'jarvis', 'agent.db');
     mkdirSync(dirname(dbPath), { recursive: true });
     const db = new Database(dbPath);
-    await createWorkspace(db, { name: 'jarvis', purpose: 'Test agent jarvis', llm: DUMMY_LLM, writeSoul: soulWriter(db) });
+    await createWorkspace(db, { name: 'jarvis', purpose: 'Test agent jarvis', llm: DUMMY_LLM, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
     expect(soulIn(rt.space)).toContain('Test agent jarvis');
 
-    await writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/SOUL.md`, '# by the file tool\n');
+    await writeText(rt.toolFiles, 'vfs://home/main/SOUL.md', '# by the file tool\n');
     expect(soulIn(rt.space)).toBe('# by the file tool\n');
     const shell = await present(rt.shell, 'the workspace shell').exec(`printf '# by the shell\\n' > '${join(rt.space, 'home/main/SOUL.md')}'`);
 

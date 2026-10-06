@@ -11,6 +11,7 @@ import { createWorkspace } from '../src/workspace-birth';
 import { bootstrapScaffold } from '../src/scaffold/bootstrap';
 import { getCurrentScaffoldVersion, readScaffoldVersion } from '../src/scaffold/versions';
 import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import { workspaceSoul, writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
@@ -76,11 +77,11 @@ describe('the mission', () => {
   });
 });
 
-/** Where a test's birth writes SOUL.md: the space a real one keeps it in. */
+/** Main's home for a test's birth: the files a real one writes into its space. */
 function bornSoul() {
-  let written: string | null = null;
+  const { vfs } = createMemoryVfs();
 
-  return { writeSoul: async (markdown: string) => { written = markdown; }, soul: () => written };
+  return { home: vfs, soul: async () => readText(vfs, SOUL_PATH) };
 }
 
 describe('workspace birth', () => {
@@ -89,20 +90,20 @@ describe('workspace birth', () => {
     const born = bornSoul();
 
     await createWorkspace(db, {
-      name: 'atlas', purpose: 'Help with testing.', llm: TEST_LLM, writeSoul: born.writeSoul,
+      name: 'atlas', purpose: 'Help with testing.', llm: TEST_LLM, home: born.home,
     });
 
     const identity = makeSql(db)<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0];
     expect(identity?.name).toBe('atlas');
-    expect(born.soul()).toContain('Help with testing.');
-    expect(missionOf(born.soul())).toBe('Help with testing.');
+    expect(await born.soul()).toContain('Help with testing.');
+    expect(missionOf(await born.soul())).toBe('Help with testing.');
   });
 
   test('the seeds are real files the agent can read back', async () => {
     const db = new Database(':memory:');
 
     const rt = await createWorkspace(db, {
-      name: 'quiet-harbor-1a4e20', title: 'Atlas', purpose: 'Help with testing.', llm: TEST_LLM, writeSoul: bornSoul().writeSoul,
+      name: 'quiet-harbor-1a4e20', title: 'Atlas', purpose: 'Help with testing.', llm: TEST_LLM, home: bornSoul().home,
     });
 
     expect(await readText(rt.storage.vfs, 'scaffold/agent.js')).toContain('async');
@@ -111,7 +112,7 @@ describe('workspace birth', () => {
 
   test('a custom first loop is born as v0 through the one writer: source, pointer and live view agree, and a reopen keeps them', async () => {
     const custom = 'async function* run(rt, task) { yield { type: "chunk", data: "custom" }; }';
-    const rt = await createWorkspace(new Database(':memory:'), { name: 'atlas', purpose: 'Help.', llm: TEST_LLM, scaffold: custom, writeSoul: bornSoul().writeSoul });
+    const rt = await createWorkspace(new Database(':memory:'), { name: 'atlas', purpose: 'Help.', llm: TEST_LLM, scaffold: custom, home: bornSoul().home });
 
     const agree = async () => ({
       pointer: getCurrentScaffoldVersion(rt.storage.sql, rt.actor),
@@ -129,17 +130,17 @@ describe('workspace birth', () => {
     const titledSoul = bornSoul();
 
     await createWorkspace(new Database(':memory:'), {
-      name: 'quiet-harbor-1a4e20', title: 'Callback Audit', purpose: 'Audit it.', llm: TEST_LLM, writeSoul: titledSoul.writeSoul,
+      name: 'quiet-harbor-1a4e20', title: 'Callback Audit', purpose: 'Audit it.', llm: TEST_LLM, home: titledSoul.home,
     });
 
-    expect(titledSoul.soul()).toStartWith('# Callback Audit');
+    expect(await titledSoul.soul()).toStartWith('# Callback Audit');
     const untitledSoul = bornSoul();
 
     const untitled = await createWorkspace(new Database(':memory:'), {
-      name: 'quiet-harbor-1a4e20', purpose: 'Audit it.', llm: TEST_LLM, writeSoul: untitledSoul.writeSoul,
+      name: 'quiet-harbor-1a4e20', purpose: 'Audit it.', llm: TEST_LLM, home: untitledSoul.home,
     });
 
-    const soul = untitledSoul.soul() ?? '';
+    const soul = await untitledSoul.soul() ?? '';
     expect(soul).toStartWith('# Kinu');
     expect(soul).not.toContain('quiet-harbor-1a4e20');
     expect(await readText(untitled.storage.vfs, 'memory/MEMORY.md'))

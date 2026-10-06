@@ -4,6 +4,7 @@
  * chunks they name that the target does not hold.
  */
 
+import { hashText } from '@kinu.run/agent-utils/memory';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import * as v from 'valibot';
@@ -315,22 +316,31 @@ async function* craftedToolRows(sql: SqlExecutor): AsyncGenerator<ForkCraftedToo
   }
 }
 
-async function* memoryChunkRows(sql: SqlExecutor): AsyncGenerator<ForkMemoryChunkRow> {
-  let rowid = 0;
+async function* listed<Row>(rows: readonly Row[]): AsyncGenerator<Row> {
+  for (const row of rows) yield row;
+}
 
-  for (;;) {
-    const row = sql<ForkMemoryChunkRow & { rowid: number }>`
-      SELECT rowid, id, path, start_line, end_line, hash, text
-      FROM memory_chunks WHERE rowid > ${rowid} ORDER BY rowid ASC LIMIT 1
-    `[0];
+/** Each row's text read from its pinned note; a row the note no longer holds stays. */
+async function memoryChunkRows(sql: SqlExecutor, pinned: ForkPinnedFiles): Promise<ForkMemoryChunkRow[]> {
+  const notes = new Map<string, string[] | null>();
 
-    if (row === undefined) return;
-    rowid = row.rowid;
-    yield {
-      id: row.id, path: row.path, start_line: row.start_line, end_line: row.end_line,
-      hash: row.hash, text: row.text,
-    };
+  const linesOf = (path: string): string[] | null => {
+    const note = `${WORKSPACE_ROOT}/${path}`;
+
+    if (!notes.has(path)) notes.set(path, pinned.kind(note) === 'file' ? new TextDecoder().decode(pinned.readFile(note)).split('\n') : null);
+
+    return notes.get(path) ?? null;
+  };
+
+  const rows: ForkMemoryChunkRow[] = [];
+
+  for (const row of sql<Omit<ForkMemoryChunkRow, 'text'>>`SELECT id, path, start_line, end_line, hash FROM memory_note_chunks ORDER BY rowid`) {
+    const text = linesOf(row.path)?.slice(row.start_line - 1, row.end_line).join('\n');
+
+    if (text !== undefined && await hashText(text) === row.hash) rows.push({ ...row, text });
   }
+
+  return rows;
 }
 
 /** Conversation sections, read one message or one entry's parts at a time to bound the sender. */
@@ -417,12 +427,13 @@ export async function* forkTransferFrames(
     ];
 
     const conversation = forkConversationCounts(source.sql, actorId, plan);
+    const memoryChunks = await memoryChunkRows(source.sql, pinned);
 
     const counts: ForkSectionCounts = {
       agentConfig: source.sql<{ key: string }>`SELECT key FROM actor_config WHERE actor_id = ${actorId}`
         .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)).length,
       craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
-      memoryChunks: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`[0]?.count ?? 0,
+      memoryChunks: memoryChunks.length,
       ...conversation,
       files: imports.length,
     };
@@ -492,7 +503,7 @@ export async function* forkTransferFrames(
           yield* yieldRows(section, craftedToolRows(source.sql), craftedToolPayloadBytes);
           break;
         case 'memoryChunks':
-          yield* yieldRows(section, memoryChunkRows(source.sql), memoryChunkPayloadBytes);
+          yield* yieldRows(section, listed(memoryChunks), memoryChunkPayloadBytes);
           break;
         case 'sessionMessages':
           yield* yieldRows(

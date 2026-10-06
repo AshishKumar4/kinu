@@ -4,6 +4,7 @@
  * (the fork's source pins and exports, the target imports); only the delivery driver is local, and it resumes by
  * regenerating the stream with the answers the target gave it recorded.
  */
+import { hashText } from '@kinu.run/agent-utils/memory';
 import { DurableObject } from 'cloudflare:workers';
 import {
   agentArtifactDirectory, agentHome, CHAT_SESSION_ID, MAIN_AGENT,
@@ -33,6 +34,8 @@ export const PROBE_CUT_RECORDED_AT = Date.parse('2026-01-01T00:00:03.000Z');
 export const PROBE_SOURCE_NAME = 'fork-source';
 
 const SOUL_CONTENT = '# Mission\nProve a fork survives an eviction.\n';
+
+const memoryLine = (n: number): string => `Chunk ${n} of the parent's memory index, wide enough to need its own frame. ${'Everything the parent learned. '.repeat(7)}`;
 
 export const PROBE_SOUL_MISSION = summarizeSoul(SOUL_CONTENT);
 
@@ -182,10 +185,10 @@ export class ForkSourceProbeDO extends ForkProbeDO {
       VALUES (${'probe_tool'}, ${'Counts what a fork carried.'},
               ${'export default () => 1;'}, ${1_760_000_000_001}, ${1_760_000_000_002})`;
 
+    // Each chunk is one line of the note, wide enough to need a frame of its own; the note keeps the text.
     for (const n of [1, 2]) {
-      void this.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text)
-        VALUES (${`chunk-${n}`}, ${'memory/notes.md'}, ${n}, ${n + 1}, ${`hash-${n}`},
-                ${`Chunk ${n} of the parent's memory index, wide enough to need its own frame.`})`;
+      void this.sql`INSERT INTO memory_note_chunks (id, path, start_line, end_line, hash)
+        VALUES (${`chunk-${n}`}, ${'memory/notes.md'}, ${n}, ${n}, ${await hashText(memoryLine(n))})`;
     }
 
     const files = nimbusSessionFiles({
@@ -230,7 +233,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
     await this.sealSoul(SOUL_CONTENT);
     const user = (await this.store()).as(CRED_SESSION_USER);
     user.mkdir(`${PROBE_HOME}/memory/deep`, { recursive: true });
-    user.writeFile(`${PROBE_HOME}/memory/notes.md`, 'Everything the parent learned. '.repeat(7));
+    user.writeFile(`${PROBE_HOME}/memory/notes.md`, [memoryLine(1), memoryLine(2)].join('\n'));
     // Distinct bytes throughout, so its content chunks are several and none repeats.
     user.writeFile(`${PROBE_HOME}/memory/deep/proof.bin`, Uint8Array.from({ length: PROOF_BYTES }, (_, at) => (at * 2654435761) >>> 24));
     await this.ctx.storage.put('transferId', transferId);
@@ -418,7 +421,7 @@ export class ForkTargetProbeDO extends ForkProbeDO {
         SELECT COUNT(*) AS count FROM context_memberships WHERE to_revision IS NULL`),
       configRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM actor_config`),
       craftedTools: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`),
-      memoryChunks: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`),
+      memoryChunks: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_note_chunks`),
       files: await this.files(),
     };
   }

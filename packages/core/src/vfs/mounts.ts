@@ -13,7 +13,7 @@ import { KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { isVfsError, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { CompositeVFS, normalizePath, type MountRoute, type Principal } from '@nimbus-sh/core/vfs/composite.js';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { WriteObserver } from './observe';
+import { observeNamespace, type WriteObserver } from './write-events';
 import { move } from '@nimbus-sh/core/vfs/move.js';
 import { workspacePath } from './workspace-path';
 
@@ -29,6 +29,8 @@ export interface VfsMount {
 	readonly readOnly?: true;
 	/** A view over the workspace's own store: `df` gives it the store's figures, as Linux does a bind mount. */
 	readonly storeView?: true;
+	/** Its mount point where that is not `/<name>`: locally a view sits in the workspace's space. */
+	readonly at?: string;
 }
 
 export const EXECUTOR_MOUNTS = {
@@ -273,12 +275,7 @@ export function workspaceFilePlane(box: NamespaceBox, input: {
 		const namespace = box.namespace.bind(box);
 
 		const opened = (): Promise<CompositeVFS> => view ??= namespace(principal).then((ready) => {
-			if (observer !== undefined) {
-				unobserve = ready.observeWrites({
-					needsBaseline: (path, writer) => mine(writer) && observer.needsBaseline(path),
-					record: ({ principal: writer, ...event }) => { if (mine(writer)) observer.record(event); },
-				});
-			}
+			if (observer !== undefined) unobserve = observeNamespace(ready, observer, mine);
 
 			return ready;
 		});
@@ -299,7 +296,7 @@ function ownNamespace(base: VFS, mounts: readonly VfsMount[]): Pick<MountedNames
 
 function mountOnto(composite: CompositeVFS, mounts: readonly VfsMount[]): void {
 	for (const mount of mounts) {
-		composite.mount(`/${mount.name}`, () => mount.files(), {
+		composite.mount(mount.at ?? `/${mount.name}`, () => mount.files(), {
 			resolvesPaths: true, absentReason: () => mount.absentReason(), ...(mount.readOnly === true && { readOnly: true }),
 		});
 	}

@@ -535,7 +535,7 @@ export class LocalAgentSession {
     );
     this.instructionDesk = new InstructionApprovalDesk({
       agentsMd: async (window, trust) => discoverAgentsMd(this.cwd, window, trust),
-      skillsVfs: this.rt.storage.vfs,
+      skillsVfs: this.rt.ownFiles,
       approvals: this.instructionApprovals,
       window: () => this.modelCatalog.window(),
     });
@@ -625,7 +625,7 @@ export class LocalAgentSession {
         // No durable wake: this process is the wake, and a crashed turn re-arms from the ledger on restart.
         armTurnWake: async () => {},
         steerSkills: (text) => steerSkillsBlock({
-          vfs: this.rt.storage.vfs,
+          vfs: this.rt.ownFiles,
           config: this.config,
           userText: text,
           trust: this.instructionTrust,
@@ -2264,7 +2264,7 @@ export class LocalAgentSession {
     roleSkills: readonly string[] = [],
   ): Promise<TurnSkillSurface> {
     return resolveTurnSkills({
-      vfs: this.rt.storage.vfs,
+      vfs: this.rt.ownFiles,
       config: this.config,
       userText,
       roleSkills,

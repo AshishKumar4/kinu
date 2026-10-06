@@ -26,7 +26,7 @@ const ACTOR_DDL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_fibers_actor_name ON fibers(actor_id, name)`,
 
-  // memory_chunks is owned by MemoryStore (agent-utils), not created here.
+  // memory_note_chunks is owned by MemoryStore (agent-utils), not created here.
   `CREATE TABLE IF NOT EXISTS evolution_events (
     actor_id   TEXT NOT NULL,
     id         TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),

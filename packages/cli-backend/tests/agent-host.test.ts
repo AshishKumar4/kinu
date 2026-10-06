@@ -45,7 +45,7 @@ import {
   type LocalAgentHostOptions,
   type LocalHostedAgent,
 } from '../src/agent-host';
-import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, soulWriter } from '../src/runtime';
+import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
 import { createMemoryVfs, present, readTranscriptRows } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -425,7 +425,7 @@ async function seedAgent(state: string, name: string): Promise<string> {
       name,
       purpose: `Test agent ${name}`,
       llm: DUMMY_LLM,
-      writeSoul: soulWriter(db),
+      home: workspaceHome(db),
     });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   } finally {

@@ -12,7 +12,6 @@ import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, 
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
-import { observeWrites } from '../src/vfs/observe';
 import { createWorkspaceBundle } from './helpers';
 import type { JsonValue } from '../src/utils/json';
 import { agentCred, agentHome, agentTmpRoot, confineAgentTmp, provisionAgentHome } from '../src/vfs/agent-home';
@@ -383,29 +382,6 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(renames).toEqual([['/big.bin', '/renamed.bin']]);
 		expect(bytesRead).toBe(0);
 	});
-	test('an observed plane keeps its native rename (no byte-carry fallback)', async () => {
-		const base = fakeTree({ '/big.bin': 'gigabytes, notionally' });
-		const renames: Array<[string, string]> = [];
-		let bytesRead = 0;
-
-		const native = {
-			...base,
-			readFile: async (path: string) => {
-				bytesRead += 1;
-
-				return base.readFile(path);
-			},
-			rename: async (oldPath: string, newPath: string) => { renames.push([oldPath, newPath]); },
-		};
-
-		const observer = { needsBaseline: () => false, record: () => {} };
-		const mounted = withMountTable(observeWrites(native, observer), [mountOf('pc', fakeTree({}))]);
-
-		await mounted.rename('/big.bin', '/renamed.bin');
-		expect(renames).toEqual([['/big.bin', '/renamed.bin']]);
-		expect(bytesRead).toBe(0);
-	});
-
 	test('a file rename inside a mount without native rename moves the bytes and drops the source', async () => {
 		const device = fakeTree({ '/home/dev/notes.txt': 'from the machine' });
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);

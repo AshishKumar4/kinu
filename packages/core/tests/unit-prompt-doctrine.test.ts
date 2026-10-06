@@ -86,7 +86,7 @@ describe('the agent works in prefixed paths, and is told where each plane is', (
     expect(prompt).toContain('a link they open');
     expect(prompt).toContain('Prefixes name parts of `vfs://`: `local://` is `vfs://local`. Here `vfs://` is `/home/ana/.kinu/acme` and `vfs://local` is `/home/ana/acme`.');
     expect(prompt.indexOf('Prefixes name parts of')).toBeGreaterThan(prompt.indexOf('## Execution environments'));
-    expect(prompt).toContain('read-only at `vfs://agent`');
+    expect(prompt).toContain('SOUL.md is yours to edit at `vfs://home/main/SOUL.md`');
   });
 
   // A view has bytes only the file tool renders; the shell is told so, and where the workspace's own skills really are.

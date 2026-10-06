@@ -91,17 +91,15 @@ erDiagram
         TEXT key PK "Config key (model, reasoning effort, skills)"
         TEXT value "Config value (NOT NULL)"
     }
-    memory_chunks {
+    memory_note_chunks {
         TEXT id PK "Chunk ID"
         TEXT path "Source file path"
         INTEGER start_line "Start line in source"
         INTEGER end_line "End line in source"
-        TEXT hash "SHA-256 of chunk content"
-        TEXT text "Chunk text content"
-        INTEGER updated_at "Epoch ms"
+        TEXT hash "SHA-256 of the chunk's lines in the note"
     }
-    memory_chunks_fts {
-        TEXT text "FTS5 virtual table (BM25)"
+    memory_note_chunks_fts {
+        TEXT text "Contentless FTS5 terms (BM25); the note holds the text"
     }
     crafted_tools {
         TEXT name PK "Tool name (snake_case)"
@@ -240,7 +238,7 @@ erDiagram
     }
 
     workspace_actors ||--o{ workspace_actors : "parent_actor_id"
-    memory_chunks ||--|| memory_chunks_fts : "FTS5 external content"
+    memory_note_chunks ||--|| memory_note_chunks_fts : "contentless FTS5, one row per chunk"
     crafted_tools ||--|| crafted_tools_fts : "FTS5 sync triggers"
     session_messages ||--o{ stream_parts : "an open message's accumulating parts"
     conversation_entries ||--o{ conversation_entry_parts : "parts the entry shows"
@@ -357,7 +355,7 @@ permission and transport failures still throw. An unavailable mount refuses
 with `ENXIO`, rather than claiming a file is missing. Kinu retains only its
 checkpoint write-report extension, not another filesystem interface. The
 shell is Nimbus's `runtime-bash`. Memory indexing reads through the active
-VFS on either backend, so `memory_chunks` never becomes a second authority.
+VFS on either backend, so `memory_note_chunks` never becomes a second authority.
 
 One table named `vfs_files` still appears in the tree, in
 `packages/cli/tests/export-import.test.ts`. The test creates it as a blob
@@ -414,13 +412,19 @@ contract in Nimbus would let Kinu hand the table to Nimbus and delete
 ## MemoryStore (FTS5 search)
 
 `@kinu.run/agent-utils` provides FTS5 full-text search over markdown files in
-the workspace filesystem. It keeps a `memory_chunks` table and a
-`memory_chunks_fts` virtual table (external content via
-`content='memory_chunks'`), both from one DDL (`initMemoryChunkTables`, which
-`MemoryStore.ensureSchema()` delegates to). Files split into chunks with a
-line-aware sliding window (`DEFAULT_CHUNK_TARGET_CHARS` 1600,
-`DEFAULT_CHUNK_OVERLAP_CHARS` 320). Each chunk carries a SHA-256 hash so the
-next pass skips unchanged chunks. Search is FTS5 MATCH with BM25 ranking.
+the workspace filesystem. The note is its text's only copy: the
+`memory_note_chunks` table keeps each chunk's path, line range and SHA-256 hash,
+and `memory_note_chunks_fts` is contentless (`content=''`,
+`contentless_delete=1`), holding terms only. Both come from one DDL
+(`initMemoryChunkTables`, which `MemoryStore.ensureSchema()` delegates to). Files
+split into chunks with a line-aware sliding window (`DEFAULT_CHUNK_TARGET_CHARS`
+1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320); the hash lets the next pass skip
+unchanged chunks. Search is FTS5 MATCH with BM25 ranking, and each hit's snippet
+is read from its note. A note whose lines no longer hash to its chunk (a shell
+edited it) is re-chunked when it is found or read, and a hit still stale is
+never served. An archive carries the notes and no index, which the next open
+rebuilds from them (`reconcileMemoryIndex`); a fork carries each chunk's row with
+its text read from the pinned note.
 `sanitizeFtsQuery` removes operators and stop words. When the AND query
 returns nothing, search falls back to OR-joined tokens.
 

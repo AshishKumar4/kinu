@@ -645,7 +645,7 @@ describe('Evolution Proof', () => {
 
     // Indexing rides an append, so an all-accepted window indexes nothing —
     // reported, and the reason is the line above.
-    const chunks = rt.storage.sql<{ path: string }>`SELECT DISTINCT path FROM memory_chunks`;
+    const chunks = rt.storage.sql<{ path: string }>`SELECT DISTINCT path FROM memory_note_chunks`;
     console.log(`    Memory chunks: ${chunks.length}`);
 
     // Both halves of every turn are on the session tree the next session reads.

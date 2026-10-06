@@ -150,17 +150,17 @@ describe('workspace schema is the only path', () => {
       .toEqual(ROOT_ONLY_TABLES);
   });
 
-  test('the schema creates memory_chunks and its FTS index', () => {
+  test('the schema creates memory_note_chunks and its FTS index', () => {
     // Created by the schema, not by MemoryStore: a fork target or archive restore would otherwise have
     // readers and no table.
     const db = new Database(':memory:');
     initWorkspaceSchema(schemaSql(db));
 
     const rows = db.query<{ name: string }, []>(
-      `SELECT name FROM sqlite_master WHERE name IN ('memory_chunks', 'memory_chunks_fts') ORDER BY name`,
+      `SELECT name FROM sqlite_master WHERE name IN ('memory_note_chunks', 'memory_note_chunks_fts') ORDER BY name`,
     ).all();
 
-    expect(rows).toEqual([{ name: 'memory_chunks' }, { name: 'memory_chunks_fts' }]);
+    expect(rows).toEqual([{ name: 'memory_note_chunks' }, { name: 'memory_note_chunks_fts' }]);
     db.close();
   });
 

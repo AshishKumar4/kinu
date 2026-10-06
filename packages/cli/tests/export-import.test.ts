@@ -1,4 +1,4 @@
-import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * `kinu export` / `kinu import` end to end: a cloud workspace exported over the paged
  * RPC restores through the same `kinu import` as a local export.
@@ -18,6 +18,7 @@ import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/co
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { stampSchemaGenesis } from '@kinu.run/cli-backend';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -282,16 +283,18 @@ describe('kinu export / import', () => {
   test('a cloud export restarts at page zero once a restart ended its snapshot, and imports the files as they then were', async () => {
     const db = new Database(':memory:');
 
-    const runtime = await createWorkspace(db, {
+    await createWorkspace(db, {
       name: 'skywriter', purpose: 'archive restart proof',
       llm: { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' },
-      // In memory, a workspace has no space to keep SOUL.md in.
-      writeSoul: async () => {},
+      // In memory, a workspace has no space: its home is a map.
+      home: createMemoryVfs().vfs,
     });
 
-    await writeText(runtime.storage.vfs, 'version.txt', 'before restart');
-    await writeText(runtime.storage.vfs, 'memory/MEMORY.md', '- kept as agent state');
     let bundle = createInlineWorkspace(db);
+    // The cloud's files live in its Nimbus store, as a hosted workspace's do.
+    await writeText(bundle.vfs, 'version.txt', 'before restart');
+    await bundle.vfs.mkdir('memory', { recursive: true });
+    await writeText(bundle.vfs, 'memory/MEMORY.md', '- kept as agent state');
     let restarted = false;
     let starts = 0;
     const sql = archiveSqlFromDatabase(db);
@@ -337,13 +340,13 @@ describe('kinu export / import', () => {
 
       expect(imported.exitCode).toBe(0);
 
-      // Its own-space files land in the local own space, as a local archive's do; agent state stays in the database.
+      // Locally every file is a real one: its own-space files and its agent state land in the own space.
       expect(readFileSync(join(home, 'after-restart', 'home', 'main', 'version.txt'), 'utf8')).toBe('after restart');
-      expect(existsSync(join(home, 'after-restart', 'home', 'main', 'memory'))).toBe(false);
+      expect(readFileSync(join(home, 'after-restart', 'home', 'main', 'memory', 'MEMORY.md'), 'utf8')).toBe('- kept as agent state');
       const restored = new Database(join(home, 'after-restart', 'agent.db'));
       const { vfs } = createInlineWorkspace(restored);
 
-      expect([await readText(vfs, 'memory/MEMORY.md'), await exists(vfs, 'version.txt')]).toEqual(['- kept as agent state', false]);
+      expect([await exists(vfs, 'memory/MEMORY.md'), await exists(vfs, 'version.txt')]).toEqual([false, false]);
       restored.close();
     } finally {
       await server.stop(true);

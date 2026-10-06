@@ -93,7 +93,7 @@ describe('a workspace born with its mission as a stand-in title', () => {
     const { db, rt } = workspace();
     const mission = 'Audit the OAuth callback flow';
     // The mission is the soul's own section, as `kinu create` seeds it.
-    await writeText(rt.storage.vfs, '/home/main/SOUL.md', `# Kinu\n\n## Mission\n\n${mission}\n`);
+    await writeText(rt.ownFiles, '/home/main/SOUL.md', `# Kinu\n\n## Mission\n\n${mission}\n`);
     rt.actor.config.setDisplayNameOrigin(mission, 'auto');
     expect(missionOf(soulIn(rt.space))).toBe(mission);
     const { model, state } = scriptedModel('found two issues');
@@ -274,9 +274,9 @@ test('a managed context edit reaches the local request', async () => {
   try {
     await session.send('use the OLD premise', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
-    const document = v.parse(v.string(), await readText(rt.storage.vfs, '/context/working.jsonl'));
-    await writeText(rt.storage.vfs, '/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
-    await expect(writeText(rt.storage.vfs, '/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
+    const document = v.parse(v.string(), await readText(rt.toolFiles, 'vfs://context/working.jsonl'));
+    await writeText(rt.toolFiles, 'vfs://context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
+    await expect(writeText(rt.toolFiles, 'vfs://context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
     await session.send('follow-up input', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
     const claim = rt.stores.claims.latestTurn();

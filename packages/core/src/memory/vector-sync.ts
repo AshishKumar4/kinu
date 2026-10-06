@@ -31,7 +31,7 @@ export interface MemoryVectors {
 export function adaptMemory(
   store: MemoryStore, files: VFS & Required<Pick<VFS, 'readRange'>>, vectors?: MemoryVectors,
 ): Memory {
-  return {
+  const memory: Memory = {
     write: (path, content) => store.writeFile(path, content),
     append: (path, content) => store.appendToFile(path, content),
     index(path) {
@@ -58,10 +58,19 @@ export function adaptMemory(
         })));
       }));
     },
-    search: (query, limit) => Promise.resolve(store.search(query, limit)),
-    read: (path) => store.readFile(path),
+    // A note a shell changed under the index is re-chunked when it is found or read, so no stale chunk is served.
+    search: (query, limit) => store.search(query, limit, async (path) => memory.index(path)),
+    async read(path) {
+      const content = await store.readFile(path);
+
+      if (content !== null && store.hasChunks(path)) await memory.index(path);
+
+      return content;
+    },
     tail: (path, bytes) => readTailWithVfsOps(files, path, bytes),
   };
+
+  return memory;
 }
 
 /** Bounded so a large memory table embeds across several boots. */
@@ -79,18 +88,15 @@ export async function backfillMemoryVectors(
   if (config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillDone) === 'true') return;
 
   const cursor = config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor) ?? '';
-  const chunks = store.allChunksAfter(cursor, cap);
+  const page = await store.allChunksAfter(cursor, cap);
 
-  if (chunks.length === 0) {
+  if (page.chunks.length > 0) await vectorStore.upsertChunks(page.chunks);
+
+  if (page.next === null) {
     config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
 
     return;
   }
 
-  await vectorStore.upsertChunks(chunks);
-  config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor, chunks[chunks.length - 1].id);
-
-  if (chunks.length < cap) {
-    config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
-  }
+  config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor, page.next);
 }

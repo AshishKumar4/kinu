@@ -9,7 +9,7 @@ export interface Chunk {
 	hash: string;
 }
 
-async function hashText(text: string): Promise<string> {
+export async function hashText(text: string): Promise<string> {
 	const data = new TextEncoder().encode(text);
 	const buf = await crypto.subtle.digest("SHA-256", data);
 	const arr = new Uint8Array(buf);

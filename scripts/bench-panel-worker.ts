@@ -40,7 +40,7 @@ import { initCraftedToolsTables } from '../packages/agent-utils/src/stores/index
 import { createWorkspace } from '../packages/core/src/workspace-birth';
 import { createCLIHeadRuntime } from '../packages/cli-backend/src/head-runtime';
 import { LocalAgentSession } from '../packages/cli-backend/src/local-session';
-import { createCLIRuntime, makeSql, soulWriter } from '../packages/cli-backend/src/runtime';
+import { createCLIRuntime, makeSql, workspaceHome } from '../packages/cli-backend/src/runtime';
 
 import { benchChatModel, createBenchInferenceProxy } from './bench-inference-proxy';
 import { parsePanelWorkerInput, type WorkerOutput } from './bench-worker-protocol';
@@ -111,7 +111,7 @@ async function main(): Promise<void> {
 
   if (fresh) {
     await createWorkspace(db, {
-      name: input.workspaceName, purpose: input.purpose, llm: analyst, writeSoul: soulWriter(db),
+      name: input.workspaceName, purpose: input.purpose, llm: analyst, home: workspaceHome(db),
     });
     // `initSearchTables` and `initScaffoldTables` seed the search and scaffold
     // tables for the panel arms' starting point.

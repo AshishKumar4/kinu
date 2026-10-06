@@ -442,7 +442,7 @@
       "decision": "framing"
     },
     {
-      "file": "packages/core/src/vfs/observe.ts",
+      "file": "packages/core/src/vfs/write-events.ts",
       "kind": "hand-parser",
       "owner": "decodedText",
       "sourceSha256": "8ee5281370fc2650a470c0525038d15a72a6e0e64b6a495426945b82075dc701",

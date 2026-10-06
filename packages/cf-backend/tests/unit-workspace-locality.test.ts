@@ -372,8 +372,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const tables = actor.tables();
     expect(tables).toContain('vfs_inodes');
     expect(tables).toContain('vfs_chunks');
-    expect(tables).toContain('memory_chunks');
-    expect(store.search('indexed bytes', 5)).not.toHaveLength(0);
+    expect(tables).toContain('memory_note_chunks');
+    expect(await store.search('indexed bytes', 5)).not.toHaveLength(0);
     expect(await readText(workspace.bundle.vfs, 'memory/MEMORY.md'))
       .toContain('the indexed bytes');
   });

@@ -1,3 +1,5 @@
+import { cpSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The backend a shared behaviour suite runs against is configuration: `KINU_TEST_BACKEND=cf` or `cli`
@@ -21,7 +23,7 @@ import { LocalAgentSession } from '../../../cli-backend/src/local-session';
 import { createHostCheckpoints } from '../../../cli-backend/src/checkpoints';
 import { createLocalModelResolver, type LocalModelResolver } from '../../../cli-backend/src/model-resolver';
 import { openWorkspaceCLI } from '../../../cli-backend/src/open';
-import { soulOf, soulWriter } from '../../../cli-backend/src/runtime';
+import { workspaceHome } from '../../../cli-backend/src/runtime';
 
 export const TEST_BACKEND_ENV = 'KINU_TEST_BACKEND';
 
@@ -259,7 +261,7 @@ function bornWorkspace(): Promise<Database> {
   born ??= (async () => {
     const db = new Database(scratchPath('shared-backend-born', 'agent.db'));
     db.exec('PRAGMA journal_mode = WAL');
-    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT, writeSoul: soulWriter(db) });
+    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT, home: workspaceHome(db) });
 
     return db;
   })();
@@ -273,8 +275,8 @@ async function cli(): Promise<SharedBackend> {
   const original = await bornWorkspace();
   original.run('VACUUM INTO ?', [dbPath]);
   const db = new Database(dbPath);
-  // SOUL.md is a file of the workspace's space, beside its database: the copy takes it too.
-  await soulWriter(db)(soulOf(original) ?? '');
+  // Main's home (SOUL.md, memory notes, the scaffold) is files of the space beside the database: the copy takes them.
+  cpSync(join(dirname(original.filename), 'home'), join(dirname(dbPath), 'home'), { recursive: true });
   const { rt } = await openWorkspaceCLI(db, dbPath, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
   const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
   rt.checkpoints = checkpoints;

@@ -375,8 +375,8 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     },
     cache_warm: EVERYWHERE,
 
-    memory_chunks: EVERYWHERE,
-    memory_chunks_fts: EVERYWHERE,
+    memory_note_chunks: EVERYWHERE,
+    memory_note_chunks_fts: EVERYWHERE,
     crafted_tools_fts: EVERYWHERE,
 
     // Created by their consumers' constructors (evolution/engine.ts, mission-budget.ts).

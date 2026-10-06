@@ -1042,7 +1042,7 @@ export {
 } from './vfs/workspace-planes';
 
 
-export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
+export { observeNamespace, type WriteEvent, type WriteObserver } from './vfs/write-events';
 
 export { isNimbusTable } from './vfs/nimbus-tables';
 
@@ -1124,9 +1124,8 @@ export {
 } from './memory/hybrid-search';
 
 // Memory writes
-export { memoryBytes } from './memory/note';
+export { memoryBytes, reconcileMemoryIndex } from './memory/note';
 
-export { AGENT_STATE_PATHS, agentViewMount, isAgentStatePath } from './vfs/agent-view';
 
 export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
 
@@ -1698,7 +1697,7 @@ export {
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
   unionAllowedTools, toolAllowedBySkills, trustedActiveSkills,
-  SKILLS_VIEW, WORKSPACE_SKILLS_DIR, SKILL_FOLDER_FILE, skillViewPath,
+  SKILLS_VIEW, WORKSPACE_SKILLS_DIR, SKILL_FOLDER_FILE, skillReference, skillViewPath,
 } from './skills/index';
 
 export type {

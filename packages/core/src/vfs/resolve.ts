@@ -41,6 +41,11 @@ export interface ResolvedPath {
 /** The tree itself: every other prefix names a subtree of it. */
 export const VFS_PREFIX = 'vfs';
 
+/** A workspace path as its `vfs://` reference: the one spelling every backend's file tool resolves. */
+export function vfsReference(path: string): string {
+  return `${VFS_PREFIX}://${path.replace(/^\/+/u, '')}`;
+}
+
 /** A machine's own name is its prefix, under this row's subtree: `<device>://x` is `/pc/<device>/x`. */
 export const DEVICE_PREFIX = '<device>';
 

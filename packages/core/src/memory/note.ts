@@ -2,6 +2,7 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** The one note-save primitive: appends a dated `### Note` heading to `memory/MEMORY.md`, then indexes it. */
 
 import type { Memory } from '../types/primitives';
+import type { MemoryStore } from '@kinu.run/agent-utils/memory';
 
 export const MEMORY_PATH = 'memory/MEMORY.md';
 
@@ -90,4 +91,20 @@ export async function memoryBytes(vfs: VFS, dir = 'memory'): Promise<number> {
   }
 
   return total;
+}
+
+/** Indexes every note when the index is empty: an archive carries notes, never their index. */
+export async function reconcileMemoryIndex(memory: Pick<Memory, 'index'>, store: Pick<MemoryStore, 'isEmpty'>, vfs: VFS): Promise<void> {
+  if (store.isEmpty()) await indexNotes(memory, vfs, MEMORY_DIR.slice(0, -1));
+}
+
+async function indexNotes(memory: Pick<Memory, 'index'>, vfs: VFS, dir: string): Promise<void> {
+  if (!await exists(vfs, dir)) return;
+
+  for (const entry of await vfs.readdir(dir)) {
+    const full = `${dir}/${entry.name}`;
+
+    if (entry.type === 'directory') await indexNotes(memory, vfs, full);
+    else if (entry.type === 'file' && full.endsWith('.md')) await memory.index(full);
+  }
 }

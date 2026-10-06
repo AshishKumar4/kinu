@@ -73,6 +73,9 @@ const EXCLUDED_TABLES = {
   webhook_secrets: true,
   conversation_fts: true,
   conversation_fts_state: true,
+  // Derived from the notes the archive carries: the next open indexes them.
+  memory_note_chunks: true,
+  memory_note_chunks_fts: true,
 } satisfies Record<string, true>;
 
 function isInternalTable(name: string): boolean {
@@ -386,6 +389,7 @@ function readSchema(sql: SqlExec): SchemaObject[] {
     if (
       isInternalTable(row.name)
       || Object.hasOwn(EXCLUDED_TABLES, row.name)
+      || Object.hasOwn(EXCLUDED_TABLES, row.tbl_name)
       || row.name.startsWith('conversation_rev_')
     ) continue;
 

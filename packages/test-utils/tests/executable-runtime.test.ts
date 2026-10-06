@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import { createWorkspace } from '../../core/src/workspace-birth';
 import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/index';
-import { openWorkspaceCLI, makeWorkspaceSchemaSql, soulWriter } from '../../cli-backend/src/index';
+import { openWorkspaceCLI, makeWorkspaceSchemaSql, workspaceHome } from '../../cli-backend/src/index';
 import { assertExecutableRuntime, createTestRuntime } from '../src/runtime';
 
 // Never called; the unroutable baseURL makes any network use fail.
@@ -30,7 +30,7 @@ describe('assertExecutableRuntime', () => {
 
     try {
       db.exec('PRAGMA journal_mode = WAL');
-      const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM, writeSoul: soulWriter(db) });
+      const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM, home: workspaceHome(db) });
       // A complete AgentRuntime with no router.
       expect(rt.executionRouter).toBeFalsy();
       expect(() => assertExecutableRuntime(rt, 'behaviour eval'))
@@ -46,7 +46,7 @@ describe('assertExecutableRuntime', () => {
 
     try {
       birth.exec('PRAGMA journal_mode = WAL');
-      await createWorkspace(birth, { name: 'open', purpose: 'open', llm: LLM, writeSoul: soulWriter(birth) });
+      await createWorkspace(birth, { name: 'open', purpose: 'open', llm: LLM, home: workspaceHome(birth) });
       initWorkspaceSchema(makeWorkspaceSchemaSql(birth));
     } finally {
       birth.close();
