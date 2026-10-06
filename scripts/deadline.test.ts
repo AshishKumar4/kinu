@@ -143,7 +143,8 @@ describe('a run under a deadline', () => {
 
     expect(outcome.exitCode).not.toBe(0);
     expect(outcome.leftovers).toHaveLength(1);
-    expect(outcome.leftovers[0]).toMatch(/^\d+ (?:env -i )?\/bin\/sleep 3600$/u);
+    // Caught between the shell's fork and its exec, the holder still reads as the shell (seen on a loaded container).
+    expect(outcome.leftovers[0]).toMatch(/^\d+ (?:(?:env -i )?\/bin\/sleep 3600|sh -c env -i \/bin\/sleep 3600 & exit 0)$/u);
   });
 
   // The shell exits only once the holder has dropped the mark: its fork, still marked, must not be what the exit sees.
