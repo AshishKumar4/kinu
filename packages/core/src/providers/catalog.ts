@@ -1,11 +1,9 @@
 // Dynamic models.dev source for providers usable with a stored `<id>.bearer` key.
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createOpenAI } from '@ai-sdk/openai';
-import type { LanguageModelV4 } from '@ai-sdk/provider';
-import { wrapLanguageModel, type LanguageModel } from 'ai';
+import type { LanguageModel } from 'ai';
 import type { DynamicProviderSource } from './registry';
 import type { ModelProvider, ProviderDeps } from './types';
-import { createAuthedFetch, statelessResponses } from './util';
+import { createAuthedFetch } from './util';
+import { createWireModel, deferredModel } from './wire-model';
 import { KINU_USER_AGENT } from '../utils/user-agent';
 import { baseCredentialKey } from '../credentials/accounts';
 import {
@@ -93,7 +91,7 @@ function createCatalogProvider(providerId: string): ModelProvider {
     },
 
     createModel(modelId, deps): LanguageModel {
-      async function resolveModel(): Promise<LanguageModelV4> {
+      return deferredModel(providerId, modelId, async () => {
         const endpoint = await getModelsDevModelEndpoint(providerId, modelId, deps);
 
         if (endpoint === null) {
@@ -120,22 +118,8 @@ function createCatalogProvider(providerId: string): ModelProvider {
           },
         });
 
-        return endpoint.protocol === 'responses'
-          ? wrapLanguageModel({
-            model: createOpenAI({ baseURL, apiKey: 'placeholder', fetch: customFetch }).responses(modelId),
-            middleware: statelessResponses(endpoint.reasoning),
-          })
-          : createOpenAICompatible({ name: providerId, baseURL, fetch: customFetch }).chatModel(modelId);
-      }
-
-      const model: LanguageModelV4 = {
-        specificationVersion: 'v4', provider: providerId, modelId,
-        get supportedUrls() { return resolveModel().then((resolved) => resolved.supportedUrls); },
-        async doGenerate(options) { return (await resolveModel()).doGenerate(options); },
-        async doStream(options) { return (await resolveModel()).doStream(options); },
-      };
-
-      return model;
+        return createWireModel({ name: providerId, modelId, baseURL, fetch: customFetch, protocol: endpoint.protocol, reasoning: endpoint.reasoning });
+      });
     },
   };
 }

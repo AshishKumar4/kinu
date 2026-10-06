@@ -66,13 +66,16 @@ aiProxyRoutes.get(`${USER_AI_PROXY_PATH}/models`, async (c) => {
   });
 });
 
-aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/chat/completions`, (c) => settle(proxyChatCompletion(c.req.raw, c.env, c.get('cli').userDO)));
+/** The two APIs a gateway model is spoken to in (`gatewayWireModel`); the account endpoint serves both. */
+for (const endpoint of ['chat/completions', 'responses'] as const) {
+  aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/${endpoint}`, (c) => settle(proxyCompletion(endpoint, c.req.raw, c.env, c.get('cli').userDO)));
+}
 
 aiProxyRoutes.all(`${USER_AI_PROXY_PATH}/*`, beneath(USER_AI_PROXY_PATH, async (c) =>
   errorResponse(404, `No such AI proxy route: ${c.req.method} ${c.req.path.slice(USER_AI_PROXY_PATH.length)}`)));
 
-function proxyChatCompletion<Id>(
-  request: Request, env: UserAIProxyEnv<Id>, userDO: UserCredentialClient,
+function proxyCompletion<Id>(
+  endpoint: 'chat/completions' | 'responses', request: Request, env: UserAIProxyEnv<Id>, userDO: UserCredentialClient,
 ): Effect.Effect<Response> {
   return Effect.gen(function* () {
     const body = yield* Effect.promise(() => request.text());
@@ -88,7 +91,8 @@ function proxyChatCompletion<Id>(
       return errorResponse(400, `Cannot route model "${model}": use "@cf/{model}" (Workers AI) or "{provider}/{model}" (your AI Gateway).`);
     }
 
-    if (workersAI && env.WORKERS_AI_VIA_BINDING === 'on') {
+    // The binding transport reads chat bodies; anything else is the account endpoint's to answer.
+    if (workersAI && endpoint === 'chat/completions' && env.WORKERS_AI_VIA_BINDING === 'on') {
       if (!env.AI) return errorResponse(503, 'Workers AI binding unavailable.');
 
       const ai = env.AI;
@@ -116,7 +120,7 @@ function proxyChatCompletion<Id>(
 
     const controls = transportControls(request);
 
-    return yield* Effect.promise(() => aiFetch(`${PROXY_PLACEHOLDER}/chat/completions`, {
+    return yield* Effect.promise(() => aiFetch(`${PROXY_PLACEHOLDER}/${endpoint}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...controls.headers },
       body,
