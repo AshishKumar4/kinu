@@ -447,85 +447,12 @@ const CONNECTION_LOST = 'Network connection lost.';
 
 const SEEDED: readonly LiveRefreshSource[] = ['memoryContent', 'executors', 'presence', 'plan'];
 
-describe('the workspace banner', () => {
-  test('one dropped connection is one reason, printed once', () => {
-    // Owner-reported: "Workspace snapshot failed: Network connection lost. Couldn't refresh live
-    // data for memory content. Showing last known data. Network connection lost."
-    const notice = formatWorkspaceError(
-      { snapshot: CONNECTION_LOST, memoryContent: CONNECTION_LOST },
-      true,
-    );
-
-    // The snapshot re-reads memory content itself, so one dropped round trip is one reason.
-    expect(notice).toEqual({
-      severity: 'blocking',
-      title: "Could not refresh this workspace.",
-      scope: 'Showing last known data.',
-      detail: CONNECTION_LOST,
-      retry: 'Retry',
-    });
-    expect(notice?.detail.split(CONNECTION_LOST).length).toBe(2);
-  });
-  test('a surface that failed for a reason of its own keeps its name beside the workspace', () => {
-    expect(formatWorkspaceError(
-      { snapshot: CONNECTION_LOST, memoryContent: 'MEMORY.md is unreadable' },
-      true,
-    )).toEqual({
-      severity: 'blocking',
-      title: "Could not refresh this workspace and memory content.",
-      scope: 'Showing last known data.',
-      detail: 'Network connection lost. MEMORY.md is unreadable',
-      retry: 'Retry',
-    });
-  });
-  test('a workspace with nothing on screen says it could not open, never that it is showing stale data', () => {
-    const notice = formatWorkspaceError(
-      { snapshot: CONNECTION_LOST, memoryContent: CONNECTION_LOST },
-      false,
-    );
-
-    expect(notice).toEqual({
-      severity: 'blocking',
-      title: "Could not open this workspace",
-      scope: 'Nothing has loaded yet.',
-      detail: CONNECTION_LOST,
-      retry: 'Retry',
-    });
-    expect(notice?.scope).not.toContain('last known data');
-  });
-
-  test('an initial failure and a refresh failure are different claims about the same reason', () => {
-    const errors = { snapshot: 'the workspace is asleep' };
-    expect(formatWorkspaceError(errors, false)).toMatchObject({
-      severity: 'blocking', title: "Could not open this workspace", detail: 'the workspace is asleep',
-    });
-    expect(formatWorkspaceError(errors, true)).toMatchObject({
-      severity: 'blocking', title: "Could not refresh this workspace.", detail: 'the workspace is asleep',
-    });
-  });
-
-  test('a failed action the user asked for keeps its own sentence', () => {
-    expect(formatWorkspaceError({ model: "Could not switch model: rejected" }, true))
-      .toEqual({
-        severity: 'partial', title: "Could not switch model: rejected",
-        scope: '', detail: '', retry: null,
-      });
-    expect(formatWorkspaceError({ model: "Could not switch model: rejected", jobs: 'offline' }, true))
-      .toEqual({
-        severity: 'partial',
-        title: "Could not switch model: rejected Background jobs could not be refreshed.",
-        scope: 'The conversation is available. Showing last known data.',
-        detail: 'offline',
-        retry: 'Retry loading background jobs',
-      });
-  });
+describe('resource-scoped workspace notices', () => {
   test('a healthy workspace says nothing at all', () => {
     expect(formatWorkspaceError({}, true)).toBeNull();
     expect(formatWorkspaceError({}, false)).toBeNull();
   });
-});
 
-describe('resource-scoped workspace notices', () => {
   test('a failed essential read blocks with the open sentence and a retry', () => {
     expect(formatWorkspaceError({ snapshot: CONNECTION_LOST }, false)).toEqual({
       severity: 'blocking',

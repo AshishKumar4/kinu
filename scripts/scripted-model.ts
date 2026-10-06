@@ -226,6 +226,21 @@ export const THINKING_TURN_ASK = 'Think this through aloud before you answer.';
 export const THINKING_TURN_ANSWER = 'Thought it through.';
 
 /** A turn that reasons for a few seconds in small steps before it answers, so a tab can join or reconnect mid-thought. */
+/** The dropped-file row's ask, and the attachment's one data row: the model answers with whether that row reached it. */
+export const DROPPED_FILE_ASK = 'Check these coupons';
+
+export const DROPPED_FILE_ROW = 'SAVE20,20';
+
+export const DROPPED_FILE_ARRIVED = 'The file arrived; SAVE20 is in it.';
+
+export function droppedFileTurn(request: ScriptedRequest): ScriptedAnswer | null {
+  const last = request.userTexts.at(-1) ?? '';
+
+  if (!last.includes(DROPPED_FILE_ASK)) return null;
+
+  return { text: last.includes(DROPPED_FILE_ROW) ? DROPPED_FILE_ARRIVED : 'No file reached me.' };
+}
+
 export function thinkingTurn(request: ScriptedRequest): ScriptedAnswer | null {
   if (!request.userTexts.some((text) => text.includes(THINKING_TURN_ASK))) return null;
 

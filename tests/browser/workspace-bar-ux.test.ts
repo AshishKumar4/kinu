@@ -93,11 +93,23 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     });
   });
 
-  test('a chat renames in its tab and deletes after a confirmation; Main renames and never deletes', async () => {
+  // m2051: every tab renames and has a ×, as today. A chat's × deletes it; Main's clears its conversation and Main stays.
+  test('a chat renames in its tab and deletes after a confirmation; Main\'s × clears its conversation and Main stays', async () => {
     await withGallery(async ({ newPage, origin }) => {
-      const page = await openWorkspacePage(newPage, origin);
-      expect(await page.$(`${CHATS} [data-agent-tab="main"] button[aria-label="Delete Main"]`)).toBeNull();
-      expect(await page.$(`${CHATS} [data-agent-tab="main"] button[aria-label="Rename Main"]`)).not.toBeNull();
+      const page = await openWorkspacePage(newPage, origin, '&transcript=revert');
+      const main = `${CHATS} [data-agent-tab="main"]`;
+      const chatText = () => page.$eval('#chat', (column) => column.textContent ?? '');
+
+      expect(await page.$(`${main} button[aria-label="Delete Main"]`)).toBeNull();
+      expect(await page.$(`${main} button[aria-label="Rename Main"]`)).not.toBeNull();
+      await page.waitForFunction(() => (document.querySelector('#chat')?.textContent ?? '').length > 300);
+      const before = await chatText();
+
+      await page.hover(`${main} a`);
+      await page.click(`${main} button[aria-label="Clear Main"]`);
+      await page.waitForSelector('[role="dialog"]');
+      await clickDialogButton(page, 'Cancel');
+      expect(await chatText()).toBe(before);
 
       await startChat(page, 'Audit the coupon rules');
       await waitForNewChatOpen(page);
@@ -123,6 +135,13 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await clickDialogButton(page, 'Delete');
       await page.waitForFunction((chats) => document.querySelector(`${chats} [data-active]`)?.getAttribute('data-agent-tab') === 'main', {}, CHATS);
       expect(await page.evaluate((chats) => document.querySelector(chats)?.textContent ?? '', CHATS)).not.toContain('Payments triage');
+
+      await page.hover(`${main} a`);
+      await page.click(`${main} button[aria-label="Clear Main"]`);
+      await page.waitForSelector('[role="dialog"]');
+      await clickDialogButton(page, 'Clear');
+      await page.waitForFunction((was) => (document.querySelector('#chat')?.textContent ?? '').length < was * 0.6, {}, before.length);
+      expect(await openTab(page)).toBe('Main');
       await page.close();
     });
   });

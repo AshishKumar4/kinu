@@ -30,7 +30,7 @@ import {
   ANSWERED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK,
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
-  heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
+  DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
   startScriptedModel, type HeldCall,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
@@ -197,6 +197,7 @@ export interface TierVerdicts {
   keptTab: KeptTabVerdict | null;
   chatScroll: ChatScrollVerdict | null;
   midThought: MidThoughtVerdict | null;
+  droppedFile: DroppedFileVerdict | null;
   state: StateVerdict | null;
 }
 
@@ -1364,6 +1365,37 @@ async function measureMidThought(newPage: LiveApp['newPage'], origin: string): P
   }
 }
 
+/** The end of the chat once the turn a dropped file went out with has answered. */
+interface DroppedFileVerdict {
+  readonly answer: string;
+}
+
+/** Issue #33: a file dropped on the chat column rides the next message into the agent's turn, through the real
+ *  composer, upload and turn; the scripted model answers with whether the file's row reached it. */
+async function measureDroppedFile(newPage: LiveApp['newPage'], origin: string): Promise<DroppedFileVerdict> {
+  const workspace = await createWorkspace(origin, { name: `live-row-drop-${RUN_ID}`, purpose: 'dropped file probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openWorkspace(newPage, origin, workspace);
+
+  try {
+    await until(page, "the workspace's first turn to end", FIRST_TURN_ENDED);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await page.$eval('[data-agent-pane$="/main"]', (pane, row) => {
+      const files = new DataTransfer();
+
+      files.items.add(new File([`coupon,discount\n${row}\n`], 'coupons.csv', { type: 'text/csv' }));
+      pane.dispatchEvent(new DragEvent('dragover', { dataTransfer: files, bubbles: true, cancelable: true }));
+      pane.dispatchEvent(new DragEvent('drop', { dataTransfer: files, bubbles: true, cancelable: true }));
+    }, DROPPED_FILE_ROW);
+    await until(page, 'the dropped file in the composer', `(document.querySelector('#chat [data-composer-root]')?.textContent ?? '').includes('coupons.csv')`);
+    await sendInChat(page, DROPPED_FILE_ASK);
+    await until(page, 'the turn to answer', `/file arrived|No file reached/u.test(document.querySelector('#chat')?.textContent ?? '')`);
+
+    return { answer: v.parse(v.string(), await page.evaluate(CHAT_TAIL)) };
+  } finally {
+    await page.close();
+  }
+}
+
 /** Row 7: the run's own state directory, measured on the LOCAL server in both
  *  modes — the question is what the harness booted on, not what a deployment
  *  holds. The roster read goes through UserDO, so its namespace directory is
@@ -1382,7 +1414,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 /** A row a file can run, by the name its log line carries, in the order the suite ran them. */
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
-  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'state',
+  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -1404,7 +1436,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null, planTabs: null, geometry: null,
-    controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, state: null,
+    controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -1425,7 +1457,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const toldBack = Promise.withResolvers<ScriptedRequest>();
 
     // The watched turn follows the answered one in its conversation, so it is matched first, by the latest ask.
-    const model = await startScriptedModel((request) => toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
+    const model = await startScriptedModel((request) => droppedFileTurn(request) ?? toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
       ?? laterReconnectTurn(request, WATCHED_ANSWER_TURN_ASK, watchedAnswerHeld)
       ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
       ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
@@ -1459,6 +1491,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'kept-tab': async () => { observed.keptTab = await attempt('kept-tab', () => measureKeptTab(newPage, origin)); },
         'chat-scroll': async () => { observed.chatScroll = await attempt('chat-scroll', () => measureChatScroll(newPage, origin)); },
         'mid-thought': async () => { observed.midThought = await attempt('mid-thought', () => measureMidThought(newPage, origin)); },
+        'dropped-file': async () => { observed.droppedFile = await attempt('dropped-file', () => measureDroppedFile(newPage, origin)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
       };
 
