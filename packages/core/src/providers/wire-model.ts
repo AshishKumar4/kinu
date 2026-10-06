@@ -1,11 +1,21 @@
 // The one place a wire protocol becomes an SDK model.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { wrapLanguageModel } from 'ai';
 import { statelessResponses } from './util';
 
-export type WireProtocol = 'responses' | 'chat-completions';
+export type WireProtocol = 'responses' | 'messages' | 'chat-completions';
+
+export const OPENAI_AUTHOR = 'openai/';
+
+export const ANTHROPIC_AUTHOR = 'anthropic/';
+
+/** The bare id of a gateway `openai/` model, else null. */
+export function gatewayOpenAIModel(modelId: string | undefined): string | null {
+  return modelId?.startsWith(OPENAI_AUTHOR) === true ? modelId.slice(OPENAI_AUTHOR.length) : null;
+}
 
 export interface WireModelInput {
   readonly name: string;
@@ -20,6 +30,8 @@ export interface WireModelInput {
 export function createWireModel(input: WireModelInput): LanguageModelV4 {
   const { name, modelId, baseURL, headers } = input;
   const fetched = input.fetch === undefined ? {} : { fetch: input.fetch };
+
+  if (input.protocol === 'messages') return createAnthropic({ name, baseURL, authToken: 'placeholder', headers, ...fetched })(modelId);
 
   return input.protocol === 'responses'
     ? wrapLanguageModel({

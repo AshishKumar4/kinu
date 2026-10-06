@@ -345,7 +345,10 @@ describe('the model list', () => {
 
     const models = await createChatGptProvider().listModels(signedIn(api.fetch).deps);
 
-    expect(api.sent[0]).toMatchObject({ url: 'https://api.openai.com/v1/models', method: 'GET', authorization: 'Bearer at-1' });
+    expect(api.sent[0]).toMatchObject({ method: 'GET', authorization: 'Bearer at-1' });
+    const listed = new URL(api.sent[0]?.url ?? '');
+    expect(`${listed.origin}${listed.pathname}`).toBe('https://api.openai.com/v1/models');
+    expect(listed.searchParams.get('client_version')).not.toBeNull();
     expect(models.map((model) => [model.id, model.label, model.contextWindow ?? null])).toEqual([
       ['gpt-6.1-sol', 'GPT-6.1 Sol', 400_000],
       ['gpt-6-luna', 'GPT-6 Luna', null],

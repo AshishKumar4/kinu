@@ -212,15 +212,6 @@ export function getModelsDevModelEndpoint(
   }));
 }
 
-/** Null when the catalog has no such provider. */
-export function getModelsDevWire(
-  providerId: string,
-  modelId: string,
-  deps: Pick<ProviderDeps, 'fetch'>,
-): Promise<ModelsDevWire | null> {
-  return settle(Effect.map(modelsDevModel(providerId, modelId, deps.fetch), (found) => (found === null ? null : wireOf(found))));
-}
-
 interface FoundModel {
   readonly info: ModelsDevProviderInfo;
   readonly model: ModelsDevModel | undefined;

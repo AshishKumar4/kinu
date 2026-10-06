@@ -38,7 +38,7 @@ import type { CountableRequest, InputTokenCount } from './providers/input-tokens
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
-import { compactionTriggerOptions, isServerCompaction, serverCompactionOptions, serverCompactor } from './providers/server-compaction';
+import { compactionTriggerOptions, isServerCompaction, serverCompactionOptions, serverCompactor, sinceLatestCompaction } from './providers/server-compaction';
 import { describeProviderError, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
@@ -749,9 +749,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   let cache = attemptCachePlan(opts, servingRoute, turnMessages, tools);
   const forcedInput = opts.transformTrigger === 'force' ? admittedTokens : undefined;
 
-  /** One attempt's provider options: its cache's, the serving model's server compaction, then its own. */
+  /** One attempt's provider options: its cache's, the serving model's server compaction, then its own. OpenAI's is
+   *  asked per step, from what the step replays. */
   const optionsFor = (spec: string | undefined, served: number | null | undefined, own: ChatOptions['providerOptions']) => mergeProviderOptions(
-    mergeProviderOptions(cache.providerOptions, serverCompactionOptions(spec, served, forcedInput)), own);
+    mergeProviderOptions(cache.providerOptions, serverCompactor(spec) === 'openai' ? undefined : serverCompactionOptions(spec, served, forcedInput)), own);
 
   /** The model each attempt calls, with the media it takes: the turn's for the primary, its own for a fallback. */
   let current = {
@@ -893,9 +894,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           turnStart,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
 
-        const asked = (done: PrepareStepResult<ToolSet>) => (trigger === undefined || done === undefined
-          ? done
-          : { ...done, providerOptions: mergeProviderOptions(done.providerOptions, trigger) });
+        const asked = (done: PrepareStepResult<ToolSet>) => {
+          const threshold = serverCompactor(current.spec) === 'openai'
+            ? serverCompactionOptions(current.spec, serving.contextWindow, opening ? forcedInput : undefined, sinceLatestCompaction(done?.messages ?? messages))
+            : undefined;
+
+          const extra = mergeProviderOptions(trigger, threshold);
+
+          return extra === undefined || done === undefined ? done : { ...done, providerOptions: mergeProviderOptions(done.providerOptions, extra) };
+        };
 
         return prepared instanceof Promise ? prepared.then((done) => asked(done ?? { messages })) : asked(prepared ?? { messages });
       },

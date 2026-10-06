@@ -76,7 +76,7 @@ import {
   workModeForTurnMetadata, authoredTurnMetadata,
   renderUnverifiedInstructions,
   observeSystemPromptHash, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock,
-  type DynamicContext, type DynamicApproval, type MissingCapability,
+  type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
   type PromptFile, PromptFileSchema,
@@ -2259,7 +2259,7 @@ export abstract class ActorAgent extends Agent<Env> {
   // exactly when the durable rows differ from what this activation last served.
   private _mcpToolsCache: McpToolSurfaceCache<ToolSet> | null = null;
   /** Rendered into the turn's dynamic context so missing MCP servers are legible. */
-  private _mcpUnavailable: MissingCapability[] = [];
+  private _mcpUnavailable: NonNullable<DynamicContextInput['unavailableMcp']> = [];
 
   private noteGitHubCall(descriptor: Pick<SerializableToolDescriptor, 'presetId' | 'name'>, args: JsonObject, result: string, actorId: string | null): void {
     if (descriptor.presetId !== GITHUB_MCP_PRESET) return;
@@ -3887,9 +3887,7 @@ export abstract class ActorAgent extends Agent<Env> {
         },
       );
 
-      this._mcpUnavailable = this.mcpToolsCache.unavailable.map((u) => ({
-        source: `MCP server "${u.server}"`, reason: u.reason,
-      }));
+      this._mcpUnavailable = this.mcpToolsCache.unavailable;
       this.logActivity('mcp_tools_served', `${Object.keys(tools).length} tools`);
 
       return tools;
@@ -3904,10 +3902,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // callers, bad descriptors or cancellation are this turn's faults and rethrow.
       if (!MCP_CATALOG_READ_FAILURES.has(failure.code)) throw failure;
       diagnostics.failure('mcp.tool_surface_failed', failure);
-      this._mcpUnavailable = [{
-        source: 'MCP catalog',
-        reason: 'The descriptor read failed. No MCP tool is available for this turn.',
-      }];
+      this._mcpUnavailable = [{ server: null, reason: 'The descriptor read failed. No MCP tool is available for this turn.' }];
 
       return {};
     }
@@ -4396,10 +4391,8 @@ export abstract class ActorAgent extends Agent<Env> {
       turn: this.turnReason(),
       ...(activeSkills !== null && { activeSkills }),
       memoryTail,
-      missingCapabilities: [
-        ...this._mcpUnavailable,
-        ...(extras.extraMissingCapabilities?.() ?? []),
-      ],
+      unavailableMcp: this._mcpUnavailable,
+      missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: () => this.subordinateDelegates(),
       approvals: extras.approvals,
     });

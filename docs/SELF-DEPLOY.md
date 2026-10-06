@@ -81,7 +81,7 @@ one multipart request. The artifact is written assets-first for the same
 reason, so the compressed bytes are released before the module set is held.
 
 Cost, measured 2026-09-18 in
-`packages/cf-backend/tests/workerd/deploy-ledger.test.ts` against a synthetic
+`packages/cf-backend/tests/workerd/deploy-lifecycle.test.ts` against a synthetic
 release of the same shape (108.46 MiB unpacked, largest member 21.50 MiB):
 **88.18 MiB at the peak**, which is the compressed artifact plus the largest
 member's base64 twice, since the transport copies a part into the multipart
@@ -200,7 +200,7 @@ Cloudflare door. No user repository and no Workers Builds.
    digest, the `/deploy` page, and `kinu deploy cloudflare`. The ledger is
    proved in workerd against real Durable Object SQLite, a fake Cloudflare API
    and a fake authorization server:
-   `packages/cf-backend/tests/workerd/deploy-ledger.test.ts` (12 tests).
+   `packages/cf-backend/tests/workerd/deploy-lifecycle.test.ts` (two journeys).
 
    What the owner still has to do once, by hand: register the self-managed
    PUBLIC OAuth client (PKCE, no secret) and put its id in
@@ -218,7 +218,7 @@ Cloudflare door. No user repository and no Workers Builds.
    `/api/updates`, `/api/updates/run` and `/api/updates/apply` gated on the
    deployment's own record, and the Updates page that polls the run. Proved in
    workerd against the same fake plane:
-   `packages/cf-backend/tests/workerd/deploy-updates.test.ts` (7 tests).
+   `packages/cf-backend/tests/workerd/deploy-lifecycle.test.ts` (one journey).
 5. **Built 2026-09-18.** The local door: `kinu deploy local` reads the
    channel, lays the release down under `~/.kinu/local/releases/<version>/`
    with a `current` symlink, renders `workerd.capnp` and `config.json` from

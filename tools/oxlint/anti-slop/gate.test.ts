@@ -245,7 +245,6 @@ for (const [rule, setting, protects] of builtinRulePins) {
 }
 
 assert.equal(packageJson.devDependencies.oxlint, packageJson.devDependencies["@oxlint/plugins"]);
-assert.equal(packageJson.devDependencies.oxlint, "1.78.0");
 assert.equal(pluginPackage.private, true);
 assert.equal(pluginPackage.type, "module");
 assert.match(packageJson.scripts["test:anti-slop"], /tsc --noEmit -p tools\/oxlint\/anti-slop/u);

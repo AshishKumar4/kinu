@@ -1,16 +1,13 @@
 /** The prompt boxes' attachments: chips, the paperclip, and paste. */
 import { useRef, type ClipboardEvent } from "react";
 import type { FileUIPart } from "ai";
-import { FileIcon, PaperclipIcon, XIcon } from "@phosphor-icons/react";
+import { PaperclipIcon } from "@phosphor-icons/react";
 import { AttachmentChip } from "@/components/AttachmentChip";
 
 export interface AttachmentsControl {
   readonly parts: readonly FileUIPart[];
   readonly onAdd: (files: FileList | null | undefined) => void;
   readonly onRemove: (index: number) => void;
-  /** Send stays disabled until each failed upload is removed. */
-  readonly failed?: readonly string[];
-  readonly onRemoveFailed?: (index: number) => void;
 }
 
 /** Dedupe by File identity only: files with the same metadata can differ in bytes. */
@@ -71,29 +68,12 @@ export function pasteAttachments(e: ClipboardEvent, attachments: AttachmentsCont
 }
 
 export function AttachmentTray({ attachments }: { attachments: AttachmentsControl }) {
-  const failed = attachments.failed ?? [];
-
-  if (attachments.parts.length === 0 && failed.length === 0) return null;
+  if (attachments.parts.length === 0) return null;
 
   return (
     <div className="flex flex-wrap gap-1.5 px-3 pt-3" data-attachments>
       {attachments.parts.map((part, i) => (
         <AttachmentChip key={`${part.filename ?? "file"}-${i}`} part={part} onRemove={() => attachments.onRemove(i)} />
-      ))}
-      {failed.map((name, i) => (
-        <span key={`failed-${name}-${i}`}
-          className="inline-flex max-w-56 items-center gap-1.5 rounded-md border p-border p-fill px-1.5 py-1 p-meta p-text-2"
-          title={`Could not attach ${name}`}>
-          <FileIcon size={13} className="shrink-0 p-text-3" />
-          <span className="truncate font-mono">{name}</span>
-          <span className="shrink-0 font-medium p-warning">failed</span>
-          {attachments.onRemoveFailed && (
-            <button type="button" onClick={() => attachments.onRemoveFailed?.(i)} aria-label={`Remove ${name}`}
-              className="p-btn-ghost cursor-pointer p-0.5">
-              <XIcon size={11} />
-            </button>
-          )}
-        </span>
       ))}
     </div>
   );

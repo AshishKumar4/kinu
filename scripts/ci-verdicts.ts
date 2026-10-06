@@ -1,8 +1,9 @@
 /**
  * CI proves a clean revision once, and the deploy takes that proof (L23). A row verdict is its command and exit
- * status, not a cache entry: the local ladder cache is checkout-specific and stays so. CI runs uncached and uploads
- * each part's verdicts even on red. Their union must contain every planned row exactly once; absence is never green.
- * Only this repository's push of the exact full SHA is eligible, never a PR's merge commit or another revision.
+ * status; a row whose input closure, toolchain and runner image are unchanged reuses the green proof its part's store
+ * holds (`ladder-cache.ts`), and names the revision that proved it. Each part uploads its verdicts even on red. Their
+ * union must contain every planned row exactly once; absence is never green. Only this repository's push of the exact
+ * full SHA is eligible, never a PR's merge commit or another revision.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -13,6 +14,8 @@ const Sha = v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/u));
 const RowSchema = v.object({
   run: v.string(), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
   timings: v.optional(v.record(v.string(), v.number())),
+  /** The revision whose run this unchanged row reuses. */
+  cached: v.optional(v.string()),
 });
 
 export type CIVerdict = v.InferOutput<typeof RowSchema>;

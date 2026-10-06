@@ -6,9 +6,9 @@ import { Effect } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
-import type { UIMessage } from "ai";
+import type { FileUIPart, UIMessage } from "ai";
 import { threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
-import { followJobOutput, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
+import { delegatedTaskMetadata, followJobOutput, summarizeSteps, TURN_END_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -26,7 +26,7 @@ import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
-import type { ParkedWriteReview, ReasoningEffort } from "@kinu.run/core";
+import type { AlternateTakeSet, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
@@ -315,6 +315,12 @@ const MODELS_FAIL = new URLSearchParams(location.search).get("models") === "fail
 
 const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
 
+/** `&snapshot=failed`: the workspace's first read fails, so nothing has loaded. */
+const SNAPSHOT_FAILS = new URLSearchParams(location.search).get("snapshot") === "failed";
+
+/** `&visit=failed`: the roster cannot record the visit for a reason other than the workspace being gone. */
+const VISIT_FAILS = new URLSearchParams(location.search).get("visit") === "failed";
+
 const GALLERY_DEVICE = { id: "dev-1", label: "Owner's laptop" };
 
 let settingsChatGptSignedIn = false;
@@ -328,6 +334,9 @@ function galleryChatGptStatus() {
 
 /** Flips when the gallery's Claude sign-in finishes with the fixture's code. */
 let settingsClaudeConnected = false;
+
+/** Keys saved through the providers panel, listed after the stock ones; each body is kept on the page for a flow to read. */
+const settingsSavedCredentials = new Map<string, JsonValue>();
 
 /** `&chatgpt=device`: a machine that signs in; without, none is connected yet. */
 function chatgptFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -373,7 +382,18 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
       { key: "anthropic.bearer", kind: "bearer" },
       { key: "anthropic.bearer@work", kind: "bearer" },
       ...(settingsClaudeConnected ? [{ key: "claude.oauth", kind: "oauth" }] : []),
+      ...[...settingsSavedCredentials.keys()].map((key) => ({ key, kind: "openai-compat" })),
     ]);
+  }
+
+  if (path.startsWith("/api/user/credentials/") && method === "POST") {
+    const key = decodeURIComponent(path.slice("/api/user/credentials/".length));
+
+    settingsSavedCredentials.set(key, JSON.parse(v.parse(v.string(), body)));
+    document.documentElement.dataset.gallerySavedCredentials = JSON.stringify(Object.fromEntries(settingsSavedCredentials));
+
+    // The route's own answer: whether the store now holds the key.
+    return fixtureJson({ ok: settingsSavedCredentials.has(key) });
   }
 
   if (path === "/api/user/unrevoked-grants") return fixtureJson([]);
@@ -780,6 +800,13 @@ const ROSTER_SOCKET_REFUSED = galleryQuery.get("rosterSocket") === "refused";
 
 const SESSION_EXPIRED = galleryQuery.get("session") === "expired";
 
+/** `&roster=held` holds every roster read until `gallery:roster-release`; `&roster=empty` answers an account with none. */
+const ROSTER_READ = galleryQuery.get("roster");
+
+const rosterRelease = Promise.withResolvers<void>();
+
+window.addEventListener("gallery:roster-release", () => rosterRelease.resolve());
+
 const galleryRosterSockets: GalleryRosterSocket[] = [];
 
 Object.assign(window, { galleryRosterSockets });
@@ -850,10 +877,20 @@ const ANONYMOUS_WORKSPACE = frame === 'workspacepage'
 
 if (ANONYMOUS_WORKSPACE) STUB.set('/api/user/profile', null);
 
+function rosterRead(search: URLSearchParams): Promise<Response> {
+  if (SESSION_EXPIRED) return Promise.resolve(fixtureJson({ error: "Sign in again." }, 401));
+
+  const answer = () => fixtureJson(ROSTER_READ === "empty" ? { entries: [], total: 0, nextCursor: null, counts: galleryRosterCounts() } : rosterAnswer(search));
+
+  return ROSTER_READ === "held" ? rosterRelease.promise.then(answer) : Promise.resolve(answer());
+}
+
 /** Every path fetched, so a gate can prove what the page did not read. */
 function touchFixture(): Response {
   const root = document.documentElement;
   root.dataset.galleryTouches = String(Number(root.dataset.galleryTouches ?? "0") + 1);
+
+  if (VISIT_FAILS) return fixtureJson({ error: "the roster is unavailable" }, 503);
 
   return WORKSPACE_GONE
     ? fixtureJson({ error: "No such workspace." }, 404)
@@ -889,9 +926,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     // Cloned per call: a `Response` body reads once and the provider has several reads in flight here.
     if (frame === "rosterauthority") return rosterAuthorityHold.promise.then((held) => held.clone());
 
-    if (SESSION_EXPIRED) return Promise.resolve(fixtureJson({ error: "Sign in again." }, 401));
-
-    return Promise.resolve(fixtureJson(rosterAnswer(roster.searchParams)));
+    return rosterRead(roster.searchParams);
   }
 
   const response = STUB.get(path);
@@ -1447,7 +1482,8 @@ const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "pan
 
 if (AGENTS_PANEL) {
   seedGalleryChat([
-    msg({ id: "ca-u1", role: "user", createdAt: NOW - 6 * 60e3, parts: [{ type: "text", text: "Audit every coupon rule against the campaign table." }] }),
+    // Hired by Main: its task arrives as an event naming the hirer, never as the person speaking.
+    msg({ id: "ca-u1", role: "user", createdAt: NOW - 6 * 60e3, metadata: delegatedTaskMetadata("main", "build"), parts: [{ type: "text", text: "Audit every coupon rule against the campaign table." }] }),
     msg({ id: "ca-a1", role: "assistant", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Two rules skip the expiry check; both are in pricing.ts." }] }),
   ], hostedActorSocketPath("coupon-auditor"));
 
@@ -1582,9 +1618,10 @@ const REVERT_THREAD: UIMessage[] = [
     id: "rv-u1", role: "user", createdAt: NOW - 8 * 60e3,
     parts: [{ type: "text", text: "Add the coupon-kind regression test and run the checkout suite." }],
   }),
+  // The loop stopped mid-work after a settled call (a step ceiling), so only the turn's own end says it did not finish.
   msg({
-    id: "rv-a1", role: "assistant", createdAt: NOW - 7 * 60e3,
-    parts: [{ type: "text", text: "Added `tests/coupon-kind.test.ts`. The suite is green: 14 passed." }],
+    id: "rv-a1", role: "assistant", createdAt: NOW - 7 * 60e3, metadata: { [TURN_END_METADATA_KEY]: "incomplete" },
+    parts: [{ type: "tool-shell", toolCallId: "rv-call-1", state: "output-available", input: { command: "bun test tests/coupon-kind.test.ts" }, output: "14 pass\n0 fail" }],
   }),
   msg({
     id: "rv-u2", role: "user", createdAt: NOW - 6 * 60e3,
@@ -1592,7 +1629,10 @@ const REVERT_THREAD: UIMessage[] = [
   }),
   msg({
     id: "rv-a2", role: "assistant", createdAt: NOW - 5 * 60e3,
-    parts: [{ type: "text", text: "Rewrote `pricing-service.ts` against the campaign table and updated eleven call sites." }],
+    parts: [
+      { type: "tool-shell", toolCallId: "rv-call-2", state: "output-available", input: { command: "bun test packages/pricing" }, output: "31 pass\n0 fail" },
+      { type: "text", text: "Rewrote `pricing-service.ts` against the campaign table and updated eleven call sites." },
+    ],
   }),
 ];
 
@@ -1648,6 +1688,14 @@ function galleryPortListing(executor: string | undefined): GalleryListing | null
 
   if (flags.sandboxStarting === "1") return { kind: "listed", value: { ports: [], pending: "the sandbox's container is still restoring" } };
 
+  // `data-sandbox-ports`: what the sandbox answers next. `failed`: an error; `forged`: a port whose address is not
+  // a preview's; `none`: no ports at all.
+  if (flags.sandboxPorts === "failed") return { kind: "listed", value: { ports: [], error: "Nimbus is temporarily unavailable" } };
+
+  if (flags.sandboxPorts === "forged") return { kind: "listed", value: { ports: [{ port: 8130, url: "https://evil.example/", name: "Arrived app" }] } };
+
+  if (flags.sandboxPorts === "none") return { kind: "listed", value: { ports: [] } };
+
   // Arrives after first paint.
   if (flags.previewArrived === "1") {
     return { kind: "listed", value: { ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] } };
@@ -1665,8 +1713,78 @@ function gallerySlates() {
   };
 }
 
+/* `&takes=3`: the revert thread's last answer ran beside two branched redirects, so there is a choice to compare;
+   `&takes=1`: a set with one take, which offers nothing to compare. A pick is recorded and the set comes back with it. */
+const TAKE_COUNT = Number(new URLSearchParams(location.search).get("takes") ?? 0);
+
+let galleryTakes: AlternateTakeSet = {
+  id: "take-1", turnId: "rv-a2", sessionId: "default", task: "Read the rules from the campaign table instead", winnerNodeId: "win",
+  chosenNodeId: null, createdAt: NOW - 5 * 60e3,
+  candidates: ([
+    { nodeId: "win", text: "Rewrote `pricing-service.ts` against the campaign table and updated eleven call sites.", origin: "live" },
+    { nodeId: "alt", text: "Kept the service and read each rule from the campaign table at its three call sites.", origin: "branch" },
+    { nodeId: "alt2", text: "Moved the rules into a view over the campaign table; the service reads the view.", origin: "branch" },
+  ] satisfies AlternateTakeSet["candidates"]).slice(0, TAKE_COUNT),
+};
+
+function galleryPickTake(args?: unknown[]): TakePickOutcome {
+  const [, nodeId] = v.parse(v.tuple([v.string(), v.string()]), args);
+  const chosen = galleryTakes.candidates.find((candidate) => candidate.nodeId === nodeId);
+
+  if (chosen === undefined) throw new Error(`gallery: no take ${nodeId}`);
+  galleryTakes = { ...galleryTakes, chosenNodeId: nodeId };
+
+  return { changedAnswer: nodeId !== galleryTakes.winnerNodeId, chosen, set: galleryTakes, continuationQueued: false };
+}
+
+/* `&annotationSaves=held`: each annotation save waits for `gallery:annotation-save`; `=fail-first`: the first one is
+   refused. Each landed save's comments are kept on the page, with the most that were ever in flight at once. */
+const ANNOTATION_SAVES = new URLSearchParams(location.search).get("annotationSaves");
+
+const annotationRelease: (() => void)[] = [];
+
+window.addEventListener("gallery:annotation-save", () => {
+  annotationRelease.shift()?.();
+  document.documentElement.dataset.galleryAnnotationsWaiting = String(annotationRelease.length);
+});
+
+let annotationSavesAsked = 0;
+
+let annotationSavesInFlight = 0;
+
+async function galleryAnnotationSave(args?: unknown[]): Promise<JsonValue> {
+  const [, , annotations] = v.parse(v.tuple([v.string(), v.number(), v.array(v.looseObject({ text: v.optional(v.string()) }))]), args);
+  const root = document.documentElement;
+
+  annotationSavesAsked += 1;
+  annotationSavesInFlight += 1;
+  root.dataset.galleryAnnotationsMostInFlight = String(Math.max(annotationSavesInFlight, Number(root.dataset.galleryAnnotationsMostInFlight ?? "0")));
+
+  if (ANNOTATION_SAVES === "held") {
+    await new Promise<void>((resolve) => {
+      annotationRelease.push(resolve);
+      root.dataset.galleryAnnotationsWaiting = String(annotationRelease.length);
+    });
+  }
+
+  annotationSavesInFlight -= 1;
+
+  const ok = !(ANNOTATION_SAVES === "fail-first" && annotationSavesAsked === 1);
+
+  if (!ok) return { ok, error: "the plan store is busy" };
+
+  const landed = v.parse(v.array(v.array(v.string())), JSON.parse(root.dataset.galleryAnnotationsSaved ?? "[]"));
+
+  root.dataset.galleryAnnotationsSaved = JSON.stringify([...landed, annotations.map((annotation) => annotation.text ?? "")]);
+
+  return { ok, plan: v.parse(JsonValueSchema, galleryAgentPlan) };
+}
+
+
 /* The reads the first-visit inspector policy decides on, in the shapes the page consumes (`listSlates` needs an array for `slates.map`). */
 const WORKSPACE_PAGE_RPC = new Map(Object.entries({
+  listAlternateTakes: () => (TAKE_COUNT > 0 ? { [galleryTakes.turnId ?? ""]: galleryTakes } : {}),
+  pickAlternateTake: galleryPickTake,
   getWorkspaceSnapshot: () => {
     const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
 
@@ -1700,7 +1818,6 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
       }] : [],
     ],
   }),
-  savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   listWorkspaceAgents: galleryWorkspaceAgents,
   getWorkspaceGitHub: (args?: unknown[]) => {
     const root = document.documentElement;
@@ -1771,6 +1888,7 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
     args,
   );
 
+  document.documentElement.dataset.galleryPlanFeedback = feedback ?? "";
   galleryAgentPlan = {
     ...galleryAgentPlan,
     status: decision === "approve" ? "approved" : "changes_requested",
@@ -1867,7 +1985,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
 
 new MutationObserver(() => {
   galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getExposedPorts"] }));
-}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived", "data-sandbox-starting"] });
+}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived", "data-sandbox-starting", "data-sandbox-ports"] });
 
 /* `&history=N&historyLatency=ms`: N older rows, paged; `&historyHold=1` waits for `gallery:release-page`. */
 const HISTORY_ROWS = Number(new URLSearchParams(location.search).get("history") ?? 0);
@@ -1992,8 +2110,37 @@ function rosterMoved(): void {
   queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubordinates"] })); });
 }
 
+/** The page reads the gallery answers only after a wait it controls. */
+const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>([
+  ...(HISTORY_ROWS > 0 ? [["getChatHistoryPage", galleryHistoryPage] as const] : []),
+  ["savePlanReviewAnnotations", galleryAnnotationSave],
+]);
+
+/** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
+async function snapshotGate(): Promise<void> {
+  const query = new URLSearchParams(location.search);
+
+  if (query.get("terminal") === "denied") await new Promise<never>(() => {});
+
+  if (SNAPSHOT_FAILS) throw new Error("Network connection lost.");
+
+  if (query.get("snapshot") !== "held" || document.documentElement.dataset.snapshotReleased === "1") return;
+
+  await new Promise<void>((resolve) => {
+    const released = new MutationObserver(() => {
+      if (document.documentElement.dataset.snapshotReleased !== "1") return;
+      released.disconnect();
+      resolve();
+    });
+
+    released.observe(document.documentElement, { attributes: true, attributeFilter: ["data-snapshot-released"] });
+  });
+}
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getChatHistoryPage" && HISTORY_ROWS > 0) return rpcResult(await galleryHistoryPage(args)).json<T>();
+  const waited = ASYNC_PAGE_RPC.get(method);
+
+  if (waited !== undefined) return rpcResult(await waited(args)).json<T>();
 
   const plan = galleryPlanRpc(method, args);
 
@@ -2021,22 +2168,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     }
   }
 
-  if (new URLSearchParams(location.search).get("terminal") === "denied" && method === "getWorkspaceSnapshot") {
-    return new Promise<T>(() => {});
-  }
-
-  if (new URLSearchParams(location.search).get("snapshot") === "held" && method === "getWorkspaceSnapshot"
-      && document.documentElement.dataset.snapshotReleased !== "1") {
-    await new Promise<void>((resolve) => {
-      const released = new MutationObserver(() => {
-        if (document.documentElement.dataset.snapshotReleased !== "1") return;
-        released.disconnect();
-        resolve();
-      });
-
-      released.observe(document.documentElement, { attributes: true, attributeFilter: ["data-snapshot-released"] });
-    });
-  }
+  if (method === "getWorkspaceSnapshot") await snapshotGate();
 
   const roster = galleryRosterRpc(method, args);
 
@@ -3376,6 +3508,7 @@ function ComposerFrame() {
   const [model, setModel] = useState("anthropic/claude-opus-4");
   /* The thinking level travels with the model; the composer sizes the row, so the picker takes no width class. */
   const [effort, setEffort] = useState<ReasoningEffort | null>(null);
+  const [parts, setParts] = useState<FileUIPart[]>([]);
 
   const picker = () => (
     <ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs"
@@ -3389,7 +3522,13 @@ function ComposerFrame() {
     placeholder: "Send a message...",
     disabled: false,
     mode: { value: mode, onChange: setMode, locked: false },
-    attachments: { parts: [], onAdd: () => {}, onRemove: () => {} },
+    attachments: {
+      parts,
+      onAdd: (files: FileList | null | undefined) => setParts((held) => [...held, ...[...files ?? []].map((file): FileUIPart => ({
+        type: "file", mediaType: file.type, filename: file.name, url: "data:,",
+      }))]),
+      onRemove: (index: number) => setParts((held) => held.filter((_, at) => at !== index)),
+    },
   } as const;
 
   return (
@@ -3399,12 +3538,12 @@ function ComposerFrame() {
           <div className="p-eyebrow px-4">At rest, with a draft</div>
           <Composer {...shared} value={value} liveness={IDLE_TURN} modelPicker={picker()} />
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1" data-gallery-composer="live">
           <div className="p-eyebrow px-4">Mid-turn — Stop, Branch, Steer</div>
           <Composer {...shared} value={value} liveness={LIVE_TURN} onBranch={() => {}}
             modelPicker={picker()} />
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1" data-gallery-composer="notice">
           <div className="p-eyebrow px-4">With a status row</div>
           <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={REFRESH_NOTICE} />
         </div>
@@ -4964,6 +5103,10 @@ const ACTIVITY_CACHE_HIT = {
   samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, p99: 0.99, emaAlpha: 0.2, warms: 2,
 };
 
+/** `&cache=unreported`: a provider that sends no cache counters, as the steps summarize it. */
+const ACTIVITY_CACHE_SHOWN = new URLSearchParams(location.search).get("cache") === "unreported"
+  ? summarizeSteps([{ usage: { input: 100 } }], { windowLimit: 200 }).cacheHit : ACTIVITY_CACHE_HIT;
+
 /** One nested label and one spent: a dollar cap, a token cap, blended pricing, and a `spent` badge. */
 const ACTIVITY_MISSIONS: WorkspaceSpend["missions"] = [
   {
@@ -6214,7 +6357,7 @@ async function mount() {
     ["activity", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />, entries: ["/"] }],
     ["activityclean", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />, entries: ["/"] }],
     ["activityempty", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />, entries: ["/"] }],
-    ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>, entries: ["/"] }],
+    ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_SHOWN} /></div>, entries: ["/"] }],
     ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
     ["jobstreaming", { node: <JobStreamingFrame />, entries: ["/"] }],

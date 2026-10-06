@@ -76,6 +76,68 @@ test('the prompt-cache rates step down in size: EMA, then last and mean, then p9
     expect(mean).toBe(last);
     expect(p95).toBeLessThan(mean ?? p95);
     expect(p99).toBe(p95);
+
+    // Each rate stands under its own label: the fixture's EMA 0.91, last 0.94, mean 0.88, p95 0.97, p99 0.99.
+    const rates = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('dl dt')]
+      .map((label) => [label.textContent?.trim() ?? '', Number.parseFloat(label.nextElementSibling?.textContent ?? '')])));
+
+    expect(rates).toMatchObject({ EMA: 91, Last: 94, Mean: 88, p95: 97, p99: 99 });
+
+    // A provider that reports no cache counters shows no rate at all, never an invented 0%.
+    await page.goto(`${origin}/gallery.html?frame=activitycache&cache=unreported`, { waitUntil: 'networkidle0' });
+    expect(await page.evaluate(() => ({ rates: document.querySelectorAll('dl dt').length, percent: document.body.innerText.includes('%') }))).toEqual({ rates: 0, percent: false });
+    await page.close();
+  });
+});
+
+// The context map's shares are of what was measured: the areas add up to the whole, and a conversation nothing has
+// measured yet shows no share at all, never a 0% that would claim a measurement.
+test('the context areas share the whole measured prompt, and an unmeasured conversation shows no share', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+
+    const context = () => page.evaluate(() => {
+      const section = [...document.querySelectorAll('section')].find((node) => node.querySelector('h3')?.textContent?.trim() === 'Context');
+      const shares = [...(section?.querySelectorAll('tr') ?? [])].map((row) => Number.parseFloat(row.querySelectorAll('td')[2]?.textContent ?? ''));
+
+      return { shares, percents: (section?.textContent ?? '').match(/\d%/g)?.length ?? 0 };
+    });
+
+    await page.goto(`${origin}/gallery.html?frame=activity`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('section table');
+    const measured = await context();
+
+    // Each area is listed once whole and once across its parts, so every share shown adds up to twice the prompt.
+    expect(measured.shares.length).toBeGreaterThan(2);
+    expect(Math.abs(measured.shares.reduce((sum, share) => sum + share, 0) - 200)).toBeLessThan(1);
+
+    await page.goto(`${origin}/gallery.html?frame=activityempty`, { waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => [...document.querySelectorAll('section h3')].some((title) => title.textContent?.trim() === 'Context'));
+    expect(await context()).toEqual({ shares: [], percents: 0 });
+    await page.close();
+  });
+});
+
+// The log the snapshot fetched reaches the reader whole, newest first, as a log is read from the top.
+test('every fetched log row is shown, newest first', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=activity`, { waitUntil: 'networkidle0' });
+
+    const events = await page.evaluate(() => {
+      const section = [...document.querySelectorAll('section')].find((node) => node.querySelector('h3')?.textContent?.trim() === 'Activity log');
+
+      return [...(section?.querySelectorAll('li') ?? [])].map((row) => row.textContent ?? '');
+    });
+
+    // The fixture's events in the order the read returns them, oldest first.
+    const fetched = ['steer_queued', 'beforeturn', 'gettools_rebuilding', 'gettools_end', 'skills_active', 'compaction', 'response_complete'];
+    const shownAt = fetched.map((event) => events.findIndex((row) => row.includes(event)));
+
+    expect(events).toHaveLength(fetched.length);
+    expect(shownAt).toEqual(fetched.map((_, at) => fetched.length - 1 - at));
     await page.close();
   });
 });

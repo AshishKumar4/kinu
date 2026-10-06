@@ -608,17 +608,6 @@
       "loadAtStart": 0.77,
       "exit": 0
     },
-    "bun run gate:bloat-budget": {
-      "wallSeconds": 1,
-      "cpuSeconds": 0.44,
-      "peakRssMb": 353.64,
-      "peakRunnable": 3,
-      "peakCpuThreads": 0.5,
-      "meanThreads": 0.44,
-      "samples": 13,
-      "loadAtStart": 70.66,
-      "exit": 0
-    },
     "bun run test:workerd:cf-complexity": {
       "wallSeconds": 69.43,
       "cpuSeconds": 88.62,
@@ -839,17 +828,6 @@
       "loadAtStart": 33.16,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts": {
-      "wallSeconds": 86.6,
-      "cpuSeconds": 113.5,
-      "peakRssMb": 5862.76,
-      "peakRunnable": 24,
-      "peakCpuThreads": 6.93,
-      "meanThreads": 1.31,
-      "samples": 344,
-      "loadAtStart": 33.95,
-      "exit": 0
-    },
     "bun test --timeout=0 --isolate scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": {
       "wallSeconds": 3.58,
       "cpuSeconds": 3.74,
@@ -1013,6 +991,17 @@
       "meanThreads": 0.45,
       "samples": 176,
       "loadAtStart": 76.44,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts": {
+      "wallSeconds": 86.6,
+      "cpuSeconds": 113.5,
+      "peakRssMb": 5862.76,
+      "peakRunnable": 24,
+      "peakCpuThreads": 6.93,
+      "meanThreads": 1.31,
+      "samples": 344,
+      "loadAtStart": 33.95,
       "exit": 0
     }
   }

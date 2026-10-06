@@ -11,7 +11,7 @@ import { ownerCaller } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
-import type { AddressedAnswers, AlarmAfterDestroy } from './addressed-name-shapes';
+import type { AddressedAnswers, AlarmAfterDestroy, FailedStartAnswers } from './addressed-name-shapes';
 
 export * from '../../src/server';
 
@@ -20,7 +20,7 @@ const PROBE_OWNER_ID = 'fedcba9876543210fedcba9876543210';
 const EVICTED = 'the workspace object is evicted';
 
 /** Names the probe adds; none is start-gated, so reading them never starts the object. */
-const PROBE_RPC = ['evict', 'startCount', 'failNextStart', 'probeAlarm', 'probeState'];
+const PROBE_RPC = ['evict', 'startCount', 'failNextStart', 'allowStart', 'probeAlarm', 'probeState'];
 
 /** The production orchestrator plus the eviction a deploy or a memory reset performs, and a start count. */
 export class OrchestratorAgent extends ProductionOrchestrator {
@@ -37,7 +37,9 @@ export class OrchestratorAgent extends ProductionOrchestrator {
 
     if (this.ctx.storage.kv.get('probe-fail-start') === true) throw new Error('the probe refused this start');
     await super.onStart();
-    await this.workspaceTitle();
+
+    // A sibling holds no workspace to read.
+    if (this.ctx.id.name?.startsWith('nbf:') !== true) await this.workspaceTitle();
   }
 
   async startCount(): Promise<number> {
@@ -46,6 +48,10 @@ export class OrchestratorAgent extends ProductionOrchestrator {
 
   async failNextStart(): Promise<void> {
     this.ctx.storage.kv.put('probe-fail-start', true);
+  }
+
+  async allowStart(): Promise<void> {
+    this.ctx.storage.kv.delete('probe-fail-start');
   }
 
   async evict(): Promise<void> {
@@ -81,7 +87,7 @@ type NamedTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator, 'claimO
 type IdTarget = Pick<ProductionOrchestrator, 'supervisorOp'> & Pick<OrchestratorAgent, 'probeAlarm' | 'evict'>;
 
 type RawTarget = Pick<ProductionOrchestrator, 'accountSpend' | 'destroyAgent'>
-  & Pick<OrchestratorAgent, 'startCount' | 'failNextStart' | 'evict' | 'probeAlarm' | 'probeState'>;
+  & Pick<OrchestratorAgent, 'startCount' | 'failNextStart' | 'allowStart' | 'evict' | 'probeAlarm' | 'probeState'>;
 
 /** A thrown chain as its text, so the test reads what each entry answered. */
 async function answer(run: () => Promise<string>): Promise<string> {
@@ -134,19 +140,31 @@ export class AddressedNameProbeRoot extends DurableObject<ProbeRootEnv> {
     return { before, spend, after: await stub.startCount() };
   }
 
-  /** A start that throws leaves the object deletable: `destroyAgent` is never gated on it. */
-  async destroyAfterFailedStart(workspace: string): Promise<{ evicted: string; spend: string; destroyed: string }> {
-    const stub = this.raw(workspace);
-    await stub.failNextStart();
+  /**
+   * A start that throws fails every request of its activation with its own cause; the next activation, its cause
+   * gone, starts and answers. `destroyAgent` is never gated on a start, and a call after it finds no workspace.
+   */
+  async failedStartThenDestroy(workspace: string): Promise<FailedStartAnswers> {
+    // A stub held across an eviction is broken; each call takes a fresh one.
+    await this.raw(workspace).failNextStart();
 
     // The eviction is the abort itself, so the call throws what `evict` aborted with.
-    const evicted = await answer(async () => {
-      await stub.evict();
+    const evict = () => answer(async () => {
+      await this.raw(workspace).evict();
 
       return 'answered';
     });
 
-    const spend = await answer(async () => JSON.stringify(await this.raw(workspace).accountSpend()));
+    const spend = () => answer(async () => JSON.stringify(await this.raw(workspace).accountSpend()));
+    const evicted = await evict();
+    const refused = [await spend(), await spend()];
+
+    await this.raw(workspace).allowStart();
+    await evict();
+    const restarted = await spend();
+
+    await this.raw(workspace).failNextStart();
+    await evict();
 
     const destroyed = await answer(async () => {
       await this.raw(workspace).destroyAgent(PROBE_OWNER_ID);
@@ -154,7 +172,12 @@ export class AddressedNameProbeRoot extends DurableObject<ProbeRootEnv> {
       return 'destroyed';
     });
 
-    return { evicted, spend, destroyed };
+    // A call that lands in a later activation, as one routed before the destroy would.
+    await this.raw(workspace).allowStart();
+    await evict();
+    const late = await spend();
+
+    return { evicted, refused, restarted, destroyed, late, left: await this.raw(workspace).probeState() };
   }
 
   /** Destroyed, and then an alarm the platform still owes it arrives: by id, as the platform delivers it, and by name. */
@@ -184,12 +207,15 @@ export class AddressedNameProbeRoot extends DurableObject<ProbeRootEnv> {
     return { destroyed, byId, byName, byIdOverTables, left: await this.raw(workspace).probeState() };
   }
 
-  /** A Nimbus sibling (`nbf:`) never runs the workspace start. */
-  async siblingStarts(): Promise<{ spend: string; starts: number }> {
+  /** A Nimbus sibling (`nbf:`) never runs the workspace start, holds no workspace, and runs its alarm as the SDK's. */
+  async siblingStarts(): Promise<{ spend: string; starts: number; alarm: string; left: { identity: number; actors: number } }> {
     const stub = this.raw('nbf:npm-resolve-fanout:0123abcd:0');
     const spend = await answer(async () => JSON.stringify(await stub.accountSpend()));
+    const starts = await stub.startCount();
+    const alarm = await answer(() => stub.probeAlarm());
+    const { identity, actors } = await stub.probeState();
 
-    return { spend, starts: await stub.startCount() };
+    return { spend, starts, alarm, left: { identity, actors } };
   }
 
   /** A facet's filesystem write by id first, then the page's claim and history seed by name. */

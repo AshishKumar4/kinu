@@ -30,7 +30,7 @@ import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
 import { beatWorkspace, webHeaders, type PublicWebIdentity } from '../evals/src/session';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
-import { FLOW_SLATE, SLATE_ASK, WRITE_FILE_ASK } from './flows-script';
+import { FLOW_SHELL_PROBE, FLOW_SLATE, SLATE_ASK, WRITE_FILE_ASK } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
   documentScriptFailures, explained, FAILED_APP_SCRIPT, recordScriptFailures, SCRIPT_FAILED, type ScriptFailure,
@@ -1132,7 +1132,12 @@ export interface FirstAnswerVerdict {
   /** The inspector column's width once the turn had closed and the page had
    *  re-read what waits on the person. */
   readonly inspectorWidth: number;
+  /** Whether the mission showed as a message the person sent: a turn they could walk back. */
+  readonly missionSent: boolean;
 }
+
+/** A message the person sent carries the control that walks the conversation back to it. */
+const SENT_MESSAGES = `[...document.querySelectorAll('#chat [data-revert-turn]')].map((control) => control.parentElement?.textContent ?? '')`;
 
 /**
  * Row: a person creates a workspace from the home page and gets a first answer.
@@ -1196,11 +1201,12 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
     } while (!ledger.quiet());
 
     const inspectorWidth = v.parse(v.number(), await page.evaluate(INSPECTOR_WIDTH));
+    const missionSent = v.parse(v.array(v.string()), await page.evaluate(SENT_MESSAGES)).some((text) => text.includes(MISSION));
 
     await ledger.stop();
     await page.close();
 
-    return { workspace, landedAt, answers, inspectorWidth };
+    return { workspace, landedAt, answers, inspectorWidth, missionSent };
   } finally {
     if (workspace !== null && workspace !== '') await removeFlowWorkspace(target, workspace);
   }
@@ -1376,8 +1382,10 @@ export interface WrittenFileVerdict {
   readonly workspace: string;
   /** Every entry the Files tab listed once its listing settled. */
   readonly filesListed: readonly string[];
-  /** The changed paths the Changes tab lists once it appears. */
+  /** The changed paths the Changes tab lists once it appears, the shell's write among them. */
   readonly changedPaths: readonly string[];
+  /** The changed paths once the reader marked the change-set reviewed. */
+  readonly afterReview: readonly string[];
 }
 
 /**
@@ -1414,11 +1422,16 @@ export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Pro
     await until(page, 'the Changes tab the write raised', stripHas('Changes'));
     await page.evaluate(stripTab('Changes'));
     await until(page, "the Changes tab's change-set", CHANGES_SETTLED);
+    await until(page, "the shell's write in the change-set", `${CHANGED_PATHS}.some((path) => path.endsWith(${JSON.stringify(FLOW_SHELL_PROBE)}))`);
     const changedPaths = v.parse(v.array(v.string()), await page.evaluate(CHANGED_PATHS));
+
+    await page.click('#inspector [data-mark-reviewed]');
+    await until(page, 'the reviewed change-set to empty', `${CHANGED_PATHS}.length === 0`);
+    const afterReview = v.parse(v.array(v.string()), await page.evaluate(CHANGED_PATHS));
 
     await page.close();
 
-    return { workspace, filesListed, changedPaths };
+    return { workspace, filesListed, changedPaths, afterReview };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }
@@ -1428,8 +1441,12 @@ export interface SlatePreviewVerdict {
   readonly workspace: string;
   /** Whether the strip drew a tab under the slate's title once the turn ended. */
   readonly slateTab: boolean;
-  /** The slate's preview frame's page text once it loaded; null when no frame drew. */
+  /** The slate's preview frame's page text once its React page drew; null when no frame drew. */
   readonly frameText: string | null;
+  /** The count the page showed after one Bump, answered by the slate's own method over its RPC; null when unread. */
+  readonly bumped: string | null;
+  /** Whether the page heard its host's context. */
+  readonly hosted: boolean;
 }
 
 /**
@@ -1454,6 +1471,8 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
 
     const slateTab = v.parse(v.boolean(), await page.evaluate(stripHas(FLOW_SLATE.title)));
     let frameText: string | null = null;
+    let bumped: string | null = null;
+    let hosted = false;
 
     if (slateTab) {
       await page.evaluate(stripTab(FLOW_SLATE.title));
@@ -1467,14 +1486,19 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
       if (frame !== null && frame !== undefined) {
         // The frame first holds its initial about:blank, which is already complete and empty.
         await waitOn(page, "the slate's preview to load", frame.waitForFunction('location.href !== "about:blank" && document.readyState === "complete"', { polling: 100 }));
+        await waitOn(page, "the slate's React page to draw", frame.waitForFunction('document.querySelector("[data-count]") !== null', { polling: 100 }));
         frameText = v.parse(v.string(), await frame.evaluate('(document.body?.textContent ?? "").trim()'));
+        await frame.click('button[type="submit"]');
+        await waitOn(page, "the slate's answer to Bump", frame.waitForFunction('document.querySelector("[data-count]")?.textContent !== "0"', { polling: 100 }));
+        bumped = v.parse(v.string(), await frame.evaluate('document.querySelector("[data-count]")?.textContent ?? ""'));
+        hosted = v.parse(v.string(), await frame.evaluate('document.querySelector("[data-host]")?.textContent ?? ""')) === 'hosted';
       }
     }
 
     await ledger.stop();
     await page.close();
 
-    return { workspace, slateTab, frameText };
+    return { workspace, slateTab, frameText, bumped, hosted };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

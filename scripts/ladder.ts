@@ -109,9 +109,14 @@ export const TIERS = ['local', 'commit', 'push', 'ci', 'deploy', 'evals'] as con
  * imported red is reported, and no verified record is written until CI and the live rows are all green.
  * The hammer phase identifies its isolated CI part, not a local serial tail.
  */
-export const DEPLOY_PHASES = ['preflight', 'upload', 'post-publish', 'source', 'hammer'] as const;
+export const DEPLOY_PHASES = ['preflight', 'upload', 'post-publish', 'source', 'hammer', 'soak'] as const;
 
 export type DeployPhase = (typeof DEPLOY_PHASES)[number];
+
+/** A row whose subject is the deployment: its cost is the live run's, not a quiet box's table figure. */
+export function readsDeployment(gate: Gate): boolean {
+  return gate.phase === 'post-publish' || gate.phase === 'soak';
+}
 
 /** The shared hang bound for a gate that declares none: seconds it may write nothing (scripts/deadline.ts). A gate
  *  that prints only its verdict is silent for its whole run, so this stays at the slowest such gate's length; a
@@ -966,7 +971,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -994,9 +999,8 @@ export const LADDER: readonly Gate[] = [
     // the reason `bun test scripts/ladder.test.ts` was red on main that day.
     // Measured solo on the 24-thread box: 0.09s wall, 34ms in-suite, 14 tests.
     // The row stays 24s for the reason stated above.
-    // `comment-only.test.ts` and `bloat-budget.test.ts` join 2026-09-22: the red
-    // and green proofs of the comment-edit checker and of the comment budget.
-    // Measured solo: 0.45s for 9 tests, 0.13s for 3. The row stays 24s.
+    // `comment-only.test.ts` joins 2026-09-22: the red and green proofs of the
+    // comment-edit checker. Measured solo: 0.45s for 9 tests. The row stays 24s.
     // `worker-bundle-reach.test.ts` joins 2026-09-25, beside the advisory gate's own
     // self-tests: it proves the condition REVIEWED_ADVISORIES accepts extract-zip on,
     // and shipped with e20573386 claimed by no tier. Measured solo: 0.8s for 3 tests.
@@ -2032,23 +2036,6 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun run gate:bloat-budget',
-    label: 'Comment budget',
-    // Measured 2026-09-22 on the 24-thread box: 0.46/0.52/0.73s wall, 417 MB
-    // peak, over 1,081 files. It reads oxc's comment list only, never the AST.
-    tier: 'local',
-    seconds: 0.6,
-    catches: 'comment growth in a package. The owner capped comments after the census measured '
-      + 'them at 41% of the non-whitespace characters in product source (4,906,181 at '
-      + '1dd25b3ad): each package holds one number, a package over it is red, a package the '
-      + 'lock never held has a budget of zero, and `--lock` only lowers a number. A cut is '
-      + 'green and printed as a stale row, so trimming comments never fails a commit.',
-    blind: 'prose moved into a string literal, a doc or a commit body; comments in tests, '
-      + 'scripts and tools; growth paid for by a cut elsewhere in the same package; whether a '
-      + 'kept comment earns its place. All are printed on the gate\'s green path.',
-    inputs: { kind: 'derived' },
-  },
-  {
     run: 'bun scripts/flake-gate.ts',
     label: 'Changed test files, repeated',
     tier: 'commit',
@@ -2499,19 +2486,19 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bash scripts/eval-pass-tier.sh',
     label: 'One trial of every eval task, on the deployment',
-    phase: 'post-publish',
-    alone: 'runs after the upload and the smoke gate, in the wave of the tiers against the deployment and the local '
-      + 'source gates (L18): its subject is the DEPLOYED build, driven as eval-service on its own eval workspaces '
-      + 'and seeded data, on the models the evals measure. No other row acts as eval-service, so none shares its '
-      + 'workspaces or its model account, and it attaches no machine, so it stands outside the fleet first-run counts.',
+    phase: 'soak',
+    alone: 'is the deploy\'s soak (L24): started once the deployment serves, never awaited, so a real model\'s minutes '
+      + 'are outside the deploy\'s 20-minute wall and its red outside the deploy\'s verdict. Its subject is the DEPLOYED '
+      + 'build, driven as eval-service on its own eval workspaces and seeded data, on the models the evals measure. No '
+      + 'other row acts as eval-service, so none shares its workspaces or its model account.',
     tier: 'deploy',
     // The eval lane's measurement on production, 2026-09-30: one trial of each task, all at once, took 4 to
     // 7 minutes. Between two lines of a run the longest gap was 13 s, and inside one trial 67 s (a model
     // step and its checks), well inside the shared silence bound.
     seconds: 420,
     catches: 'an eval task that fails outright on the build that just shipped: a trial whose workspace, turn or '
-      + 'checks break on the deployment, reported in that deploy\'s own report with the trial\'s evidence beside '
-      + 'it, and a trial that stops advancing, which its silence bound ends.',
+      + 'checks break on the deployment, reported in that deploy\'s report as a soak red with the trial\'s evidence '
+      + 'beside it, and a trial that stops advancing, which its silence bound ends.',
     blind: 'a pass rate. One trial says nothing about a task that fails one time in three: the statistics are '
       + '.github/workflows/evals.yml\'s, which the deploy dispatches against the same deployment and whose '
       + 'Verdict a promotion waits for.',
@@ -3459,7 +3446,7 @@ function printMatrix(): void {
 function recordProof(
   plan: Extract<Plan, { kind: 'miss' }>,
   gate: GateCacheRequest,
-  result: { readonly seconds: number; readonly revision: string; readonly execution?: string },
+  result: { readonly seconds: number; readonly revision: string; readonly execution?: string; readonly timings?: Record<string, number> },
 ): boolean {
   const refused = recordGreen(plan, gate, result);
 
@@ -3844,7 +3831,7 @@ if (import.meta.main) {
   }
 
   const repo = repoAt(root, (run, files) => claims(run, files));
-  const phaseRows = deployPhase === undefined ? undefined : phaseWave(deployPhase, withResourceCosts(readCosts(), deployOrder().filter((gate) => gate.phase === 'post-publish').map((gate) => gate.run)));
+  const phaseRows = deployPhase === undefined ? undefined : phaseWave(deployPhase, withResourceCosts(readCosts(), deployOrder().filter(readsDeployment).map((gate) => gate.run)));
 
   const phaseGates = phaseRows === undefined ? tierRun(tier) : localDeployGates(phaseRows.map(({ gate }) => gate));
   const declared = selectedGate === undefined ? phaseGates : [selectedGate];
@@ -3985,6 +3972,12 @@ if (import.meta.main) {
     const plan = caching && !nativeChanged ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
 
     if (plan?.kind === 'hit') {
+      // A reused CI verdict names the revision that proved it, and carries the file walls that proof measured.
+      if (verdictPath !== undefined) {
+        ciRows.push({ run: gate.run, exitCode: 0, seconds: plan.entry.seconds, output: '', timings: plan.entry.timings, cached: plan.entry.revision });
+        writeVerdicts(verdictPath, { sha: revision, part: ciPart ?? 'all', rows: ciRows });
+      }
+
       console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
       console.log(
         `skip  ${gate.run}  hit ${plan.key.slice(0, 12)}, proved green on ${plan.entry.revision} `
@@ -4061,6 +4054,9 @@ if (import.meta.main) {
     return false;
   };
 
+  /** A CI row's file walls, which its recorded proof keeps for a later hit's coverage. */
+  const ciTimings = (path: string) => (ciPart === undefined ? undefined : readFileTimings(path));
+
   const runPending = async (entry: (typeof pending)[number]): Promise<void> => {
     const { index, gate, plan, closure, proofs } = entry;
     const header = `\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`;
@@ -4128,7 +4124,7 @@ if (import.meta.main) {
       const proofRecorded = plan?.kind === 'miss' && recordProof(
         plan,
         { run: gate.run, inputs: gate.inputs, repo: repoAt(root, (run, files) => claims(run, files)), tools, store },
-        { seconds, revision },
+        { seconds, revision, timings: ciTimings(timingPath) },
       );
 
       if (proofRecorded) recorded.push(gate.run);

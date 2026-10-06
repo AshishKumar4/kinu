@@ -32,9 +32,19 @@ describe('a gateway model on both backends', () => {
         });
       }
 
-      const body = v.parse(v.object({ model: v.string(), tools: v.optional(v.array(v.unknown())) }), JSON.parse(await new Request(input, init).text()));
+      const body = v.parse(v.object({ model: v.string(), tools: v.optional(v.array(v.unknown())), system: v.optional(v.unknown()) }), JSON.parse(await new Request(input, init).text()));
       const endpoint = url.slice(`${ACCOUNT_AI}/`.length);
       wire.push(`${endpoint} ${body.model}`);
+
+      // The gateway's `/messages` refuses Anthropic's system blocks: it takes one string (measured 2026-10-06).
+      if (endpoint === 'messages') {
+        if (body.system !== undefined && !v.is(v.string(), body.system)) return Response.json({ error: { type: 'invalid_request_error', message: 'Invalid value at system' } }, { status: 400 });
+
+        return Response.json({
+          id: 'msg_1', type: 'message', role: 'assistant', model: body.model, stop_reason: 'end_turn', stop_sequence: null,
+          content: [{ type: 'text', text: 'served' }], usage: { input_tokens: 1, output_tokens: 1 },
+        });
+      }
 
       if (endpoint === 'responses') {
         return Response.json({
@@ -74,7 +84,7 @@ describe('a gateway model on both backends', () => {
       ASSETS: unreachableAssets(),
     };
 
-    const menu = ['my-gateway/openai/gpt-6.1-sol', 'my-gateway/google/gemini-2.5-flash'];
+    const menu = ['my-gateway/openai/gpt-6.1-sol', 'my-gateway/google/gemini-2.5-flash', 'my-gateway/anthropic/claude-sonnet-4.5'];
 
     const local = createLocalModelResolver({ llm: null, credentials: {}, cloud: { origin: ORIGIN, token: CLI_TOKEN }, fetch: asFetchFunction(async (input, init) => {
       const url = requestUrl(input);
@@ -103,8 +113,11 @@ describe('a gateway model on both backends', () => {
       for (const spec of menu) answered.push(await answer(hosted.resolveModel(spec, 'kinu-test')), await answer(local.resolveModel(spec, 'kinu-test')));
 
       expect({ answered, wire }).toEqual({
-        answered: ['served', 'served', 'served', 'served'],
-        wire: ['responses openai/gpt-6.1-sol', 'responses openai/gpt-6.1-sol', 'chat/completions google/gemini-2.5-flash', 'chat/completions google/gemini-2.5-flash'],
+        answered: ['served', 'served', 'served', 'served', 'served', 'served'],
+        wire: [
+          'responses openai/gpt-6.1-sol', 'responses openai/gpt-6.1-sol', 'chat/completions google/gemini-2.5-flash',
+          'chat/completions google/gemini-2.5-flash', 'messages anthropic/claude-sonnet-4.5', 'messages anthropic/claude-sonnet-4.5',
+        ],
       });
     } finally {
       globalThis.fetch = workerFetch;

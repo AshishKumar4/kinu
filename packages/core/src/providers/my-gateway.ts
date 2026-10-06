@@ -3,8 +3,9 @@
 import type { LanguageModel } from 'ai';
 import { type ModelProvider, type ModelInfo, type ProviderDeps } from './types';
 import { authCacheKey, cloneModelInfos, settleModelList, StaleModelList } from './util';
-import { getModelsDevWire, listModelsDevProviderModels } from './models-dev';
-import { createWireModel, deferredModel } from './wire-model';
+import { listModelsDevProviderModels } from './models-dev';
+import { ANTHROPIC_AUTHOR, createWireModel, gatewayOpenAIModel, OPENAI_AUTHOR } from './wire-model';
+import { asFetchFunction } from './fetch-shim';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from './cloudflare-oauth';
 import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
 import { Effect } from 'effect';
@@ -108,26 +109,56 @@ export function createMyGatewayProvider(): ModelProvider {
         mapError: (res, resolved) => mapGatewayError(res, modelId, resolved.headers['cf-aig-gateway-id']),
       });
 
-      return gatewayWireModel(MY_GATEWAY_PROVIDER_ID, modelId, { baseURL: placeholder, fetch: customFetch }, deps);
+      return gatewayWireModel(MY_GATEWAY_PROVIDER_ID, modelId, { baseURL: placeholder, fetch: customFetch });
     },
   };
 }
 
-/** The account endpoint on the worker, the signed-in proxy on the CLI. */
 export interface GatewayTransport {
   readonly baseURL: string;
   readonly fetch?: typeof fetch;
   readonly headers?: Record<string, string>;
 }
 
-/** A gateway `{author}/{model}` speaks its author's own API where models.dev names one, else the unified chat API. */
-export function gatewayWireModel(name: string, modelId: string, transport: GatewayTransport, deps: Pick<ProviderDeps, 'fetch'>): LanguageModel {
-  const slash = modelId.indexOf('/');
+/** Each author's own API where the gateway serves one (`/responses`, `/messages`), else its unified chat API. */
+export function gatewayWireModel(name: string, modelId: string, transport: GatewayTransport): LanguageModel {
+  const own = gatewayOpenAIModel(modelId);
 
-  return deferredModel(name, modelId, async () => {
-    const wire = slash < 0 ? null : await getModelsDevWire(modelId.slice(0, slash), modelId.slice(slash + 1), deps);
+  if (modelId.startsWith(ANTHROPIC_AUTHOR)) {
+    // The SDK reads limits by Anthropic's own id.
+    const claude = modelId.slice(ANTHROPIC_AUTHOR.length).replaceAll('.', '-');
 
-    return createWireModel({ name, modelId, ...transport, protocol: wire?.protocol ?? 'chat-completions', reasoning: wire?.reasoning ?? false });
+    return createWireModel({ name, modelId: claude, ...transport, fetch: claudeForGateway(transport.fetch ?? fetch, modelId), protocol: 'messages', reasoning: false });
+  }
+
+  if (own === null) return createWireModel({ name, modelId, ...transport, protocol: 'chat-completions', reasoning: false });
+
+  return createWireModel({ name, modelId: own, ...transport, fetch: authored(transport.fetch ?? fetch), protocol: 'responses', reasoning: false });
+}
+
+const MessagesBodySchema = v.looseObject({ system: v.optional(v.array(v.looseObject({ text: v.string() }))) });
+
+/** The gateway's id, and `system` as the one string its `/messages` takes (2026-10-06). */
+function claudeForGateway(send: typeof fetch, gatewayId: string): typeof fetch {
+  return asFetchFunction(async (input, init) => {
+    const text = v.safeParse(v.string(), init?.body);
+    const body = text.success ? v.safeParse(MessagesBodySchema, JSON.parse(text.output)) : null;
+
+    if (body?.success !== true) return await send(input, init);
+    const { system, ...rest } = body.output;
+
+    return await send(input, { ...init, body: JSON.stringify({
+      ...rest, model: gatewayId, ...(system !== undefined && { system: system.map((block) => block.text).join('\n\n') }),
+    }) });
+  });
+}
+
+function authored(send: typeof fetch): typeof fetch {
+  return asFetchFunction(async (input, init) => {
+    const text = v.safeParse(v.string(), init?.body);
+    const body = text.success ? v.safeParse(v.looseObject({ model: v.string() }), JSON.parse(text.output)) : null;
+
+    return await send(input, body?.success === true ? { ...init, body: JSON.stringify({ ...body.output, model: `${OPENAI_AUTHOR}${body.output.model}` }) } : init);
   });
 }
 

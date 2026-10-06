@@ -1,4 +1,5 @@
 /** Real-browser account panels, viewport boundaries, deletion confirmation and workspace navigation. */
+import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import { ONBOARDING_STEPS } from '@kinu.run/core';
@@ -311,6 +312,53 @@ describe('account panels', () => {
 
         const offered = await settings.$$eval('[role="option"]', (nodes) => nodes.filter((node) => node.checkVisibility()).map((node) => node.textContent?.trim()));
         expect(offered).toEqual(['main', 'work']);
+      } finally {
+        await settings.close();
+      }
+    });
+  });
+
+  // A custom endpoint's declared window is every listed model's window; blank is unknown and never saved as a value.
+  test('an OpenAI-compatible endpoint saves its context window, holds Save on one that is not a whole number, and omits a blank one', async () => {
+    await withGallery(async (gallery) => {
+      const settings = await freshPage(gallery, 'usersettingsstate&section=providers', 'dark', 'desktop');
+
+      const addEndpoint = async (name: string, window: string) => {
+        await settings.click('input[placeholder^="Search providers"]');
+        await settings.type('input[placeholder^="Search providers"]', 'OpenAI-compatible');
+        await settings.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+        await settings.evaluate(() => [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((node) => node.checkVisibility())?.click());
+        await settings.waitForSelector('input[aria-label="Endpoint name"]');
+        await settings.type('input[aria-label="Endpoint name"]', name);
+        await settings.type('input[aria-label="Base URL"]', 'http://localhost:8080/v1');
+        await settings.type('input[aria-label="API key"]', 'sk-local');
+        await settings.type('input[aria-label="Context window in tokens"]', window);
+      };
+
+      const saveEnabled = () => settings.$eval('form button[type="submit"]', (button) => button.disabled === false);
+
+      const saved = async () => v.parse(v.record(v.string(), v.looseObject({ kind: v.string(), baseURL: v.string(), contextWindow: v.optional(v.number()) })),
+        JSON.parse(await settings.evaluate(() => document.documentElement.dataset.gallerySavedCredentials ?? '{}')));
+
+      try {
+        await settings.waitForSelector('input[placeholder^="Search providers"]');
+        await addEndpoint('local', '12.5');
+        expect(await saveEnabled()).toBe(false);
+
+        await settings.$eval('input[aria-label="Context window in tokens"]', (input) => { input.select(); });
+        await settings.type('input[aria-label="Context window in tokens"]', '131072');
+        expect(await saveEnabled()).toBe(true);
+        await settings.click('form button[type="submit"]');
+        await settings.waitForFunction(() => document.documentElement.dataset.gallerySavedCredentials?.includes('openai-compat.local') === true);
+
+        await addEndpoint('remote', '');
+        await settings.click('form button[type="submit"]');
+        await settings.waitForFunction(() => document.documentElement.dataset.gallerySavedCredentials?.includes('openai-compat.remote') === true);
+
+        const bodies = await saved();
+        expect(bodies['openai-compat.local']).toMatchObject({ kind: 'openai-compat', baseURL: 'http://localhost:8080/v1', contextWindow: 131072 });
+        expect(bodies['openai-compat.remote']).toMatchObject({ kind: 'openai-compat', baseURL: 'http://localhost:8080/v1' });
+        expect(bodies['openai-compat.remote']).not.toHaveProperty('contextWindow');
       } finally {
         await settings.close();
       }

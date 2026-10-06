@@ -519,6 +519,10 @@ const CraftedToolSchema = v.object({
   name: v.string(),
   description: v.string(),
   usageCount: v.optional(v.number()),
+  /** What the Tools pane shows beside the name: wired into `eval`, and the quality the platform measured. */
+  wired: v.optional(v.boolean()),
+  exposure: v.optional(v.string()),
+  qualityScore: v.optional(v.number()),
 });
 
 const ToolDescriptionsSchema = v.object({ crafted: v.array(CraftedToolSchema) });

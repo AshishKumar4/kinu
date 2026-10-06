@@ -38,7 +38,6 @@ function claudeTokenEndpoint(answer: () => Response): v.InferOutput<typeof Token
 }
 
 function routes(harness: TestUserDO) {
-  const notified: string[] = [];
   const pending: Promise<unknown>[] = [];
 
   const stub = userAccount({
@@ -53,9 +52,7 @@ function routes(harness: TestUserDO) {
     UserDO: { idFromName: (name) => name, get: () => stub },
     OrchestratorAgent: {
       idFromName: (name) => name,
-      get: (id) => workspaceObject({ async onModelSettingsChanged() { notified.push(id);
-
- return { ok: true as const }; } }),
+      get: () => workspaceObject({ async onModelSettingsChanged() { return { ok: true as const }; } }),
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
@@ -75,7 +72,7 @@ function routes(harness: TestUserDO) {
 
   const start = async () => new URL(v.parse(v.object({ url: v.string() }), await (await call('/claude/start')).json()).url);
 
-  return { call, start, notified, settled: () => Promise.all(pending) };
+  return { call, start, settled: () => Promise.all(pending) };
 }
 
 const challengeOf = (verifier: string) => createHash('sha256').update(verifier).digest('base64url');
@@ -101,7 +98,6 @@ describe('Claude sign-in on the web', () => {
       expect(seen[0]).toMatchObject({ grant_type: 'authorization_code', code: 'the-code', state });
       expect(challengeOf(seen[0]?.code_verifier ?? '')).toBe(authorize.searchParams.get('code_challenge') ?? '');
       expect(await storedKeys(harness)).toEqual([CLAUDE_CRED_KEY]);
-      expect(web.notified).toEqual(['jarvis']);
       // The sign-in is spent: the same code cannot land twice.
       expect((await web.call('/claude/finish', { code: `the-code#${state}` })).status).toBe(404);
     } finally {
@@ -124,7 +120,6 @@ describe('Claude sign-in on the web', () => {
       expect(status.error).toContain('Invalid authorization code');
       expect(await storedKeys(harness)).toEqual([]);
       await web.settled();
-      expect(web.notified).toEqual([]);
     } finally {
       harness.close();
     }

@@ -1,16 +1,16 @@
 /**
- * A reset between a claimed call's effect and its result: the next process keeps the step the call belongs to, runs
+ * A crash between a claimed call's effect and its result: the next process keeps the step the call belongs to, runs
  * the effect no second time, and tells the model the call may have taken effect (DESIGN reds 1 and 3; the owner's
- * approved item 6). The effect is an MCP tool, reached through `eval`, that marks a file and never answers, so the first
- * process dies inside it.
+ * approved item 6). The effect is an MCP tool, reached through `eval`, that marks a file and never answers, and the
+ * first process is killed inside it (`fixtures/lost-call-process.ts`).
  */
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, readFileSync } from 'node:fs';
-import { initWorkspaceSchema, mcpToolKey, type LLMProviderConfig } from '@kinu.run/core';
+import type { LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
-import { scratchPath, scratchDir } from '@kinu.run/test-utils';
-import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
+import { scratchPath, scratchDir, spawnTest } from '@kinu.run/test-utils';
+import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 
@@ -36,15 +36,6 @@ function model(steps: readonly (() => LanguageModelV2StreamPart[])[], prompts: P
   });
 }
 
-const markCall = (path: string) => (): LanguageModelV2StreamPart[] => [
-  { type: 'stream-start', warnings: [] },
-  {
-    type: 'tool-call', toolCallId: 'call-mark', toolName: 'eval',
-    input: JSON.stringify({ code: `return await tools[${JSON.stringify(mcpToolKey('marker', 'mark'))}](${JSON.stringify({ path })});` }),
-  },
-  { type: 'finish', finishReason: 'tool-calls', usage: USAGE },
-];
-
 const answer = (): LanguageModelV2StreamPart[] => [
   { type: 'stream-start', warnings: [] },
   { type: 'text-start', id: '0' },
@@ -57,44 +48,41 @@ async function until(holds: () => boolean): Promise<void> {
   while (!holds()) await new Promise<void>((resolve) => { setImmediate(resolve); });
 }
 
-test('a call cut off after its effect runs once, and the model is told it may have taken effect', async () => {
-  const db = new Database(scratchPath('lost-tool-call', 'agent.db'));
-  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
+test('a process killed after its call\'s effect: the next runs it no second time and tells the model it may have taken effect', async () => {
+  const dbPath = scratchPath('lost-tool-call', 'agent.db');
+  const cwd = scratchDir('workspace-folder');
   const marks = scratchPath('lost-tool-call', 'marks.txt');
   const lines = () => existsSync(marks) ? readFileSync(marks, 'utf8').split('\n').filter(Boolean).length : 0;
 
-  rt.actor.config.setLearning(false);
-  let dyingEnded = false;
-
-  const dying = new LocalAgentSession({
-    rt, db, model: model([markCall(marks)], []),
-    onEvent: (event) => { dyingEnded ||= event.type === 'turn-end'; },
+  // A real process, killed with no chance to settle anything: no `finally`, no disconnect, as a crash leaves it.
+  const dying = spawnTest(['bun', new URL('./fixtures/lost-call-process.ts', import.meta.url).pathname, dbPath, marks, cwd], {
+    stdout: 'ignore', stderr: 'pipe',
   });
 
-  await dying.connectMcp(SERVERS);
-  const dead = dying.send('mark the file', { id: crypto.randomUUID() });
-  // Ends on the mark, or on the dying turn's own end if its call never ran, so a mismatch fails instead of spinning.
-  await until(() => lines() === 1 || dyingEnded);
-  expect(lines()).toBe(1);
+  await until(() => lines() === 1 || dying.exitCode !== null);
+  expect({ marks: lines(), alive: dying.exitCode === null }).toEqual({ marks: 1, alive: true });
+  dying.kill('SIGKILL');
+  await dying.exited;
 
+  const db = new Database(dbPath);
+  const rt = createCLIRuntime(db, { cwd, llm: DUMMY_LLM });
+
+  rt.actor.config.setLearning(false);
   const prompts: Prompt[] = [];
   const events: SessionEvent[] = [];
   const next = new LocalAgentSession({ rt, db, model: model([answer], prompts), onEvent: (event) => events.push(event) });
+
   await next.connectMcp(SERVERS);
   await until(() => events.some((event) => event.type === 'turn-end'));
   await next.end();
+  db.close();
+
+  const results = (prompts[0] ?? []).flatMap((message) => message.role === 'tool' ? message.content : []);
 
   expect(lines()).toBe(1);
-  const results = (prompts[0] ?? []).flatMap((message) => message.role === 'tool' ? message.content : []);
   // The provider sees the call under its portable id; the refusal names the original.
   expect(results).toEqual([expect.objectContaining({
     toolName: 'eval',
     output: { type: 'error-text', value: expect.stringMatching(/may or may not have taken effect\..*the call is call-mark/u) },
   })]);
-
-  // Ending the dead process's session disconnects its server, which fails the open call.
-  await dying.end();
-  await Promise.race([dead, Promise.resolve()]);
-  db.close();
 });

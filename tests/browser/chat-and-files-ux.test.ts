@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { parseJsonValue, redactPayload } from '@kinu.run/core';
+import { CHECKPOINTS_UNAVAILABLE_NO_GIT, parseJsonValue, redactPayload } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
 
@@ -1391,6 +1391,25 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
     });
   });
 
+  // m268: a device store that cannot answer is never reported as a turn that changed nothing.
+  test('a device that keeps no history and a turn that changed no files are told apart, and neither offers device files', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const notes: Record<string, string> = {};
+
+      for (const listing of ['nogit', 'none'] as const) {
+        const page = await newPage();
+        await openDialog(page, origin, `&checkpoints=${listing}`);
+        expect(await revertAttributes(page, 'data-revert-action')).toEqual(['conversation']);
+        notes[listing] = await page.$eval('[data-device-history]', (element) => element.textContent ?? '');
+        await page.close();
+      }
+
+      expect(notes.nogit).toContain(CHECKPOINTS_UNAVAILABLE_NO_GIT);
+      expect(notes.none).not.toContain(CHECKPOINTS_UNAVAILABLE_NO_GIT);
+      expect(notes.nogit).not.toBe(notes.none);
+    });
+  });
+
   test('a device holding this turn’s checkpoint adds the second action', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
@@ -1400,6 +1419,73 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
         'conversation-and-device-files', 'conversation',
       ]);
       await page.screenshot({ path: join(TAB_SHOTS, 'revert-with-device-files-dialog.png') });
+      await page.close();
+    });
+  });
+});
+
+/** A turn whose loop stopped mid-work says so even though its last call settled; a turn that finished says nothing. */
+describe('how a settled turn ended', () => {
+  test('the turn that stopped mid-work carries a notice and the finished one does not', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=revert`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => (document.querySelector('#chat')?.textContent ?? '').includes('eleven call sites'));
+
+      // Where each status note sits: after the stopped turn's call and before the next request, or in the finished turn.
+      const notes = await page.evaluate(() => {
+        const chat = document.querySelector('#chat');
+        const at = (words: string) => [...(chat?.querySelectorAll('*') ?? [])].filter((node) => node.textContent?.includes(words) === true).at(-1);
+        const stoppedCall = at('coupon-kind.test.ts');
+        const nextAsk = at('Now rewrite the pricing service');
+        const finishedCall = at('packages/pricing');
+        const after = (anchor: Element | undefined, node: Element) => anchor !== undefined && (anchor.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+        const statuses = [...(chat?.querySelectorAll('[role="status"]') ?? [])];
+
+        return {
+          stopped: statuses.filter((node) => after(stoppedCall, node) && !after(nextAsk, node)).length,
+          finished: statuses.filter((node) => after(finishedCall, node)).length,
+        };
+      });
+
+      expect(notes).toEqual({ stopped: 1, finished: 0 });
+      await page.close();
+    });
+  });
+});
+
+/** A redirect that ran as a branch leaves takes to compare: the chip names the current one, the comparison cycles
+ *  through all of them both ways, and a pick becomes the current answer. One take alone offers nothing to compare. */
+describe('alternate takes on an answer', () => {
+  const chip = '#chat button[title^="Your mid-turn redirect"]';
+  const shown = (page: Page) => page.$eval('[role="dialog"]', (dialog) => /Take (\d) of (\d)/.exec(dialog.textContent ?? '')?.slice(1, 3).join('/') ?? '');
+
+  test('compare, cycle both ways, and pick one, which the chip then names', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=revert&takes=3`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(chip);
+      expect(await page.$eval(chip, (button) => button.textContent?.trim())).toBe('Take 1 of 3');
+
+      await page.click(chip);
+      await page.waitForSelector('[role="dialog"]');
+      expect(await shown(page)).toBe('1/3');
+      await page.keyboard.press('ArrowLeft');
+      expect(await shown(page)).toBe('3/3');
+      await page.click('[role="dialog"] button[aria-label="Next take"]');
+      await page.click('[role="dialog"] button[aria-label="Next take"]');
+      expect(await shown(page)).toBe('2/3');
+      expect(await page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '')).toContain('three call sites');
+
+      await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent?.trim() === 'Use this take')?.click());
+      await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
+      await page.waitForFunction((at) => document.querySelector(at)?.textContent?.trim() === 'Take 2 of 3', {}, chip);
+
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=revert&takes=1`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => (document.querySelector('#chat')?.textContent ?? '').includes('eleven call sites'));
+      expect(await page.$(chip)).toBeNull();
       await page.close();
     });
   });
@@ -3463,6 +3549,40 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
     });
   });
 
+  // A preview is only replaced by what the sandbox validly says: a failed or forged answer keeps the last good one and
+  // names the problem; an answer of no ports retires it.
+  test('a running preview survives a failed or forged listing, and leaves when the sandbox lists no ports', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForSelector('[data-preview-ready]');
+      await page.click('[data-preview-ready]');
+      await page.waitForSelector('[aria-label="Arrived app"]');
+
+      const listingSays = (state: string) => page.evaluate((next) => { document.documentElement.dataset.sandboxPorts = next; }, state);
+
+      // The listing's failure line, by what it names; its full message is the line's title.
+      const problem = () => page.evaluate(() => [...document.querySelectorAll('[data-failure]')]
+        .find((line) => line.textContent?.includes('preview listings'))?.getAttribute('title') ?? null);
+
+      await listingSays('failed');
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-failure]')].some((line) => line.textContent?.includes('preview listings')));
+      expect(await problem()).toContain('Nimbus is temporarily unavailable');
+      expect(await page.$('[aria-label="Arrived app"]')).not.toBeNull();
+
+      await listingSays('forged');
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-failure]')].some((line) => line.getAttribute('title')?.includes('invalid preview registration')));
+      expect(await page.$eval('[aria-label="Arrived app"]', (tab) => tab.getAttribute('title') ?? tab.textContent ?? '')).not.toContain('evil.example');
+
+      await listingSays('none');
+      await page.waitForFunction(() => document.querySelector('[aria-label="Arrived app"]') === null);
+      expect(await problem()).toBeNull();
+      await page.close();
+    });
+  });
+
   test('a collapse issued while a reset is in flight still claims its target', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
@@ -3624,6 +3744,84 @@ describe('the home creation form, as a browser submits it', () => {
         () => document.querySelector('.p-notice-danger') === null
           && document.body.innerText.includes('Probe created'));
       expect(await page.evaluate(() => window.__createProbe.posts)).toBe(2);
+      await page.close();
+    });
+  });
+});
+
+/** Two files dropped one after the other, each under the cap but over it together: the one dropped first is kept,
+ *  the other is refused by name, and only what was kept goes out with the words. */
+describe('attachments at the message cap', () => {
+  test('two drops that together exceed the cap keep the first, refuse the second by name, and send only the first', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      const pane = '[data-agent-pane="checkout-fixes/main"]';
+      await page.waitForSelector(`${pane} textarea:not([disabled])`);
+
+      // Two separate drops in one task: both read their files while the other is still being read.
+      await page.$eval(pane, (node) => {
+        const drop = (name: string) => {
+          const files = new DataTransfer();
+          files.items.add(new File([new Uint8Array(640 * 1024)], name, { type: 'application/octet-stream' }));
+          node.dispatchEvent(new DragEvent('dragover', { dataTransfer: files, bubbles: true, cancelable: true }));
+          node.dispatchEvent(new DragEvent('drop', { dataTransfer: files, bubbles: true, cancelable: true }));
+        };
+
+        drop('first.bin');
+        drop('second.bin');
+      });
+
+      const composer = `${pane} [data-composer-root]`;
+      await page.waitForFunction((at) => (document.querySelector(at)?.textContent ?? '').includes('second.bin'), {}, composer);
+
+      const shown = await page.$eval(composer, (root) => ({
+        chips: [...root.querySelectorAll('button[aria-label^="Remove "]')].map((button) => button.getAttribute('aria-label')),
+        refusal: [...root.querySelectorAll('*')].map((node) => node.textContent ?? '').find((text) => text.includes('did not fit')) ?? '',
+      }));
+
+      expect(shown.chips).toEqual(['Remove first.bin']);
+      expect(shown.refusal).toContain('second.bin');
+
+      await page.type(`${pane} textarea`, 'Here are the files');
+      await page.click(`${pane} button[aria-label="Send"]`);
+      await page.waitForFunction(() => document.documentElement.dataset.galleryChatSent !== undefined);
+      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:first.bin', 'text:Here are the files']);
+      await page.close();
+    });
+  });
+});
+
+/** Mid-turn, Branch runs the draft's words beside the turn: it is offered only while there are words to run, never for
+ *  attachments alone. A composer showing a status row keeps that row's Retry and stays usable. */
+describe('the composer while a turn runs and under a status row', () => {
+  test('Branch follows the words in the draft, not its attachments; a status row keeps its retry and the composer', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1100, height: 1200 });
+      await page.goto(`${origin}/gallery.html?frame=composer`, { waitUntil: 'networkidle0' });
+      const live = '[data-gallery-composer="live"]';
+      const branch = () => page.$$eval(`${live} button`, (buttons) => buttons.some((button) => button.textContent?.trim() === 'Branch'));
+
+      expect(await branch()).toBe(true);
+      await page.$eval(`${live} textarea`, (box) => { box.select(); });
+      await page.keyboard.press('Backspace');
+      await page.waitForFunction((at) => ![...document.querySelectorAll(`${at} button`)].some((button) => button.textContent?.trim() === 'Branch'), {}, live);
+
+      const attach = await page.$(`${live} input[type="file"]`);
+      const file = `${process.env.TMPDIR ?? '/tmp'}/branch-attachment.csv`;
+      await Bun.write(file, 'cart,total\n1,20\n');
+      await attach?.uploadFile(file);
+      await page.waitForFunction((at) => (document.querySelector(at)?.textContent ?? '').includes('branch-attachment.csv'), {}, live);
+      expect(await branch()).toBe(false);
+
+      await page.type(`${live} textarea`, 'try the other fix');
+      await page.waitForFunction((at) => [...document.querySelectorAll(`${at} button`)].some((button) => button.textContent?.trim() === 'Branch'), {}, live);
+
+      const notice = '[data-gallery-composer="notice"]';
+      expect(await page.$$eval(`${notice} button`, (buttons) => buttons.some((button) => button.textContent?.trim() === 'Retry'))).toBe(true);
+      expect(await page.$(`${notice} textarea:not([disabled])`)).not.toBeNull();
       await page.close();
     });
   });

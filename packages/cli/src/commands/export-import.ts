@@ -116,6 +116,8 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     const db = new Database(stagedDb, { create: true });
 
     try {
+      // Published WAL, as `kinu create` publishes it: a database is switched only while it is private.
+      db.exec('PRAGMA journal_mode = WAL');
       const files = localArchiveTarget(staging);
       let store: ReturnType<typeof createInlineWorkspace> | null = null;
       const opened = () => (store ??= createInlineWorkspace(db));
