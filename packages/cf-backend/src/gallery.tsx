@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
-import type { UIMessage } from "ai";
+import type { FileUIPart, UIMessage } from "ai";
 import { threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, TURN_END_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
@@ -314,6 +314,9 @@ const CHATGPT_DEVICE = new URLSearchParams(location.search).get("chatgpt") === "
 const MODELS_FAIL = new URLSearchParams(location.search).get("models") === "fail";
 
 const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
+
+/** `&snapshot=failed`: the workspace's first read fails, so nothing has loaded. */
+const SNAPSHOT_FAILS = new URLSearchParams(location.search).get("snapshot") === "failed";
 
 /** `&visit=failed`: the roster cannot record the visit for a reason other than the workspace being gone. */
 const VISIT_FAILS = new URLSearchParams(location.search).get("visit") === "failed";
@@ -2113,6 +2116,27 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["savePlanReviewAnnotations", galleryAnnotationSave],
 ]);
 
+/** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
+async function snapshotGate(): Promise<void> {
+  const query = new URLSearchParams(location.search);
+
+  if (query.get("terminal") === "denied") await new Promise<never>(() => {});
+
+  if (SNAPSHOT_FAILS) throw new Error("Network connection lost.");
+
+  if (query.get("snapshot") !== "held" || document.documentElement.dataset.snapshotReleased === "1") return;
+
+  await new Promise<void>((resolve) => {
+    const released = new MutationObserver(() => {
+      if (document.documentElement.dataset.snapshotReleased !== "1") return;
+      released.disconnect();
+      resolve();
+    });
+
+    released.observe(document.documentElement, { attributes: true, attributeFilter: ["data-snapshot-released"] });
+  });
+}
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   const waited = ASYNC_PAGE_RPC.get(method);
 
@@ -2144,22 +2168,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     }
   }
 
-  if (new URLSearchParams(location.search).get("terminal") === "denied" && method === "getWorkspaceSnapshot") {
-    return new Promise<T>(() => {});
-  }
-
-  if (new URLSearchParams(location.search).get("snapshot") === "held" && method === "getWorkspaceSnapshot"
-      && document.documentElement.dataset.snapshotReleased !== "1") {
-    await new Promise<void>((resolve) => {
-      const released = new MutationObserver(() => {
-        if (document.documentElement.dataset.snapshotReleased !== "1") return;
-        released.disconnect();
-        resolve();
-      });
-
-      released.observe(document.documentElement, { attributes: true, attributeFilter: ["data-snapshot-released"] });
-    });
-  }
+  if (method === "getWorkspaceSnapshot") await snapshotGate();
 
   const roster = galleryRosterRpc(method, args);
 
@@ -3499,6 +3508,7 @@ function ComposerFrame() {
   const [model, setModel] = useState("anthropic/claude-opus-4");
   /* The thinking level travels with the model; the composer sizes the row, so the picker takes no width class. */
   const [effort, setEffort] = useState<ReasoningEffort | null>(null);
+  const [parts, setParts] = useState<FileUIPart[]>([]);
 
   const picker = () => (
     <ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs"
@@ -3512,7 +3522,13 @@ function ComposerFrame() {
     placeholder: "Send a message...",
     disabled: false,
     mode: { value: mode, onChange: setMode, locked: false },
-    attachments: { parts: [], onAdd: () => {}, onRemove: () => {} },
+    attachments: {
+      parts,
+      onAdd: (files: FileList | null | undefined) => setParts((held) => [...held, ...[...files ?? []].map((file): FileUIPart => ({
+        type: "file", mediaType: file.type, filename: file.name, url: "data:,",
+      }))]),
+      onRemove: (index: number) => setParts((held) => held.filter((_, at) => at !== index)),
+    },
   } as const;
 
   return (
@@ -3522,12 +3538,12 @@ function ComposerFrame() {
           <div className="p-eyebrow px-4">At rest, with a draft</div>
           <Composer {...shared} value={value} liveness={IDLE_TURN} modelPicker={picker()} />
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1" data-gallery-composer="live">
           <div className="p-eyebrow px-4">Mid-turn — Stop, Branch, Steer</div>
           <Composer {...shared} value={value} liveness={LIVE_TURN} onBranch={() => {}}
             modelPicker={picker()} />
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1" data-gallery-composer="notice">
           <div className="p-eyebrow px-4">With a status row</div>
           <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={REFRESH_NOTICE} />
         </div>
