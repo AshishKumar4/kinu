@@ -3007,17 +3007,14 @@ export function ciUnits(costs: HostedCosts = readHostedCosts()): { readonly gate
   });
 }
 
-/** GitHub's source runners per CI run. */
-const HOSTED_SOURCE_PARTS = 8;
-
-/** Hosted wall, not workstation CPU/PSS, balances the source runners: GitHub's eight, or as many as the container
- *  runner asks for. The upload scan and each hammer run have independent runners. No suite list lives in the workflow. */
-export function ciParts(costs: HostedCosts = readHostedCosts(), width = HOSTED_SOURCE_PARTS): CIPart[] {
+/** Hosted wall, not workstation CPU/PSS, balances eight source runners. The upload scan and each hammer run have
+ *  independent runners. No suite list lives in the workflow. */
+export function ciParts(costs: HostedCosts = readHostedCosts()): CIPart[] {
   const units = ciUnits(costs);
   const upload = units.filter((unit) => unit.gate.phase === 'preflight' || unit.gate.phase === 'upload');
   const hammer = units.filter((unit) => unit.gate.phase === 'hammer');
   const source = units.filter((unit) => !upload.includes(unit) && !hammer.includes(unit));
-  const parts: { name: string; runs: string[]; seconds: number }[] = Array.from({ length: width }, (_, index) => ({ name: 'source-' + String(index + 1), runs: [], seconds: 0 }));
+  const parts: { name: string; runs: string[]; seconds: number }[] = Array.from({ length: 8 }, (_, index) => ({ name: 'source-' + String(index + 1), runs: [], seconds: 0 }));
 
   for (const unit of [...source].sort((left, right) => right.seconds - left.seconds)) {
     const part = parts.reduce((least, candidate) => candidate.seconds < least.seconds ? candidate : least);
@@ -3033,29 +3030,24 @@ export function ciParts(costs: HostedCosts = readHostedCosts(), width = HOSTED_S
   ];
 }
 
-/** Source parts of about `target` seconds each, from the same measured units `ciParts` packs. */
-export function ciWidth(costs: HostedCosts, target: number): number {
-  const source = ciUnits(costs).filter((unit) => !['preflight', 'upload', 'hammer'].includes(unit.gate.phase ?? 'source'));
-
-  return Math.max(1, Math.ceil(source.reduce((sum, unit) => sum + unit.seconds, 0) / target));
-}
-
-/** A row a part must report, with the files a split suite must time, as `checkFileCoverage` holds GitHub's to. */
+/** A row a task must report, with the files a split suite must time, as `checkFileCoverage` holds GitHub's to. */
 type PlannedRow = string | { readonly name: string; readonly files: string[] };
 
 interface CIMatrix {
-  readonly include: { readonly part: string; readonly width: number; readonly rows: PlannedRow[] }[];
+  readonly include: { readonly name: string; readonly row: string; readonly weight: number; readonly rows: PlannedRow[] }[];
 }
 
-/** The container runner's matrix (cf-ci, `.cf-ci.json`): one entry per part, naming the rows it must report. */
-function ciPlan(costs: HostedCosts, width: number): CIMatrix {
-  const split = new Set(ciUnits(costs).filter((unit) => unit.gate.ciShards !== undefined).map((unit) => unit.gate.run));
+/** The container runner's matrix (armada, `.armada.json`): one task per CI unit, the same units GitHub's parts pack,
+ *  each weighed by its measured seconds so the longest start first, naming the row it must report. */
+function ciPlan(costs: HostedCosts): CIMatrix {
   const tracked = trackedTestFiles();
 
   return {
-    include: ciParts(costs, width).map((part) => ({
-      part: part.name, width,
-      rows: part.runs.map((run) => split.has(run) ? { name: run, files: claims(run, tracked) } : run),
+    include: ciUnits(costs).map((unit) => ({
+      name: unit.gate.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80),
+      row: unit.gate.run,
+      weight: Math.round(unit.seconds),
+      rows: [unit.gate.ciShards === undefined ? unit.gate.run : { name: unit.gate.run, files: claims(unit.gate.run, tracked) }],
     })),
   };
 }
@@ -3624,25 +3616,15 @@ function argumentValue(name: string): string | undefined {
   return process.argv.find((argument) => argument.startsWith('--' + name + '='))?.slice(name.length + 3);
 }
 
-interface CIPlanInputs {
-  readonly costs: HostedCosts;
-  readonly width: number;
-}
-
-/** What a CI part is cut from: GitHub's eight parts over `ci-cost.json`, or the container runner's `--ci-width` over
- *  what it measured (`--ci-costs`, cf-ci's timings). Every part of one run is given the same pair, so all cut the same
- *  plan. */
-function ciPlanInputs(): CIPlanInputs {
+/** What CI units are cut and weighed from: `ci-cost.json`, with the container runner's own measurements over it
+ *  (`--ci-costs`, armada's timings). The plan and every task of one run are given the same file, so all cut the same
+ *  units. */
+function ciPlanCosts(): HostedCosts {
   const measured = argumentValue('ci-costs');
-  const width = argumentValue('ci-width');
   const hosted = readHostedCosts();
-
   const labels = new Map(ciUnits(hosted).map((unit) => [unit.gate.run, unit.gate.label]));
 
-  return {
-    costs: measured === undefined ? hosted : withRunnerCosts(hosted, parseRunnerTimings(readFileSync(measured, 'utf8')), labels),
-    width: width === undefined ? HOSTED_SOURCE_PARTS : Number(width),
-  };
+  return measured === undefined ? hosted : withRunnerCosts(hosted, parseRunnerTimings(readFileSync(measured, 'utf8')), labels);
 }
 
 async function ciCommand(): Promise<number | undefined> {
@@ -3658,9 +3640,7 @@ async function ciCommand(): Promise<number | undefined> {
   }
 
   if (process.argv.includes('--ci-plan')) {
-    const { costs } = ciPlanInputs();
-
-    console.log(JSON.stringify(ciPlan(costs, ciWidth(costs, Number(option('ci-target') ?? '300')))));
+    console.log(JSON.stringify(ciPlan(ciPlanCosts())));
 
     return 0;
   }
@@ -3907,11 +3887,18 @@ if (import.meta.main) {
     throw new Error('CI row verdicts require a clean full SHA; commit the tree first');
   }
 
-  const planned = ciPlanInputs();
-  const part = ciPart === undefined ? undefined : ciParts(planned.costs, planned.width).find((candidate) => candidate.name === ciPart);
+  const costs = ciPlanCosts();
+  const part = ciPart === undefined ? undefined : ciParts(costs).find((candidate) => candidate.name === ciPart);
 
   if (ciPart !== undefined && (tier !== 'ci' || part === undefined)) throw new Error('unknown CI part or a non-CI tier');
-  const chosen = part === undefined ? declared : ciUnits(planned.costs).map((unit) => unit.gate).filter((gate) => part.runs.includes(gate.run));
+  // `--ci-row`: one CI unit, as the container runner runs them, each in its own task.
+  const ciRow = process.argv.find((argument) => argument.startsWith('--ci-row='))?.slice('--ci-row='.length);
+  const rowGate = ciRow === undefined ? undefined : ciUnits(costs).find((unit) => unit.gate.run === ciRow)?.gate;
+
+  if (ciRow !== undefined && (tier !== 'ci' || rowGate === undefined)) throw new Error('unknown CI row or a non-CI tier: ' + ciRow);
+  let chosen = part === undefined ? declared : ciUnits(costs).map((unit) => unit.gate).filter((gate) => part.runs.includes(gate.run));
+
+  if (rowGate !== undefined) chosen = [rowGate];
   const tracked = trackedTestFiles();
   const changedByRun = new Map<string, Gate>();
 
@@ -3925,7 +3912,9 @@ if (import.meta.main) {
 
   const gates = changedFrom === undefined ? chosen : [...chosen.filter((gate) => !changedByRun.has(gate.run)), ...changedByRun.values()];
 
-  if (ciPart !== undefined && ciPart !== 'upload') {
+  const sourceRow = rowGate !== undefined && !['preflight', 'upload'].includes(rowGate.phase ?? 'source');
+
+  if ((ciPart !== undefined && ciPart !== 'upload') || sourceRow) {
     // This runner's prerequisite, not another source verdict or another row in the collected proof.
     const ready = await runUnderDeadline({ argv: ['bun', 'scripts/preflight.ts'], cwd: root, seconds: GATE_DEADLINE_SECONDS, label: 'Runner preflight', stdio: 'inherit' });
 

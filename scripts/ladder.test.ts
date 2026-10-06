@@ -27,7 +27,7 @@ import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   ciParts, localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, ciWidth, changedTestGate, splitCIGate, type Gate,
+  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -1210,25 +1210,16 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
     expect(reportCIVerdicts({ sha, part: 'all', rows: [{ run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'https://github.com/o/r/actions/runs/17', '')).toBe(false);
   });
 
-  // The container runner (cf-ci, `.cf-ci.json`) cuts the same units to its own width, sized from what it measured.
-  test('a container plan covers every CI row once at any width, sized from the runner\'s timings over the hosted ones', () => {
+  // The container runner (armada, `.armada.json`) runs the same units one task each, weighed by what it measured.
+  test('the container runner\'s measurements weigh only the rows they name, over the hosted ones', () => {
     const hosted = readHostedCosts();
-    const expected = ciUnits(hosted).map((unit) => unit.gate.run).sort();
-    const unit = ciUnits(hosted).find((each) => each.gate.phase !== 'hammer' && each.gate.phase !== 'upload' && each.gate.phase !== 'preflight');
-    const label = unit?.gate.label ?? '';
-    const measured = withRunnerCosts(hosted, { rows: { [unit?.gate.run ?? '']: 1e6, 'a command no row runs': 5 }, files: {} }, new Map([[unit?.gate.run ?? '', label]]));
+    const unit = ciUnits(hosted).find((each) => each.gate.phase !== 'hammer' && each.gate.ciShards === undefined);
+    const run = unit?.gate.run ?? '';
+    const measured = withRunnerCosts(hosted, { rows: { [run]: 1e6, 'a command no row runs': 5 }, files: { 'a.test.ts': 2 } }, new Map([[run, unit?.gate.label ?? '']]));
+    const weights = new Map(ciUnits(measured).map((each) => [each.gate.run, each.seconds]));
 
-    for (const width of [1, 13, 40]) {
-      const runs = ciParts(hosted, width).flatMap((part) => part.runs);
-
-      expect({ width, runs: [...runs].sort(), unique: new Set(runs).size }).toEqual({ width, runs: expected, unique: runs.length });
-    }
-
-    expect(ciParts(hosted, 13).filter((part) => part.name.startsWith('source-'))).toHaveLength(13);
-    expect(ciWidth(hosted, 1e9)).toBe(1);
-    // A row the runner timed at a million seconds outweighs every hosted estimate, so it alone needs that many parts.
-    expect(ciWidth(measured, 300)).toBeGreaterThan(1e6 / 300);
-    expect(measured.seconds[label]).toBe(1e6);
+    expect({ timed: weights.get(run), others: ciUnits(hosted).filter((each) => each.gate.run !== run).every((each) => weights.get(each.gate.run) === each.seconds), file: measured.files['a.test.ts'] })
+      .toEqual({ timed: 1e6, others: true, file: 2 });
   });
 
   test('all six contended runs have independent runners instead of a sequential hammer tail', () => {

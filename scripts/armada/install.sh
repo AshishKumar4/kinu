@@ -1,5 +1,5 @@
 #!/bin/sh
-# The locked install with its `prepare` hook, as the user in the checkout, once per cf-ci environment, and the smoke
+# The locked install with its `prepare` hook, as the user in the checkout, once per armada environment, and the smoke
 # every shard depends on. The bun cache stays: scripts/patch-parity.ts reads its pristine trees.
 set -eu
 PATH=/usr/local/bin:/usr/bin:/bin bun install --frozen-lockfile

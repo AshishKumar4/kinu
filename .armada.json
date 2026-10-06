@@ -1,0 +1,18 @@
+{
+  "name": "kinu",
+  "environment": {
+    "base": "cloudflare/debian-trixie",
+    "setup": "scripts/armada/setup.sh",
+    "install": "scripts/armada/install.sh",
+    "key": ["bun.lock", "bunfig.toml", "package.json", "packages/*/package.json", "patches/**", "third_party/mossaic/**", "scripts/mossaic-sdk.ts"],
+    "smoke": "node_modules/.bin/bun --version && google-chrome --version"
+  },
+  "env": { "PATH": "{workdir}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin" },
+  "pool": 60,
+  "plan": { "command": ["bun", "scripts/ladder.ts", "--ci-plan", "--ci-costs={timings}"] },
+  "task": {
+    "command": ["bun", "scripts/ladder.ts", "--tier=ci", "--ci-row={row}", "--ci-costs={timings}", "--verdicts={out}"],
+    "name": "name",
+    "timeout": 1800
+  }
+}
