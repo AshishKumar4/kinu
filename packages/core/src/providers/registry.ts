@@ -232,7 +232,9 @@ export function createProviderRegistry(): ProviderRegistry {
 
     listAllModels(deps) {
       return settle(Effect.gen(function* () {
+        const started = Date.now();
         const { providers, failures: sourceFailures } = yield* allProviders(deps);
+        const catalogMs = Date.now() - started;
         const models: Array<ModelInfo & { provider: string }> = [];
         const failures = [...sourceFailures];
         const keys = (yield* Effect.promise(async () => deps.listCredentialKeys?.())) ?? [];
@@ -250,10 +252,10 @@ export function createProviderRegistry(): ProviderRegistry {
           return await p.isAvailable(own) ? await p.listModels(own) : null;
         });
 
-        const slowest = probes.reduce<(typeof probes)[number] | null>((worst, probed) => (worst === null || probed.ms > worst.ms ? probed : worst), null);
+        const slowest = probes.reduce((worst, probed) => (probed.ms > worst.ms ? { provider: probed.provider.id, ms: probed.ms } : worst), { provider: CATALOG_SOURCE_ID, ms: catalogMs });
 
         // A slow listing is one a dropped connection can cut; this names who held it.
-        if (slowest !== null && slowest.ms >= SLOW_LISTING_MS) diagnostics.event('models.listing_slow', { provider: slowest.provider.id, ms: slowest.ms });
+        if (slowest.ms >= SLOW_LISTING_MS) diagnostics.event('models.listing_slow', slowest);
 
         for (const probed of probes) {
           if (Result.isFailure(probed.result)) {

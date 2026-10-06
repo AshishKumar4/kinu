@@ -1027,15 +1027,25 @@ describe('CLI TUI layout', () => {
       import { createRoot, flushSync } from '@opentui/react';
       import { CONFIG_PATH } from './packages/cli/src/config.ts';
       import { HomeApp } from './packages/cli/src/tui/home-app.tsx';
+      import { installTurnDiagnostics } from './packages/cli/src/turn-log.ts';
 
+      // As bin/cli.ts does: the TUI's stderr is the screen.
+      installTurnDiagnostics();
       // models.dev, the OpenAI key's only model list: a failed read lists nothing to pick.
       const openai = (id, name) => ({
         id, name, tool_call: true, reasoning: true, limit: { context: 1050000 },
         reasoning_options: [{ type: 'effort', values: ['none', 'low', 'medium', 'high', 'xhigh'] }],
       });
-      globalThis.fetch = async () => Response.json({
-        openai: { models: { 'gpt-5.5': openai('gpt-5.5', 'GPT-5.5'), 'gpt-5.4': openai('gpt-5.4', 'GPT-5.4') } },
-      });
+      // Each read takes five seconds, so the listing is always slow, as it was under load.
+      const now = Date.now;
+      let held = 0;
+      Date.now = () => now() + held;
+      globalThis.fetch = async () => {
+        held += 5_000;
+        return Response.json({
+          openai: { models: { 'gpt-5.5': openai('gpt-5.5', 'GPT-5.5'), 'gpt-5.4': openai('gpt-5.4', 'GPT-5.4') } },
+        });
+      };
       const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
         width: 100,
         height: 40,
@@ -1121,6 +1131,7 @@ describe('CLI TUI layout', () => {
     });
 
     expect({ exitCode: proc.exitCode, stderr: proc.stderr }).toEqual({ exitCode: 0, stderr: '' });
+    expect(readFileSync(resolve(kinuHome, 'cli.log'), 'utf8')).toContain('models.listing_slow');
     const tier = v.parse(v.object({ reasoningEffort: v.string(), model: v.string() }), JSON.parse(proc.stdout));
     expect(tier).toMatchObject({ reasoningEffort: 'high' });
     expect(tier.model).toStartWith('openai/');
@@ -1227,6 +1238,8 @@ const homeScreenPrelude = (project: string, width = 100, height = 40, fetchStub?
   // the swap must be in place before home-app resolves createCliRenderer.
   await mock.module('@opentui/core', () => ({ ...core, createCliRenderer: async () => renderer }));
   const { runHomeTui } = await import('./packages/cli/src/tui/home-app.tsx');
+  // As bin/cli.ts does: the TUI's stderr is the screen.
+  (await import('./packages/cli/src/turn-log.ts')).installTurnDiagnostics();
 
   const frame = () => captureCharFrame();
   const rowWith = (text) => (frame().split('\\n').find((row) => row.includes(text)) ?? '').replace(/\\s+/gu, ' ').trim();

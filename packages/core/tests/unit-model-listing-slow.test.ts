@@ -29,10 +29,18 @@ function provider(id: string, heldMs: number): ModelProvider {
 
 const deps: ProviderDeps = { env: {}, getAuth: async () => null, hasCredential: async () => true, listCredentialKeys: async () => [] };
 
-async function listed(providers: readonly ModelProvider[]) {
+async function listed(providers: readonly ModelProvider[], catalogHeldMs = 0) {
   const registry = createProviderRegistry();
 
   for (const p of providers) registry.register(p);
+  registry.registerDynamic({
+    get: () => undefined,
+    listIds: async () => {
+      setSystemTime(new Date(Date.now() + catalogHeldMs));
+
+      return [];
+    },
+  });
   const log = createRecordingLogger();
   const restore = setDiagnosticsSink(log);
 
@@ -50,6 +58,13 @@ describe('a slow model listing', () => {
     setSystemTime(new Date('2026-10-05T17:27:23Z'));
 
     expect(await listed([provider('quick', 0), provider('claude', 4_800)])).toMatchObject([{ fields: { provider: 'claude', ms: 4_800 } }]);
+  });
+
+  // The models.dev read that names the catalog's providers runs before any of them is probed.
+  test('names the catalog when its read held the listing', async () => {
+    setSystemTime(new Date('2026-10-05T17:27:23Z'));
+
+    expect(await listed([provider('quick', 0)], 4_800)).toMatchObject([{ fields: { provider: 'catalog', ms: 4_800 } }]);
   });
 
   test('a quick listing says nothing', async () => {
