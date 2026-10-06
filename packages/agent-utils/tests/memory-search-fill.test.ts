@@ -1,7 +1,6 @@
 // Partial matches must fill an underfull strict page, not only an empty one.
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
-import { fillToCapacity, relaxFtsQuery } from "../src/memory/query";
 import { createTestDb, createMemoryVfs } from "./helpers";
 
 function createStore() {
@@ -83,52 +82,5 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 		const { store } = createStore();
 		await store.indexFile("memory/only.md", "postgres vacuum notes");
 		expect(store.search("postgres", 5).map((h) => h.path)).toEqual(["memory/only.md"]);
-	});
-});
-
-describe("relaxFtsQuery", () => {
-	test("a multi-token query relaxes to any-term", () => {
-		expect(relaxFtsQuery('"wrangler" "staging"')).toBe('"wrangler" OR "staging"');
-	});
-
-	test("a single token cannot be relaxed, because the two queries are identical", () => {
-		expect(relaxFtsQuery('"wrangler"')).toBeNull();
-		expect(relaxFtsQuery("")).toBeNull();
-	});
-});
-
-describe("fillToCapacity", () => {
-	const idOf = (row: { id: string }) => row.id;
-	const rows = (...ids: string[]) => ids.map((id) => ({ id }));
-
-	test("strict rows keep their order and their places", () => {
-		expect(fillToCapacity(rows("a", "b"), rows("z", "a", "y"), 4, idOf).map(idOf))
-			.toEqual(["a", "b", "z", "y"]);
-	});
-
-	test("a strict page at capacity is returned unchanged", () => {
-		expect(fillToCapacity(rows("a", "b"), rows("z"), 2, idOf).map(idOf))
-			.toEqual(["a", "b"]);
-	});
-
-	test("duplicates in the partial page are skipped, not counted", () => {
-		expect(fillToCapacity(rows("a"), rows("a", "a", "b"), 2, idOf).map(idOf))
-			.toEqual(["a", "b"]);
-	});
-
-	test("a short partial page fills what it can without inventing rows", () => {
-		expect(fillToCapacity(rows("a"), rows("a"), 5, idOf).map(idOf)).toEqual(["a"]);
-		expect(fillToCapacity([], [], 5, idOf)).toEqual([]);
-	});
-
-	test("an oversized strict page is cut to capacity", () => {
-		expect(fillToCapacity(rows("a", "b", "c"), rows("z"), 2, idOf).map(idOf))
-			.toEqual(["a", "b"]);
-	});
-
-	test("the strict page is never mutated", () => {
-		const strict = rows("a");
-		fillToCapacity(strict, rows("b"), 3, idOf);
-		expect(strict.map(idOf)).toEqual(["a"]);
 	});
 });

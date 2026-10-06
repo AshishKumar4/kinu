@@ -119,7 +119,6 @@ class Rebuilt {
     this.out.push(escapeText(decodeEntities(text)));
   }
 
-  /** True once the root closes. */
   close(name: string): boolean {
     const depth = this.open.map((element) => element.name).lastIndexOf(name);
 
@@ -155,7 +154,7 @@ class Rebuilt {
   }
 }
 
-/** The first `<svg>` in `written`, rebuilt; null when absent, empty or over the cap. */
+/** The first `<svg>` in `written`, rebuilt; null if absent, empty or over the cap. */
 export function sanitizeWorkspaceLogoSvg(written: string): string | null {
   const start = written.search(/<svg[\s>]/i);
 

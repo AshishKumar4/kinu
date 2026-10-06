@@ -1,9 +1,11 @@
 /**
  * Terminal chrome vocabulary shared by the TUI and every surface that depicts it; the CLI is the authority.
- * Textual marks only: emoji code points render differently per terminal font, and the CLI's zero-emoji gate enforces it.
+ * Textual marks only: emoji code points render differently per terminal font.
  */
 
 import type { ChangelogEntryKind } from './evolution/changelog';
+
+export const ELAPSED_COUNTER = { prefix: ' · ', suffix: 's' } as const;
 
 export const TUI_MARKS = {
   toolCall: '›',

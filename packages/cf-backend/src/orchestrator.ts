@@ -1941,6 +1941,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private readonly actorRetirementsInFlight = new Map<string, Promise<ActorDirectoryResult>>();
 
+  private readonly hostedRetries = new Set<string>();
+
   async actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> {
     const { actorId, workspaceId, parentActorId } = this.actorHandle();
 
@@ -2114,8 +2116,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       history: (limit) => this.agentStores(actorId).history(limit),
       admitted: (id) => this.agentStores(actorId).admitted(id),
       send: (input) => whenActorTakesInput(this.boundSql, actorId, () => sendNow(input)),
-      retry: (id) => whenActorTakesInput(this.boundSql, actorId, () => retryHostedMessage(this.hostedSeams(), reference, {
-        messageId: id, reopen: async () => { await (await facet()).reopen(snapshot(), id); },
+      retry: (claim) => whenActorTakesInput(this.boundSql, actorId, () => retryHostedMessage(this.hostedSeams(), reference, {
+        reserved: this.hostedRetries, claim, reopen: async () => (await facet()).reopen(snapshot()),
       })),
       interrupt: () => {
         this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));

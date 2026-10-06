@@ -1,7 +1,7 @@
 import type { SqlExecutor } from "../types";
 import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { chunkMarkdown } from "./chunker";
-import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from "./query";
+import { searchFts } from "./query";
 import type { MemorySearchResult } from "./query";
 
 const SNIPPET_MAX_CHARS = 700;
@@ -137,17 +137,11 @@ export class MemoryStore {
 	}
 }
 
-/** Ranked hits: strict all-term page, then partial matches up to `limit` (see {@link fillToCapacity}). */
+/** Ranked hits: strict all-term page, then partial matches up to `limit`. */
 export function searchMemoryChunks(sql: SqlExecutor, query: string, limit = 10): MemorySearchResult[] {
 	if (!query.trim()) return [];
 
-	const safeQuery = sanitizeFtsQuery(query);
-	const strict = runFtsQuery(sql, safeQuery, limit);
-	const relaxed = strict.length >= limit ? null : relaxFtsQuery(safeQuery);
-
-	const rows = relaxed === null
-		? strict
-		: fillToCapacity(strict, runFtsQuery(sql, relaxed, limit), limit, (row) => row.id);
+	const rows = searchFts(query, limit, (match, capacity) => runFtsQuery(sql, match, capacity), (row) => row.id);
 
 	// bm25() is more negative for better matches; |rank|/(1+|rank|) keeps the score monotone with relevance.
 	return rows.map((r) => ({

@@ -1,14 +1,13 @@
 /**
- * Every container image the Worker runs: where it is pushed and the digest wrangler.jsonc runs. The sandbox's is read
- * from its own artifact record, packages/devbox/block-lower/upstream.json, whose per-file hashes release-config's A8
- * holds; the Codex forwarder's is declared here with a hash of its tracked source directory, so a source change with
- * no new digest fails release-config, and `gate:egress-interception` reads the same record to admit it.
+ * Custom images carry a registry digest and source hash. Devbox's managed base comes from its tools artifact
+ * record and starts directly, with no Wrangler image preparation (D72); release-config holds the tools sources.
+ * The Codex forwarder's tracked source and digest are also read by `gate:egress-interception`.
  *
  * A new Codex forwarder digest:
  *   bunx wrangler containers build -p -t kinu-codex-egress:<first 12 of the source hash> <source>, then
  *   `docker buildx imagetools inspect registry.cloudflare.com/<account>/kinu-codex-egress:<tag>` for the digest, and
  *   move the digest here, in wrangler.jsonc, and the hash `bun scripts/container-images.ts` prints. deploy.sh builds
- *   no image. The sandbox image: packages/devbox/block-lower/README.
+ *   no image. The devbox tools tarball: packages/devbox/block-lower/README.
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -18,7 +17,7 @@ import { trackedFiles } from './sources';
 
 export interface ContainerImage {
   readonly repository: string;
-  readonly digest: string;
+  readonly digest?: string;
   /** Tracked directory holding the Dockerfile the image is built from. */
   readonly source: string;
   /** {@link sourceHash} of `source` when `digest` was pushed; absent where the source has its own artifact record. */
@@ -27,7 +26,7 @@ export interface ContainerImage {
 
 const BLOCK_LOWER = 'packages/devbox/block-lower';
 
-const SandboxArtifact = v.object({ image: v.string(), digest: v.string() });
+const SandboxArtifact = v.object({ base: v.literal('cloudflare/debian-trixie') });
 
 const SANDBOX = v.parse(SandboxArtifact, JSON.parse(readFileSync(join(import.meta.dir, '..', BLOCK_LOWER, 'upstream.json'), 'utf8')));
 
@@ -35,8 +34,7 @@ const REGISTRY = 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1';
 
 export const CONTAINER_IMAGES = {
   KinuDevbox: {
-    repository: SANDBOX.image.slice(0, SANDBOX.image.lastIndexOf('@')),
-    digest: SANDBOX.digest,
+    repository: SANDBOX.base,
     source: BLOCK_LOWER,
   },
   CodexEgress: {
@@ -47,7 +45,7 @@ export const CONTAINER_IMAGES = {
   },
 } satisfies Record<string, ContainerImage>;
 
-export const imageReference = (image: ContainerImage): string => `${image.repository}@${image.digest}`;
+export const imageReference = (image: ContainerImage): string => image.digest === undefined ? image.repository : `${image.repository}@${image.digest}`;
 
 /** The tracked files under `source`, relative to the repository, in order. */
 export function sourceFiles(source: string, tracked: readonly string[] = trackedFiles()): string[] {

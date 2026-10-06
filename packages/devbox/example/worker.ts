@@ -5,7 +5,7 @@
  * `scripts/bench-devbox-standalone.ts` deploys it and runs its acceptance.
  */
 import * as v from 'valibot';
-import { Devbox, type DevboxStore } from "../src/index";
+import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore } from "../src/index";
 
 export { DevboxOutbound, DevboxStoreGateway } from "../src/index";
 
@@ -14,10 +14,16 @@ interface Env {
   readonly WORKSPACES: R2Bucket;
   /** Supplied per deploy with `--var`; while it is absent every request is refused. */
   readonly EXAMPLE_TOKEN?: string;
+  readonly DEVBOX_REGISTRY_TOKEN?: string;
 }
 
 export class ExampleBox extends Devbox<Env> {
   protected override get namespaceBinding(): string { return "Box"; }
+  protected override get registryToken(): string | undefined { return this.env.DEVBOX_REGISTRY_TOKEN; }
+  protected override get registryAccount(): string { return 'f44999d1ddda7012e9a87729eba250f1'; }
+  protected override get peers(): BoxPeers {
+    return { golden: () => this.env.Box.getByName(GOLDEN_NAME), box: id => this.env.Box.get(this.env.Box.idFromString(id)) };
+  }
   protected override get store(): DevboxStore {
     return { binding: "WORKSPACES", bucket: this.env.WORKSPACES };
   }

@@ -1,4 +1,4 @@
-/** The workspace's GitHub record: one row per subject, each fact folded in, so nothing ages out. */
+/** One row per GitHub subject, each fact folded in. */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { GitHubFact, GitHubSubjectFact } from './recognize';
@@ -191,7 +191,6 @@ export function readGitHubActivity(sql: SqlExecutor, remotes: readonly string[])
 
   const held = new Map(rows.map((row) => [row.repo, row]));
 
-  // Remotes first, in order.
   const ordered = [...remotes.map((repo): RepoRow => held.get(repo) ?? {
     repo, pushRef: null, pushAt: null, fetchedAt: null, observedBranch: null, ci: null, ciAt: null,
   }), ...rows.filter((row) => !remotes.includes(row.repo))];

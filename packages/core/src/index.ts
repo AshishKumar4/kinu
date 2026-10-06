@@ -1093,7 +1093,6 @@ export {
 
 export { deviceFileCheckpoints, type DeviceRpcHub, type DeviceCheckpointsInput } from './checkpoints/device';
 
-// Shadow-git store format, both engines'.
 export {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT,
   CHECKPOINT_REF_PREFIX, CHECKPOINT_WORKDIR_MARKER, CHECKPOINT_EXCLUDES,

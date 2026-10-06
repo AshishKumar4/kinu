@@ -291,6 +291,9 @@ export class ChatSession {
   private readonly pendingSends: PendingSendStore;
   /** Settled where the fate is decided, never at admission. A send admitted via `admit` has no entry: its fate goes out as steer_status. */
   private readonly landings = new Map<string, SendLandingWaiter>();
+
+  /** A Retry reserved but not yet queued. */
+  private reopening = false;
   private readonly eventLog: EventLog;
   private revision: Promise<void> | null = null;
   private readonly unobserveMeasures: () => void;
@@ -596,29 +599,27 @@ export class ChatSession {
     if (this.runningAnnouncement?.startsWith(prefix) === true) this.stop();
   }
 
-  /**
-   * Retry: the turn the newest user message `id` opened runs again under it. Its completed steps stay in the context
-   * and the transcript, so their work is not done again and the next call follows the last of them; an answer the
-   * failure left empty is dropped.
-   */
-  retry(id: string): Promise<SendLanding> {
+  /** Reruns the newest turn as its opener (a steer is not resent); `claim` runs before any await. */
+  retry(claim: (turnId: string) => void): Promise<SendLanding> {
     return settleEffect(Effect.gen({ self: this }, function* () {
-      if (this.turnInFlight()) return yield* Effect.fail(new KinuError('denied', 'Stop the turn that is running before you retry.'));
-      const opening = this.transcript.read(id);
+      if (this.turnInFlight() || this.reopening) return yield* Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.'));
+      const opener = this.transcript.reopenNewestTurn();
 
-      if (opening === null || this.transcript.newestUserId() !== id) return yield* Effect.fail(new KinuError('bad_input', 'Only the newest message can be retried.'));
-      const answer = this.transcript.at(opening.position + 1);
-
-      if (answer?.role === 'assistant' && answer.parts.length === 0 && this.transcript.count() === answer.position + 1) this.transcript.truncate(answer.position);
-      const message = yield* Effect.promise(() => this.transcript.message(id));
-      const metadata = yield* Effect.promise(() => this.transcript.metadata(id));
+      if (opener === null) return yield* Effect.fail(new KinuError('bad_input', 'There is no message to retry.'));
+      const turnId = opener.id;
       const landing = Promise.withResolvers<SendLanding>();
 
-      this.landings.set(id, landing);
+      this.reopening = true;
+      this.landings.set(turnId, landing);
+      claim(turnId);
+
+      const message = yield* Effect.promise(() => this.transcript.message(turnId)).pipe(Effect.ensuring(Effect.sync(() => { this.reopening = false; })));
+      const metadata = yield* Effect.promise(() => this.transcript.metadata(turnId));
+
       this.queue.push({
         text: message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '',
-        kind: 'user', turnId: id, ...(metadata !== undefined && { metadata }),
-        settle: (failure) => { this.settleLandings([id], failure ?? 'turn'); },
+        kind: 'user', turnId, ...(metadata !== undefined && { metadata }),
+        settle: (failure) => { this.settleLandings([turnId], failure ?? 'turn'); },
       });
       this.pump();
 

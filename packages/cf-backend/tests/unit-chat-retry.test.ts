@@ -17,12 +17,33 @@ const ASK = 'Note that the deploy ran, then tell me.';
 
 const COUNTER = 'retry-side-effect.txt';
 
-function request(id: string, trigger: 'submit-message' | 'regenerate-message'): string {
+function request(id: string, trigger: 'submit-message' | 'regenerate-message', messages = [{ id: 'ask', text: ASK }]): string {
   return JSON.stringify({
     type: 'cf_agent_use_chat_request', id,
-    init: { method: 'POST', body: JSON.stringify({ messages: [{ id: 'ask', role: 'user', parts: [{ type: 'text', text: ASK }] }], trigger }) },
+    init: {
+      method: 'POST',
+      body: JSON.stringify({ messages: messages.map((message) => ({ id: message.id, role: 'user', parts: [{ type: 'text', text: message.text }] })), trigger }),
+    },
   });
 }
+
+const STEER = 'Send one notification when it is done.';
+
+/** A workspace whose model refuses its first call with a 400, then answers; `calls` counts the calls on the ask. */
+function refusedOnce() {
+  let calls = 0;
+
+  const workspace = gatewayWorkspace(stubAiBinding((run) => {
+    if (!JSON.stringify(requestOf(run).messages).includes(ASK)) return chatCompletion(run, '{"title":"Deploy notes"}');
+    calls += 1;
+
+    return calls === 1 ? Response.json({ error: { message: 'Bad Request' } }, { status: 400 }) : chatCompletion(run, 'Answered once.');
+  }));
+
+  return { workspace, calls: () => calls };
+}
+
+const times = (prompt: string, text: string) => prompt.split(text).length - 1;
 
 const DoneSchema = v.object({
   type: v.literal('cf_agent_use_chat_response'), id: v.string(), done: v.literal(true), error: v.optional(v.boolean()), body: v.optional(v.string()),
@@ -185,5 +206,104 @@ describe('Retry on a failed turn', () => {
     expect(last.split(ASK).length).toBe(asked);
     expect(last).toContain('"role":"tool"');
     expect(JSON.stringify(frames.items)).toContain('The deploy ran, noted once.');
+  });
+
+  test('two tabs retrying one failed turn: one runs it, the other is refused, and the first is answered', async () => {
+    const { workspace, calls } = refusedOnce();
+
+    const { agent } = workspace;
+    await workspace.started;
+    const { wire, frames } = listen(agent);
+    const gate = agent.harnessChatGate();
+
+    await gate(wire, request('first', 'submit-message'));
+    await frames.until((sent) => done(sent, 'first').length > 0);
+    const before = calls();
+
+    await Promise.all([gate(wire, request('tab-a', 'regenerate-message')), gate(wire, request('tab-b', 'regenerate-message'))]);
+    await frames.until((sent) => done(sent, 'tab-a').length > 0 && done(sent, 'tab-b').length > 0);
+
+    expect(['tab-a', 'tab-b'].filter((id) => done(frames.items, id)[0]?.error === true)).toHaveLength(1);
+    expect(calls() - before).toBe(1);
+  });
+
+  test('a turn a steer joined is retried under its opener: each message reaches the model once', async () => {
+    const prompts: string[] = [];
+    let refused = false;
+    const steered = Promise.withResolvers<void>();
+    let shellRan: (() => void) | null = null;
+    const shellStarted = new Promise<void>((resolve) => { shellRan = resolve; });
+
+    const workspace = gatewayWorkspace(stubAiBinding(async (run) => {
+      const sent = requestOf(run).messages;
+
+      if (!JSON.stringify(sent).includes(ASK)) return chatCompletion(run, '{"title":"Deploy notes"}');
+      prompts.push(JSON.stringify(sent));
+
+      if (!sent.some((message) => message.role === 'tool')) {
+        shellRan?.();
+        await steered.promise;
+
+        return toolCallCompletion(run, { tool: 'shell', args: { command: 'echo ran' } }, 'call_0');
+      }
+
+      if (!refused) {
+        refused = true;
+
+        return Response.json({ error: { message: 'Bad Request' } }, { status: 400 });
+      }
+
+      return chatCompletion(run, 'Done, one notification.');
+    }));
+
+    const { agent } = workspace;
+    await workspace.started;
+    const { wire, frames } = listen(agent);
+    const gate = agent.harnessChatGate();
+
+    const opening = gate(wire, request('first', 'submit-message'));
+    await shellStarted;
+    // The steer's request answers once the step it waits behind ends.
+    const steering = gate(wire, request('steer', 'submit-message', [{ id: 'ask', text: ASK }, { id: 'steer', text: STEER }]));
+    await frames.until(() => true);
+    steered.resolve();
+    await Promise.all([opening, steering]);
+    await frames.until((sent) => done(sent, 'first').length > 0);
+    expect(refused).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes(STEER))).toBe(true);
+
+    await gate(wire, request('retry', 'regenerate-message', [{ id: 'ask', text: ASK }, { id: 'steer', text: STEER }]));
+    await frames.until((sent) => done(sent, 'retry').length > 0);
+
+    expect(done(frames.items, 'retry')[0]?.error).toBeUndefined();
+    const last = prompts.at(-1) ?? '';
+    expect([times(last, ASK), times(last, STEER)]).toEqual([1, 1]);
+    const users = (await storedChat(workspace)).filter((message) => message.role === 'user');
+    expect(users).toHaveLength(2);
+  });
+
+  test('on a hosted agent\'s chat, two tabs retrying one failed turn: one runs it, the other is refused', async () => {
+    const { workspace, calls } = refusedOnce();
+
+    const { agent } = workspace;
+    await workspace.started;
+    const { subordinate } = await agent.createSubordinateAgent();
+
+    if (subordinate.actorId === null) throw new Error('the added agent has no actor');
+    const { wire, frames } = listen(agent, subordinate.actorId);
+
+    await agent.onMessage(wire, request('first', 'submit-message'));
+    await agent.terminalRetryPass();
+    await joinHarnessFibers();
+    await frames.until((sent) => done(sent, 'first').length > 0);
+    const before = calls();
+
+    await Promise.all([agent.onMessage(wire, request('tab-a', 'regenerate-message')), agent.onMessage(wire, request('tab-b', 'regenerate-message'))]);
+    await agent.terminalRetryPass();
+    await joinHarnessFibers();
+    await frames.until((sent) => done(sent, 'tab-a').length > 0 && done(sent, 'tab-b').length > 0);
+
+    expect(['tab-a', 'tab-b'].filter((id) => done(frames.items, id)[0]?.error === true)).toHaveLength(1);
+    expect(calls() - before).toBe(1);
   });
 });

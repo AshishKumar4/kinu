@@ -1,4 +1,4 @@
-// Shadow-git store format for both engines; the daemon carries it generated (`scripts/daemon-checkpoint-format.ts`).
+// Shadow-git store format; the daemon carries a generated copy.
 
 import type { CheckpointTurnMeta } from './types';
 
@@ -87,7 +87,7 @@ function diagnoseStaging(stderr: string): StagingDiagnosis {
   };
 }
 
-/** `code` null: git never finished (a signal, an overfull buffer), so its index is partial whatever it printed. */
+/** `code` null: git never finished, so its index is partial whatever it printed. */
 export function stagingOutcome(code: number | null, stderr: string): { readonly unreadable: string[] } | { readonly failure: string } {
   if (code === null) return { failure: 'checkpoint staging failed: git add did not finish' };
   const diagnosis = diagnoseStaging(stderr);

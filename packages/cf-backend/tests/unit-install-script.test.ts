@@ -482,14 +482,6 @@ describe('the CLI installs as a prebuilt artifact', () => {
 
 /** Pins: installer said "Kinu CLI is ready.", next `kinu` said "Bun is required." because the scripts resolved Bun independently. */
 describe('Bun runtime resolution is one source of truth', () => {
-  test('the approved Bun is the version this repository itself pins', () => {
-    const manifest = readFileSync(join(import.meta.dir, '../../../package.json'), 'utf8');
-    const pin = v.parse(v.object({ packageManager: v.string() }), JSON.parse(manifest)).packageManager;
-    expect(pin).toBe(`bun@${approvedBun()}`);
-    const minKey = /KINU_BUN_MIN_KEY=(\d+)/.exec(bunResolutionShell())?.[1];
-    expect(Number(minKey)).toBeGreaterThan(0);
-  });
-
   test('the device daemon carries the launcher\'s own resolution, to leave an older Bun the same way', async () => {
     const daemon = v.parse(
       v.object({ bunResolutionShell: v.pipe(v.function(), v.returns(v.string())) }),

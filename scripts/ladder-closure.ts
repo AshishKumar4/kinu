@@ -66,6 +66,8 @@ import type { SyntaxNode } from './syntax';
 export type Inputs =
   | {
     readonly kind: 'derived';
+    /** A verdict that observes the checkout's physical location is not a cross-worktree proof. */
+    readonly location?: 'checkout';
     /** Tracked paths (a file, or a directory with a trailing slash) the gate
      *  opens by path at runtime, beyond what the module graph carries. An
      *  empty list is a declaration too: nothing beyond the graph. */
@@ -146,6 +148,7 @@ export function repoAt(
 
 export interface Derived {
   readonly kind: 'derived';
+  readonly location?: 'checkout';
   /** Sorted, repo-relative. */
   readonly files: readonly string[];
   /** Sorted environment names whose values enter the key. */
@@ -336,6 +339,34 @@ interface Walk {
   readonly failure: string | undefined;
 }
 
+interface ScannedModule {
+  readonly source: string;
+  readonly edges: ReturnType<typeof moduleEdges>;
+  readonly markers: ReturnType<typeof scanMarkers>;
+}
+
+const scannedModules = new WeakMap<Repo, Map<string, ScannedModule>>();
+
+function scannedModule(file: string, repo: Repo): ScannedModule {
+  const source = repo.read(file);
+  let modules = scannedModules.get(repo);
+
+  if (modules === undefined) {
+    modules = new Map();
+    scannedModules.set(repo, modules);
+  }
+
+  const previous = modules.get(file);
+
+  if (previous?.source === source) return previous;
+  const parsed = parse(file, source);
+  const edges = moduleEdges(parsed);
+  const scanned = { source, edges, markers: scanMarkers(parsed.root, edges.edges.map((edge) => edge.specifier)) };
+  modules.set(file, scanned);
+
+  return scanned;
+}
+
 /** The transitive graph from `entries` over the repository. */
 function walkGraph(entries: readonly string[], repo: Repo): Walk {
   const universe = new Set(repo.files);
@@ -366,12 +397,12 @@ function walkGraph(entries: readonly string[], repo: Repo): Walk {
     if (file === CORPUS_MODULE) corpus = true;
 
     if (!isParseable(file)) return paths;
-    const parsed = parse(file, repo.read(file));
-    const { edges, computed, resolvedByPath } = moduleEdges(parsed);
+    const scanned = scannedModule(file, repo);
+    const { edges, computed, resolvedByPath } = scanned.edges;
 
     for (const line of computed) computedImports.push(`${file}:${String(line)}`);
 
-    const scan = scanMarkers(parsed.root, edges.map((edge) => edge.specifier));
+    const scan = scanned.markers;
 
     if (scan.readsByPath || resolvedByPath.length > 0) readsByPath.push(file);
 
@@ -741,6 +772,7 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
 
   return {
     kind: 'derived',
+    location: inputs.location,
     files: [...files].sort(),
     env: [...new Set([...walked.env, ...loaded.env, ...(inputs.env ?? [])])].sort(),
     corpus,

@@ -1,12 +1,9 @@
 /** Web-Crypto primitives shared by every path that mints or checks a secret. */
+import { bytesToBase64 } from './base64';
 
 /** URL-safe base64, padding trimmed. The only encoder: PKCE (RFC 7636) compares the challenge as a string. */
 export function base64Url(bytes: Uint8Array): string {
-  let bin = '';
-
-  for (const byte of bytes) bin += String.fromCharCode(byte);
-
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
 export function randomToken(bytes: number): string {

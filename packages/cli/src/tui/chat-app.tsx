@@ -52,7 +52,7 @@ import { openBrowser } from '../commands/auth';
 import { StatusBar } from './status-bar';
 import { MessageList, type DisplayMessage } from './messages';
 import { createHostShell } from '@kinu.run/cli-backend';
-import type { TurnMeter } from './overlays';
+import type { TurnMeter } from '@kinu.run/core/tui';
 import {
   ChangelogOverlay,
   CommandHintOverlay,

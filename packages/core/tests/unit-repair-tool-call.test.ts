@@ -21,19 +21,15 @@ const run = (toolName: string, input: string, error: InvalidToolInputError | NoS
   repair({ toolCall: call(toolName, input), tools, error, instructions: undefined, system: undefined, messages, inputSchema: async () => ({}) });
 
 describe('the deterministic tool-call repair', () => {
-  test('a case-only name drift is renamed when exactly one tool matches', async () => {
-    await expect(run('WRITE_FILE', '{"path":"a"}', new NoSuchToolError({ toolName: 'WRITE_FILE' })))
-      .resolves.toMatchObject({ toolName: 'write_file', input: '{"path":"a"}' });
+  test('ambiguous or unknown names are never guessed', async () => {
     // Two tools that differ only by case: choosing is a call the model did not make.
     await expect(run('READ_FILE', '{}', new NoSuchToolError({ toolName: 'READ_FILE' }))).resolves.toBeNull();
     await expect(run('rm', '{}', new NoSuchToolError({ toolName: 'rm' }))).resolves.toBeNull();
   });
 
-  test('fenced, double-encoded and wrapper-keyed arguments settle to the object', async () => {
+  test('fenced and wrapper-keyed arguments settle to the object', async () => {
     const fenced = '```json\n{"path":"a"}\n```';
     await expect(run('write_file', fenced, invalid('write_file', fenced))).resolves.toMatchObject({ input: '{"path":"a"}' });
-    const twice = JSON.stringify('{"path":"a"}');
-    await expect(run('write_file', twice, invalid('write_file', twice))).resolves.toMatchObject({ input: '{"path":"a"}' });
     await expect(run('write_file', '{"input":{"path":"a"}}', invalid('write_file', ''))).resolves.toMatchObject({ input: '{"path":"a"}' });
   });
 

@@ -83,19 +83,20 @@ function strictlyDominates(
   return strictlyGreaterSomewhere;
 }
 
-/** Weight = number of instances on which the candidate is tied-best; off-front candidates get 0. */
+/** Weight: the instances where a candidate is tied-best; 0 off the front. */
 export function parentSelectionWeights(
   pool: ReadonlyArray<GepaCandidate>,
   instanceIds: ReadonlyArray<string>,
 ): Map<GepaCandidate, number> {
-  const { perInstanceBest } = computeParetoFront(pool, instanceIds);
+  const { front, perInstanceBest } = computeParetoFront(pool, instanceIds);
+  const onFront = new Set(front);
   const weights = new Map<GepaCandidate, number>();
 
   for (const cand of pool) weights.set(cand, 0);
 
   for (const bests of perInstanceBest.values()) {
     for (const c of bests) {
-      weights.set(c, (weights.get(c) ?? 0) + 1);
+      if (onFront.has(c)) weights.set(c, (weights.get(c) ?? 0) + 1);
     }
   }
 
@@ -120,12 +121,14 @@ export function sampleParentByWeight(
     return bestAggregate(pool);
   }
 
+  // Half-open [start, start + w): a draw of 0 lands on the first weighted candidate.
   let r = random() * total;
 
   for (const [cand, w] of weights) {
-    r -= w;
+    if (w === 0) continue;
 
-    if (r <= 0) return cand;
+    if (r < w) return cand;
+    r -= w;
   }
 
   return bestAggregate(pool);

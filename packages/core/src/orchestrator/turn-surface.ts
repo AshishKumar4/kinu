@@ -137,7 +137,7 @@ async function admitTurnSkills(
   };
 }
 
-/** The trusted active skills' allowed_tools union (KINU-N028), `eval` included; null when empty. */
+/** Trusted active skills' allowed_tools union, `eval` included; null when empty. */
 function skillToolBound(activeSkills: ActiveSkillSet | undefined): ((name: string) => boolean) | null {
   if (!activeSkills) return null;
   const allowedUnion = unionAllowedTools(trustedActiveSkills(activeSkills));

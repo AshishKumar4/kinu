@@ -4,8 +4,9 @@ import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver, createTestRuntime, createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import {
-  chatSessionTurns, gatewayWorkspace, orchestratorHarness, rpcReachableFrom, workspaceMainActor,
+  chatSessionTurns, gatewayWorkspace, orchestratorHarness, workspaceMainActor,
 } from './helpers/actor-harness';
+import { rpcReachableFrom } from './helpers/platform-context';
 import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 import { ConversationSearchStore, isAgentRpcMethod } from '@kinu.run/core';
 import {

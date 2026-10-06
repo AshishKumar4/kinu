@@ -5,25 +5,6 @@ import * as v from 'valibot';
 
 const CountSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 
-/** Work one restore did, in the dimensions a readiness claim is checked against.
- *  `serialRemoteOps` counts the remote operations that were unavoidably serial. */
-export const RestoreWorkSchema = v.strictObject({
-  serialRemoteOps: CountSchema,
-  totalRemoteOps: CountSchema,
-  metadataBytes: CountSchema,
-  payloadBytes: CountSchema,
-  cpuSteps: CountSchema,
-  mounts: CountSchema,
-  replayUnits: CountSchema,
-});
-
-export type RestoreWork = v.InferOutput<typeof RestoreWorkSchema>;
-
-export const PublishWorkSchema = v.strictObject({
-  objectsPut: CountSchema,
-  bytesPut: CountSchema,
-  casAttempts: CountSchema,
-});
 
 /** `containerStart` is the first command that answered; a box with no chain skips `storeMount`/`baseAttach`. */
 export type RestorePhase = 'containerStart' | StoragePhase | 'attached' | 'bootId';

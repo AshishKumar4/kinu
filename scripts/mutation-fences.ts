@@ -221,6 +221,36 @@ export interface FenceResult {
   readonly output: string;
 }
 
+/** The CLI's verdict and diagnostics, also exercised without running an isolated suite. */
+export function fenceFindings(result: FenceResult): readonly string[] {
+  const findings: string[] = [];
+
+  if (result.pristineExit !== 0) {
+    findings.push(`  ${result.fence}\n    must:      its owning test pass on the pristine tree\n`
+      + `    found:     exit ${String(result.pristineExit)}\n`
+      + '    silently: a red baseline makes every later comparison meaningless — the\n'
+      + '               owner is broken independently of the fence\n'
+      + '    fix:      repair the owning suite first');
+  }
+
+  if (result.mutantExit === 0) {
+    findings.push(`  ${result.fence}\n    must:      its owning test FAIL once the fence is stripped\n`
+      + '    found:     the mutant passed — the proof has rotted\n'
+      + '    silently: the fence reads load-bearing while no test guards it; the next\n'
+      + '               refactor removes it and nothing notices\n'
+      + '    fix:      restore the owning test\'s red direction, or re-quote the snippet');
+  }
+
+  if (result.mutantExit === null) {
+    findings.push(`  ${result.fence}\n    must:      its owning test FAIL once the fence is stripped\n`
+      + `    found:     the mutant run never settled: ${result.output.slice(0, 400)}\n`
+      + '    silently: a hung or unrunnable owner is indistinguishable from a pass\n'
+      + '    fix:      run the owning suite by hand in an isolated worktree');
+  }
+
+  return findings;
+}
+
 /** Where the isolated copy lives for the duration of one run. */
 function scratchRoot(): string {
   return join(tmpdir(), `kinu-scratch-mutation-fences-${process.pid}`);
@@ -511,28 +541,7 @@ if (import.meta.main) {
   }
 
   for (const result of results) {
-    if (result.pristineExit !== 0) {
-      findings.push(`  ${result.fence}\n    must:      its owning test pass on the pristine tree\n`
-        + `    found:     exit ${String(result.pristineExit)}\n`
-        + '    silently: a red baseline makes every later comparison meaningless — the\n'
-        + '               owner is broken independently of the fence\n'
-        + '    fix:      repair the owning suite first');
-    }
-
-    if (result.mutantExit === 0) {
-      findings.push(`  ${result.fence}\n    must:      its owning test FAIL once the fence is stripped\n`
-        + '    found:     the mutant passed — the proof has rotted\n'
-        + '    silently: the fence reads load-bearing while no test guards it; the next\n'
-        + '               refactor removes it and nothing notices\n'
-        + '    fix:      restore the owning test\'s red direction, or re-quote the snippet');
-    }
-
-    if (result.mutantExit === null) {
-      findings.push(`  ${result.fence}\n    must:      its owning test FAIL once the fence is stripped\n`
-        + `    found:     the mutant run never settled: ${result.output.slice(0, 400)}\n`
-        + '    silently: a hung or unrunnable owner is indistinguishable from a pass\n'
-        + '    fix:      run the owning suite by hand in an isolated worktree');
-    }
+    findings.push(...fenceFindings(result));
   }
 
   if (findings.length > 0) {

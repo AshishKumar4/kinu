@@ -4,7 +4,7 @@ import { chmodSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { scratchDir } from '@kinu.run/test-utils';
+import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -20,8 +20,7 @@ const configHome = () => {
 };
 
 async function runCheck(home: string, fetchExpr: string): Promise<string> {
-  const proc = Bun.spawn({
-    cmd: [process.execPath, '-e', `
+  const { stdout, stderr, exitCode } = await runToExit([process.execPath, '-e', `
       import { runStartupUpdateCheck } from './packages/cli/src/version-check.ts';
       const lines = [];
       const outcome = await runStartupUpdateCheck({
@@ -31,18 +30,10 @@ async function runCheck(home: string, fetchExpr: string): Promise<string> {
         fetchImpl: ${fetchExpr},
       });
       console.log(JSON.stringify({ lines, outcome }));
-    `],
+    `], {
     cwd: repoRoot,
     env: { ...process.env, KINU_HOME: home },
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
-
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
 
   if (exitCode !== 0) throw new Error(`script failed (${exitCode}): ${stderr}`);
 

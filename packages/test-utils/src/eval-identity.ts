@@ -113,9 +113,10 @@ export type EvalTargetVerdict =
   | { readonly kind: 'allowed'; readonly origin: string; readonly why: EvalTargetReason }
   | { readonly kind: 'refused'; readonly origin: string; readonly reason: string };
 
-export function evalTargetVerdict(origin: string): EvalTargetVerdict {
+/** Unset selects the deployment default; an explicitly blank target is refused. */
+export function evalTargetVerdict(origin: string | undefined): EvalTargetVerdict {
   return settleSync(Effect.gen(function* () {
-    const normalized = origin.trim().replace(/\/+$/, '');
+    const normalized = (origin ?? EVAL_DEPLOYMENT_ORIGIN).trim().replace(/\/+$/, '');
 
     if (!normalized) {
       return {
@@ -242,18 +243,20 @@ export type EvalIdentityResolution =
 /** The eval-service identity for this environment. `absent` is not an error; a disallowed target is. */
 export function resolveEvalIdentity(env: EnvSource = ambientByName(Object.values(EVAL_IDENTITY_ENV))): EvalIdentityResolution {
   const token = env[EVAL_IDENTITY_ENV.token]?.trim();
-  const origin = env[EVAL_IDENTITY_ENV.origin]?.trim() ?? EVAL_DEPLOYMENT_ORIGIN;
+  const verdict = evalTargetVerdict(env[EVAL_IDENTITY_ENV.origin]);
+
+  if (verdict.kind === 'refused' && verdict.origin === '') {
+    return { kind: 'refused', reason: verdict.reason };
+  }
 
   if (!token) {
     return {
       kind: 'absent',
-      reason: `no eval credential. Sign the isolated ${EVAL_SERVICE_ACCOUNT} session into ${origin} `
+      reason: `no eval credential. Sign the isolated ${EVAL_SERVICE_ACCOUNT} session into ${verdict.origin} `
         + `or export ${EVAL_IDENTITY_ENV.token}: a person's signed-in session is never borrowed, `
         + 'so without it every live suite skips.',
     };
   }
-
-  const verdict = evalTargetVerdict(origin);
 
   if (verdict.kind === 'refused') {
     return { kind: 'refused', reason: verdict.reason };

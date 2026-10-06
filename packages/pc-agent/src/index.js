@@ -290,7 +290,7 @@ function rpc(ws, id, result, error) {
 
 // BEGIN GENERATED from packages/core/src/checkpoints/format.ts by `bun scripts/daemon-checkpoint-format.ts`. Do not edit.
 
-// Shadow-git store format for both engines; the daemon carries it generated (`scripts/daemon-checkpoint-format.ts`).
+// Shadow-git store format; the daemon carries a generated copy.
 
 const DEFAULT_CHECKPOINT_KEEP = 50;
 
@@ -370,7 +370,7 @@ function diagnoseStaging(stderr) {
   };
 }
 
-/** `code` null: git never finished (a signal, an overfull buffer), so its index is partial whatever it printed. */
+/** `code` null: git never finished, so its index is partial whatever it printed. */
 function stagingOutcome(code, stderr) {
   if (code === null) return { failure: 'checkpoint staging failed: git add did not finish' };
   const diagnosis = diagnoseStaging(stderr);

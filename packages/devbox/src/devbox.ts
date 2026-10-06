@@ -8,6 +8,7 @@ import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesO
 import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
 import { STORE_MOUNT, chainStoreRoot, storeObjectUrl } from './store-gateway';
 import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
+import { Snapshots } from './snapshots';
 import {
   GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeParts, refreshTools,
   type GoldenAnswer, type GoldenPorts,
@@ -26,12 +27,6 @@ import {
   describeThrown as describe,
   type LateStartFailure,
   incidentRetryDelayMs,
-  createCheckpointLane,
-  createResourceLane,
-  heldUntilDrained,
-  pathScopes,
-  portScope,
-  processScope,
   admissionStep,
   classifyRecovery,
   isTerminalRecovery,
@@ -44,7 +39,6 @@ import {
   type IncidentDisposition,
   type IncidentStage,
   type PortExposureSpec,
-  type ResourceScope,
   type SupervisedProcessSpec,
   openStartBudget, awaitListenerCommand,
   LAST_INTERACTION_KEY,
@@ -58,6 +52,7 @@ import {
   type RestProcess,
   type RunningForRest,
 } from './lifecycle';
+import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, processScope, type ResourceScope } from './operation-lanes';
 import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
@@ -191,23 +186,8 @@ const START_REFUSED_KEY = 'devbox:start-refused';
 
 const DISK_STATE_KEY = 'devbox:disk-chain';
 
-const SNAPSHOT_KEY = 'devbox:snapshot';
-
 /** Where the box stamps the container's identity: on the disk a replacement does not keep (P1). */
 const BOOT_ID_PATH = '/tmp/devbox-boot-id';
-
-const DEAD_SNAPSHOTS_KEY = 'devbox:dead-snapshots';
-
-/** Durable: a rest after an eviction still knows the parent. */
-const WOKE_FROM_KEY = 'devbox:woke-from';
-
-/** `lineage`: ancestors, root first; `rootTakenAt` ages the lineage (D65). */
-const SnapshotRecord = v.object({
-  id: v.string(), image: v.string(), chainRev: v.number(), takenAt: v.number(), lineage: v.optional(v.array(v.string()), []),
-  rootTakenAt: v.optional(v.number()),
-});
-
-const SNAPSHOT_LIFE_MS = 29 * 24 * 60 * 60 * 1000;
 
 const NO_START_IMAGE = 'no image to start: name it `devbox` in the container `images` map';
 
@@ -319,7 +299,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #storage: DevboxStorage | undefined;
 
   #started: StartSource = { kind: 'image' };
-  #sweeping: Promise<void> | undefined;
+  #snapshotOwner: Snapshots | undefined;
   #gateRestore: Flight | undefined;
   /** Fences every write below: an abandoned startup continuation keeps running, and must
    *  re-check this token after every await or it can clear its successor's single-flight entry. */
@@ -695,22 +675,23 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
   }
 
-  #wakeSnapshot(): string | undefined {
-    const held = v.safeParse(SnapshotRecord, this.ctx.storage.kv.get(SNAPSHOT_KEY));
-    const chain = v.safeParse(DiskChainStateSchema, this.ctx.storage.kv.get(DISK_STATE_KEY));
+  get #snapshots(): Snapshots {
+    return this.#snapshotOwner ??= new Snapshots({
+      kv: this.ctx.storage.kv,
+      base: () => this.containerImage ?? '',
+      chainRev: () => {
+        const chain = v.safeParse(DiskChainStateSchema, this.ctx.storage.kv.get(DISK_STATE_KEY));
 
-    if (!held.success || held.output.image !== this.#base() || Date.now() - (held.output.rootTakenAt ?? held.output.takenAt) > SNAPSHOT_LIFE_MS) return undefined;
-
-    return chain.success && chain.output.rev > held.output.chainRev ? undefined : held.output.id;
-  }
-
-  #base(): string {
-    return this.peers === undefined ? this.containerImage ?? '' : GOLDEN_BASE;
+        return chain.success ? chain.output.rev : undefined;
+      },
+      take: () => this.#container().snapshotContainer({ name: `${this.ctx.id.toString()}-${String(Date.now())}` }),
+      registry: () => this.snapshotRegistry,
+    });
   }
 
   /** Its own snapshot, else the golden (or the image, with no builder), else wait to be told (D65). */
   async #startSource(lost?: string): Promise<StartSource | { readonly kind: 'pending'; readonly reason: string }> {
-    const own = lost === undefined ? this.#wakeSnapshot() : undefined;
+    const own = lost === undefined ? this.#snapshots.wake() : undefined;
 
     if (own !== undefined) return { kind: 'own', id: own };
 
@@ -723,7 +704,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #startFrom(container: Container, inputs: StartInputs, source: StartSource): void {
     this.#started = source;
     this.#awaitingGolden = undefined;
-    this.ctx.storage.kv.put(WOKE_FROM_KEY, source.kind === 'own' ? source.id : '');
+    this.#snapshots.started(source.kind === 'own' ? source.id : undefined);
     const from = source.kind === 'image' ? { image: inputs.image } : { containerSnapshot: { id: source.id } };
     const entrypoint = this.peers === undefined ? undefined : GOLDEN_ENTRYPOINT;
 
@@ -746,8 +727,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       await this.#awaitContainerStopped();
 
       if (golden === undefined) {
-        this.#supersede(SNAPSHOT_KEY);
-        unawaited(this.#sweepSnapshots(), 'sweeping dead snapshots');
+        this.#snapshots.supersede();
+        unawaited(this.#snapshots.sweep(), 'sweeping dead snapshots');
       }
 
       const next = await this.#startSource(golden);
@@ -766,45 +747,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return true;
   }
 
-  #supersede(key: string): void {
-    const held = v.safeParse(SnapshotRecord, this.ctx.storage.kv.get(key));
-
-    if (!held.success) return;
-    this.#bury([...held.output.lineage, held.output.id]);
-    this.ctx.storage.kv.delete(key);
-  }
-
-  #bury(ids: readonly string[]): void {
-    this.ctx.storage.kv.put(DEAD_SNAPSHOTS_KEY, [...new Set([...this.#deadSnapshots(), ...ids])]);
-  }
-
-  #deadSnapshots(): readonly string[] {
-    const dead = v.safeParse(v.array(v.string()), this.ctx.storage.kv.get(DEAD_SNAPSHOTS_KEY));
-
-    return dead.success ? dead.output : [];
-  }
-
-  /** Never throws; a refusal is logged and asked again next sweep. */
-  #sweepSnapshots(): Promise<void> {
-    return this.#sweeping ??= this.#sweepOnce().finally(() => { this.#sweeping = undefined; });
-  }
-
-  async #sweepOnce(): Promise<void> {
-    const registry = this.snapshotRegistry;
-
-    if (registry === undefined) return;
-
-    for (const id of this.#deadSnapshots()) {
-      const outcome = await registry.delete(id);
-
-      if (outcome.kind === 'refused') {
-        console.error(`[devbox] the dead snapshot ${id} was not deleted: ${outcome.reason}`);
-        continue;
-      }
-
-      this.ctx.storage.kv.put(DEAD_SNAPSHOTS_KEY, this.#deadSnapshots().filter(dead => dead !== id));
-    }
-  }
 
   /** Joins a re-entered hook; adopts a settled boot without re-attaching. */
   async #restoreInStartGate(): Promise<void> {
@@ -1688,7 +1630,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   protected get containerImage(): string | undefined {
-    return this.ctx.container?.images['devbox'];
+    return this.peers === undefined ? this.ctx.container?.images['devbox'] : GOLDEN_BASE;
   }
 
   protected get defaultSize(): BoxSize {
@@ -2130,7 +2072,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#invalidateGeneration();
     await this.#stopContainer();
     await this.#awaitContainerStopped();
-    await this.#sweepSnapshots();
+    await this.#snapshots.sweep();
 
     return outcome;
   }
@@ -2138,26 +2080,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** A box with no store keeps nothing past a rest, its snapshot included. */
   async #restSnapshot(): Promise<void> {
     if (this.store === undefined) return;
-    const [taken] = await Promise.allSettled([this.#takeRestSnapshot()]);
+    const [taken] = await Promise.allSettled([this.#snapshots.save()]);
 
     if (taken.status === 'rejected') await this.#record('quiesce', `the rest took no snapshot, so the next wake recovers from the backup: ${describe({ cause: taken.reason })}`);
   }
 
-  /** After an image start the new snapshot is a root, and the old lineage is dead. */
-  async #takeRestSnapshot(): Promise<void> {
-    const chain = v.safeParse(DiskChainStateSchema, this.ctx.storage.kv.get(DISK_STATE_KEY));
-    const held = v.safeParse(SnapshotRecord, this.ctx.storage.kv.get(SNAPSHOT_KEY));
-    const parent = held.success && held.output.id === this.ctx.storage.kv.get(WOKE_FROM_KEY) ? held.output : undefined;
-    const snapshot = await this.#container().snapshotContainer({ name: `${this.ctx.id.toString()}-${String(Date.now())}` });
-
-    const takenAt = Date.now();
-
-    if (parent === undefined) this.#supersede(SNAPSHOT_KEY);
-    this.ctx.storage.kv.put(SNAPSHOT_KEY, {
-      id: snapshot.id, image: this.#base(), chainRev: chain.success ? chain.output.rev : 0, takenAt,
-      lineage: parent === undefined ? [] : [...parent.lineage, parent.id], rootTakenAt: parent === undefined ? takenAt : parent.rootTakenAt ?? parent.takenAt,
-    });
-  }
 
   /** An in-flight restore writes nothing durable after this, and no tick publishes after the
    *  discard; a stopped box never starts an instance to clean. */
@@ -2165,7 +2092,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(attempt('io', async () => {
       this.#invalidateGeneration();
       await this.#requireStorage().discard();
-      await this.#sweepSnapshots();
+      await this.#snapshots.sweep();
       // The attach evidence describes the discarded bytes, so it is deleted with them.
       await this.ctx.storage.delete(LAST_ATTACH_KEY);
     }));
@@ -2380,7 +2307,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           ?? await this.ctx.storage.get<number>(LAST_INTERACTION_KEY),
         quietSince: await this.ctx.storage.get<number>(QUIET_SINCE_KEY),
         chain: parsedOrNull(DiskChainStateSchema, this.ctx.storage.kv.get<StoredValue>(DISK_STATE_KEY)),
-        snapshot: parsedOrNull(SnapshotRecord, this.ctx.storage.kv.get<StoredValue>(SNAPSHOT_KEY)),
+        snapshot: this.#snapshots.record,
         lastAttach: await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY),
         lastTick: await this.ctx.storage.get<HeartbeatTick>(LAST_TICK_KEY),
         bootId: await this.ctx.storage.get<string>(BOOT_ID_KEY),
@@ -2833,7 +2760,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       recovered: async (restoredTo) => { await this.#record('recovered', recoveryNotice(restoredTo, this.archiveExcludes)); },
       discard: async () => {
         this.ctx.storage.kv.delete(DISK_STATE_KEY);
-        this.#supersede(SNAPSHOT_KEY);
+        this.#snapshots.supersede();
 
         // R2 pages at 1,000, refuses an empty delete (D64).
         for (let listed = await store.bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/` }); listed.objects.length > 0;) {

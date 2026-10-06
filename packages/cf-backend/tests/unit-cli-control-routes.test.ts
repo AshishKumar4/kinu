@@ -17,7 +17,9 @@ import { ownedByAnotherAccount } from '../src/user/workspace-ownership';
 // `agents` reaches `cloudflare:email`: mock first, then the harness.
 mockAgentsSdk();
 
-const { orchestratorHarness, stubOf } = await import('./helpers/actor-harness');
+const { orchestratorHarness } = await import('./helpers/actor-harness');
+
+const { stubOf } = await import('./helpers/platform-context');
 
 const cli = serveFamily(cliRoutes);
 

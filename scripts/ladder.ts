@@ -39,13 +39,13 @@ import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline, writeFully 
 import { recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
-  CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
+  CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, storeAt, toolVersions,
 } from './ladder-cache';
-import type { GateCacheRequest, Plan } from './ladder-cache';
+import type { GateCacheRequest, Plan, Store, ToolVersions } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
-import type { Inputs } from './ladder-closure';
+import type { Closure, Inputs, Repo } from './ladder-closure';
 import {
   isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching,
   trackedFiles,
@@ -88,6 +88,8 @@ export const HOOKS_DIR = '.githooks';
 
 /**
  * Tier order is containment order: a later tier runs everything before it.
+ * `local` is a lane's commit: the whole-tree static analysis, a few minutes. The test suites wait for `commit`,
+ * which runs on integration merges, where every lane's work meets (owner, 2026-10-06: full checks at merge points).
  * `evals` sits LAST, after `deploy`, and that placement is its meaning:
  * live-model behavioural evidence that no hook, push or deploy waits on. A
  * deploy that ran the evals took over an hour and spent real tokens to ship a
@@ -98,7 +100,7 @@ export const HOOKS_DIR = '.githooks';
  * members, so an entry cannot hide from the deploy by wearing the tier
  * silently.
  */
-export const TIERS = ['commit', 'push', 'ci', 'deploy', 'evals'] as const;
+export const TIERS = ['local', 'commit', 'push', 'ci', 'deploy', 'evals'] as const;
 
 /**
  * The deploy plan still names every required gate (L18, L23). The local machine preflight and account gate run
@@ -242,7 +244,7 @@ export const LADDER: readonly Gate[] = [
       + 'an unrelated filesystem test, which reads as a code regression and is not one. A gate '
       + 'running beside it could report that regression before the preflight had said the '
       + 'machine was unfit to be reported on.',
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.12,
     catches: 'a gate reporting on an environment nobody looked at: exhausted temp '
       + 'inodes, or a stray project marker that makes a checkpoint working directory '
@@ -264,7 +266,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/pattern-inventory.ts',
     label: 'Pattern inventory',
-    tier: 'commit',
+    tier: 'local',
     seconds: 2.5, // Measured 2026-09-23 on the 24-thread box at load 5: 2.50/2.51/2.63 s.
     catches: 'unclassified code-pattern and named scanner candidates in the shared source corpus',
     blind: 'runtime aliases, unnamed scanners, native source and embedded shell language tokens',
@@ -273,7 +275,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run lint',
     label: 'Anti-slop lint',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 21.4 s solo
     // (test:anti-slop under node, then oxlint). Split out of `bun run check`
     // (37 s) so the lint's closure — the anti-slop tool tree and the corpus —
@@ -310,7 +312,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run typecheck',
     label: 'TypeScript projects',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 18 tsc projects
     // sum to 11.9 s solo (largest cf-backend 1.4 s, scripts 1.25 s, core 1.0 s).
     // One row rather than eighteen: every project reads the corpus, so their
@@ -325,7 +327,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:do-init',
     label: 'Durable Object cold start',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.71 s. Replaces 0.1 s.
     seconds: 0.71,
     catches: 'off-object I/O inside a Durable Object `onStart`, which put a pure SELECT '
@@ -337,7 +339,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:duplication',
     label: 'Duplicate implementations',
-    tier: 'commit',
+    tier: 'local',
     // Re-measured 2026-09-05 on the 24-thread box: 1.6/1.6/1.7/1.7s. Replaces 1.1s.
     seconds: 1.7,
     catches: 'a second implementation of an existing function body, including one with '
@@ -349,7 +351,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:reachability',
     label: 'Unreachable RPC surface',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 2.27 s. Replaces 1 s.
     seconds: 2.27,
     catches: 'an @callable RPC no caller reaches — the "correct, wired, dead" class this '
@@ -360,7 +362,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:platform',
     label: 'Platform fact catalog',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.22 s. Replaces 0.07 s.
     seconds: 0.22,
     catches: 'a catalog entry with no evidence label or provenance.',
@@ -370,7 +372,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:egress-interception',
     label: 'Egress interception totality',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.73 s. Replaces 0.1 s.
     seconds: 0.73,
     catches: 'a container class that lost `enableInternet = false` or '
@@ -386,7 +388,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:typecheck-coverage',
     label: 'Typecheck coverage',
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.1,
     catches: 'a directory of tests that no tsconfig `bun run check` runs ever compiles. '
       + 'The root `tests/` directory was in that state: `check` named eight projects and '
@@ -408,7 +410,7 @@ export const LADDER: readonly Gate[] = [
     // COMMIT: a lane that changes a row's command is the one asked to measure it. Until 2026-09-29 only
     // deploy.test.ts (ci) reached `deployPlan()`'s refusal, and b631df84cd's widened chat-scroll row reached the
     // ci tier unmeasured. Measured 2026-09-29 on the 24-thread box at load 1.1: 1.05 s through the ladder's runner.
-    tier: 'commit',
+    tier: 'local',
     seconds: 1.05,
     catches: 'a row the deploy\'s concurrent wave schedules with no measured cost, a figure taken from a run that '
       + 'failed, and a figure kept for a command that is no longer a gate: the three ways the wave admits a row '
@@ -420,7 +422,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:set-equality',
     label: 'Measured set equals governed set',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.63 s. Replaces 0.2 s.
     seconds: 0.63,
     catches: 'a gate that measures a narrower set than the one it governs — the defect that '
@@ -443,7 +445,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:commit-message',
     label: 'Commit message hygiene',
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.1,
     catches: 'a commit message that credits an orchestration subagent as if it were a human '
       + 'reviewer, narrates the session that produced it, or argues with a previous position in '
@@ -484,7 +486,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:install-scripts',
     label: 'Dependency install-script policy',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.05 s. Replaces 0.2 s.
     seconds: 0.05,
     catches: 'a third-party dependency lifecycle script executing on every `bun install` without '
@@ -506,7 +508,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:patch-parity',
     label: 'Committed patches reproduce node_modules',
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.16,
     catches: 'a committed patch that does not reproduce the `node_modules` the suites ran '
       + 'against. Four dependencies are patched, so every green result in this repository stands '
@@ -535,7 +537,7 @@ export const LADDER: readonly Gate[] = [
     // already moved on by push. At 0.34s over the whole corpus (measured
     // 2026-09-23 at load 20) the refusal belongs on the commit that moves the
     // anchor.
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.34,
     catches: 'a refactor that silently unruns a bench task. Each seeded defect is a '
       + 'context diff against source that keeps moving, so renaming or reflowing the code a '
@@ -624,7 +626,7 @@ export const LADDER: readonly Gate[] = [
     // and it is falsified harder here: those two at least go red in the lane's
     // own tree once it runs them, whereas an undeclared edge is INVISIBLE to
     // every suite by construction — resolution succeeds.
-    tier: 'commit',
+    tier: 'local',
     // Three readings 2026-09-10 on the 24-thread box under load 40 (five lanes
     // building concurrently): 5.31/5.49/6.29s, interleaved with
     // `gate:reachability` (declared 2.27, measured 6.27/7.92/8.09) and
@@ -664,7 +666,7 @@ export const LADDER: readonly Gate[] = [
     // artifact. Cost is real and stated rather than hidden: 7.7-9.3s measured
     // against the 3.6s declared when it was cheaper, so the commit tier grows
     // by roughly this plus dead-code's 15s.
-    tier: 'commit',
+    tier: 'local',
     seconds: 9,
     catches: 'a capability that was designed, built, TESTED, and connected to nothing — the '
       + 'class `gate:dead-code` is structurally unable to see, because knip\'s unit of "used" '
@@ -710,7 +712,7 @@ export const LADDER: readonly Gate[] = [
     // passes — the same artifact-travels-to-the-integrator shape that moved
     // `gate:wired` and `gate:dead-code` here. 0.62/0.67/0.75s measured on this
     // tree, 1s declared, the larger rounded up.
-    tier: 'commit',
+    tier: 'local',
     seconds: 1,
     catches: 'a client entry that can reach `@agent-core/core` or `bun:sqlite` '
       + 'through value imports — the edge that blanks `bun run dev` while the '
@@ -730,7 +732,7 @@ export const LADDER: readonly Gate[] = [
     // a parked step with one, 4.8 MB without). A literal written in any lane
     // widens every request that carries it. 2.13/2.24/2.45s measured on this
     // tree under a test run's load, 3s declared, the larger rounded up.
-    tier: 'commit',
+    tier: 'local',
     seconds: 3,
     catches: 'a string or template literal above U+00FF in product source, or a '
       + 'line of a Markdown prompt asset, outside the two renderers: modules a '
@@ -746,7 +748,7 @@ export const LADDER: readonly Gate[] = [
     // COMMIT. 40 of core's 42 directories are one import cycle, so no package
     // split can start; this declares the three layers and locks today's 177
     // upward edges shrink-only. 0.43s measured, 1s declared.
-    tier: 'commit',
+    tier: 'local',
     seconds: 1,
     catches: 'a new import inside packages/core that points from platform to '
       + 'tools or harness, or from tools to harness — one more edge in the cycle '
@@ -765,7 +767,7 @@ export const LADDER: readonly Gate[] = [
     // vendor's `assistant_messages` failed every hosted workspace at once on
     // 2026-09-11, on the same tree every unit test had seeded from Kinu's own
     // copy of the DDL. Measured 2026-09-12: 0.80/0.80/0.82s; 1s declared.
-    tier: 'commit',
+    tier: 'local',
     seconds: 1,
     catches: 'a Kinu statement over a vendor table whose columns the vendor '
       + 'does not declare — read, write or JOIN — and a Kinu CREATE TABLE that '
@@ -834,7 +836,7 @@ export const LADDER: readonly Gate[] = [
     // COMMIT: at push, lanes had already committed functions over the line
     // (2026-09-23). Measured that day on the 24-thread box at load 5 over 2,575
     // files and 63,573 functions: 2.44/2.50/2.54 s.
-    tier: 'commit',
+    tier: 'local',
     seconds: 2.5,
     catches: 'a new function at the hard end of this codebase, arriving unnamed. The budget is '
       + 'MEASURED rather than chosen: cyclomatic complexity for every function in the '
@@ -858,7 +860,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:silent-drop',
     label: 'Silently dropped failures',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-23 on the 24-thread box at load 5: 0.98/1.00/1.03 s.
     seconds: 1,
     catches: 'a failure destroyed in one of the six ways the four no-swallow lint rules are '
@@ -876,7 +878,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:test-clocks',
     label: 'Wall-clock waits in tests',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-23 on the 24-thread box at load 5: 1.41/1.44/1.46 s over
     // 1,248 test files, one oxc parse each.
     seconds: 1.5,
@@ -924,7 +926,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/schema-drift.ts',
     label: 'Schema drift',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-01, three runs: 0.47/0.52/0.44s over 863 enumerated
     // product files, 71 parsed, 118 tables. It was a PUSH gate at 2s while it
     // asked git for each table's origin on every run; the genesis lock replaced
@@ -949,7 +951,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/gen-cli-docs.ts --check',
     label: 'CLI reference is current',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-26 on the 24-thread box, three runs: 0.30/0.30/0.30 s, 134 MB.
     // The commit tier is where this belongs: the reference is rendered from the command
     // registry, and the drift is written in the same hunk as the option. Checked only in
@@ -1572,7 +1574,7 @@ export const LADDER: readonly Gate[] = [
     // substrate. Not one of their names starts with
     // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
     // tier: 89 tests that ran in no pipeline.
-    run: 'bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-e2e.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-container-tier.test.ts',
     label: 'Benchmark harness guarantees',
     tier: 'ci',
     // 7.00s: 221 tests over 15 files, median of 7.00 / 7.71 / 6.86 on the
@@ -1856,7 +1858,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:capability-parity',
     label: 'Cross-backend capability parity',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box: 1.5/1.6/1.6/1.7/1.8s. Replaces 1.2s.
     seconds: 1.7,
     catches: 'the two shapes of backend divergence. A core contract whose optional '
@@ -1988,7 +1990,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:scratch-ownership',
     label: 'Test scratch ownership',
-    tier: 'commit',
+    tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.42 s. Replaces 1.3 s.
     seconds: 0.42,
     catches: 'a suite that mints a temp directory and never removes it, at the mint site. '
@@ -2009,7 +2011,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:agents-fields',
     label: 'Agents action/field relation',
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.34,
     catches: 'a field of the `agents` tool that the handler reads and nothing declares, or '
       + 'declares and nothing reads. The input was one flat `v.object`, and valibot\'s '
@@ -2037,7 +2039,7 @@ export const LADDER: readonly Gate[] = [
     label: 'Comment budget',
     // Measured 2026-09-22 on the 24-thread box: 0.46/0.52/0.73s wall, 417 MB
     // peak, over 1,081 files. It reads oxc's comment list only, never the AST.
-    tier: 'commit',
+    tier: 'local',
     seconds: 0.6,
     catches: 'comment growth in a package. The owner capped comments after the census measured '
       + 'them at 41% of the non-whitespace characters in product source (4,906,181 at '
@@ -2081,7 +2083,7 @@ export const LADDER: readonly Gate[] = [
     label: 'Error-model ratchet',
     // Measured 2026-09-23 on the 24-thread box under load 29: 1.30/1.32/1.35s
     // wall, 690 MB peak, over 1,087 files. One AST walk per product file.
-    tier: 'commit',
+    tier: 'local',
     seconds: 1.4,
     catches: 'a legacy failure mechanism growing while the Effect migration removes them: a '
       + '`throw`, a `catch`, a promise rejection handler, an `{ ok }` or `{ success }` literal '
@@ -2450,6 +2452,20 @@ export const LADDER: readonly Gate[] = [
       + 'model makes the calls a case names when asked in plain words: that is the evals\' '
       + 'question, a pass rate per model.',
     inputs: { kind: 'live', why: 'drives the DEPLOYED build with real machines, a real browser and the scripted model\'s Worker.' },
+  },
+  {
+    run: 'bun run gate:devbox-e2e',
+    label: 'Devbox contracts on real golden containers',
+    shared: 'browser',
+    phase: 'post-publish',
+    alone: 'uses the staging eval identity on its own throwaway Worker, application, bucket and boxes; the browser lane owns its desktop client.',
+    tier: 'deploy',
+    // 2026-10-06, dc20261006045352da6d8: 17 contracts and verified cleanup, 370 s whole run (D72).
+    seconds: 370,
+    catches: 'tools and FUSE missing from the real golden; lost exec bytes, unsafe process kills or trust; a broken desktop click; '
+      + 'snapshot and R2 recovery data loss, whole-file deltas, failed compaction, serial mounts and disk-pressure failures.',
+    blind: 'long snapshot lifetime, account saturation, the model path, and a product adapter no contract drives. No Docker image is built or started.',
+    inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },
   },
   {
     run: 'bash scripts/product-flows-tier.sh',
@@ -2932,6 +2948,8 @@ export const CI_EXEMPT = {
     + 'build, and pointing it at the previous one would report the last deploy\'s product under '
     + "this pull request's name. It also creates workspaces, links real machines and spends "
     + 'model calls on a shared account, none of which belongs on a pull request.',
+  'bun run gate:devbox-e2e':
+    'needs staging eval authority and a Cloudflare session to create and remove throwaway real containers, R2 and snapshots; no pull request holds those credentials.',
   'bash scripts/product-flows-tier.sh':
     'has nothing to run against at CI: its subject is the deployment that just went up, as the '
     + 'eval identity, whose secret no pull request holds.',
@@ -3047,6 +3065,67 @@ export function changedTestGate(gate: Gate, ref: string, tracked: readonly strin
   if (argv?.[0] === 'vitest') return { ...gate, run: gate.run + ' --changed=' + ref + ' --passWithNoTests' };
 
   return undefined;
+}
+
+export interface TestProof {
+  readonly file: string;
+  readonly argv: readonly string[];
+  readonly request: GateCacheRequest;
+  readonly plan: Exclude<Plan, { readonly kind: 'uncacheable' }>;
+}
+
+/** A changed hook caches complete test files, never a native selection that may execute no tests. */
+export function testFileProofs(gate: Gate, repo: Repo, tools: ToolVersions, store: Store): TestProof[] | undefined {
+  if (gate.inputs.kind === 'live') return undefined;
+  const contents = new Map<string, string>();
+
+  const snapshot: Repo = { ...repo, read: (file) => {
+    const stored = contents.get(file);
+
+    if (stored !== undefined) return stored;
+    const source = repo.read(file);
+    contents.set(file, source);
+
+    return source;
+  } };
+
+  const run = gate.run.split(/\s+/).filter((word) => !word.startsWith('--changed=') && word !== '--passWithNoTests').join(' ');
+  const full = deriveClosure(run, gate.inputs, snapshot);
+
+  if (full.kind !== 'derived') return undefined;
+  const inputs: Inputs = { ...gate.inputs, env: full.env, corpus: full.corpus || gate.inputs.corpus };
+  const files = repo.claims(run);
+
+  if (files.length === 0) return undefined;
+  const proofs: TestProof[] = [];
+
+  for (const file of files) {
+    const argv = narrowedTo(run, file, repo.files);
+
+    if (argv === undefined || !((argv[0] === 'bun' && argv[1] === 'test') || argv[0] === 'vitest')) return undefined;
+
+    if (argv[0] === 'bun' && !argv.includes('--isolate')) argv.splice(2, 0, '--isolate');
+
+    const withoutImports: Inputs = { ...inputs, imports: undefined };
+    const fileInputs = deriveClosure(argv.join(' '), withoutImports, snapshot).kind === 'derived' ? withoutImports : inputs;
+    const request: GateCacheRequest = { run: argv.join(' '), inputs: fileInputs, repo: snapshot, tools, store };
+    const plan = planGate(request);
+
+    if (plan.kind === 'uncacheable') return undefined;
+    proofs.push({ file, argv, request, plan });
+  }
+
+  const prefix = proofs[0]?.argv.slice(0, -1).join(' ');
+
+  if (!proofs.every((proof) => proof.argv.slice(0, -1).join(' ') === prefix)) return undefined;
+
+  if (proofs.some((proof) => proof.plan.kind === 'hit')) {
+    const after = deriveClosure(run, gate.inputs, repo);
+
+    if (after.kind !== 'derived' || keyFor({ run, closure: full, repo: snapshot, tools }) !== keyFor({ run, closure: after, repo, tools })) return undefined;
+  }
+
+  return proofs;
 }
 
 /**
@@ -3383,13 +3462,37 @@ function printMatrix(): void {
 function recordProof(
   plan: Extract<Plan, { kind: 'miss' }>,
   gate: GateCacheRequest,
-  result: { readonly seconds: number; readonly revision: string },
+  result: { readonly seconds: number; readonly revision: string; readonly execution?: string },
 ): boolean {
   const refused = recordGreen(plan, gate, result);
 
   if (refused !== undefined) console.log(`      not recorded: ${refused}`);
 
   return refused === undefined;
+}
+
+function recordTestFiles(
+  proofs: readonly TestProof[], repo: Repo,
+  result: { readonly execution: string; readonly seconds: number; readonly revision: string },
+): boolean {
+  const recorded = proofs.filter((proof) => proof.plan.kind === 'miss').map((proof) => {
+    if (proof.plan.kind !== 'miss') return true;
+
+    return recordProof(proof.plan, { ...proof.request, repo }, result);
+  });
+
+  return recorded.every(Boolean);
+}
+
+function cacheRunEnvironment(closure: Closure, argv: readonly string[]): ReturnType<typeof gateEnvironment> | undefined {
+  if (closure.kind !== 'derived') return undefined;
+  const env = gateEnvironment(closure);
+
+  if (argv.some((word) => word.startsWith('--changed=')) && closure.env.includes('KINU_WORKER_SOURCE_INPUTS')) {
+    env.KINU_WORKER_SOURCE_INPUTS = JSON.stringify(closure.corpus ? ['**/*'] : closure.files);
+  }
+
+  return env;
 }
 
 /** The scratch drive's temp root on the owner's box (AGENTS.md, Owner Preferences): unset, TMPDIR is the /tmp RAM
@@ -3730,7 +3833,7 @@ if (import.meta.main) {
   const deployPhase = phaseAsked === undefined || deployPhases.length !== phasesAsked.length ? undefined : deployPhases;
   const flag = process.argv.find((argument) => argument.startsWith('--tier='));
 
-  const asked = selectedGate === undefined && phaseAsked === undefined
+  const asked = (selectedGate === undefined || changedFrom !== undefined) && phaseAsked === undefined
     ? flag?.slice('--tier='.length) ?? (changedFrom === undefined ? undefined : 'commit')
     : 'deploy';
 
@@ -3764,7 +3867,7 @@ if (import.meta.main) {
   const changedByRun = new Map<string, Gate>();
 
   if (changedFrom !== undefined) {
-    for (const gate of tierRun('ci').filter((row) => (row.phase ?? 'source') === 'source')) {
+    for (const gate of tierRun('ci').filter((row) => (row.phase ?? 'source') === 'source' && (selectedGate === undefined || row.run === selectedGate.run))) {
       const selected = changedTestGate(gate, changedFrom, tracked);
 
       if (selected !== undefined) changedByRun.set(gate.run, selected);
@@ -3853,7 +3956,7 @@ if (import.meta.main) {
   // quiet one. A derived gate runs under exactly the environment its key
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
-  const caching = changedFrom === undefined && ciPart === undefined && !process.argv.includes('--no-cache');
+  const caching = cacheEnabled({ changedFrom, ciPart, noCache: process.argv.includes('--no-cache') });
   const tools = toolVersions(root);
   const store = storeAt(defaultStoreDirectory());
   const revision = fullRevision();
@@ -3866,10 +3969,23 @@ if (import.meta.main) {
   const notes = new Set<string>();
 
   // A gate's cache lookup, its header, and what the run needs; hits are settled here, in order.
-  const pending: { readonly index: number; readonly gate: Gate; readonly plan: ReturnType<typeof planGate> | undefined; readonly closure: ReturnType<typeof deriveClosure> }[] = [];
+  const pending: { readonly index: number; readonly gate: Gate; readonly plan: ReturnType<typeof planGate> | undefined;
+    readonly closure: ReturnType<typeof deriveClosure>; readonly proofs?: readonly TestProof[]; readonly argv?: readonly string[] }[] = [];
 
   for (const [index, gate] of gates.entries()) {
-    const plan = caching ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
+    const nativeChanged = changedFrom !== undefined && gate.run.split(/\s+/).some((word) => word.startsWith('--changed='));
+    const proofs = caching && nativeChanged ? testFileProofs(gate, repo, tools, store) : undefined;
+    const missing = proofs?.filter((proof) => proof.plan.kind === 'miss');
+
+    if (proofs !== undefined && missing?.length === 0) {
+      console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
+      console.log(`skip  ${gate.run}  hit ${String(proofs.length)} complete test-file proofs`);
+      skipped.push(gate.run);
+      continue;
+    }
+
+    const argv = missing === undefined ? undefined : [...(missing[0]?.argv.slice(0, -1) ?? []), ...missing.flatMap((proof) => proof.argv.slice(-1))];
+    const plan = caching && !nativeChanged ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
 
     if (plan?.kind === 'hit') {
       console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
@@ -3881,7 +3997,8 @@ if (import.meta.main) {
       continue;
     }
 
-    pending.push({ index, gate, plan, closure: plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo) });
+    pending.push({ index, gate, plan, proofs, argv,
+      closure: plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo) });
   }
 
   // THE WAVE. With more than one gate to run, a tier or a deploy phase admits them through `tierWave` (the measured
@@ -3948,9 +4065,17 @@ if (import.meta.main) {
   };
 
   const runPending = async (entry: (typeof pending)[number]): Promise<void> => {
-    const { index, gate, plan, closure } = entry;
+    const { index, gate, plan, closure, proofs } = entry;
     const header = `\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`;
     const lines: string[] = [];
+
+    if (proofs !== undefined) {
+      lines.push(`      file cache: ${String(proofs.filter((proof) => proof.plan.kind === 'hit').length)} hit, `
+        + `${String(proofs.filter((proof) => proof.plan.kind === 'miss').length)} complete file(s) to run`);
+    } else if (changedFrom !== undefined && gate.run.split(/\s+/).some((word) => word.startsWith('--changed='))) {
+      lines.push('      never cached: native changed selection has no complete per-file closure');
+      uncached.push(`${gate.run} — native changed selection has no complete per-file closure`);
+    }
 
     if (plan?.kind === 'uncacheable') {
       lines.push(`      never cached: ${plan.closure.why}`);
@@ -3969,13 +4094,9 @@ if (import.meta.main) {
     if (!concurrent) console.log([header, ...lines].join('\n'));
 
     const timingPath = resolve(root, 'bench-artifacts/ci/file-' + String(index) + '.json');
-    const argv = rowArgv(gate, tracked, deployPhase !== undefined, ciPart === undefined ? undefined : timingPath);
+    const argv = entry.argv === undefined ? rowArgv(gate, tracked, deployPhase !== undefined, ciPart === undefined ? undefined : timingPath) : [...entry.argv];
 
-    const env = closure.kind === 'derived' ? gateEnvironment(closure) : undefined;
-
-    if (changedFrom !== undefined && closure.kind === 'derived' && env !== undefined && closure.env.includes('KINU_WORKER_SOURCE_INPUTS')) {
-      env.KINU_WORKER_SOURCE_INPUTS = JSON.stringify(closure.corpus ? ['**/*'] : closure.files);
-    }
+    const env = cacheRunEnvironment(closure, argv);
 
     // Under the row's own silence bound: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
@@ -3997,6 +4118,14 @@ if (import.meta.main) {
     }
 
     if (reportOutcome(gate, outcome)) {
+      if (proofs !== undefined) {
+        const after = repoAt(root, (run, files) => claims(run, files));
+
+        if (recordTestFiles(proofs, after, { execution: argv.join(' '), seconds, revision })) recorded.push(gate.run);
+
+        return;
+      }
+
       // Only a miss re-enumerates the tree: `recordGreen` re-derives the
       // closure from what is on disk NOW, and no other path reads it.
       const proofRecorded = plan?.kind === 'miss' && recordProof(

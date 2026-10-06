@@ -25,3 +25,26 @@ export function processResult(work: Promise<{ stdout: string; stderr: string; ex
     },
   };
 }
+
+/** The native pipe boundary backed by a real Linux process, with caller env over inherited env. */
+export const pipeExec: Container['exec'] = async (argv, options) => {
+  const child = Bun.spawn(argv, { cwd: options?.cwd, env: { ...process.env, ...options?.env }, stdout: 'pipe', stderr: 'pipe' });
+
+  return {
+    isPty: false,
+    resize: () => { throw new Error('the pipe test cannot resize a PTY'); },
+    stdin: null,
+    stdout: child.stdout,
+    stderr: child.stderr,
+    pid: child.pid,
+    exitCode: child.exited,
+    output: async () => {
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(child.stdout).arrayBuffer(), new Response(child.stderr).arrayBuffer(), child.exited,
+      ]);
+
+      return { stdout, stderr, exitCode };
+    },
+    kill: signal => { child.kill(signal); },
+  };
+};

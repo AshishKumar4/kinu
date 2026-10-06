@@ -29,7 +29,6 @@ export interface GitHubRefresh {
 /** `owner/name`, never a path step. */
 const RepoName = v.pipe(v.string(), v.maxLength(200), v.regex(/^[\w.-]+\/[\w.-]+$/), v.check((repo) => !repo.split('/').some((part) => /^\.+$/.test(part))));
 
-/** What a workspace asks the account to read. */
 export const GitHubRefreshAskSchema = v.object({
   repos: v.pipe(v.array(v.object({ repo: RepoName, branch: v.nullable(v.pipe(v.string(), v.maxLength(255))) })), v.maxLength(REPO_LIMIT)),
   items: v.pipe(v.array(v.object({ subject: v.picklist(['issue', 'pr']), repo: RepoName, number: v.pipe(v.number(), v.integer(), v.minValue(1)) })), v.maxLength(ITEM_LIMIT)),
@@ -42,7 +41,6 @@ export const gitHubRefreshAsk = (activity: WorkspaceGitHub): GitHubRefreshAsk =>
   items: activity.items.slice(0, ITEM_LIMIT).map(({ subject, repo, number }) => ({ subject, repo, number })),
 });
 
-/** What GitHub said, or that no token is held. */
 export interface GitHubRefreshAnswer {
   readonly observed: readonly GitHubObservation[];
   readonly outcome: 'no-token' | GitHubRefreshOutcome;

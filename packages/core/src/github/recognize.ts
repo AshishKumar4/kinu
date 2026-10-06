@@ -202,7 +202,6 @@ function payloadSubject(payload: JsonValue) {
   return null;
 }
 
-/** Every object carrying both a node id and its own page. */
 function namedNodes(value: JsonValue, found: GitHubSubjectFact[] = []): GitHubSubjectFact[] {
   if (Array.isArray(value)) {
     for (const entry of value) namedNodes(entry, found);

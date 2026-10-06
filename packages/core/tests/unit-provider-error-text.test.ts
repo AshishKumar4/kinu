@@ -10,6 +10,7 @@ import {
   describeProviderError, providerFailureFacts, toProviderError, runChat, createMyGatewayProvider, createWorkersAIProvider, asFetchFunction,
   type ModelCallDeps,
 } from '../src/index';
+import { statedRetryAfterMs } from '../src/providers/fallback-cooldown';
 import {
   KinuError, createRecordingLogger, renderThrownChain, setDiagnosticsSink,
 } from '../src/obs/index';
@@ -274,5 +275,29 @@ describe('a Cloudflare AI refusal reaches the user in Cloudflare\'s words', () =
     expect(shown).toContain('No such model');
     expect(shown).toContain('5007');
     expect(shown).not.toContain('Bad Request');
+  });
+
+  // The rebuilt refusal kept only its content type, so a model told to wait 10 minutes was parked for the default.
+  test.each([
+    ['my-gateway', (waiting: ModelCallDeps) => createMyGatewayProvider().createModel('workers-ai/@cf/zai-org/glm-5.3', waiting)],
+    ['workers-ai', (waiting: ModelCallDeps) => createWorkersAIProvider(undefined).createModel('@cf/zai-org/glm-5.3', waiting)],
+  ] as const)('through %s, the wait Cloudflare states survives into the failure the fallback route reads', async (_route, model) => {
+    const waiting: ModelCallDeps = {
+      ...deps,
+      fetch: asFetchFunction(async () => Response.json(
+        { errors: [{ message: 'The model is down for maintenance', code: 3043 }], success: false, result: {}, messages: [] },
+        { status: 503, headers: { 'retry-after': '600' } },
+      )),
+    };
+
+    // A chain entry takes its call with no retries.
+    const thrown = await rejectionOf(async () => {
+      for await (const _ of runChat({
+        model: model(waiting),
+        system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {}, stopWhen: isStepCount(1), retries: 0,
+      })) { /* drain */ }
+    });
+
+    expect(statedRetryAfterMs({ cause: thrown }, 0)).toBe(600_000);
   });
 });

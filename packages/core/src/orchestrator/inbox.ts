@@ -39,7 +39,7 @@ export const PromptFileSchema: v.GenericSchema<PromptFile> = v.object({
   url: v.string(),
 });
 
-/** Attachments as file parts (convertToModelMessages' FileUIPart shape), then the text. */
+/** Attachments as file parts, then the text. */
 export function turnInputMessage(input: { readonly text: string; readonly files?: ReadonlyArray<PromptFile> }): ModelMessage {
   const files = input.files ?? [];
 

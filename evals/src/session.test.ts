@@ -37,9 +37,11 @@ import {
 import { DeploymentAnswer, EVAL_WEB_IDENTITY_ENV, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import {
   decodeFrame, encodeChatRequest, encodeRpcRequest,
-  recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity,
-  type PublicResponseFrame, type PublicTurnRecorder,
-  HeardStreams, KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS, type InspectionAnswer,
+  recordPublicTurn, HeardStreams, type PublicResponseFrame, type PublicTurnRecorder,
+} from './session-protocol';
+import {
+  resolvePublicSessionPlan, resolveWebIdentity,
+  KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS, type InspectionAnswer,
 } from './session';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { SubordinateInspectionRequestSchema } from '../../packages/core/src/subordinates/inspection';

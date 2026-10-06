@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 
 import { dirname, join } from 'node:path';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER } from '@kinu.run/core';
+import { EVAL_DEPLOYMENT_ORIGIN, EVAL_SERVICE_EMAIL } from '../packages/test-utils/src/eval-identity';
 
 /** A deployment that runs the device flow and approves it only for one secret. `honorsAccount`: it resolves a
  *  named eval account to its plus-addressed user, as every build since the account header does; without it, it
@@ -11,7 +12,7 @@ import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER } from '@kinu.run/core
 function deployment(secret: string, { honorsAccount = false } = {}) {
   const seen: string[] = [];
   let approved = false;
-  let approvedAs = 'eval-service@kinu.run';
+  let approvedAs = EVAL_SERVICE_EMAIL;
   let origin = '';
 
   const server = Bun.serve({
@@ -99,6 +100,20 @@ function keptDevicesBearer(home: string, origin: string, email: string): string 
 describe('the eval-session mint', () => {
   const stops: Array<() => Promise<void> | void> = [];
   afterEach(async () => { await Promise.all(stops.splice(0).map(async (stop) => stop())); });
+
+  test.each(['', '   '])('a blank origin %j cannot mint or borrow the default deployment bearer', async (origin) => {
+    const home = scratchDir('mint-blank-origin');
+    const path = sessionPath(home, EVAL_DEPLOYMENT_ORIGIN);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ origin: EVAL_DEPLOYMENT_ORIGIN, accessToken: 'pta_default' }), { mode: 0o600 });
+
+    for (const script of ['scripts/eval-session-mint.ts', 'scripts/eval-credentials.ts']) {
+      const run = await runScript(script, { KINU_EVAL_ORIGIN: origin, KINU_EVAL_WEB_IDENTITY: 'secret' }, home);
+      expect(run.exitCode).toBe(1);
+      expect(run.stderr).toMatch(/REFUSED.*KINU_EVAL_ORIGIN.*empty value/);
+      expect(run.stdout).not.toContain('pta_default');
+    }
+  });
 
   test('approves the device flow as the eval identity and persists the bearer, mode 0600', async () => {
     const d = deployment('s3cret');

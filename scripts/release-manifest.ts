@@ -23,9 +23,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import * as v from 'valibot';
-import { parseJsonc } from './jsonc';
-import { ENV_TYPES, WRANGLER_CONFIG, envFields, vectorizeGeometry, SUPPLY, type Supply } from './infra-manifest';
+import { ENV_TYPES, WRANGLER_CONFIG, deployedConfig, envFields, vectorizeGeometry, SUPPLY, type DeployedConfig, type Supply } from './infra-manifest';
 import type {
   BindingKind, ReleaseBinding, ReleaseFile, ReleaseManifest, ReleaseMigration,
   ReleaseSecret, ReleaseSeed, ReleaseVar, ReleaseVectorIndex, VarPolicy,
@@ -77,36 +75,6 @@ function policyFor(name: string): VarPolicy | undefined {
   return isClassifiedVar(name) ? VAR_POLICY[name] : undefined;
 }
 
-const BindingBlocksSchema = v.object({
-  name: v.optional(v.string()),
-  main: v.optional(v.string()),
-  compatibility_date: v.optional(v.string()),
-  compatibility_flags: v.optional(v.array(v.string())),
-  vars: v.optional(v.record(v.string(), v.string())),
-  assets: v.optional(v.object({ binding: v.string(), directory: v.string() })),
-  kv_namespaces: v.optional(v.array(v.object({ binding: v.string() }))),
-  r2_buckets: v.optional(v.array(v.object({ binding: v.string(), bucket_name: v.string() }))),
-  vectorize: v.optional(v.array(v.object({ binding: v.string(), index_name: v.string() }))),
-  analytics_engine_datasets: v.optional(v.array(v.object({ binding: v.string(), dataset: v.optional(v.string()) }))),
-  durable_objects: v.optional(v.object({
-    bindings: v.array(v.object({ name: v.string(), class_name: v.string() })),
-  })),
-  containers: v.optional(v.array(v.object({ class_name: v.string() }))),
-  worker_loaders: v.optional(v.array(v.object({ binding: v.string() }))),
-  send_email: v.optional(v.array(v.object({ name: v.string() }))),
-  version_metadata: v.optional(v.object({ binding: v.string() })),
-  ai: v.optional(v.object({ binding: v.string() })),
-  browser: v.optional(v.object({ binding: v.string() })),
-  exports: v.optional(v.record(v.string(), v.object({ state: v.optional(v.string()) }))),
-  triggers: v.optional(v.object({ crons: v.optional(v.array(v.string())) })),
-});
-
-type BindingBlocks = v.InferOutput<typeof BindingBlocksSchema>;
-
-export function readWranglerConfig(configPath = WRANGLER_CONFIG): BindingBlocks {
-  return parseJsonc(readFileSync(join(REPO, configPath), 'utf8'), BindingBlocksSchema, configPath);
-}
-
 /**
  * Every binding the deployed Worker carries, with the kind and the account
  * resource behind it.
@@ -117,7 +85,7 @@ export function readWranglerConfig(configPath = WRANGLER_CONFIG): BindingBlocks 
  * bind, so the release names the title it will create instead, derived from
  * the worker and the binding so two deployments in one account cannot collide.
  */
-export function releaseBindings(config: BindingBlocks, optional: ReadonlySet<string>): readonly ReleaseBinding[] {
+export function releaseBindings(config: DeployedConfig, optional: ReadonlySet<string>): readonly ReleaseBinding[] {
   const worker = config.name ?? 'kinu';
   const rows: ReleaseBinding[] = [];
 
@@ -192,7 +160,7 @@ export function releaseSecrets(
   return rows.sort((left, right) => (left.name < right.name ? -1 : 1));
 }
 
-export function releaseVars(config: BindingBlocks): readonly ReleaseVar[] {
+export function releaseVars(config: DeployedConfig): readonly ReleaseVar[] {
   return Object.entries(config.vars ?? {}).map(([name, value]) => {
     const policy = policyFor(name);
 
@@ -217,7 +185,7 @@ export interface ReleaseBuild {
 }
 
 export function buildReleaseManifest(build: ReleaseBuild, configPath = WRANGLER_CONFIG): ReleaseManifest {
-  const config = readWranglerConfig(configPath);
+  const config = deployedConfig('production', configPath);
 
   const optional = new Set(envFields(readFileSync(join(REPO, ENV_TYPES), 'utf8'))
     .filter((field) => field.optional)

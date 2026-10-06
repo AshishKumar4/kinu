@@ -16,10 +16,9 @@ import {
   PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema, failedToolOutcome,
   type AgentsToolInput,
-  type AgentsSwarmDeps, type AgentsToolDeps, type PeersToolDeps,
+  type AgentsSwarmDeps, type AgentsToolDeps,
   type AgentsProfileContext,
-  type SubordinateRosterEntry, type TeamToolDeps,
-  type SubordinateDelivery, type SubordinateHandoff,
+  type TeamToolDeps,
   BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, validateProfileCatalog,
   type ProfileCatalog,
 } from '../src/index';
@@ -27,6 +26,7 @@ import { renderThrownChain } from '../src/obs/index';
 import { inWorkMode } from '../src/execution/work-mode';
 import { buildToolSurface } from '../src/tools/builtins';
 import { conversationsFor } from './helpers';
+import { handoff, makeTeam, makePeers, rosterEntry, temporaryPortStub } from './helpers-agents';
 
 async function recordedFailure(pending: Promise<AgentsTestResult>, args: AgentsToolInput) {
   try { await pending; }
@@ -38,8 +38,6 @@ async function recordedFailure(pending: Promise<AgentsTestResult>, args: AgentsT
 
   throw new Error('the native agents invocation did not fail');
 }
-
-interface Call { action: string; input: object }
 
 type AgentsTestResult = object | string | number | boolean | null | undefined;
 
@@ -141,130 +139,6 @@ function actionDescription(input: { value: unknown }): string {
       properties: v.object({ action: v.object({ description: v.string() }) }),
     }),
   }), input.value).jsonSchema.properties.action.description;
-}
-
-const rosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'agent', status: 'idle', currentTask: null, createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null };
-
-interface HandoffEcho {
-  action: string;
-  input: { name: string };
-  delivery: SubordinateDelivery;
-  busy: boolean;
-}
-
-function echoHandoff(calls: Call[], echo: HandoffEcho) {
-  calls.push({ action: echo.action, input: echo.input });
-
-  return { ok: true as const, name: echo.input.name, ...handoff(echo.delivery, echo.busy) };
-}
-
-const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
-  eventId: `evt-${delivery}`,
-  delivery,
-  phase: { busy, lastActivityAt: 1234, workingOn: busy ? 'reading src/auth.ts' : null },
-});
-
-/** Temporary rung port stub; its behaviour is covered by unit-temporary-agents. */
-const temporaryPortStub = {
-  start: async () => ({
-    status: 'working' as const,
-    agent: 'ask-auditor-x',
-    lifetime: 'task' as const,
-    role: 'auditor',
-    answer: 'answered',
-    transcript: 'kept' as const,
-  }),
-  release: async () => {},
-  reclaim: () => null,
-  answered: () => [],
-  forget: () => {},
-};
-
-function makeTeam(
-  overrides: Partial<Pick<TeamToolDeps, 'assign' | 'message' | 'list'>> = {},
-) {
-  const calls: Call[] = [];
-
-  const deps: TeamToolDeps = {
-    delegation: ROOT_DELEGATION_BUDGET,
-    temporary: temporaryPortStub,
-    snapshot: () => [rosterEntry],
-    list: async () => [rosterEntry],
-    create: async (input) => ({
-      name: input.name ?? 'researcher',
-      displayName: 'Researcher',
-      subordinate: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
-    }),
-    rename: async (input) => {
-      calls.push({ action: 'rename', input });
-
-      return {
-        ok: true, name: input.name, displayName: input.displayName,
-        subordinate: { ...rosterEntry, name: input.name, displayName: input.displayName },
-      };
-    },
-    recordTitle: async (input) => {
-      calls.push({ action: 'recordTitle', input });
-
-      return { ok: true, name: input.name, displayName: input.displayName, applied: true };
-    },
-    spawn: async (input) => {
-      calls.push({ action: 'spawn', input });
-
-      return { name: input.name ?? 'researcher', displayName: 'Researcher' };
-    },
-    assign: async (input) => echoHandoff(calls, {
-      action: 'assign', input, delivery: 'queued', busy: true,
-    }),
-    knows: async () => true,
-    status: async (input) => {
-      calls.push({ action: 'status', input });
-
-      return { roster: [rosterEntry] };
-    },
-    message: async (input) => echoHandoff(calls, {
-      action: 'message', input, delivery: 'starts_now', busy: false,
-    }),
-    dismiss: async (input) => {
-      calls.push({ action: 'dismiss', input });
-
-      return { ok: true, name: input.name, historyKept: input.keepHistory ?? false, stoppedJobs: [] };
-    },
-    ...overrides,
-  };
-
-  return { deps, calls };
-}
-
-function makePeers(overrides: Partial<PeersToolDeps> = {}) {
-  const calls: Call[] = [];
-
-  const deps: PeersToolDeps = {
-    listPeers: async () => [{ name: 'scout', displayName: 'Scout' }],
-    ask: async (input) => {
-      calls.push({ action: 'ask', input });
-
-      return { status: 'replied', from: input.agent, reply: 'answer' };
-    },
-    send: async (input) => {
-      calls.push({ action: 'send', input });
-
-      return { status: 'delivered', message_id: 'ox1' };
-    },
-    reply: async (input) => {
-      calls.push({ action: 'reply', input });
-
-      return { ok: true };
-    },
-    spawnWorkspace: async (input) => {
-      calls.push({ action: 'spawn_workspace', input });
-
-      return { agent: input.name ?? 'specialist', created: true, status: 'replied', from: 'specialist', reply: 'done' };
-    },
-    ...overrides,
-  };
-
-  return { deps, calls };
 }
 
 describe('agents tool — registration and dep-gating', () => {

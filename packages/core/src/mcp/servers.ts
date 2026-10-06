@@ -1,4 +1,3 @@
-// An MCP server registration and the rules an owner's input is held to; transport is each backend's.
 
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -33,7 +32,7 @@ const HeaderRecordSchema = v.pipe(
 
 const StringArraySchema = v.array(v.string());
 
-/** One spelling per endpoint: fragment dropped; path and query kept (`/mcp` and `/mcp/` differ). */
+/** One spelling per endpoint: fragment dropped, path and query verbatim (`/mcp` and `/mcp/` differ). */
 function canonicalMcpUrl(serverUrl: string): string {
   const url = new URL(serverUrl);
   url.hash = '';
@@ -41,7 +40,7 @@ function canonicalMcpUrl(serverUrl: string): string {
   return url.href;
 }
 
-/** https, or http on loopback; `allowedTools: []` exposes nothing; a preset's catalog fields win. */
+/** https, or http on loopback. `allowedTools: []` is kept: it exposes nothing. */
 export function validateMcpServerInput(input: JsonValue): McpServerInput {
   return settleSync(Effect.gen(function* () {
     const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
@@ -73,7 +72,7 @@ export function validateMcpServerInput(input: JsonValue): McpServerInput {
       return yield* new KinuError('bad_input', '`serverUrl` must use https:// (http:// allowed only for localhost).');
     }
 
-    // Credentials belong in sealed `headers`: `serverUrl` is plaintext.
+    // Credentials go in sealed `headers`: `serverUrl` is plaintext.
     if (parsed.username !== '' || parsed.password !== '') {
       return yield* new KinuError('bad_input', '`serverUrl` must not carry a username or password: put credentials in `headers`.');
     }
@@ -135,7 +134,6 @@ function toolAllowlist(value: JsonValue): Effect.Effect<string[], KinuError> {
   });
 }
 
-/** Absent: a custom server. */
 function presetOf(presetId: JsonValue | undefined): Effect.Effect<McpPreset | undefined, KinuError> {
   if (presetId === undefined || presetId === null) return Effect.succeed(undefined);
   const parsedPresetId = v.safeParse(v.string(), presetId);
@@ -159,7 +157,6 @@ export function validateMcpServerName(name: JsonValue): string {
   return settleSync(serverName(name));
 }
 
-/** Null when the column is unset or fails the schema. */
 function jsonColumn<Schema extends v.GenericSchema>(raw: string | null | undefined, schema: Schema): v.InferOutput<Schema> | null {
   if (!raw) return null;
   const parsed = v.safeParse(schema, tolerate(() => JSON.parse(raw), 'malformed-input'));
