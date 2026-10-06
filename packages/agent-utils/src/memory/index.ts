@@ -1,6 +1,6 @@
 export { MemoryStore, initMemoryChunkTables } from "./store";
 
-export type { IndexedChunk, MemoryIndexDelta, NoteReader } from "./store";
+export type { IndexedChunk, MemoryIndexDelta, NoteReader, NoteStamp } from "./store";
 
 export { chunkMarkdown, hashText } from "./chunker";
 

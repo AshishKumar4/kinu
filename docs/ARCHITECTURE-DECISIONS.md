@@ -307,7 +307,8 @@ are read-only mounts to the file tool (the memory tool and the loop's writer
 change them). Conversations, the memory index, jobs and settings stay in
 `agent.db`: that is data, not files. The index keeps no text of its own: a
 contentless FTS5 reads each hit from its note, and every search first re-chunks
-the notes whose size or modified time moved from their stamp, so a note a shell
+the notes whose file identity moved from their stamp (a revision, else inode,
+size, mtime and ctime, taken before the read and checked after), so a note a shell
 wrote is found by the words it holds now; a fork carries the notes, not the
 index. The gate judges where a path lands (`resolvePath`, NIMBUS-ASKS #23), so a
 link into `/pc` is the user's file. `/context` (a rendering of the conversation) and `/skills` (the

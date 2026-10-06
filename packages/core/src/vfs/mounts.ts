@@ -392,15 +392,15 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		return { files: namespace, path: normal, resolved, route: namespace.routeOf(resolved) };
 	};
 
-	const via = async <T>(path: string, op: (files: VFS, at: string) => Awaitable<T>): Promise<T> => {
-		const target = await landing(path);
+	const via = async <T>(path: string, op: (files: VFS, at: string) => Awaitable<T>, follow = true): Promise<T> => {
+		const target = await landing(path, follow);
 
 		return op(target.files, target.path);
 	};
 
 	/** The plane's optional operation as `ask` starts it, or ENOTSUP with `reason` where the plane has none. */
-	const optional = <T>(path: string, reason: string, ask: (files: VFS, path: string, route: MountRoute | null) => Awaitable<T> | undefined): Effect.Effect<T, VfsError> => Effect.gen(function* () {
-		const target = yield* Effect.promise(async () => landing(path));
+	const optional = <T>(path: string, reason: string, ask: (files: VFS, path: string, route: MountRoute | null) => Awaitable<T> | undefined, follow = true): Effect.Effect<T, VfsError> => Effect.gen(function* () {
+		const target = yield* Effect.promise(async () => landing(path, follow));
 		const answer = ask(target.files, target.path, target.route);
 
 		return answer === undefined ? yield* Effect.fail(new VfsError('ENOTSUP', reason, path)) : yield* Effect.promise(async () => answer);
@@ -428,7 +428,8 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		writeFile: (path, data) => via(path, (files, at) => (parents && files instanceof CompositeVFS ? files.writeFile(at, data, { parents: true }) : files.writeFile(at, data))),
 		readdir: (path) => via(path, (files, at) => files.readdir(at)),
 		mkdir: (path, options) => via(path, (files, at) => files.mkdir(at, options)),
-		unlink: (path) => via(path, (files, at) => files.unlink(at)),
+		// The last link is the entry an unlink or a readlink is of, never where it points.
+		unlink: (path) => via(path, (files, at) => files.unlink(at), false),
 		async rename(from, to) {
 			const [source, target] = await Promise.all([landing(from, false), landing(to, false)]);
 
@@ -452,7 +453,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		readRange: (path, offset, length) => settle(optional(path, 'this plane serves no ranged read', (files, at, route) => (
 			mounted(route) !== null && mounted(route)?.readRange === undefined ? undefined : files.readRange?.(at, offset, length)
 		))),
-		readlink: (path) => settle(optional(path, 'this plane serves no readlink', (files, at) => files.readlink?.(at))),
+		readlink: (path) => settle(optional(path, 'this plane serves no readlink', (files, at) => files.readlink?.(at), false)),
 		readFileAtRevision: (path, revision, range) => settle(optional(path, 'this file plane does not retain file revisions',
 			(files, at) => files.readFileAtRevision?.(at, revision, range))),
 		writeFileIfRevision: (path, data, expected) => settle(optional(path, 'this file plane does not support revision-checked writes',

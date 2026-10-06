@@ -159,13 +159,17 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
   return (ddl: string) => db.exec(ddl);
 }
 
-/** The memory of the workspace whose database `db` is, as its memory tool reads and searches it. */
-export function workspaceMemory(db: Database): Memory {
-  const notes = agentStateFiles(db);
-  const store = new MemoryStore(notes, makeSql(db));
+/** Main's memory over its notes: the one its memory tool, and `kinu memory`, read and search. */
+function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor) {
+  const store = new MemoryStore(notes, sql);
   store.ensureSchema();
 
-  return adaptMemory(store, notes);
+  return { store, memory: adaptMemory(store, notes) };
+}
+
+/** The memory of the workspace whose database `db` is, as its memory tool reads and searches it. */
+export function workspaceMemory(db: Database): Memory {
+  return notesMemory(agentStateFiles(db), makeSql(db)).memory;
 }
 
 /** Main's home beside `db`, as real files. */
@@ -384,9 +388,7 @@ function buildCLIRuntime(
 
   const { planes, home: ownHome } = runtimePlanes(cwd, space, config.facet, views);
 
-  const memoryStore = new MemoryStore(agentStateVfs, sql);
-  memoryStore.ensureSchema();
-  const memory = adaptMemory(memoryStore, agentStateVfs);
+  const { store: memoryStore, memory } = notesMemory(agentStateVfs, sql);
 
   const craftStore = new CraftStore(sql);
   craftStore.ensureSchema();

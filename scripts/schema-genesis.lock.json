@@ -859,8 +859,7 @@
   ],
   "memory_note_files@packages/agent-utils/src/memory/store.ts": [
     "path TEXT PRIMARY KEY",
-    "size INTEGER NOT NULL",
-    "mtime_ms REAL NOT NULL"
+    "stamp TEXT"
   ],
   "mission_budget@packages/core/src/mission-budget.ts": [
     "actor_id TEXT NOT NULL",

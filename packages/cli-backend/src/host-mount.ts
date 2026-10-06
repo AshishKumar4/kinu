@@ -66,8 +66,10 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
 
       if (stat === undefined) return null;
       const type = stat.isSymbolicLink() ? 'symlink' as const : 'file' as const;
+      // A FIFO, socket or device says what it is in its mode's format bits, as Nimbus reads a device's.
+      const special = stat.isFile() || stat.isDirectory() || stat.isSymbolicLink() ? {} : { mode: stat.mode };
 
-      return { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDirectory() ? 'directory' : type };
+      return { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino, type: stat.isDirectory() ? 'directory' : type, ...special };
     }),
     async unlink(path) {
       await snapshot(path, 'file delete');

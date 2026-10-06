@@ -1,9 +1,9 @@
 import { exists, readText as nimbusReadText, type Awaitable, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Workspace plane bound to a physical directory: peers share canonical files on disk while identity stays in each agent's database. */
 
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync, readlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync, readlinkSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import * as v from 'valibot';
@@ -742,6 +742,17 @@ describe('main\'s state keeps its writer, whatever path reaches it', () => {
     expect(existsSync(join(home, 'memory/MEMORY.md'))).toBe(true);
     expect(existsSync(join(home, 'scaffold/agent.js'))).toBe(true);
   });
+
+  test('a link that points at itself is read and removed as the link, never followed', async () => {
+    const { state, project } = roots('cwd-plane-link-loop');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    const loop = join(project, 'loop');
+    symlinkSync('loop', loop);
+
+    expect(await rt.storage.vfs.readlink?.(loop)).toBe('loop');
+    await rt.storage.vfs.unlink(loop);
+    expect(lstatSync(loop, { throwIfNoEntry: false })).toBeUndefined();
+  });
 });
 
 // Locally a shell edits a note beside the memory tool: a search finds the words the note holds now, and only those.
@@ -764,6 +775,72 @@ describe('the memory notes, edited by the shell', () => {
     expect(await rt.memory.search('kubernetes', 5)).toEqual([]);
     expect((await rt.memory.search('staging', 1)).map((hit) => hit.path)).toEqual(['memory/cache.md']);
   });
+
+  // A stamp is trusted only once the note's last change is two seconds behind it; the clock is a minute on, so it is.
+  test('a same-length edit that keeps the note\'s times, as `touch -r` leaves it, is found by its new words', async () => {
+    const { state, project } = roots('cwd-plane-memory-touch');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    const note = join(state, 'jarvis', 'home', 'main', 'memory', 'deploy.md');
+    const times = join(project, 'times');
+    const shell = present(rt.shell, 'the workspace shell');
+    await rt.memory.write('memory/deploy.md', 'wrangler staging deploy succeeded\n');
+    setSystemTime(new Date(Date.now() + 60_000));
+
+    try {
+      expect((await rt.memory.search('wrangler', 5)).map((hit) => hit.path)).toEqual(['memory/deploy.md']);
+      const before = statSync(note);
+      const edit = `touch -r '${note}' '${times}' && printf 'kubernetes ingress fronts staging\\n' > '${note}' && touch -r '${times}' '${note}'`;
+
+      expect((await shell.exec(edit)).exitCode).toBe(0);
+      const after = statSync(note);
+
+      expect([after.ino, after.size, after.mtimeMs]).toEqual([before.ino, before.size, before.mtimeMs]);
+      expect((await rt.memory.search('kubernetes', 5)).map((hit) => hit.path)).toEqual(['memory/deploy.md']);
+      expect(await rt.memory.search('wrangler', 5)).toEqual([]);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('a shell write that lands while the index reads the note is what the same search finds', async () => {
+    const { state, project } = roots('cwd-plane-memory-race');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    const note = join(state, 'jarvis', 'home', 'main', 'memory', 'deploy.md');
+    const files = present(rt.agentStateVfs, 'main\'s home');
+    const read = files.readFile.bind(files);
+    let edited = false;
+    await rt.memory.write('memory/deploy.md', 'wrangler staging deploy succeeded\n');
+
+    // The shell's write lands after the index has the old bytes in hand, before it looks at the file again.
+    files.readFile = async (path) => {
+      const bytes = await read(path);
+
+      if (!edited && path === 'memory/deploy.md') {
+        edited = true;
+        writeFileSync(note, 'kubernetes ingress now fronts staging\n');
+      }
+
+      return bytes;
+    };
+
+    expect((await rt.memory.search('kubernetes', 5)).map((hit) => hit.path)).toEqual(['memory/deploy.md']);
+    expect(edited).toBe(true);
+    expect(await rt.memory.search('wrangler', 5)).toEqual([]);
+  });
+
+  // A FIFO's read would wait for a writer that never comes: what is no regular file is dropped unread.
+  for (const [entry, make] of [['a directory', 'mkdir'], ['a FIFO', 'mkfifo']] as const) {
+    test(`a note replaced by ${entry} leaves no hit, and the search still answers`, async () => {
+      const { state, project } = roots(`cwd-plane-memory-${make}`);
+      const { rt } = await openedWorkspace(state, 'jarvis', project);
+      const note = join(state, 'jarvis', 'home', 'main', 'memory', 'deploy.md');
+      await rt.memory.write('memory/deploy.md', 'wrangler staging deploy succeeded\n');
+      await rt.memory.index('memory/deploy.md');
+
+      expect((await present(rt.shell, 'the workspace shell').exec(`rm '${note}' && ${make} '${note}'`)).exitCode).toBe(0);
+      expect(await rt.memory.search('wrangler', 5)).toEqual([]);
+    });
+  }
 });
 
 describe('SOUL.md is the workspace\'s own file', () => {

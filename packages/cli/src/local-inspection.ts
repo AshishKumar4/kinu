@@ -246,11 +246,7 @@ export function readLocalMemory(name: string): Promise<string> {
 export function searchLocalMemory(name: string, query: string, limit = 10): Promise<MemorySearchResult[]> {
   const window = boundedInt(limit, 10, 1, Number.MAX_SAFE_INTEGER);
 
-  return withLocalDbAsync(name, async (db) => {
-    if (!tableExists(db, 'memory_note_chunks_fts')) return [];
-
-    return workspaceMemory(db).search(query, window);
-  }, 'write');
+  return withLocalDbAsync(name, async (db) => workspaceMemory(db).search(query, window), 'repair');
 }
 
 export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {
@@ -634,8 +630,8 @@ export async function executeLocalExecutor(name: string, executorId: string, com
   }, 'write');
 }
 
-/** A read refuses a database another schema genesis wrote; a write opens it as it stands. */
-type DbMode = 'read' | 'write';
+/** A read, and a write that repairs a derived index, refuse a database another schema genesis wrote; a write opens it as it stands. */
+type DbMode = 'read' | 'repair' | 'write';
 
 function openLocalDb(name: string, mode: DbMode): SqliteDb {
   const dbPath = agentDbPath(name);

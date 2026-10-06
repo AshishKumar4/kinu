@@ -386,6 +386,23 @@ describe('kinu export / import', () => {
     expect(existsSync(join(home, 'oldbot', 'agent.db'))).toBe(false);
   });
 
+  // An archive carries the notes and no index: `kinu memory` builds it from them, the first time it is asked.
+  test('`kinu memory` finds an imported archive\'s notes by their words, before any turn has run', async () => {
+    const { home } = placedWorkspace();
+    const notes = join(home, 'scout', 'home', 'main', 'memory');
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, 'MEMORY.md'), 'the wrangler deploy goes to staging\n');
+    const archive = join(scratch('kinu-export-notes-'), 'scout.kinu.jsonl');
+
+    expect((await result(runCli(home, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
+    expect((await result(runCli(home, ['import', archive, '--name', 'restored-notes']))).exitCode).toBe(0);
+    const found = await result(runCli(home, ['memory', 'restored-notes', 'wrangler', '--json']));
+
+    expect(found.stderr).toBe('');
+    expect(found.exitCode).toBe(0);
+    expect(v.parse(v.array(v.object({ path: v.string() })), JSON.parse(found.stdout)).map((hit) => hit.path)).toEqual(['memory/MEMORY.md']);
+  });
+
   test('a database or an archive an older Kinu made is refused by name, and no workspace is written', async () => {
     const { home } = placedWorkspace();
     const out = scratch('kinu-export-genesis-out-');
@@ -407,7 +424,12 @@ describe('kinu export / import', () => {
     agedHere.exec('PRAGMA user_version = 0');
     agedHere.close();
 
-    for (const args of [['import', archive, '--name', 'from-archive'], ['import', older], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')]]) {
+    const commands = [
+      ['import', archive, '--name', 'from-archive'], ['import', older], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')],
+      ['memory', 'scout', 'wrangler'],
+    ];
+
+    for (const args of commands) {
       const refused = await result(runCli(home, args));
 
       expect(refused.exitCode).toBe(1);
@@ -417,6 +439,10 @@ describe('kinu export / import', () => {
 
     expect(() => restoredDb(home, 'from-archive')).toThrow('unable to open database file');
     expect(() => restoredDb(home, 'older')).toThrow('unable to open database file');
+    // Refused before the search could build an index into it.
+    const kept = restoredDb(home, 'scout');
+    expect(kept.query(`SELECT name FROM sqlite_master WHERE name LIKE 'memory_note%'`).all()).toEqual([]);
+    kept.close();
   });
 
   test('a truncated archive leaves no workspace behind', async () => {

@@ -29,11 +29,8 @@ export interface MemoryIndexDelta {
 
 export type NoteReader = (path: string) => Promise<string | null>;
 
-/** A note's size and mtime as it was indexed: one that differs changed under the index. */
-export interface NoteStamp {
-	readonly size: number;
-	readonly mtimeMs: number;
-}
+/** A note's file identity as it was indexed; one that differs changed under the index. Null: indexed, not yet trusted. */
+export type NoteStamp = string | null;
 
 /** The note holds the text; rows keep lines and hash, FTS5 the terms. */
 export function initMemoryChunkTables(sql: SqlExecutor): void {
@@ -49,9 +46,8 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 	void sql`CREATE INDEX IF NOT EXISTS idx_mc_path ON memory_note_chunks(path)`;
 	void sql`
 		CREATE TABLE IF NOT EXISTS memory_note_files (
-			path     TEXT PRIMARY KEY,
-			size     INTEGER NOT NULL,
-			mtime_ms REAL    NOT NULL
+			path  TEXT PRIMARY KEY,
+			stamp TEXT
 		)
 	`;
 	void sql`
@@ -100,13 +96,37 @@ export class MemoryStore {
 
 	/** Each indexed note's stamp, by path. */
 	stamps(): Map<string, NoteStamp> {
-		const rows = this.sql<{ path: string; size: number; mtime_ms: number }>`SELECT path, size, mtime_ms FROM memory_note_files`;
+		const rows = this.sql<{ path: string; stamp: NoteStamp }>`SELECT path, stamp FROM memory_note_files`;
 
-		return new Map(rows.map((row) => [row.path, { size: row.size, mtimeMs: row.mtime_ms }]));
+		return new Map(rows.map((row) => [row.path, row.stamp]));
 	}
 
-	/** (Re)index a note as `stamp` found it, or, with no stamp, forget a note that is gone; the vector index's delta. */
-	async indexFile(path: string, content: string, stamp?: NoteStamp): Promise<MemoryIndexDelta> {
+	/** The stamp `path` was indexed at; undefined when it never was. */
+	stampOf(path: string): NoteStamp | undefined {
+		return this.sql<{ stamp: NoteStamp }>`SELECT stamp FROM memory_note_files WHERE path = ${path}`.at(0)?.stamp;
+	}
+
+	/** (Re)index a note as the file `stamp` names held it; the vector index's delta. */
+	async indexFile(path: string, content: string, stamp: NoteStamp = null): Promise<MemoryIndexDelta> {
+		const delta = await this.replaceChunks(path, content);
+
+		void this.sql`
+			INSERT INTO memory_note_files (path, stamp) VALUES (${path}, ${stamp})
+			ON CONFLICT(path) DO UPDATE SET stamp = excluded.stamp
+		`;
+
+		return delta;
+	}
+
+	/** A note that is gone, or is no file: its chunks and its stamp leave. */
+	async forgetFile(path: string): Promise<MemoryIndexDelta> {
+		const delta = await this.replaceChunks(path, '');
+		void this.sql`DELETE FROM memory_note_files WHERE path = ${path}`;
+
+		return delta;
+	}
+
+	private async replaceChunks(path: string, content: string): Promise<MemoryIndexDelta> {
 		const chunks = await chunkMarkdown(content);
 
 		const existing = this.sql<{ id: string; hash: string }>`
@@ -142,14 +162,6 @@ export class MemoryStore {
 			}
 		}
 
-		if (stamp === undefined) void this.sql`DELETE FROM memory_note_files WHERE path = ${path}`;
-		else {
-			void this.sql`
-				INSERT INTO memory_note_files (path, size, mtime_ms) VALUES (${path}, ${stamp.size}, ${stamp.mtimeMs})
-				ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime_ms = excluded.mtime_ms
-			`;
-		}
-
 		return { upserted, deletedIds };
 	}
 
@@ -172,7 +184,9 @@ export class MemoryStore {
 	}
 
 	private async reindex(path: string): Promise<void> {
-		await this.indexFile(path, await this.readFile(path) ?? '');
+		const content = await this.readFile(path);
+
+		await (content === null ? this.forgetFile(path) : this.indexFile(path, content));
 	}
 }
 

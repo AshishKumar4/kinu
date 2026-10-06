@@ -1,4 +1,5 @@
-import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { direntTypeOfStat } from '@nimbus-sh/core/vfs/dirent-type.js';
 /** Keeps the Vectorize index in step with the FTS5 memory store; separate from runtime.ts to stay dependency-light. */
 
 import { Effect } from 'effect';
@@ -9,7 +10,7 @@ import { type VectorStore } from './vector-store';
 import { AGENT_CONFIG_KEYS } from '../config/store';
 import { readTailWithVfsOps } from '../vfs/mounts';
 import { MEMORY_DIR } from './note';
-import type { MemoryStore } from "@kinu.run/agent-utils/memory";
+import type { MemoryStore, NoteStamp } from "@kinu.run/agent-utils/memory";
 import { diagnostics, settle, toKinuError } from "../obs/index";
 
 /** Clearing the completeness marker and cursor hands the repair to the idempotent backfill. */
@@ -32,23 +33,13 @@ export interface MemoryVectors {
 export function adaptMemory(
   store: MemoryStore, files: VFS & Required<Pick<VFS, 'readRange'>>, vectors?: MemoryVectors,
 ): Memory {
-  /** Whether `path` is a file whose stamp differs from the one it was indexed at: a shell changed it under the index. */
-  const changed = async (path: string, stamps = store.stamps()): Promise<boolean> => {
-    const stat = await files.stat(path);
-    const indexed = stamps.get(path);
-
-    if (stat === null || stat.type !== 'file') return indexed !== undefined;
-
-    return indexed === undefined || indexed.size !== stat.size || indexed.mtimeMs !== stat.mtimeMs;
-  };
-
-  /** Every note whose stamp moved, a note no index row names yet, and every indexed one now gone, indexed again. */
+  /** Every note new to the index, changed under it, or gone from it, indexed again. */
   const refresh = async (): Promise<void> => {
     const stamps = store.stamps();
-    const notes = await notePaths(files);
+    const known = [...stamps.keys()].filter((path) => path.startsWith(MEMORY_DIR));
 
-    for (const path of new Set([...notes, ...[...stamps.keys()].filter((known) => known.startsWith(MEMORY_DIR))])) {
-      if (await changed(path, stamps)) await memory.index(path);
+    for (const path of new Set([...await notePaths(files), ...known])) {
+      if (await stale(files, path, stamps.get(path))) await memory.index(path);
     }
   };
 
@@ -57,10 +48,9 @@ export function adaptMemory(
     append: (path, content) => store.appendToFile(path, content),
     index(path) {
       return settle(Effect.gen(function* () {
-        const content = yield* Effect.promise(() => store.readFile(path));
-        const stat = content === null ? null : yield* Effect.promise(async () => files.stat(path));
-        // A note that is gone leaves the index with its chunks; an emptied one indexes to none.
-        const delta = yield* Effect.promise(() => store.indexFile(path, content ?? '', stat === null ? undefined : { size: stat.size, mtimeMs: stat.mtimeMs }));
+        const note = yield* Effect.promise(() => settledNote(store, files, path));
+        // A note that is gone, or is no file, leaves the index with its chunks; an emptied one indexes to none.
+        const delta = yield* Effect.promise(() => (note === null ? store.forgetFile(path) : store.indexFile(path, note.content, note.stamp)));
 
         if (vectors === undefined || !vectors.store.available) return;
         const vectorStore = vectors.store;
@@ -87,7 +77,7 @@ export function adaptMemory(
     async read(path) {
       const content = await store.readFile(path);
 
-      if (await changed(path)) await memory.index(path);
+      if (await stale(files, path, store.stampOf(path))) await memory.index(path);
 
       return content;
     },
@@ -95,6 +85,52 @@ export function adaptMemory(
   };
 
   return memory;
+}
+
+/** A stamp is trusted once its file's last change is this far past: within it, a second change may keep every stamp field. */
+const RACY_MS = 2_000;
+
+/** Reads of a note that changed under each of them before it is indexed unstamped. */
+const SETTLE_ATTEMPTS = 3;
+
+/** The file's identity: its backend's revision, else git's racy-clean stat (inode, size, mtime, and ctime, which no caller sets). */
+function stampOf(stat: VfsStat): string {
+  return stat.revision === undefined ? `${stat.ino ?? 0}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs ?? ''}` : `r${stat.revision}`;
+}
+
+/** A regular file: a link, a directory, a FIFO or a device at a note's path is no note. */
+function regular(stat: VfsStat | null): stat is VfsStat {
+  return stat !== null && direntTypeOfStat(stat) === 'file';
+}
+
+/** Whether the index holds `path` other than as it stands: new to it, changed under it, untrusted, or no file now. */
+async function stale(files: VFS, path: string, indexed: NoteStamp | undefined): Promise<boolean> {
+  const stat = await files.stat(path, { follow: false });
+
+  return regular(stat) ? indexed !== stampOf(stat) : indexed !== undefined;
+}
+
+/**
+ * The note as one file held it, its stamp taken before the read and checked after: a write between them reads it again,
+ * and a note still changing, or changed within RACY_MS, is indexed unstamped so the next search reads it again. Null when
+ * no regular file is there.
+ */
+async function settledNote(store: MemoryStore, files: VFS, path: string): Promise<{ readonly content: string; readonly stamp: NoteStamp } | null> {
+  for (let attempt = 1; ; attempt += 1) {
+    const before = await files.stat(path, { follow: false });
+
+    if (!regular(before)) return null;
+    const content = await store.readFile(path);
+    const after = await files.stat(path, { follow: false });
+
+    if (content !== null && regular(after) && stampOf(after) === stampOf(before)) {
+      const changedAt = Math.max(after.mtimeMs, after.ctimeMs ?? after.mtimeMs);
+
+      return { content, stamp: after.revision !== undefined || changedAt < Date.now() - RACY_MS ? stampOf(after) : null };
+    }
+
+    if (attempt === SETTLE_ATTEMPTS) return content === null ? null : { content, stamp: null };
+  }
 }
 
 /** Every markdown note under the memory directory, by its relative path. */

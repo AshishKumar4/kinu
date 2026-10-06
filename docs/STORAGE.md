@@ -103,8 +103,7 @@ erDiagram
     }
     memory_note_files {
         TEXT path PK "Note path"
-        INTEGER size "Bytes when indexed"
-        REAL mtime_ms "Modified time when indexed"
+        TEXT stamp "File identity when indexed; null until trusted"
     }
     crafted_tools {
         TEXT name PK "Tool name (snake_case)"
@@ -425,12 +424,19 @@ and `memory_note_chunks_fts` is contentless (`content=''`,
 split into chunks with a line-aware sliding window (`DEFAULT_CHUNK_TARGET_CHARS`
 1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320); the hash lets the next pass skip
 unchanged chunks. Search is FTS5 MATCH with BM25 ranking, and each hit's snippet
-is read from its note. `memory_note_files` stamps each indexed note with the
-size and modified time it had; before every search the notes under `memory/`
-are listed and any whose stamp differs, or that has none (a shell wrote it,
-edited it, or it came with an archive or fork), is re-chunked, and a stamped
-note that is gone loses its chunks. A read re-chunks a changed note too, and a
-hit whose lines no longer hash is never served. An archive and a fork carry the
+is read from its note. `memory_note_files` stamps each indexed note with its
+file identity: the backend's revision where its stat carries one, else inode,
+size, mtime and ctime, git's racy-clean stat, so an edit that keeps its length
+and its times (`touch -r`) still moves ctime. The cloud's SDK stat carries
+ctime but no revision or inode (NIMBUS-ASKS #25). The stamp
+is taken before the read and checked after; a note that changed in between is
+read again, and one changed within two seconds of its stamp is kept unstamped,
+so the next search reads it again. Before every search the notes under
+`memory/` are listed and any whose stamp differs, or that has none (a shell
+wrote it, edited it, or it came with an archive or fork), is re-chunked; a
+stamped note that is gone, or is now a directory, link or FIFO, loses its
+chunks unread. A read re-chunks a changed note too, and a hit whose lines no
+longer hash is never served. An archive and a fork carry the
 notes and no index: the target's first search builds it from them.
 `sanitizeFtsQuery` removes operators and stop words. When the AND query
 returns nothing, search falls back to OR-joined tokens.
