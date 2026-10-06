@@ -11,6 +11,13 @@ import { nowMs } from '../utils/date';
 
 const MS_PER_DAY = 86_400_000;
 
+export interface CraftScoreRow { readonly name: string; readonly score: number; readonly uses: number; readonly last_used_at: number }
+
+/** Each crafted tool's stored scores, by name. */
+export function craftScores(sql: SqlExecutor): Map<string, CraftScoreRow> {
+  return new Map(sql<CraftScoreRow>`SELECT name, score, uses, last_used_at FROM crafted_tools`.map((row) => [row.name, row]));
+}
+
 export function emaUpdate(
   oldScore: number,
   newObs: number,

@@ -205,7 +205,7 @@ export function omitEmptyOptionalArgs(
 
 /** Budget a remote MCP catalog is admitted against: `stepContextLimit` minus the actor's own tool surface. */
 export interface McpSurfaceBudget {
-  contextWindow: number;
+  contextWindow: number | null;
   /** Null when nothing reported one. Read from the same `ModelCatalogSession` as the window. */
   modelOutputLimit: number | null;
   nativeToolTokens: number;

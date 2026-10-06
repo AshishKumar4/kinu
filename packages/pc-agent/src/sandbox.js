@@ -248,36 +248,57 @@ function trimPath(value) {
   return resolved.length > 1 ? resolved.replace(/\/+$/, '') : resolved;
 }
 
+/** The kernel's own bound on links followed in one lookup (Linux MAXSYMLINKS). */
+const MAX_LINK_HOPS = 40;
+
 /**
- * The path a syscall will actually REACH: symlinks followed where the target
- * exists, and composed onto the nearest existing ancestor where it does not.
+ * The path a syscall will actually REACH: every symlink followed, a DANGLING
+ * one included, since a write through a link whose target is absent creates
+ * that target; the part of the path that does not exist yet is composed on.
  *
  * Decided on the destination rather than the spelling, because a symlink in a
  * writable directory pointing into Kinu's own is a read of Kinu's own, and
  * every file method here follows links.
  */
-function realTarget(requested) {
+function realTarget(requested, hops = 0) {
   const resolved = trimPath(requested);
-  const followable = (err) => err && err.code !== 'ENOENT' && err.code !== 'EACCES' && err.code !== 'ELOOP';
+  const missing = (err) => err && (err.code === 'ENOENT' || err.code === 'EACCES' || err.code === 'ELOOP');
 
   try {
     return fs.realpathSync(resolved);
   } catch (err) {
-    if (followable(err)) throw err;
+    if (!missing(err)) throw err;
   }
 
-  let parent = path.dirname(resolved);
+  // Something on the path is absent: walk it as the kernel does, following each link to where it points.
+  const parts = resolved.split('/').filter(Boolean);
+  let reached = '/';
 
-  while (parent !== path.dirname(parent)) {
+  for (const [at, part] of parts.entries()) {
+    const entry = path.join(reached, part);
+    let stat;
+
     try {
-      return path.join(fs.realpathSync(parent), path.relative(parent, resolved));
+      stat = fs.lstatSync(entry);
     } catch (err) {
-      if (followable(err)) throw err;
-      parent = path.dirname(parent);
+      if (!missing(err)) throw err;
+
+      return path.join(entry, ...parts.slice(at + 1));
     }
+
+    if (!stat.isSymbolicLink()) {
+      reached = entry;
+      continue;
+    }
+
+    if (hops >= MAX_LINK_HOPS) {
+      throw Object.assign(new Error(`device path '${requested}' crosses too many symbolic links`), { code: 'ELOOP' });
+    }
+
+    return realTarget(path.resolve(reached, fs.readlinkSync(entry), ...parts.slice(at + 1)), hops + 1);
   }
 
-  return resolved;
+  return reached;
 }
 
 /** Whether `target` is `root` itself or below it, decided on resolved paths so

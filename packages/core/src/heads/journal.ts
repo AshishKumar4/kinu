@@ -514,15 +514,16 @@ export class HeadJournal {
   }
 
   private assembleRun(rootId: HeadId, spawnedAt: number): HeadRunView {
+    // No GROUP BY: it walked the actor's whole journal.
     const rows = this.sql<HeadViewRow>`
       SELECT j.id, j.parent_id, j.depth, j.task, j.rationale, j.status, j.summary, j.error_message,
              j.token_input, j.token_output, j.token_cache_read, j.token_cache_write,
              j.token_cache_write_1h, j.token_reasoning, j.neurons,
-             j.wall_clock_ms, j.spawned_at,
-             j.decisions_json, MAX(s.created_at) AS last_step_at
-      FROM head_journal j LEFT JOIN head_steps s ON s.actor_id = j.actor_id AND s.head_id = j.id
+             j.wall_clock_ms, j.spawned_at, j.decisions_json,
+             (SELECT MAX(s.created_at) FROM head_steps s WHERE s.actor_id = j.actor_id AND s.head_id = j.id) AS last_step_at
+      FROM head_journal j
       WHERE j.actor_id = ${this.actorId} AND j.root_id = ${rootId}
-      GROUP BY j.id ORDER BY j.depth, j.spawned_at`;
+      ORDER BY j.depth, j.spawned_at, j.id`;
 
     // A sub-split's parent head is the run header; for a synthetic root nothing matches.
     const rootRow = rows.find((h) => h.id === rootId) ?? null;

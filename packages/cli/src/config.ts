@@ -124,6 +124,7 @@ const OpenAiCompatConfigSchema = v.object({
   apiKey: v.optional(v.string()),
   headers: v.optional(StringMapSchema),
   extraHeaders: v.optional(StringMapSchema),
+  contextWindow: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
 });
 
 const LocalApiKeyProviderSchema = v.object({
@@ -718,6 +719,7 @@ function compatCredential(compat: v.InferOutput<typeof OpenAiCompatConfigSchema>
     baseURL: compat.baseURL,
     ...(compat.apiKey !== undefined && { apiKey: compat.apiKey }),
     extraHeaders: { ...Object.fromEntries(base), ...compat.extraHeaders },
+    ...(compat.contextWindow !== undefined && { contextWindow: compat.contextWindow }),
   };
 }
 

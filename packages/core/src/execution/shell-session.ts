@@ -4,6 +4,7 @@ import {
   ShellExecOptionsSchema, type OutputSink, type Shell, type ShellCallJob, type ShellExecOptions, type ShellExecResult,
 } from '../types/primitives';
 import { shellQuote } from '../utils/shell';
+import { shellPath } from '../safety/command-review';
 
 /** A shell call's options, or a provider exec's context: a bare string is stdin; keys of neither are dropped. */
 export function shellExecOptions(input: { value: unknown }): ShellExecOptions {
@@ -204,6 +205,131 @@ function withoutTrailer(sink: OutputSink): OutputSink {
       held = bytes.slice(bytes.length - keep);
 
       if (bytes.length > keep) sink.write(stream, bytes.subarray(0, bytes.length - keep));
+    },
+  };
+}
+
+export interface ShellCwd {
+  readonly home: string;
+  readonly cwd: string;
+  readonly mayBeUsers: boolean;
+}
+
+export interface ShellSession {
+  readonly home: string;
+  readonly userRoots: () => readonly string[];
+  /** Where a call starts: its `cwd`, under its name's directory (the home for none). */
+  at(name: string | undefined, cwd: string | undefined): Promise<ShellCwd>;
+  /** A named call ended in `cwd`; null: unknown, so the next call reads it again. */
+  ran(name: string, cwd: string | null): void;
+  /** A named call cut short: its shell may have moved after it, so it is unknown until a call reports. */
+  lost(name: string): void;
+  /** One call at a time per name, and a name a detached job holds answers `busy` at once; unnamed calls never wait. */
+  hold<R>(name: string | undefined, job: ShellCallJob | undefined, call: () => Promise<R>, busy: (message: string) => R): Promise<R>;
+}
+
+export interface ShellSessionOptions {
+  readonly home: string;
+  readonly userRoots: () => readonly string[];
+  /** A name's directory as an earlier process left it; null: unreadable. Absent: every name starts at home. */
+  readonly stored?: (name: string) => Promise<string | null>;
+}
+
+/** A call's session from its `cwd` option; an unresolvable one may be the user's. */
+function sessionAt(home: string, cwd: string | undefined): ShellCwd {
+  const at = cwd === undefined ? home : shellPath(cwd, home, home);
+
+  return at === null ? { cwd: home, home, mayBeUsers: true } : { cwd: at, home, mayBeUsers: false };
+}
+
+interface HeldName {
+  readonly ended: Promise<void>;
+  readonly detached: Promise<void>;
+  job: { readonly id: string; readonly since: number } | null;
+}
+
+export function createShellSession({ home, userRoots, stored }: ShellSessionOptions): ShellSession {
+  const directories = new Map<string, Promise<ShellCwd>>();
+  const held = new Map<string, HeldName>();
+  const unknown: ShellCwd = { home, cwd: home, mayBeUsers: true };
+
+  // A read that failed or found nothing is not kept: the next call reads again.
+  const directory = (name: string): Promise<ShellCwd> => {
+    const known = directories.get(name);
+
+    if (known !== undefined) return known;
+
+    const read = (async (): Promise<ShellCwd> => {
+      let cwd: string | null = null;
+
+      try {
+        cwd = stored === undefined ? home : await stored(name);
+      } finally {
+        if (cwd === null) directories.delete(name);
+      }
+
+      return cwd === null ? unknown : sessionAt(home, cwd);
+    })();
+
+    directories.set(name, read);
+
+    return read;
+  };
+
+  return {
+    home,
+    userRoots,
+    async at(name, cwd) {
+      if (name === undefined) return sessionAt(home, cwd);
+      const base = await directory(name);
+      const at = cwd === undefined ? base.cwd : shellPath(cwd, base.cwd, home);
+      // An absolute `cwd` is where it starts whatever the name's directory is.
+      const known = cwd?.startsWith('/') === true || !base.mayBeUsers;
+
+      return at === null ? unknown : { home, cwd: at, mayBeUsers: !known };
+    },
+    ran(name, cwd) {
+      // Unreported: read again when the shell can say, else unknown until a call reports it.
+      if (cwd !== null) directories.set(name, Promise.resolve(sessionAt(home, cwd)));
+      else if (stored === undefined) directories.set(name, Promise.resolve(unknown));
+      else directories.delete(name);
+    },
+    lost(name) {
+      directories.set(name, Promise.resolve(unknown));
+    },
+    async hold(name, job, call, busy) {
+      if (name === undefined) return await call();
+
+      for (let previous = held.get(name); previous !== undefined; previous = held.get(name)) {
+        if (previous.job !== null) {
+          return busy(`shell ${name} is busy with job ${previous.job.id} since ${new Date(previous.job.since).toISOString()}; use another name or none`);
+        }
+
+        await Promise.race([previous.ended, previous.detached]);
+      }
+
+      const ended = Promise.withResolvers<void>();
+      const detached = Promise.withResolvers<void>();
+      const mine: HeldName = { ended: ended.promise, detached: detached.promise, job: null };
+
+      const onDetach = (): void => {
+        if (job !== undefined) mine.job = { id: job.id, since: Date.now() };
+
+        detached.resolve();
+      };
+
+      held.set(name, mine);
+
+      if (job?.detached.aborted === true) onDetach();
+      else job?.detached.addEventListener('abort', onDetach, { once: true });
+
+      try {
+        return await call();
+      } finally {
+        job?.detached.removeEventListener('abort', onDetach);
+        held.delete(name);
+        ended.resolve();
+      }
     },
   };
 }

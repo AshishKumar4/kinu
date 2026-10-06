@@ -34,7 +34,7 @@ const HISTORY: ModelMessage[] = [
 const COMPACTED: ModelMessage[] = [{ role: 'user', content: 'summary of the long conversation' }];
 
 /** Measured window: an unmeasured one is admitted over rather than refused against. */
-const LIMITS = { contextWindow: 200_000, modelOutputLimit: 40_000, windowMeasured: true };
+const LIMITS = { contextWindow: 200_000, modelOutputLimit: 40_000 };
 
 const LIMIT = stepContextLimit(LIMITS);
 
@@ -256,7 +256,7 @@ describe('exact turn admission', () => {
   test('with no count endpoint, an estimate over the window triggers the one forced compaction instead of submitting', async () => {
     const { extensions, triggers } = compactionProbe();
     // The allocation sits between the assembled and compacted estimates, so the estimate forces the compaction.
-    const tight = { contextWindow: 48, modelOutputLimit: 20, windowMeasured: true };
+    const tight = { contextWindow: 48, modelOutputLimit: 20 };
 
     const { messages: out } = await assembleTurnMessages({
       ...base(),
@@ -271,7 +271,7 @@ describe('exact turn admission', () => {
 
   test('with no count endpoint, an estimate that still overflows after compaction is refused, not submitted', async () => {
     const { extensions } = compactionProbe();
-    const tight = { contextWindow: 8, modelOutputLimit: 4, windowMeasured: true };
+    const tight = { contextWindow: 8, modelOutputLimit: 4 };
 
     const failure = await refusalOf(assembleTurnMessages({
       ...base(),

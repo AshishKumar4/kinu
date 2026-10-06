@@ -6,7 +6,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
-import { effectiveScore } from '../craft/ema';
+import { craftScores, effectiveScore, type CraftScoreRow } from '../craft/ema';
 import { DEFAULT_CONFIG } from '../config';
 import { isoDate, nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
@@ -34,15 +34,6 @@ function titleOf(text: string, maxChars = 90): string {
   const line = text.trim().split('\n', 1)[0] ?? '';
 
   return line.length > maxChars ? `${line.slice(0, maxChars)}...` : line || 'untitled';
-}
-
-interface CraftScoreRow { name: string; score: number; uses: number; last_used_at: number }
-
-function craftScores(sql: SqlExecutor): Map<string, CraftScoreRow> {
-  return new Map(
-    sql<CraftScoreRow>`SELECT name, score, uses, last_used_at FROM crafted_tools`
-      .map((r) => [r.name, r]),
-  );
 }
 
 function craftCandidate(

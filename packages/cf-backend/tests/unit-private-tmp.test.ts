@@ -15,7 +15,7 @@ import {
   type ProgrammaticHost,
 } from './helpers/programmatic-host';
 import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
-import { settleWorkspaceRoot } from '@kinu.run/core';
+import { settleWorkspaceRoot, WORKSPACE_ROOT } from '@kinu.run/core';
 
 const databases: Database[] = [];
 
@@ -53,9 +53,10 @@ async function openFixture(): Promise<Fixture> {
     transactions,
     generation: 1,
     processes,
+    env: { HOME: WORKSPACE_ROOT },
   });
 
-  // As Kinu's boot leaves it: the workspace root, and its old name a link to it.
+  // As Kinu's boot leaves it: Nimbus seeds the configured home, and root owns /home.
   settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
 
   const host = programmaticHostOver(workspace).host;

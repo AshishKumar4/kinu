@@ -12,9 +12,8 @@ export interface PromptModelContext {
   family?: PromptModelFamily;
   reasoning?: boolean;
   capabilities?: readonly string[];
-  contextWindow?: number;
-  /** Whether `contextWindow` was measured for this model rather than a stand-in. */
-  windowMeasured?: boolean;
+  /** Null when no catalog row names it. */
+  contextWindow?: number | null;
   /** Largest answer out of that window; absent when the catalog has not answered, never the window itself. */
   modelOutputLimit?: number | null;
 }
@@ -24,7 +23,7 @@ export interface PromptModelProfile {
   provider?: string;
   family: PromptModelFamily;
   capabilities: ReadonlySet<PromptModelCapability>;
-  contextWindow?: number;
+  contextWindow?: number | null;
 }
 
 const TOOL_CAPABILITIES: PromptModelCapability[] = ['tools', 'streaming'];

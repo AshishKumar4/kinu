@@ -52,13 +52,13 @@ describe('the credential store is sealed at rest', () => {
     harness.close();
   });
 
-  test('an openai-compat credential keeps answering with its baseURL', async () => {
+  test('an openai-compat credential keeps answering with its endpoint', async () => {
     const harness = createTestUserDO();
     await harness.userDO.setCredential(await testOwner(), 'openai-compat.groq', {
-      kind: 'openai-compat', baseURL: 'https://api.groq.com/openai/v1', apiKey: 'gsk-secret',
+      kind: 'openai-compat', baseURL: 'https://api.groq.com/openai/v1', apiKey: 'gsk-secret', contextWindow: 131_072,
     });
-    expect(await harness.userDO.getCredentialBaseURL(await testOwner(), 'openai-compat.groq'))
-      .toBe('https://api.groq.com/openai/v1');
+    expect(await harness.userDO.getCredentialEndpoint(await testOwner(), 'openai-compat.groq'))
+      .toEqual({ baseURL: 'https://api.groq.com/openai/v1', contextWindow: 131_072 });
     expect(storedValue(harness, 'openai-compat.groq')).not.toContain('gsk-secret');
     harness.close();
   });
@@ -123,7 +123,7 @@ describe('the credential store is sealed at rest', () => {
         ok: presented === bearer, tokenHash: 'session-hash', user: { id: userId, email: 'owner@example.test', displayName: null },
       }),
       listCredentials: (caller) => harness.userDO.listCredentials(caller),
-      getCredentialBaseURL: (caller, key) => harness.userDO.getCredentialBaseURL(caller, key),
+      getCredentialEndpoint: (caller, key) => harness.userDO.getCredentialEndpoint(caller, key),
     });
 
     const response = await serveFamily(providerProxyRoutes)(

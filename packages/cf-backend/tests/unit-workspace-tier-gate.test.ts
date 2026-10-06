@@ -54,7 +54,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'credentials.model', name: 'getAuthHeaders(codex.oauth)', run: (u, c) => u.getAuthHeaders(c, 'codex.oauth') },
   { capability: 'credentials.model', name: 'getAuthHeaders(openai.bearer)', run: (u, c) => u.getAuthHeaders(c, 'openai.bearer') },
   { capability: 'credentials.model', name: 'getAuth(openai.bearer)', run: (u, c) => u.getAuth(c, 'openai.bearer') },
-  { capability: 'credentials.model', name: 'getCredentialBaseURL(openai-compat.box)', run: (u, c) => u.getCredentialBaseURL(c, 'openai-compat.box') },
+  { capability: 'credentials.model', name: 'getCredentialEndpoint(openai-compat.box)', run: (u, c) => u.getCredentialEndpoint(c, 'openai-compat.box') },
   { capability: 'credentials.model', name: 'listCredentials', run: (u, c) => u.listCredentials(c) },
   { capability: 'credentials.model', name: 'listConnectedProviders', run: (u, c) => u.listConnectedProviders(c) },
   { capability: 'credentials.model', name: 'relayDevice', run: (u, c) => u.relayDevice(c, 'codex') },
@@ -64,7 +64,7 @@ const GATED_CALLS: GatedCall[] = [
 
   { capability: 'credentials.other', name: 'getAuthHeaders(github)', run: (u, c) => u.getAuthHeaders(c, 'github') },
   { capability: 'credentials.other', name: 'getAuth(github)', run: (u, c) => u.getAuth(c, 'github') },
-  { capability: 'credentials.other', name: 'getCredentialBaseURL(github)', run: (u, c) => u.getCredentialBaseURL(c, 'github') },
+  { capability: 'credentials.other', name: 'getCredentialEndpoint(github)', run: (u, c) => u.getCredentialEndpoint(c, 'github') },
   { capability: 'credentials.other', name: 'setCredential', run: (u, c) => u.setCredential(c, 'github', { kind: 'bearer', token: 'ghp_x' }) },
   { capability: 'credentials.other', name: 'deleteCredential', run: (u, c) => u.deleteCredential(c, 'github') },
   { capability: 'credentials.other', name: 'listUnrevokedGrants', run: (u, c) => u.listUnrevokedGrants(c) },

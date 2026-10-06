@@ -71,8 +71,6 @@ export interface ThresholdDeps {
   onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome | Promise<DetachOutcome>;
 }
 
-const TIMED_OUT = Symbol('timed-out');
-
 /** Outcome is a value either way, so the race's loser is observed and never an unhandled rejection. */
 function settlement<T>(promise: Promise<T>): Promise<{ value: T } | { error: unknown }> {
   return (async () => {
@@ -84,47 +82,44 @@ function settlement<T>(promise: Promise<T>): Promise<{ value: T } | { error: unk
   })();
 }
 
+/** `promise` settles inline unless `trigger` fires first, when `onThreshold` detaches or keeps it. */
+function detachOn<T>(input: {
+  readonly kind: string;
+  readonly promise: Promise<T>;
+  /** Resolves null to detach; resolved already, it beats same-tick work. */
+  readonly trigger: Promise<null>;
+  readonly release?: () => void;
+  readonly onThreshold: ThresholdDeps['onThreshold'];
+  readonly message: string;
+}): Effect.Effect<T | BackgroundHandle> {
+  return Effect.gen(function* () {
+    const settled = settlement(input.promise);
+    const winner = yield* Effect.promise(() => Promise.race([settled, input.trigger]));
+
+    input.release?.();
+
+    const answered = winner === null ? yield* Effect.promise(async () => input.onThreshold(input.kind, input.promise)) : null;
+
+    if (answered?.detached === true) return { background: true, jobId: answered.jobId, kind: input.kind, message: input.message };
+    const foreground = winner ?? (yield* Effect.promise(() => settled));
+
+    return 'error' in foreground ? yield* Effect.die(foreground.error) : foreground.value;
+  });
+}
+
 export function withBackgroundThreshold<T>(
   kind: string,
   exec: () => Promise<T>,
   deps: ThresholdDeps,
 ): Promise<T | BackgroundHandle> {
-  return settle(Effect.gen(function* () {
-    const thresholdMs = deps.thresholdMs ?? BACKGROUND_POLICY.interactive.detachAfterMs;
-    const promise = exec();
-    const { promise: timeout, resolve: expire } = Promise.withResolvers<typeof TIMED_OUT>();
-    const cancel = (deps.clock ?? REAL_CLOCK).after(thresholdMs, () => { expire(TIMED_OUT); });
+  const thresholdMs = deps.thresholdMs ?? BACKGROUND_POLICY.interactive.detachAfterMs;
+  const promise = exec();
+  const { promise: trigger, resolve: expire } = Promise.withResolvers<null>();
+  const cancel = (deps.clock ?? REAL_CLOCK).after(thresholdMs, () => { expire(null); });
 
-    const settled = settlement(promise);
-    const winner = yield* Effect.promise(() => Promise.race([settled, timeout]));
-
-    cancel();
-
-    if (winner !== TIMED_OUT) {
-      if ('error' in winner) return yield* Effect.die(winner.error);
-
-      return winner.value;
-    }
-
-    // A refusal is an admission decision, not a timeout: keep the foreground's controller and settlement.
-    const outcome = yield* Effect.promise(async () => deps.onThreshold(kind, promise));
-
-    if (!outcome.detached) {
-      const foreground = yield* Effect.promise(() => settled);
-
-      if ('error' in foreground) return yield* Effect.die(foreground.error);
-
-      return foreground.value;
-    }
-
-    return {
-      background: true,
-      jobId: outcome.jobId,
-      kind,
-      message:
-        `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded: ` +
-        `still running, not cancelled. The settled result will wake you.`,
-    };
+  return settle(detachOn({
+    kind, promise, trigger, release: cancel, onThreshold: deps.onThreshold,
+    message: `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded: still running, not cancelled. The settled result will wake you.`,
   }));
 }
 
@@ -135,37 +130,10 @@ export function withSpawnDetach<T>(
   exec: (spawnStarted: () => void) => Promise<T>,
   deps: Pick<ThresholdDeps, 'onThreshold'>,
 ): Promise<T | BackgroundHandle> {
-  return settle(Effect.gen(function* () {
-    const SPAWNED = Symbol('spawned');
-    let announce!: () => void;
-    const started = new Promise<typeof SPAWNED>((resolve) => { announce = () => resolve(SPAWNED); });
-    const promise = exec(announce);
+  const { promise: trigger, resolve: announce } = Promise.withResolvers<null>();
 
-    const settled = settlement(promise);
-    const winner = yield* Effect.promise(() => Promise.race([settled, started]));
-
-    if (winner !== SPAWNED) {
-      if ('error' in winner) return yield* Effect.die(winner.error);
-
-      return winner.value;
-    }
-
-    const outcome = yield* Effect.promise(async () => deps.onThreshold(kind, promise));
-
-    if (!outcome.detached) {
-      const foreground = yield* Effect.promise(() => settled);
-
-      if ('error' in foreground) return yield* Effect.die(foreground.error);
-
-      return foreground.value;
-    }
-
-    return {
-      background: true,
-      jobId: outcome.jobId,
-      kind,
-      message: `Spawned; the settled result will wake you.`,
-    };
+  return settle(detachOn({
+    kind, promise: exec(() => { announce(null); }), trigger, onThreshold: deps.onThreshold, message: 'Spawned; the settled result will wake you.',
   }));
 }
 

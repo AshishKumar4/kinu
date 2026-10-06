@@ -25,4 +25,4 @@ export type { DurableAppIdentity, DurableApps } from './durable-app';
 
 export { SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
 
-export { WorkspaceLiveShares, type WorkspaceLiveSharesDeps } from './live-sharing';
+export { shareLiveSlate } from './live-sharing';

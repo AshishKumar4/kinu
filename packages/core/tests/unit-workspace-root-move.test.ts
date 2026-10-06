@@ -1,8 +1,6 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Nimbus before 0.15 seeded `/home/user`; a workspace from then has its tree there, or Kinu's link from there to
- * `/home/main`. Since 0.15 HOME is the one home: the tree moves to `/home/main` and the link goes.
- * Cold boot and interrupted publication preserve the files and their ownership.
+ * A workspace's home is `/home/main`, seeded by Nimbus from HOME (it keeps no /home/user), and root owns `/home`.
  * Slates are shared at `/slates`, where every agent makes and changes them.
  */
 import { describe, expect, test } from 'bun:test';
@@ -20,10 +18,10 @@ const workspaceSql = (database: Database): SqlDatabase => inlineWorkspaceStorage
 
 const transactions = (database: Database) => inlineWorkspaceStorage(database).transactions;
 
-/** Nimbus's own default boot, before Kinu publishes the canonical home. */
+/** Nimbus's own boot of the stored workspace, before Kinu settles its layout. */
 async function substrate(database: Database) {
   const workspace = await NimbusWorkspace.create({
-    sql: workspaceSql(database), transactions: transactions(database), generation: 1_000, cwd: '/home/user',
+    sql: workspaceSql(database), transactions: transactions(database), generation: 1_000, cwd: '/home/main', env: { HOME: '/home/main' },
   });
 
   return { kernel: workspace.vfs.as(CRED_KERNEL), user: workspace.vfs.as(CRED_SESSION_USER) };
@@ -38,56 +36,23 @@ async function boot(database: Database) {
   return { bundle, kernel: session.vfs.as(CRED_KERNEL), user: session.vfs.as(CRED_SESSION_USER) };
 }
 
-/** Files under Nimbus's default home before Kinu initializes its layout. */
+/** Files in the home Nimbus seeded, before Kinu initializes its layout. */
 async function nimbusSeededWorkspace(): Promise<Database> {
   const database = new Database(':memory:');
   const { kernel, user } = await substrate(database);
 
-  kernel.writeFile('/home/user/SOUL.md', SOUL);
-  kernel.chmod('/home/user/SOUL.md', 0o444);
-  user.mkdir('/home/user/slates/queue', { recursive: true });
-  user.writeFile('/home/user/slates/queue/package.json', '{"name":"queue"}');
-  user.writeFile('/home/user/notes.md', '# coupon regression\n');
-  user.mkdir('/home/user/data/2026', { recursive: true });
-  user.writeFile('/home/user/data/2026/rows.csv', 'id,kind\n1,percent\n');
+  kernel.writeFile('/home/main/SOUL.md', SOUL);
+  kernel.chmod('/home/main/SOUL.md', 0o444);
+  user.mkdir('/home/main/slates/queue', { recursive: true });
+  user.writeFile('/home/main/slates/queue/package.json', '{"name":"queue"}');
+  user.writeFile('/home/main/notes.md', '# coupon regression\n');
+  user.mkdir('/home/main/data/2026', { recursive: true });
+  user.writeFile('/home/main/data/2026/rows.csv', 'id,kind\n1,percent\n');
 
   return database;
 }
 
 
-
-describe('a workspace seeded at /home/user', () => {
-  test('boots with its files and SOUL.md at /home/main, and its slates at /slates', async () => {
-    const { kernel } = await boot(await nimbusSeededWorkspace());
-
-    expect(kernel.isDirectory('/home/main')).toBe(true);
-    expect(kernel.readFileString('/home/main/notes.md')).toBe('# coupon regression\n');
-    expect(kernel.readFileString('/slates/queue/package.json')).toBe('{"name":"queue"}');
-    // One path: the old one is gone, not a link.
-    expect(kernel.exists('/home/main/slates')).toBe(false);
-    expect(kernel.readFileString('/home/main/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
-    expect(kernel.readFileString('/home/main/SOUL.md')).toBe(SOUL);
-    // Moved, not copied: SOUL.md keeps the kernel ownership that protects it.
-    expect(kernel.stat('/home/main/SOUL.md')).toMatchObject({ uid: 0, mode: expect.any(Number) });
-    expect(kernel.stat('/home/main/SOUL.md').mode & 0o777).toBe(0o444);
-  });
-
-  test('runs its shell from /home/main', async () => {
-    const { bundle } = await boot(await nimbusSeededWorkspace());
-    const ran = await bundle.shell.exec('pwd && cat notes.md && echo "$HOME"');
-
-    expect(ran.stdout).toBe('/home/main\n# coupon regression\n/home/main\n');
-  });
-
-  test('moves once: a second boot finds the same tree, and no /home/user', async () => {
-    const database = await nimbusSeededWorkspace();
-    await boot(database);
-    const { kernel } = await boot(database);
-
-    expect(kernel.readdir('/home').map((entry) => `${entry.name}:${entry.type}`)).toEqual(['main:directory']);
-    expect(kernel.readFileString('/home/main/notes.md')).toBe('# coupon regression\n');
-  });
-});
 
 describe('a new workspace', () => {
   test('has /home/main and no /home/user', async () => {
@@ -99,31 +64,9 @@ describe('a new workspace', () => {
   });
 });
 
-describe('the link an earlier boot made from /home/user', () => {
-  // Relative since Python's WASI refused an absolute target; an earlier boot made it absolute.
-  for (const target of ['main', '/home/main']) {
-    test(`goes on the next boot (${target}), and the home keeps its files`, async () => {
-      const database = await nimbusSeededWorkspace();
-      const { kernel } = await boot(database);
-      kernel.symlink(target, '/home/user');
-
-      const booted = (await boot(database)).kernel;
-
-      expect(booted.exists('/home/user')).toBe(false);
-      expect(booted.readFileString('/home/main/notes.md')).toBe('# coupon regression\n');
-    });
-  }
-
-  test('to anywhere else stays', async () => {
-    const database = await nimbusSeededWorkspace();
-    const { kernel } = await boot(database);
-    kernel.symlink('/srv', '/home/user');
-
-    expect((await boot(database)).kernel.readlink('/home/user')).toBe('/srv');
-  });
-
-  test("a workspace settled while /home was its agent's takes /home back on its next boot", async () => {
-    const database = await nimbusSeededWorkspace();
+describe('/home', () => {
+  test("a workspace whose /home an agent came to own takes it back on its next boot", async () => {
+    const database = new Database(':memory:');
     const settled = await boot(database);
     // As a boot before this one left it.
     settled.kernel.chown('/home', SESSION_UID, SESSION_UID);
@@ -144,37 +87,6 @@ describe('a subagent', () => {
 
     expect(home).toBe('/home/sub-reviewer');
     expect(kernel.readdir('/home').map((entry) => entry.name).sort((a, b) => a.localeCompare(b))).toEqual(['main', 'sub-reviewer']);
-  });
-});
-
-describe('a move cut short', () => {
-  test('finishes on the next boot when /home/main holds only part of the tree', async () => {
-    const database = await nimbusSeededWorkspace();
-    const { user } = await substrate(database);
-    // What a boot that stopped after publishing the first entries left behind.
-    user.mkdir('/home/main/data', { recursive: true });
-    user.writeFile('/home/main/notes.md', '# coupon regression\n');
-
-    const booted = (await boot(database)).kernel;
-
-    expect(booted.readFileString('/home/main/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
-    expect(booted.readFileString('/slates/queue/package.json')).toBe('{"name":"queue"}');
-    expect(booted.readFileString('/home/main/SOUL.md')).toBe(SOUL);
-    expect(booted.exists('/home/user')).toBe(false);
-  });
-
-  test('finishes on the next boot when /home/user holds only what was not yet retired', async () => {
-    const database = await nimbusSeededWorkspace();
-    await boot(database);
-    // A boot that published everything and stopped while retiring the old name, deepest first.
-    const { kernel, user } = await substrate(database);
-    kernel.chown('/home', SESSION_UID, SESSION_UID);
-    user.mkdir('/home/user/data', { recursive: true });
-
-    const booted = (await boot(database)).kernel;
-
-    expect(booted.readFileString('/home/main/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
-    expect(booted.exists('/home/user')).toBe(false);
   });
 });
 

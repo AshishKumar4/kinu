@@ -30,10 +30,10 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 
 /** The dedicated checkout continuous staging deploys from, and no one edits. */
-export const WORKTREE = '/mnt/scratch/kinu/wt/staging-loop';
+export const WORKTREE = '/mnt/local/kinu/wt/staging-loop';
 
 /** The dedicated checkout auto-promotion promotes from, and no one edits. */
-export const PROMOTE_WORKTREE = '/mnt/scratch/kinu/wt/promote-loop';
+export const PROMOTE_WORKTREE = '/mnt/local/kinu/wt/promote-loop';
 
 /** A staging deploy's credentials, as `KEY=value` lines, written by whoever owns them; mode 600. */
 export const ENV_FILE = join(homedir(), '.config', 'kinu', 'staging-deploy.env');

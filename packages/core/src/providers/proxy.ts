@@ -117,14 +117,10 @@ export function proxyTargetAllowed(target: string, base: string, method: string)
   return PROXY_ALLOWED_ENDPOINTS.some((allowed) => allowed.method === verb && allowed.path.test(endpoint));
 }
 
-/** Secret-free marker resolution, plus the base URL when known. No proxied
+/** Secret-free marker resolution, plus the credential's endpoint when known. No proxied
  *  refresh on a refusal: its users, the subscription logins, are refused by the proxy. */
-export function proxyAuthResolution(credKey: string, baseURL?: string | null): AuthResolution {
-  const resolution: AuthResolution = { headers: { [PROXY_CRED_HEADER]: credKey } };
-
-  if (baseURL) resolution.baseURL = baseURL;
-
-  return resolution;
+export function proxyAuthResolution(credKey: string, endpoint?: Pick<AuthResolution, 'baseURL' | 'contextWindow'>): AuthResolution {
+  return { headers: { [PROXY_CRED_HEADER]: credKey }, ...endpoint };
 }
 
 export interface ProviderProxyFetchOptions {

@@ -5,7 +5,7 @@ import { isStepCount, tool, type ModelMessage, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
-  runChat,
+  runChat, createFallbackCooldowns,
   createAnthropicProvider, createOpenAIProvider, createOpenRouterProvider, createOpenAICompatProvider, createClaudeProvider, CLAUDE_CRED_KEY,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
@@ -263,6 +263,38 @@ describe('one TTL per request, in the order Anthropic reads it', () => {
 
     expect(ttls.length).toBeGreaterThanOrEqual(3);
     expect(new Set(ttls).size).toBe(1);
+  });
+  // Audit New#2: a fallback is prepared for the provider serving it, per m1820's fallback chain.
+  test('an OpenAI turn that falls back to Claude sends Claude its own cache markers and replay', async () => {
+    const mock = createMockFetch([
+      { match: 'api.openai.com', respond: { status: 503, body: JSON.stringify({ error: { message: 'overloaded', type: 'server_error' } }) } },
+      { match: 'api.anthropic.com', respond: () => ({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: ANTHROPIC_TEXT_SSE }) },
+    ]);
+
+    const deps = makeDeps({
+      [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-openai' } },
+      [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test' } },
+    }, mock.fetch);
+
+    await drain({
+      model: createOpenAIProvider().createModel('gpt-5.5', deps), modelSpec: 'openai/gpt-5.5',
+      fallbacks: [{
+        spec: 'anthropic/claude-opus-5-5', accepts: new Set(), window: { contextWindow: null, modelOutputLimit: null },
+        bind: () => ({ model: createAnthropicProvider().createModel('claude-opus-5-5', deps), provider: 'anthropic' }),
+      }],
+      cooldowns: createFallbackCooldowns(),
+      system: 'You are Kinu.', history: GPT_THEN_CLAUDE, tools: chatTools(),
+      cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'kinu-test' },
+    });
+
+    const sent = mock.requests.findIndex((request) => request.url.includes('api.anthropic.com'));
+    const body = bodyOf(mock, sent);
+
+    expect({
+      system: breakpointTtls({ system: body.system ?? [], messages: [] }).length,
+      tools: breakpointTtls({ tools: body.tools ?? [], messages: [] }).length,
+      replayedOpenAiItem: JSON.stringify(body.messages).includes('rs_1'),
+    }).toEqual({ system: 1, tools: 1, replayedOpenAiItem: false });
   });
 });
 

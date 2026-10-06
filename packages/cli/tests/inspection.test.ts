@@ -159,10 +159,10 @@ test("a genuinely unreadable workspace names its cause instead of hiding it", as
   expect(list.stdout).toContain("unreadable:");
 
   // Assert contract fields, not rendered lines, which may change formatting.
-  const line = list.stderr.trim().split('\n')
-    .find((row) => row.includes('workspace.read_failed'));
+  const log = readFileSync(join(home, "cli.log"), "utf-8");
+  const line = log.trim().split('\n').find((row) => row.includes('workspace.read_failed'));
 
-  if (line === undefined) throw new Error(`no workspace.read_failed diagnostic in stderr: ${list.stderr}`);
+  if (line === undefined) throw new Error(`no workspace.read_failed diagnostic in cli.log: ${log}`);
 
   const diagnostic = v.parse(v.object({
     event: v.literal('workspace.read_failed'),
@@ -302,6 +302,28 @@ describe("CLI inspection commands", () => {
     expect(unknownProvider.stderr).toContain('Unknown model provider "unknown"');
     expect(unknownProvider.stderr).toContain("workers-ai");
     expect(unknownProvider.stdout).not.toContain("set unknown/model");
+  });
+
+  // stderr is the person's screen, and under the TUI a stray line corrupts it.
+  test("a slow model listing is logged to cli.log, not printed", async () => {
+    const home = scratchDir("cli-model-slow");
+    await createLocalAgent(home, "localtest");
+    const slowFetch = join(home, "slow-fetch.ts");
+
+    writeFileSync(slowFetch, `
+      const now = Date.now;
+      let held = 0;
+      Date.now = () => now() + held;
+      globalThis.fetch = async () => { held += 5_000; return new Response("{}", { status: 503 }); };
+    `);
+
+    const run = await runToExit([process.execPath, "--preload", slowFetch, cliBin, "model", "localtest", "workers-ai/@cf/meta/llama-3.1-8b-instruct"], {
+      cwd: newProjectDir(),
+      env: { ...process.env, KINU_HOME: home, KINU_BASE_URL: "http://localhost:1/v1", KINU_AUTH: "Bearer x" },
+    });
+
+    expect([run.exitCode, run.stderr]).toEqual([0, ""]);
+    expect(readFileSync(join(home, "cli.log"), "utf-8")).toContain("models.listing_slow");
   });
 
   // `jobs` and `triggers` read opts.json, so commander must accept `--json`.

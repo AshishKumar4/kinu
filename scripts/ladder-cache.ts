@@ -55,11 +55,23 @@ export function cacheEnabled(options: { readonly changedFrom?: string; readonly 
 
 const PackageVersion = v.object({ version: v.string() });
 
+/** The `node` on PATH, which the lint row runs: under Bun, `process.versions.node` is Bun's compatibility
+ *  value, so an upgraded Node would reuse the old Node's verdicts. Asked once per run. */
+export async function pathNodeVersion(): Promise<string> {
+  const node = Bun.which('node');
+
+  if (node === null) return 'absent';
+  const child = Bun.spawn([node, '--version'], { stdin: 'ignore', stdout: 'pipe', stderr: 'ignore' });
+  const [text, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+
+  return code === 0 ? text.trim() : 'unreadable';
+}
+
 /** The toolchain a gate's verdict stands on. Package versions are read from
- *  the installed manifests under `root` rather than spawned, so the key costs
- *  no process; the runtimes are the ones running this program. A package that
- *  is not installed is recorded as `absent`, which is a version too. */
-export function toolVersions(root: string): ToolVersions {
+ *  the installed manifests under `root` rather than spawned; `node` is the
+ *  PATH node's version. A package that is not installed is recorded as
+ *  `absent`, which is a version too. */
+export function toolVersions(root: string, node: string): ToolVersions {
   const installed = (name: string): string => {
     const manifest = join(root, 'node_modules', name, 'package.json');
 
@@ -70,7 +82,7 @@ export function toolVersions(root: string): ToolVersions {
 
   return {
     bun: `${Bun.version}+${Bun.revision}`,
-    node: process.versions.node,
+    node,
     typescript: installed('typescript'),
     oxlint: installed('oxlint'),
     wrangler: installed('wrangler'),

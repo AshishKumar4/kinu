@@ -177,7 +177,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
   async code(mode: WorkMode, code: string): Promise<{ answer: string; file: string }> {
     const vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
     // As a workspace boot leaves it: Nimbus's base tree, and the workspace root the session user owns.
-    seedBaseFilesystem(vfs);
+    seedBaseFilesystem(vfs, WORKSPACE_ROOT);
     settleWorkspaceRoot(vfs.as(CRED_KERNEL));
     const files = vfs.as(CRED_SESSION_USER);
 

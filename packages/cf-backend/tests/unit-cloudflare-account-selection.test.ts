@@ -69,8 +69,8 @@ describe('Cloudflare account selection', () => {
         selectedId: PERSONAL.id,
         accounts: [PERSONAL, EMPLOYER],
       });
-      expect(await harness.userDO.getCredentialBaseURL(await testOwner(), CLOUDFLARE_OAUTH_CRED_KEY))
-        .toBe(`https://api.cloudflare.com/client/v4/accounts/${PERSONAL.id}/ai/v1`);
+      expect(await harness.userDO.getCredentialEndpoint(await testOwner(), CLOUDFLARE_OAUTH_CRED_KEY))
+        .toEqual({ baseURL: `https://api.cloudflare.com/client/v4/accounts/${PERSONAL.id}/ai/v1` });
     } finally {
       harness.close();
       restore();
@@ -87,8 +87,8 @@ describe('Cloudflare account selection', () => {
       await harness.userDO.selectCloudflareAccount(owner, EMPLOYER.id);
 
       expect(await harness.userDO.listCloudflareAccounts(owner)).toMatchObject({ selectedId: EMPLOYER.id });
-      expect(await harness.userDO.getCredentialBaseURL(owner, CLOUDFLARE_OAUTH_CRED_KEY))
-        .toBe(`https://api.cloudflare.com/client/v4/accounts/${EMPLOYER.id}/ai/v1`);
+      expect(await harness.userDO.getCredentialEndpoint(owner, CLOUDFLARE_OAUTH_CRED_KEY))
+        .toEqual({ baseURL: `https://api.cloudflare.com/client/v4/accounts/${EMPLOYER.id}/ai/v1` });
       expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_OAUTH_CRED_KEY))
         .toMatchObject({ Authorization: 'Bearer cf-access' });
     } finally {

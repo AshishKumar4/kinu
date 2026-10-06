@@ -1,5 +1,5 @@
 // One DNS label `<handle>-<token>-<workspace>`, parsed positionally; fixed-width fields leave room for
-// `WORKSPACE_ADDRESS_MAX`, so no workspace address is ever truncated.
+// `WORKSPACE_ADDRESS_MAX`; a preview label puts its port before it.
 
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
@@ -19,6 +19,7 @@ export interface SlateShareLabel {
   workspace: string;
 }
 
+/** The label's fields, lowercased; null where one is malformed. */
 export function parseSlateShareLabel(label: string): SlateShareLabel | null {
   const lower = label.toLowerCase();
   const tokenStart = HANDLE_LENGTH + 1;
@@ -37,6 +38,19 @@ export function parseSlateShareLabel(label: string): SlateShareLabel | null {
   return { handle, token, workspace };
 }
 
+/** The label; null for an unusable workspace name, a throw for a malformed handle or token. */
+export function slateShareLabel(parts: { handle: string; token: string; workspace: string }, what: string): string | null {
+  return settleSync(Effect.gen(function* () {
+    const { handle, token, workspace } = parts;
+
+    if (!HANDLE_RE.test(handle)) return yield* Effect.die(new Error(`Invalid ${what} handle`));
+
+    if (!TOKEN_RE.test(token)) return yield* Effect.die(new Error(`Invalid ${what} token`));
+
+    return workspaceAddressRefusal(workspace) === null ? `${handle}-${token}-${workspace}` : null;
+  }));
+}
+
 /** Null when the workspace name does not fit (reported as "no URL"); malformed handle or token throws. */
 export function buildSlateShareHost(parts: {
   handle: string;
@@ -44,16 +58,7 @@ export function buildSlateShareHost(parts: {
   workspace: string;
   suffix: string;
 }): string | null {
-  return settleSync(Effect.gen(function* () {
-    const { handle, token, workspace, suffix } = parts;
+  const label = slateShareLabel(parts, 'slate share');
 
-    if (!HANDLE_RE.test(handle)) return yield* Effect.die(new Error('Invalid slate share handle'));
-
-    if (!TOKEN_RE.test(token)) return yield* Effect.die(new Error('Invalid slate share token'));
-
-    if (workspaceAddressRefusal(workspace) !== null) return null;
-    const label = `${handle}-${token}-${workspace}`;
-
-    return label.length > 63 ? null : `${label}.${suffix}`;
-  }));
+  return label === null || label.length > 63 ? null : `${label}.${parts.suffix}`;
 }

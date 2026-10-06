@@ -30,7 +30,6 @@ import {
   searchLocalMemory,
 } from '../local-inspection';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { installTurnDiagnostics } from '../turn-log';
 
 /** `--no-transcript` arrives as `transcript: false`, not `noTranscript: true`. */
 interface TranscriptFlags {
@@ -135,8 +134,6 @@ async function runOneShot(
 ): Promise<boolean> {
   // A one-shot run never starts the evolution pass it cannot finish; the daemon runs it (see AgentOrchestrator's exit contract).
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  // Diagnostics go to the turn log: in --json mode stderr is empty on success and holds only the error on failure.
-  installTurnDiagnostics();
 
   const client = await createAgentClient(
     target,

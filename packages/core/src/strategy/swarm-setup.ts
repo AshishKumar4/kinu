@@ -216,7 +216,7 @@ export async function prepareParetoMeasurement(input: {
     const kind = registeredVerifierKind(component.objective.verify.kind);
 
     if (kind === null) return unregisteredKindRefusalFor(component.objective.verify.kind);
-    const fault = await preflightVerifier(kind, ctx);
+    const fault = await preflightVerifier(ctx);
 
     if (fault !== null) {
       return unavailable(`the "${kind}" Pareto instrument cannot run in this workspace: ${fault}`);
@@ -306,7 +306,7 @@ function measurementPlan(input: {
       + 'well-formed; the instrument is absent.');
   }
 
-  const instrumentFault = yield* Effect.promise(() => preflightVerifier(kind, ctx));
+  const instrumentFault = yield* Effect.promise(() => preflightVerifier(ctx));
 
   if (instrumentFault !== null) {
     return unavailable(`the "${kind}" instrument cannot run in this workspace's shell, so no `
@@ -333,7 +333,7 @@ function measurementPlan(input: {
     const witnessKind = registeredVerifierKind(measured.witness.kind);
 
     if (witnessKind === null) return unregisteredKindRefusalFor(measured.witness.kind);
-    const witnessFault = yield* Effect.promise(() => preflightVerifier(witnessKind, ctx));
+    const witnessFault = yield* Effect.promise(() => preflightVerifier(ctx));
 
     if (witnessFault !== null) {
       return unavailable(`the witness instrument cannot run in this workspace: ${witnessFault}`);

@@ -10,7 +10,6 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
-import { vfsBasename } from '../utils/vfs-helpers';
 import * as v from 'valibot';
 import { ownerSoulDb, SOUL_PATH, UNVERIFIED_SOUL_PATH } from '../identity/soul';
 import { parseActorKey } from '../identity/actor-key';
@@ -203,24 +202,10 @@ export function provisionAgentHome(root: HomeRootVfs, agentName: string, identit
 }
 
 export type RootMoveVfs = Pick<CredentialedVfs,
-  'exists' | 'isDirectory' | 'isSymlink' | 'readlink' | 'readdir' | 'rename' | 'removeRecursive' | 'unlink'
-  | 'stat' | 'chown' | 'chmod'>;
+  'exists' | 'isDirectory' | 'isSymlink' | 'readdir' | 'rename' | 'removeRecursive' | 'unlink' | 'stat' | 'chown' | 'chmod'>;
 
-/** Nimbus before 0.15 seeded it, and Kinu linked it to {@link WORKSPACE_ROOT}; its HOME is now the only home. */
-const LEGACY_HOME = '/home/user';
-
-export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
-  if (kernel.isSymlink(LEGACY_HOME)) {
-    if ([vfsBasename(WORKSPACE_ROOT), WORKSPACE_ROOT].includes(kernel.readlink(LEGACY_HOME))) kernel.unlink(LEGACY_HOME);
-  } else if (kernel.isDirectory(LEGACY_HOME)) {
-    if (kernel.exists(WORKSPACE_ROOT)) {
-      moveMissing(kernel, LEGACY_HOME, WORKSPACE_ROOT);
-      kernel.removeRecursive(LEGACY_HOME);
-    } else {
-      kernel.rename(normalizeVfsPath(LEGACY_HOME), normalizeVfsPath(WORKSPACE_ROOT));
-    }
-  }
-
+/** Nimbus seeds the configured HOME (env.HOME is {@link WORKSPACE_ROOT}); `/home` holds every agent's, so root owns it. */
+export function settleWorkspaceRoot(kernel: Pick<RootMoveVfs, 'stat' | 'chown' | 'chmod'>): void {
   const homes = kernel.stat('/home');
 
   if (homes.uid !== 0 || homes.gid !== 0 || (homes.mode & 0o7777) !== 0o755) {

@@ -36,7 +36,7 @@ import {
   UserSessions, CLI_AGENT_WEBSOCKET_CAPABILITY, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
 
-import { UserCredentials, type CodexStatus, type ConnectedProvider, type CredentialSummary } from './credentials';
+import { UserCredentials, type CredentialEndpoint, type CodexStatus, type ConnectedProvider, type CredentialSummary } from './credentials';
 import { UserWorkspaces, type WorkspaceEntry, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult, type SharedBlueprintReceipt, type UserProfile } from './profile';
 import type { SqlRow, UserObjectHost } from './user-host';
@@ -264,8 +264,8 @@ export class UserDO extends Agent<Env> {
     return this.credentials.resolveEgressInjection(caller, facts, active);
   }
 
-  getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null> {
-    return this.credentials.getCredentialBaseURL(caller, key);
+  getCredentialEndpoint(caller: UserCaller, key: string): Promise<CredentialEndpoint | null> {
+    return this.credentials.getCredentialEndpoint(caller, key);
   }
 
   getAuthHeaders(caller: UserCaller, key: string, opts?: AuthRequest): Promise<Record<string, string> | null> {

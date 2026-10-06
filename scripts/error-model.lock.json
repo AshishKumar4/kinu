@@ -228,7 +228,7 @@
     "packages/core/src/vfs/mounts.ts#catch": 2,
     "packages/core/src/vfs/mounts.ts#result-literal": 2,
     "packages/core/src/vfs/mounts.ts#result-type": 3,
-    "packages/core/src/vfs/mounts.ts#throw": 20,
+    "packages/core/src/vfs/mounts.ts#throw": 6,
     "packages/core/src/vfs/nimbus-workspace.ts#catch": 2,
     "packages/core/src/vfs/nimbus-workspace.ts#throw": 3,
     "packages/core/src/vfs/workspace-runtimes.ts#catch": 1,

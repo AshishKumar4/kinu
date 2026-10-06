@@ -38,6 +38,8 @@ export function createModelsDevCatalogSource(opts: ModelsDevCatalogSourceOptions
   const providers = new Map<string, ModelProvider>();
 
   return {
+    id: 'catalog',
+    label: 'models.dev catalog',
     get(providerId) {
       if (excluded.has(providerId) || !PROVIDER_ID_PATTERN.test(providerId)) return undefined;
       let provider = providers.get(providerId);

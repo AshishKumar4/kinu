@@ -44,7 +44,11 @@ export function shellMounts(filesystem: ProcessFiles, table: ShellMountTable): S
           }
 
           return files;
-        }, { readOnly, absentReason: (principal) => mountFor(principal, name)?.absentReason() ?? `nothing is mounted at /${name} for this user` });
+        }, {
+          resolvesPaths: true,
+          readOnly,
+          absentReason: (principal) => mountFor(principal, name)?.absentReason() ?? `nothing is mounted at /${name} for this user`,
+        });
       }
     },
   };

@@ -18,7 +18,7 @@ import { settle } from '../obs/effect';
 import { KinuError } from '../obs/error';
 import { VfsExportPageSchema } from '../vfs/export-page';
 import { isNimbusTable } from '../vfs/nimbus-tables';
-import { SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { isTreeRelativePath, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { SOUL_PATH } from './soul';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
@@ -460,10 +460,7 @@ function withoutRowidKey(sql: SqlExec, table: SchemaObject): Effect.Effect<reado
 }
 
 function archivePath(path: string): Effect.Effect<string> {
-  const invalid = !path || path.startsWith('/') || path.endsWith('/')
-    || path.split('/').some((part) => !part || part === '.' || part === '..');
-
-  return invalid ? Effect.die(new Error(`Invalid workspace archive path: ${JSON.stringify(path)}.`)) : Effect.succeed(path);
+  return !isTreeRelativePath(path) ? Effect.die(new Error(`Invalid workspace archive path: ${JSON.stringify(path)}.`)) : Effect.succeed(path);
 }
 
 function archiveEntries(source: ArchiveFileSource): Effect.Effect<ArchiveFileEntry[]> {
@@ -802,7 +799,7 @@ function isCarriedRoot(stored: string): boolean {
   const parent = root.slice(0, Math.max(0, root.lastIndexOf('/')));
   const name = root.slice(parent.length + 1);
 
-  if (name === '' || name === '.' || name === '..') return false;
+  if (!isTreeRelativePath(name)) return false;
 
   if (parent === WORKSPACE_ROOT) return !Object.hasOwn(MAIN_HOME_NOT_CARRIED, name);
 

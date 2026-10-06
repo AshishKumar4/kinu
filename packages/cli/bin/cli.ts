@@ -7,12 +7,16 @@ import { buildProgram } from '../src/program';
 import { chatCommand } from '../src/commands/chat';
 import { printHelp, printFailure, DIM } from '../src/display';
 import { runStartupUpdateCheck } from '../src/version-check';
+import { installTurnDiagnostics } from '../src/turn-log';
 
 const program = buildProgram();
 
 // No args in a real terminal opens the interactive agent flow. Root --help
 // remains branded help, and subcommand help is left to Commander.
 const topLevelArgs = process.argv.slice(2);
+
+// The daemon's shell is spawned with daemon.log as its stderr; every other command's stderr is a screen.
+if (topLevelArgs[0] !== 'daemon' || topLevelArgs[1] !== 'shell') installTurnDiagnostics();
 
 if (topLevelArgs.length === 0) {
   if (process.stdin.isTTY && process.stdout.isTTY) {

@@ -1102,7 +1102,8 @@ describe('the /skills view', () => {
     await expect(plane.readFile(skillViewPath('nope'))).rejects.toThrow("'/skills/nope/SKILL.md'");
   });
 
-  test('every write is refused and names where a skill is written instead', async () => {
+  // Where a skill is written instead is in every prompt's skills index (render.ts).
+  test('every write is refused, and nothing it named changes', async () => {
     const plane = skillsPlane(files);
 
     for (const write of [
@@ -1111,7 +1112,6 @@ describe('the /skills view', () => {
       () => plane.unlink(skillViewPath('review')),
     ]) {
       await expect(write()).rejects.toMatchObject({ code: 'EROFS' });
-      await expect(write()).rejects.toThrow(`${WORKSPACE_SKILLS_DIR}/<name>/SKILL.md`);
     }
 
     expect(await readText(plane, skillViewPath('deploy'))).toBe(files[`${WORKSPACE_SKILLS_DIR}/deploy/SKILL.md`]);

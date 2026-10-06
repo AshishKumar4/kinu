@@ -23,13 +23,13 @@ function storedConfig(home: string): JsonObject {
 }
 
 /** Child process, so KINU_HOME is read fresh and the developer's ~/.kinu is untouched. */
-async function runStore(home: string, opts: { local: boolean; origin?: string; endpoint?: string }) {
+async function runStore(home: string, opts: { local: boolean; origin?: string; endpoint?: string; contextWindow?: string }) {
   const provider = opts.endpoint === undefined ? 'openrouter' : 'openai-compatible';
 
   // An endpoint's model is named up front: these endpoints are unreachable on purpose, so nothing may probe them.
   const answers = opts.endpoint === undefined
     ? ['sk-or-secret', 'anthropic/claude-x']
-    : [opts.endpoint, 'sk-or-secret'];
+    : [opts.endpoint, 'sk-or-secret', opts.contextWindow ?? ''];
 
   const model = opts.endpoint === undefined ? {} : { model: 'gpt-oss:20b' };
 
@@ -134,6 +134,32 @@ describe('where a provider secret is written', () => {
 
     expect(res.stdout).toContain('WHERE:local');
     expect(JSON.stringify(storedConfig(home))).toContain('sk-or-secret');
+  });
+
+  // The window the owner declares travels with the endpoint, to the account or this disk alike.
+  test('a declared context window is stored with the endpoint, on the account and on this disk', async () => {
+    const received: string[] = [];
+
+    const server = Bun.serve({
+      port: 0, hostname: '127.0.0.1',
+      fetch: async (request) => {
+        received.push(await request.text());
+
+        return Response.json({ ok: true }, { status: 201 });
+      },
+    });
+
+    const account = kinuHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
+    const local = kinuHome({});
+
+    try {
+      expect((await runStore(account, { local: false, endpoint: 'https://llm.example.com/v1', contextWindow: '131,072' })).stdout).toContain('WHERE:account');
+      expect((await runStore(local, { local: true, endpoint: 'http://localhost:11434/v1', contextWindow: '131072' })).stdout).toContain('WHERE:local');
+      expect(received.map((body) => v.parse(v.object({ contextWindow: v.number() }), JSON.parse(body)).contextWindow)).toEqual([131_072]);
+      expect(JSON.stringify(storedConfig(local))).toContain('"contextWindow":131072');
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test('a public https endpoint lets the account hold the key', async () => {

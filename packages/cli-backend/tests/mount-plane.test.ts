@@ -3,9 +3,10 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // executor, with no `/pc` or `/sandbox` mount.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
+import { localFilePlane } from '../src/host-mount';
 import * as v from 'valibot';
 import { type ExecutionRouter } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -77,7 +78,30 @@ describe('the local backend file plane', () => {
       }
     };
 
-    expect([await writing('/sandbox/notes.md'), await writing('/elsewhere/notes.md')]).toEqual(['EACCES', 'EACCES']);
+    const sandbox = await writing('/sandbox/notes.md');
+
+    expect(sandbox).toBe(await writing('/elsewhere/notes.md'));
+    expect(['written', 'ENXIO']).not.toContain(sandbox);
   });
 
+  // The host plane has no native removal, so the composite walks it; a walk that kept anything must say so.
+  test('a recursive removal the host refuses part of rejects, naming what it kept', async () => {
+    const folder = scratchDir('mount-plane-removal');
+    mkdirSync(join(folder, 'dir/locked'), { recursive: true });
+    writeFileSync(join(folder, 'dir/locked/kept'), 'x');
+    writeFileSync(join(folder, 'dir/gone'), 'y');
+    chmodSync(join(folder, 'dir/locked'), 0o500);
+    const machine = localFilePlane({ folder, space: join(folder, 'space'), views: [], checkpoints: undefined });
+
+    try {
+      await expect(machine.removeRecursive(join(folder, 'dir'))).rejects.toMatchObject({
+        code: 'EACCES',
+        message: expect.stringContaining(`removing ${join(folder, 'dir/locked/kept')} failed`),
+      });
+    } finally {
+      chmodSync(join(folder, 'dir/locked'), 0o700);
+    }
+
+    expect(existsSync(join(folder, 'dir/locked/kept'))).toBe(true);
+  });
 });

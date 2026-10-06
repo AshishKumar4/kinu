@@ -1,7 +1,6 @@
 /**
- * The closed registry `VerifierSpec.kind` resolves against: an unregistered kind
- * is refused as bad_input before a run starts. Each kind owns its `spec` schema.
- * `spec` is never case-transformed, so `verifierDigest` has one input.
+ * The closed registry `VerifierSpec.kind` resolves against; an unregistered kind is refused as bad_input.
+ * Each kind owns its `spec` schema; `spec` is never case-transformed, so `verifierDigest` has one input.
  * Spec: docs/EXPLORATION.md "The closed verifier registry", "Comparability", "The floor", "Refusals".
  */
 import * as v from 'valibot';
@@ -15,7 +14,7 @@ import {
   type Measurement, type MeasurementContext, type Verifier, type VerifierKind,
   type VerifierSpec,
 } from './objective';
-import { renderIssues, type JsonValue } from '../utils/json';
+import { renderIssues } from '../utils/json';
 import type { SwarmRefusal } from './swarm';
 
 // Declared in `objective.ts` beside the field it closes, to avoid an import cycle.
@@ -38,68 +37,38 @@ const ExecRatioSpecSchema = v.strictObject({
   lowerBoundOps: v.pipe(v.number(), v.finite()),
 });
 
-/** One registered kind as the registry holds it. */
-interface VerifierKindEntry {
-  /** The path a candidate's artifact must occupy for this kind to measure it. */
-  readonly artifact: string;
-  /** The key in `MeasuredValue.measured` carrying the measured baseline, or null. */
-  readonly baselineKey: string | null;
-  /** The instrument's content digest. A producer, not a string, to keep hashing
-     *  off the import path of the browser bundle. */
-  readonly implementation: () => string;
-  /**
-     * Whether this instrument can run in the workspace at all, independent of `spec`;
-     * `null` when it can, else the reason. Checked before `spec` is reported on.
-     */
-  readonly preflight: (ctx: MeasurementContext) => Promise<string | null>;
-  readonly bind: (spec: JsonValue) => { readonly verify: Verifier } | { readonly issues: string };
-}
+type ExecRatioSpec = v.InferOutput<typeof ExecRatioSpecSchema>;
 
-const EXEC_RATIO: VerifierKindEntry = {
-  artifact: SOLUTION_FILE,
-  baselineKey: 'refOps',
-  implementation: execRatioImplementation,
-  preflight: preflightRatioHarness,
-  bind: (spec) => {
-    const parsed = v.safeParse(ExecRatioSpecSchema, spec);
+/** The one registered kind's measurement: a candidate's oracle calls against the reference's, on one instance. */
+function execRatioVerifier(problem: ExecRatioSpec): Verifier {
+  return async (ctx): Promise<Measurement> => {
+    // No catch: a harness that cannot run is a broken instrument and must fault the run, not score a candidate badly.
+    const m = await runRatioMeasurement(ctx, problem);
+    const measured = { refOps: m.refOps, candOps: m.candOps, refMs: m.refMs, candMs: m.candMs };
 
-    if (!parsed.success) return { issues: renderIssues(parsed.issues) };
-    const problem = parsed.output;
+    if (m.failure !== null) {
+      return { kind: 'unmeasurable', detail: `no usable solution: ${m.failure}`, measured };
+    }
+
+    if (!m.correct) {
+      return {
+        kind: 'unmeasurable',
+        detail: `wrong answer at ${String(m.candOps)} oracle calls: correctness gates the `
+          + 'measurement, so an incorrect answer has no cost worth comparing however cheap it was',
+        measured,
+      };
+    }
 
     return {
-      verify: async (ctx): Promise<Measurement> => {
-        // No catch: a harness that cannot run is a broken instrument and must fault
-                // the run, not score a candidate badly.
-        const m = await runRatioMeasurement(ctx, problem);
-        const measured = { refOps: m.refOps, candOps: m.candOps, refMs: m.refMs, candMs: m.candMs };
-
-        if (m.failure !== null) {
-          return { kind: 'unmeasurable', detail: `no usable solution: ${m.failure}`, measured };
-        }
-
-        if (!m.correct) {
-          return {
-            kind: 'unmeasurable',
-            detail: `wrong answer at ${String(m.candOps)} oracle calls: correctness gates the `
-              + 'measurement, so an incorrect answer has no cost worth comparing however cheap it was',
-            measured,
-          };
-        }
-
-        return {
-          kind: 'measured',
-          // Raw, in the objective's unit; normalisation happens once in the harness (*Raw units*).
-          value: m.candOps,
-          detail: `${String(m.candOps)} oracle calls against the reference's ${String(m.refOps)} on the `
-            + 'same instance in the same process',
-          measured,
-        };
-      },
+      kind: 'measured',
+      // Raw, in the objective's unit; normalisation happens once in the harness (*Raw units*).
+      value: m.candOps,
+      detail: `${String(m.candOps)} oracle calls against the reference's ${String(m.refOps)} on the `
+        + 'same instance in the same process',
+      measured,
     };
-  },
-};
-
-const ENTRIES = { 'exec-ratio': EXEC_RATIO } satisfies Record<VerifierKind, VerifierKindEntry>;
+  };
+}
 
 export interface ResolvedVerifier {
   readonly kind: VerifierKind;
@@ -130,11 +99,12 @@ export function unregisteredKindRefusalFor(kind: string): SwarmRefusal {
   };
 }
 
-/** Ask a registered instrument whether it can run in this workspace, before a run is accepted. */
-export async function preflightVerifier(
-  kind: VerifierKind, ctx: MeasurementContext,
-): Promise<string | null> {
-  return ENTRIES[kind].preflight(ctx);
+/**
+ * Whether the registered instrument can run in this workspace, before a run is accepted: `null` when it can, else the
+ * reason. Independent of `spec`, so it is asked before `spec` is reported on.
+ */
+export async function preflightVerifier(ctx: MeasurementContext): Promise<string | null> {
+  return preflightRatioHarness(ctx);
 }
 
 /** Resolve a `VerifierSpec` to its instrument, or refuse as a value (never a throw). */
@@ -142,26 +112,20 @@ export function resolveVerifier(source: VerifierSpec): ResolvedVerifier | SwarmR
   const kind = registeredVerifierKind(source.kind);
 
   if (kind === null) return unregisteredKindRefusalFor(source.kind);
-  const entry = ENTRIES[kind];
-  const bound = entry.bind(source.spec);
+  const parsed = v.safeParse(ExecRatioSpecSchema, source.spec);
 
-  if ('issues' in bound) {
+  if (!parsed.success) {
     return {
       reason: 'bad_input',
       error: refusalOf(new KinuError(
         'bad_input',
-        `\`spec\` does not describe a "${kind}" measurement: ${bound.issues}. Every field is `
+        `\`spec\` does not describe a "${kind}" measurement: ${renderIssues(parsed.issues)}. Every field is `
         + 'required: one that is missing is a quantity the floor and its margin checks '
         + 'would otherwise have to invent.',
       )).error,
     };
   }
 
-  return {
-    kind,
-    artifact: entry.artifact,
-    baselineKey: entry.baselineKey,
-    implementation: entry.implementation(),
-    verify: bound.verify,
-  };
+  // The digest is produced here, not at import, to keep hashing off the browser bundle's import path.
+  return { kind, artifact: SOLUTION_FILE, baselineKey: 'refOps', implementation: execRatioImplementation(), verify: execRatioVerifier(parsed.output) };
 }

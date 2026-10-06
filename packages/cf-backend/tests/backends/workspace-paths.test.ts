@@ -177,12 +177,12 @@ for (const name of testBackends()) {
         expect(await plane.read('pc/studio/item.txt')).toMatchObject({ content: 'local device spelling' });
         expect(await plane.read('shared/item.txt')).toMatchObject({ content: 'local shared spelling' });
         expect((await plane.read('/shared/item.txt')).error).toContain('ENXIO');
-        // A mount on the cloud refuses a climb out of it; a real path climbs as POSIX does.
-        expect((await plane.read('/shared/../item.txt')).error).toContain(name === 'cf' ? 'EPERM' : 'ENOENT');
+        // `..` climbs lexically on both backends, as POSIX does: out of a mount it lands beside the mount point.
+        expect((await plane.read('/shared/../item.txt')).error).toContain('no such file or directory');
 
         if (name === 'cf') {
           expect((await plane.read('/pc/studio/item.txt')).error).toContain('ENXIO');
-          expect((await plane.read('/pc/studio/../../item.txt')).error).toContain('EPERM');
+          expect((await plane.read('/pc/studio/../../item.txt')).error).toContain('no such file or directory');
         }
       } finally {
         plane.end?.();

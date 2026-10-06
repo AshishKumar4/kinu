@@ -23,7 +23,6 @@ import {
   type AgentMode,
 } from '../config';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
-import { installTurnDiagnostics } from '../turn-log';
 import { EMPTY_MODEL_MENU, normalizeModelMenu, specWithoutAccount, type AgentModelMenu } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { VERSION } from '../display';
@@ -756,8 +755,6 @@ function createDefaultOnboarding(
 }
 
 export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiAction> {
-  // Interactive surface: stderr is the person's screen, so diagnostics go to cli.log.
-  installTurnDiagnostics();
   requireInteractiveTerminal();
   const renderer = await createCliRenderer({ exitOnCtrlC: false, exitSignals: [] });
   const root = createRoot(renderer);

@@ -20,6 +20,7 @@ import {
   createEngine,
   formatTranscript,
   preparePlan,
+  replayPlanSnapshot,
   toPlanSnapshot,
   transformTurns,
   writeTranscript,
@@ -72,9 +73,18 @@ export interface CompactionExtensionDeps {
   attachments?: AttachmentDeps;
 }
 
+type SizedContext = TransformContext & { readonly contextWindow: number };
+
+function sized(ctx: TransformContext, codec: CodecOps): SizedContext | null {
+  const owned = ctx.trigger === 'user' ? measuredTokens(ctx, kinuCodec.encode([...ctx.messages]), 0, codec) : null;
+  const contextWindow = ctx.contextWindow ?? owned;
+
+  return ctx.messages.length === 0 || contextWindow === null || contextWindow <= 0 ? null : { ...ctx, contextWindow };
+}
+
 interface ForceRebuildInputs {
   readonly turns: Turn[];
-  readonly ctx: TransformContext;
+  readonly ctx: SizedContext;
   /** Monotonic floor: pruned tool results stay pruned, summaries are reused. */
   readonly prior: PlanSnapshot | null;
   readonly reportedTokens: number;
@@ -85,12 +95,22 @@ interface PrefixUpgradeInputs {
   readonly turns: Turn[];
   readonly plan: BoundaryContextPlan;
   readonly prior: PlanSnapshot | null;
-  readonly ctx: TransformContext;
+  readonly ctx: SizedContext;
   readonly reportedTokens: number;
   readonly rollingSummaryAttempted: boolean;
 }
 
-export function createCompactionExtension(deps: CompactionExtensionDeps): KinuExtension {
+/** The extension a backend registers, and the swarm's shared-prefix half of the same ladder (`SwarmRunDeps.compactShared`). */
+export type CompactionExtension = KinuExtension & { readonly compactShared: SharedPrefixCompactor };
+
+export function createCompactionExtension(deps: CompactionExtensionDeps): CompactionExtension {
+  return {
+    ...compactionExtension(deps),
+    compactShared: sharedPrefixCompactor(compactionExtension({ ...deps, ephemeral: NO_EPHEMERAL_PLANE, onOutcome: undefined, model: undefined })),
+  };
+}
+
+function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
   const profile = deps.profile ?? { ...COMPACTION_PRESETS.light, triggerPercent: COMPACTION_TRIGGER_PERCENT };
   const { attachments, model } = deps;
   const spec: LadderSpec = attachments === undefined || model === undefined ? kinuSpec : { ...kinuSpec, attachments: kinuAttachments(attachments, model) };
@@ -129,8 +149,8 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       concurrency: profile.summarizerConcurrency,
     });
 
-  // /compact: target 0; a trigger past the largest turn keeps the last exchanges.
-  const buildInputs = (ctx: TransformContext, reportedTokens: number, turns: readonly Turn[]): BuildPlanInputs => ({
+  // /compact: target 0, a trigger past the largest turn; any window serves.
+  const buildInputs = (ctx: SizedContext, reportedTokens: number, turns: readonly Turn[]): BuildPlanInputs => ({
     // A bypass drops a plan's summary; a server-compacting model keeps its own in history.
     bypassSummaries: serverCompactor(ctx.model) !== null,
     sessionKey: ctx.sessionKey,
@@ -145,7 +165,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   });
 
   /** An owner's fold replays up to the ladder's trigger. */
-  const savedPlan = (ctx: TransformContext, plan: BoundaryContextPlan): PlanSnapshot => (ctx.trigger === 'user'
+  const savedPlan = (ctx: SizedContext, plan: BoundaryContextPlan): PlanSnapshot => (ctx.trigger === 'user'
     ? { ...toPlanSnapshot(plan), triggerTokens: Math.floor(ctx.contextWindow * profile.triggerPercent / 100) }
     : toPlanSnapshot(plan));
 
@@ -154,7 +174,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
    * blocks (woven per step, never in durable history). Gated on the ladder trigger since it breaks the
    * woven prefix; needed because replay prices overhead as of plan build and never sees later blocks.
    */
-  function relieveEphemeralPressure(ctx: TransformContext, turns: Turn[]): number {
+  function relieveEphemeralPressure(ctx: SizedContext, turns: Turn[]): number {
     const measured = measuredTokens(ctx, turns, 0, codec);
     const triggerTokens = Math.floor(ctx.contextWindow * profile.triggerPercent / 100);
 
@@ -274,13 +294,25 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     deps.archive.append(ctx.sessionKey, derived.range);
   }
 
+  async function heldFold(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
+    const cached = ctx.messages.length === 0 ? null : await deps.ports.plans.load(ctx.sessionKey);
+
+    if (cached?.sessionId !== ctx.sessionKey) return undefined;
+    const compactor = serverCompactor(ctx.model);
+    const messages = compactor === null ? [...ctx.messages] : sinceServerSummary(ctx.messages, compactor);
+    const replayed = replayPlanSnapshot(kinuCodec.encode(messages), cached, spec, { allowRegrown: true, bypassSummaries: compactor !== null });
+
+    return replayed === null ? undefined : kinuCodec.decode(withArchiveManifest(replayed, renderArchiveManifest(deps.archive.list(ctx.sessionKey))), messages);
+  }
+
   return {
     name: 'compaction',
 
-    async transformContext(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
-      ctx.abortSignal?.throwIfAborted();
+    async transformContext(unsized: TransformContext): Promise<ModelMessage[] | undefined> {
+      unsized.abortSignal?.throwIfAborted();
+      const ctx = sized(unsized, codec);
 
-      if (ctx.messages.length === 0 || ctx.contextWindow <= 0) return undefined;
+      if (ctx === null) return await heldFold(unsized);
       const compactor = serverCompactor(ctx.model);
       const messages = compactor === null ? [...ctx.messages] : sinceServerSummary(ctx.messages, compactor);
       const turns = kinuCodec.encode(messages);
@@ -374,33 +406,17 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
 /** The swarm prefix never contains dynamic-context blocks, so the first rung has nothing to drop. */
 const NO_EPHEMERAL_PLANE: EphemeralContextPlane = { dropSuperseded: () => 0 };
 
-export interface SharedPrefixCompactorDeps {
-  /** The archived range lands in the workspace VFS, readable by the node's own file tools. */
-  ports: EnginePorts;
-  archive: ArchiveIndexStore;
-  summarize: (prompt: string) => Promise<string>;
-  profile?: CompactionProfile;
-}
-
-/**
- * Swarm half of the compaction seam (`SwarmRunDeps.compactShared`): the same ladder, entered once per
- * branch point. The caller owns the policy, so this always forces; keyed by the branch point's durable
- * id so re-entry replays byte-stably and siblings share one cacheable prefix.
- */
-export function createSharedPrefixCompactor(
-  deps: SharedPrefixCompactorDeps,
-): (
+type SharedPrefixCompactor = (
   messages: readonly ModelMessage[],
   basis: { readonly contextWindow: number; readonly key: string },
-) => Promise<readonly ModelMessage[]> {
-  const extension = createCompactionExtension({
-    ports: deps.ports,
-    archive: deps.archive,
-    summarize: deps.summarize,
-    profile: deps.profile,
-    ephemeral: NO_EPHEMERAL_PLANE,
-  });
+) => Promise<readonly ModelMessage[]>;
 
+/**
+ * The swarm's half: the same ladder, entered once per branch point. The caller owns the policy, so this always
+ * forces; keyed by the branch point's durable id so re-entry replays byte-stably and siblings share one cacheable
+ * prefix.
+ */
+function sharedPrefixCompactor(extension: KinuExtension): SharedPrefixCompactor {
   return async (messages, basis) => {
     if (messages.length === 0) return messages;
 

@@ -138,6 +138,7 @@ describe('ProviderRegistry', () => {
       const r = createProviderRegistry();
       r.register(fakeProvider('alpha', 'a', true));
       r.registerDynamic({
+        id: 'catalog', label: 'models.dev catalog',
         get: () => undefined,
         listIds: () => { throw new Error('models.dev returned HTTP 503'); },
       });

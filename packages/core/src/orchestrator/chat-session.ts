@@ -25,7 +25,7 @@ import type { CacheWarmingLane } from '../providers/cache-warming';
 import { DEFAULT_CACHE_RETENTION } from '../providers/types';
 import { serverCompactor, SERVER_COMPACTION_MIN_TOKENS } from '../providers/server-compaction';
 import type { ToolOutcome } from '../tools/outcome';
-import { OVERFLOW_RETRY_EVENT } from '../turn-failure';
+import { OVERFLOW_RETRY_EVENT, statedContextLimit } from '../turn-failure';
 import type {
   BroadcastEvent, EnqueueTurnResult, ProgrammaticTurn, PromptFile,
 } from '../types/backend-host';
@@ -150,7 +150,7 @@ export interface ChatTurnInput {
 export interface PreparedTurn {
   readonly execution: Omit<ActorExecutionInput, 'task'>;
   readonly sessionKey: string;
-  readonly contextWindow: number;
+  readonly contextWindow: number | null;
   readonly historyLength: number;
   /** The live trial's arm this turn ran (`turnArtifactBodies`), recorded with the completed turn. */
   readonly trial?: TrialTurn | null;
@@ -371,6 +371,25 @@ export class ChatSession {
   get turnOwed(): boolean { return this.pumpActive || this.queue.length > 0; }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
+
+  /** Arms the forced compaction and says whether to retry; a too-long refusal also records the window it measured. */
+  private recoverOverflow(prepared: PreparedTurn, error: string, turnWasOverflowRetry: boolean): boolean {
+    const lastPromptTokens = this.actorSession.orchestrator.acc.lastPromptTokens;
+
+    const recovery = applyOverflowRecovery({
+      error, lastPromptTokens, contextWindow: prepared.contextWindow, turnWasOverflowRetry, state: this.compactionState, sessionKey: prepared.sessionKey,
+    });
+
+    const model = prepared.execution.chat.modelSpec ?? prepared.execution.chat.modelContext?.id;
+    const refused = Math.max(this.eventRecorder.readContextMeasures().gate?.tokens ?? 0, lastPromptTokens ?? 0);
+    const window = statedContextLimit(error) ?? (refused > 0 ? refused : null);
+
+    if (recovery.failureClass === 'context_length' && model !== undefined && window !== null && this.runId !== null) {
+      this.eventRecorder.emit(this.runId, { type: 'context_overflow', model, window });
+    }
+
+    return recovery.enqueueRetry;
+  }
   /** Open on purpose, so the wake reconcile must not seal them. */
   drivenRuns(): readonly string[] {
     return [...new Set([this.runId, this.reopenedRunId].filter((runId): runId is string => runId !== null))];
@@ -1104,14 +1123,7 @@ export class ChatSession {
     if (execution.failure !== null) {
       const message = renderThrownChain({ cause: execution.failure });
       runError = message.slice(0, 500);
-      overflowRetry = applyOverflowRecovery({
-        error: message,
-        lastPromptTokens: this.actorSession.orchestrator.acc.lastPromptTokens,
-        contextWindow: prepared.contextWindow,
-        turnWasOverflowRetry: item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT,
-        state: this.compactionState,
-        sessionKey: prepared.sessionKey,
-      }).enqueueRetry;
+      overflowRetry = this.recoverOverflow(prepared, message, item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT);
     }
 
     // Classified once: the classifier also files the mid-work defect.
