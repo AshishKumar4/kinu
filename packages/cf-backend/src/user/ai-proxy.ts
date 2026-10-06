@@ -66,8 +66,8 @@ aiProxyRoutes.get(`${USER_AI_PROXY_PATH}/models`, async (c) => {
   });
 });
 
-/** The two APIs a gateway model is spoken to in (`gatewayWireModel`); the account endpoint serves both. */
-for (const endpoint of ['chat/completions', 'responses'] as const) {
+/** The APIs a gateway model is spoken to in (`gatewayWireModel`); the account endpoint serves each. */
+for (const endpoint of ['chat/completions', 'responses', 'messages'] as const) {
   aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/${endpoint}`, (c) => settle(proxyCompletion(endpoint, c.req.raw, c.env, c.get('cli').userDO)));
 }
 
@@ -75,7 +75,7 @@ aiProxyRoutes.all(`${USER_AI_PROXY_PATH}/*`, beneath(USER_AI_PROXY_PATH, async (
   errorResponse(404, `No such AI proxy route: ${c.req.method} ${c.req.path.slice(USER_AI_PROXY_PATH.length)}`)));
 
 function proxyCompletion<Id>(
-  endpoint: 'chat/completions' | 'responses', request: Request, env: UserAIProxyEnv<Id>, userDO: UserCredentialClient,
+  endpoint: 'chat/completions' | 'responses' | 'messages', request: Request, env: UserAIProxyEnv<Id>, userDO: UserCredentialClient,
 ): Effect.Effect<Response> {
   return Effect.gen(function* () {
     const body = yield* Effect.promise(() => request.text());
