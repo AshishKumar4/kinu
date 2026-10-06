@@ -154,7 +154,7 @@ export type RunEvent =
   | (RunEventBase & { type: 'model_fallback'; from: string; to: string; reason: string })
   /** Null `tokens`: the next request could not be measured, so no true number exists. */
   | (RunEventBase & { type: 'context_admitted'; tokens: number | null; contextWindow: number | null })
-  /** A provider refused `model`'s request as too long; `window` is its stated limit, else the refused request's size. */
+  /** A too-long refusal on `model`; `window` is its stated limit, else the refused request's size. */
   | (RunEventBase & { type: 'context_overflow'; model: string; window: number })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
   /** `totalTokens` is absent when no head reported usage: unknown, not zero. */

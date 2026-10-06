@@ -102,7 +102,7 @@ export interface SwarmRunDeps {
     messages: readonly ModelMessage[],
     basis: { readonly contextWindow: number; readonly key: string },
   ) => Promise<readonly ModelMessage[]>;
-  /** A model's catalog window, the basis {@link compactShared}'s threshold measures; absent, it is unknown. */
+  /** The basis {@link compactShared}'s threshold measures. */
   readonly windowOf?: (spec: string) => Promise<ModelWindow>;
   /** The resolved turn profile, recorded at `begin` so a re-drive re-enters under it. */
   readonly profile?: SwarmProfileSnapshot;
@@ -116,7 +116,6 @@ export interface SwarmRunDeps {
 }
 
 /** Run a resolved swarm, or refuse. Refusals are ordered by cost; nothing spends before the baseline. */
-/** The node model's catalog window, the shared prefix's threshold basis; null when unknown. */
 async function windowOfModel(deps: SwarmRunDeps, model: LanguageModel): Promise<number | null> {
   return deps.windowOf === undefined ? null : (await deps.windowOf(modelSpecOf(model))).contextWindow;
 }

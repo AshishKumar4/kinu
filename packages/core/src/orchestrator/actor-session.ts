@@ -421,7 +421,6 @@ export class ActorSession {
     }).pipe(Effect.catch(deliveryFailed(turnId))));
   }
 
-  /** No catalog reaches the review, so its window is unknown and nothing in the guidance is trimmed by it. */
   private async advisorGuidance(): Promise<string> {
     const workspace = await this.options.advisor?.workspace() ?? this.runtime.agentStateVfs ?? this.runtime.storage.vfs;
 

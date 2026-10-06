@@ -57,7 +57,7 @@ export interface TransformContext {
   /** Durable history only: without the runtime context the step weaves in. */
   readonly messages: readonly ModelMessage[];
   readonly system: string;
-  /** Null when no catalog row names it and no refusal has measured it: nothing compacts by size. */
+  /** Null when unknown: nothing compacts by size. */
   readonly contextWindow: number | null;
   /** The model this request is built for: its server compaction, if any, decides the mode. */
   readonly model?: string;

@@ -1,9 +1,4 @@
-/**
- * Cached catalog view per spec for both backends. A window is the catalog row's, else the one this session measured
- * when the provider refused a request as too long, else unknown; synchronous reads see unknown until the row lands.
- * {@link ModelCatalogSession.resolved} is the awaited read (#20). A model request resolves its spec once and reads
- * through {@link ModelCatalogSession.at}; the live reads resolve it per call.
- */
+/** Cached catalog view per spec for both backends; {@link ModelCatalogSession.resolved} is the awaited read (#20). */
 
 import { modelWindow, type ModelWindow } from '../context-window';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
@@ -47,7 +42,7 @@ export class ModelCatalogSession {
     effectiveSpec: () => string;
     /** Resolve null (or throw) when unavailable: the window is then unknown. */
     lookup: (spec: string) => Promise<ModelInfo | null>;
-    /** The window this session learned for `spec` from a provider's too-long refusal, or null. */
+    /** A too-long refusal's window for `spec`, or null. */
     measured: (spec: string) => number | null;
   }) {}
 
@@ -83,8 +78,6 @@ export class ModelCatalogSession {
     return settle(Effect.map(this.lookup(spec), (info) => this.windowFrom(spec, info)));
   }
 
-  /** The window pair every producer divides (`stepContextLimit`), read now: the turn's model, or another `spec` once
-   *  warmed. */
   window(spec?: string): ModelWindow {
     const own = this.deps.effectiveSpec();
 

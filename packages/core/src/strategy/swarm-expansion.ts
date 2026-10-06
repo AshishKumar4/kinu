@@ -249,7 +249,7 @@ export function modelSpecOf(model: LanguageModel): string {
  * the prefix is handed over whole and the absence is reported.
  */
 export async function sharedPrefix(input: {
-  /** The children's catalog window, the threshold's basis; null when unknown, which compacts nothing. */
+  /** The children's window; null when unknown, which compacts nothing. */
   readonly window: number | null;
   readonly parent: TreeNode;
   /** As {@link SwarmRunDeps.compactShared}; narrowed so this module needs no runner import. */

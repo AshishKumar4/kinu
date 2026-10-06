@@ -378,11 +378,7 @@ export class ChatSession {
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
 
-  /**
-   * Arms the forced compaction and says whether to retry. A too-long refusal also measures the model's window for this
-   * session, which the catalog session reads where no row names one: the limit it states, else the larger of the
-   * refused turn's admitted size and its last reported prompt.
-   */
+  /** Arms the forced compaction and says whether to retry; a too-long refusal also records the window it measured. */
   private recoverOverflow(prepared: PreparedTurn, error: string, turnWasOverflowRetry: boolean): boolean {
     const lastPromptTokens = this.actorSession.orchestrator.acc.lastPromptTokens;
 
