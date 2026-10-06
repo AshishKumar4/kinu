@@ -1,6 +1,6 @@
 /** Gallery stand-in for `agents/react` and `@cloudflare/ai-chat/react` (aliased in `gallery.vite.config.ts`). */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { UIMessage } from "ai";
 import * as v from "valibot";
 
@@ -28,6 +28,8 @@ export interface GalleryAgent {
 	removeEventListener(type: string, listener: EventListener): void;
 	close(): void;
 	reopen(): void;
+	/** A forced redial: a fresh socket, so the calls a dead one would have failed are served again. */
+	reconnect(): void;
 	/** A server-initiated frame, delivered raw so `useKinu`'s own parse and gates run. */
 	deliver(raw: string): void;
 	readonly path: string;
@@ -74,11 +76,32 @@ export function galleryServerPush(raw: string): void {
 	for (const agent of live) agent.deliver(raw);
 }
 
+const windows = new Map<string, Set<(messages: readonly UIMessage[]) => void>>();
+
+/** As the server's `cf_agent_chat_messages` frame lands: every window on the chat at `path` now shows `messages`. */
+export function galleryChatWindow(path: string, messages: readonly UIMessage[]): void {
+	for (const show of windows.get(path) ?? []) show(messages);
+}
+
 /** As the server answers a clear: the chat at `path` is emptied, then every window on it is told to empty. */
 export function galleryClearChat(path: string): void {
 	seededChats.delete(path);
 
 	for (const agent of live) if (agent.path === path) agent.deliver(JSON.stringify({ type: "cf_agent_chat_clear" }));
+}
+
+/**
+ * `data-gallery-rpc-failures`: the workspace socket's next calls fail in order, one entry each, as a dead-but-open
+ * socket's do (`timeout`, the SDK's own rejection) or as a live origin refusing (`fast`).
+ */
+function nextCallFailure(method: string): Error | null {
+	const root = document.documentElement.dataset;
+	const [next, ...rest] = (root.galleryRpcFailures ?? "").split(",").filter(Boolean);
+
+	if (next === undefined) return null;
+	root.galleryRpcFailures = rest.join(",");
+
+	return next === "timeout" ? new Error(`RPC call to ${method} timed out after 30000ms`) : new Error("the origin refused the call");
 }
 
 /** A connection whose calls resolve from the frame fixture; terminal mode never opens. */
@@ -96,15 +119,24 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 	const agent = useMemo<GalleryAgent>(() => {
 		const listeners = new Map<string, Set<EventListener>>();
 
+		const reopen = () => {
+			handlers.current.onClose?.(new CloseEvent("close", { code: 1006 }));
+			handlers.current.onOpen?.(new Event("open"));
+
+			for (const listener of listeners.get("open") ?? []) listener(new Event("open"));
+		};
+
 		return {
 			path: options.path ?? "",
 			readyState: 1,
 			connectionError: terminalClose,
-			call: <T,>(method: string, args: unknown[] = []): Promise<T> => (
-				served === null
-					? Promise.reject(new Error(`gallery: no fixture serves ${method}`))
-					: served<T>(method, args)
-			),
+			call: <T,>(method: string, args: unknown[] = []): Promise<T> => {
+				const failure = options.path === undefined || options.path === "" ? nextCallFailure(method) : null;
+
+				if (failure === null && served !== null) return served<T>(method, args);
+
+				return Promise.reject(failure ?? new Error(`gallery: no fixture serves ${method}`));
+			},
 			send: () => {},
 			addEventListener: (type, listener) => {
 				const set = listeners.get(type) ?? new Set<EventListener>();
@@ -113,11 +145,14 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 			},
 			removeEventListener: (type, listener) => { listeners.get(type)?.delete(listener); },
 			close: () => { listeners.clear(); },
-			reopen: () => {
-				handlers.current.onClose?.(new CloseEvent("close", { code: 1006 }));
-				handlers.current.onOpen?.(new Event("open"));
+			reopen,
+			reconnect: () => {
+				const root = document.documentElement.dataset;
 
-				for (const listener of listeners.get("open") ?? []) listener(new Event("open"));
+				root.galleryRedials = String(Number(root.galleryRedials ?? "0") + 1);
+				// How many scripted failures were still to come when the page gave up on the socket.
+				root.galleryRedialAt = String((root.galleryRpcFailures ?? "").split(",").filter(Boolean).length);
+				reopen();
 			},
 			deliver: (raw) => {
 				const message = new MessageEvent("message", { data: raw });
@@ -156,10 +191,54 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 	return agent;
 }
 
+/** A send the transport holds: Stop leaves it unsettled, as an abort that lands late; `gallery:settle-send` settles it. */
+interface HeldSend {
+	readonly settle: ReturnType<typeof Promise.withResolvers<void>>;
+	stopped: boolean;
+	settled: boolean;
+}
+
+const SettleSendSchema = v.object({ at: v.number(), failed: v.optional(v.boolean()) });
+
 /** The held-send DOM values are transport controls only; `useKinu` decides whether presses reach it. */
 export function useAgentChat(options: { agent: GalleryAgent }) {
 	const [messages, setMessages] = useState<readonly UIMessage[]>(seededChats.get(options.agent.path) ?? []);
 	const agent = options.agent;
+	const held = useRef<HeldSend[]>([]);
+	// An external store, as the SDK's status is: a Stop inside a transition shows at once, not when the transition ends.
+	const watchers = useRef(new Set<() => void>());
+	const submitted = () => held.current.some((send) => !send.stopped && !send.settled);
+	const resync = () => { for (const watcher of watchers.current) watcher(); };
+
+	const status = useSyncExternalStore((watcher) => {
+		watchers.current.add(watcher);
+
+		return () => { watchers.current.delete(watcher); };
+	}, () => (submitted() ? "submitted" as const : "ready" as const));
+
+	useEffect(() => {
+		const settle = (event: Event) => {
+			const asked = v.parse(SettleSendSchema, event instanceof CustomEvent ? event.detail : null);
+			const send = held.current[asked.at];
+
+			if (send === undefined) return;
+
+			if (asked.failed === true) send.settle.reject(new Error("the gallery transport failed this send"));
+			else send.settle.resolve();
+		};
+
+		window.addEventListener("gallery:settle-send", settle);
+
+		return () => { window.removeEventListener("gallery:settle-send", settle); };
+	}, []);
+
+	useEffect(() => {
+		const shown = windows.get(agent.path) ?? new Set();
+
+		windows.set(agent.path, shown.add(setMessages));
+
+		return () => { shown.delete(setMessages); };
+	}, [agent.path]);
 
 	useEffect(() => {
 		const onMessage = (event: Event) => {
@@ -192,16 +271,25 @@ export function useAgentChat(options: { agent: GalleryAgent }) {
 			root.dataset.galleryChatSent = JSON.stringify((message.parts ?? []).map((part) => (part.type === "file" ? `file:${part.filename ?? ""}` : `${part.type}:${part.text ?? ""}`)));
 
 			if (root.dataset.galleryChatHold !== "1") return Promise.resolve();
+			const send: HeldSend = { settle: Promise.withResolvers<void>(), stopped: false, settled: false };
 
-			return new Promise<void>(() => {});
+			held.current.push(send);
+			resync();
+
+			return send.settle.promise.finally(() => {
+				send.settled = true;
+				resync();
+			});
 		},
 		regenerate: () => Promise.resolve(),
-		stop: () => {},
+		stop: () => {
+			for (const send of held.current) send.stopped = true;
+			resync();
+		},
 		isStreaming: false as const,
-		status: "ready" as const,
 		error: undefined,
 		connectionError: terminalClose,
 	}), []);
 
-	return { ...controls, messages };
+	return { ...controls, messages, status };
 }

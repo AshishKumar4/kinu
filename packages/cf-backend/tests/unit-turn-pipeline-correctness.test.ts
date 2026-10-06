@@ -15,7 +15,6 @@ import {
   chatSessionTurns, driveUntil, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
   workspaceMainActor, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
-import { socketConnection } from './helpers/bindings';
 import { answeringGateway, chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import type { ScriptedAnswer } from './helpers/turn-harness';
 import { createRecordingLogger } from '@kinu.run/core/obs';
@@ -585,10 +584,7 @@ describe('turn-pipeline correctness wiring', () => {
       'SELECT plan_json FROM compaction_state',
     ).get()?.plan_json ?? null;
 
-    const clear = () => agent.onMessage(
-      socketConnection({ id: 'tab-1', send: () => {} }),
-      JSON.stringify({ type: 'cf_agent_chat_clear' }),
-    );
+    const clear = () => agent.clearConversation();
 
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
     db.prepare('INSERT INTO compaction_state (actor_id, session_key, plan_json) VALUES (?, ?, ?)')

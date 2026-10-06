@@ -38,6 +38,18 @@ if (topLevelArgs.length === 1 && (topLevelArgs[0] === '--help' || topLevelArgs[0
   process.exit(0);
 }
 
+// Under --json a parse error is the run's one JSON error line, as every other failure of a --json run is.
+const jsonRequested = topLevelArgs.includes('--json') || topLevelArgs.includes('--mode=json')
+  || topLevelArgs.some((arg, index) => arg === '--mode' && topLevelArgs[index + 1] === 'json');
+
+if (jsonRequested) {
+  for (const command of [program, ...program.commands]) {
+    command.configureOutput({
+      outputError: (text) => { process.stdout.write(`${JSON.stringify({ type: 'error', message: text.replace(/^error: /, '').trim() })}\n`); },
+    });
+  }
+}
+
 // A failed command prints its chain and exits 1.
 program.parseAsync().catch((...rejection: [unknown]) => {
   printFailure({ cause: rejection[0] });

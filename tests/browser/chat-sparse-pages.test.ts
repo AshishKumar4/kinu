@@ -108,3 +108,60 @@ test('a fork counts the canonical rows through a message after an unloaded gap',
     await page.close();
   });
 });
+
+/** The row numbers the column shows, top to bottom, each fixture row once per time it is drawn. */
+async function shownRows(page: Page): Promise<number[]> {
+  return page.$eval(CHAT, (el) => [...(el.textContent ?? '').matchAll(/(?:Question (\d+):|Answer (\d+)\.)/gu)].map((match) => Number(match[1] ?? match[2])));
+}
+
+/** Moves the socket's live window to those history rows, as the server's transcript frame does. */
+async function liveWindow(page: Page, detail: { rows: number[]; edited?: number; cleared?: boolean }): Promise<void> {
+  await page.evaluate((window_) => { window.dispatchEvent(new CustomEvent('gallery:live-window', { detail: window_ })); }, detail);
+  await paint(page);
+}
+
+test('the live window slides without losing or repeating a row, pages older rows only at the top, and a clear empties both', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1280, height: 860 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&history=2000`, { waitUntil: 'networkidle0' });
+    await page.waitForFunction((selector) => document.querySelector(selector)?.textContent?.includes('Answer 1999.'), {}, CHAT);
+    await paint(page);
+
+    // The newest page only.
+    const newest = await shownRows(page);
+    expect(newest.at(-1)).toBe(1999);
+    expect(newest[0]).toBeGreaterThan(0);
+
+    // A stored row the live window holds too is drawn once, as the live copy.
+    await liveWindow(page, { rows: [1999, 2000], edited: 1999 });
+    await page.waitForFunction((selector) => document.querySelector(selector)?.textContent?.includes('Edited live.'), {}, CHAT);
+    expect((await shownRows(page)).filter((row) => row === 1999)).toHaveLength(1);
+
+    // The window moves forward, repeats a frame, and moves again: what left its front stays, oldest first, once.
+    for (const rows of [[2000, 2001, 2002], [2001, 2002, 2003], [2001, 2002, 2003], [2003, 2004, 2005]]) await liveWindow(page, { rows });
+    await page.waitForFunction((selector) => document.querySelector(selector)?.textContent?.includes('Answer 2005.'), {}, CHAT);
+    expect((await shownRows(page)).slice(-8)).toEqual([1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005]);
+    // Five frames drawn at the bottom, and nothing older was read.
+    expect(await asks(page)).toBe(1);
+
+    // At the top, the walk reads rows older than any drawn.
+    await page.$eval(CHAT, (el) => { el.scrollTop = 0; });
+    await page.waitForFunction((first, selector) => [...(document.querySelector(selector)?.textContent ?? '').matchAll(/Question (\d+):/gu)]
+      .some((match) => Number(match[1]) < first), {}, newest[0] ?? 0, CHAT);
+    expect(await asks(page)).toBeGreaterThan(1);
+
+    // A window sharing no row with the last one is a gap: the rows kept from the old window go.
+    await liveWindow(page, { rows: [2090, 2091] });
+    await page.waitForFunction((selector) => document.querySelector(selector)?.textContent?.includes('Answer 2091.'), {}, CHAT);
+    expect((await shownRows(page)).filter((row) => row >= 2000 && row < 2090)).toEqual([]);
+
+    // Another tab cleared the conversation: no stored or kept row survives, and the next message stands alone.
+    await liveWindow(page, { rows: [], cleared: true });
+    await page.waitForFunction((selector) => !/Question \d+:|Answer \d+\./u.test(document.querySelector(selector)?.textContent ?? ''), {}, CHAT);
+    await liveWindow(page, { rows: [2500] });
+    await page.waitForFunction((selector) => document.querySelector(selector)?.textContent?.includes('Question 2500:'), {}, CHAT);
+    expect(await shownRows(page)).toEqual([2500]);
+    await page.close();
+  });
+});

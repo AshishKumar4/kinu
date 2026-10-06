@@ -120,38 +120,44 @@ function resolveExecWorkspaceName(explicit?: string): string {
     : `Multiple workspaces configured. Pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
 }
 
+/** A one-shot run's outcome: its first failure, the one line --json reports for it. */
+interface OneShotRun {
+  readonly json: boolean;
+  readonly headless: boolean;
+  failure: string | null;
+}
+
 /**
- * A run's one failure boundary, from reading its prompt and finding its workspace through the turn: any failure
- * prints as a turn's does, so --json still prints one error line.
+ * A run's one failure boundary, from reading its prompt and finding its workspace through the turn. The first failure,
+ * whether an error event, a thrown error, a failed turn or a denied consent, is the run's outcome; --json prints it
+ * as exactly one error line at the end.
  */
 async function runOneShot(
   surface: { json: boolean; headless: boolean },
   opts: AgentClientFlags & TranscriptFlags,
   prepare: () => Promise<{ target: AgentTarget; rawPrompt: string }>,
 ): Promise<boolean> {
-  const run = { ...surface, failed: false };
+  const run: OneShotRun = { ...surface, failure: null };
 
   try {
     const { target, rawPrompt } = await prepare();
     await oneShotTurn(target, rawPrompt, opts, run);
   } catch (err) {
-    // An error event already printed this failure.
-    if (!run.failed) {
-      if (run.json) process.stdout.write(`${JSON.stringify({ type: 'error', message: describeProviderError({ cause: err }) })}\n`);
-      else printFailure({ cause: err });
-    }
-
-    run.failed = true;
+    // On a terminal an error event already printed the first failure; a later throw is usually the same one.
+    if (!run.json && run.failure === null) printFailure({ cause: err });
+    run.failure ??= describeProviderError({ cause: err });
   }
 
-  return run.failed;
+  if (run.json && run.failure !== null) process.stdout.write(`${JSON.stringify({ type: 'error', message: run.failure })}\n`);
+
+  return run.failure !== null;
 }
 
 async function oneShotTurn(
   target: AgentTarget,
   rawPrompt: string,
   opts: AgentClientFlags & TranscriptFlags,
-  run: { json: boolean; headless: boolean; failed: boolean },
+  run: OneShotRun,
 ): Promise<void> {
   // A one-shot run never starts the evolution pass it cannot finish; the daemon runs it (see AgentOrchestrator's exit contract).
   if (target.mode === 'local') ensureLocalDaemonRunning();
@@ -169,7 +175,7 @@ async function oneShotTurn(
   }
 }
 
-async function turnOnClient(client: AgentClient, rawPrompt: string, run: { json: boolean; headless: boolean; failed: boolean }): Promise<void> {
+async function turnOnClient(client: AgentClient, rawPrompt: string, run: OneShotRun): Promise<void> {
   // Resolved after the client exists: it reports the backend's inline cap.
   const prompt = await resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
 
@@ -178,7 +184,7 @@ async function turnOnClient(client: AgentClient, rawPrompt: string, run: { json:
   const render = run.json ? createJsonEventWriter(client) : renderRunEvent;
 
   const unsubscribe = client.subscribe((event) => {
-    if (event.type === 'error') run.failed = true;
+    if (event.type === 'error') run.failure ??= describeProviderError({ cause: event.message });
     render(event);
   });
 
@@ -188,7 +194,7 @@ async function turnOnClient(client: AgentClient, rawPrompt: string, run: { json:
     if (!consents) return null;
 
     if (run.headless) {
-      return watchHeadlessConsents(consents, client.agentName, { json: run.json, onDenied: () => { run.failed = true; } });
+      return watchHeadlessConsents(consents, client.agentName, { json: run.json, onDenied: () => { run.failure ??= 'A device command was denied: nobody was at the terminal to approve it.'; } });
     }
 
     if (run.json) return null;
@@ -206,7 +212,7 @@ async function turnOnClient(client: AgentClient, rawPrompt: string, run: { json:
       { cwd: process.cwd() },
     );
 
-    if (result.landed === 'turn' && result.hadError) run.failed = true;
+    if (result.landed === 'turn' && result.hadError) run.failure ??= 'The turn ended with an error; its tool results name the call that failed.';
     // A detached tool's wake turn or the completion gate's confirming turn may follow; drain while the subscription is live.
     await client.settleBackgroundWork?.();
   } finally {
@@ -622,8 +628,9 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
       return [{ type: 'step_cut', stepIndex: event.stepIndex }];
     case 'step-finish':
       return [];
+    // The run's one error line, printed when it ends.
     case 'error':
-      return [{ type: 'error', message: describeProviderError({ cause: event.message }) }];
+      return [];
     case 'evolution':
       return [{ type: 'evolution', event: event.event, message: event.message }];
     case 'background':

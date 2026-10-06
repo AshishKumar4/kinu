@@ -7,7 +7,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
+import { restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, TURN_END_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
@@ -104,7 +104,7 @@ import type {
 import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
-import { galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -1308,9 +1308,10 @@ window.WebSocket = new Proxy(RealWebSocket, {
   },
 });
 
-/** A frame the gate makes the server send: only cards and steers carry an actor stamp, which no fixture read can produce. */
+/** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status"]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT]),
+  reads: v.optional(v.array(v.string())),
   actorId: v.optional(v.string()),
   id: v.optional(v.string()),
   state: v.optional(v.string()),
@@ -1872,12 +1873,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   previewSlate: (args?: unknown[]) => ({
     ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
   }),
-  // `&consent=waiting`: a device command already waiting.
-  // `&consent=spoofed`: a command whose bidi and zero-width characters would show a reader a different command.
-  listPendingConsents: () => (["waiting", "spoofed"].includes(new URLSearchParams(location.search).get("consent") ?? "")
-    ? [{ consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1,
-      command: new URLSearchParams(location.search).get("consent") === "spoofed" ? "rm -rf ./build \u202E\u2066gpj.x\u200B" : "git push origin main" }]
-    : []),
+  listPendingConsents: galleryConsents,
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
   listFileCheckpoints: () => REVERT_LISTING,
@@ -1896,6 +1892,13 @@ type GalleryAnswer = { readonly value: unknown } | null;
 function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
   if (method === "inspectSubordinate") {
     return { value: galleryPlanInspection(v.parse(SubordinateInspectionRequestSchema, args?.[0]), [galleryAgentPlan]) };
+  }
+
+  if (method === "dismissPlanReview") {
+    document.documentElement.dataset.galleryPlanDismissed = "1";
+    galleryAgentPlan = { ...galleryAgentPlan, status: "dismissed", updatedAt: Date.now() };
+
+    return { value: { ok: true, plan: galleryAgentPlan } };
   }
 
   if (method !== "decidePlanReview") return null;
@@ -2016,6 +2019,26 @@ const HISTORY_UNEVEN = new URLSearchParams(location.search).get("historyUneven")
 
 const HISTORY_PICTURE = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220"><rect width="480" height="220" fill="#3a3530"/><text x="24" y="120" fill="#e8dcc4" font-size="28">chart</text></svg>')}`;
 
+/**
+ * `gallery:live-window` with `{ rows, edited?, cleared? }`: the socket's live window moves to those history rows, `edited`
+ * saying more live than stored; `cleared` is another tab's clear, which empties the store too.
+ */
+const LiveWindowSchema = v.object({ rows: v.array(v.number()), edited: v.optional(v.number()), cleared: v.optional(v.boolean()) });
+
+window.addEventListener("gallery:live-window", (event: Event) => {
+  const asked = v.parse(LiveWindowSchema, event instanceof CustomEvent ? event.detail : null);
+
+  if (asked.cleared === true) document.documentElement.dataset.historyCleared = "1";
+
+  const entries = asked.rows.map((index) => {
+    const row = historyRow(index);
+
+    return index === asked.edited ? { ...row, content: `${row.content} Edited live.` } : row;
+  });
+
+  galleryChatWindow("", restoredRows(entries));
+});
+
 function historyRow(index: number): ChatHistoryEntry {
   const id = `hist-${String(index).padStart(5, "0")}`;
   const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
@@ -2044,7 +2067,8 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
 
   asks.historyAsks = String(Number(asks.historyAsks ?? 0) + 1);
   asks.historyReads = `${asks.historyReads ?? ""} ${cursor === undefined ? "newest" : `${String(cursor.before - limit)}-${String(cursor.before)}`}`;
-  const held = Math.min(cursor?.before ?? HISTORY_ROWS, HISTORY_ROWS);
+  const stored = asks.historyCleared === "1" ? 0 : HISTORY_ROWS;
+  const held = Math.min(cursor?.before ?? stored, stored);
   const from = Math.max(0, held - limit);
   const items = Array.from({ length: held - from }, (_, offset) => historyRow(from + offset));
   const settled = Promise.withResolvers<void>();
@@ -2127,15 +2151,161 @@ function rosterMoved(): void {
   queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubordinates"] })); });
 }
 
-/** The page reads the gallery answers only after a wait it controls. */
+async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
+  galleryRevertConversation(v.parse(v.string(), args?.[0]));
+
+  return null;
+}
+
+/** The first `name` event whose detail parses as `schema` and is `mine`. */
+function galleryEvent<Schema extends v.GenericSchema>(
+  name: string, schema: Schema, mine: (asked: v.InferOutput<Schema>) => boolean,
+): Promise<v.InferOutput<Schema>> {
+  return new Promise((resolve) => {
+    const listen = (event: Event) => {
+      const asked = v.parse(schema, event instanceof CustomEvent ? event.detail : null);
+
+      if (!mine(asked)) return;
+      window.removeEventListener(name, listen);
+      resolve(asked);
+    };
+
+    window.addEventListener(name, listen);
+  });
+}
+
+const TWO_CONSENTS = [
+  { consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1, command: "git push origin main" },
+  { consentId: "c-2", deviceLabel: "laptop", method: "exec", createdAt: 2, command: "bun run deploy" },
+];
+
+/**
+ * `&consent=waiting`: a device command already waiting. `&consent=spoofed`: one whose bidi and zero-width characters
+ * would show a reader a different command. `&consent=two`: two devices' commands, each resolution held until
+ * `gallery:consent-settle` `{ id, failed? }`, and a resolved one no longer listed.
+ */
+function galleryConsents(): JsonValue {
+  const asked = new URLSearchParams(location.search).get("consent");
+  const resolved = (document.documentElement.dataset.galleryConsentsResolved ?? "").split(",");
+
+  if (asked === "two") return TWO_CONSENTS.filter((consent) => !resolved.includes(consent.consentId));
+
+  if (asked !== "waiting" && asked !== "spoofed") return [];
+
+  return [{ consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1,
+    command: asked === "spoofed" ? "rm -rf ./build \u202E\u2066gpj.x\u200B" : "git push origin main" }];
+}
+
+const ConsentSettleSchema = v.object({ id: v.string(), failed: v.optional(v.string()) });
+
+async function galleryResolveConsent(args?: unknown[]): Promise<JsonValue> {
+  const [id] = v.parse(v.tuple([v.string(), v.string()]), args);
+
+  if (new URLSearchParams(location.search).get("consent") !== "two") return {};
+
+  const settled = await galleryEvent("gallery:consent-settle", ConsentSettleSchema, (asked) => asked.id === id);
+
+  if (settled.failed !== undefined) throw new Error(settled.failed);
+  const root = document.documentElement.dataset;
+
+  root.galleryConsentsResolved = `${root.galleryConsentsResolved ?? ""},${id}`;
+
+  return {};
+}
+
+const JobsAnswerSchema = v.object({ at: v.number(), label: v.optional(v.string()), failed: v.optional(v.string()) });
+
+function heldJob(at: number, label: string | undefined): JsonValue {
+  return [{
+    id: `bgjob-held-${String(at)}`, kind: "shell", label: label ?? null, workMode: "build", status: "running",
+    result: null, error: null, createdAt: NOW - 60e3, settledAt: null,
+  }];
+}
+
+/**
+ * `&jobs=held`: one running job, `first build`, until `data-gallery-jobs-hold="1"`; from then each read waits for
+ * `gallery:jobs-answer` `{ at, label?, failed? }`, `at` counting held reads from 0, and answers one running job named
+ * `label` or fails with `failed`. Otherwise there are none.
+ */
+async function galleryJobsRead(): Promise<JsonValue> {
+  if (new URLSearchParams(location.search).get("jobs") !== "held") return [];
+  const root = document.documentElement.dataset;
+
+  if (root.galleryJobsHold !== "1") return heldJob(-1, "first build");
+  const at = Number(root.galleryJobReads ?? "0");
+
+  root.galleryJobReads = String(at + 1);
+
+  const answer = await galleryEvent("gallery:jobs-answer", JobsAnswerSchema, (asked) => asked.at === at);
+
+  if (answer.failed !== undefined) throw new Error(answer.failed);
+
+  return heldJob(at, answer.label);
+}
+
+/**
+ * The plan decision, as `&decision=` asks: `held` until `gallery:decision-answer`, or `fail-first` failing the first
+ * attempt. `data-gallery-decisions` counts the decisions sent.
+ */
+async function galleryDecidePlan(args?: unknown[]): Promise<JsonValue> {
+  const root = document.documentElement.dataset;
+  const sent = Number(root.galleryDecisions ?? "0") + 1;
+  const asked = new URLSearchParams(location.search).get("decision");
+
+  root.galleryDecisions = String(sent);
+
+  if (asked === "held") await galleryEvent("gallery:decision-answer", v.unknown(), () => true);
+
+  if (asked === "fail-first" && sent === 1) throw new Error("review-fixture-rpc-failed");
+
+  return v.parse(JsonValueSchema, galleryPlanRpc("decidePlanReview", args)?.value ?? null);
+}
+
+/** What went to the running turn rather than opening one. */
+async function galleryMidTurnSend(args?: unknown[]): Promise<JsonValue> {
+  const asks = document.documentElement.dataset;
+
+  asks.galleryMidTurnSends = `${asks.galleryMidTurnSends ?? ""}${v.parse(v.string(), args?.[0])}\n`;
+
+  return {};
+}
+
+/** Stop's cancel, held while `data-gallery-cancel-held` is set, until `gallery:release-cancel`. */
+async function galleryCancelWork(): Promise<JsonValue> {
+  if (document.documentElement.dataset.galleryCancelHeld === "1") {
+    await new Promise((released) => { window.addEventListener("gallery:release-cancel", released, { once: true }); });
+  }
+
+  return {};
+}
+
+/** `&clear=refused`: a turn is running, so the server refuses and keeps every message. */
+async function galleryClearConversation(): Promise<JsonValue> {
+  if (new URLSearchParams(location.search).get("clear") === "refused") throw new Error(CLEAR_NEEDS_IDLE);
+  galleryClearChat("");
+
+  return null;
+}
+
+/** The page's conversation writes, and the reads the gallery answers only after a wait it controls. */
 const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>([
   ...(HISTORY_ROWS > 0 ? [["getChatHistoryPage", galleryHistoryPage] as const] : []),
   ["savePlanReviewAnnotations", galleryAnnotationSave],
+  ["revertConversation", galleryRevert],
+  ["clearConversation", galleryClearConversation],
+  ["send", galleryMidTurnSend],
+  ["cancelCurrentWork", galleryCancelWork],
+  ["resolveDeviceConsent", galleryResolveConsent],
+  ["listBackgroundJobs", galleryJobsRead],
+  ["decidePlanReview", galleryDecidePlan],
 ]);
 
 /** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
 async function snapshotGate(): Promise<void> {
   const query = new URLSearchParams(location.search);
+  const asks = document.documentElement.dataset;
+
+  asks.gallerySnapshotReads = String(Number(asks.gallerySnapshotReads ?? "0") + 1);
 
   if (query.get("terminal") === "denied") await new Promise<never>(() => {});
 
@@ -2190,20 +2360,6 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
   const roster = galleryRosterRpc(method, args);
 
   if (roster) return rpcResult(v.parse(JsonValueSchema, roster.value)).json<T>();
-
-  if (method === "revertConversation") {
-    galleryRevertConversation(v.parse(v.string(), args?.[0]));
-
-    return rpcResult(null).json<T>();
-  }
-
-  // `&clear=refused`: a turn is running, so the server refuses and keeps every message.
-  if (method === "clearConversation") {
-    if (new URLSearchParams(location.search).get("clear") === "refused") throw new Error(CLEAR_NEEDS_IDLE);
-    galleryClearChat("");
-
-    return rpcResult(null).json<T>();
-  }
 
   const listing = method === "getExposedPorts" ? galleryPortListing(v.parse(v.optional(v.string()), args?.[0])) : null;
 

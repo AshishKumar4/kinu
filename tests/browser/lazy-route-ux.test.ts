@@ -70,7 +70,10 @@ interface Observed {
  * what makes the skew deterministic — the chunk fails during the first render,
  * microseconds after the baseline read, and no timer could land between them.
  */
-async function serve(page: Page, mode: 'stable' | 'moves', served: { count: number }): Promise<void> {
+/** `absent`: the origin names no build at all. `blind`: the load-time read fails, so the page never learns its own. */
+type Served = 'stable' | 'moves' | 'absent' | 'blind';
+
+async function serve(page: Page, mode: Served, served: { count: number }): Promise<void> {
   await page.setRequestInterception(true);
   page.on('request', (request: HTTPRequest) => detach(Effect.promise(async () => {
     if (new URL(request.url()).pathname !== '/api/health') {
@@ -78,7 +81,9 @@ async function serve(page: Page, mode: 'stable' | 'moves', served: { count: numb
     }
 
     served.count += 1;
-    const sha = mode === 'moves' && served.count > 1 ? LATER_SHA : LOADED_SHA;
+
+    if (mode === 'absent' || (mode === 'blind' && served.count === 1)) return request.respond({ status: 503, body: '' });
+    const sha = mode !== 'stable' && served.count > 1 ? LATER_SHA : LOADED_SHA;
 
     return request.respond({
       status: 200,
@@ -115,10 +120,12 @@ async function readAttempt(page: Page, which: 'lazyStaleAttempts' | 'lazyHealthy
 }
 
 interface Scenario {
+  /** What `/api/health` answers: by default the build the page loaded, and with `skew` a newer one after load. */
+  served?: Served;
   /** Move the origin to a new build after the document has loaded. */
   skew?: boolean;
-  /** Spend the one reload before the page even loads. */
-  claimSpent?: boolean;
+  /** Spend the one reload before the page even loads, on this build. */
+  claimSpent?: string;
   /** Fail with an application error rather than a module-load one. */
   appFailure?: boolean;
   /** Take the boundary's own recovery action after it catches. */
@@ -133,15 +140,15 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
   let navigations = 0;
   page.on('pageerror', (error) => pageErrors.push(renderThrownChain({ cause: error })));
   page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) navigations += 1; });
-  await serve(page, options.skew === true ? 'moves' : 'stable', served);
+  await serve(page, options.served ?? (options.skew === true ? 'moves' : 'stable'), served);
 
   // The guard is per-origin session storage, so it has to be seeded on the
   // origin — which means a document first, then the seed, then the real drive.
-  if (options.claimSpent === true) {
+  if (options.claimSpent !== undefined) {
     await page.goto(`${origin}/gallery.html?frame=palette`, { waitUntil: 'load' });
     await page.evaluate(
       (key: string, value: string) => { sessionStorage.setItem(key, value); },
-      CHUNK_RELOAD_KEY, LATER_SHA,
+      CHUNK_RELOAD_KEY, options.claimSpent,
     );
     navigations = 0;
     served.count = 0;
@@ -195,13 +202,22 @@ let spent: Observed;
 
 let appError: Observed;
 
+let spentEarlier: Observed;
+
+let unnamed: Observed;
+
+let blind: Observed;
+
 beforeAll(async () => {
   await withGallery(async (gallery) => {
     recovered = await drive(gallery, { skew: true });
     noSkew = await drive(gallery, {});
     retried = await drive(gallery, { retry: true });
-    spent = await drive(gallery, { skew: true, claimSpent: true });
+    spent = await drive(gallery, { skew: true, claimSpent: LATER_SHA });
     appError = await drive(gallery, { skew: true, appFailure: true });
+    spentEarlier = await drive(gallery, { skew: true, claimSpent: 'cafe000' });
+    unnamed = await drive(gallery, { served: 'absent' });
+    blind = await drive(gallery, { served: 'blind' });
   });
 });
 
@@ -329,5 +345,26 @@ describe('a failure that is not a chunk at all', () => {
   test('and reaches the boundary as the error it is', () => {
     expect(appError.fallbackVisible).toBe(true);
     expect(appError.routeLoaded).toBe(false);
+  });
+});
+
+describe('a reload spent on an earlier build', () => {
+  test('leaves the next build its own one reload, and the route renders', () => {
+    expect(spentEarlier.navigations).toBe(2);
+    expect(spentEarlier.reloadClaim).toBe(LATER_SHA);
+    expect(spentEarlier.routeLoaded).toBe(true);
+  });
+});
+
+describe('a stale chunk with no build to compare', () => {
+  test('an origin that names no build is not reloaded at, and the reader gets the error screen', () => {
+    expect([unnamed.navigations, unnamed.reloadClaim, unnamed.fallbackVisible]).toEqual([1, null, true]);
+    // Asked, and answered with nothing: recognition passed and the missing build is what refused it.
+    expect(unnamed.healthReads).toBe(2);
+  });
+
+  test('a page that never learned its own build is not reloaded at either, though the origin has moved', () => {
+    expect([blind.navigations, blind.reloadClaim, blind.fallbackVisible]).toEqual([1, null, true]);
+    expect(blind.healthReads).toBe(2);
   });
 });
