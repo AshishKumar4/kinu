@@ -199,20 +199,27 @@ export async function admitHostedTask(
 
 /** Retry on a hosted chat: the message's assignment pends again. */
 export function retryHostedMessage(
-  seams: HostedActorSeams, reference: ActorReference, input: { readonly messageId: string; readonly reopen: () => Promise<void> },
+  seams: HostedActorSeams, reference: ActorReference,
+  input: { readonly reserved: Set<string>; readonly reopen: () => Promise<string>; readonly claim: (turnId: string) => void },
 ): Promise<'turn'> {
-  return settle(Effect.gen(function* () {
-    if (seams.turnInFlight(reference)) return yield* Effect.fail(new KinuError('denied', 'Stop the turn that is running before you retry.'));
-    const log = new EventLog(seams.exec, seams.host.bindStores(reference).handle);
-    const assignment = log.idForDedupeKey(subordinateMessageDedupeKey(input.messageId));
+  if (seams.turnInFlight(reference) || input.reserved.has(reference.actorId)) {
+    return settle(Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.')));
+  }
 
-    if (assignment === null) return yield* Effect.fail(new KinuError('bad_input', 'Only the newest message can be retried.'));
-    yield* attemptInItsWords('bad_input', input.reopen);
+  input.reserved.add(reference.actorId);
+
+  return settle(Effect.gen(function* () {
+    const turnId = yield* attemptInItsWords('bad_input', input.reopen);
+    const log = new EventLog(seams.exec, seams.host.bindStores(reference).handle);
+    const assignment = log.idForDedupeKey(subordinateMessageDedupeKey(turnId));
+
+    if (assignment === null) return yield* Effect.fail(new KinuError('bad_input', 'That turn was not opened by a chat message, so it cannot be retried.'));
+    input.claim(turnId);
     log.unbind(assignment);
     seams.armWake();
 
     return 'turn' as const;
-  }));
+  }).pipe(Effect.ensuring(Effect.sync(() => { input.reserved.delete(reference.actorId); }))));
 }
 
 function hostedHirer(seams: HostedActorSeams, child: BoundActor): BoundActor {

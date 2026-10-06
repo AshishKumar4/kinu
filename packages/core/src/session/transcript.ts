@@ -553,6 +553,23 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     });
   }
 
+  /**
+   * Retry's reopening, one rule for every backend: the turn the newest user row belongs to (a steer's turn is its
+   * opener's), with an answer its failure left empty dropped. Null when there is no user row to retry.
+   */
+  reopenNewestTurn(): ConversationEntry | null {
+    const newest = this.newestUserId();
+    const row = newest === null ? null : this.read(newest);
+    const opener = row === null ? null : this.read(row.turnId ?? row.id);
+
+    if (opener?.role !== 'user') return null;
+    const last = this.at(this.count() - 1);
+
+    if (last?.role === 'assistant' && last.parts.length === 0 && last.turnId === opener.id) this.truncate(last.position);
+
+    return opener;
+  }
+
   /** A rewind: `position` and everything after it is deleted, parts with it; the chat keeps no branch. */
   truncate(position: number): void {
     this.atomic(() => {
