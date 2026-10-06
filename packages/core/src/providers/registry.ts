@@ -80,13 +80,7 @@ export function accountDeps<Deps extends ProviderDeps>(deps: Deps, providerId: s
     return accountCredentialKey(key, only);
   });
 
-  const answered = (key: string, auth: AuthResolution): AuthResolution => {
-    const stored: AuthResolution = { headers: auth.headers, credentialKey: key };
-
-    if (auth.baseURL !== undefined) stored.baseURL = auth.baseURL;
-
-    return stored;
-  };
+  const answered = (key: string, auth: AuthResolution): AuthResolution => ({ ...auth, credentialKey: key });
 
   return {
     ...deps,

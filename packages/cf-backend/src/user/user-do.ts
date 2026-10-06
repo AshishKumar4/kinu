@@ -698,7 +698,20 @@ function retireActivationRestore(
   return restore;
 }
 
-/** The endpoint a stored credential names; null where its provider's own endpoint applies. */
+/** The endpoint a stored credential names, and the window its owner declared; null where its provider's own applies. */
+export interface CredentialEndpoint {
+  readonly baseURL: string;
+  readonly contextWindow?: number;
+}
+
+function credentialEndpoint(storedKey: string, cred: Credential): CredentialEndpoint | null {
+  const baseURL = credentialBaseURL(storedKey, cred);
+
+  if (baseURL === null) return null;
+
+  return cred.kind === 'openai-compat' && cred.contextWindow !== undefined ? { baseURL, contextWindow: cred.contextWindow } : { baseURL };
+}
+
 function credentialBaseURL(storedKey: string, cred: Credential): string | null {
   if (cred.kind === 'openai-compat') return cred.baseURL;
 
@@ -4173,8 +4186,8 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     return resolveEgressInjection(this.egressVaultDeps(await this.cipher()), facts, active);
   }
 
-  /** baseURL is not a secret and is absent from listCredentials(); the provider proxy reads it without the login. */
-  async getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null> {
+  /** The endpoint is not a secret and is absent from listCredentials(); the provider proxy reads it without the login. */
+  async getCredentialEndpoint(caller: UserCaller, key: string): Promise<CredentialEndpoint | null> {
     await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
     // The my-gateway view uses the same account-scoped /ai/v1 endpoint as Workers AI;
@@ -4182,7 +4195,7 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
     const cred = await this.readCredential(storedKey);
 
-    return cred === null ? null : credentialBaseURL(storedKey, cred);
+    return cred === null ? null : credentialEndpoint(storedKey, cred);
   }
 
   async getAuthHeaders(caller: UserCaller, key: string, opts?: AuthRequest): Promise<Record<string, string> | null> {
@@ -4241,9 +4254,7 @@ async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
       headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.env);
     }
 
-    const baseURL = credentialBaseURL(storedKey, cred);
-
-    return baseURL === null ? { headers } : { headers, baseURL };
+    return { headers, ...credentialEndpoint(storedKey, cred) };
   }
 
   private static readonly AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';

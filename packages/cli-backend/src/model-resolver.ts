@@ -57,6 +57,7 @@ const proxiedCredentialsSchema = v.object({
   credentials: v.optional(v.array(v.object({
     key: v.string(),
     baseURL: v.optional(v.string()),
+    contextWindow: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
     failure: v.optional(v.string()),
   })), []),
 });
@@ -263,7 +264,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
         if (remote?.failure !== undefined) return yield* Effect.die(new Error(remote.failure));
 
-        return remote ? proxyAuthResolution(key, remote.baseURL) : null;
+        return remote ? proxyAuthResolution(key, remote) : null;
       }));
     },
     hasCredential(key) {
@@ -474,7 +475,7 @@ function readCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch):
 }
 
 interface ProxiedCredentials {
-  byKey: Map<string, { baseURL?: string; failure?: string }>;
+  byKey: Map<string, { baseURL?: string; contextWindow?: number; failure?: string }>;
   /** Set only until a listing succeeds; afterwards a failure serves the last good answer. */
   error: string | null;
 }
@@ -496,13 +497,12 @@ function readProxyCredentialListing(cloud: LocalCloudSession, fetchImpl?: typeof
 
     if (!res.ok) return yield* Effect.die(new Error(`the Kinu provider proxy returned HTTP ${String(res.status)}`));
     const body = v.parse(proxiedCredentialsSchema, yield* Effect.promise(() => res.json()));
-    const byKey = new Map<string, { baseURL?: string; failure?: string }>();
+    const byKey: ProxiedCredentials['byKey'] = new Map();
 
-    for (const { key, baseURL, failure } of body.credentials) {
+    for (const { key, failure, ...endpoint } of body.credentials) {
       if (!key) continue;
 
-      if (failure !== undefined) byKey.set(key, { failure });
-      else byKey.set(key, baseURL ? { baseURL } : {});
+      byKey.set(key, failure === undefined ? endpoint : { failure });
     }
 
     return { byKey, error: null };
@@ -672,7 +672,11 @@ function buildAuthStore(
   }
 
   for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {
-    store.set(`openai-compat.${name}`, { headers: credentialToHeaders(`openai-compat.${name}`, compat), baseURL: compat.baseURL });
+    store.set(`openai-compat.${name}`, {
+      headers: credentialToHeaders(`openai-compat.${name}`, compat),
+      baseURL: compat.baseURL,
+      ...(compat.contextWindow !== undefined && { contextWindow: compat.contextWindow }),
+    });
   }
 
   return {

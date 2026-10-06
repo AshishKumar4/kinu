@@ -21,11 +21,12 @@ import { authoredRefusal, diagnostics, renderThrownChain, settle } from '@kinu.r
 import { beneath } from '../api/context';
 import { inferenceProxyGate, type CliEnv } from '../cli/routes';
 
-/** Client view of a proxyable credential; never carries secret material. `baseURL` is set for
- * openai-compat credentials; `failure` marks an unreadable entry without failing the listing. */
+/** Client view of a proxyable credential; never carries secret material. `baseURL` and `contextWindow` are the
+ * endpoint an openai-compat credential names; `failure` marks an unreadable entry without failing the listing. */
 export interface ProxyableCredential {
   key: string;
   baseURL?: string;
+  contextWindow?: number;
   failure?: string;
 }
 
@@ -39,7 +40,7 @@ const STRIPPED_REQUEST_HEADERS: readonly string[] = [
   'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-real-ip',
 ];
 
-export type ProxyCredentialSource = Pick<UserDO, 'listCredentials' | 'getCredentialBaseURL' | 'getAuthHeaders'>;
+export type ProxyCredentialSource = Pick<UserDO, 'listCredentials' | 'getCredentialEndpoint' | 'getAuthHeaders'>;
 
 export const providerProxyRoutes = new Hono<CliEnv>();
 
@@ -74,8 +75,8 @@ function listProxyableCredentials(
     for (const { key } of stored) {
       if (isProxyDeniedCredentialKey(key)) continue;
 
-      const read = yield* Effect.matchCause(Effect.promise(() => userDO.getCredentialBaseURL(owner, key)), {
-        onSuccess: (credentialBase) => ({ credentialBase }),
+      const read = yield* Effect.matchCause(Effect.promise(() => userDO.getCredentialEndpoint(owner, key)), {
+        onSuccess: (endpoint) => ({ endpoint }),
         onFailure: (failed) => {
           const error = authoredRefusal({ doing: 'reading a credential\'s base URL', cause: Cause.squash(failed) });
           diagnostics.failure('provider_proxy.base_url_unread', error, { key });
@@ -89,11 +90,11 @@ function listProxyableCredentials(
         continue;
       }
 
-      const credentialBase = read.credentialBase;
+      const { endpoint } = read;
 
-      if (credentialBase) {
+      if (endpoint) {
         // Forwarding is https-only; non-https endpoints (e.g. the owner's own machine) are not proxyable.
-        if (credentialBase.startsWith('https://')) out.push({ key, baseURL: credentialBase });
+        if (endpoint.baseURL.startsWith('https://')) out.push({ key, ...endpoint });
         continue;
       }
 
@@ -127,7 +128,7 @@ function forwardUpstream(
       return errorResponse(403, `${credKey} is not served by this proxy: Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);
     }
 
-    const base = (yield* Effect.promise(() => userDO.getCredentialBaseURL(owner, credKey)))
+    const base = (yield* Effect.promise(() => userDO.getCredentialEndpoint(owner, credKey)))?.baseURL
       ?? (yield* Effect.promise(() => providerProxyBaseURL(credKey, { fetch })));
 
     if (!base) {

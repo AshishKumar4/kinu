@@ -97,7 +97,7 @@ export async function discoverOpenAICompatibleModels(
     const id = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.id);
 
     if (!id.success) return [];
-    const contextWindow = positiveInteger({ value: value.context_window });
+    const contextWindow = auth.contextWindow ?? positiveInteger({ value: value.context_window });
     const name = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.name);
 
     return [{
