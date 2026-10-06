@@ -265,7 +265,10 @@ function readProviderFailure(
 /** Reason plus identifiers it does not already state, bounded by `evidenceWindow`
  *  since the useful sentence is usually last. */
 export function describeProviderError(failure: { readonly cause: unknown }): string {
-  const facts = providerFailureFacts({ cause: failure.cause });
+  return describeFacts(providerFailureFacts({ cause: failure.cause }));
+}
+
+function describeFacts(facts: ProviderFailureFacts): string {
   const tags: string[] = [];
 
   if (facts.status !== undefined) tags.push(`HTTP ${String(facts.status)}`);
@@ -356,7 +359,7 @@ export function toProviderError(input: {
   }
 
   const fields: ProviderFailureFields = {
-    detail: describeProviderError({ cause: input.cause }),
+    detail: describeFacts(facts),
   };
 
   if (facts.status !== undefined) fields.status = facts.status;
