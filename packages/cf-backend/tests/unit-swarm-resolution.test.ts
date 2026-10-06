@@ -41,22 +41,6 @@ function journal(nodes: readonly JournalNode[]): HeadRunView {
 }
 
 describe('the resolution a run resolved', () => {
-  test('a named preset resolves to its tuple, and settle is derived from it', () => {
-    const resolution = swarmResolutionOf('prove');
-    expect(resolution).toMatchObject({ kind: 'preset', preset: 'prove', settle: 'best' });
-    expect(resolution?.kind === 'preset' ? swarmAxisRows(resolution.config) : []).toEqual([
-      { axis: 'unit', value: 'answer' },
-      { axis: 'context', value: 'inherit' },
-      { axis: 'expand', value: 'sample' },
-      { axis: 'score', value: 'verify' },
-      { axis: 'advance', value: 'best-first' },
-      { axis: 'carry', value: 'artifacts ≥1' },
-    ]);
-  });
-
-  test('a preset with no selector and no score derives settle=merge, not settle=best', () => {
-    expect(swarmResolutionOf('ideate')).toMatchObject({ kind: 'preset', settle: 'merge' });
-  });
 
   test('every named preset resolves, so redteam has an archive floor to show', () => {
     // `redteam`'s archive novelty floor is Rainbow Teaming's τ=0.6 converted from a similarity
@@ -66,11 +50,6 @@ describe('the resolution a run resolved', () => {
     expect(resolution?.kind === 'preset' ? swarmAxisRows(resolution.config) : []).toContainEqual(
       { axis: 'advance', value: 'archive ≥0.4' },
     );
-  });
-
-  test('a label that names no preset is a composition, carried as its provenance label', () => {
-    expect(swarmResolutionOf('conflict-reconciling ensemble'))
-      .toEqual({ kind: 'custom', label: 'conflict-reconciling ensemble' });
   });
 
   test('no label is no resolution — absent, never a composition with an empty name', () => {
@@ -155,18 +134,6 @@ describe('a run that reached nothing reads as a refusal', () => {
 
 /** `runRefusal` is null while running; this progress fact is computed from the journal, not the status word. */
 describe('what a running search says about itself', () => {
-  test('the counts are per node lifecycle, not the run status word', () => {
-    const live = runLiveness(
-      journal([
-        liveNode('a', 'running'), liveNode('b', 'running'),
-        liveNode('c', 'completed', { summary: 'found the null kind' }),
-        liveNode('d', 'errored', { errorMessage: 'provider refused' }),
-        liveNode('e', 'aborted', { errorMessage: 'operator stopped it' }),
-      ]),
-    );
-
-    expect(live).toMatchObject({ running: 2, reported: 1, failed: 2, total: 5 });
-  });
 
   test('the newest event is the newest STEP, and a node that never stepped falls back to its spawn', () => {
     // A run whose only moving node has stepped is live at that step, not at a sibling's spawn.
@@ -184,18 +151,6 @@ describe('what a running search says about itself', () => {
     expect(unstarted?.lastEventAt).toBe(4_000);
   });
 
-  test('levels come from the journal depth, so a deeper search is not flattened', () => {
-    const live = runLiveness(journal([
-      liveNode('a', 'completed', { depth: 1 }), liveNode('b', 'completed', { depth: 1 }),
-      liveNode('c', 'running', { depth: 2 }), liveNode('d', 'running', { depth: 2 }),
-    ]));
-
-    expect(live?.levels).toEqual([
-      { depth: 1, running: 0, reported: 2, failed: 0, total: 2 },
-      { depth: 2, running: 2, reported: 0, failed: 0, total: 2 },
-    ]);
-  });
-
   test('a settled run still reports its shape — the panel is not a running-only widget', () => {
     const live = runLiveness(journal([
       liveNode('a', 'completed'), liveNode('b', 'completed'),
@@ -210,13 +165,6 @@ describe('what a running search says about itself', () => {
     expect(runLiveness(journal([]))).toBeNull();
   });
 
-  test('an unrecognised status counts as neither reported nor failed, and never as running', () => {
-    const live = runLiveness(journal([
-      liveNode('a', 'interrupted'),
-    ]));
-
-    expect(live).toMatchObject({ running: 0, reported: 0, failed: 0, total: 1 });
-  });
 });
 
 describe('a frontier value in its own unit', () => {

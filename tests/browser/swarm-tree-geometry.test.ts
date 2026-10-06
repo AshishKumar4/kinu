@@ -990,3 +990,60 @@ test('a running head paints its arriving step, only its own, until the step land
     await page.close();
   });
 });
+
+/** The swarm configuration a frame's run resolved: its kind, its name, and the settle it derived. */
+async function resolutionOf(newPage: Gallery['newPage'], origin: string, frame: string) {
+  const page = await newPage();
+
+  await page.setViewport({ width: 1440, height: 1000 });
+  await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('[data-swarm-config] summary');
+  await page.click('[data-swarm-config] summary');
+  await page.waitForSelector('[data-swarm-resolution]');
+
+  const seen = await page.$eval('[data-swarm-resolution]', (body) => ({
+    kind: body.getAttribute('data-swarm-resolution'),
+    text: body.textContent ?? '',
+    axes: [...body.querySelectorAll('dt')].map((term) => term.textContent),
+  }));
+
+  await page.close();
+
+  return seen;
+}
+
+/** The liveness counts the panel and each level row carry: depth (null for the panel), running, reported, stopped, total. */
+function livenessCounts(page: Page): Promise<(number | null)[][]> {
+  return page.$$eval('[data-run-liveness], [data-run-level]', (rows) => rows.map((row) => [
+    row.hasAttribute('data-run-level') ? Number(row.getAttribute('data-run-level')) : null,
+    ...['data-running', 'data-reported', 'data-failed', 'data-total'].map((name) => Number(row.getAttribute(name))),
+  ]));
+}
+
+/**
+ * What a run resolved and how its nodes stand, as the swarm surface shows them. A named preset shows its six axes and
+ * the settle they derive: a scored search settles on its best, an unscored one merges. A composition shows only its
+ * label. Liveness counts each node by its own journal word at its own level: errored and aborted count as stopped,
+ * and words that settle nothing, out of budget or interrupted, count toward no bucket and never as running.
+ */
+test('a run shows the preset or composition it resolved, and counts each node by its own word at its own level', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const prove = await resolutionOf(newPage, origin, 'forkpreset');
+    expect(prove.kind).toBe('preset');
+    expect(prove.axes).toEqual(['unit', 'context', 'expand', 'score', 'advance', 'carry']);
+    expect(prove.text).toContain('settle best');
+
+    const ideate = await resolutionOf(newPage, origin, 'forkrefused');
+    expect([ideate.kind, ideate.text.includes('settle merge')]).toEqual(['preset', true]);
+
+    const composed = await resolutionOf(newPage, origin, 'forkfanin');
+    expect([composed.kind, composed.axes]).toEqual(['custom', []]);
+
+    const page = await newPage();
+    await page.setViewport({ width: 1440, height: 1000 });
+    await page.goto(`${origin}/gallery.html?frame=forkrunning`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-run-liveness]');
+    expect(await livenessCounts(page)).toEqual([[null, 5, 2, 2, 11], [1, 2, 2, 1, 5], [2, 3, 0, 1, 6]]);
+    await page.close();
+  });
+});
