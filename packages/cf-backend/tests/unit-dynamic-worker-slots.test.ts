@@ -3,8 +3,8 @@
  * (platform-catalog `worker_loader.do_dynamic_worker_concurrency`, measured on staging 2026-10-02). The harness counts
  * as the platform does, so a read that calls more isolates at once than that is refused here as it was on staging.
  */
-import { beginLoaderFetch } from '@nimbus-sh/fabric/budgets.js';
-import { describe, expect, test } from 'bun:test';
+import { beginLoaderFetch, loaderLedgerStats } from '@nimbus-sh/fabric/budgets.js';
+import { describe, expect, test, vi } from 'bun:test';
 import { catalogTurn, gatewayWorkspace, orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
@@ -135,17 +135,38 @@ describe("a read across every agent's isolate", () => {
 
     workers.hidden = 9;
     workers.gate = gate.promise;
+    const timer = globalThis.setTimeout;
+    const ledger = workspace.agent.harnessDynamicWorkerLedger();
+    const beforeRetry = Promise.withResolvers<{ refused: number; calls: number }>();
+
+    const observeRetry = Object.assign((...args: Parameters<typeof timer>): ReturnType<typeof timer> => {
+      const [callback, ms, ...params] = args;
+
+      if (ms === undefined || ms <= 0 || loaderLedgerStats(ledger).pauseMs !== ms) return timer(...args);
+
+      return timer(() => {
+        beforeRetry.resolve({ refused: workers.refused, calls: workers.calls.length });
+        callback(...params);
+      }, ms);
+    }, timer);
+
+    const arming = vi.spyOn(globalThis, 'setTimeout').mockImplementation(observeRetry);
     const spend = workspace.agent.accountSpend();
 
-    await workers.when(() => workers.refused === 2 && workers.inFlight.size === 1);
-    await roundTrips(20);
+    try {
+      expect(await beforeRetry.promise).toEqual({ refused: 2, calls: 1 });
+      workers.gate = null;
+      gate.resolve();
 
-    expect({ refused: workers.refused, calls: workers.calls.length }).toEqual({ refused: 2, calls: 1 });
-    workers.gate = null;
-    gate.resolve();
-
-    expect(await spend).toEqual(expect.any(Array));
-    expect(new Set(workers.calls).size).toBe(3);
+      expect(await spend).toEqual(expect.any(Array));
+      expect(workers.calls).toHaveLength(3);
+      expect(new Set(workers.calls).size).toBe(3);
+    } finally {
+      workers.gate = null;
+      gate.resolve();
+      arming.mockRestore();
+      await spend;
+    }
   });
 
   test("fails naming the ledger when every slot is Nimbus's and none of Kinu's calls is in flight", async () => {
