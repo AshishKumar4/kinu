@@ -42,37 +42,43 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     if (this.ctx.id.name?.startsWith('nbf:') !== true) await this.workspaceTitle();
   }
 
-  async startCount(): Promise<number> {
-    return this.ctx.storage.kv.get<number>('probe-starts') ?? 0;
+  // Plain functions, never `async`: since agents 0.25 an async method a stub calls starts the object first.
+  startCount(): Promise<number> {
+    return Promise.resolve(this.starts());
   }
 
-  async failNextStart(): Promise<void> {
+  failNextStart(): Promise<void> {
     this.ctx.storage.kv.put('probe-fail-start', true);
+
+    return Promise.resolve();
   }
 
-  async allowStart(): Promise<void> {
+  allowStart(): Promise<void> {
     this.ctx.storage.kv.delete('probe-fail-start');
+
+    return Promise.resolve();
   }
 
-  async evict(): Promise<void> {
-    await this.ctx.storage.sync();
-    this.ctx.abort(EVICTED);
+  evict(): Promise<void> {
+    return this.ctx.storage.sync().then(() => { this.ctx.abort(EVICTED); });
   }
 
   /** The platform's alarm delivery: this activation, however it was built, runs its alarm. */
-  async probeAlarm(): Promise<string> {
-    await this.alarm();
-
-    return 'retired';
+  probeAlarm(): Promise<string> {
+    return this.alarm().then(() => 'retired');
   }
 
   /** What a workspace holds: its starts, its identity rows and its actor rows. */
-  async probeState(): Promise<{ starts: number; identity: number; actors: number }> {
+  probeState(): Promise<{ starts: number; identity: number; actors: number }> {
     const rows = (table: string): number => (this.ctx.storage.sql.exec(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table,
     ).toArray().length === 0 ? 0 : v.parse(v.number(), this.ctx.storage.sql.exec(`SELECT COUNT(*) AS n FROM ${table}`).one().n));
 
-    return { starts: await this.startCount(), identity: rows('workspace_identity'), actors: rows('workspace_actors') };
+    return Promise.resolve({ starts: this.starts(), identity: rows('workspace_identity'), actors: rows('workspace_actors') });
+  }
+
+  private starts(): number {
+    return this.ctx.storage.kv.get<number>('probe-starts') ?? 0;
   }
 }
 

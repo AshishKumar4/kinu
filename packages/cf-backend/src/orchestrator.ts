@@ -354,7 +354,7 @@ function clampLimit(requested: number | undefined, max: number): number {
   return Math.min(Math.max(Math.floor(requested), 1), max);
 }
 
-/** agents 0.24's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
+/** agents 0.26's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
 const PERSISTED_NAME_KEY = '__ps_name';
 
 /** An alarm phase's failure: marked on its span and recorded, so the tick goes on to its next phase. */
@@ -2975,10 +2975,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Synchronous by contract: runs inside blockConcurrencyWhile, which gates every request and
    *  resets the object at 30s (`do.block_concurrency.cancel_ms`); `scripts/do-init-gate.ts` enforces. */
   async onStart(): Promise<void> {
+    // A sibling's first RPC starts it too (agents 0.25); it is no workspace, so it records no startup.
+    if (this.nimbusSibling) return;
     diagnostics.event('actor.startup', { workspace: this.name });
 
     // An unborn workspace owes nothing: its first claim writes it.
-    if (this.storageRefusal !== undefined || this.nimbusSibling || !this.workspaceBorn()) return;
+    if (this.storageRefusal !== undefined || !this.workspaceBorn()) return;
     this.rependDeadActivationLeases();
     // Row-budgeted (init gate); a truncated pass drains under the wake below.
     this.maintenanceUnfinished = this.maintenanceSweeps(true);
