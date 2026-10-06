@@ -466,7 +466,6 @@ const runnerOptions = {
           NEIGHBOUR: { className: 'NeighbourDO', useSQLite: true },
           GATED: { className: 'GatedDO', useSQLite: true },
           TRANSACTION: { className: 'TransactionDO', useSQLite: true },
-          SOCKET: { className: 'SocketDO', useSQLite: true },
           ALARMED: { className: 'AlarmDO', useSQLite: true },
           CACHE_WARM_PROBE: { className: 'CacheWarmProbeDO', useSQLite: true },
           EVICTION_PROBE: { className: 'EvictionProbeDO', useSQLite: true },
@@ -497,7 +496,6 @@ const runnerOptions = {
           HIRE_PROBE: { className: 'HireProbeRoot', scriptName: 'hire-probe', useSQLite: true },
           // The probe's workspace itself, reached as the public route reaches it: an agent's pane is a socket on it.
           HIRE_WORKSPACE: { className: 'OrchestratorAgent', scriptName: 'hire-probe', useSQLite: true },
-          DEVBOX_NOT_READY_PROBE: { className: 'DevboxNotReadyProbeDO', useSQLite: true },
           CODEX_EGRESS_PROBE: { className: 'CodexEgressProbe', scriptName: 'codex-egress-probe', useSQLite: true },
           SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
           DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', scriptName: 'delete-all-probe', useSQLite: true },

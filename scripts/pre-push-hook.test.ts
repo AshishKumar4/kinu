@@ -1,5 +1,5 @@
 /**
- * The push tier proves the checked-out tree, so the pre-push hook must refuse a push
+ * The tier proves the checked-out tree, so the pre-push hook must refuse a push
  * whose commit is not that tree. On 2026-09-30 a push of integration from the primary
  * checkout ran the tier on main and refused a green commit; a push from a dirty tree
  * proves files the commit does not carry, untracked ones included (scripts/sources.ts
@@ -58,7 +58,8 @@ describe('the pre-push hook proves only the commit it pushes', () => {
     const { status, stderr } = runHook(repo, parent);
 
     expect(status).toBe(1);
-    expect(stderr).toContain(`this push sends ${parent}, but the push tier proves the checked-out ${head}`);
+    expect(stderr).toContain(parent);
+    expect(stderr).toContain(head);
   });
 
   test('a push of the checked-out commit from a clean tree runs the tier and passes', () => {

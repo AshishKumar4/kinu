@@ -4,7 +4,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { serveFamily } from './helpers/api';
 import { describe, test, expect } from 'bun:test';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
-import type { ProfileCatalogWriteResult } from '../src/user/user-do';
+import type { ProfileCatalogWriteResult } from '../src/user/profile';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import type { UserCaller } from '@kinu.run/core';
 import type { AuthIdentity } from '../src/auth/session';

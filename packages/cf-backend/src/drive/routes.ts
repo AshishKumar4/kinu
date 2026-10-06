@@ -9,7 +9,8 @@ import {
   pumpUploadChunks, retryTransientDO, safeJson, type DriveFailure, type DriveUploadTarget, type UserCaller,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
-import type { DriveAnswer, UserDO } from '../user/user-do';
+import type { UserDO } from '../user/user-do';
+import type { DriveAnswer } from '../user/drive';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 
 export type DriveRouteObject = Pick<UserDO,

@@ -6,7 +6,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { initWorkspaceSchema, type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
+import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { scratchDir, scratchPath, scriptedTurnModel, sqlOver, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import {
   historyOver, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
@@ -19,7 +20,7 @@ import type { OrchestratorAgent } from '../../src/orchestrator';
 import { LocalAgentSession } from '../../../cli-backend/src/local-session';
 import { createHostCheckpoints } from '../../../cli-backend/src/checkpoints';
 import { createLocalModelResolver, type LocalModelResolver } from '../../../cli-backend/src/model-resolver';
-import { createCLIRuntime, makeWorkspaceSchemaSql } from '../../../cli-backend/src/runtime';
+import { openWorkspaceCLI } from '../../../cli-backend/src/open';
 
 export const TEST_BACKEND_ENV = 'KINU_TEST_BACKEND';
 
@@ -242,18 +243,35 @@ function scriptedResolver(model: LanguageModel): LocalModelResolver {
     resolveModel: () => model,
     credentialFor: (spec) => real.credentialFor(spec),
     listProviders: () => real.listProviders(),
-    listModels: () => real.listModels(),
+    // The menu is the scripted model alone: a provider installed on the host (an `opencode` on PATH) never reaches a case.
+    listModels: () => Promise.resolve({ models: [{ provider: NO_ENDPOINT.name, id: NO_ENDPOINT.model }], failures: [] }),
     modelInfo: () => Promise.resolve(null),
     countInputTokens: () => Promise.resolve({ kind: 'unsupported', provider: 'fake', reason: 'a scripted model has no count endpoint' }),
     getAuth: real.getAuth,
   };
 }
 
-/** The CLI session over its own workspace database, with its checkpoint store under scratch. */
-function cli(): SharedBackend {
-  const db = new Database(scratchPath('shared-backend', 'agent.db'));
-  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
+let born: Promise<Database> | null = null;
+
+/** One workspace born as `kinu create` births it, once per run. */
+function bornWorkspace(): Promise<Database> {
+  born ??= (async () => {
+    const db = new Database(scratchPath('shared-backend-born', 'agent.db'));
+    db.exec('PRAGMA journal_mode = WAL');
+    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT });
+
+    return db;
+  })();
+
+  return born;
+}
+
+/** The CLI session over a copy of the born workspace, opened as `kinu` opens one, with its checkpoint store under scratch. */
+async function cli(): Promise<SharedBackend> {
+  const dbPath = scratchPath('shared-backend', 'agent.db');
+  (await bornWorkspace()).run('VACUUM INTO ?', [dbPath]);
+  const db = new Database(dbPath);
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
   const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
   rt.checkpoints = checkpoints;
   const gate = turnGate();
@@ -350,5 +368,5 @@ function cli(): SharedBackend {
 }
 
 export function openBackend(name: BackendName): Promise<SharedBackend> {
-  return name === 'cf' ? cloudflare() : Promise.resolve(cli());
+  return name === 'cf' ? cloudflare() : cli();
 }

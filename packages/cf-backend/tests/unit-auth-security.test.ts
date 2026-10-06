@@ -30,7 +30,7 @@ import type { CliRoutesEnv } from '../src/cli/routes';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { makeKv, type FakeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import type { BrowserSessionIdentity } from '../src/user/user-do';
+import type { BrowserSessionIdentity } from '../src/user/sessions';
 import type { UserCaller } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';

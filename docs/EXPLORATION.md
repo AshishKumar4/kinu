@@ -519,8 +519,8 @@ Measured 2026-09-06, `packages/cf-backend/tests/unit-node-home-wiring.test.ts`
 passes 26 tests with 0 failures. It covers home ownership, sibling write
 refusal, shared reads, binary transfer, and reset recovery. The CLI provisions
 no private node home since 2026-10-04, when local workspaces became real files:
-`packages/cli-backend/tests/swarm-node-home.test.ts` proves every local node
-reports `shared-origin-plane`.
+`packages/cli-backend/tests/head-runtime.test.ts` exercises the files a local
+node shares.
 
 The main agent keeps `HOME=/home/main` and uses `TMPDIR=/tmp/main`.
 Workspace boot provisions its temporary directory before commands run.

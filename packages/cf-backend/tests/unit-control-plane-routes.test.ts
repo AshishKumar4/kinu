@@ -19,7 +19,7 @@ import {
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { sqlExec } from './helpers/user-do';
 import type { ControlEnv } from '../src/control-plane/routes';
-import type { WorkspaceEntry } from '../src/user/user-do';
+import type { WorkspaceEntry } from '../src/user/workspaces';
 import { ownedByAnotherAccount } from '../src/user/workspace-ownership';
 
 mockAgentsSdk();

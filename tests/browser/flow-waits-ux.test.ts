@@ -1,8 +1,7 @@
 /**
  * What ends a harness wait before its condition holds: a failure the page shows, named beside what the wait was
  * for. On 2026-09-24 a sweep's Drive row waited 36 minutes on a Drive whose listing had failed, while the page said
- * why the whole time. Which words each failure display marks is the product's side, held by
- * packages/cf-backend/tests/unit-failure-marks.test.ts.
+ * why the whole time.
  */
 import { expect, test } from 'bun:test';
 import { Effect } from 'effect';

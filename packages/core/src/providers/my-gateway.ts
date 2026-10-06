@@ -96,7 +96,7 @@ export function createMyGatewayProvider(): ModelProvider {
   };
 }
 
-/** The account's endpoint on the worker, the signed-in proxy on the CLI. */
+/** The account endpoint on the worker, the signed-in proxy on the CLI. */
 export interface GatewayTransport {
   readonly baseURL: string;
   readonly fetch?: typeof fetch;

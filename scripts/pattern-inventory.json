@@ -120,13 +120,6 @@
       "decision": "lexical"
     },
     {
-      "file": "packages/cf-backend/tests/unit-code-highlighter.test.ts",
-      "kind": "regex-literal",
-      "owner": "tokens",
-      "sourceSha256": "9b251c55a99cad074d64aba2f49462fded0f993abe8b5b697f4da2ddd4cb4e5e",
-      "decision": "lexical"
-    },
-    {
       "file": "packages/cf-backend/tests/unit-composer.test.ts",
       "kind": "regex-literal",
       "owner": "send",
@@ -187,41 +180,6 @@
       "kind": "regex-literal",
       "owner": "<module>",
       "sourceSha256": "608b9f9251a492e88bbe180a28173cd3b5800f8d3ab87029b0f5231b7078d13d",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-public-shell.test.ts",
-      "kind": "regex-literal",
-      "owner": "<module>",
-      "sourceSha256": "2353b92a1290a02e9fd9b3ea097bd000612d761e454fe5591417fc535431d6eb",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-public-shell.test.ts",
-      "kind": "regex-literal",
-      "owner": "<module>",
-      "sourceSha256": "3157e4146cd8590236b6f671db94298a5d56e2dbdd170425bf8a10f583fcf5bd",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-public-shell.test.ts",
-      "kind": "regex-literal",
-      "owner": "match",
-      "sourceSha256": "401699e3478a3d1a77238fba91276691709662efc35d6beb612a50f6c71cb4f2",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-public-shell.test.ts",
-      "kind": "regex-literal",
-      "owner": "shipped",
-      "sourceSha256": "9fb95a84e045f6e67446621b11b4274a0287a366ea9f0dcd3ac849b789ed7d82",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-settings-sections.test.ts",
-      "kind": "regexp-constructor",
-      "owner": "match",
-      "sourceSha256": "c2bbb28e28225aa65c79aa80ef96d55667888ea952ad0a2424187bf3a3a84c36",
       "decision": "lexical"
     },
     {
@@ -929,13 +887,6 @@
       "kind": "regex-literal",
       "owner": "<module>",
       "sourceSha256": "884c96a030fdbb6ef3cdd5fc57517142244473c15a9fcfb3751b1d51298023d7",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-markdown-code.test.ts",
-      "kind": "regex-literal",
-      "owner": "<module>",
-      "sourceSha256": "22f10e4bbfe818759c2dd235314b98983d8d8ccc83c4174f9ec7dea46080e2ee",
       "decision": "lexical"
     }
   ]

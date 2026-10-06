@@ -58,7 +58,7 @@ export declare const CALLBACK_PATH: string;
 
 export declare const DEVICE_RECORD_FILE: string;
 
-export declare const UNUSABLE_REFRESH_CODES: readonly string[];
+export declare const SPENT_REFRESH_CODES: readonly string[];
 
 export declare function hostId(home: string): string;
 

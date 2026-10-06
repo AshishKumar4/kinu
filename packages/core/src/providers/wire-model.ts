@@ -29,7 +29,7 @@ export function createWireModel(input: WireModelInput): LanguageModelV4 {
     : createOpenAICompatible({ name, baseURL, headers, ...fetched }).chatModel(modelId);
 }
 
-/** `createModel` is synchronous and the wire is read from the catalog, so it resolves at each call. */
+/** `createModel` is synchronous and the wire is read from the catalog: resolved per call. */
 export function deferredModel(provider: string, modelId: string, resolve: () => Promise<LanguageModelV4>): LanguageModelV4 {
   return {
     specificationVersion: 'v4', provider, modelId,

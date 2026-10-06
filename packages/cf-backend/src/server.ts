@@ -35,7 +35,7 @@ import {
   type AuthIdentity,
 } from "./auth/session";
 import { containPreviewResponse, hostOf, isPreviewHostRequest, serveApp } from "@kinu.run/core";
-import { parseCliAgentConnectTicketUserId } from "./user/user-do";
+import { parseCliAgentConnectTicketUserId } from "./user/sessions";
 import { ownerCaller } from "@kinu.run/core";
 import { appendIdentityHeaders } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";

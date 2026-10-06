@@ -288,7 +288,7 @@ function rpc(ws, id, result, error) {
 // honestly to "checkpoints unavailable: git not found" without blocking
 // anything.
 
-// BEGIN GENERATED from packages/core/src/checkpoints/format.ts by `bun scripts/daemon-checkpoint-format.ts`. Do not edit.
+// BEGIN GENERATED from packages/core/src/checkpoints/format.ts by `bun scripts/daemon-generated.ts`. Do not edit.
 
 // Shadow-git store format; the daemon carries a generated copy.
 

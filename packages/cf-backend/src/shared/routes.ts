@@ -15,7 +15,7 @@ import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
 import { deriveUserId } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
-import type { SharedBlueprintReceipt } from '../user/user-do';
+import type { SharedBlueprintReceipt } from '../user/profile';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
 import type { ErrorCode } from '@kinu.run/core/obs';

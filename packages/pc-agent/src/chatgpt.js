@@ -14,28 +14,145 @@ const http = require('node:http');
 
 const crypto = require('node:crypto');
 
+// BEGIN GENERATED from packages/core/src/providers/chatgpt-protocol.ts by `bun scripts/daemon-generated.ts`. Do not edit.
+
+// Sign in with ChatGPT's token protocol (developers.openai.com/siwc, 2026-09-30) for the machine's sign-in
+// (pc-agent/src/chatgpt.js, generated) and a deployment's (chatgpt-sign-in.ts); I/O and errors are each side's.
+
 const ISSUER = 'https://auth.openai.com';
 
 const AUTHORIZE_URL = `${ISSUER}/api/accounts/authorize`;
 
 const TOKEN_URL = `${ISSUER}/api/accounts/oauth/token`;
 
-/** The discovery document's `revocation_endpoint` (read 2026-09-30). */
 const REVOKE_URL = `${ISSUER}/api/accounts/oauth/revoke`;
 
 const JWKS_URL = `${ISSUER}/.well-known/jwks.json`;
 
 const RESOURCE = 'https://api.openai.com/v1';
 
+/** Lets the tokens pay for inference with the owner's plan. */
 const PLAN_SCOPE = 'chatgpt.tokens.use.direct';
 
 const SCOPES = ['openid', 'profile', 'email', 'offline_access', 'resource.invoke', PLAN_SCOPE];
 
-/** The first-registration entrypoint; never an issued id, never saved. */
 const DYNAMIC_AGENT_CLIENT = 'dynamic_agent_client';
 
-/** The app's own name, the same on every installation. */
 const AGENT_NAME_HINT = 'Kinu';
+
+/** Refresh this long before the hour-long access token ends. */
+const REFRESH_LEAD_MS = 5 * 60_000;
+
+/** As OpenAI's own verification example sets it. */
+const CLOCK_SKEW_SEC = 5;
+
+/** Refresh refusals that end the renewable session. */
+const SPENT_REFRESH_CODES = [
+  'invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
+];
+
+function tokenRefusal(status, answer, doing) {
+  const code = answer.error ?? null;
+  const detail = answer.errorDescription === undefined ? '' : `: ${answer.errorDescription}`;
+
+  return { code, message: `auth.openai.com refused ${doing} (HTTP ${String(status)}${code === null ? '' : ` ${code}`})${detail}` };
+}
+
+/** RFC 6749 §5.1: no `scope` granted what was asked, or on refresh what the grant held. */
+function scopesOf(scope, whenAbsent) {
+  return (scope === undefined ? [...whenAbsent] : scope.split(' ').filter((entry) => entry !== '')).sort((left, right) => (left < right ? -1 : 1));
+}
+
+function grantsPlan(scopes) {
+  return scopes !== undefined && scopes.includes(PLAN_SCOPE);
+}
+
+function expiring(held, now) {
+  return held?.accessToken === undefined || held.expiresAt === undefined || now + REFRESH_LEAD_MS >= held.expiresAt;
+}
+
+/** No access token renews nothing; the refresh token sent stays when none came back. */
+function refreshedTokens(answer, held, now) {
+  if (answer.accessToken === undefined) return { problem: 'auth.openai.com renewed the ChatGPT sign-in without an access token' };
+
+  return {
+    accessToken: answer.accessToken,
+    refreshToken: answer.refreshToken ?? held.refreshToken,
+    ...(answer.expiresIn !== undefined && { expiresAt: now + answer.expiresIn * 1000 }),
+    scopes: scopesOf(answer.scope, held.scopes),
+  };
+}
+
+function signedInTokens(answer, now) {
+  if (answer.accessToken === undefined || answer.refreshToken === undefined) {
+    return { problem: 'auth.openai.com answered the sign-in without an access and a refresh token' };
+  }
+
+  return {
+    accessToken: answer.accessToken,
+    refreshToken: answer.refreshToken,
+    ...(answer.expiresIn !== undefined && { expiresAt: now + answer.expiresIn * 1000 }),
+    scopes: scopesOf(answer.scope, SCOPES),
+  };
+}
+
+/** Without a registration the sign-in registers Kinu. */
+function authorizeUrl(input
+
+) {
+  const { registration } = input;
+  const loginHint = registration?.email ?? null;
+
+  const params = new URLSearchParams({
+    client_id: registration?.clientId ?? DYNAMIC_AGENT_CLIENT,
+    ...(registration === null && { agent_name_hint: AGENT_NAME_HINT }),
+    ext_agent_host_id: input.hostId,
+    ...(loginHint !== null && { login_hint: loginHint }),
+    response_type: 'code',
+    redirect_uri: input.redirectUri,
+    scope: SCOPES.join(' '),
+    resource: RESOURCE,
+    state: input.state,
+    nonce: input.nonce,
+    code_challenge_method: 'S256',
+    code_challenge: input.challenge,
+    ...(input.consent && { prompt: 'consent' }),
+  });
+
+  return `${AUTHORIZE_URL}?${params.toString()}`;
+}
+
+/** `audience` is `aud` as a list. */
+
+function idTokenKeyId(token) {
+  return token.algorithm !== 'RS256' || token.keyId === undefined
+    ? { problem: `the ID token is signed with ${String(token.algorithm)}, not RS256` }
+    : { keyId: token.keyId };
+}
+
+function idTokenSignatureVerifies(key, signed, signature) {
+  const padded = signature.replaceAll('-', '+').replaceAll('_', '/');
+  const bytes = Uint8Array.from(atob(padded + '='.repeat((4 - (padded.length % 4)) % 4)), (char) => char.charCodeAt(0));
+
+  return crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, bytes, new TextEncoder().encode(signed));
+}
+
+function idTokenIdentity(token, expected) {
+  const { subject } = token;
+
+  const problem = ([
+    [token.issuer !== ISSUER, `the ID token was issued by ${String(token.issuer)}, not ${ISSUER}`],
+    [!token.audience.includes(expected.clientId), 'the ID token was issued to another client'],
+    [token.expires === undefined || token.expires + CLOCK_SKEW_SEC < expected.now / 1000, 'the ID token has expired'],
+    [token.nonce !== expected.nonce, 'the ID token does not answer this sign-in (nonce mismatch)'],
+  ]).find(([failed]) => failed)?.[1];
+
+  if (problem !== undefined) return { problem };
+
+  return subject === undefined || subject === '' ? { problem: 'the ID token names no subject' } : { subject, email: token.email ?? null };
+}
+
+// END GENERATED
 
 /** Only the port of the loopback redirect may vary between sign-ins. */
 const CALLBACK_PATH = '/auth/callback';
@@ -46,17 +163,6 @@ const HOST_ID_FILE = 'chatgpt-host-id';
 
 /** The daemon's own sign-in; the CLI keeps its own in config.json. */
 const DEVICE_RECORD_FILE = 'pc-agent.chatgpt.json';
-
-/** Refresh this long before the hour-long access token ends. */
-const REFRESH_LEAD_MS = 5 * 60_000;
-
-/** The ID token's allowed clock skew, as OpenAI's own verification example sets it. */
-const CLOCK_SKEW_SEC = 5;
-
-/** Refresh answers that end the renewable session: clear the tokens, sign in again with the saved client. */
-const UNUSABLE_REFRESH_CODES = Object.freeze([
-  'invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
-]);
 
 /** A refusal from auth.openai.com, with its OAuth error code when it sent one. */
 class SiwcError extends Error {
@@ -139,24 +245,8 @@ function parseJson(text) {
   }
 }
 
-const byName = (a, b) => a.localeCompare(b);
-
-/** RFC 6749 §5.1: an answer without `scope` granted exactly what was asked (or, on refresh, what the grant held). */
-function scopesOf(scope, whenAbsent) {
-  const granted = stringOf(scope);
-
-  return granted === undefined ? [...whenAbsent].sort(byName) : granted.split(' ').filter(Boolean).sort(byName);
-}
-
 function planEnabled(record) {
-  return Array.isArray(record?.scopes) && record.scopes.includes(PLAN_SCOPE);
-}
-
-/** Due for refresh: no access token, or within the lead of its expiry. */
-function expiring(record, now) {
-  const expiresAt = numberOf(record?.expiresAt);
-
-  return stringOf(record?.accessToken) === undefined || expiresAt === undefined || now + REFRESH_LEAD_MS >= expiresAt;
+  return grantsPlan(record?.scopes);
 }
 
 /** The token endpoint's answer, decoded (token-reference, 2026-09-30). */
@@ -182,36 +272,23 @@ async function tokenCall(fetchImpl, fields, doing) {
   const answer = tokenAnswerOf(parseJson(await res.text()));
 
   if (!res.ok) {
-    const code = answer.error ?? null;
-    const detail = answer.errorDescription === undefined ? '' : `: ${answer.errorDescription}`;
+    const { code, message } = tokenRefusal(res.status, answer, doing);
 
-    throw new SiwcError(`auth.openai.com refused ${doing} (HTTP ${res.status}${code === null ? '' : ` ${code}`})${detail}`, {
-      code,
-      unusable: fields.grant_type === 'refresh_token' && code !== null && UNUSABLE_REFRESH_CODES.includes(code),
-    });
+    throw new SiwcError(message, { code, unusable: fields.grant_type === 'refresh_token' && code !== null && SPENT_REFRESH_CODES.includes(code) });
   }
 
-  if (answer.accessToken === undefined && answer.idToken === undefined) throw new SiwcError(`auth.openai.com answered ${doing} without tokens`);
-
   return answer;
-}
-
-/** Token fields of one answer, expiry counted from when it arrived. */
-function tokensOf(answer, now, grantedWhenAbsent) {
-  return {
-    ...(answer.accessToken !== undefined && { accessToken: answer.accessToken }),
-    ...(answer.refreshToken !== undefined && { refreshToken: answer.refreshToken }),
-    ...(answer.expiresIn !== undefined && { expiresAt: now + answer.expiresIn * 1000 }),
-    scopes: scopesOf(answer.scope, grantedWhenAbsent),
-  };
 }
 
 /** One rotation: the replacement refresh token supersedes the one sent. */
 async function refreshTokens({ clientId, refreshToken, scopes = [], fetch: fetchImpl = globalThis.fetch, now = Date.now }) {
   // `scope` stays out so the grant keeps what it had.
   const answer = await tokenCall(fetchImpl, { grant_type: 'refresh_token', client_id: clientId, refresh_token: refreshToken, resource: RESOURCE }, 'the refresh');
+  const tokens = refreshedTokens(answer, { refreshToken, scopes }, now());
 
-  return tokensOf(answer, now(), scopes);
+  if ('problem' in tokens) throw new SiwcError(tokens.problem);
+
+  return tokens;
 }
 
 /**
@@ -240,6 +317,7 @@ async function signingKey(kid, fetchImpl) {
     const res = await fetchImpl(JWKS_URL, { headers: { accept: 'application/json' } });
 
     if (!res.ok) throw new SiwcError(`auth.openai.com's signing keys could not be read (HTTP ${res.status})`);
+
     const published = parseJson(await res.text());
 
     for (const jwk of Array.isArray(published?.keys) ? published.keys : []) {
@@ -265,44 +343,40 @@ function jwtPart(segment) {
   return decoded;
 }
 
-/** The ID token's claims this sign-in checks, decoded. */
-function claimsOf(payload) {
+/** The ID token's header and claims, decoded for the protocol's checks. */
+function idTokenOf(head, body) {
+  const header = jwtPart(head);
+  const claims = jwtPart(body);
+
   return {
-    issuer: stringOf(payload.iss),
-    audience: Array.isArray(payload.aud) ? stringsOf(payload.aud) : [stringOf(payload.aud)].filter((entry) => entry !== undefined),
-    expires: numberOf(payload.exp),
-    nonce: stringOf(payload.nonce),
-    subject: stringOf(payload.sub),
-    email: stringOf(payload.email),
+    algorithm: stringOf(header.alg),
+    keyId: stringOf(header.kid),
+    issuer: stringOf(claims.iss),
+    audience: Array.isArray(claims.aud) ? stringsOf(claims.aud) : [stringOf(claims.aud)].filter((entry) => entry !== undefined),
+    expires: numberOf(claims.exp),
+    nonce: stringOf(claims.nonce),
+    subject: stringOf(claims.sub),
+    email: stringOf(claims.email),
   };
 }
 
-/** The OIDC checks: OpenAI's signature, issuer, audience = the issued client, expiry, and this attempt's nonce. */
+/** The protocol's ID token checks, with its signing keys read here. */
 async function verifyIdToken(idToken, { clientId, nonce, fetch: fetchImpl, now }) {
   const [head, body, signature] = idToken.split('.');
-  const header = jwtPart(head);
-  const claims = claimsOf(jwtPart(body));
-  const kid = stringOf(header.kid);
+  const token = idTokenOf(head, body);
+  const named = idTokenKeyId(token);
 
-  if (header.alg !== 'RS256' || kid === undefined) throw new SiwcError(`the ID token is signed with ${String(header.alg)}, not RS256`);
-  const key = await signingKey(kid, fetchImpl);
-  const signed = new TextEncoder().encode(`${head}.${body}`);
+  if ('problem' in named) throw new SiwcError(named.problem);
 
-  if (!await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, Buffer.from(signature ?? '', 'base64url'), signed)) {
+  if (!await idTokenSignatureVerifies(await signingKey(named.keyId, fetchImpl), `${head}.${body}`, signature ?? '')) {
     throw new SiwcError('the ID token signature does not verify against auth.openai.com\'s keys');
   }
 
-  if (claims.issuer !== ISSUER) throw new SiwcError(`the ID token was issued by ${String(claims.issuer)}, not ${ISSUER}`);
+  const identity = idTokenIdentity(token, { clientId, nonce, now });
 
-  if (!claims.audience.includes(clientId)) throw new SiwcError('the ID token was issued to another client');
+  if ('problem' in identity) throw new SiwcError(identity.problem);
 
-  if (claims.expires === undefined || claims.expires + CLOCK_SKEW_SEC < now / 1000) throw new SiwcError('the ID token has expired');
-
-  if (claims.nonce !== nonce) throw new SiwcError('the ID token does not answer this sign-in (nonce mismatch)');
-
-  if (claims.subject === undefined || claims.subject === '') throw new SiwcError('the ID token names no subject');
-
-  return { subject: claims.subject, email: claims.email ?? null };
+  return identity;
 }
 
 function answerBrowser(res, status, text) {
@@ -368,14 +442,16 @@ async function beginSignIn({
       throw new SiwcError('the browser signed in to a different ChatGPT account than the one this sign-in renews');
     }
 
-    const record = { issuer: ISSUER, subject: identity.subject, email: identity.email, clientId: issued, ...tokensOf(answer, at, SCOPES) };
-
-    if (planEnabled(record)) return { outcome: 'signed-in', registered: registering, record };
+    const signedIn = { issuer: ISSUER, subject: identity.subject, email: identity.email, clientId: issued };
+    const scopes = scopesOf(answer.scope, SCOPES);
 
     // Retain the sign-in, not tokens that cannot pay for inference.
-    const { accessToken: _access, refreshToken: _refresh, expiresAt: _expires, ...identityOnly } = record;
+    if (!grantsPlan(scopes)) return { outcome: 'plan-disabled', registered: registering, record: { ...signedIn, scopes } };
+    const tokens = signedInTokens(answer, at);
 
-    return { outcome: 'plan-disabled', registered: registering, record: identityOnly };
+    if ('problem' in tokens) throw new SiwcError(tokens.problem);
+
+    return { outcome: 'signed-in', registered: registering, record: { ...signedIn, ...tokens } };
   };
 
   const server = http.createServer((req, res) => {
@@ -423,23 +499,9 @@ async function beginSignIn({
     callback.reject(new SiwcError('the sign-in was cancelled'));
   }, { once: true });
 
-  const params = new URLSearchParams({
-    client_id: clientId,
-    ...(registering && { agent_name_hint: AGENT_NAME_HINT }),
-    ext_agent_host_id: hostId(home),
-    ...(!registering && registration.email !== undefined && { login_hint: registration.email }),
-    response_type: 'code',
-    redirect_uri: redirectUri,
-    scope: SCOPES.join(' '),
-    resource: RESOURCE,
-    state,
-    nonce,
-    code_challenge_method: 'S256',
-    code_challenge: challenge,
-    ...(consent && { prompt: 'consent' }),
-  });
+  const authorize = authorizeUrl({ registration, hostId: hostId(home), redirectUri, state, nonce, challenge, consent });
 
-  return { authorizeUrl: `${AUTHORIZE_URL}?${params}`, redirectUri, done: complete() };
+  return { authorizeUrl: authorize, redirectUri, done: complete() };
 }
 
 /** The saved registration a record carries, for a later sign-in to the same account. */
@@ -716,7 +778,7 @@ module.exports = {
   AGENT_NAME_HINT,
   CALLBACK_PATH,
   DEVICE_RECORD_FILE,
-  UNUSABLE_REFRESH_CODES,
+  SPENT_REFRESH_CODES,
   SiwcError,
   hostId,
   planEnabled,

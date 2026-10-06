@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
 import { rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type RosterBucket, type SqlExec, type WorkspaceOverview } from '@kinu.run/core';
-import type { WorkspaceEntry } from './user-do';
+import type { WorkspaceEntry } from './workspaces';
 
 export const ROSTER_SOCKET_PATH = '/roster/live';
 

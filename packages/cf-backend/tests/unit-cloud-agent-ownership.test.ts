@@ -17,7 +17,7 @@ import {
 } from './helpers/actor-harness';
 import { WORKSPACE_KEYED_ROWS, type UserCaller } from '@kinu.run/core';
 import type { NameOrigin } from '@kinu.run/core';
-import type { WorkspaceRegistrationSource } from '../src/user/user-do';
+import type { WorkspaceRegistrationSource } from '../src/user/workspaces';
 import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import type { AuthIdentity } from '../src/auth/session';
 import type { IndexFeedSink } from '../src/control-plane/index-feed';
