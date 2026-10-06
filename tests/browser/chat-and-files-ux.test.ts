@@ -1439,6 +1439,83 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
       await page.close();
     });
   });
+
+  /**
+   * Stop gives the next Send its own turn, but only once the stop's cancel has come back; the stopped send landing
+   * late never frees a newer turn; and a send the transport fails frees the next one. A press the latch refuses is
+   * not lost: it goes to the running turn.
+   */
+  test('a stopped or failed send frees the next turn, and a stale one never frees a newer turn', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-composer-root] textarea');
+      await page.evaluate(() => { document.documentElement.dataset.galleryChatHold = '1'; });
+
+      const counts = () => page.evaluate(() => ({
+        turns: Number(document.documentElement.dataset.galleryChatSends ?? '0'),
+        toRunning: (document.documentElement.dataset.galleryMidTurnSends ?? '').split('\n').filter(Boolean),
+      }));
+
+      // Waits until the words reached the transport or the running turn, so a press that went the wrong way fails, not waits.
+      const press = async (label: string, words: string) => {
+        await page.type('[data-composer-root] textarea', words);
+        await page.click(`[data-composer-root] button[aria-label="${label}"]`);
+        await page.waitForFunction((said) => [document.documentElement.dataset.galleryChatSent ?? '', document.documentElement.dataset.galleryMidTurnSends ?? '']
+          .some((reached) => reached.includes(said)), {}, words);
+      };
+
+      const stopHeld = async () => {
+        await page.evaluate(() => { document.documentElement.dataset.galleryCancelHeld = '1'; });
+        await page.click('[data-composer-root] button[aria-label="Stop this turn"]');
+        await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
+      };
+
+      const settleSend = (at: number, failed = false) => page.evaluate((detail) => {
+        window.dispatchEvent(new CustomEvent('gallery:settle-send', { detail }));
+      }, { at, failed });
+
+      const releaseCancel = () => page.evaluate(() => {
+        document.documentElement.dataset.galleryCancelHeld = '0';
+        window.dispatchEvent(new Event('gallery:release-cancel'));
+      });
+
+      await press('Send', 'first turn');
+      expect(await counts()).toEqual({ turns: 1, toRunning: [] });
+      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
+
+      // Stopped, with its cancel still out: the turn still holds, so a Send goes to it.
+      await stopHeld();
+      await press('Send', 'during the stop');
+      expect(await counts()).toEqual({ turns: 1, toRunning: ['during the stop'] });
+
+      await releaseCancel();
+      await page.waitForFunction(() => document.querySelector('[data-composer-root] button[aria-label="Send"]') !== null);
+      await press('Send', 'second turn');
+      expect((await counts()).turns).toBe(2);
+      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
+
+      // The first send lands now, after the second took the latch: the second still holds it.
+      await settleSend(0);
+      await stopHeld();
+      await press('Send', 'after the stale landing');
+      expect(await counts()).toEqual({ turns: 2, toRunning: ['during the stop', 'after the stale landing'] });
+
+      await releaseCancel();
+      await press('Send', 'third turn');
+      expect((await counts()).turns).toBe(3);
+      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
+
+      // The transport fails the third: the next Send opens a turn of its own.
+      await settleSend(2, true);
+      await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
+      await press('Send', 'after the failure');
+      expect(await counts()).toEqual({ turns: 4, toRunning: ['during the stop', 'after the stale landing'] });
+      await page.close();
+    });
+  });
 });
 
 /**

@@ -1,6 +1,6 @@
 /** Gallery stand-in for `agents/react` and `@cloudflare/ai-chat/react` (aliased in `gallery.vite.config.ts`). */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { UIMessage } from "ai";
 import * as v from "valibot";
 
@@ -156,10 +156,46 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 	return agent;
 }
 
+/** A send the transport holds: Stop leaves it unsettled, as an abort that lands late; `gallery:settle-send` settles it. */
+interface HeldSend {
+	readonly settle: ReturnType<typeof Promise.withResolvers<void>>;
+	stopped: boolean;
+	settled: boolean;
+}
+
+const SettleSendSchema = v.object({ at: v.number(), failed: v.optional(v.boolean()) });
+
 /** The held-send DOM values are transport controls only; `useKinu` decides whether presses reach it. */
 export function useAgentChat(options: { agent: GalleryAgent }) {
 	const [messages, setMessages] = useState<readonly UIMessage[]>(seededChats.get(options.agent.path) ?? []);
 	const agent = options.agent;
+	const held = useRef<HeldSend[]>([]);
+	// An external store, as the SDK's status is: a Stop inside a transition shows at once, not when the transition ends.
+	const watchers = useRef(new Set<() => void>());
+	const submitted = () => held.current.some((send) => !send.stopped && !send.settled);
+	const resync = () => { for (const watcher of watchers.current) watcher(); };
+
+	const status = useSyncExternalStore((watcher) => {
+		watchers.current.add(watcher);
+
+		return () => { watchers.current.delete(watcher); };
+	}, () => (submitted() ? "submitted" as const : "ready" as const));
+
+	useEffect(() => {
+		const settle = (event: Event) => {
+			const asked = v.parse(SettleSendSchema, event instanceof CustomEvent ? event.detail : null);
+			const send = held.current[asked.at];
+
+			if (send === undefined) return;
+
+			if (asked.failed === true) send.settle.reject(new Error("the gallery transport failed this send"));
+			else send.settle.resolve();
+		};
+
+		window.addEventListener("gallery:settle-send", settle);
+
+		return () => { window.removeEventListener("gallery:settle-send", settle); };
+	}, []);
 
 	useEffect(() => {
 		const onMessage = (event: Event) => {
@@ -192,16 +228,25 @@ export function useAgentChat(options: { agent: GalleryAgent }) {
 			root.dataset.galleryChatSent = JSON.stringify((message.parts ?? []).map((part) => (part.type === "file" ? `file:${part.filename ?? ""}` : `${part.type}:${part.text ?? ""}`)));
 
 			if (root.dataset.galleryChatHold !== "1") return Promise.resolve();
+			const send: HeldSend = { settle: Promise.withResolvers<void>(), stopped: false, settled: false };
 
-			return new Promise<void>(() => {});
+			held.current.push(send);
+			resync();
+
+			return send.settle.promise.finally(() => {
+				send.settled = true;
+				resync();
+			});
 		},
 		regenerate: () => Promise.resolve(),
-		stop: () => {},
+		stop: () => {
+			for (const send of held.current) send.stopped = true;
+			resync();
+		},
 		isStreaming: false as const,
-		status: "ready" as const,
 		error: undefined,
 		connectionError: terminalClose,
 	}), []);
 
-	return { ...controls, messages };
+	return { ...controls, messages, status };
 }
