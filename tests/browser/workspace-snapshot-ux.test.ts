@@ -295,10 +295,7 @@ test('a late answer to an older read never replaces a newer one, nor reports its
     const page = await newPage();
     await page.setViewport({ width: 1440, height: 900 });
     await page.goto(`${origin}/gallery.html?frame=workspacepage&jobs=held`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('[aria-label="Work"]');
-    await page.click('[aria-label="Work"]');
-    await page.waitForSelector('[data-back-to-work]');
-    await page.click('[data-back-to-work]');
+    await openWorkList(page);
     await page.waitForFunction(() => document.body.textContent?.includes('first build'));
     await page.evaluate(() => { document.documentElement.dataset.galleryJobsHold = '1'; });
 
@@ -319,6 +316,43 @@ test('a late answer to an older read never replaces a newer one, nor reports its
     await answerJobs(page, olderAgain, { failed: 'older request failed' });
     await framesDrawn(page);
     expect([await pageSays(page, 'latest build'), await pageSays(page, 'older request failed')]).toEqual([true, false]);
+    await page.close();
+  });
+});
+
+/** Opens the Work tab's own list, past the plan the gallery workspace has waiting for review. */
+async function openWorkList(page: Page): Promise<void> {
+  await page.waitForSelector('[aria-label="Work"]');
+  await page.click('[aria-label="Work"]');
+  await page.waitForFunction(() => document.querySelector('[data-back-to-work]') !== null || document.querySelector('[data-work-plans]') !== null);
+
+  if (await page.$('[data-back-to-work]') !== null) await page.click('[data-back-to-work]');
+}
+
+/** A read the workspace left behind answers after the reader moved on: the next workspace never shows it. */
+test('a read answered after its workspace was left never shows in the next one', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&jobs=held`, { waitUntil: 'networkidle0' });
+    await openWorkList(page);
+    await page.waitForFunction(() => document.body.textContent?.includes('first build'));
+    await page.evaluate(() => { document.documentElement.dataset.galleryJobsHold = '1'; });
+
+    const left = await jobsMoved(page);
+    const reads = await jobReads(page);
+
+    await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/billing-cleanup'); });
+    await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryJobReads ?? '0') > was, {}, reads);
+    const arrived = reads;
+
+    await answerJobs(page, arrived, { label: 'next workspace build' });
+    await openWorkList(page);
+    await page.waitForFunction(() => document.body.textContent?.includes('next workspace build'));
+
+    await answerJobs(page, left, { label: 'left workspace build' });
+    await framesDrawn(page);
+    expect([await pageSays(page, 'next workspace build'), await pageSays(page, 'left workspace build')]).toEqual([true, false]);
     await page.close();
   });
 });
