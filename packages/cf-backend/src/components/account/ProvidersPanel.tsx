@@ -486,8 +486,14 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
               <input value={compatBaseURL} onChange={(e) => setCompatBaseURL(e.target.value)} placeholder="https://api.example.com/v1"
                 aria-label="Base URL" className={`${inputCls} min-w-0 flex-1`} />
               <span className="basis-full" aria-hidden />
-              <input value={compatWindow} onChange={(e) => setCompatWindow(e.target.value)} inputMode="numeric" placeholder="context window, tokens (optional)"
-                aria-label="Context window in tokens" aria-invalid={windowValid ? undefined : true} className={`${inputCls} max-w-56`} />
+              <label data-invalid={windowValid ? undefined : ""}
+                className="flex h-9 w-full max-w-72 cursor-text items-center gap-2 rounded-md border border-[var(--c-input-border)] bg-[var(--c-surface)] px-3 text-sm p-text transition-all focus-within:border-[var(--c-accent)] focus-within:ring-1 focus-within:ring-[var(--c-accent-subtle)] data-[invalid]:border-[var(--c-danger)]">
+                <span className="shrink-0 p-text-3">Context window</span>
+                <input value={compatWindow} onChange={(e) => setCompatWindow(e.target.value)} inputMode="numeric" placeholder="optional"
+                  aria-label="Context window in tokens" aria-invalid={windowValid ? undefined : true}
+                  className="min-w-0 flex-1 bg-transparent text-right outline-none focus-visible:!outline-none placeholder:p-text-3" />
+                <span className="shrink-0 p-text-3">tokens</span>
+              </label>
             </>
           ) : (
             <input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="account (blank: main)"
@@ -505,7 +511,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
             className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">{saving ? '...' : saveWord}</button>
         </form>
       )}
-      {compat && !windowValid && <p className="text-xs p-danger">The context window is a whole number of tokens, or blank.</p>}
+      {compat && !windowValid && <p className="mb-1 text-xs p-danger">The context window is a whole number of tokens, or blank.</p>}
       {error && <p className="text-xs p-danger">{error}</p>}
     </Field>
   );
