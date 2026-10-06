@@ -400,14 +400,17 @@ describe('the open tab, as the browser paints it', () => {
 
 /**
  * Status a reader takes in at a glance: a working chat's name carries a moving light, one that needs the person
- * breathes a red glow, a failed one holds a still red mark. With reduced motion asked for, nothing moves.
+ * has a red light breathing up from under its tab (no outline: the owner's pick, 2026-10-06), a failed one holds a
+ * still red mark. With reduced motion asked for, nothing moves.
  */
 describe('a chat\'s status, as the bar paints it', () => {
   const motion = (page: Page) => page.$$eval('[data-tab-strip="main"] .p-bar-tab[data-status]', (tabs) => Object.fromEntries(tabs.map((tab) => [
     tab.getAttribute('data-status') ?? '',
     {
       label: getComputedStyle(tab.querySelector('.p-status-label') ?? tab).animationName,
-      halo: getComputedStyle(tab, '::after').animationName,
+      // The light under the tab: its own layer, never an outline around the tab.
+      glow: getComputedStyle(tab.querySelector('.p-bar-link') ?? tab, '::before').animationName,
+      outline: getComputedStyle(tab, '::after').boxShadow,
       mark: tab.querySelector('[role="img"]')?.getAttribute('aria-label') ?? null,
     },
   ])));
@@ -423,9 +426,9 @@ describe('a chat\'s status, as the bar paints it', () => {
 
         const seen = await motion(page);
 
-        expect(seen.working).toEqual({ label: reduce ? 'none' : 'p-shimmer', halo: 'none', mark: 'Working' });
-        expect(seen.waiting).toEqual({ label: 'none', halo: reduce ? 'none' : 'p-attention', mark: 'Needs you' });
-        expect(seen.failed).toEqual({ label: 'none', halo: 'none', mark: 'Last turn failed' });
+        expect(seen.working).toEqual({ label: reduce ? 'none' : 'p-shimmer', glow: 'none', outline: 'none', mark: 'Working' });
+        expect(seen.waiting).toEqual({ label: 'none', glow: reduce ? 'none' : 'p-attention', outline: 'none', mark: 'Needs you' });
+        expect(seen.failed).toEqual({ label: 'none', glow: 'none', outline: 'none', mark: 'Last turn failed' });
         await page.close();
       }
     });

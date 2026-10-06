@@ -1743,7 +1743,7 @@ body > .annotation-toolbar {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: 1.5px solid color-mix(in srgb, var(--c-accent-mark) 24%, transparent);
+  border: 2px solid color-mix(in srgb, var(--c-accent-mark) 32%, transparent);
   border-top-color: var(--c-accent-mark);
   animation: p-status-turn 1.15s linear infinite;
 }
@@ -1763,37 +1763,47 @@ body > .annotation-toolbar {
 }
 
 /* Working: the name's words carry a slow light, left to right. Needing the
-   person: a soft red glow breathes around the tab or row. A failure stays a
-   still red mark, so it never reads as the live pulse. */
-.p-status-label { --shimmer-base: var(--c-text-3); --shimmer-peak: color-mix(in srgb, var(--c-accent-mark) 75%, var(--c-text)); }
+   person: a soft red light rises under the tab from the bar's hairline, or
+   washes in from a row's edge, and breathes; never an outline. A failure
+   stays a still red mark, so it never reads as the live pulse. */
+.p-status-label { --shimmer-base: var(--c-text-3); --shimmer-peak: var(--c-accent-mark); }
 [data-status="working"] .p-status-label {
   color: transparent;
-  background: linear-gradient(100deg, var(--shimmer-base) 0 32%, var(--shimmer-peak) 50%, var(--shimmer-base) 68% 100%) 100% 0 / 280% 100% no-repeat;
+  background: linear-gradient(100deg, var(--shimmer-base) 0 18%, var(--shimmer-peak) 42% 58%, var(--shimmer-base) 82% 100%) 100% 0 / 280% 100% no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
   animation: p-shimmer 2.8s ease-in-out infinite;
 }
 @keyframes p-shimmer { to { background-position: 0 0; } }
-.p-halo { --halo-inset: 0; isolation: isolate; }
-.p-bar-tab.p-halo { --halo-inset: 7px calc(var(--flare) + 3px) 6px; }
-[data-status="waiting"].p-halo::after {
+.p-halo { isolation: isolate; }
+.p-bar-tab.p-halo[data-status="waiting"] .p-bar-link::before,
+[data-status="waiting"].p-halo:not(.p-bar-tab)::after {
   content: "";
   position: absolute;
-  inset: var(--halo-inset);
-  z-index: -1;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--c-danger) 7%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-danger) 40%, transparent), 0 0 14px 1px color-mix(in srgb, var(--c-danger) 30%, transparent);
   pointer-events: none;
   animation: p-attention 2.6s ease-in-out infinite;
 }
-@keyframes p-attention { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+.p-bar-tab.p-halo[data-status="waiting"] .p-bar-link::before {
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 16px;
+  background: radial-gradient(55% 100% at 50% 100%, color-mix(in srgb, var(--c-danger) 55%, transparent), transparent 80%);
+}
+[data-status="waiting"].p-halo:not(.p-bar-tab)::after {
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: radial-gradient(60% 160% at 0% 50%, color-mix(in srgb, var(--c-danger) 16%, transparent), transparent 75%);
+}
+@keyframes p-attention { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .p-agent-status::before { animation: none !important; }
   .p-agent-status[data-status="working"]::before { border-right-color: var(--c-accent-mark); }
   .p-agent-status[data-status="waiting"]::before { box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--c-danger) 28%, transparent); }
   [data-status="working"] .p-status-label { animation: none; color: inherit; background: none; }
-  [data-status="waiting"].p-halo::after { animation: none; opacity: 0.8; }
+  .p-bar-tab.p-halo[data-status="waiting"] .p-bar-link::before,
+  [data-status="waiting"].p-halo:not(.p-bar-tab)::after { animation: none; opacity: 0.7; }
 }
 
 /* A nested list: rows indented under their parent, with one thin guide
