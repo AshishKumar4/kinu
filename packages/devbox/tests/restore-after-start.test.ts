@@ -2,26 +2,15 @@ import { describe, expect, test } from 'bun:test';
 
 import type { RestoreClockPhase } from '../src/restoration';
 import type { StoredValue } from '../src/storage';
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy, type StartClock } from '../src/lifecycle';
+import type { DevboxPolicy, StartClock } from '../src/lifecycle';
+import { TestDevbox, TEST_DEVBOX_POLICY as TEST_POLICY } from './support/test-devbox';
 import { handClock } from '../../test-utils/src/hand-clock';
 import {
-  Devbox, FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, boxState, deliver, fakeStorage, gate, harness,
+  FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, boxState, deliver, fakeStorage, gate, harness,
   type Harness,
 } from './support/devbox-harness';
 
-/** The listener proof is one container command whose loop the container bounds,
- *  so a short `portWaitMs` shortens that command rather than a timer. */
-const TEST_POLICY: DevboxPolicy = {
-  ...DEFAULT_DEVBOX_POLICY,
-  portWaitMs: 4,
-  portProbeIntervalMs: 1,
-};
-
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return TEST_POLICY;
-  }
-
+class TestBox extends TestDevbox<unknown> {
   protected override get previewHost(): string | undefined {
     return 'preview.test';
   }

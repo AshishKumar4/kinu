@@ -31,7 +31,8 @@ export const ROSTER_READS: readonly LiveRead[] = [...AGENTS, 'listSubordinates']
 /** Every write to one of these tables moves the reads that select from it. */
 const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string, readonly LiveRead[]>([
   ['agent_facts', LEDGER],
-  ['github_activity', ['getWorkspaceGitHub']],
+  ['github_items', ['getWorkspaceGitHub']],
+  ['github_repos', ['getWorkspaceGitHub']],
   ['crafted_tools', ['getToolDescriptions', ...LEDGER]],
   ['gepa_runs', LEDGER],
   ['artifact_versions', LEDGER],

@@ -60,7 +60,7 @@ export function runGepa<I = unknown, E = unknown>(
     const pool: GepaCandidate[] = [seed];
     const history: GepaCandidate[] = [seed];
 
-    // The front and the best change only when the pool grows, so a run of rejections reuses one reading.
+    // The front and the best change only when the pool grows.
     let standing: { readonly size: number; readonly paretoFront: GepaCandidate[]; readonly bestSoFar: GepaCandidate } | null = null;
 
     const standingOf = () => {

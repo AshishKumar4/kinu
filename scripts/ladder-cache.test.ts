@@ -11,10 +11,11 @@ import { existsSync, mkdirSync, readdirSync, statSync, symlinkSync, writeFileSyn
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
-import { claims, LADDER, gatesFor } from './ladder';
+import { claims, LADDER, gatesFor, testFileProofs } from './ladder';
+import type { Gate, TestProof } from './ladder';
 import { auditClosure } from './ladder-audit';
 import {
-  CACHE_BLIND_SPOTS, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
+  CACHE_BLIND_SPOTS, cacheEnabled, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, storeAt, toolVersions,
 } from './ladder-cache';
 import type { Plan, Store, ToolVersions } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
@@ -113,6 +114,27 @@ function withEnv<T>(values: Record<string, string | undefined>, body: () => T): 
 }
 
 describe('ladder-cache — the green path', () => {
+  test('an identical changed-hook retry uses the first green proof, not another run', () => {
+    const fx = fixture({ 'scripts/a.ts': 'console.log("executed");' });
+    const ran: string[] = [];
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const enabled = cacheEnabled({ changedFrom: 'HEAD', noCache: false });
+
+      if (!enabled) {
+        const run = Bun.spawnSync(['bun', 'scripts/a.ts'], { cwd: fx.root, env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
+
+        expect(run.exitCode).toBe(0);
+        ran.push(run.stdout.toString().trim());
+      } else if (runGate(fx, 'bun scripts/a.ts').plan.kind !== 'hit') ran.push('executed');
+    }
+
+    expect(ran).toEqual(['executed']);
+    expect(entries(fx.store)).toHaveLength(1);
+    expect(cacheEnabled({ changedFrom: 'HEAD', noCache: true })).toBe(false);
+    expect(cacheEnabled({ changedFrom: 'HEAD', ciPart: 'source', noCache: false })).toBe(false);
+  });
+
   test('after a green run, a rerun hits every cacheable gate and names the hash, the revision and the closure size', () => {
     const fx = fixture({
       'scripts/a.ts': `import { shared } from './shared';\nexport const a = shared;\n${GREEN}`,
@@ -203,18 +225,56 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(entries(fx.store)).toEqual([]);
   });
 
-  test('a result recorded in one checkout is never reused in another', () => {
-    // Byte-identical trees at two roots: the second is a MISS, because the
-    // gate runs in its checkout and an absolute path, an untracked file or a
-    // linked node_modules is that checkout's and not the other's.
-    const files = { 'scripts/a.ts': `export const a = 1;\n${GREEN}` };
+  test('another worktree reuses a green only on identical closure bytes', () => {
+    const files = { 'scripts/a.ts': 'import { value } from "../src/a"; console.log(value);', 'src/a.ts': 'export const value = 1;' };
     const recorded = fixture(files);
+
     expect(runGate(recorded, 'bun scripts/a.ts').refused).toBeUndefined();
     expect(runGate(recorded, 'bun scripts/a.ts').plan.kind).toBe('hit');
-
     const other = fixture(files);
     const plan = planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo: other.repo(), tools: other.tools, store: recorded.store });
-    expect(plan.kind).toBe('miss');
+
+    expect(plan.kind).toBe('hit');
+    writeFileSync(join(other.root, 'src/a.ts'), 'export const value = 2;');
+    expect(planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo: other.repo(), tools: other.tools, store: recorded.store }).kind).toBe('miss');
+    writeFileSync(join(other.root, 'src/a.ts'), files['src/a.ts']);
+    writeFileSync(join(other.root, 'src/no-consumer.ts'), 'export const unrelated = 2;');
+    expect(planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo: other.repo(), tools: other.tools, store: recorded.store }).kind).toBe('hit');
+  });
+
+  test('a location-sensitive verdict never crosses worktrees even on identical closure bytes', () => {
+    const recorded = fixture({ 'scripts/a.ts': 'console.log(process.cwd());' });
+    const inputs = { kind: 'derived', location: 'checkout' } as const;
+
+    expect(runGate(recorded, 'bun scripts/a.ts', inputs).plan.kind).toBe('miss');
+    const other = fixture({ 'scripts/a.ts': 'console.log(process.cwd());' });
+
+    expect(planGate({ run: 'bun scripts/a.ts', inputs, repo: other.repo(), tools: other.tools, store: recorded.store }).kind).toBe('miss');
+  });
+
+  test.each(['', '/'])('root normalization changes only declared path values, never scalar environment or outside paths: root suffix %j', (suffix) => {
+    const a = fixture({ 'scripts/a.ts': GREEN });
+    const b = fixture({ 'scripts/a.ts': GREEN });
+    const inputs: Inputs = { kind: 'derived', env: ['KINU_ROOT', 'ALPHA'] };
+
+    const key = (fx: Fixture, alpha: string, outside = '/usr/bin'): string => {
+      const repo = { ...fx.repo(), root: fx.root + suffix };
+      const closure = deriveClosure('bun scripts/a.ts', inputs, repo);
+
+      if (closure.kind !== 'derived') throw new Error('fixture closure was not computed');
+
+      return keyFor({ run: 'bun scripts/a.ts', repo, closure, tools: fx.tools, env: (name) => {
+        if (name === 'PATH') return `${fx.root}/node_modules/.bin:${outside}`;
+
+        if (name === 'KINU_ROOT') return fx.root;
+
+        return name === 'ALPHA' ? alpha : undefined;
+      } });
+    };
+
+    expect(key(a, 'same')).toBe(key(b, 'same'));
+    expect(key(a, a.root)).not.toBe(key(b, b.root));
+    expect(key(a, 'same', `${a.root}-other/bin`)).not.toBe(key(b, 'same', `${b.root}-other/bin`));
   });
 
   test('a red result leaves no cache entry, and the next run is still a miss', () => {
@@ -225,6 +285,23 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(first.plan.kind).toBe('miss');
     expect(entries(fx.store)).toEqual([]);
     expect(runGate(fx, 'bun scripts/red.ts').plan.kind).toBe('miss');
+  });
+
+  test('reusing parsed module summaries still rereads bytes and reaches a changed import', () => {
+    const fx = fixture({ 'scripts/a.ts': 'import "../src/a";', 'src/a.ts': GREEN, 'src/b.ts': GREEN });
+    const repo = fx.repo();
+    const request = { run: 'bun scripts/a.ts', inputs: DERIVED, repo, tools: fx.tools, store: fx.store };
+    const first = planGate(request);
+
+    if (first.kind !== 'miss') throw new Error('the fixture had a proof before running');
+    expect(recordGreen(first, request, { seconds: 0.1, revision: 'fixture' })).toBeUndefined();
+    expect(planGate(request).kind).toBe('hit');
+    writeFileSync(join(fx.root, 'scripts/a.ts'), 'import "../src/b";');
+    const changed = planGate(request);
+
+    expect(changed.kind).toBe('miss');
+    expect(changed.closure.kind === 'derived' ? changed.closure.files : []).toContain('src/b.ts');
+    expect(changed.closure.kind === 'derived' ? changed.closure.files : []).not.toContain('src/a.ts');
   });
 
   test('an entry a crash left unreadable is a miss, and the next green run replaces it', () => {
@@ -447,11 +524,86 @@ describe('ladder-cache — the live ladder declares what it never caches', () =>
   });
 });
 
+describe('changed hooks prove complete files', () => {
+  const row: Gate = { run: 'bun test tests/ --changed=HEAD', label: 'fixture tests', tier: 'commit', seconds: 1,
+    catches: 'a failing test', blind: 'no platform', inputs: DERIVED };
+
+  const suites = {
+    'tests/a.test.ts': 'import { test, expect } from "bun:test"; import { a } from "../src/a"; test("a", () => expect(a).toBe(1));',
+    'tests/b.test.ts': 'import { test, expect } from "bun:test"; import { b } from "../src/b"; test("b", () => expect(b).toBe(1));',
+    'src/a.ts': 'export const a = 1;',
+    'src/b.ts': 'export const b = 1;',
+  };
+
+  const plans = (fx: Fixture): TestProof[] => {
+    const proof = testFileProofs(row, fx.repo(), fx.tools, fx.store);
+
+    if (proof === undefined) throw new Error('fixture file proofs were not computed');
+
+    return proof;
+  };
+
+  test('identical retries hit every file, while a one-file or imported-product change misses only its consumer', () => {
+    const fx = fixture(suites);
+
+    for (const proof of plans(fx)) {
+      expect(proof.plan.kind).toBe('miss');
+      const run = Bun.spawnSync([...proof.argv], { cwd: fx.root, env: gateEnvironment(proof.plan.closure), stdout: 'pipe', stderr: 'pipe' });
+
+      expect(run.exitCode, run.stderr.toString()).toBe(0);
+
+      if (proof.plan.kind === 'miss') expect(recordGreen(proof.plan, { ...proof.request, repo: fx.repo() }, { seconds: 0.1, revision: 'fixture' })).toBeUndefined();
+    }
+
+    expect(plans(fx).map((proof) => proof.plan.kind)).toEqual(['hit', 'hit']);
+    writeFileSync(join(fx.root, 'tests/a.test.ts'), suites['tests/a.test.ts'] + '\n// changed file\n');
+    expect(plans(fx).map((proof) => [proof.file, proof.plan.kind])).toEqual([['tests/a.test.ts', 'miss'], ['tests/b.test.ts', 'hit']]);
+    writeFileSync(join(fx.root, 'tests/a.test.ts'), suites['tests/a.test.ts']);
+    writeFileSync(join(fx.root, 'src/b.ts'), 'export const b = 2;');
+    expect(plans(fx).map((proof) => [proof.file, proof.plan.kind])).toEqual([['tests/a.test.ts', 'hit'], ['tests/b.test.ts', 'miss']]);
+  });
+
+  test('a native empty changed selection cannot record a green for a failing complete file', () => {
+    const fx = fixture({ ...suites, 'src/a.ts': 'export const a = 2;' });
+    const proof = plans(fx).find((entry) => entry.file === 'tests/a.test.ts');
+
+    if (proof === undefined) throw new Error('the failing consumer was omitted');
+    expect(proof.argv.some((word) => word.startsWith('--changed='))).toBe(false);
+    const run = Bun.spawnSync([...proof.argv], { cwd: fx.root, env: gateEnvironment(proof.plan.closure), stdout: 'pipe', stderr: 'pipe' });
+
+    expect(run.exitCode).not.toBe(0);
+    expect(entries(fx.store)).toEqual([]);
+  });
+
+  test('a file edit during planning cannot turn the operation snapshot into a stale hit', () => {
+    const fx = fixture(suites);
+
+    for (const proof of plans(fx)) {
+      if (proof.plan.kind === 'miss') expect(recordGreen(proof.plan, { ...proof.request, repo: fx.repo() }, { seconds: 0.1, revision: 'fixture' })).toBeUndefined();
+    }
+
+    let edited = false;
+
+    const store: Store = { ...fx.store, lookup: (key) => {
+      const found = fx.store.lookup(key);
+
+      if (!edited) {
+        edited = true;
+        writeFileSync(join(fx.root, 'src/b.ts'), 'export const b = 2;');
+      }
+
+      return found;
+    } };
+
+    expect(testFileProofs(row, fx.repo(), fx.tools, store)).toBeUndefined();
+  });
+});
+
 describe('ladder-cache — single-gate CLI', () => {
-  test('a declared gate records its pass and reuses it on the next invocation', () => {
+  test.each([[[]], [['--changed=HEAD']]])('a declared gate records its pass and reuses it on the next invocation: %j', (mode) => {
     const cache = scratchDir('ladder-cache-store');
 
-    const invoke = () => Bun.spawnSync(['bun', 'scripts/ladder.ts', '--gate', 'bun run gate:install-scripts'], {
+    const invoke = () => Bun.spawnSync(['bun', 'scripts/ladder.ts', '--gate', 'bun run gate:install-scripts', ...mode], {
       cwd: new URL('..', import.meta.url).pathname,
       env: childEnv({ XDG_CACHE_HOME: cache }),
       stdout: 'pipe', stderr: 'pipe',

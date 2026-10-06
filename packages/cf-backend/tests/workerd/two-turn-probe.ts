@@ -772,7 +772,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only this worker's outbound handler routes to the control host, so no new Worker or binding. */
   async httpCalls(): Promise<HttpCall[]> {
-    return (await this.probeLog()).calls;
+    return (await this.probeLog()).calls.filter((call) => !call.users.some((message) => message.startsWith('Design the logo')));
   }
 
   async probeLog(): Promise<{ calls: HttpCall[]; catalogHits: number; ai: CallRecord[] }> {

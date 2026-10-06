@@ -6,7 +6,7 @@ import { CAPABLE_HELLO, daemon } from './helpers/device-harness';
 import { USER_DO_RPC_SURFACE, type UserDoRpcMethod } from '../src/rpc-surface';
 import type { RosterPage } from '../src/user/roster';
 import type { UserDO } from '../src/user/user-do';
-import { sha256Hex } from '@kinu.run/core';
+import { asFetchFunction, sha256Hex } from '@kinu.run/core';
 import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
 import {
   CapabilityDeniedError,
@@ -97,7 +97,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'mcp.tools', name: 'userMcp_toolDescriptors', run: (u, c) => u.userMcp_toolDescriptors(c) },
   { capability: 'mcp.tools', name: 'userMcp_callTool', run: (u, c) => u.userMcp_callTool(c, { serverId: 'srv', name: 'tool', args: {}, id: 'call-1' }) },
   { capability: 'mcp.tools', name: 'userMcp_cancelCall', run: (u, c) => u.userMcp_cancelCall(c, 'call-1') },
-  { capability: 'mcp.tools', name: 'userMcp_githubAuthorization', run: (u, c) => u.userMcp_githubAuthorization(c) },
+  { capability: 'mcp.tools', name: 'userMcp_githubRefresh', run: (u, c) => u.userMcp_githubRefresh(c, { repos: [], items: [] }) },
 
   { capability: 'mcp.manage', name: 'userMcp_list', run: (u, c) => u.userMcp_list(c) },
   { capability: 'mcp.manage', name: 'userMcp_presets', run: (u, c) => u.userMcp_presets(c) },
@@ -134,6 +134,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'workspaces.write', name: 'removeWorkspace', run: (u, c) => u.removeWorkspace(c, OTHER_WORKSPACE, USER_ID) },
 
   { capability: 'workspaces.rename_self', name: 'setWorkspaceDisplayName', run: (u, c) => u.setWorkspaceDisplayName(c, WORKSPACE, 'Renamed', 'user') },
+  { capability: 'workspaces.rename_self', name: 'setWorkspaceLogo', run: (u, c) => u.setWorkspaceLogo(c, WORKSPACE, '<svg viewBox="0 0 8 8"><circle r="3"/></svg>') },
   {
     capability: 'workspaces.overview_self',
     name: 'putWorkspaceOverview',
@@ -409,6 +410,43 @@ describe('a registered workspace reaches the whole surface', () => {
     expect((await harness.userDO.listCredentials(caller)).map((c) => c.key)).toEqual(['github', 'openai.bearer']);
     expect(await harness.userDO.getAuthHeaders(caller, 'openai.bearer')).toEqual({ Authorization: 'Bearer sk-model' });
     expect(await harness.userDO.getAuthHeaders(caller, 'github')).toEqual({ Authorization: 'Bearer ghp_secret' });
+    harness.close();
+  });
+
+  // m48: a GitHub token, the vault's or the MCP connection's, stays in the UserDO; the workspace gets what GitHub said.
+  test('a workspace asks the account to read GitHub and gets the answers, never the token', async () => {
+    const harness = await setupWorkspaces();
+    await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_secret' });
+    const caller: UserCaller = { workspaceToken: harness.token };
+    const sent: string[] = [];
+    const real = globalThis.fetch;
+
+    globalThis.fetch = asFetchFunction(async (input, init) => {
+      sent.push(new Request(input, init).headers.get('authorization') ?? '');
+
+      return new Response(JSON.stringify({ title: 'SAVE20 500s', state: 'closed' }), { status: 200 });
+    });
+
+    try {
+      const answer = await harness.userDO.userMcp_githubRefresh(caller, { repos: [], items: [{ subject: 'issue', repo: 'acme/checkout', number: 41 }] });
+
+      expect(sent).toEqual(['Bearer ghp_secret']);
+      expect(answer).toEqual({ outcome: 'refreshed', observed: [{ subject: 'issue', repo: 'acme/checkout', number: 41, title: 'SAVE20 500s', state: 'closed' }] });
+      expect(JSON.stringify(answer)).not.toContain('ghp_secret');
+      await expect(harness.userDO.userMcp_githubRefresh(caller, { repos: [{ repo: 'acme/..', branch: null }], items: [] })).rejects.toThrow();
+    } finally {
+      globalThis.fetch = real;
+    }
+
+    expect(USER_DO_RPC_SURFACE.filter((name) => /github/i.test(name))).toEqual(['userMcp_githubRefresh']);
+    harness.close();
+  });
+
+  test('without a GitHub token the account says so and reads nothing', async () => {
+    const harness = await setupWorkspaces();
+    const answer = await harness.userDO.userMcp_githubRefresh({ workspaceToken: harness.token }, { repos: [], items: [] });
+
+    expect(answer).toEqual({ outcome: 'no-token', observed: [] });
     harness.close();
   });
 

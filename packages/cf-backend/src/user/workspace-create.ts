@@ -8,7 +8,7 @@ import {
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, logged, renderThrownChain, toKinuError, settle } from '@kinu.run/core/obs';
+import { carriesCauseCode, diagnostics, KinuError, logged, toKinuError, settle, type ErrorCode } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from '@kinu.run/core';
@@ -16,6 +16,7 @@ import { listAvailableModels, type AvailableModelsEnv } from './available-models
 import type { WorkspaceEntry, WorkspaceRegistration, WorkspaceRegistrationSource } from './user-do';
 import { indexNewWorkspace, unindexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
+import { isOwnedByAnotherAccount } from './workspace-ownership';
 import type { ObjectNamespace } from '@kinu.run/core';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
@@ -83,7 +84,7 @@ export function createCloudWorkspaceForUser<Id>(
     );
 
     if (!servable) {
-      return yield* new KinuError('unavailable', 'Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
+      return yield* createConflict('unavailable', 'Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
     }
 
     const identity = yield* createInitialCloudAgentIdentity(input, purpose);
@@ -95,7 +96,7 @@ export function createCloudWorkspaceForUser<Id>(
 
     // A 'reserved' row is an uncommitted fork transfer's reservation; a create may not take it.
     if (registered.status === 'reserved') {
-      return yield* new KinuError('bad_input', `Workspace name conflict: "${identity.name}" is being created by a transfer that has not finished. Choose another name or try again once it lands.`);
+      return yield* createConflict('bad_input', `Workspace name conflict: "${identity.name}" is being created by a transfer that has not finished. Choose another name or try again once it lands.`);
     }
 
     const entry = registered.entry;
@@ -152,7 +153,7 @@ function rollbackRegistration<Id>(input: {
 }): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     const { env, userId, userDO, caller, entry } = input;
-    const contested = OWNED_BY_ANOTHER.test(renderThrownChain({ cause: input.cause }));
+    const contested = isOwnedByAnotherAccount({ cause: input.cause });
 
     const undo = contested
       ? Effect.promise(() => userDO.releaseWorkspaceReservation(caller, entry.name, entry.createdAt))
@@ -184,9 +185,16 @@ function rollbackRegistration<Id>(input: {
   });
 }
 
-/** `claimOwner`'s refusal for another account's name. Matched by message because error classes
- *  don't survive DO RPC; same reading `claimOwnedWorkspace` uses for 403. */
-const OWNED_BY_ANOTHER = /owned by a different user/i;
+/** A create the account cannot make now: no model serves the first turn, or an unfinished transfer holds the name. */
+const CREATE_CONFLICT = 'workspace_create_conflict';
+
+function createConflict(code: ErrorCode, message: string): KinuError {
+  return new KinuError(code, message, { cause: { code: CREATE_CONFLICT, message } });
+}
+
+export function isCreateConflict(input: { cause: unknown }): boolean {
+  return carriesCauseCode(input, CREATE_CONFLICT);
+}
 
 interface InitialCloudAgentIdentity {
   name: string;

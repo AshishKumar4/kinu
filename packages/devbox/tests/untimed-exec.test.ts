@@ -1,52 +1,30 @@
 // D37: an untimed command runs on `ctx.container.exec`, and ending it ends everything it started. Here the
 // runtime's exec is a real local process, so the output, the exit code and the process tree are real.
+import { TestDevbox } from './support/test-devbox';
 import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
+import { DEFAULT_DEVBOX_POLICY } from '../src/lifecycle';
 import { devboxFailure } from '../src/errors';
 import { collectExecRecords } from '../src/exec-stream';
 import { CONTAINER_TRUST_ENV } from '../src/processes';
-import { Devbox, gate, harness } from './support/devbox-harness';
+import { gate, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+import { pipeExec as localExec } from './support/native-process';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}untimed-exec-`));
 
 afterAll(() => { rmSync(root, { recursive: true, force: true }); });
 
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class TestBox extends TestDevbox<unknown> {
 
   protected override get ambientCheckpoints(): boolean {
     return false;
   }
 }
 
-/** The runtime's `exec`, as a local process with its output on pipes. */
-const localExec: Container['exec'] = async (argv, options) => {
-  const child = Bun.spawn(argv, { cwd: options?.cwd, env: { ...process.env, ...options?.env }, stdout: 'pipe', stderr: 'pipe' });
-  const exitCode = child.exited;
-
-  return {
-    isPty: false,
-    resize: () => { throw new Error("the local pipe test cannot resize a PTY"); },
-    stdin: null,
-    stdout: child.stdout,
-    stderr: child.stderr,
-    pid: child.pid,
-    exitCode,
-    output: async () => {
-      const [stdout, stderr] = await Promise.all([new Response(child.stdout).arrayBuffer(), new Response(child.stderr).arrayBuffer()]);
-
-      return { stdout, stderr, exitCode: await exitCode };
-    },
-    kill: (signal) => { child.kill(signal); },
-  };
-};
 
 /** Alive: present and not a zombie, as the kill reads it. */
 function alive(pid: number): boolean {

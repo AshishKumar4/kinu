@@ -230,9 +230,20 @@ describe('the genesis turn names the workspace over its stand-in', () => {
     await harness.agent.installWorkspaceCapability(capability);
     await harness.agent.setSoul(renderSoulMarkdown({ name: STAND_IN, mission: MISSION }));
     const namingCalls: string[] = [];
+    const drawingCalls: string[] = [];
 
     harness.agent.sideModelFactory = () => new MockLanguageModelV3({
-      doGenerate: async () => {
+      doGenerate: async (options) => {
+        // The logo's call, told apart by its prompt.
+        if (JSON.stringify(options.prompt).includes('Design the logo')) {
+          drawingCalls.push('drawing');
+
+          return {
+            content: [{ type: 'text', text: '<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="20" fill="#F6B57C"/></svg>' }],
+            finishReason: { unified: 'stop', raw: undefined }, usage: USAGE, warnings: [],
+          };
+        }
+
         namingCalls.push('naming');
 
         if (namingCalls.length === 1) throw new Error('the naming model is unavailable');
@@ -244,7 +255,7 @@ describe('the genesis turn names the workspace over its stand-in', () => {
       },
     });
 
-    return { user, owner, workspace, harness, namingCalls };
+    return { user, owner, workspace, harness, namingCalls, drawingCalls };
   }
 
   test('a failed naming call is retried by the ledger, and a later turn asks no model', async () => {
@@ -268,6 +279,26 @@ describe('the genesis turn names the workspace over its stand-in', () => {
     await joinHarnessFibers();
     expect(namingCalls).toHaveLength(2);
     expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: 'OAuth Callback Audit', nameOrigin: 'auto' });
+    harness.db.close();
+    user.close();
+  });
+
+  test('the genesis turn draws the workspace\'s logo once, and the registry keeps it for the roster', async () => {
+    const { user, owner, harness, drawingCalls } = await createdWorkspace('user');
+    const turns = chatSessionTurns(harness.agent);
+    const next = turns.park();
+    await harness.agent.beginGenesisTurn();
+    await next;
+    await turns.settle({ messageId: 'a-genesis', text: 'ok' });
+    await joinHarnessFibers();
+
+    expect(drawingCalls).toEqual(['drawing']);
+    const [entry] = (await user.userDO.listWorkspaces(owner)).entries;
+    expect(entry?.logo).toBe('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="20" fill="#F6B57C"/></svg>');
+
+    await turns.run('What did you find?');
+    await joinHarnessFibers();
+    expect(drawingCalls).toEqual(['drawing']);
     harness.db.close();
     user.close();
   });

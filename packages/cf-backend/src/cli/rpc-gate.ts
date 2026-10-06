@@ -25,9 +25,6 @@ export const CLI_BEARER_HEADER = 'x-kinu-cli-bearer';
 /** Written by the edge beside the scope and bearer headers. */
 const USER_ID_HEADER = 'x-kinu-user-id';
 
-/** The session auth time the step-up gate compares; same writer and rule as the user id header. */
-export const AUTH_TIME_HEADER = 'x-kinu-auth-time';
-
 /** Lets a socket restored from hibernation know whose authority it runs on, so revocation applies. */
 const CLI_BEARER_TAG_PREFIX = 'cli-bearer:';
 
@@ -95,8 +92,6 @@ export function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Heade
   // The object reads the identity below, never the credential.
   next.delete(DEV_IDENTITY_HEADER);
   next.set(USER_ID_HEADER, identity.userId);
-
-  if (identity.authTime) next.set(AUTH_TIME_HEADER, String(identity.authTime));
   next.delete(CLI_SCOPES_HEADER);
 
   if (identity.cliScopes) next.set(CLI_SCOPES_HEADER, identity.cliScopes.join(','));

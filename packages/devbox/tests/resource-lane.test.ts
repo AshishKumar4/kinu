@@ -10,7 +10,7 @@ import {
   portScope,
   processScope,
   scopesOverlap,
-} from '../src/lifecycle';
+} from '../src/operation-lanes';
 
 /** Drains microtasks without a clock: an operation not entered after this is held by the lane,
  *  not merely unscheduled. */

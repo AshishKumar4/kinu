@@ -376,6 +376,7 @@ f64444e25b726655320ba32c1d06857f4e733419	scripts/secret-scan.ts	cf-internal-refe
 cd8159648350da02c94ecbb738f09a2f94da1978	scripts/secret-scan.ts	kinu-token	1
 f4a3c293c874d28edab9b4f73c11b804c028e291	scripts/secret-scan.ts	kinu-token	1
 f64444e25b726655320ba32c1d06857f4e733419	scripts/secret-scan.ts	kinu-token	1
+5d09024421d31f65ba90e91b49a51d1822793077	packages/cf-backend/tests/unit-devbox-golden-cron.test.ts	secret-assignment	1
 `);
 
 /**

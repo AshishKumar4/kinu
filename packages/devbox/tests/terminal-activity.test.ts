@@ -1,20 +1,18 @@
 // The ready+activity bridge lives on `Devbox`, so every host inherits it: a terminal lane
 // stamps the durable interaction only after the readiness gate admits the box.
+import { TestDevbox } from './support/test-devbox';
 import { describe, expect, setSystemTime, test, vi } from 'bun:test';
 
 import * as v from 'valibot';
 
 import { INCIDENT_PREFIX } from '../src/incidents';
-import { DEFAULT_DEVBOX_POLICY, LAST_INTERACTION_KEY, QUIET_SINCE_KEY, type DevboxPolicy } from '../src/lifecycle';
+import { DEFAULT_DEVBOX_POLICY, LAST_INTERACTION_KEY, QUIET_SINCE_KEY } from '../src/lifecycle';
 import { Processes } from '../src/processes';
 import type { StoredValue } from '../src/storage';
-import { Devbox, harness, wakeWhileArmed } from './support/devbox-harness';
+import { harness, wakeWhileArmed } from './support/devbox-harness';
 
 /** The shipped policy with a test-length probe: nothing here is about budgets. */
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class TestBox extends TestDevbox<unknown> {
 
   protected override get ambientCheckpoints(): boolean {
     return false;

@@ -2,15 +2,16 @@
 // window and its job read as running forever. Kinu stamps a job's command with the job's id; this read names the
 // stamp on whatever holds a port's listening socket. The runtime's exec is a real local process here, so the
 // sockets, the process tree and /proc are real.
+import { TestDevbox } from './support/test-devbox';
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import type { PortListener } from '../src/devbox';
-import { Devbox, harness } from './support/devbox-harness';
+import { harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+import { pipeExec as localExec } from './support/native-process';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}port-listeners-`));
 
@@ -18,37 +19,13 @@ afterAll(() => { rmSync(root, { recursive: true, force: true }); });
 
 const STAMP = 'KINU_JOB_ID';
 
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class TestBox extends TestDevbox<unknown> {
 
   protected override get ambientCheckpoints(): boolean {
     return false;
   }
 }
 
-/** The runtime's `exec`, as a local process that gets the environment it is given, as the container's does. */
-const localExec: Container['exec'] = async (argv, options) => {
-  const child = Bun.spawn(argv, { cwd: options?.cwd, env: { ...process.env, ...options?.env }, stdout: 'pipe', stderr: 'pipe' });
-  const exitCode = child.exited;
-
-  return {
-    isPty: false,
-    resize: () => { throw new Error("the local pipe test cannot resize a PTY"); },
-    stdin: null,
-    stdout: child.stdout,
-    stderr: child.stderr,
-    pid: child.pid,
-    exitCode,
-    output: async () => {
-      const [stdout, stderr] = await Promise.all([new Response(child.stdout).arrayBuffer(), new Response(child.stderr).arrayBuffer()]);
-
-      return { stdout, stderr, exitCode: await exitCode };
-    },
-    kill: (signal) => { child.kill(signal); },
-  };
-};
 
 /** The read of a box that is running, which answers rows, never null. */
 function read(listeners: readonly PortListener[] | null): readonly PortListener[] {

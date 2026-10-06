@@ -22,7 +22,7 @@ export type ImageCarrier = v.InferOutput<typeof ImageCarrierSchema>;
 const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+=*)$/u;
 
 export interface TakenImages {
-  /** The output with each image data URL replaced by `[image N]`, and each nested carrier by its own output. */
+  /** Images become `[image N]`; a nested carrier becomes its own output. */
   readonly value: JsonValue;
   readonly images: readonly ToolImage[];
 }
@@ -31,7 +31,7 @@ export function takeImages(value: JsonValue): TakenImages {
   const images: ToolImage[] = [];
 
   const walk = (node: JsonValue): JsonValue => {
-    // A native tool's own carrier nested in a program's result (`return await tools.web({ action: 'screenshot' })`).
+    // A native tool's carrier nested in a program's result.
     const carrier = v.safeParse(ImageCarrierSchema, node);
 
     if (carrier.success) {

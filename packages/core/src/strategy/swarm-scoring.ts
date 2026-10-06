@@ -98,7 +98,7 @@ function instrumented<A>(run: () => Promise<A>, label = ''): Effect.Effect<A, Ch
   return Effect.tryPromise({ try: run, catch: (error): ChildOutcome => ({ kind: 'instrument-faulted', error: `${label}${renderThrownChain({ cause: error })}` }) });
 }
 
-/** A verifier's artifact written and measured as one instrument call: a refused write faults it like a thrown verify. */
+/** Write and measure as one instrument call: a refused write faults it like a thrown verify. */
 function verified(ctx: MeasurementContext, verifier: ResolvedVerifier, artifact: string, label = ''): Effect.Effect<Measurement, ChildOutcome> {
   return instrumented(async () => {
     await writeText(ctx.vfs, verifier.artifact, artifact);

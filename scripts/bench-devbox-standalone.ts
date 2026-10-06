@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
+import { copyPinnedTools } from './devbox-tools';
 import {
   BENCH_ACCOUNT_ID, cleanupObservationProbes, orphanTeardownExecutor, r2CleanupKeyRefusal, r2ResiduePlane,
   sourceRevision,
@@ -286,6 +287,7 @@ async function main(): Promise<number> {
 
     writeFileSync(config, template);
     runWrangler(REPO, ['r2', 'bucket', 'create', worker]);
+    await copyPinnedTools(worker);
     const output = runWrangler(REPO, ['deploy', '--config', config, '--var', `EXAMPLE_TOKEN:${token}`]);
     const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
     workerVersion = /Current Version ID:\s*([0-9a-f-]{8,})/i.exec(output)?.[1] ?? null;

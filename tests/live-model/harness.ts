@@ -22,6 +22,7 @@ import {
   WORKSPACE_RUN_ID, ConversationSearchStore, BackgroundJobRunner, BACKGROUNDABLE_TOOLS, narrowToolSurface,
 } from '../../packages/core/src/index';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
+import { synthesizeToolFallback } from '../../packages/core/src/utils/evidence-window';
 import {
   createDefaultWebSearchProvider, restBrowserRunAccess, createWebCodemodeProvider,
 } from '../../packages/core/src/web/index';
@@ -658,4 +659,23 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
     availableTools: [],
     activeSkills: [],
   })));
+}
+
+/**
+ * A `generateText` result's answer as a turn records it. Some models (e.g. Kimi K2.5) end on a tool-call step
+ * with no trailing text, and the SDK puts only the final step's text in `result.text`.
+ */
+export function collectStepText(result: {
+  text: string;
+  steps: ReadonlyArray<{
+    text: string;
+    toolResults: Parameters<typeof synthesizeToolFallback>[0][number]['toolResults'];
+  }>;
+}): string {
+  if (result.text) return result.text;
+  const textParts = result.steps.flatMap((step) => (step.text ? [step.text] : []));
+
+  if (textParts.length > 0) return textParts.join('\n\n');
+
+  return synthesizeToolFallback(result.steps) || '(no response)';
 }

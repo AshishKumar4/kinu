@@ -79,10 +79,7 @@ export interface VfsListedEntry {
 /** Most text held in memory for a bounded view on a plane with no ranged read (viewer preview, tools/file-scan.ts). */
 export const RESIDENT_TEXT_MAX_BYTES = 512 * 1024;
 
-/**
- * A plane without a prefix read is read whole only when `size` fits `limit`; otherwise EPERM with a stated
- * reason, never a whole-file fallback.
- */
+/** Read whole only when `size` fits `limit`; otherwise EPERM with a stated reason. */
 export async function readBoundedWithVfsOps(
 	files: VFS, path: string, limit: number, size: number | null,
 ): Promise<Uint8Array> {
@@ -152,10 +149,7 @@ export type TreeRemoval =
 		readonly failed: { readonly path: string; readonly cause: unknown };
 	};
 
-/**
- * Depth-first removal in base VFS ops: enumerate first, then delete children before parents.
- * The first failed unlink ends the pass; an entry that vanished before its unlink counts as removed.
- */
+/** Enumerate, then delete children before parents; the first failed unlink ends the pass. */
 export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<TreeRemoval> {
 	const st = await files.stat(path);
 
@@ -243,10 +237,7 @@ export interface VfsMountRouting {
 
 export type MountedVfs = VFS & Required<Pick<VFS, 'rename' | 'removeRecursive' | 'readRange'>> & VfsMountRouting & CheckpointFiles;
 
-/**
- * `base` extended by `mounts`, composed by Nimbus (m1960): each mount resolves its own paths, so a read under one is
- * one backend call with no walk of its ancestors. A relative path stays in `base`, so `pc/x` is a workspace file.
- */
+/** `base` extended by `mounts`, composed by Nimbus; a relative path stays in `base`, so `pc/x` is a workspace file. */
 export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedVfs {
 	const byName = new Map<string, VfsMount>();
 
@@ -292,7 +283,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		mountPoints: () => mounts.filter((m) => m.files() !== null).map((m) => m.name),
 		mounts: () => [...mounts],
 		userRoots: () => userRoots,
-		// Nimbus answers null for a path on an absent mount; this plane states the absence, as a read does.
+		// An absent mount's stat states the absence, as a read does.
 		stat: (path, options) => {
 			const routed = routeOf(path);
 
@@ -313,7 +304,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 			if (source === null && target === null) return move(base, from, to);
 			const files = source?.mount.files() ?? null;
 
-			// Within one mounted tree without its own rename, the bytes move as `mv` moves them; across mounts Nimbus answers EXDEV.
+			// One mounted tree without its own rename moves bytes as `mv` does.
 			if (source !== null && target?.mount === source.mount && files !== null && files.rename === undefined
 				&& source.native !== '/' && target.native !== '/' && source.mount.readOnly !== true) {
 				return move(files, source.native, target.native);

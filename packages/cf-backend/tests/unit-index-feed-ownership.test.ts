@@ -8,6 +8,7 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import { workerContext } from './helpers/bindings';
 import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import { DEV_IDENTITY_HEADER, type UserCaller } from '@kinu.run/core';
+import { ownedByAnotherAccount } from '../src/user/workspace-ownership';
 
 mockAgentsSdk();
 
@@ -69,7 +70,7 @@ function harness(email: string, owned: readonly string[]) {
     idFromName: (name: string) => name,
     get: (name: string) => ({
       async claimOwner(userId: string) {
-        if (!owned.includes(name)) throw new Error('Agent owned by a different user');
+        if (!owned.includes(name)) throw ownedByAnotherAccount('Agent owned by a different user');
 
         return { owner: userId, capabilityHash: null };
       },

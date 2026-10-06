@@ -1,4 +1,4 @@
-/** Store-format parity: the TS engine and the pc-agent daemon engine (which pins the format as literals) restore each other's snapshots. */
+/** Store-format parity: the TS engine and the pc-agent daemon engine (which carries core's format, generated) restore each other's snapshots. */
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { createHostCheckpoints } from '../src/checkpoints';
 import { present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
+import { daemonSources } from '../../../scripts/daemon-checkpoint-format';
 
 const require = createRequire(import.meta.url);
 
@@ -73,6 +74,12 @@ function setup() {
 }
 
 describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
+  test('the daemon runs core\'s store format, generated: run scripts/daemon-checkpoint-format.ts after changing it', () => {
+    const { committed, fresh } = daemonSources();
+
+    expect(committed === fresh).toBe(true);
+  });
+
   test('a host-engine snapshot is listed, planned, and restored by the daemon', async () => {
     const { work, host, device } = setup();
 

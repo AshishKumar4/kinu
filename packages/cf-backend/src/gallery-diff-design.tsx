@@ -632,7 +632,7 @@ function Workspace({ wide, chatPane, inspector, chat, panel }: { wide: boolean; 
   return (
     <div className="flex h-full flex-col">
       <WorkspaceHeader
-        workspace={{ title: "Storefront", to: `/workspace/${WORKSPACE}/overview`, editValue: "Storefront", rename: async () => {}, remove: () => {} }}
+        workspace={{ name: WORKSPACE, title: "Storefront", to: `/workspace/${WORKSPACE}/overview`, editValue: "Storefront", rename: async () => {}, remove: () => {} }}
         chats={[{ agent: MAIN_CHAT, to: `/workspace/${WORKSPACE}`, rename: async () => {} }]}
         active="main"
         newChat={`/workspace/${WORKSPACE}/new`}

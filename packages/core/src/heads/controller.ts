@@ -566,7 +566,7 @@ function headTrajectory(r: HeadReport): string {
   return parts.join('\n').trim();
 }
 
-/** A head that never reported: its usage is unknown (`{}`, not zeros) and the reason travels in `errorMessage`. */
+/** A head that never reported: usage `{}` (unknown), reason in `errorMessage`. */
 function unreportedHead(id: string, summary: string, wallClockMs: number, failed: Cause.Cause<unknown>): HeadReport {
   return {
     id, status: 'errored', summary, evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],

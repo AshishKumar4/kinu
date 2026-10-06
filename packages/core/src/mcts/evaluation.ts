@@ -390,7 +390,7 @@ async function sampleJudgeScore(judge: LLM, prompt: string): Promise<number | nu
   return judgeScoreOf(await judge.complete(prompt));
 }
 
-/** A judge's `{"score": …}` in [0, 1], or null when the text carries none; shared with heads/controller.ts. */
+/** A judge's `{"score": …}` in [0, 1], or null when the text carries none */
 export function judgeScoreOf(text: string): number | null {
   const json = tolerate(() => extractJsonObject(text), 'malformed-input');
 

@@ -1,10 +1,13 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeAll, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { runParityScenario } from './chat-session-parity';
 
 describe('ChatSession steering and recovery', () => {
+  let ordinary: Awaited<ReturnType<typeof runParityScenario>>;
+  beforeAll(async () => { ordinary = await runParityScenario(); });
+
   test('steering preserves conversation order and consumes pending sends across restart', async () => {
-    const now = await runParityScenario();
+    const now = ordinary;
     expect(now.landings).toEqual({ landingTwo: 'mid-turn', landingThree: 'cancelled', returned: ['three-steer'], landingFour: 'acknowledged', landingFive: 'turn' });
     const rows = v.parse(v.array(v.object({ id: v.string(), position: v.number(), role: v.string(), content: v.string() })), now.afterTwo.actorMessages);
     expect(rows.map(row => row.content)).toEqual(['one', 'answer one', 'two', 'two-steer', 'answer two']);
@@ -24,7 +27,7 @@ describe('ChatSession steering and recovery', () => {
 
   test('AN INTERRUPTED TURN CONTINUES: the restart re-opens the dead turn where it stopped', async () => {
     // The dead process's turn is re-opened under the same row and re-enters its produced tool call rather than rerunning:
-    const now = await runParityScenario();
+    const now = ordinary;
     const rows = v.parse(v.array(v.object({ id: v.string(), position: v.number(), role: v.string(), content: v.string() })), now.end.actorMessages);
     const four = rows.filter((row) => row.role === 'user' && row.content === 'four');
     // …the opening row exists once, not once per process that ran it;

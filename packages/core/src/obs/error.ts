@@ -245,6 +245,28 @@ export function toKinuError(
   return new KinuError(code, input.doing, { cause: input.cause });
 }
 
+const CauseLinkSchema = v.object({ code: v.optional(v.string()), cause: v.optional(v.unknown()) });
+
+/** Domain codes in a cause chain, outermost first: DO RPC keeps an error's cause where it drops its class. */
+export function* causeCodes(input: { cause: unknown }): Generator<string> {
+  const seen = new Set<unknown>();
+  let cause: unknown = input.cause;
+
+  for (;;) {
+    const parsed = v.safeParse(CauseLinkSchema, cause);
+
+    if (!parsed.success || seen.has(cause)) return;
+    seen.add(cause);
+
+    if (parsed.output.code !== undefined) yield parsed.output.code;
+    cause = parsed.output.cause;
+  }
+}
+
+export function carriesCauseCode(input: { cause: unknown }, ...codes: readonly string[]): boolean {
+  return [...causeCodes(input)].some((code) => codes.includes(code));
+}
+
 /** Native RPC preserves these own fields; the receiving Error need not be a KinuError instance. */
 function remoteRefusal(error: Error): { code: ErrorCode; message: string } | null {
   if (!('_tag' in error) || error._tag !== 'KinuError' || !('code' in error)) return null;

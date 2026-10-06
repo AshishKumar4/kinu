@@ -22,7 +22,6 @@ import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepR
 import * as v from 'valibot';
 
 import {
-  collectStepText,
   EvolutionEngine,
   recordTurnRating,
   thumbsRating,
@@ -32,7 +31,7 @@ import {
 } from '../../packages/core/src/index';
 import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import {
-  buildEvalAgentSurface, createStepToolCallLog, recordRequestSurface,
+  buildEvalAgentSurface, collectStepText, createStepToolCallLog, recordRequestSurface,
   type EvalAgentSurface, type RequestSurfaceEvidence,
 } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';

@@ -816,6 +816,34 @@ describe('thinking in a settled turn', () => {
   });
 });
 
+describe('a long thought folds by its height', () => {
+  // m1111: a thought that is one long paragraph never folded, because the fold counted source lines.
+  test('one long paragraph shows a few lines and an expand, and expanding shows all of it', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 900, height: 1200 });
+      await page.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-chat-row="a2"] [data-reasoning]');
+
+      const shown = () => page.$eval('[data-chat-row="a2"] [data-reasoning]', (block) => ({
+        height: block.querySelector('.prose-thinking')?.getBoundingClientRect().height ?? 0,
+        toggle: block.querySelector('button')?.getAttribute('aria-expanded') ?? null,
+      }));
+
+      const folded = await shown();
+
+      expect(folded.toggle).toBe('false');
+      await page.click('[data-chat-row="a2"] [data-reasoning] button');
+
+      const open = await shown();
+
+      expect(open.toggle).toBe('true');
+      expect(open.height).toBeGreaterThan(folded.height * 1.5);
+      await page.close();
+    });
+  });
+});
+
 describe('feedback on a settled turn', () => {
   test('the buttons appear when the message is hovered, and a click records one vote', async () => {
     // Hidden at rest, revealed by hovering the MESSAGE (not the footer row):

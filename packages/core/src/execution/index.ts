@@ -80,7 +80,7 @@ export {
   type DeviceCancelResult, type DeviceExecOutput,
 } from './device-tunnel';
 
-export { DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, isDeviceFailure, type DeviceMethod } from './device-protocol';
+export { DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, type DeviceMethod } from './device-protocol';
 
 export {
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,

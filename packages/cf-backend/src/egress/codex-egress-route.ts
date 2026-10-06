@@ -1,10 +1,10 @@
 import { Cause, Effect } from 'effect';
 import {
   activeOperationProfile, asFetchFunction, WORKSPACE_RUN_ID, abortCause, EGRESS_REFUSAL_HEADER, EGRESS_ROUTE_HEADER, refusalError,
-  isDeviceNotConnectedError, isDeviceFailure, DEVICE_ERRORS,
+  isDeviceNotConnectedError, DEVICE_ERRORS,
   type ActorReference, type OperationProfile, type RelayedProvider, type UserCaller,
 } from '@kinu.run/core';
-import { attempt, detach, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { attempt, carriesCauseCode, detach, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import type { CodexEgress } from './codex-egress';
 
 export interface CodexEgressNamespace<Id = DurableObjectId> {
@@ -61,7 +61,7 @@ function stoppedBy(signal: AbortSignal | undefined, cancel: () => Promise<void>,
 }
 
 function deviceLost(failure: { readonly cause: unknown }): boolean {
-  return isDeviceNotConnectedError(failure) || isDeviceFailure(failure, DEVICE_ERRORS.unresponsive);
+  return isDeviceNotConnectedError(failure) || carriesCauseCode(failure, DEVICE_ERRORS.unresponsive);
 }
 
 function stamped(response: Response, route: string): Response {

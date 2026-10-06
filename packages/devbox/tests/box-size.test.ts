@@ -1,4 +1,5 @@
 // D50: sizes applied at the one start boundary, and one-call `resize`, over real local processes.
+import { TestDevbox } from './support/test-devbox';
 import { afterAll, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,45 +7,21 @@ import { join } from 'node:path';
 
 import { DEFAULT_BOX_SIZE, type BoxSize } from '../src/sizes';
 import { devboxFailure } from '../src/errors';
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
-import { Devbox, HARNESS_IMAGE, harness } from './support/devbox-harness';
+import { HARNESS_IMAGE, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+import { pipeExec as localExec } from './support/native-process';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}box-size-`));
 
 afterAll(() => { rmSync(root, { recursive: true, force: true }); });
 
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class TestBox extends TestDevbox<unknown> {
 
   protected override get ambientCheckpoints(): boolean {
     return false;
   }
 }
 
-const localExec: Container['exec'] = async (argv, options) => {
-  // devbox depends on no workspace package, so it passes the scratch environment itself.
-  const child = Bun.spawn(argv, { cwd: options?.cwd, env: process.env, stdout: 'pipe', stderr: 'pipe' });
-  const exitCode = child.exited;
-
-  return {
-    isPty: false,
-    resize: () => { throw new Error('the local pipe test cannot resize a PTY'); },
-    stdin: null,
-    stdout: child.stdout,
-    stderr: child.stderr,
-    pid: child.pid,
-    exitCode,
-    output: async () => {
-      const [stdout, stderr] = await Promise.all([new Response(child.stdout).arrayBuffer(), new Response(child.stderr).arrayBuffer()]);
-
-      return { stdout, stderr, exitCode: await exitCode };
-    },
-    kill: (signal) => { child.kill(signal); },
-  };
-};
 
 const INSTANCES = {
   small: { vcpu: 1, memoryMib: 4_096, diskMb: 20_000 },

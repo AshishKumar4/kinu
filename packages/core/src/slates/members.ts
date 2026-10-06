@@ -1,6 +1,6 @@
 /**
  * Read-only versus mutating per (binding, member); unnamed members are mutating (fail closed).
- * `NATIVE_ACTION_EFFECTS` is the native tools' own classification: `toolCallEffect` (tools/) reads it from here.
+ * `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
  */
 import * as v from 'valibot';
 import type { JsonObject } from '../utils/json';
@@ -22,12 +22,12 @@ export const TASKS_MEMBER_EFFECTS = {
   list: 'read', add: 'mutate', update: 'mutate', mode: 'mutate',
 } as const satisfies Readonly<Record<string, SlateMemberEffect>>;
 
-/** The `web` namespace's members, which write nothing; browser sessions are eval's (a slate has no socket to drive one). */
+/** The `web` namespace's members write nothing. */
 export const WEB_MEMBER_EFFECTS = {
   search: 'read', fetch: 'read', screenshot: 'read',
 } as const satisfies Readonly<Record<string, SlateMemberEffect>>;
 
-/** Each native tool action: the native web tool spills a fetched page and saves a screenshot into the workspace. */
+/** Per native action; the native web tool writes (a spilled page, a screenshot). */
 export const NATIVE_ACTION_EFFECTS = {
   file: { read: 'read', list: 'read', stat: 'read', search: 'read', write: 'mutate', edit: 'mutate' },
   memory: MEMORY_MEMBER_EFFECTS,

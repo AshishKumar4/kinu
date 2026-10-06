@@ -705,7 +705,7 @@ describe('native egress constraints — red in every governed direction', () => 
     [kinu, 'this.#nativeExports.KinuEgress({ props: params })', 'this.#nativeExports.KinuEvents({ props: params })', 'does not bind the vault'],
     [base, 'await this.outboundPolicy()', '{ routes: {} }', 'does not bind the vault'],
     [router, 'this.#fallback = policy.fallback', 'this.#fallback = undefined', 'does not bind the vault'],
-    [worker, 'return handleContainerEgress(request, this.env, parseEgressParams(this.ctx));', 'return fetch(request);', 'does not enter credential injection'],
+    [worker, 'return handleContainerEgress(request, this.env, params, params && new GitHubEgressRecorder(this.env, this.ctx, params.workspaceName));', 'return fetch(request);', 'does not enter credential injection'],
     [vault, 'vault.resolveEgressInjection(', 'vault.unrelatedInjection(', 'does not consult the owner vault'],
     [router, '?? this.ctx.props.fallback', '', 'owned routes do not precede'],
     [router, 'this.ctx.props.internet ?', 'true ?', 'public forwarding is not conditional'],

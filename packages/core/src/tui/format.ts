@@ -1,5 +1,21 @@
 import { codenameFor } from '../identity/naming';
 import { revealMisrepresenting } from '../safety/untrusted-text';
+import { ELAPSED_COUNTER } from '../tui-presentation';
+
+export const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+export interface TurnMeter {
+  readonly startedAt: number;
+  streamedChars: number;
+}
+
+export function meterText(meter: TurnMeter, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - meter.startedAt) / 1000));
+  const tokens = Math.ceil(meter.streamedChars / 4);
+  const elapsed = `${ELAPSED_COUNTER.prefix}${String(seconds)}${ELAPSED_COUNTER.suffix}`;
+
+  return tokens === 0 ? elapsed : `${elapsed} · ~${String(tokens)} tokens`;
+}
 
 const NARROW_ONLY = /^[\x20-\x7e]*$/;
 

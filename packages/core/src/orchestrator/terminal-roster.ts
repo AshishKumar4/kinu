@@ -58,6 +58,8 @@ export interface TerminalTurnParts {
   readonly sleepTime?: boolean;
   /** `standIn`: the shown title is a new workspace's, replaced by this turn's naming (identity/naming.ts). */
   readonly autoTitle?: { readonly mission: string | null; readonly standIn?: boolean };
+  /** Owed by a new workspace's first turn. */
+  readonly logo?: { readonly mission: string | null };
   /** Presence is the caller's decision: a `task` child owes a terminal answer on every ending, a durable child only on completion. */
   readonly parentReport?: {
     readonly text: string;
@@ -208,6 +210,8 @@ export function declareTerminalRoster(
 
   const naming = autoTitleEffect(facts, parts);
 
+  owed.push(...logoEffect(facts, parts));
+
   // Below is completed-Build only, except a new workspace's naming, which is owed however its first turn ended.
   if (!completed || facts.workMode === 'plan') {
     if (naming?.standIn === true) owed.push(naming.effect);
@@ -245,6 +249,12 @@ function completedBuildEffects(
   if (naming !== null) owed.push(naming);
 
   return owed;
+}
+
+function logoEffect(facts: TerminalTurnFacts, parts: TerminalTurnParts): OwedEffect[] {
+  if (parts.logo === undefined) return [];
+
+  return [{ name: 'workspace_logo', scope: facts.messageId, lane: 'detached', input: { subject: autoTitleInput(parts.logo, facts.userText).subject } }];
 }
 
 function autoTitleEffect(

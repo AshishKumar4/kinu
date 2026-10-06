@@ -1,11 +1,11 @@
 // Pins the ownership fence at `#stampBootId`: a stale attempt's stamp must not overwrite
 // the successor's `BOOT_ID_KEY`, which the heartbeat's replacement detector reads.
+import { TestDevbox } from './support/test-devbox';
 import { describe, expect, test } from 'bun:test';
 
 import * as v from 'valibot';
 
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
-import { Devbox, gate, harness } from './support/devbox-harness';
+import { gate, harness } from './support/devbox-harness';
 
 const BOOT_ID_KEY = 'devbox:boot-id';
 
@@ -15,10 +15,7 @@ const StampedBootIdSchema = v.string();
 
 /** Shipped policy with a short port probe so a parked attempt resolves fast; budgets stay
  *  default because the fence under test is not about budget exhaustion. */
-class TestBox extends Devbox<unknown> {
-  protected override get policy(): DevboxPolicy {
-    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
-  }
+class TestBox extends TestDevbox<unknown> {
 
   protected override get previewHost(): string | undefined {
     return 'preview.example';

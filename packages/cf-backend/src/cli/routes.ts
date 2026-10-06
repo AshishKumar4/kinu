@@ -1,4 +1,4 @@
-import { Hono, type Context, type MiddlewareHandler, type Next } from 'hono';
+import { Hono, type Context, type Next } from 'hono';
 import { Cause, Effect, Result } from 'effect';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
@@ -18,7 +18,7 @@ import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE, type WebhookRouteEnv } from '@kinu.run/core';
 import {
-  CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,
+  CliAuthCodeError, RateLimitError, approveCliAuth,
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows,
   type CliAuthAuthority, type CliTokenIdentity,
 } from './auth-store';
@@ -41,8 +41,9 @@ import type { UserDO } from '../user/user-do';
 import { handleCreateWorkspaceRequest, notifyWorkspacesModelSettingsChanged } from '../user/workspace-access';
 import type { UserAIProxyEnv } from '../user/ai-proxy';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
-import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
-import { noHead, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
+import { ownerCaller } from '@kinu.run/core';
+import { noHead, rawParam, type FamilyEnv } from '../api/context';
+import { authenticateCli, type CliBearerVariables } from '../api/cli-bearer';
 import * as v from 'valibot';
 import { authoredRefusal, classify, diagnostics, KinuError, renderThrownChain, toKinuError, settleLogged, settle } from '@kinu.run/core/obs';
 
@@ -71,15 +72,13 @@ export interface CliRoutesEnv<Id>
   CLI_APPROVAL_ORIGIN?: string;
 }
 
-export type CliIdentity = CliTokenIdentity<CliRoutesAuthority>;
+type CliIdentity = CliTokenIdentity<CliRoutesAuthority>;
 
-export interface CliVariables extends ApiVariables {
-  /** Set by `cliBearer`. */
-  cli: CliIdentity;
+interface CliVariables extends CliBearerVariables<CliRoutesAuthority> {
   key: string;
 }
 
-export type CliEnv = FamilyEnv<CliRoutesEnv<unknown>, CliVariables>;
+type CliEnv = FamilyEnv<CliRoutesEnv<unknown>, CliVariables>;
 
 type CliContext = Context<CliEnv>;
 
@@ -114,40 +113,15 @@ cliPageRoutes.get('/cli/auth', noHead<CliPagesEnv>((c) => renderBrowserApproval(
 
 cliPageRoutes.post('/cli/auth', (c) => settle(approveFromBrowser(c.req.raw, c.env)));
 
-function authenticateCli(c: CliContext): Effect.Effect<CliIdentity | Response> {
-  return Effect.catchCause(
-    Effect.map(Effect.promise(() => authenticateCliToken(c.req.raw, c.env)), (result) => (Result.isSuccess(result) ? result.success : err(401, result.failure))),
-    (failed) => {
-      const e = Cause.squash(failed);
-
-      // No root secret: say so rather than surfacing an unexplained 500.
-      return e instanceof OwnerCapabilityUnavailableError ? Effect.succeed(err(503, e.message)) : Effect.failCause(failed);
-    },
-  );
-}
-
 function cliBearer(c: CliContext, next: Next): Effect.Effect<Response | undefined> {
   return Effect.gen(function* () {
-    const cli = yield* authenticateCli(c);
+    const cli = yield* authenticateCli(c.req.raw, c.env);
 
     if (cli instanceof Response) return cli;
     c.set('cli', cli);
     yield* Effect.promise(() => next());
   });
 }
-
-export const inferenceProxyGate: MiddlewareHandler<CliEnv> = (c, next) => settle(Effect.gen(function* () {
-  const cli = yield* authenticateCli(c);
-
-  if (cli instanceof Response) return cli;
-
-  if (cli.kind === 'access' && !tokenAllows(cli, 'ai.proxy')) {
-    return err(403, 'This access token does not have the ai.proxy scope.');
-  }
-
-  c.set('cli', cli);
-  yield* Effect.promise(() => next());
-}));
 
 function cliPath(c: CliContext): string {
   return c.req.path.slice('/api/cli'.length) || '/';

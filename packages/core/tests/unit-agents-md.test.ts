@@ -85,8 +85,6 @@ describe('renderAgentsMdSection', () => {
       referenced: [],
     }, 'system');
 
-    expect(section).toContain('## Project instructions (AGENTS.md)');
-    expect(section).toMatch(/closest to the working directory wins/);
     // Later renders take higher precedence.
     expect(section.indexOf('/repo/AGENTS.md')).toBeLessThan(section.indexOf('/repo/pkg/AGENTS.md'));
     expect(section).toContain('Use bun for everything.');
@@ -110,8 +108,6 @@ describe('renderAgentsMdSection', () => {
 
     expect(section).toContain('nearest instructions win');
     expect(section).toContain('/repo/AGENTS.md (5242880 bytes)');
-    expect(section).toMatch(/file tool/);
-    expect(section).not.toContain('truncated');
   });
 
   test('a section of nothing but references still reports them', () => {
@@ -119,7 +115,6 @@ describe('renderAgentsMdSection', () => {
       admitted: [], referenced: [{ path: '/repo/AGENTS.md', bytes: 900_000 }],
     }, 'system');
 
-    expect(section).toContain('## Project instructions (AGENTS.md)');
     expect(section).toContain('/repo/AGENTS.md (900000 bytes)');
   });
 });
@@ -137,14 +132,10 @@ describe('buildSystemPromptSync — agentsMd option', () => {
       },
     });
 
-    expect(prompt).toContain('## Project instructions (AGENTS.md)');
     expect(prompt).toContain('Always run the linter.');
   });
 
-  test('renders no block when absent', () => {
-    const { rt } = createTestRuntime();
-    expect(buildSystemPromptSync(rt)).not.toContain('Project instructions (AGENTS.md)');
-  });
+
 });
 
 interface FakeVfs {

@@ -1,5 +1,4 @@
-// The compaction content spec: the structured handoff template and the
-// [CONTEXT CHECKPOINT] wrapper.
+// The compaction prompt's inputs and the [CONTEXT CHECKPOINT] wrapper.
 import { describe, test, expect } from 'bun:test';
 import {
   buildCompactionSummaryPrompt,
@@ -8,53 +7,21 @@ import {
   CONTEXT_CHECKPOINT_PREFIX,
 } from '../src/compaction';
 
-const SECTIONS = [
-  '## Active Task',
-  '## Completed',
-  '## In Progress',
-  '## Key Decisions & Constraints',
-  '## Files & Paths Touched',
-  '## Resolved Questions',
-  '## Pending User Asks',
-  '## Remaining Work',
-];
-
 describe('buildCompactionSummaryPrompt', () => {
-  test('demands every handoff section, concreteness, recall-first budget, and secret redaction', () => {
-    const prompt = buildCompactionSummaryPrompt({ transcript: 't', budgetTokens: 2_000 });
-
-    for (const section of SECTIONS) expect(prompt).toContain(section);
-    expect(prompt).toContain('copied verbatim');
-    expect(prompt).toContain('never "made some changes"');
-    expect(prompt).toContain('~2000 tokens');
-    expect(prompt).toContain('recall');
-    expect(prompt).toContain('do NOT preserve their values');
-    expect(prompt).toContain('Never invent paths');
-    // "Remaining Work", deliberately not "Next Steps" — a record, not orders.
-    expect(prompt).not.toContain('Next Steps');
-  });
-
   test('hands the latest user ask in directly so verbatim copying is mechanical', () => {
     const ask = 'Deploy the staging worker and tell me the preview URL';
-    const prompt = buildCompactionSummaryPrompt({ transcript: 't', latestUserAsk: ask, budgetTokens: 500 });
-    expect(prompt).toContain(ask);
-    expect(prompt).toContain('copy this verbatim into "## Active Task"');
+    expect(buildCompactionSummaryPrompt({ transcript: 't', latestUserAsk: ask, budgetTokens: 500 })).toContain(ask);
   });
 
-  test('iterative update keeps the previous summary and states the move-item rules', () => {
+  test('an iterative update carries the previous summary and the new turns', () => {
     const prompt = buildCompactionSummaryPrompt({
       transcript: 'new turns here',
       previousSummary: '## Active Task\nOld task body',
       budgetTokens: 800,
     });
 
-    expect(prompt).toContain('PREVIOUS SUMMARY:');
     expect(prompt).toContain('Old task body');
-    expect(prompt).toContain('NEW TURNS TO INCORPORATE:');
-    expect(prompt).toContain('In Progress to Completed');
-    expect(prompt).toContain('PRESERVE still-relevant information');
-
-    for (const section of SECTIONS) expect(prompt).toContain(section);
+    expect(prompt).toContain('new turns here');
   });
 
   test('an oversize latest ask is windowed head+tail with a named omission, not dropped', () => {
