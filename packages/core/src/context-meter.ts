@@ -49,8 +49,7 @@ function messageChars(message: ModelMessage): number {
   const held = MEASURED.get(message);
 
   if (held !== undefined) return held;
-  const text = v.safeParse(v.string(), message.content);
-  const chars = text.success ? text.output.length : JSON.stringify(message.content)?.length ?? 0;
+  const chars = typeof message.content === 'string' ? message.content.length : JSON.stringify(message.content)?.length ?? 0;
   MEASURED.set(message, chars);
 
   return chars;
@@ -58,11 +57,7 @@ function messageChars(message: ModelMessage): number {
 
 /** Live-state blocks ride as user messages but are not conversation. */
 function isEphemeral(message: ModelMessage): boolean {
-  const content = v.safeParse(v.string(), message.content);
-
-  return message.role === 'user'
-    && content.success
-    && content.output.startsWith(DYNAMIC_CONTEXT_OPEN_TAG);
+  return message.role === 'user' && typeof message.content === 'string' && message.content.startsWith(DYNAMIC_CONTEXT_OPEN_TAG);
 }
 
 /** Counted as the JSON Schema the provider is sent. */
