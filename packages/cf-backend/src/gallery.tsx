@@ -2243,6 +2243,24 @@ async function galleryJobsRead(): Promise<JsonValue> {
   return heldJob(at, answer.label);
 }
 
+/**
+ * The plan decision, as `&decision=` asks: `held` until `gallery:decision-answer`, or `fail-first` failing the first
+ * attempt. `data-gallery-decisions` counts the decisions sent.
+ */
+async function galleryDecidePlan(args?: unknown[]): Promise<JsonValue> {
+  const root = document.documentElement.dataset;
+  const sent = Number(root.galleryDecisions ?? "0") + 1;
+  const asked = new URLSearchParams(location.search).get("decision");
+
+  root.galleryDecisions = String(sent);
+
+  if (asked === "held") await galleryEvent("gallery:decision-answer", v.unknown(), () => true);
+
+  if (asked === "fail-first" && sent === 1) throw new Error("review-fixture-rpc-failed");
+
+  return v.parse(JsonValueSchema, galleryPlanRpc("decidePlanReview", args)?.value ?? null);
+}
+
 /** What went to the running turn rather than opening one. */
 async function galleryMidTurnSend(args?: unknown[]): Promise<JsonValue> {
   const asks = document.documentElement.dataset;
@@ -2279,6 +2297,7 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["cancelCurrentWork", galleryCancelWork],
   ["resolveDeviceConsent", galleryResolveConsent],
   ["listBackgroundJobs", galleryJobsRead],
+  ["decidePlanReview", galleryDecidePlan],
 ]);
 
 /** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
