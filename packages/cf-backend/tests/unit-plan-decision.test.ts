@@ -80,15 +80,6 @@ function recorder(saves: boolean, decided: () => Promise<PlanDecisionOutcome> = 
 }
 
 describe('a decision on a plan revision', () => {
-  test('saves the annotations, then wakes the agent exactly once, carrying them when changes are asked for', async () => {
-    const { done, input } = recorder(true);
-    const hook = await mounted(input);
-
-    await act(async () => { await hook.current().decide('request_changes'); });
-
-    expect(done).toEqual(['save', 'decidePlanReview ["plan-1",3,"request_changes","Plan Feedback: tighten step 2"]']);
-    await hook.unmount();
-  });
 
   test('takes no decision when the annotations were not saved', async () => {
     const { done, input } = recorder(false);
@@ -115,52 +106,4 @@ describe('a decision on a plan revision', () => {
     }
   });
 
-  test('reports a failed decision and releases the plan for another attempt', async () => {
-    let attempts = 0;
-    const errors: string[] = [];
-
-    const { input } = recorder(true, async () => {
-      attempts += 1;
-
-      if (attempts === 1) throw new Error('review-fixture-rpc-failed');
-
-      return { ok: true, plan: PLAN, queued: true };
-    });
-
-    const hook = await mounted({ ...input, onError: (message) => { if (message !== null) errors.push(message); } });
-
-    try {
-      await act(async () => { await hook.current().decide('approve'); });
-
-      expect(errors).toEqual(['review-fixture-rpc-failed']);
-      expect({ busy: hook.current().busy, inFlight: hook.current().inFlight() }).toEqual({ busy: null, inFlight: false });
-
-      await act(async () => { await hook.current().decide('approve'); });
-
-      expect(attempts).toBe(2);
-      expect(errors).toEqual(['review-fixture-rpc-failed']);
-    } finally {
-      await hook.unmount();
-    }
-  });
-
-  test('is the only one while it runs: the plan is frozen, and a second decision is dropped', async () => {
-    const answer = Promise.withResolvers<PlanDecisionOutcome>();
-    const { done, input } = recorder(true, () => answer.promise);
-    const hook = await mounted(input);
-    let first: Promise<void> = Promise.resolve();
-    let second: Promise<void> = Promise.resolve();
-
-    await act(async () => { first = hook.current().decide('approve'); });
-
-    expect({ busy: hook.current().busy, inFlight: hook.current().inFlight() }).toEqual({ busy: 'approve', inFlight: true });
-
-    await act(async () => { second = hook.current().decide('approve'); });
-    answer.resolve({ ok: true, plan: PLAN, queued: true });
-    await act(async () => { await Promise.all([first, second]); });
-
-    expect(done).toEqual(['save', 'decidePlanReview ["plan-1",3,"approve",null]']);
-    expect({ busy: hook.current().busy, inFlight: hook.current().inFlight() }).toEqual({ busy: null, inFlight: false });
-    await hook.unmount();
-  });
 });

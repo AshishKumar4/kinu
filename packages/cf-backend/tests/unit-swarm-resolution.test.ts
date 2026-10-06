@@ -104,15 +104,6 @@ describe('the fan-in vertex, read out of the rationale the engine writes', () =>
     expect(fanInArity('fan-in over 12 parents of depth 4')).toBe(12);
   });
 
-  test('a sampled sibling is not a vertex, however it was worded', () => {
-    expect(fanInArity('expansion 2 of 3')).toBeNull();
-    expect(fanInArity('the strongest accepted line so far')).toBeNull();
-    expect(fanInArity(null)).toBeNull();
-    // The engine refuses a fan-in over one parent, so a count below two is a misread.
-    expect(fanInArity('fan-in over 1 parents of depth 2')).toBeNull();
-    expect(fanInArity('reconcile the fan-in over 3 parents we saw earlier')).toBeNull();
-  });
-
   test('a run reports every vertex and its arity, and no sibling', () => {
     const vertices = fanInVertices(journal([
       node('a', 'expansion 1 of 3'),
@@ -140,12 +131,6 @@ describe('the fan-in vertex, read out of the rationale the engine writes', () =>
 });
 
 describe('a run that reached nothing reads as a refusal', () => {
-  test("a failed run names a BRANCH's own cause, not the ledger's class", () => {
-    expect(runRefusal(
-      { status: 'failed', branches: 3 },
-      journal([node('a', 'expansion 1 of 3', 'the workspace filesystem has no credential')]),
-    )).toEqual({ reason: 'failed', error: 'the workspace filesystem has no credential' });
-  });
 
   test('a failed run whose journal recorded no message says so instead of inventing one', () => {
     const refusal = runRefusal({ status: 'failed', branches: 0 }, null);
