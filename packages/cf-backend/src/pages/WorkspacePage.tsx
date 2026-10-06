@@ -14,7 +14,7 @@ import {
 } from "@kinu.run/core";
 import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, Rpc, TakePickOutcome } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
-import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
+import { useActorChat, useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
@@ -525,7 +525,7 @@ function SubordinateChatColumn({
   title: string;
   input: boolean;
 }) {
-  const state = useKinu({ workspace, subordinate: subName });
+  const state = useActorChat({ workspace, subordinate: subName });
   const live = state.liveness.kind === "live";
   const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
 
