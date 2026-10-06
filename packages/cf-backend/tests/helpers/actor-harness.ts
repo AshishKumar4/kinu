@@ -1486,8 +1486,13 @@ export interface RecordedUserPlaneCalls {
   failWarm: Error | null;
   /** Set to make `userMcp_toolDescriptors` reject with this error; unset, the read is unreachable. */
   failDescriptors?: Error;
-  /** The owner's MCP tools, served as the UserDO serves them; each call is recorded and answered by `answerMcp`. */
-  mcp?: { readonly descriptors: readonly SerializableToolDescriptor[]; readonly calls: Array<{ tool: string; args: JsonValue }>; readonly answer: JsonValue };
+  /** The owner's MCP tools, served as the UserDO serves them; each call is recorded and answered by `answerMcp`.
+   *  `cold`: the UserDO isolate holds no connection until a warm succeeds, and until then names the server
+   *  unavailable as `user/mcp-servers.ts` does, so only a warmed turn is offered its tools. */
+  mcp?: {
+    readonly descriptors: readonly SerializableToolDescriptor[]; readonly calls: Array<{ tool: string; args: JsonValue }>; readonly answer: JsonValue;
+    cold?: boolean;
+  };
   /** How many times the object asked for its tool descriptors. */
   descriptorReads?: number;
   /** Set to make the egress-vault listing reject; unset, it answers empty. */
@@ -1607,10 +1612,18 @@ export function makeEnv(
 
             if (userPlane?.failWarm) throw userPlane.failWarm;
 
+            if (userPlane?.mcp !== undefined) userPlane.mcp.cold = false;
+
             return { servers: 1 };
           },
           userMcp_toolDescriptors: async (): Promise<string> => {
             if (userPlane) userPlane.descriptorReads = (userPlane.descriptorReads ?? 0) + 1;
+
+            if (userPlane?.mcp?.cold === true) {
+              const servers = [...new Set(userPlane.mcp.descriptors.map((tool) => tool.serverName))];
+
+              return JSON.stringify({ descriptors: [], unavailable: servers.map((server) => ({ server, reason: 'not connected when this turn opened' })) });
+            }
 
             if (userPlane?.mcp !== undefined && userPlane.failDescriptors === undefined) {
               return JSON.stringify({ descriptors: userPlane.mcp.descriptors, unavailable: [] });
