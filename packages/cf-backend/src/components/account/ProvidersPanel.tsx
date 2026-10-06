@@ -414,10 +414,14 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
   const [accountName, setAccountName] = useState('');
   const [compatName, setCompatName] = useState('');
   const [compatBaseURL, setCompatBaseURL] = useState('');
+  const [compatWindow, setCompatWindow] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const named = accountName.trim().toLowerCase();
   const compat = selected?.id === COMPAT_ENTRY.id;
+  // Blank is unknown and leaves the field out; anything else must be a whole number of tokens.
+  const contextWindow = compatWindow.trim() === '' ? undefined : Number(compatWindow.trim());
+  const windowValid = contextWindow === undefined || (Number.isInteger(contextWindow) && contextWindow >= 1);
 
   const save = () => Effect.gen(function* () {
     if (!selected || !apiKey.trim()) return;
@@ -426,13 +430,15 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       if (compat) {
-        yield* Effect.promise(async () => setCredential(`openai-compat.${compatName.trim()}`, { kind: 'openai-compat', baseURL: compatBaseURL.trim(), apiKey: apiKey.trim() }));
+        yield* Effect.promise(async () => setCredential(`openai-compat.${compatName.trim()}`, {
+          kind: 'openai-compat', baseURL: compatBaseURL.trim(), apiKey: apiKey.trim(), ...(contextWindow !== undefined && { contextWindow }),
+        }));
       } else {
         yield* Effect.promise(async () => setCredential(named === '' ? selected.credKey : accountCredentialKey(selected.credKey, named), { kind: 'bearer', token: apiKey.trim() }));
       }
 
       setSelected(null);
-      setApiKey(''); setAccountName(''); setCompatName(''); setCompatBaseURL('');
+      setApiKey(''); setAccountName(''); setCompatName(''); setCompatBaseURL(''); setCompatWindow('');
       onChanged();
     }), showing(setError)), Effect.sync(() => {
       setSaving(false);
@@ -441,7 +447,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
 
   const target = selected === null || compat ? null : formKey(selected.credKey, named);
   const saveWord = creds.some((c) => c.key === target) ? 'Replace' : 'Save';
-  const ready = apiKey.trim() !== '' && (!compat || (compatName.trim() !== '' && compatBaseURL.trim() !== ''));
+  const ready = apiKey.trim() !== '' && (!compat || (compatName.trim() !== '' && compatBaseURL.trim() !== '' && windowValid));
 
   return (
     <Field label="Add an API key">
@@ -468,7 +474,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
         </Combobox.Content>
       </Combobox>
       {selected && (
-        <form className="flex flex-wrap gap-2" onSubmit={(event) => {
+        <form className="flex flex-wrap gap-2 [&>input]:h-9" onSubmit={(event) => {
           event.preventDefault();
 
           detach(save());
@@ -479,6 +485,9 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
                 aria-label="Endpoint name" className={`${inputCls} max-w-44`} />
               <input value={compatBaseURL} onChange={(e) => setCompatBaseURL(e.target.value)} placeholder="https://api.example.com/v1"
                 aria-label="Base URL" className={`${inputCls} min-w-0 flex-1`} />
+              <span className="basis-full" aria-hidden />
+              <input value={compatWindow} onChange={(e) => setCompatWindow(e.target.value)} inputMode="numeric" placeholder="context window, tokens (optional)"
+                aria-label="Context window in tokens" aria-invalid={windowValid ? undefined : true} className={`${inputCls} max-w-56`} />
             </>
           ) : (
             <input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="account (blank: main)"
@@ -496,6 +505,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
             className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">{saving ? '...' : saveWord}</button>
         </form>
       )}
+      {compat && !windowValid && <p className="text-xs p-danger">The context window is a whole number of tokens, or blank.</p>}
       {error && <p className="text-xs p-danger">{error}</p>}
     </Field>
   );
