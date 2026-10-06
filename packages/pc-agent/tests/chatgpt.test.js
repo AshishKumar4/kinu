@@ -341,7 +341,7 @@ describe('refresh', () => {
     expect(auth.calls.map((call) => [call.url, call.signal])).toEqual([[REVOKE_URL, undefined]]);
   });
 
-  test.each(chatgpt.UNUSABLE_REFRESH_CODES)('%s spends the session', async (code) => {
+  test.each(chatgpt.SPENT_REFRESH_CODES)('%s spends the session', async (code) => {
     const auth = authServer(await signer(), async () => Response.json({ error: code }, { status: 400 }));
     const refresh = chatgpt.refreshTokens({ clientId: 'oaiapp_issued', refreshToken: 'rt-1', fetch: auth.fetch });
 

@@ -1,8 +1,5 @@
 import { Data } from 'effect';
-
-const SPENT_REFRESH_CODES: readonly string[] = [
-  'invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
-];
+import { SPENT_REFRESH_CODES } from './chatgpt-protocol';
 
 /** An OAuth code distinguishes a terminal refusal from a transient failure. */
 export class OAuthTokenError extends Data.TaggedError('OAuthTokenError')<{ readonly message: string }> {

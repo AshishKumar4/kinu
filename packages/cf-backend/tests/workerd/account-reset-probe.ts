@@ -7,7 +7,8 @@ import { getAgentByName, type AgentContext } from 'agents';
 import { ownerCaller } from '@kinu.run/core';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { USER_DO_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
-import { UserDO, type UserProfile } from '../../src/user/user-do';
+import { UserDO } from '../../src/user/user-do';
+import { type UserProfile } from '../../src/user/profile';
 
 // Bound under production names: `deleteAccount` reaches workspaces through `env.OrchestratorAgent`.
 export * from '../../src/server';

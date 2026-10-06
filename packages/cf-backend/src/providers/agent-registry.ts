@@ -7,7 +7,7 @@ import {
   type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
-import type { CredentialSummary } from '../user/user-do';
+import type { CredentialSummary } from '../user/credentials';
 import { codexEgressFetch, deviceRouteFetch, type CodexEgressNamespace, type ModelRelayHub } from '../egress/codex-egress-route';
 
 /**

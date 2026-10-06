@@ -14,7 +14,7 @@ import {
 import { storedMcpOptionsCarryCredential } from '../src/user/mcp';
 import { createCredentialCipher, McpToolSurfaceSchema, validateMcpServerInput } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import type { McpToolSurface } from '../src/user/user-do';
+import type { McpToolSurface } from '../src/user/mcp-servers';
 import type { UserCaller } from '@kinu.run/core';
 import { refusedSseConnect, refusedToolCall } from './helpers/mcp-transport';
 import * as v from 'valibot';

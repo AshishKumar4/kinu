@@ -7,7 +7,7 @@ import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManag
 import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES } from '@kinu.run/core';
 import { isJsonObject } from '../../../core/src/utils/json';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
-import type { WorkspaceEntry, WorkspaceRegistration } from '../../src/user/user-do';
+import type { WorkspaceEntry, WorkspaceRegistration } from '../../src/user/workspaces';
 import {
   DeviceConsentRegistry,
   DeviceConsentStore,

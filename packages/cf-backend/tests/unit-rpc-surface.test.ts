@@ -105,8 +105,8 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
     unsealRpcSurface(harness.userDO);
     const stolenBySql = await callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials WHERE key = ?', 'github']);
     expect(JSON.stringify(stolenBySql)).not.toContain('ghp_the_owners_pat');
-    // A private credential read is reachable too; it answers with the effect that opens the row.
-    expect(rpcReachableFrom(harness.userDO)).toContain('readCredential');
+    // The vault's own reads live in its domain object, which no RPC reaches even unsealed.
+    expect(rpcReachableFrom(harness.userDO)).not.toContain('readCredential');
 
     sealRpcSurface(harness.userDO, USER_DO_RPC_SURFACE);
     await expect(callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials']))

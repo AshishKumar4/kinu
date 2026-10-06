@@ -1,6 +1,5 @@
-// Sign in with ChatGPT held by a Kinu deployment (developers.openai.com/siwc/token-sharing-open-source/sign-in, read
-// 2026-10-05): the owner signs in in any browser and pastes back the 127.0.0.1 address it ends on. The machine's
-// own sign-in is packages/pc-agent/src/chatgpt.js.
+// Sign in with ChatGPT held by a Kinu deployment: the owner signs in in any browser and pastes back the 127.0.0.1
+// address it ends on. The protocol is chatgpt-protocol.ts.
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { OAuthCredential } from '../credentials/store';
@@ -9,32 +8,16 @@ import type { SubscriptionIssuer } from './subscription-login';
 import { KinuError, settle, tolerate } from '../obs/index';
 import { createPkcePair, hmacSha256Hex, randomToken, timingSafeEqual } from '../utils/crypto';
 import { parseJsonValue } from '../utils/json';
-import { CHATGPT_BASE_URL } from './chatgpt';
+import {
+  DYNAMIC_AGENT_CLIENT, ISSUER, JWKS_URL, RESOURCE, REVOKE_URL, SCOPES, TOKEN_URL,
+  authorizeUrl, expiring, grantsPlan, idTokenIdentity, idTokenKeyId, idTokenSignatureVerifies, refreshedTokens, scopesOf, signedInTokens, tokenRefusal,
+  type IdToken, type IdTokenIdentity, type TokenAnswer,
+} from './chatgpt-protocol';
 
-const ISSUER = 'https://auth.openai.com';
+export const CHATGPT_REVOKE_URL = REVOKE_URL;
 
-const AUTHORIZE_URL = `${ISSUER}/api/accounts/authorize`;
-
-const TOKEN_URL = `${ISSUER}/api/accounts/oauth/token`;
-
-export const CHATGPT_REVOKE_URL = `${ISSUER}/api/accounts/oauth/revoke`;
-
-const JWKS_URL = `${ISSUER}/.well-known/jwks.json`;
-
-const PLAN_SCOPE = 'chatgpt.tokens.use.direct';
-
-const SCOPES = ['openid', 'profile', 'email', 'offline_access', 'resource.invoke', PLAN_SCOPE];
-
-const DYNAMIC_AGENT_CLIENT = 'dynamic_agent_client';
-
-const AGENT_NAME_HINT = 'Kinu';
-
-/** Nothing listens here: the browser's failed load leaves this address for the owner to paste back. */
+/** Nothing listens here: the failed load leaves this address to paste back. */
 export const CHATGPT_PASTE_REDIRECT = 'http://127.0.0.1:1455/auth/callback';
-
-const REFRESH_LEAD_MS = 5 * 60_000;
-
-const CLOCK_SKEW_SEC = 5;
 
 /** An account's issued client, kept across sign-outs so the next sign-in skips registration. */
 export const ChatGptRegistrationSchema = v.object({ clientId: v.string(), subject: v.string(), email: v.optional(v.nullable(v.string()), null) });
@@ -55,7 +38,7 @@ export type ChatGptPasteOutcome =
 
 const CredentialMetadataSchema = v.object({ clientId: v.string(), scopes: v.optional(v.array(v.string()), []) });
 
-const TokenAnswerSchema = v.looseObject({
+const TokenAnswerSchema = v.pipe(v.looseObject({
   access_token: v.optional(v.string()),
   refresh_token: v.optional(v.string()),
   id_token: v.optional(v.string()),
@@ -63,24 +46,25 @@ const TokenAnswerSchema = v.looseObject({
   scope: v.optional(v.string()),
   error: v.optional(v.string()),
   error_description: v.optional(v.string()),
-});
-
-type TokenAnswer = v.InferOutput<typeof TokenAnswerSchema>;
+}), v.transform((body): TokenAnswer => ({
+  accessToken: body.access_token, refreshToken: body.refresh_token, idToken: body.id_token, expiresIn: body.expires_in,
+  scope: body.scope, error: body.error, errorDescription: body.error_description,
+})));
 
 const JwksSchema = v.object({ keys: v.array(v.looseObject({ kty: v.string(), kid: v.optional(v.string()) })) });
 
-const JwtHeaderSchema = v.looseObject({ alg: v.string(), kid: v.string() });
+const JwtHeaderSchema = v.looseObject({ alg: v.optional(v.string()), kid: v.optional(v.string()) });
 
 const ClaimsSchema = v.looseObject({
-  iss: v.string(),
-  aud: v.union([v.string(), v.array(v.string())]),
-  exp: v.number(),
+  iss: v.optional(v.string()),
+  aud: v.optional(v.union([v.string(), v.array(v.string())])),
+  exp: v.optional(v.number()),
   nonce: v.optional(v.string()),
-  sub: v.pipe(v.string(), v.minLength(1)),
+  sub: v.optional(v.string()),
   email: v.optional(v.string()),
 });
 
-/** The deployment's one agent host (`ext_agent_host_id`): a UUID URN derived from its credential root, opaque and stable. */
+/** `ext_agent_host_id`: a UUID URN derived from the deployment's credential root, opaque and stable. */
 export async function chatgptHostId(credentialRoot: string): Promise<string> {
   const hex = (await hmacSha256Hex(credentialRoot, 'kinu chatgpt ext_agent_host_id')).slice(0, 32).split('');
 
@@ -91,7 +75,7 @@ export async function chatgptHostId(credentialRoot: string): Promise<string> {
   return `urn:uuid:${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
 }
 
-/** The authorize address for a paste-back sign-in, and what the account holds until the owner pastes it back. */
+/** The authorize address, and what the account holds until the owner pastes it back. */
 export async function startChatGptPasteSignIn(input: {
   readonly hostId: string;
   readonly registration: ChatGptRegistration | null;
@@ -101,23 +85,11 @@ export async function startChatGptPasteSignIn(input: {
   const held: ChatGptPasteSignIn = { state: randomToken(32), nonce: randomToken(32), verifier: pkce.verifier, registration: input.registration };
   const { registration } = input;
 
-  const params = new URLSearchParams({
-    client_id: registration?.clientId ?? DYNAMIC_AGENT_CLIENT,
-    ...(registration === null && { agent_name_hint: AGENT_NAME_HINT }),
-    ext_agent_host_id: input.hostId,
-    ...(registration?.email != null && { login_hint: registration.email }),
-    response_type: 'code',
-    redirect_uri: CHATGPT_PASTE_REDIRECT,
-    scope: SCOPES.join(' '),
-    resource: CHATGPT_BASE_URL,
-    state: held.state,
-    nonce: held.nonce,
-    code_challenge_method: 'S256',
-    code_challenge: pkce.challenge,
-    ...(input.consent && { prompt: 'consent' }),
+  const url = authorizeUrl({
+    registration, hostId: input.hostId, redirectUri: CHATGPT_PASTE_REDIRECT, state: held.state, nonce: held.nonce, challenge: pkce.challenge, consent: input.consent,
   });
 
-  return { url: `${AUTHORIZE_URL}?${params.toString()}`, held };
+  return { url, held };
 }
 
 function tokenCall(fetchFn: typeof fetch, fields: Readonly<Record<string, string>>, doing: string): Effect.Effect<TokenAnswer, KinuError> {
@@ -137,13 +109,12 @@ function tokenCall(fetchFn: typeof fetch, fields: Readonly<Record<string, string
     });
 
     const parsed = v.safeParse(TokenAnswerSchema, tolerate<unknown>(() => parseJsonValue(text), 'malformed-input'));
-    const answer: TokenAnswer = parsed.success ? parsed.output : {};
+    const answer = parsed.success ? parsed.output : v.parse(TokenAnswerSchema, {});
 
     if (!res.ok) {
-      const code = answer.error ?? 'unknown';
-      const detail = answer.error_description === undefined ? '' : `: ${answer.error_description}`;
+      const refusal = tokenRefusal(res.status, answer, doing);
 
-      return yield* Effect.die(new OAuthTokenError('chatgpt', code, `auth.openai.com refused ${doing} (HTTP ${String(res.status)} ${code})${detail}`));
+      return yield* Effect.die(new OAuthTokenError('chatgpt', refusal.code ?? 'unknown', refusal.message));
     }
 
     return answer;
@@ -154,32 +125,31 @@ const signingKeys = new Map<string, CryptoKey>();
 
 function signingKey(kid: string, fetchFn: typeof fetch): Effect.Effect<CryptoKey, KinuError> {
   return Effect.gen(function* () {
-    const known = signingKeys.get(kid);
-
-    if (known !== undefined) return known;
-
-    const res = yield* Effect.tryPromise({
-      try: () => fetchFn(JWKS_URL, { headers: { accept: 'application/json' } }),
-      catch: (cause) => new KinuError('unavailable', 'auth.openai.com\'s signing keys could not be read', { cause }),
-    });
-
-    const published = v.safeParse(JwksSchema, yield* Effect.tryPromise({
-      try: () => res.json(),
-      catch: (cause) => new KinuError('unavailable', 'auth.openai.com\'s signing keys could not be read', { cause }),
-    }));
-
-    if (!res.ok || !published.success) return yield* Effect.fail(new KinuError('unavailable', `auth.openai.com's signing keys could not be read (HTTP ${String(res.status)})`));
-
-    for (const jwk of published.output.keys) {
-      if (jwk.kty !== 'RSA' || jwk.kid === undefined) continue;
-      const id = jwk.kid;
-
-      const key = yield* Effect.tryPromise({
-        try: () => crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']),
-        catch: (cause) => new KinuError('io', `auth.openai.com published an unusable signing key ${id}`, { cause }),
+    if (!signingKeys.has(kid)) {
+      const res = yield* Effect.tryPromise({
+        try: () => fetchFn(JWKS_URL, { headers: { accept: 'application/json' } }),
+        catch: (cause) => new KinuError('unavailable', 'auth.openai.com\'s signing keys could not be read', { cause }),
       });
 
-      signingKeys.set(id, key);
+      if (!res.ok) return yield* Effect.fail(new KinuError('unavailable', `auth.openai.com's signing keys could not be read (HTTP ${String(res.status)})`));
+
+      const published = v.safeParse(JwksSchema, yield* Effect.tryPromise({
+        try: () => res.json(),
+        catch: (cause) => new KinuError('unavailable', 'auth.openai.com\'s signing keys could not be read', { cause }),
+      }));
+
+      if (!published.success) return yield* Effect.fail(new KinuError('unavailable', 'auth.openai.com\'s signing keys could not be read'));
+
+      for (const jwk of published.output.keys) {
+        const id = jwk.kid;
+
+        if (jwk.kty !== 'RSA' || id === undefined) continue;
+
+        signingKeys.set(id, yield* Effect.tryPromise({
+          try: () => crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']),
+          catch: (cause) => new KinuError('io', `auth.openai.com published an unusable signing key ${id}`, { cause }),
+        }));
+      }
     }
 
     const key = signingKeys.get(kid);
@@ -190,53 +160,45 @@ function signingKey(kid: string, fetchFn: typeof fetch): Effect.Effect<CryptoKey
   });
 }
 
-function base64UrlBytes(segment: string): Uint8Array<ArrayBuffer> {
-  const padded = segment.replace(/-/g, '+').replace(/_/g, '/');
+function base64UrlText(segment: string): string {
+  const padded = segment.replaceAll('-', '+').replaceAll('_', '/');
 
-  return Uint8Array.from(atob(padded + '='.repeat((4 - (padded.length % 4)) % 4)), (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(Uint8Array.from(atob(padded + '='.repeat((4 - (padded.length % 4)) % 4)), (char) => char.charCodeAt(0)));
 }
 
 function jwtPart<T extends v.GenericSchema>(schema: T, segment: string): Effect.Effect<v.InferOutput<T>, KinuError> {
   return Effect.try({
-    try: () => v.parse(schema, parseJsonValue(new TextDecoder().decode(base64UrlBytes(segment)))),
+    try: () => v.parse(schema, parseJsonValue(base64UrlText(segment))),
     catch: (cause) => new KinuError('denied', 'the ID token is not a JWT this sign-in can read', { cause }),
   });
 }
 
-/** OpenAI's signature, the issuer, the audience (the issued client), expiry and this attempt's nonce. */
-function verifiedIdentity(idToken: string, input: { readonly clientId: string; readonly nonce: string; readonly fetch: typeof fetch }): Effect.Effect<{ subject: string; email: string | null }, KinuError> {
+function verifiedIdentity(idToken: string, input: { readonly clientId: string; readonly nonce: string; readonly fetch: typeof fetch }): Effect.Effect<IdTokenIdentity, KinuError> {
   return Effect.gen(function* () {
     const [head = '', body = '', signature = ''] = idToken.split('.');
     const header = yield* jwtPart(JwtHeaderSchema, head);
     const claims = yield* jwtPart(ClaimsSchema, body);
 
-    if (header.alg !== 'RS256') return yield* Effect.fail(new KinuError('denied', `the ID token is signed with ${header.alg}, not RS256`));
-    const key = yield* signingKey(header.kid, input.fetch);
+    const token: IdToken = {
+      algorithm: header.alg, keyId: header.kid, issuer: claims.iss, audience: claims.aud === undefined ? [] : [claims.aud].flat(),
+      expires: claims.exp, nonce: claims.nonce, subject: claims.sub, email: claims.email,
+    };
+
+    const named = idTokenKeyId(token);
+
+    if ('problem' in named) return yield* Effect.fail(new KinuError('denied', `The ID token was refused: ${named.problem}`));
+    const key = yield* signingKey(named.keyId, input.fetch);
 
     const verified = yield* Effect.tryPromise({
-      try: () => crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, base64UrlBytes(signature), new TextEncoder().encode(`${head}.${body}`)),
+      try: () => idTokenSignatureVerifies(key, `${head}.${body}`, signature),
       catch: (cause) => new KinuError('denied', 'the ID token signature could not be checked', { cause }),
     });
 
-    const audience = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+    if (!verified) return yield* Effect.fail(new KinuError('denied', 'The ID token was refused: its signature does not verify against auth.openai.com\'s keys'));
+    const identity = idTokenIdentity(token, { clientId: input.clientId, nonce: input.nonce, now: Date.now() });
 
-    const refusal = ([
-      [!verified, 'its signature does not verify against auth.openai.com\'s keys'],
-      [claims.iss !== ISSUER, `it was issued by ${claims.iss}`],
-      [!audience.includes(input.clientId), 'it was issued to another client'],
-      [claims.exp + CLOCK_SKEW_SEC < Date.now() / 1000, 'it has expired'],
-      [claims.nonce !== input.nonce, 'it does not answer this sign-in (nonce mismatch)'],
-    ] as const).find(([failed]) => failed)?.[1];
-
-    if (refusal !== undefined) return yield* Effect.fail(new KinuError('denied', `The ID token was refused: ${refusal}`));
-
-    return { subject: claims.sub, email: claims.email ?? null };
+    return 'problem' in identity ? yield* Effect.fail(new KinuError('denied', `The ID token was refused: ${identity.problem}`)) : identity;
   });
-}
-
-/** RFC 6749 §5.1: an answer without `scope` granted what was asked, or on refresh what the grant held. */
-function scopesOf(scope: string | undefined, whenAbsent: readonly string[]): string[] {
-  return (scope === undefined ? [...whenAbsent] : scope.split(' ').filter(Boolean)).sort();
 }
 
 /** The owner's pasted address, checked against the sign-in it must answer. */
@@ -273,7 +235,6 @@ function returnedCode(returned: string, held: ChatGptPasteSignIn): Effect.Effect
     : Effect.succeed({ code, clientId: held.registration.clientId });
 }
 
-/** Exchanges the pasted address's code with PKCE and checks the ID token and the granted scopes. */
 export function finishChatGptPasteSignIn(held: ChatGptPasteSignIn, returned: string, fetchFn: typeof fetch = fetch): Promise<ChatGptPasteOutcome> {
   return settle(Effect.gen(function* () {
     const answered = yield* returnedCode(returned, held);
@@ -282,40 +243,34 @@ export function finishChatGptPasteSignIn(held: ChatGptPasteSignIn, returned: str
     const { code, clientId } = answered;
 
     const answer = yield* tokenCall(fetchFn, {
-      grant_type: 'authorization_code', client_id: clientId, code, code_verifier: held.verifier, redirect_uri: CHATGPT_PASTE_REDIRECT, resource: CHATGPT_BASE_URL,
+      grant_type: 'authorization_code', client_id: clientId, code, code_verifier: held.verifier, redirect_uri: CHATGPT_PASTE_REDIRECT, resource: RESOURCE,
     }, 'the sign-in code');
 
     const at = Date.now();
 
-    if (answer.id_token === undefined) return yield* Effect.fail(new KinuError('denied', 'auth.openai.com answered the sign-in without an ID token'));
-    const identity = yield* verifiedIdentity(answer.id_token, { clientId, nonce: held.nonce, fetch: fetchFn });
+    if (answer.idToken === undefined) return yield* Effect.fail(new KinuError('denied', 'auth.openai.com answered the sign-in without an ID token'));
+    const identity = yield* verifiedIdentity(answer.idToken, { clientId, nonce: held.nonce, fetch: fetchFn });
 
     if (held.registration !== null && held.registration.subject !== identity.subject) {
       return yield* Effect.fail(new KinuError('denied', 'The browser signed in to a different ChatGPT account than this account\'s registration'));
     }
 
     const registration: ChatGptRegistration = { clientId, subject: identity.subject, email: identity.email };
-    const scopes = scopesOf(answer.scope, SCOPES);
 
-    if (!scopes.includes(PLAN_SCOPE)) return { outcome: 'plan_declined', registration } as const;
+    if (!grantsPlan(scopesOf(answer.scope, SCOPES))) return { outcome: 'plan_declined', registration } as const;
+    const tokens = signedInTokens(answer, at);
 
-    if (answer.access_token === undefined || answer.refresh_token === undefined) {
-      return yield* Effect.fail(new KinuError('denied', 'auth.openai.com answered the sign-in without an access and a refresh token'));
-    }
+    if ('problem' in tokens) return yield* Effect.fail(new KinuError('denied', tokens.problem));
+    const { scopes, ...granted } = tokens;
 
     const credential: OAuthCredential = {
-      kind: 'oauth',
-      accessToken: answer.access_token,
-      refreshToken: answer.refresh_token,
-      ...(answer.expires_in !== undefined && { expiresAt: at + answer.expires_in * 1_000 }),
-      metadata: { ...registration, issuer: ISSUER, idToken: answer.id_token, scopes },
+      kind: 'oauth', ...granted, metadata: { ...registration, issuer: ISSUER, idToken: answer.idToken, scopes },
     };
 
     return { outcome: 'signed_in', registration, credential } as const;
   }));
 }
 
-/** The registration a stored ChatGPT login carries, for the next sign-in to the same account. */
 export function chatgptRegistrationOf(credential: OAuthCredential | null): ChatGptRegistration | null {
   const parsed = v.safeParse(ChatGptRegistrationSchema, credential?.metadata);
 
@@ -325,7 +280,7 @@ export function chatgptRegistrationOf(credential: OAuthCredential | null): ChatG
 /** Renews with the login's issued client; a spent refresh token rejects as a revoked `OAuthTokenError`. */
 export function chatgptLoginIssuer(): SubscriptionIssuer {
   return {
-    expiring: (credential) => credential.expiresAt === undefined || Date.now() + REFRESH_LEAD_MS >= credential.expiresAt,
+    expiring: (credential) => expiring(credential, Date.now()),
     refresh: (credential, fetchFn = fetch) => settle(Effect.gen(function* () {
       const held = v.safeParse(CredentialMetadataSchema, credential.metadata);
       const refreshToken = credential.refreshToken;
@@ -336,20 +291,15 @@ export function chatgptLoginIssuer(): SubscriptionIssuer {
 
       // `scope` stays out so the grant keeps what it had.
       const answer = yield* tokenCall(fetchFn, {
-        grant_type: 'refresh_token', client_id: held.output.clientId, refresh_token: refreshToken, resource: CHATGPT_BASE_URL,
+        grant_type: 'refresh_token', client_id: held.output.clientId, refresh_token: refreshToken, resource: RESOURCE,
       }, 'the refresh');
 
-      if (answer.access_token === undefined) {
-        return yield* Effect.die(new OAuthTokenError('chatgpt', 'unknown', 'auth.openai.com renewed the ChatGPT login without an access token'));
-      }
+      const tokens = refreshedTokens(answer, { refreshToken, scopes: held.output.scopes }, Date.now());
 
-      return {
-        kind: 'oauth',
-        accessToken: answer.access_token,
-        refreshToken: answer.refresh_token ?? refreshToken,
-        ...(answer.expires_in !== undefined && { expiresAt: Date.now() + answer.expires_in * 1_000 }),
-        metadata: { ...credential.metadata, scopes: scopesOf(answer.scope, held.output.scopes) },
-      } satisfies OAuthCredential;
+      if ('problem' in tokens) return yield* Effect.die(new OAuthTokenError('chatgpt', 'unknown', tokens.problem));
+      const { scopes, ...renewed } = tokens;
+
+      return { kind: 'oauth', ...renewed, metadata: { ...credential.metadata, scopes } } satisfies OAuthCredential;
     })),
   };
 }

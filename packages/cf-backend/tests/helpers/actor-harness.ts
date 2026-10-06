@@ -27,7 +27,9 @@ import { sqlOver } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
-import type { McpToolCall, UserDO, UserProfile } from '../../src/user/user-do';
+import type { UserDO } from '../../src/user/user-do';
+import type { UserProfile } from '../../src/user/profile';
+import type { McpToolCall } from '../../src/user/mcp-servers';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
   actorReferenceOf,

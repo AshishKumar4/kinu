@@ -1,4 +1,4 @@
-import type { WorkspaceEntry } from '../user/user-do';
+import type { WorkspaceEntry } from '../user/workspaces';
 
 /** The owner's other workspaces as cross-workspace peers — self excluded. */
 export function teamPeers(
