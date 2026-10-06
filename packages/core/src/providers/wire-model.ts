@@ -28,6 +28,13 @@ export function gatewayWire(modelId: string): GatewayWire {
   return { protocol: 'chat-completions', modelId };
 }
 
+/** The API an AI SDK package speaks (models.dev and OpenCode name a model's by its npm package); reasoning never picks it. */
+export function sdkWire(npm: string | undefined): WireProtocol {
+  if (npm === '@ai-sdk/openai') return 'responses';
+
+  return npm === '@ai-sdk/anthropic' ? 'messages' : 'chat-completions';
+}
+
 /** The API a route's provider fixes for its model, null where the catalog decides per model. */
 export function routeProtocol(providerId: string | undefined, modelId: string | undefined): WireProtocol | null {
   if (providerId === 'anthropic' || providerId === 'claude') return 'messages';
