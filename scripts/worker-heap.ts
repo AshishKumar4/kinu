@@ -191,9 +191,49 @@ const SnapshotSchema = v.object({
 });
 
 /** One inspector session on the product isolate. */
+interface ProfileNode {
+  readonly callFrame: { readonly functionName: string; readonly url: string; readonly lineNumber: number };
+  readonly selfSize: number;
+  readonly children: readonly ProfileNode[];
+}
+
+const ProfileNodeSchema: v.GenericSchema<ProfileNode> = v.object({
+  callFrame: v.object({ functionName: v.string(), url: v.string(), lineNumber: v.number() }),
+  selfSize: v.number(),
+  children: v.array(v.lazy(() => ProfileNodeSchema)),
+});
+
+const SamplingReplySchema = v.object({ result: v.object({ profile: v.object({ head: ProfileNodeSchema }) }) });
+
+interface Allocations {
+  readonly total: number;
+  readonly sites: readonly { readonly site: string; readonly bytes: number }[];
+}
+
+/** Every sampled allocation by the function that made it, collected or not: the churn, not what stays. */
+function allocationSites(head: ProfileNode): Allocations {
+  const bySite = new Map<string, number>();
+  const pending = [head];
+  let total = 0;
+
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    const { functionName, url, lineNumber } = node.callFrame;
+    const site = `${functionName === '' ? '(anonymous)' : functionName} ${url.split('/').slice(-2).join('/')}:${String(lineNumber + 1)}`;
+    bySite.set(site, (bySite.get(site) ?? 0) + node.selfSize);
+    total += node.selfSize;
+    pending.push(...node.children);
+  }
+
+  const sites = [...bySite].map(([site, bytes]) => ({ site, bytes })).sort((a, b) => b.bytes - a.bytes).slice(0, 15);
+
+  return { total, sites };
+}
+
 async function inspect(port: number): Promise<{
   readonly usedHeap: () => Promise<number>;
   readonly liveHeap: () => Promise<number>;
+  readonly sampleAllocations: () => Promise<void>;
+  readonly allocations: () => Promise<Allocations>;
   readonly close: () => void;
 }> {
   const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
@@ -226,11 +266,11 @@ async function inspect(port: number): Promise<{
   await opened.promise;
 
   /** The raw reply, which each caller parses for the field it asked for. */
-  const send = (method: string): Promise<string> => {
+  const send = (method: string, params?: Readonly<Record<string, number | boolean>>): Promise<string> => {
     next += 1;
     const answer = Promise.withResolvers<string>();
     replies.set(next, answer.resolve);
-    socket.send(JSON.stringify({ id: next, method }));
+    socket.send(JSON.stringify({ id: next, method, ...(params !== undefined && { params }) }));
 
     return answer.promise;
   };
@@ -252,6 +292,10 @@ async function inspect(port: number): Promise<{
 
       return live;
     },
+    sampleAllocations: async () => {
+      await send('HeapProfiler.startSampling', { samplingInterval: 65_536, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
+    },
+    allocations: async () => allocationSites(v.parse(SamplingReplySchema, JSON.parse(await send('HeapProfiler.stopSampling'))).result.profile.head),
     close: () => { socket.close(); },
   };
 }
@@ -295,6 +339,7 @@ export interface HeapMeasurement {
   readonly longTurnPeak: number;
   /** What {@link LONG_TURN} holds live at its last model call beyond its first. */
   readonly longTurnGrowth: number;
+  readonly longTurnAllocated: Allocations;
   /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
   readonly wide: readonly string[];
 }
@@ -399,6 +444,7 @@ export async function measure(): Promise<HeapMeasurement> {
 
       await ask('/?workspace=long&compat=1');
       await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
+      await inspector.sampleAllocations();
       const long = ask('/turn?workspace=long&text=long');
       let longTurnPeak = 0;
       let firstLive = 0;
@@ -416,6 +462,7 @@ export async function measure(): Promise<HeapMeasurement> {
       }
 
       await long;
+      const longTurnAllocated = await inspector.allocations();
 
       // A root turn returns once it has hired; its helpers' turns end with their runners, each after its release.
       const noRunners = async (left: number): Promise<void> => {
@@ -470,7 +517,7 @@ export async function measure(): Promise<HeapMeasurement> {
       await noRunners(0);
       await ask('/model?hires=0&nest=0');
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, wide };
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, wide };
     } finally {
       inspector.close();
     }
@@ -505,13 +552,11 @@ async function main(args: readonly string[]): Promise<number> {
   // One character above U+00FF stores a whole module's retained source two bytes per character.
   const wide = graph.filter((module) => module.endsWith('.js') && isWide(readFileSync(join(DIST, module), 'utf8')));
   const measured = await measure();
-  // Report only, until the owner decides which shape the peak row reads: the same run with V8's heap capped at the
-  // isolate's 128 MB, as a deployed Worker runs it (developers.cloudflare.com/workers/platform/limits, read 2026-10-06).
-  process.env.MINIFLARE_WORKERD_V8_FLAGS = '--max-heap-size=128';
-  const capped = await measure();
-  delete process.env.MINIFLARE_WORKERD_V8_FLAGS;
-  console.log(`${GATE}: under a 128 MB V8 heap the ${String(LONG_TURN.steps)}-step turn completed, peaking at ${mb(capped.longTurnPeak)} used `
-    + `and growing ${mb(capped.longTurnGrowth)} live; the uncapped run peaked at ${mb(measured.longTurnPeak)}`);
+  // A deployed object dies of allocation bursts, not only of what it keeps (platform-catalog `worker.memory_kill_is_burst_sensitive`),
+  // so the long turn's churn is named by the code that makes it.
+  console.log(`${GATE}: the ${String(LONG_TURN.steps)}-step turn allocated ${mb(measured.longTurnAllocated.total)}; most by`);
+
+  for (const site of measured.longTurnAllocated.sites) console.log(`  ${mb(site.bytes).padStart(9)}  ${site.site}`);
   const findings: string[] = [];
 
   if (wide.length > 0) findings.push(`${wide.join(', ')} carry characters outside ASCII, which V8 keeps two bytes each`);

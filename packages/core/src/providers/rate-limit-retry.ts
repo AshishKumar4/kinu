@@ -23,6 +23,9 @@ const MAX_RETRY_DELAY_MS = 60_000;
 /** This call's retries; never sent upstream. */
 export const PROVIDER_RETRIES_HEADER = 'x-kinu-retries';
 
+/** Set by the call that streams, so the silence bound applies without parsing the request; never sent upstream. */
+export const PROVIDER_STREAM_HEADER = 'x-kinu-stream';
+
 /** What a provider that rebuilds a request keeps of the caller's: its retry allowance and its cancel. */
 export interface TransportControls {
   readonly headers: Readonly<Record<string, string>>;
@@ -30,12 +33,16 @@ export interface TransportControls {
 }
 
 export function transportControls(requested: Pick<RequestInit, 'headers' | 'signal'> | undefined): TransportControls {
-  const retries = copyHeaders(requested?.headers).get(PROVIDER_RETRIES_HEADER);
+  const given = copyHeaders(requested?.headers);
 
-  return { headers: retries === null ? {} : { [PROVIDER_RETRIES_HEADER]: retries }, signal: requested?.signal ?? null };
+  const kept = [PROVIDER_RETRIES_HEADER, PROVIDER_STREAM_HEADER].flatMap((name) => {
+    const value = given.get(name);
+
+    return value === null ? [] : [[name, value] as const];
+  });
+
+  return { headers: Object.fromEntries(kept), signal: requested?.signal ?? null };
 }
-
-const StreamRequestSchema = v.looseObject({ stream: v.literal(true) });
 
 export interface RateLimitRetryOptions {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -69,18 +76,17 @@ export function withRateLimitRetry(
       const headers = copyHeaders(requested?.headers);
       const stated = headers.get(PROVIDER_RETRIES_HEADER);
       const retries = stated === null ? DEFAULT_PROVIDER_RETRIES : Number(stated);
+      const streams = headers.get(PROVIDER_STREAM_HEADER) !== null;
 
       headers.delete(PROVIDER_RETRIES_HEADER);
-      const init: RequestInit | undefined = stated === null ? requested : { ...requested, headers };
+      headers.delete(PROVIDER_STREAM_HEADER);
+      const init: RequestInit | undefined = stated === null && !streams ? requested : { ...requested, headers };
 
       if (!hasReplayableBody(input, init)) return yield* Effect.promise(() => fetchImpl(input, init));
 
       const host = providerHost(input);
       const lane = opts.lane === undefined ? host : `${host} ${opts.lane}`;
       const signal = init?.signal ?? undefined;
-
-      const body = v.safeParse(v.string(), init?.body);
-      const streams = body.success && v.is(StreamRequestSchema, tolerate<unknown>(() => JSON.parse(body.output), 'malformed-input'));
 
       const stalled = (): APICallError => new APICallError({
         message: `${opts.provider ?? host} sent nothing for ${fmtSpan(silenceBoundMs('provider.stream.idle_ms'))}`,
