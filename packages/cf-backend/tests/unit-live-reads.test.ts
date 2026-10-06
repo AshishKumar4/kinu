@@ -66,6 +66,7 @@ const MOVED_ELSEWHERE = new Map([
   ['sqlite_master', 'schema probe'],
   ['workspace_actors', 'identity lookup'],
   ['workspace_identity', 'identity lookup'],
+  ['memory_note_files', 'the memory read looks at its note\'s stamp only to re-index it; it answers the note, whose file events name it'],
   ['conversation_entries', "the work mode follows the root's own turns, and every page re-reads at turn end"],
   ['run_events', 'the changelog reads only promotions and rollbacks, each written with its scaffold_versions row; '
     + "the agents list reads each agent's figures, which move when its turn settles its actor_turn_claims row"],

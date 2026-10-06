@@ -78,16 +78,14 @@ import {
   type WorkspaceSpend,
   type AccountSpend,
   MEMORY_PATH,
-  WORKSPACE_ROOT,
-  readMission,
-  searchMemoryChunks,
+  missionOf,
   type MemorySearchResult,
 } from '@kinu.run/core';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { classify, tolerateAsync } from '@kinu.run/core/obs';
 import {
   agentStateFiles, makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
-  openWorkspaceCLI, resolverModelPlane,
+  openWorkspaceCLI, resolverModelPlane, soulOf, workspaceMemory,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveLocalAgent } from './config';
@@ -238,18 +236,17 @@ export async function readLocalNextTurnTier(name: string, opts: LocalModelResolv
   });
 }
 
-/** The file itself, through the read-only plane; `memory_chunks` is the search index and can lag an edit. */
+/** The note itself, a real file of main's home; `memory_note_chunks` is the search index. */
 export function readLocalMemory(name: string): Promise<string> {
-  return withLocalDbAsync(name, async (db) =>
-    await tolerateAsync(() => readText(agentStateFiles(db), `${WORKSPACE_ROOT}/${MEMORY_PATH}`), 'enoent') ?? '');
+  return withLocalDbAsync(name, async (db) => await tolerateAsync(() => readText(agentStateFiles(db), MEMORY_PATH), 'enoent') ?? '');
 }
 
 /** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */
-/** The agent's own ranked search over the same index. */
-export function searchLocalMemory(name: string, query: string, limit = 10): MemorySearchResult[] {
+/** The agent's own search, as its memory tool runs it: a note a shell changed is indexed again first, so its new words are found. */
+export function searchLocalMemory(name: string, query: string, limit = 10): Promise<MemorySearchResult[]> {
   const window = boundedInt(limit, 10, 1, Number.MAX_SAFE_INTEGER);
 
-  return withLocalDb(name, (db) => tableExists(db, 'memory_chunks_fts') ? searchMemoryChunks(makeSql(db), query, window) : []);
+  return withLocalDbAsync(name, async (db) => workspaceMemory(db).search(query, window), 'repair');
 }
 
 export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {
@@ -633,8 +630,8 @@ export async function executeLocalExecutor(name: string, executorId: string, com
   }, 'write');
 }
 
-/** A read refuses a database another schema genesis wrote; a write opens it as it stands. */
-type DbMode = 'read' | 'write';
+/** A read, and a write that repairs a derived index, refuse a database another schema genesis wrote; a write opens it as it stands. */
+type DbMode = 'read' | 'repair' | 'write';
 
 function openLocalDb(name: string, mode: DbMode): SqliteDb {
   const dbPath = agentDbPath(name);
@@ -813,8 +810,8 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
       db, `SELECT name, created_at FROM workspace_identity LIMIT 1`).at(0)
     : null;
 
-  // Off the soul's row, not SOUL.md: opening the workspace filesystem writes.
-  const mission = readMission(makeSql(db));
+  // SOUL.md read where it lies in the workspace's space, without opening a filesystem.
+  const mission = missionOf(soulOf(db));
 
   return {
     name: identity?.name ?? null,

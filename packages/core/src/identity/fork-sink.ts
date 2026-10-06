@@ -1,4 +1,4 @@
-/** Where a fork's files land on the target: Nimbus imports, and SOUL.md's protected write. */
+/** Where a fork's files land on the target: Nimbus imports. */
 
 import type { VfsExportChunk, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
@@ -10,8 +10,6 @@ export interface ForkFileSink {
    * naming chunks the target holds neither staged nor stored writes nothing and lists them in `want`.
    */
   importPage(dst: string, page: VfsExportPage): Promise<{ want: string[]; done: boolean }>;
-  /** SOUL.md's bytes, written as the owner writes them. */
-  publishSoul(bytes: Uint8Array): Promise<void>;
   /** Recursive; a missing path is not an error. */
   remove(paths: readonly string[]): Promise<void>;
 }

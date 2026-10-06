@@ -6,7 +6,8 @@ import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { OutputSink, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { collectExecStream, type ExecChunk, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
-import type { MountedVfs } from '../vfs/mounts';
+import type { VfsMount, WorkspacePrincipal } from '../vfs/mounts';
+import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { atVfsPath } from '../vfs/errno';
 import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { workspacePath } from '../vfs/workspace-path';
@@ -129,9 +130,9 @@ export interface NimbusSandboxFiles {
     /** Whole-file write; no precondition, so no compare-and-write. */
     write(path: string, content: string | Uint8Array): Promise<void>;
     list(path?: string): Promise<Array<{ name: string; type?: string; isDir?: boolean; size?: number }>>;
-    /** Native stat (SDK ≥0.2.0). `mtime` is in milliseconds; null when absent. No revision field. */
-    stat?(path: string): Promise<{ type: string; size: number; mtime: number } | null>;
-    lstat?(path: string): Promise<{ type: string; size: number; mtime: number; mode?: number } | null>;
+    /** Native stat (SDK ≥0.2.0). `mtime` and `ctime` are in milliseconds; null when absent. No revision or inode field. */
+    stat?(path: string): Promise<{ type: string; size: number; mtime: number; ctime?: number } | null>;
+    lstat?(path: string): Promise<{ type: string; size: number; mtime: number; ctime?: number; mode?: number } | null>;
     /** A link's target text; null when the path is absent. */
     readlink?(path: string): Promise<string | null>;
     rename?(from: string, to: string): Promise<void>;
@@ -168,7 +169,8 @@ export interface NimbusSandboxHandle {
     url?(port: number): string | undefined;
   };
   /** See `WorkspaceBundle.mountTable`; absent on a remote box. */
-  mountTable?(plane: MountedVfs, cred?: VfsCred): () => void;
+  mountTable?(mounts: readonly VfsMount[], principal?: WorkspacePrincipal): () => void;
+  namespace?(principal?: WorkspacePrincipal): Promise<CompositeVFS>;
 }
 
 export interface NimbusSessionOpts {
@@ -812,8 +814,10 @@ export function nimbusSessionFiles(
 
         if (stat === null) return null;
         const type = stat.type === 'symlink' ? 'symlink' as const : 'file' as const;
+        // The change time moves on every write and no caller sets it: what a note's stamp is told apart by.
+        const changed = stat.ctime === undefined ? {} : { ctimeMs: stat.ctime };
 
-        return { size: stat.size, mtimeMs: stat.mtime, type: stat.type === 'directory' ? 'directory' : type };
+        return { size: stat.size, mtimeMs: stat.mtime, ...changed, type: stat.type === 'directory' ? 'directory' : type };
       }
 
       const result = await box.exec(`stat -c '%s %Y %F' ${shellQuote(absolute)}`, asCred(cred));

@@ -6,7 +6,9 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { DefaultExecutionRouter } from '../src/execution/router';
-import { gateProviderExec, withApprovalGatedShell } from '../src/execution/approval';
+import { gateProviderExec, withApprovalGatedFiles, withApprovalGatedShell } from '../src/execution/approval';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { cloudPlanes } from '../src/vfs/resolve';
 import { shellExecOptions } from '../src/execution/shell-session';
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
@@ -14,7 +16,7 @@ import { type FilesOwner } from '../src/safety/command-review';
 import { type ShellApprovalPolicy, type ShellApprovalRequest } from '../src/safety/approval-gate';
 import { createShellSession } from '../src/execution/shell-session';
 
-import { withMountTable } from '../src/vfs/mounts';
+import { withMountTable, workspaceFilePlane } from '../src/vfs/mounts';
 import { skillsMount } from '../src/skills/view';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { present } from '@kinu.run/test-utils';
@@ -390,8 +392,11 @@ function workspaceOverDevice() {
   const db = new Database(':memory:');
   const workspace = createWorkspaceBundle(db);
   const { device, removed } = deviceProject();
-  const mounted = withMountTable(workspace.vfs, [{ name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' }]);
-  workspace.mountTable(mounted);
+
+  const { files: mounted } = workspaceFilePlane(workspace, {
+    mounts: [{ name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' }], principal: {}, home: WORKSPACE_ROOT,
+  });
+
   const asked: string[] = [];
 
   const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots() });
@@ -405,10 +410,43 @@ function workspaceOverDevice() {
     },
   });
 
-  return { db, shell, asked, removed };
+  return { db, shell, asked, removed, workspace, mounted, device };
 }
 
 describe('a workspace shell over the user\'s mounts', () => {
+  // A link of the agent's own home into the user's machine: the file is the user's wherever the agent names it from.
+  test('a write through a link into /pc is the user\'s file, asked as one, and an unanswered one changes nothing', async () => {
+    const { db, workspace, mounted, device } = workspaceOverDevice();
+    const written: string[] = [];
+    const asked: string[] = [];
+
+    const kernel = (await workspace.session()).vfs.as(CRED_SESSION_USER);
+
+    device.writeFile = async (path) => { written.push(path); };
+
+    kernel.symlink('/pc/proj', `${WORKSPACE_ROOT}/pc-link`);
+
+    const deny = async (request: { command: string }): Promise<'deny'> => {
+      asked.push(request.command);
+
+      return 'deny';
+    };
+
+    const files = withApprovalGatedFiles(mounted, 'workspace', {
+      planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow) => mounted.resolve(path, { follow }),
+      userRoots: () => mounted.userRoots(), locate: null, parksWrites: false,
+    }, { mode: () => 'strict', requestApproval: deny });
+
+    try {
+      await expect(files.writeFile(`${WORKSPACE_ROOT}/pc-link/a.txt`, new TextEncoder().encode('forged'))).rejects.toThrow();
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).toContain('/pc/proj/a.txt');
+      expect(written).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   test('a command naming /pc is put to the user, while the same delete in the agent\'s home is not', async () => {
     const { db, shell, asked, removed } = workspaceOverDevice();
 

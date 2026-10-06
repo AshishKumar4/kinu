@@ -4,7 +4,8 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { describe, test, expect } from 'bun:test';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { forkTransferFrames, readForkLineage, readSoul, type ForkFrameReply, actorHomeName } from '../src/index';
+import { adaptMemory, forkTransferFrames, readForkLineage, readSoul, type ForkFrameReply, actorHomeName } from '../src/index';
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
 import {
   ForkConversation, readChain, readWorkingContext, seedForkSource, seedForkTarget,
@@ -121,23 +122,17 @@ describe('a workspace fork', () => {
     expect(await readSoul(tgt.vfs)).toBe('help with testing');
   });
 
-  test('a soul swapped since the seal does not become the fork\'s: the target row holds the owner\'s', async () => {
+  test('the fork carries SOUL.md as the source\'s agents left it', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedForkTarget(tgt, { workspaceId: 'TGT' });
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
-
-    // A mid-turn swap of the file: the fork carries the owner's row through the resealed source.
-    const kernel = (await src.bundle.session()).vfs.as(CRED_KERNEL);
-    kernel.unlink(`${WORKSPACE_ROOT}/SOUL.md`);
-    kernel.writeFile(`${WORKSPACE_ROOT}/SOUL.md`, 'forged');
-    kernel.chown(`${WORKSPACE_ROOT}/SOUL.md`, 1000, 1000);
-    kernel.chmod(`${WORKSPACE_ROOT}/SOUL.md`, 0o644);
+    await writeText(src.vfs, 'SOUL.md', 'edited by an agent');
 
     await forkInto(src, tgt, { untilMessageId: 'm1' });
 
-    expect(await readSoul(tgt.vfs)).toBe('help with testing');
+    expect(await readSoul(tgt.vfs)).toBe('edited by an agent');
   });
 
   test('an entry after the cut is not inherited', async () => {
@@ -534,17 +529,26 @@ describe('a workspace fork', () => {
     expect(carried).toContain('model');
   });
 
-  test('a target that cannot take the memory index fails instead of dropping it', async () => {
+  // The index is derived from the notes, so a fork carries the notes alone; a shell-edited one is the target's as it is.
+  test('a fork carries the notes, and the target finds them by the words they hold now', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
-    tgt.execRaw('DROP TABLE memory_chunks_fts');
-    tgt.execRaw('DROP TABLE memory_chunks');
-    tgt.execRaw('CREATE TABLE memory_chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, content TEXT NOT NULL)');
+    const notes = adaptMemory(new MemoryStore(src.vfs, src.sql), src.vfs);
+    await notes.write('memory/deploy.md', 'wrangler staging deploy succeeded');
+    await notes.index('memory/deploy.md');
+    // A shell edit after the index was taken: the fork must not carry the old words as the note's.
+    await writeText(src.vfs, 'memory/deploy.md', 'kubernetes ingress now fronts staging');
 
-    await expect(forkInto(src, tgt, { untilMessageId: 'm1' })).rejects.toThrow(/memory_chunks/);
+    await forkInto(src, tgt, { untilMessageId: 'm1' });
+    const store = new MemoryStore(tgt.vfs, tgt.sql);
+    store.ensureSchema();
+    const forked = adaptMemory(store, tgt.vfs);
+
+    expect((await forked.search('kubernetes', 5)).map((hit) => hit.path)).toEqual(['memory/deploy.md']);
+    expect(await forked.search('wrangler', 5)).toEqual([]);
   });
 
   test('a target that cannot take actor_config fails instead of keeping its bootstrap name', async () => {
@@ -564,7 +568,7 @@ describe('a workspace fork', () => {
 });
 
 describe('the files a fork carries', () => {
-  test('SOUL.md first, then one import a name under the home in order, then each payload once', async () => {
+  test('one import a name under the home in order, SOUL.md among them, then each payload once', async () => {
     const ws = fresh();
     const chat = await seedForkSource(ws, { memory: [] });
     await writeText(ws.vfs, 'b/inner.md', 'inner');
@@ -575,8 +579,6 @@ describe('the files a fork carries', () => {
     const frames = await sourceFrames(ws, 'm2');
 
     const carried = [...new Set(frames.flatMap((frame) => {
-      if (frame.kind === 'soul') return ['SOUL.md'];
-
       if (frame.kind !== 'page') return [];
 
       return [frame.target.in === 'home' ? frame.target.name : `payload ${frame.target.path}`];
@@ -584,8 +586,7 @@ describe('the files a fork carries', () => {
 
     const payloads = carried.filter((name) => name.startsWith('payload '));
 
-    expect(carried[0]).toBe('SOUL.md');
-    expect(carried.filter((name) => ['a.md', 'b'].includes(name))).toEqual(['a.md', 'b']);
+    expect(carried.filter((name) => ['SOUL.md', 'a.md', 'b'].includes(name))).toEqual(['SOUL.md', 'a.md', 'b']);
     expect(carried.slice(-payloads.length)).toEqual(payloads);
     expect(payloads).toHaveLength(2);
     expect(carried).not.toContain('scaffold');

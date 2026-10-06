@@ -16,7 +16,7 @@ import {
   resolveActiveSkills, extractExplicitInvocations,
   admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, unionAllowedTools, toolAllowedBySkills,
-  WORKSPACE_SKILLS_DIR, skillViewPath, skillsMount, workspaceSkillIndexLine,
+  WORKSPACE_SKILLS_DIR, skillReference, skillViewPath, skillsMount, workspaceSkillIndexLine,
   type ActiveSkill, type DiscoveredSkill,
 } from './index';
 import { withMountTable } from '../vfs/mounts';
@@ -471,7 +471,7 @@ describe('renderActiveSkillsSection + tool gating', () => {
 
     expect(out).toContain('(50000 chars)');
     // The pointer is the one load path every skill has, whichever root holds it.
-    expect(out).toContain(skillViewPath('giant'));
+    expect(out).toContain(skillReference('giant'));
     expect(out).not.toContain('[truncated:');
   });
 
@@ -511,8 +511,8 @@ describe('renderSkillsIndexSection', () => {
 
     expect(out).toContain('## Skills');
     // Descriptions are agent-writable; the system index never embeds them before approval.
-    expect(out).toContain(`**alpha** \`${skillViewPath('alpha')}\``);
-    expect(out).toContain(`**zeta** \`${skillViewPath('zeta')}\``);
+    expect(out).toContain(`**alpha** \`${skillReference('alpha')}\``);
+    expect(out).toContain(`**zeta** \`${skillReference('zeta')}\``);
     expect(out.indexOf('alpha')).toBeLessThan(out.indexOf('zeta'));
     expect(out).not.toContain('desc alpha');
     expect(out).not.toContain('desc zeta');
@@ -528,7 +528,7 @@ describe('renderSkillsIndexSection', () => {
 
     expect(out).toContain('**huge**');
     expect(out).toContain('4000000 bytes');
-    expect(out).toContain(skillViewPath('huge'));
+    expect(out).toContain(skillReference('huge'));
   });
 
   test('elides under allocation pressure with an honest count and where to look, never a silent cut', () => {
@@ -541,7 +541,7 @@ describe('renderSkillsIndexSection', () => {
 
     const out = renderSkillsIndexSection(index);
     expect(out).toMatch(/\.\.\.and \d+ more skills? this turn's skills allocation did not reach/);
-    expect(out).toContain('`/skills`');
+    expect(out).toContain('`vfs://skills`');
     // At least one entry survives, and the omitted count is honest.
     const shown = (out.match(/^- \*\*/gm) ?? []).length;
     expect(shown).toBeGreaterThan(0);
@@ -909,7 +909,7 @@ describe('skills admission', () => {
     expect(byName.get('aaa-pinned-giant')?.body).toBeNull();
     expect(vfs.calls.readFile).toEqual([`${WORKSPACE_SKILLS_DIR}/zzz-invoked.md`]);
     // The giant stays visible as a reference-tier pointer.
-    expect(renderActiveSkillsSection(set, 'unverified')).toContain(skillViewPath('aaa-pinned-giant'));
+    expect(renderActiveSkillsSection(set, 'unverified')).toContain(skillReference('aaa-pinned-giant'));
   });
 
   test('every discovered skill is rendered, named in the index, or reachable through a pointer — nothing is lost silently', async () => {
@@ -953,7 +953,7 @@ describe('skills admission', () => {
 
     // Every body that missed the cut still says where it is.
     for (const skill of set.active) {
-      if (skill.body === null) expect(activeText).toContain(skillViewPath(skill.name));
+      if (skill.body === null) expect(activeText).toContain(skillReference(skill.name));
     }
   });
 
@@ -1139,6 +1139,6 @@ describe('a turn\'s skills in its system prompt', () => {
 
     expect(loud.activeSkills).toBeUndefined();
     expect(prompt(loud)).toBe(prompt(quiet));
-    expect(prompt(quiet)).toContain(skillViewPath('slates'));
+    expect(prompt(quiet)).toContain(skillReference('slates'));
   });
 });

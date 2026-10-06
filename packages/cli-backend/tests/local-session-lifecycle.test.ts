@@ -936,8 +936,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const prompts: PromptMessage[][] = [];
     const { rt, session } = setup('ok', historyCapturingModel('ok', (messages) => { prompts.push(messages); }));
     const path = workspaceSkillPath('tidy');
-    await rt.storage.vfs.mkdir(`${WORKSPACE_SKILLS_DIR}/tidy`, { recursive: true });
-    await writeText(rt.storage.vfs, path, '---\nname: tidy\ndescription: keep notes tidy\n---\nSort the notes first.\n');
+    await rt.ownFiles.mkdir(`${WORKSPACE_SKILLS_DIR}/tidy`, { recursive: true });
+    await writeText(rt.ownFiles, path, '---\nname: tidy\ndescription: keep notes tidy\n---\nSort the notes first.\n');
     const reviewed = present(await session.readInstructionApproval(path), 'the tidy skill');
     expect((await session.approveInstruction(path, reviewed.digest)).ok).toBe(true);
 
@@ -963,7 +963,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     if (reviewed === null) throw new Error('expected focused skill');
 
-    await writeText(rt.storage.vfs, path, `${FOCUSED_SKILL}\n# changed after review\n`);
+    await writeText(rt.ownFiles, path, `${FOCUSED_SKILL}\n# changed after review\n`);
     const result = await session.approveInstruction(path, reviewed.digest);
 
     expect(result.ok).toBe(false);

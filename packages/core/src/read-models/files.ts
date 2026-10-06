@@ -18,7 +18,6 @@ import { Effect } from 'effect';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
-import { isWorkspaceSoul } from '../identity/soul';
 
 export interface ExecutorFileLookup {
   getProvider(name: string): { files?: VFS; homeDir(segment?: string): Promise<string> } | undefined;
@@ -108,7 +107,6 @@ export class ExecutorFileUpload {
     private readonly path: string,
     private readonly write: {
       readonly expectedRevision?: VfsRevision | undefined;
-      readonly writeSoul?: (bytes: Uint8Array) => Promise<void>;
     } = {},
   ) {}
 
@@ -121,15 +119,9 @@ export class ExecutorFileUpload {
 
     if (!('assembled' in assembly)) return assembly;
 
-    const { writeSoul, expectedRevision } = this.write;
+    const { expectedRevision } = this.write;
 
     return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
-      if (writeSoul !== undefined && this.executorId === 'workspace' && isWorkspaceSoul(this.path)) {
-        await writeSoul(assembly.assembled);
-
-        return { ok: true };
-      }
-
       return writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembly.assembled, expectedRevision });
     })));
   }
@@ -555,10 +547,6 @@ export function renameExecutorPathOp(
   if (from === to) return Promise.resolve({ ok: true });
 
   return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
-    if (executorId === 'workspace' && (isWorkspaceSoul(from) || isWorkspaceSoul(to))) {
-      return { error: 'SOUL.md is set from Settings, not by moving files' };
-    }
-
     const vfs = executorFiles(router, executorId);
 
     if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
@@ -580,8 +568,6 @@ export function deleteExecutorPathOp(
   if (!path || normalizePath(path) === '/') return Promise.resolve({ error: 'a real path is required' });
 
   return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
-    if (executorId === 'workspace' && isWorkspaceSoul(path)) return { error: 'SOUL.md is set from Settings, not by deleting it' };
-
     const vfs = executorFiles(router, executorId);
 
     if (!vfs) return { error: `Executor "${executorId}" has no file plane` };

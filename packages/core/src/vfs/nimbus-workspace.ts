@@ -21,7 +21,7 @@ import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { CommandResult, RunOptions } from '@nimbus-sh/core/substrate/lifo/sandbox/types.js';
 import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
-  settleWorkspaceSlates, resealWorkspaceSoul,
+  settleWorkspaceSlates, provisionWorkspaceSoul,
   type HomeRootVfs, type TmpConfiner,
 } from './agent-home';
 import { registerNpm, workspaceCommandNotFound } from './workspace-runtimes';
@@ -32,7 +32,8 @@ import { FORK_PIN_PREFIX } from '../identity/fork';
 import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
 import { diagnostics, KinuError, tolerate, toKinuError } from '../obs/index';
 import { atVfsPath } from './errno';
-import type { MountedVfs } from './mounts';
+import type { VfsMount, WorkspacePrincipal } from './mounts';
+import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { shellMounts, type ShellMounts, type ShellMountTable } from './shell-mounts';
 
 
@@ -209,6 +210,10 @@ export interface WorkspaceSession {
   readonly sql: SqlDatabase;
 }
 
+function principalKey(cred: Readonly<VfsCred>, actor: string | undefined): string {
+  return `${cred.uid}@${actor ?? ''}`;
+}
+
 export interface WorkspaceBundle {
   vfs: VFS & Required<Pick<VFS, 'readRange' | 'readlink' | 'rename' | 'removeRecursive'>>;
   shell: Shell;
@@ -217,8 +222,9 @@ export interface WorkspaceBundle {
   asAgent(agent: WorkspaceAgent): Promise<WorkspaceAgentPlane>;
   session(): Promise<WorkspaceSession>;
   onFilesChanged(listener: (paths: readonly string[]) => void): () => void;
-  /** Shells running as `cred` (default: session user) serve `plane`'s mounts. */
-  mountTable(plane: MountedVfs, cred?: Readonly<VfsCred>): () => void;
+  /** `principal`'s view (default: the session user) holds `mounts`. */
+  mountTable(mounts: readonly VfsMount[], principal?: WorkspacePrincipal): () => void;
+  namespace(principal?: WorkspacePrincipal): Promise<CompositeVFS>;
   /** Drops only the workspace tables; the host's own rows stay. */
   destroy(): Promise<void>;
 }
@@ -246,8 +252,8 @@ export interface WorkspaceOptions {
 /** Returns synchronously; the workspace boots lazily on its first operation. */
 export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const fileListeners = new Set<(paths: readonly string[]) => void>();
-  const mountTables = new Map<number, MountedVfs>();
-  const tableFor: ShellMountTable = (cred) => mountTables.get(cred.uid) ?? null;
+  const mountTables = new Map<string, readonly VfsMount[]>();
+  const tableFor: ShellMountTable = (principal) => (principal.cred === null ? null : mountTables.get(principalKey(principal.cred, principal.actor)) ?? null);
   let shellMountPoints: ShellMounts | undefined;
   let booting: Promise<NimbusWorkspace> | undefined;
 
@@ -290,11 +296,11 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
     shellMountPoints = shellMounts(workspace.filesystem, tableFor);
 
-    for (const plane of mountTables.values()) shellMountPoints.add(plane);
+    for (const mounts of mountTables.values()) shellMountPoints.add(mounts);
     settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
     // Trusted host init, once per engine boot: a registration is not stored with the tree.
     settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
-    resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
+    provisionWorkspaceSoul(workspace.vfs.as(CRED_KERNEL));
 
     await registerNpm(workspace);
     const root = workspace.vfs.as(CRED_KERNEL);
@@ -346,12 +352,15 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
       return () => { fileListeners.delete(listener); };
     },
-    mountTable(plane, cred) {
-      const { uid } = cred ?? CRED_SESSION_USER;
-      mountTables.set(uid, plane);
-      shellMountPoints?.add(plane);
+    mountTable(mounts, principal) {
+      const key = principalKey(principal?.cred ?? CRED_SESSION_USER, principal?.actor);
+      mountTables.set(key, mounts);
+      shellMountPoints?.add(mounts);
 
-      return () => { if (mountTables.get(uid) === plane) mountTables.delete(uid); };
+      return () => { if (mountTables.get(key) === mounts) mountTables.delete(key); };
+    },
+    async namespace(principal) {
+      return (await open()).filesystem.vfs.as(principal?.cred ?? CRED_SESSION_USER, principal?.actor);
     },
     async privileged() {
       const workspace = await open();

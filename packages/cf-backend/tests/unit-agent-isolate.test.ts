@@ -1,6 +1,6 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, test } from 'bun:test';
-import { accountCredentialKey, agentAffinityKey, asFetchFunction, requestUrl } from '@kinu.run/core';
+import { accountCredentialKey, actorReferenceOf, agentAffinityKey, asFetchFunction, requestUrl } from '@kinu.run/core';
 import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
 import {
   agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubordinateHarness, makeEnv, orchestratorHarness, runDelegatedTask,
@@ -233,13 +233,14 @@ test("a hired agent's working context is read and edited where its conversation 
   const workspace = gatewayWorkspace(gateway);
   const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const middleId = middle.actor.handle.actorId;
-  const own = middle.actor.runtime.storage.vfs;
 
   const ended = (): number => agentSql(middleId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'run_end'`[0]?.n ?? 0;
 
   await wakeForDelegatedTask(workspace, middleId, 'First task OTTERX.');
   await driveUntil(workspace, 'the first turn never ended', () => ended() > 0);
+  // Its runtime as the host holds it now: the one its turn ran on was released, and its view's mounts with it.
+  const own = (await workspace.agent.observeActorHost().acquire(actorReferenceOf(middle.actor.handle))).runtime.storage.vfs;
   const working = await readText(own, '/context/working.jsonl');
 
   expect(working).toContain('First task OTTERX.');

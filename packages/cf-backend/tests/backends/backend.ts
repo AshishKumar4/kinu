@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The backend a shared behaviour suite runs against is configuration: `KINU_TEST_BACKEND=cf` or `cli`
@@ -5,7 +6,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  * and does nothing else, so a behaviour one backend changes on its own fails in that backend, by name.
  */
 import { Database } from 'bun:sqlite';
-import { copyFileSync } from 'node:fs';
+import { copyFileSync, cpSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
 import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
@@ -22,6 +23,7 @@ import { LocalAgentSession } from '../../../cli-backend/src/local-session';
 import { createHostCheckpoints } from '../../../cli-backend/src/checkpoints';
 import { createLocalModelResolver, type LocalModelResolver } from '../../../cli-backend/src/model-resolver';
 import { openWorkspaceCLI } from '../../../cli-backend/src/open';
+import { workspaceHome } from '../../../cli-backend/src/runtime';
 
 export const TEST_BACKEND_ENV = 'KINU_TEST_BACKEND';
 
@@ -79,7 +81,7 @@ export interface SharedBackend {
   /** The main actor's durable rows, addressed the way core's stores address them. */
   readonly sql: SqlExecutor;
   readonly actor: ActorHandle;
-  /** The workspace file plane, as the owner and the agent reach it. */
+  /** The workspace's own files named by their `vfs://` path, as core names a skill or a slate. */
   readonly files: VFS;
   /** The main actor's conversation store, as each backend records its turns. */
   readonly history: SessionHistory;
@@ -261,7 +263,7 @@ function bornWorkspace(): Promise<string> {
     const path = scratchPath('shared-backend-born', 'agent.db');
     const db = new Database(path);
     db.exec('PRAGMA journal_mode = WAL');
-    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT });
+    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT, home: workspaceHome(db) });
     db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
     db.close();
 
@@ -274,7 +276,10 @@ function bornWorkspace(): Promise<string> {
 /** The CLI session over a copy of the born workspace, opened as `kinu` opens one, with its checkpoint store under scratch. */
 async function cli(): Promise<SharedBackend> {
   const dbPath = scratchPath('shared-backend', 'agent.db');
-  copyFileSync(await bornWorkspace(), dbPath);
+  const original = await bornWorkspace();
+  copyFileSync(original, dbPath);
+  // Main's home (SOUL.md, memory notes, the scaffold) is files of the space beside the database: the copy takes them.
+  cpSync(join(dirname(original), 'home'), join(dirname(dbPath), 'home'), { recursive: true });
   const db = new Database(dbPath);
   const { rt } = await openWorkspaceCLI(db, dbPath, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
   const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
@@ -295,7 +300,7 @@ async function cli(): Promise<SharedBackend> {
     end: () => session.end(),
     sql: rt.storage.sql,
     actor: rt.actor,
-    files: rt.storage.vfs,
+    files: rt.ownFiles,
     history: rt.stores.history,
     snapshot: async (dir, turn) => {
       checkpoints.beginTurn(turn);

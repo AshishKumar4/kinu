@@ -491,7 +491,7 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
     case 'memory': {
       const query = stringField(cmd, 'query');
 
-      return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: await readLocalMemory(name) } });
+      return decodeJsonValue({ value: query ? await searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: await readLocalMemory(name) } });
     }
 
     case 'events':

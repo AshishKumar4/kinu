@@ -1,6 +1,7 @@
 import { createAgentStores, contextMount, localContextTree, withMountTable, requireLocalActorWorkspace } from '@kinu.run/core';
 import type { ActorHandle, AgentRuntime } from '@kinu.run/core';
 import type { CLIRuntime, NodeSource } from './runtime';
+import { join } from 'node:path';
 
 /**
  * A swarm node's runtime over `source`'s plane, without copying its live model getters. The node shares the
@@ -19,11 +20,14 @@ export function localNodeRuntime(owner: CLIRuntime, actor: ActorHandle, source: 
     own: () => localContextTree(() => ({ claims: stores.claims, events: stores.eventRecorder }), { author: actor.actorId, child: false }),
   });
 
+  // Over the source's plane, at the point `vfs://context` names in the workspace's space.
+  const context = { ...ownContext, at: join(owner.space, ownContext.name) };
+
   return {
     actor,
-    storage: { ...source.storage, vfs: withMountTable(source.storage.vfs, [ownContext]) },
+    storage: { ...source.storage, vfs: withMountTable(source.storage.vfs, [context]) },
     agentStateVfs: source.agentStateVfs,
-    toolFiles: withMountTable(source.toolFiles, [ownContext]),
+    toolFiles: withMountTable(source.toolFiles, [context]),
     planes: source.planes,
     memory: source.memory,
     executor: source.executor,

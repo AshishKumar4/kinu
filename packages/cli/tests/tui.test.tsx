@@ -10,7 +10,7 @@ import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 
-import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
+import { createCLIRuntime, soulOf } from '@kinu.run/cli-backend';
 import { commandsForClient } from '../src/slash-commands';
 import {
   ChangelogOverlay,
@@ -24,7 +24,7 @@ import {
 } from '../src/tui/overlays';
 
 import type { AgentModelEntry } from '@kinu.run/core';
-import { readMission } from '@kinu.run/core';
+import { missionOf } from '@kinu.run/core';
 import type { KinuConfig } from '../src/config';
 
 import { StatusBar } from '../src/tui/status-bar';
@@ -855,7 +855,7 @@ describe('CLI TUI layout', () => {
 
     try {
       expect(db.query('SELECT COUNT(*) AS messages FROM conversation_entries').get()).toEqual({ messages: 0 });
-      expect(readMission(makeSql(db))).toBe(mission);
+      expect(missionOf(soulOf(db))).toBe(mission);
     } finally {
       db.close();
     }

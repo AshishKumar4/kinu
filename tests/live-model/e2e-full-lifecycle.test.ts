@@ -19,7 +19,6 @@ import {
   createFactsStore,
   extractJsonObject,
   openWorkspaceMainActor,
-  readSoul,
   type JsonObject,
   type LLMProviderConfig,
   type CompletedTurn,
@@ -27,7 +26,7 @@ import {
 import { tolerate } from '../../packages/core/src/obs';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
-  makeSql, type CLIRuntime,
+  makeSql, soulIn, type CLIRuntime,
 } from '../../packages/cli-backend/src/runtime';
 import { buildEvalAgentSurface, collectStepText, createStepToolCallLog } from './harness';
 import { localTargetFolder, provisionLocalTarget } from './target-local';
@@ -104,7 +103,7 @@ async function chatTurn(
   userMessage: string,
 ): Promise<CompletedTurn> {
   const start = Date.now();
-  const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
+  const soul = soulIn(rt.space) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
   const log = createStepToolCallLog();
@@ -197,13 +196,13 @@ describe('E2E Full Lifecycle', () => {
 
     expect(tables).toContain('workspace_identity');
     expect(tables).toContain('conversation_entries');
-    expect(tables).toContain('vfs_inodes');
+    expect(tables).toContain('memory_note_files');
     expect(tables).toContain('search_nodes');
     expect(tables).toContain('scaffold_versions');
     expect(tables).toContain('crafted_tools');
     expect(tables).toContain('fibers');
 
-    const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
+    const soul = soulIn(rt.space) ?? '';
     expect(soul).toContain('JavaScript');
 
     const identity = db.query<{ id: string; name: string }, []>(
@@ -375,16 +374,8 @@ describe('E2E Full Lifecycle', () => {
 
     console.log(`\n  Identity: ${JSON.stringify(identity)}`);
 
-    const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
+    const soul = soulIn(rt.space) ?? '';
     console.log(`  SOUL.md: ${JSON.stringify(soul.slice(0, 120))}`);
-
-    const vfsFiles = db.query<{ path: string; size: number }, []>(
-      'SELECT path, size FROM vfs_inodes WHERE kind = 0 ORDER BY path',
-    ).all();
-
-    console.log(`\n  VFS files:`);
-
-    for (const f of vfsFiles) console.log(`    ${f.path} (${f.size} bytes)`);
 
     const entries = db.query<{ id: string; role: string }, []>(
       'SELECT id, role FROM conversation_entries ORDER BY recorded_at, rowid',
@@ -406,7 +397,7 @@ describe('E2E Full Lifecycle', () => {
     // persistence claim, not a second copy of step 1. A bare `length > 0`
     // stood here and passed over any store that opened at all.
     for (const table of [
-      'workspace_identity', 'conversation_entries', 'vfs_inodes', 'search_nodes',
+      'workspace_identity', 'conversation_entries', 'memory_note_files', 'search_nodes',
       'scaffold_versions', 'crafted_tools', 'fibers',
     ]) {
       expect(tables).toContain(table);

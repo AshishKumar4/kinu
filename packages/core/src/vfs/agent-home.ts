@@ -4,6 +4,7 @@
  * merge-back; tmp is 0o700. Both planes act as the agent's credential, or its own tool writes get `EACCES`.
  */
 
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -11,10 +12,9 @@ import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import * as v from 'valibot';
-import { ownerSoulDb, SOUL_PATH, UNVERIFIED_SOUL_PATH } from '../identity/soul';
+import { SOUL_FILE, SOUL_PATH } from '../identity/soul';
 import { parseActorKey } from '../identity/actor-key';
 import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
-import { diagnostics, toKinuError } from '../obs/index';
 import { SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
@@ -214,90 +214,35 @@ export function settleWorkspaceRoot(kernel: Pick<RootMoveVfs, 'stat' | 'chown' |
   }
 }
 
-export type SoulVfs = Pick<CredentialedVfs, 'readdir' | 'lstat' | 'unlink' | 'rename' | 'removeRecursive' | 'writeFile' | 'readFile' | 'chown' | 'chmod'>;
+export type SoulVfs = Pick<CredentialedVfs, 'readdir' | 'lstat' | 'writeFile' | 'unlink' | 'chown' | 'chmod'>;
 
-const SOUL_FILE = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
+/** Main owns SOUL.md and the workspace group writes it: every agent of the workspace carries that group. */
+const SOUL_MODE = 0o664;
 
-function soulPresent(kernel: SoulVfs): boolean {
-  return soulPresentName(kernel, SOUL_PATH);
-}
+/** SOUL.md, with `content` where given, as an ordinary file of the workspace that every agent of it edits. */
+export function provisionWorkspaceSoul(kernel: SoulVfs, content?: string | Uint8Array): void {
+  const present = (): boolean => kernel.readdir(WORKSPACE_ROOT).some((entry) => entry.name === SOUL_PATH);
 
-function sealedSoul(kernel: SoulVfs): boolean {
-  if (!soulPresent(kernel)) return false;
-  const entry = kernel.lstat(SOUL_FILE);
-
-  return entry.type === 'file' && entry.uid === 0 && entry.gid === 0;
-}
-
-export function sealWorkspaceSoul(kernel: SoulVfs, content: string | Uint8Array): void {
-  if (soulPresent(kernel)) {
-    if (kernel.lstat(SOUL_FILE).type === 'directory') kernel.removeRecursive(SOUL_FILE);
-    else kernel.unlink(SOUL_FILE);
-  }
-
-  kernel.writeFile(SOUL_FILE, content);
-  kernel.chown(SOUL_FILE, 0, 0);
-  kernel.chmod(SOUL_FILE, 0o444);
-}
-
-function kernelHeldSoul(kernel: SoulVfs): string | null {
-  return sealedSoul(kernel) ? new TextDecoder().decode(kernel.readFile(SOUL_FILE)) : null;
-}
-
-/** SOUL.md as the row's view; written only on a mismatch. */
-export function resealWorkspaceSoul(kernel: SoulVfs, sql: SqlDatabase): string | null {
   return settleSync(Effect.gen(function* () {
-    const owned = ownerSoulDb(sql, kernelHeldSoul(kernel));
+    // Written as uid 0, so never through an entry an agent put there: a link is replaced by the file, a directory refused.
+    if (content !== undefined) {
+      const there = present() ? kernel.lstat(SOUL_FILE).type : null;
 
-    if (owned === null) return null;
-
-    const { soul, seeded } = owned;
-
-    const intact = sealedSoul(kernel)
-      && (kernel.lstat(SOUL_FILE).mode & 0o7777) === 0o444
-      && new TextDecoder().decode(kernel.readFile(SOUL_FILE)) === soul;
-
-    if (intact) return soul;
-
-    if (soulPresent(kernel) && !sealedSoul(kernel)) {
-      const forged = kernel.lstat(SOUL_FILE).type;
-
-      if (forged === 'directory') kernel.removeRecursive(SOUL_FILE);
-      else if (forged === 'symlink') kernel.unlink(SOUL_FILE);
-      else if (seeded) {
-        const stale = `${WORKSPACE_ROOT}/${UNVERIFIED_SOUL_PATH}`;
-
-        if (soulPresentName(kernel, UNVERIFIED_SOUL_PATH)) kernel.unlink(stale);
-        kernel.rename(SOUL_FILE, stale);
-        yield* unverifiedNote(sql);
-      } else {
-        kernel.unlink(SOUL_FILE);
-        diagnostics.event('soul.forge_discarded', { kind: forged });
-      }
+      if (there === 'symlink') kernel.unlink(SOUL_FILE);
+      else if (there !== null && there !== 'file') return yield* Effect.fail(new VfsError('EISDIR', `${SOUL_FILE} is a ${there}, not the workspace's SOUL.md`, SOUL_FILE));
+      kernel.writeFile(SOUL_FILE, content);
     }
 
-    sealWorkspaceSoul(kernel, soul);
+    if (!present()) return;
+    const entry = kernel.lstat(SOUL_FILE);
 
-    return soul;
+    // A directory or link an agent left there is its own; only the file is shared.
+    if (entry.type !== 'file') return;
+
+    if (entry.uid !== SESSION_UID || entry.gid !== WORKSPACE_GID) kernel.chown(SOUL_FILE, SESSION_UID, WORKSPACE_GID);
+
+    if ((entry.mode & 0o7777) !== SOUL_MODE) kernel.chmod(SOUL_FILE, SOUL_MODE);
   }));
-}
-
-function soulPresentName(kernel: SoulVfs, name: string): boolean {
-  return kernel.readdir(WORKSPACE_ROOT).some((entry) => entry.name === name);
-}
-
-function unverifiedNote(sql: SqlDatabase): Effect.Effect<void> {
-  return Effect.try({
-    try: () => {
-      const [id] = [...sql.exec(`SELECT id FROM workspace_identity LIMIT 1`)];
-      const workspace = v.parse(v.object({ id: v.string() }), id).id;
-      sql.exec(
-        `INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at) VALUES (?, 'soul.unverified_moved', 'An older SOUL.md was moved to SOUL.md.unverified and is no longer read; set SOUL.md to adopt it.', 0, ?)`,
-        workspace, Date.now(),
-      );
-    },
-    catch: (cause) => toKinuError({ doing: 'recording that an older SOUL.md was set aside', cause, otherwise: 'io' }),
-  }).pipe(Effect.catch((failure) => Effect.sync(() => diagnostics.failure('soul.unverified_note_failed', failure))));
 }
 
 export type SlatesMoveVfs = RootMoveVfs & Pick<CredentialedVfs, 'mkdir' | 'lstat' | 'getDefaultAcl' | 'setDefaultAcl'>;

@@ -25,8 +25,9 @@ describe("MemoryStore.search ranking", () => {
 		).join("\n");
 
 		const filler = Array.from({ length: 40 }, (_, i) => `unrelated filler line ${i}`).join("\n");
+		await store.writeFile(PATH, `${dense}\n${filler}`);
 		await store.indexFile(PATH, `${dense}\n${filler}`);
-		const hits = store.search("kinu workspace sandbox provisioning failure diagnosis");
+		const hits = await store.search("kinu workspace sandbox provisioning failure diagnosis");
 		expect(hits.length).toBeGreaterThan(0);
 	});
 
@@ -34,9 +35,11 @@ describe("MemoryStore.search ranking", () => {
 		const { store } = createStore();
 		const strong = Array.from({ length: 30 }, () => "quantum entanglement research").join("\n");
 		const weak = `one mention of quantum here\n${Array.from({ length: 30 }, (_, i) => `noise ${i}`).join("\n")}`;
+		await store.writeFile("memory/strong.md", strong);
 		await store.indexFile("memory/strong.md", strong);
+		await store.writeFile("memory/weak.md", weak);
 		await store.indexFile("memory/weak.md", weak);
-		const hits = store.search("quantum");
+		const hits = await store.search("quantum");
 		const strongHit = present(hits.find((h) => h.path === "memory/strong.md"), "the strong file's hit");
 		const weakHit = present(hits.find((h) => h.path === "memory/weak.md"), "the weak file's hit");
 		expect(hits[0].path).toBe("memory/strong.md");

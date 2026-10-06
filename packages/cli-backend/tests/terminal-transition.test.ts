@@ -10,12 +10,12 @@ import {
   TerminalEffectInterrupt,
   COMPLETION_GATE_EVENT, TERMINAL_EFFECT_RETRY_CEILING_MS,
   TERMINAL_TRANSITION_CALL_ID,
-  readMission,
+  missionOf,
   type Shell, type TemporaryAgentPort, type TerminalEffectFault,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import { TestLanguageModelV2 } from './test-language-model';
-import type { CLIRuntime } from '../src/runtime';
+import { soulIn, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import {
   openTerminalWorkspace, scriptedModel,
@@ -93,10 +93,9 @@ describe('a workspace born with its mission as a stand-in title', () => {
     const { db, rt } = workspace();
     const mission = 'Audit the OAuth callback flow';
     // The mission is the soul's own section, as `kinu create` seeds it.
-    void rt.storage.sql`INSERT INTO workspace_soul (id, markdown) VALUES (1, ${`# Kinu\n\n## Mission\n\n${mission}\n`})
-      ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown`;
+    await writeText(rt.ownFiles, '/home/main/SOUL.md', `# Kinu\n\n## Mission\n\n${mission}\n`);
     rt.actor.config.setDisplayNameOrigin(mission, 'auto');
-    expect(readMission(rt.storage.sql)).toBe(mission);
+    expect(missionOf(soulIn(rt.space))).toBe(mission);
     const { model, state } = scriptedModel('found two issues');
     const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
 
@@ -275,9 +274,9 @@ test('a managed context edit reaches the local request', async () => {
   try {
     await session.send('use the OLD premise', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
-    const document = v.parse(v.string(), await readText(rt.storage.vfs, '/context/working.jsonl'));
-    await writeText(rt.storage.vfs, '/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
-    await expect(writeText(rt.storage.vfs, '/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
+    const document = v.parse(v.string(), await readText(rt.toolFiles, 'vfs://context/working.jsonl'));
+    await writeText(rt.toolFiles, 'vfs://context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
+    await expect(writeText(rt.toolFiles, 'vfs://context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
     await session.send('follow-up input', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
     const claim = rt.stores.claims.latestTurn();

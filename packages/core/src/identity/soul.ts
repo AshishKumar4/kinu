@@ -1,20 +1,12 @@
 import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
-// SOUL.md is a file, edited via setSoul; `workspace_soul` holds its bytes, so a listing reads the mission off that
-// row ({@link readMission}) and never opens (and mutates) a filesystem.
+// SOUL.md is an ordinary file of the workspace, and the only copy of the soul: every agent edits it, the owner
+// too, and the next turn reads what it holds.
 
 import * as v from 'valibot';
-import { WORKSPACE_SOUL_DDL } from './schema';
-import type { SqlRow } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { AgentSignal } from '../types/signals';
-import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { SqlExecutor, SqlValue } from '../types/primitives';
-import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 export const SOUL_PATH = 'SOUL.md';
-
-export function isWorkspaceSoul(path: string): boolean {
-  return workspacePath(path, WORKSPACE_ROOT) === `${WORKSPACE_ROOT}/${SOUL_PATH}`;
-}
 
 /** Generic missions seeded when none was given. */
 const PLACEHOLDER_MISSIONS = [
@@ -125,112 +117,34 @@ export function summarizeSoul(markdown: string | null | undefined, maxLength = 2
   return `${summary.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
-/** Null when absent; asked, not caught. */
-export async function readSoul(vfs: VFS): Promise<string | null> {
-  if (!await exists(vfs, SOUL_PATH)) return null;
+/** The workspace's SOUL.md: main's home holds it, wherever the reader's own home is. */
+export const SOUL_FILE = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
 
-  if ((await vfs.stat(SOUL_PATH, { follow: false }))?.type === 'symlink') return null;
-  const text = v.parse(v.string(), await readText(vfs, SOUL_PATH));
+/** Null when absent, blank, or a link; asked, not caught. */
+export async function readSoul(vfs: VFS): Promise<string | null> {
+  if (!await exists(vfs, SOUL_FILE)) return null;
+
+  if ((await vfs.stat(SOUL_FILE, { follow: false }))?.type === 'symlink') return null;
+  const text = v.parse(v.string(), await readText(vfs, SOUL_FILE));
 
   return text.trim() ? text : null;
 }
 
 
 
-/** The mission every listing shows: summarized from the owner's soul, readable without opening a filesystem. */
-export function readMission(sql: SqlExecutor): string | null {
-  // A turn reads this: the soul table exists from schema init, so no probe of sqlite_master.
-  const [row] = sql<SqlRow>`SELECT markdown FROM workspace_soul WHERE id = 1`;
-
-  return missionOf(row === undefined ? null : soulText(row));
-}
-
-/** The first soul, from the workspace's name and stated purpose; `seal` is `writeWorkspaceSoul`, the one writer. */
+/** The first soul, from the workspace's name and stated purpose; `write` puts it in SOUL.md. */
 export async function seedSoul(
-  input: { name: string; mission?: string }, seal: (content: string) => Promise<void>,
+  input: { name: string; mission?: string }, write: (content: string) => Promise<void>,
 ): Promise<string> {
   const soul = renderSoulMarkdown(input);
-  await seal(soul);
+  await write(soul);
 
   return soul;
 }
 
-const IdentityRow = v.object({ name: v.string() });
-
-const SoulRow = v.object({ markdown: v.string() });
-
-function soulText(row: SqlRow): string {
-  return v.parse(SoulRow, row).markdown;
-}
-
-export interface SoulReads {
-  readonly soulTable: boolean;
-  readonly soul: string | null;
-  readonly identity: { name: string } | null;
-}
-
-export const UNVERIFIED_SOUL_PATH = 'SOUL.md.unverified';
-
-/** One statement's rows, untyped: each read parses its own. */
-type SoulRows = (query: string, ...bindings: SqlValue[]) => readonly SqlRow[];
-
-/** The one read of the soul and identity rows; a table not yet made reads as absent. */
-function soulReads(rows: SoulRows): SoulReads {
-  const has = (table: string): boolean => rows(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, table).length > 0;
-  const soulTable = has('workspace_soul');
-  const [soulRow] = soulTable ? rows(`SELECT markdown FROM workspace_soul WHERE id = 1`) : [];
-  const identity = has('workspace_identity') ? v.safeParse(IdentityRow, rows(`SELECT name FROM workspace_identity LIMIT 1`)[0]) : null;
-
-  return {
-    soulTable,
-    soul: soulRow === undefined ? null : soulText(soulRow),
-    identity: identity?.success === true ? { name: identity.output.name } : null,
-  };
-}
-
-export function soulReadsSql(sql: SqlExecutor): SoulReads {
-  return soulReads((query, ...bindings) => {
-    const strings = query.split('?');
-
-    return sql<SqlRow>(Object.assign(strings, { raw: strings }), ...bindings);
-  });
-}
-
-export function ownerSoulDb(db: SqlDatabase, kernelHeld: string | null): { soul: string; seeded: boolean } | null {
-  const reads = soulReads((query, ...bindings) => [...db.exec(query, ...bindings)]);
-
-  if (reads.soul !== null) return { soul: reads.soul, seeded: false };
-
-  if (reads.identity === null) return null;
-
-  if (kernelHeld !== null) {
-    recordKernelSoul(db, kernelHeld);
-
-    return { soul: kernelHeld, seeded: true };
-  }
-
-  const seed = renderSoulMarkdown(reads.identity);
-  db.exec(WORKSPACE_SOUL_DDL);
-  db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, seed);
-
-  return { soul: seed, seeded: true };
-}
-
-function recordKernelSoul(db: SqlDatabase, markdown: string): void {
-
-  db.exec(WORKSPACE_SOUL_DDL);
-  db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, markdown);
-}
-
-/** Summarized from the soul the owner wrote: null before one is written, or when it says nothing a summary keeps. */
+/** Summarized from SOUL.md: null before one is written, or when it says nothing a summary keeps. */
 export function missionOf(soul: string | null): string | null {
   const mission = summarizeSoul(soul);
 
   return mission === '' ? null : mission;
 }
-
-export function storeDurableSoulDb(db: SqlDatabase, markdown: string): void {
-  db.exec(WORKSPACE_SOUL_DDL);
-  db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown`, markdown);
-}
-

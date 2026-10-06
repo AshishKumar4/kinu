@@ -12,12 +12,6 @@ export const WORKSPACE_IDENTITY_DDL =
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`;
 
-/** The owner's soul; SOUL.md is resealed from it. */
-export const WORKSPACE_SOUL_DDL = `CREATE TABLE IF NOT EXISTS workspace_soul (
-    id       INTEGER PRIMARY KEY CHECK (id = 1),
-    markdown TEXT NOT NULL
-  )`;
-
 const ACTOR_DDL = [
   // mcts/schemas.ts and scaffold/schemas.ts own their DDL (initActorTables runs it): one owner per table.
 
@@ -32,7 +26,7 @@ const ACTOR_DDL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_fibers_actor_name ON fibers(actor_id, name)`,
 
-  // memory_chunks is owned by MemoryStore (agent-utils), not created here.
+  // memory_note_chunks is owned by MemoryStore (agent-utils), not created here.
   `CREATE TABLE IF NOT EXISTS evolution_events (
     actor_id   TEXT NOT NULL,
     id         TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),
@@ -92,7 +86,6 @@ const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     head_cut_created_at             INTEGER NOT NULL DEFAULT 0,
     staged_agent_config             INTEGER NOT NULL DEFAULT 0,
     staged_crafted_tools            INTEGER NOT NULL DEFAULT 0,
-    staged_memory_chunks            INTEGER NOT NULL DEFAULT 0,
     staged_session_messages         INTEGER NOT NULL DEFAULT 0,
     staged_conversation_entries     INTEGER NOT NULL DEFAULT 0,
     staged_conversation_entry_parts INTEGER NOT NULL DEFAULT 0,
@@ -104,7 +97,6 @@ const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     import_path                     TEXT,
     want_agent_config               INTEGER NOT NULL DEFAULT 0,
     want_crafted_tools              INTEGER NOT NULL DEFAULT 0,
-    want_memory_chunks              INTEGER NOT NULL DEFAULT 0,
     want_session_messages           INTEGER NOT NULL DEFAULT 0,
     want_conversation_entries       INTEGER NOT NULL DEFAULT 0,
     want_conversation_entry_parts   INTEGER NOT NULL DEFAULT 0,
@@ -124,7 +116,6 @@ export function initActorDdl(execRaw: RawSqlExec): void {
 
 export function initWorkspaceOwnershipTables(execRaw: RawSqlExec): void {
   execRaw(WORKSPACE_IDENTITY_DDL);
-  execRaw(WORKSPACE_SOUL_DDL);
   execRaw(FORK_LINEAGE_DDL);
   execRaw(FORK_TRANSFER_DDL);
   execRaw(FORK_STAGED_FILES_DDL);

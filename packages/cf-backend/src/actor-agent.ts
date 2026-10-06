@@ -3563,7 +3563,7 @@ export abstract class ActorAgent extends Agent<Env> {
       : Effect.sync(() => this.ownedModelServices.resolveModel(spec)));
   }
 
-  /** Cached SOUL.md text, refreshed at turn start and invalidated by setSoul(). */
+  /** SOUL.md as this turn read it: any agent may have edited it since the last turn. */
   protected _cachedSoulText: string | null = null;
   protected async loadSoulText(): Promise<string> {
     return (await readSoul(this.rt.storage.vfs)) ?? '';
@@ -3580,7 +3580,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * The workspace's purpose as this actor knows it: the auto-title source, and what an
    * added agent inherits. Each root answers from wherever its mission durably lives.
    */
-  protected abstract ownMission(): string;
+  protected abstract ownMission(): Promise<string>;
 
   /**
    * Failures propagate so the durable caller keeps the row owed and the ledger retries it.
@@ -4132,7 +4132,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async readTurnInputs(tools: ToolSet, body: JsonObject): Promise<TurnReads> {
     await this.ensureOwnedScaffold();
 
-    if (this._cachedSoulText === null) await this.refreshSoulText();
+    await this.refreshSoulText();
 
     const inputs = this.profileInputs();
 

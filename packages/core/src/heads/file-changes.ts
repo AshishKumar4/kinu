@@ -5,7 +5,7 @@
  */
 
 import { diffLines, type FileStatus } from '../vfs/diff';
-import { textPayload, type WriteEvent, type WriteObserver } from '../vfs/observe';
+import { textPayload, type WriteEvent, type WriteObserver } from '../vfs/write-events';
 import type { HeadFileChange } from '../types/heads';
 
 export type { HeadFileChange } from '../types/heads';
