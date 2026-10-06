@@ -262,3 +262,63 @@ test('two waiting device commands are decided independently, and a refused decis
     await page.close();
   });
 });
+
+/** Three frames drawn: long enough for an answered read's promise chain to reach the screen. */
+async function framesDrawn(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((drawn) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => { drawn(); })));
+  }));
+}
+
+const jobReads = (page: Page): Promise<number> => page.evaluate(() => Number(document.documentElement.dataset.galleryJobReads ?? '0'));
+
+/** Answers the jobs read numbered `at` with one running job, or fails it. */
+async function answerJobs(page: Page, at: number, answer: { label?: string; failed?: string }): Promise<void> {
+  await page.evaluate((detail) => { window.dispatchEvent(new CustomEvent('gallery:jobs-answer', { detail })); }, { at, ...answer });
+}
+
+/** Has the server say the jobs moved, and returns the number of the read that starts. */
+async function jobsMoved(page: Page): Promise<number> {
+  const at = await jobReads(page);
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: { type: 'reads_changed', reads: ['listBackgroundJobs'] } })));
+  await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryJobReads ?? '0') > was, {}, at);
+
+  return at;
+}
+
+const pageSays = (page: Page, words: string): Promise<boolean> => page.evaluate((said) => document.body.textContent?.includes(said) === true, words);
+
+/** Two reads of the same list in flight: whichever was asked later decides what shows, whatever order they answer in. */
+test('a late answer to an older read never replaces a newer one, nor reports its failure over it', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&jobs=held`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[aria-label="Work"]');
+    await page.click('[aria-label="Work"]');
+    await page.waitForSelector('[data-back-to-work]');
+    await page.click('[data-back-to-work]');
+    await page.waitForFunction(() => document.body.textContent?.includes('first build'));
+    await page.evaluate(() => { document.documentElement.dataset.galleryJobsHold = '1'; });
+
+    const older = await jobsMoved(page);
+    const newer = await jobsMoved(page);
+
+    await answerJobs(page, newer, { label: 'newer build' });
+    await page.waitForFunction(() => document.body.textContent?.includes('newer build'));
+    await answerJobs(page, older, { label: 'older build' });
+    await framesDrawn(page);
+    expect([await pageSays(page, 'newer build'), await pageSays(page, 'older build')]).toEqual([true, false]);
+
+    const olderAgain = await jobsMoved(page);
+    const latest = await jobsMoved(page);
+
+    await answerJobs(page, latest, { label: 'latest build' });
+    await page.waitForFunction(() => document.body.textContent?.includes('latest build'));
+    await answerJobs(page, olderAgain, { failed: 'older request failed' });
+    await framesDrawn(page);
+    expect([await pageSays(page, 'latest build'), await pageSays(page, 'older request failed')]).toEqual([true, false]);
+    await page.close();
+  });
+});

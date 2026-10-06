@@ -1308,9 +1308,10 @@ window.WebSocket = new Proxy(RealWebSocket, {
   },
 });
 
-/** A frame the gate makes the server send: only cards and steers carry an actor stamp, which no fixture read can produce. */
+/** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status"]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT]),
+  reads: v.optional(v.array(v.string())),
   actorId: v.optional(v.string()),
   id: v.optional(v.string()),
   state: v.optional(v.string()),
@@ -2149,6 +2150,23 @@ async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
   return null;
 }
 
+/** The first `name` event whose detail parses as `schema` and is `mine`. */
+function galleryEvent<Schema extends v.GenericSchema>(
+  name: string, schema: Schema, mine: (asked: v.InferOutput<Schema>) => boolean,
+): Promise<v.InferOutput<Schema>> {
+  return new Promise((resolve) => {
+    const listen = (event: Event) => {
+      const asked = v.parse(schema, event instanceof CustomEvent ? event.detail : null);
+
+      if (!mine(asked)) return;
+      window.removeEventListener(name, listen);
+      resolve(asked);
+    };
+
+    window.addEventListener(name, listen);
+  });
+}
+
 const TWO_CONSENTS = [
   { consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1, command: "git push origin main" },
   { consentId: "c-2", deviceLabel: "laptop", method: "exec", createdAt: 2, command: "bun run deploy" },
@@ -2178,17 +2196,7 @@ async function galleryResolveConsent(args?: unknown[]): Promise<JsonValue> {
 
   if (new URLSearchParams(location.search).get("consent") !== "two") return {};
 
-  const settled = await new Promise<v.InferOutput<typeof ConsentSettleSchema>>((resolve) => {
-    const listen = (event: Event) => {
-      const asked = v.parse(ConsentSettleSchema, event instanceof CustomEvent ? event.detail : null);
-
-      if (asked.id !== id) return;
-      window.removeEventListener("gallery:consent-settle", listen);
-      resolve(asked);
-    };
-
-    window.addEventListener("gallery:consent-settle", listen);
-  });
+  const settled = await galleryEvent("gallery:consent-settle", ConsentSettleSchema, (asked) => asked.id === id);
 
   if (settled.failed !== undefined) throw new Error(settled.failed);
   const root = document.documentElement.dataset;
@@ -2196,6 +2204,36 @@ async function galleryResolveConsent(args?: unknown[]): Promise<JsonValue> {
   root.galleryConsentsResolved = `${root.galleryConsentsResolved ?? ""},${id}`;
 
   return {};
+}
+
+const JobsAnswerSchema = v.object({ at: v.number(), label: v.optional(v.string()), failed: v.optional(v.string()) });
+
+function heldJob(at: number, label: string | undefined): JsonValue {
+  return [{
+    id: `bgjob-held-${String(at)}`, kind: "shell", label: label ?? null, workMode: "build", status: "running",
+    result: null, error: null, createdAt: NOW - 60e3, settledAt: null,
+  }];
+}
+
+/**
+ * `&jobs=held`: one running job, `first build`, until `data-gallery-jobs-hold="1"`; from then each read waits for
+ * `gallery:jobs-answer` `{ at, label?, failed? }`, `at` counting held reads from 0, and answers one running job named
+ * `label` or fails with `failed`. Otherwise there are none.
+ */
+async function galleryJobsRead(): Promise<JsonValue> {
+  if (new URLSearchParams(location.search).get("jobs") !== "held") return [];
+  const root = document.documentElement.dataset;
+
+  if (root.galleryJobsHold !== "1") return heldJob(-1, "first build");
+  const at = Number(root.galleryJobReads ?? "0");
+
+  root.galleryJobReads = String(at + 1);
+
+  const answer = await galleryEvent("gallery:jobs-answer", JobsAnswerSchema, (asked) => asked.at === at);
+
+  if (answer.failed !== undefined) throw new Error(answer.failed);
+
+  return heldJob(at, answer.label);
 }
 
 /** What went to the running turn rather than opening one. */
@@ -2233,6 +2271,7 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["send", galleryMidTurnSend],
   ["cancelCurrentWork", galleryCancelWork],
   ["resolveDeviceConsent", galleryResolveConsent],
+  ["listBackgroundJobs", galleryJobsRead],
 ]);
 
 /** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
