@@ -8,6 +8,9 @@ import type { ScriptedAnswer, ScriptedRequest } from './scripted-protocol';
 /** A file name no scaffold file can carry. */
 export const FLOW_PROBE = 'flow-probe.txt';
 
+/** The file the same turn's shell writes, so Changes is shown a write no file tool made. */
+export const FLOW_SHELL_PROBE = 'flow-shell-probe.txt';
+
 /** The written-file row's one turn. */
 export const WRITE_FILE_ASK = `Use your file tool to write a new file named ${FLOW_PROBE} in the workspace, `
   + 'containing exactly the words browser flow probe. Then reply with one line: DONE.';
@@ -18,16 +21,39 @@ export const FLOW_SLATE = { title: 'Flow probe', id: 'flow', page: 'browser flow
 
 /** The slate row's one turn. */
 export const SLATE_ASK = `Use the file tool to create a slate at ${SLATES_ROOT}/${FLOW_SLATE.id}/. `
-  + `Write package.json with main "server.ts" and slate {"title":"${FLOW_SLATE.title}","port":8788,"bindings":{}}. `
-  + `Write server.ts so the slate answers GET / with an HTML page whose body is <h1>${FLOW_SLATE.page}</h1>. `
+  + `Write package.json with main "server.ts", browser "client.tsx" and slate {"title":"${FLOW_SLATE.title}","port":8788,"bindings":{}}. `
+  + 'Write server.ts with a Slate whose bump(by) method adds to a count and returns it. '
+  + `Write client.tsx as a React page headed <h1>${FLOW_SLATE.page}</h1> with a Bump button that calls slate.bump. `
   + 'Start its preview. Reply with the preview URL.';
+
+/** The slate's page: React state, a form action and the host's context, so the vendored React and `kinu:slate` both run. */
+const FLOW_SLATE_CLIENT = [
+  'import { useActionState, useState } from "react";',
+  'import { slate, useHostContext } from "kinu:slate";',
+  '',
+  'export default function App() {',
+  '  const host = useHostContext();',
+  '  const [by] = useState(2);',
+  '  const [count, bump] = useActionState(async () => slate.bump(by), 0);',
+  '',
+  '  return (',
+  '    <form action={bump}>',
+  `      <h1>${FLOW_SLATE.page}</h1>`,
+  '      <output data-count>{String(count)}</output>',
+  '      <p data-host>{typeof host.origin === "string" ? "hosted" : "no host"}</p>',
+  '      <button type="submit">Bump</button>',
+  '    </form>',
+  '  );',
+  '}',
+  '',
+].join('\n');
 
 /** The slate turn's calls, in the order the scripted model plays them: the two files the ask names, then its preview. */
 const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
   {
     text: 'Writing the slate.',
     toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/package.json`, content: JSON.stringify({
-      name: FLOW_SLATE.id, main: 'server.ts', slate: { title: FLOW_SLATE.title, port: 8788, bindings: {} },
+      name: FLOW_SLATE.id, main: 'server.ts', browser: 'client.tsx', slate: { title: FLOW_SLATE.title, port: 8788, bindings: {} },
     }, null, 2) } },
   },
   {
@@ -35,13 +61,18 @@ const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
       'import { SlateObject } from "kinu:slate";',
       '',
       'export class Slate extends SlateObject {',
-      '  async fetch() {',
-      `    return new Response("<h1>${FLOW_SLATE.page}</h1>", { headers: { "content-type": "text/html" } });`,
+      '  count = 0;',
+      '',
+      '  async bump(by: number) {',
+      '    this.count += by;',
+      '',
+      '    return this.count;',
       '  }',
       '}',
       '',
     ].join('\n') } },
   },
+  { toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/client.tsx`, content: FLOW_SLATE_CLIENT } } },
   {
     text: 'Starting its preview.',
     toolCall: { name: 'eval', arguments: { code: `return await workspace.slates.${FLOW_SLATE.id}.$preview();` } },
@@ -57,9 +88,13 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
   const asked = (ask: string): boolean => request.userTexts.some((text) => text.includes(ask));
 
   if (asked(WRITE_FILE_ASK) && request.available.includes('file')) {
-    return request.called.includes('file')
+    if (!request.called.includes('file')) {
+      return { text: 'Writing the file.', toolCall: { name: 'file', arguments: { action: 'write', path: workspacePath(FLOW_PROBE, WORKSPACE_ROOT), content: 'browser flow probe' } } };
+    }
+
+    return request.called.includes('shell') || !request.available.includes('shell')
       ? { text: 'DONE' }
-      : { text: 'Writing the file.', toolCall: { name: 'file', arguments: { action: 'write', path: workspacePath(FLOW_PROBE, WORKSPACE_ROOT), content: 'browser flow probe' } } };
+      : { toolCall: { name: 'shell', arguments: { runtime: 'workspace', command: `echo from the shell > ${workspacePath(FLOW_SHELL_PROBE, WORKSPACE_ROOT)}` } } };
   }
 
   if (asked(SLATE_ASK) && request.available.includes('file')) {
