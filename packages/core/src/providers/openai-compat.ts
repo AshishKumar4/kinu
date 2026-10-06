@@ -19,7 +19,7 @@ const ModelListSchema = v.object({
 
 const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
 
-export function openAICompatNameOf(key: string): string | null {
+function openAICompatNameOf(key: string): string | null {
   const base = baseCredentialKey(key);
 
   return base.startsWith(OPENAI_COMPAT_KEY_PREFIX) ? base.slice(OPENAI_COMPAT_KEY_PREFIX.length) : null;

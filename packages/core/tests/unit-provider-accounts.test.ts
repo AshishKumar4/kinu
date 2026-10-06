@@ -8,6 +8,7 @@ import {
   catalogProviderOfKey,
   createAnthropicProvider,
   createCodexProvider,
+  createNamedEndpointSource,
   createOpenAICompatProvider,
   createProviderRegistry,
   quotaWindowText,
@@ -16,7 +17,6 @@ import {
   formatModelSpec,
   isModelInferenceCredentialKey,
   isProxyDeniedCredentialKey,
-  openAICompatNameOf,
   parseModelSpec,
   providerProxyBaseURL,
   storedAccounts,
@@ -107,7 +107,8 @@ describe('account credential keys', () => {
     expect(await providerProxyBaseURL('anthropic.bearer@work', { fetch })).toBe(ANTHROPIC_BASE_URL);
     expect(catalogProviderOfKey('groq.bearer@work')).toBe('groq');
     expect(catalogProviderOfKey('github@work')).toBeNull();
-    expect(openAICompatNameOf('openai-compat.box@work')).toBe('box');
+    expect(await createNamedEndpointSource().listIds({ env: {}, getAuth: async () => null, hasCredential: async () => true, listCredentialKeys: async () => ['openai-compat.box@work'] }))
+      .toEqual(['openai-compat:box']);
   });
 });
 
