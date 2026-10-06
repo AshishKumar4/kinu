@@ -1734,6 +1734,50 @@ function galleryPickTake(args?: unknown[]): TakePickOutcome {
   return { changedAnswer: nodeId !== galleryTakes.winnerNodeId, chosen, set: galleryTakes, continuationQueued: false };
 }
 
+/* `&annotationSaves=held`: each annotation save waits for `gallery:annotation-save`; `=fail-first`: the first one is
+   refused. Each landed save's comments are kept on the page, with the most that were ever in flight at once. */
+const ANNOTATION_SAVES = new URLSearchParams(location.search).get("annotationSaves");
+
+const annotationRelease: (() => void)[] = [];
+
+window.addEventListener("gallery:annotation-save", () => {
+  annotationRelease.shift()?.();
+  document.documentElement.dataset.galleryAnnotationsWaiting = String(annotationRelease.length);
+});
+
+let annotationSavesAsked = 0;
+
+let annotationSavesInFlight = 0;
+
+async function galleryAnnotationSave(args?: unknown[]): Promise<JsonValue> {
+  const [, , annotations] = v.parse(v.tuple([v.string(), v.number(), v.array(v.looseObject({ text: v.optional(v.string()) }))]), args);
+  const root = document.documentElement;
+
+  annotationSavesAsked += 1;
+  annotationSavesInFlight += 1;
+  root.dataset.galleryAnnotationsMostInFlight = String(Math.max(annotationSavesInFlight, Number(root.dataset.galleryAnnotationsMostInFlight ?? "0")));
+
+  if (ANNOTATION_SAVES === "held") {
+    await new Promise<void>((resolve) => {
+      annotationRelease.push(resolve);
+      root.dataset.galleryAnnotationsWaiting = String(annotationRelease.length);
+    });
+  }
+
+  annotationSavesInFlight -= 1;
+
+  const ok = !(ANNOTATION_SAVES === "fail-first" && annotationSavesAsked === 1);
+
+  if (!ok) return { ok, error: "the plan store is busy" };
+
+  const landed = v.parse(v.array(v.array(v.string())), JSON.parse(root.dataset.galleryAnnotationsSaved ?? "[]"));
+
+  root.dataset.galleryAnnotationsSaved = JSON.stringify([...landed, annotations.map((annotation) => annotation.text ?? "")]);
+
+  return { ok, plan: v.parse(JsonValueSchema, galleryAgentPlan) };
+}
+
+
 /* The reads the first-visit inspector policy decides on, in the shapes the page consumes (`listSlates` needs an array for `slates.map`). */
 const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   listAlternateTakes: () => (TAKE_COUNT > 0 ? { [galleryTakes.turnId ?? ""]: galleryTakes } : {}),
@@ -1771,7 +1815,6 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
       }] : [],
     ],
   }),
-  savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   listWorkspaceAgents: galleryWorkspaceAgents,
   getWorkspaceGitHub: (args?: unknown[]) => {
     const root = document.documentElement;
@@ -1842,6 +1885,7 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
     args,
   );
 
+  document.documentElement.dataset.galleryPlanFeedback = feedback ?? "";
   galleryAgentPlan = {
     ...galleryAgentPlan,
     status: decision === "approve" ? "approved" : "changes_requested",
@@ -2063,8 +2107,16 @@ function rosterMoved(): void {
   queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubordinates"] })); });
 }
 
+/** The page reads the gallery answers only after a wait it controls. */
+const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>([
+  ...(HISTORY_ROWS > 0 ? [["getChatHistoryPage", galleryHistoryPage] as const] : []),
+  ["savePlanReviewAnnotations", galleryAnnotationSave],
+]);
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getChatHistoryPage" && HISTORY_ROWS > 0) return rpcResult(await galleryHistoryPage(args)).json<T>();
+  const waited = ASYNC_PAGE_RPC.get(method);
+
+  if (waited !== undefined) return rpcResult(await waited(args)).json<T>();
 
   const plan = galleryPlanRpc(method, args);
 
