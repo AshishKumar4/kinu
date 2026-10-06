@@ -114,12 +114,12 @@ describe('my-gateway request shape', () => {
           });
         }
 
-        return chatCompletionResponse('anthropic/claude-sonnet-4-5');
+        return chatCompletionResponse('xai/grok-4.7');
       })),
     });
 
     const result = await generateText({
-      model: reg.resolveModel('my-gateway/anthropic/claude-sonnet-4-5', 'kinu-test'),
+      model: reg.resolveModel('my-gateway/xai/grok-4.7', 'kinu-test'),
       prompt: 'ping',
     });
 

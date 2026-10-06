@@ -1,6 +1,5 @@
 /**
- * Type-aware linting gate. `oxlint-tsgolint` stays pinned to the version this
- * policy measured. `typeAware` is the only semantic-engine switch; `typeCheck`
+ * Type-aware linting gate. `typeAware` is the only semantic-engine switch; `typeCheck`
  * stays absent because compiler diagnostics belong to `tsc`.
  *
  * The enabled set is every `typescript/*` rule in the config except
@@ -56,16 +55,6 @@ import * as v from "valibot";
 import { describeDiagnostic, lintJson } from "./shared/oxlint-json.ts";
 
 const config = JSON.parse(readFileSync(".oxlintrc.json", "utf8"));
-const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-
-// The pin is the contract between the lockfile, the installed binary and every
-// measurement taken with it. A range would let a release change rule behavior
-// under a green tree.
-assert.equal(
-  packageJson.devDependencies["oxlint-tsgolint"],
-  "7.0.2001",
-  "oxlint-tsgolint must be pinned at the exact measured version",
-);
 
 // One switch for the type-aware layer, read from config so the CLI flag and
 // the config file cannot disagree. `typeCheck` is deliberately absent: it

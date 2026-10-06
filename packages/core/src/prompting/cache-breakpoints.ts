@@ -10,6 +10,7 @@ import * as v from 'valibot';
 import { DEFAULT_CACHE_RETENTION, type CacheRetention } from '../providers/types';
 import { ANTHROPIC_MAX_BREAKPOINTS } from '../providers/anthropic';
 import { compatOptionsKey } from '../providers/effort';
+import { gatewayOpenAIModel } from '../providers/wire-model';
 
 /** The AI SDK's provider-options bag (not re-exported by `ai` itself). */
 type ProviderOptions = NonNullable<ModelMessage['providerOptions']>;
@@ -99,11 +100,11 @@ export function resolvePromptCacheStrategy(
       return strategy;
     }
 
-    // Gateway OpenAI models speak Responses (`gatewayWireModel`).
-    case 'my-gateway':
-      return modelId?.startsWith('openai/') === true
-        ? resolvePromptCacheStrategy('openai', modelId.slice('openai/'.length), retention)
-        : { kind: 'openai-compat', bodyNamespace: providerId, markers: false };
+    case 'my-gateway': {
+      const own = gatewayOpenAIModel(modelId);
+
+      return own === null ? { kind: 'openai-compat', bodyNamespace: providerId, markers: false } : resolvePromptCacheStrategy('openai', own, retention);
+    }
 
     case 'ai-gateway':
       return { kind: 'openai-compat', bodyNamespace: providerId, markers: false };

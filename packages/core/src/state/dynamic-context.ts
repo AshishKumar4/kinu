@@ -1,5 +1,5 @@
-// Binds each dynamic-context plane to the store that answers it, once for both backends.
-// `agentDynamicContext` (prompting/volatile-context.ts) owns which planes exist.
+// Binds each dynamic-context plane to the store answering it, once for both backends.
+// `agentDynamicContext` owns which planes exist.
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from './agent-stores';
@@ -10,7 +10,7 @@ import type { ActiveRoster } from '../types/dynamic-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
 import { listToolLessons, MAX_TOOL_LESSONS, shownLesson } from '../evolution/struggles';
-import { craftedToolDeclarations, externalToolDeclarations } from '../tools/sandbox-contract';
+import { craftedToolDeclarations, externalToolDeclarations, runnableSandbox } from '../tools/sandbox-contract';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { ActiveSkillSet } from '../skills/types';
@@ -27,10 +27,12 @@ export interface DynamicContextInput {
   readonly runtime: RuntimeFacts;
   readonly turn?: TurnReason;
   readonly activeSkills?: ActiveSkillSet;
-  /** Read once per turn by the caller (the only await in this plane). */
+  /** Read once per turn by the caller. */
   readonly memoryTail: string | undefined;
   readonly missingCapabilities: readonly MissingCapability[];
-  /** Backend-only planes, as callbacks so no backend re-splices the assembled result. */
+  /** Down MCP servers (`server` null: the catalog), noted only where `eval` reaches MCP tools. */
+  readonly unavailableMcp?: readonly { readonly server: string | null; readonly reason: string }[];
+  /** Backend-only planes, as callbacks: no backend re-splices the result. */
   readonly subordinateDelegates?: () => readonly DynamicDelegate[];
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
 }
@@ -77,7 +79,12 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     liveHeadRuns: stores.headJournal.listLive(),
     subordinateDelegates: input.subordinateDelegates?.(),
     approvals: input.approvals?.(),
-    missingCapabilities: input.missingCapabilities,
+    missingCapabilities: [
+      ...(runnableSandbox(input.tools, profile) === undefined ? [] : input.unavailableMcp ?? []).map(({ server, reason }) => ({
+        source: server === null ? 'MCP catalog' : `MCP server "${server}"`, reason,
+      })),
+      ...input.missingCapabilities,
+    ],
   });
 }
 

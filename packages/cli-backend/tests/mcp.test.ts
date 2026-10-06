@@ -252,6 +252,29 @@ describe('LocalAgentSession MCP surface', () => {
   });
 });
 
+// m1984: a turn that cannot reach MCP tools, as `eval` is their only way in, was still told which servers were down.
+describe('a server that is down is named only to a turn that can reach MCP tools', () => {
+  test('a build turn is told the server is down; a planning turn, whose eval is refused, is told nothing of MCP', async () => {
+    const told: Record<string, boolean> = {};
+
+    for (const role of ['task', 'planner'] as const) {
+      let prompt = '';
+      const { session } = sessionWithModel(capturingModel((request) => { prompt = request.prompt; }));
+
+      try {
+        await session.connectMcp({ ...mcpServers(), down: { command: 'node', args: [scratchPath('mcp', 'no-such-server.mjs')] } });
+        await session.setRole(role);
+        await session.send('what can you reach?', { id: crypto.randomUUID() });
+        told[role] = prompt.includes('MCP server \\"down\\"');
+      } finally {
+        await session.end();
+      }
+    }
+
+    expect(told).toEqual({ task: true, planner: false });
+  });
+});
+
 /** What the request's latest context declares; an earlier turn's block stays in the history it was sent in. */
 function latestDeclarations(prompt: string): string {
   return prompt.slice(prompt.lastIndexOf('MCP and extension tools available through eval'));

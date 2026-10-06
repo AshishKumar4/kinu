@@ -50,7 +50,7 @@ export function withCraftedToolDeclarations<Tool extends ToolSet[string]>(
 type DeclaringProfile = { readonly workMode: WorkMode; readonly allowedTools: readonly string[] };
 
 /** The turn's `eval`, when this profile may run it in this work mode. */
-function runnableSandbox(tools: ToolSet, profile: DeclaringProfile): ToolSet[string] | undefined {
+export function runnableSandbox(tools: ToolSet, profile: DeclaringProfile): ToolSet[string] | undefined {
   const sandbox = tools[SANDBOX_TOOL];
 
   if (!sandbox || !profile.allowedTools.includes(SANDBOX_TOOL)

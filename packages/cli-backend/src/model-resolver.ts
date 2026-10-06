@@ -551,7 +551,7 @@ function createCloudProxyProvider(opts: {
       };
 
       return opts.id === 'my-gateway'
-        ? gatewayWireModel(opts.id, modelId, transport, deps)
+        ? gatewayWireModel(opts.id, modelId, transport)
         : createWireModel({ name: opts.id, modelId, ...transport, protocol: 'chat-completions', reasoning: false });
     },
   };
