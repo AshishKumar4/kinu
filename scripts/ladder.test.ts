@@ -39,7 +39,7 @@ import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
 import { checkCoverage, checkFileCoverage, pushRun, readFileTimings, readHostedCosts, requireCIGreen, withRunnerCosts } from './ci-verdicts';
-import { environmentKey, installInput, medians, recordSamples, SAMPLES } from './ci-runner/contract';
+import { environmentKey, installInput, medians, recordSamples } from './ci-runner/contract';
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 
@@ -1344,18 +1344,21 @@ describe('the container runner\'s contract', () => {
     const id = (digit: string) => digit.repeat(40);
     const manifest = paths.map((path, index) => ({ path, id: id(String(index)) }));
 
+    const key = await environmentKey(manifest);
+    const reordered = await environmentKey([...manifest].reverse());
+    const relocked = await environmentKey([{ path: 'bun.lock', id: id('9') }, ...manifest.slice(1)]);
+
     expect({ inputs: paths.filter(installInput), ignored: ignored.filter(installInput) }).toEqual({ inputs: paths, ignored: [] });
-    expect(await environmentKey([...manifest].reverse())).toBe(await environmentKey(manifest));
-    expect(await environmentKey([{ ...manifest[0] ?? { path: 'bun.lock', id: id('0') }, id: id('9') }, ...manifest.slice(1)])).not.toBe(await environmentKey(manifest));
+    expect({ hex: /^[0-9a-f]{64}$/u.test(key), reordered: reordered === key, relocked: relocked === key }).toEqual({ hex: true, reordered: true, relocked: false });
   });
 
-  test('a row\'s estimate is the median of its last few green runs, so one slow run moves nothing', () => {
+  test('a row\'s estimate is the median of its last five green runs: one slow run moves nothing, and old ones age out', () => {
     let history: Record<string, number[]> = {};
 
-    for (const seconds of [100, 100, 900, 100, 100, 100, 100]) history = recordSamples(history, { row: seconds, [`only-${String(seconds)}`]: seconds });
+    for (const seconds of [900, 900, 900, 900, 1, 1, 1]) history = recordSamples(history, { aged: seconds });
 
-    expect(history['row']).toHaveLength(SAMPLES);
-    expect(medians(history)).toMatchObject({ row: 100, 'only-900': 900 });
-    expect(medians({ even: [1, 2, 3, 10] })).toEqual({ even: 2.5 });
+    for (const seconds of [100, 100, 900, 100]) history = recordSamples(history, { row: seconds });
+
+    expect(medians({ ...history, even: [1, 2, 3, 10] })).toEqual({ aged: 1, row: 100, even: 2.5 });
   });
 });

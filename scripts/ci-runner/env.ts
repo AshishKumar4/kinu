@@ -20,3 +20,10 @@ export const packKey = (sha: string, base: string): string => `packs/${sha}.${ba
 
 /** The one instance of an account-wide object. */
 export const SINGLE = 'all';
+
+/** An error and every cause under it, on one line. */
+export function chain(error: Error): string {
+  if (error.cause instanceof Error) return `${error.message}: ${chain(error.cause)}`;
+
+  return error.cause === undefined ? error.message : `${error.message}: ${JSON.stringify(error.cause)}`;
+}

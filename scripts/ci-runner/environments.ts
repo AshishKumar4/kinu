@@ -5,9 +5,9 @@
  * builds one, a phase per alarm, as DEVBOX-DECISIONS D66's golden object builds the devbox's.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { INSTALL, INSTANCE, LEAVE_INSTALLED, RECEIVE, SHELL_ENV, SYSTEM, USER, must } from './container';
+import { INSTALL, INSTANCE, RECEIVE, REPO, SHELL_ENV, SYSTEM, must, pipeIn, startFresh } from './container';
 import type { Generation } from './contract';
-import { packKey, SINGLE, type Env } from './env';
+import { chain, packKey, SINGLE, type Env } from './env';
 
 type Entry =
   | { readonly state: 'preparing'; readonly sha: string; readonly since: number }
@@ -114,18 +114,18 @@ export class CiPreparer extends DurableObject<Env> {
       await this.ctx.storage.delete('preparation');
       // The preparation failed already; a container that will not stop either ends at its inactivity timeout.
       await Promise.allSettled([this.ctx.container?.destroy()]);
-      console.error(JSON.stringify({ preparation: preparation.key, phase: preparation.phase, error: String(cause) }));
-      await this.registry().preparationFailed(preparation.key, preparation.sha, `${preparation.phase}: ${String(cause)}`);
+      console.error(JSON.stringify({ preparation: preparation.key, phase: preparation.phase, error: (cause instanceof Error ? chain(cause) : String(cause)) }));
+      await this.registry().preparationFailed(preparation.key, preparation.sha, `${preparation.phase}: ${(cause instanceof Error ? chain(cause) : String(cause))}`);
     }
   }
 
   /** One phase; the next phase's changes, or null once the registry holds the environment. */
   private async step(preparation: Preparation): Promise<Partial<Preparation> | null> {
     const container = this.container();
-    const asUser = { user: USER, env: SHELL_ENV, ms: STEP_MS };
+    const asUser = { asUser: true, env: SHELL_ENV, ms: STEP_MS };
 
     if (preparation.phase === 'system') {
-      container.start({ image: 'cloudflare/debian-trixie', instance: INSTANCE, enableInternet: true, entrypoint: ['sleep', 'infinity'] });
+      await startFresh(container, { image: 'cloudflare/debian-trixie', instance: INSTANCE, enableInternet: true, entrypoint: ['sleep', 'infinity'] });
       await container.setInactivityTimeout(LEASE_MS);
       await must(container, 'the system tools', ['/bin/sh', '-c', SYSTEM], { ms: STEP_MS });
 
@@ -136,10 +136,9 @@ export class CiPreparer extends DurableObject<Env> {
       const pack = await this.env.ARTIFACTS.get(packKey(preparation.sha, 'root'));
 
       if (pack === null) throw new Error(`the pack of ${preparation.sha} is not in R2`);
-      await must(container, 'the checkout', ['/bin/sh', '-c', RECEIVE, 'receive', preparation.sha], { ...asUser, stdin: pack.body });
+      await pipeIn(container, pack.body, '/ci/pack');
+      await must(container, 'the checkout', ['/bin/sh', '-c', RECEIVE, 'receive', preparation.sha], asUser);
       const installed = await must(container, 'the install', ['/bin/sh', '-c', INSTALL], asUser);
-
-      await must(container, 'clearing the tree', ['/bin/sh', '-c', LEAVE_INSTALLED], asUser);
 
       return { phase: 'snapshot', versions: installed.stdout.split('\n').filter((line) => line.trim() !== '').slice(-4).join('; ') };
     }
@@ -154,8 +153,8 @@ export class CiPreparer extends DurableObject<Env> {
 
     if (preparation.snapshot === null) throw new Error('verifying a preparation that has no snapshot');
     // A snapshot that does not start, or starts without its install, is no environment.
-    container.start({ containerSnapshot: { id: preparation.snapshot.id }, instance: INSTANCE, enableInternet: true, entrypoint: ['sleep', 'infinity'] });
-    await must(container, 'the restored install', ['/bin/sh', '-c', 'cd /work && git rev-parse HEAD && node_modules/.bin/bun --version && google-chrome --version'], asUser);
+    await startFresh(container, { containerSnapshot: { id: preparation.snapshot.id }, instance: INSTANCE, enableInternet: true, entrypoint: ['sleep', 'infinity'] });
+    await must(container, 'the restored install', ['/bin/sh', '-c', `cd ${REPO} && git rev-parse HEAD && node_modules/.bin/bun --version && google-chrome --version`], asUser);
     await container.destroy();
     await this.ctx.storage.delete('preparation');
     await this.registry().prepared({

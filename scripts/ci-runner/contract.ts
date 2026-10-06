@@ -8,7 +8,7 @@ import * as v from 'valibot';
 export const Sha = v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/u));
 
 /** Bump when the preparation scripts change what an environment holds: every key changes with it. */
-export const PREPARATION = 1;
+export const PREPARATION = 2;
 
 /** A tree's install inputs by git object id: what `bun install` and its `prepare` hook read. */
 export const ManifestSchema = v.pipe(v.array(v.object({ path: v.string(), id: Sha })), v.minLength(1));

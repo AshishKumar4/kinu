@@ -6,9 +6,9 @@
  * exec, a ladder that stops writing, an exit with no verdict file) is reported as infrastructure, never as a red row.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { INSTANCE, LAUNCH, RECEIVE, SHELL_ENV, STATUS, USER, must, run } from './container';
+import { INSTANCE, LAUNCH, RECEIVE, SHELL_ENV, STATUS, must, pipeIn, run } from './container';
 import type { ShardTimes } from './contract';
-import { packKey, type Env } from './env';
+import { chain, packKey, type Env } from './env';
 
 export interface ShardSpec {
   readonly runId: string;
@@ -83,9 +83,9 @@ export class CiShard extends DurableObject<Env> {
     } catch (cause) {
       if ((await this.ctx.storage.get<State>('state')) === 'stopped') return;
       await this.ctx.storage.put('state', 'failed' satisfies State);
-      console.error(JSON.stringify({ shard: `${spec.runId}/${spec.name}/${String(spec.attempt)}`, state, error: String(cause) }));
+      console.error(JSON.stringify({ shard: `${spec.runId}/${spec.name}/${String(spec.attempt)}`, state, error: (cause instanceof Error ? chain(cause) : String(cause)) }));
       await Promise.allSettled([this.ctx.container?.destroy()]);
-      await runner.failed(spec.name, spec.attempt, `${spec.name} attempt ${String(spec.attempt + 1)}: ${String(cause)}`);
+      await runner.failed(spec.name, spec.attempt, `${spec.name} attempt ${String(spec.attempt + 1)}: ${(cause instanceof Error ? chain(cause) : String(cause))}`);
     }
   }
 
@@ -101,25 +101,42 @@ export class CiShard extends DurableObject<Env> {
 
     if (!container.running) container.start({ containerSnapshot: { id: spec.snapshot }, instance: INSTANCE, enableInternet: true, entrypoint: ['sleep', 'infinity'] });
     await container.setInactivityTimeout(INACTIVITY_MS);
-    // A restored snapshot's hostname does not resolve until it is set (Dew 6ec7406a5).
-    await must(container, 'the first exec', ['/bin/sh', '-c', 'hostname localhost; echo ready'], { ms: START_MS });
+    await this.firstAnswer(container);
     const answered = Date.now();
     const pack = await this.env.ARTIFACTS.get(packKey(spec.sha, spec.base));
     const costs = await this.env.ARTIFACTS.get(spec.costsKey);
 
     if (pack === null || costs === null) throw new Error(`the pack of ${spec.sha} or the run's costs is not in R2`);
-    const asUser = { user: USER, env: SHELL_ENV, ms: EXEC_MS };
+    const asUser = { asUser: true, env: SHELL_ENV, ms: EXEC_MS };
 
-    await must(container, 'the checkout', ['/bin/sh', '-c', RECEIVE, 'receive', spec.sha], { ...asUser, stdin: pack.body });
-    await must(container, 'the costs', ['/bin/sh', '-c', 'cat > /ci/costs.json'], { ...asUser, stdin: costs.body });
+    await pipeIn(container, pack.body, '/ci/pack');
+    await must(container, 'the checkout', ['/bin/sh', '-c', RECEIVE, 'receive', spec.sha], asUser);
+    await pipeIn(container, costs.body, '/ci/costs.json');
     const received = Date.now();
     const out = spec.name === 'plan' ? '/ci/plan.json' : 'log';
 
-    await must(container, 'the launch', ['/bin/sh', '-c', LAUNCH, 'launch', out, 'bun', 'scripts/ladder.ts', ...spec.argv], asUser);
+    await must(container, 'the launch', ['/bin/sh', '-c', LAUNCH, 'launch', out, 'bun', 'scripts/ladder.ts', ...spec.argv], { env: SHELL_ENV, ms: EXEC_MS });
     const times: ShardTimes = { requested, answered, received, launched: Date.now() };
 
     await this.ctx.storage.put({ state: 'running' satisfies State, times, grewAt: Date.now() });
     await this.env.CI_RUN.getByName(spec.runId).progress(spec.name, spec.attempt, 'launched');
+  }
+
+  /** The container's first answer. An exec right after `start` can be refused as not started yet; that is waited out. */
+  private async firstAnswer(container: Container): Promise<void> {
+    const deadline = Date.now() + START_MS;
+
+    for (;;) {
+      // A restored snapshot's hostname does not resolve until it is set (Dew 6ec7406a5).
+      const [first] = await Promise.allSettled([must(container, 'the first exec', ['/bin/sh', '-c', 'hostname localhost; echo ready'], { ms: START_MS })]);
+
+      if (first.status === 'fulfilled') return;
+
+      const refused = first.reason instanceof Error ? chain(first.reason) : String(first.reason);
+
+      if (!refused.includes('has not been started') || Date.now() > deadline) throw first.reason;
+      await scheduler.wait(1_000);
+    }
   }
 
   /** True once the piece is finished and reported. */
@@ -127,7 +144,7 @@ export class CiShard extends DurableObject<Env> {
     const container = this.container();
 
     if (!container.running) throw new Error('the container stopped before the ladder exited');
-    const [read] = await Promise.allSettled([run(container, ['/bin/sh', '-c', STATUS], { user: USER, ms: EXEC_MS })]);
+    const [read] = await Promise.allSettled([run(container, ['/bin/sh', '-c', STATUS], { ms: EXEC_MS })]);
     const status = read.status === 'fulfilled' && read.value.exitCode === 0 ? read.value : null;
 
     // One lost exec is not a lost container.
@@ -165,12 +182,11 @@ export class CiShard extends DurableObject<Env> {
   private async collect(spec: ShardSpec, exitCode: number): Promise<boolean> {
     const container = this.container();
     const keys = pieceKeys(spec.runId, spec.name, spec.attempt);
-    const asUser = { user: USER, ms: EXEC_MS };
-    const log = await container.exec(['/bin/sh', '-c', 'gzip -c /ci/log'], { user: USER, signal: AbortSignal.timeout(EXEC_MS) });
+    const log = await container.exec(['/bin/sh', '-c', 'gzip -c /ci/log'], { signal: AbortSignal.timeout(EXEC_MS) });
     const zipped = await log.output();
 
     await this.env.ARTIFACTS.put(keys.log, zipped.stdout, { httpMetadata: { contentType: 'text/plain; charset=utf-8', contentEncoding: 'gzip' } });
-    const output = await run(container, ['cat', spec.name === 'plan' ? '/ci/plan.json' : '/ci/verdicts.json'], asUser);
+    const output = await run(container, ['cat', spec.name === 'plan' ? '/ci/plan.json' : '/ci/verdicts.json'], { ms: EXEC_MS });
 
     // A ladder that exits without its verdict file did not grade the part: a crash, a refused preflight, a drift.
     if (output.exitCode !== 0 || output.stdout.trim() === '') throw new Error(`the ladder exited ${String(exitCode)} and wrote no ${spec.name === 'plan' ? 'plan' : 'verdict file'}`);

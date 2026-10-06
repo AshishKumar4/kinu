@@ -13,7 +13,7 @@ import * as v from 'valibot';
 import {
   environmentKey, PlanSchema, type Generation, type Phase, type PieceRow, type RunSpec, type RunStatus, type ShardResult, type StartRequest,
 } from './contract';
-import { SINGLE, type Env } from './env';
+import { chain, SINGLE, type Env } from './env';
 import { pieceKeys, type PieceKeys } from './shard';
 
 const WATCHDOG_MS = 10_000;
@@ -97,7 +97,7 @@ export class CiRun extends DurableObject<Env> {
         runId: spec.runId, name, attempt, sha: spec.sha, base: spec.base, snapshot: environment.snapshot.id, argv: this.argv(spec, name, width), costsKey: this.costsKey(spec),
       });
     } catch (cause) {
-      await this.failed(name, attempt, `${name} attempt ${String(attempt + 1)} could not start: ${String(cause)}`);
+      await this.failed(name, attempt, `${name} attempt ${String(attempt + 1)} could not start: ${(cause instanceof Error ? chain(cause) : String(cause))}`);
     }
   }
 
