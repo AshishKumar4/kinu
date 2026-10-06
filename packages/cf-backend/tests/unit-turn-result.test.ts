@@ -169,7 +169,7 @@ describe('MessageView reasoning', () => {
       expect(html).toContain('aria-expanded="false"');
       expect(html).toContain('>expand<');
       expect(html).not.toContain('data-reasoning-viewport');
-      expect(html).not.toContain('Check the final branch.');
+      expect(html).toContain('data-folded');
     }
   });
 });

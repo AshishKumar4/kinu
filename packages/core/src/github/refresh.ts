@@ -26,6 +26,28 @@ export interface GitHubRefresh {
   readonly outcome: GitHubRefreshOutcome;
 }
 
+/** `owner/name`, never a path step. */
+const RepoName = v.pipe(v.string(), v.maxLength(200), v.regex(/^[\w.-]+\/[\w.-]+$/), v.check((repo) => !repo.split('/').some((part) => /^\.+$/.test(part))));
+
+/** What a workspace asks the account to read. */
+export const GitHubRefreshAskSchema = v.object({
+  repos: v.pipe(v.array(v.object({ repo: RepoName, branch: v.nullable(v.pipe(v.string(), v.maxLength(255))) })), v.maxLength(REPO_LIMIT)),
+  items: v.pipe(v.array(v.object({ subject: v.picklist(['issue', 'pr']), repo: RepoName, number: v.pipe(v.number(), v.integer(), v.minValue(1)) })), v.maxLength(ITEM_LIMIT)),
+});
+
+export type GitHubRefreshAsk = v.InferOutput<typeof GitHubRefreshAskSchema>;
+
+export const gitHubRefreshAsk = (activity: WorkspaceGitHub): GitHubRefreshAsk => ({
+  repos: activity.repos.slice(0, REPO_LIMIT).map(({ repo, branch }) => ({ repo, branch })),
+  items: activity.items.slice(0, ITEM_LIMIT).map(({ subject, repo, number }) => ({ subject, repo, number })),
+});
+
+/** What GitHub said, or that no token is held. */
+export interface GitHubRefreshAnswer {
+  readonly observed: readonly GitHubObservation[];
+  readonly outcome: 'no-token' | GitHubRefreshOutcome;
+}
+
 type Read = { readonly status: number; readonly body: string } | { readonly unreachable: true };
 
 const Issue = v.looseObject({ title: v.string(), state: v.string() });
@@ -43,24 +65,28 @@ const CombinedStatus = v.looseObject({ state: v.string(), total_count: v.number(
 
 const FAILED_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure']);
 
-/** Check runs first, else commit statuses; no checks at all is `none`. */
+/** Both sources folded: failure, then pending, then success; no checks is `none`. */
 function ciOf(runs: Read, status: Read): GitHubCi | null {
   const checks = parsedFrom(CheckRuns, runs);
   const combined = parsedFrom(CombinedStatus, status);
+  const words: GitHubCi[] = [];
 
   if (checks.success && checks.output.total_count > 0) {
-    const all = checks.output.check_runs;
-
-    if (all.some((run) => run.conclusion !== null && FAILED_CONCLUSIONS.has(run.conclusion))) return 'failure';
-
-    return all.some((run) => run.status !== 'completed') ? 'pending' : 'success';
+    for (const run of checks.output.check_runs) {
+      if (run.conclusion !== null && FAILED_CONCLUSIONS.has(run.conclusion)) words.push('failure');
+      else words.push(run.status === 'completed' ? 'success' : 'pending');
+    }
   }
 
   if (combined.success && combined.output.total_count > 0) {
-    if (combined.output.state === 'success') return 'success';
+    const { state } = combined.output;
 
-    return combined.output.state === 'pending' ? 'pending' : 'failure';
+    words.push(state === 'success' || state === 'pending' ? state : 'failure');
   }
+
+  const worst = (['failure', 'pending', 'success'] as const).find((word) => words.includes(word));
+
+  if (worst !== undefined) return worst;
 
   return checks.success || combined.success ? 'none' : null;
 }
@@ -80,7 +106,7 @@ const stateOf = (merged: boolean, issueState: string): 'merged' | 'closed' | 'op
 
 export function refreshGitHub(input: {
   readonly authorization: string;
-  readonly activity: WorkspaceGitHub;
+  readonly ask: GitHubRefreshAsk;
   readonly fetch: (url: string, init: RequestInit) => Promise<Response>;
 }): Effect.Effect<GitHubRefresh> {
   const headers = {
@@ -99,7 +125,7 @@ export function refreshGitHub(input: {
 
   interface Done { readonly answers: readonly Read[]; readonly observed: readonly GitHubObservation[] }
 
-  const items = input.activity.items.slice(0, ITEM_LIMIT).map((item): Effect.Effect<Done> => Effect.gen(function* () {
+  const items = input.ask.items.map((item): Effect.Effect<Done> => Effect.gen(function* () {
     const answer = yield* read(`/repos/${item.repo}/issues/${String(item.number)}`);
     const issue = parsedFrom(Issue, answer);
 
@@ -116,7 +142,7 @@ export function refreshGitHub(input: {
     return { answers: [answer, pullAnswer], observed: [{ ...seen, state: stateOf(merged, issue.output.state) }] };
   }));
 
-  const repos = input.activity.repos.slice(0, REPO_LIMIT).map((repo): Effect.Effect<Done> => Effect.gen(function* () {
+  const repos = input.ask.repos.map((repo): Effect.Effect<Done> => Effect.gen(function* () {
     const answers: Read[] = [];
     let branch = repo.branch;
 

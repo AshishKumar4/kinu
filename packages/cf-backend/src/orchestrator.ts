@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { GitHubFactSchema, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, refreshGitHub, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { GitHubFactSchema, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -137,7 +137,7 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
-  readMission, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT,
+  readMission, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT, isPlaceholderMission, drawWorkspaceLogo,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
@@ -2360,6 +2360,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The genesis turn owes the naming: the create stored a stand-in title, and no
       // other turn replaces one.
       autoTitle: { mission, standIn: input.event === WORKSPACE_CREATED_EVENT },
+      logo: input.event === WORKSPACE_CREATED_EVENT ? { mission } : undefined,
     };
 
     return parts;
@@ -2443,6 +2444,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           if (unreachable !== null) return { status: 'owed', detail: unreachable };
           await this.applyAutoTitle(subject, standIn === true);
+
+          return { status: 'completed' };
+        },
+      }),
+
+      workspace_logo: terminalEffect({
+        input: v.object({ subject: v.string() }),
+        run: async ({ subject }) => {
+          const unreachable = await this.titlingRefusal();
+
+          if (unreachable !== null) return { status: 'owed', detail: unreachable };
+          await this.drawLogo(subject);
 
           return { status: 'completed' };
         },
@@ -2915,8 +2928,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
-  @callable()
   /** The devbox egress cannot name the agent, so nobody's. Never `@callable`. */
   async recordGitHubEgress(facts: readonly GitHubFact[]): Promise<void> {
     recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId: null, source: 'egress', at: Date.now() });
@@ -2933,14 +2944,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private refreshGitHub(activity: WorkspaceGitHub): Effect.Effect<WorkspaceGitHubView['refresh']> {
     return Effect.gen({ self: this }, function* () {
-      const authorization = yield* attempt({ doing: 'finding the account\'s GitHub token', otherwise: 'unavailable' }, async () => this.githubAuthorization());
+      const { stub, caller } = yield* Effect.promise(async () => this.userHub());
 
-      if (authorization === null) return 'no-token' as const;
-      const refreshed = yield* refreshGitHub({ authorization, activity, fetch: async (url, init) => fetch(url, init) });
+      const answer = yield* attempt({ doing: 'asking the account to read GitHub', otherwise: 'unavailable' },
+        async () => stub.userMcp_githubRefresh(caller, gitHubRefreshAsk(activity)));
 
-      recordGitHubObservations(this.boundSql, refreshed.observed, Date.now());
+      recordGitHubObservations(this.boundSql, answer.observed, Date.now());
 
-      return refreshed.outcome;
+      return answer.outcome;
     }).pipe(Effect.catch((failed) => Effect.sync(() => {
       diagnostics.failure('github.refresh_failed', failed);
 
@@ -2948,14 +2959,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     })));
   }
 
-  private async githubAuthorization(): Promise<string | null> {
-    const { stub, caller } = await this.userHub();
-    const vault = await stub.getAuthHeaders(caller, 'github');
-    const header = Object.entries(vault ?? {}).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
-
-    return header ?? stub.userMcp_githubAuthorization(caller);
-  }
-
+  /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
+  @callable()
   async listWorkspaceWork(): Promise<WorkspaceWork> {
     return readWorkspaceWork(
       this.boundSql,
@@ -4631,6 +4636,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
 
     return { builtIn, crafted, executors };
+  }
+
+  @callable() async regenerateWorkspaceLogo(): Promise<{ drawn: boolean; refusal: string | null }> {
+    const refusal = await this.titlingRefusal();
+
+    if (refusal !== null) return { drawn: false, refusal };
+    const mission = readMission(this.boundSql);
+    const subject = mission === null || isPlaceholderMission(mission) ? await this.workspaceTitle() ?? this.name : mission;
+
+    return { drawn: await this.drawLogo(subject), refusal: null };
+  }
+
+  private async drawLogo(subject: string): Promise<boolean> {
+    const svg = await drawWorkspaceLogo(await this.oneShotOn('logo'), subject);
+
+    if (svg === null) return false;
+    const { stub, caller } = await this.userHub();
+
+    return (await stub.setWorkspaceLogo(caller, this.name, svg)).drawn;
   }
 
   @callable() async setDisplayName(displayName: string) {

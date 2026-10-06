@@ -16,7 +16,7 @@ import { FeedbackButton } from "./FeedbackButton";
 import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, type PanelAgent } from "@kinu.run/core";
 import { renderCauseChain, detach } from "@kinu.run/core/obs";
 import { SidebarAgents } from "./SidebarAgents";
-import { AgentStatusMark } from "./AgentStatus";
+import { ChatMascot, WorkspaceLogo, mascotSeed } from "./Marks";
 import { RemoveWorkspaceDialog } from "./RemoveWorkspaceDialog";
 import { useAgentsNav, useOpenAgentsPanel, type WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
 import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
@@ -242,7 +242,10 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                           `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-12 lg:pr-3 lg:group-hover:pr-12 lg:group-focus-within:pr-12 transition-colors ${navRowCls(linkActive && panel === null)}`
                         }
                       >
-                        <span className="flex w-[13px] shrink-0 justify-center"><WorkspaceDot overview={overview} open={isActive} /></span>
+                        <span className="relative flex shrink-0">
+                          <WorkspaceLogo title={shown} logo={a.logo} />
+                          <span className="p-logo-badge"><WorkspaceDot overview={overview} open={false} /></span>
+                        </span>
                         <span className={`min-w-0 flex-1 truncate p-row-text font-semibold ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
                         {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
@@ -331,7 +334,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
           <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
             aria-current={panel.shown === chat.key ? "page" : undefined}
             className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(panel.shown === chat.key)}`}>
-            <span className="flex w-[13px] shrink-0 justify-center"><AgentStatusMark activity={chat.activity} /></span>
+            <ChatMascot seed={mascotSeed(panel.workspace, chat.key)} activity={chat.activity} />
             <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{chat.label}</span>
           </button>
         </li>

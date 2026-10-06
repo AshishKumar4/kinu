@@ -67,7 +67,9 @@ const WorkspaceEntrySchema = v.object({
   name: v.string(), displayName: v.string(), createdAt: v.number(), lastVisited: v.number(),
 });
 
-const RosterEntrySchema = v.object({ ...WorkspaceEntrySchema.entries, overview: v.nullable(WorkspaceOverviewSchema), decisions: v.number() });
+const RosterEntrySchema = v.object({
+  ...WorkspaceEntrySchema.entries, overview: v.nullable(WorkspaceOverviewSchema), decisions: v.number(), logo: v.optional(v.nullable(v.string())),
+});
 
 const RosterCountsSchema = v.object({
   all: v.number(), needs: v.number(), working: v.number(), idle: v.number(), unreported: v.number(), decisions: v.number(),

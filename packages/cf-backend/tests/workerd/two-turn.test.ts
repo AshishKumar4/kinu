@@ -30,7 +30,7 @@ const ATTACHMENT_URL = 'data:image/png;base64,iVBORw0KGgo=';
 
 /** A new workspace's logo is drawn by its own model too; a test counting turns leaves that call out. */
 function drawsLogo(call: HttpCall): boolean {
-  return call.users.some((message) => message.startsWith('Draw the logo'));
+  return call.users.some((message) => message.startsWith('Design the logo'));
 }
 
 function carriesAttachment(call: HttpCall): boolean {

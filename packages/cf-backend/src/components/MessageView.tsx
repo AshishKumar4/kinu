@@ -1,5 +1,5 @@
 import { Effect, Cause } from 'effect';
-import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useLayoutEffect, useCallback, type ReactNode } from "react";
 import {
   WrenchIcon, CaretRightIcon,
   GitBranchIcon, CheckCircleIcon,
@@ -97,21 +97,13 @@ export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
   );
 }
 
-/** Cut between lines, so no markdown span is left open. */
-function openingLines(text: string): string {
-  const lines = text.split("\n");
-  let taken = 0;
-
-  for (let length = 0; taken < lines.length && taken < 4 && length < 160; taken += 1) length += lines[taken].length;
-
-  return lines.slice(0, taken).join("\n");
-}
-
+/** Folds by rendered height, never source lines (m1111). */
 function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  // A guess for the first paint and the server; the measure below settles it.
+  const [long, setLong] = useState(() => text.length > 160 || text.split("\n").length > 3);
   const viewport = useRef<HTMLDivElement>(null);
-  const opening = openingLines(text);
-  const long = opening !== text;
+  const prose = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!live) return;
@@ -119,6 +111,19 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
 
     if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
   }, [live, text]);
+
+  useLayoutEffect(() => {
+    const box = prose.current;
+
+    if (live || expanded || box === null) return;
+    const measure = () => setLong(box.scrollHeight > box.clientHeight + 1);
+    const observer = new ResizeObserver(measure);
+
+    measure();
+    observer.observe(box);
+
+    return () => observer.disconnect();
+  }, [live, expanded, text]);
 
   return (
     <div className="py-0.5 p-row-text p-text-4" data-reasoning>
@@ -133,7 +138,7 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
             <ThinkingLabel live={false} />
             {long && <span className="ml-2 font-medium p-accent">{expanded ? "collapse" : "expand"}</span>}
           </button>
-          <div className="prose-thinking mt-1 ml-3.5" data-folded={long && !expanded ? "" : undefined}><MarkdownContent content={expanded ? text : opening} /></div>
+          <div ref={prose} className="prose-thinking mt-1 ml-3.5" data-folded={expanded ? undefined : ""} data-overflows={long ? "" : undefined}><MarkdownContent content={text} /></div>
         </>
       )}
     </div>

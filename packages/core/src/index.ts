@@ -142,6 +142,8 @@ export {
   validateWorkspaceName,
 } from './identity/naming';
 
+export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg } from './identity/logo';
+
 export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
 
 export { EvolutionEngine } from './evolution/engine';
@@ -1577,7 +1579,10 @@ export {
   type GitHubCi, type GitHubItem, type GitHubRepo, type WorkspaceGitHub,
 } from './github/activity';
 
-export { refreshGitHub, type GitHubRefreshOutcome, type WorkspaceGitHubView } from './github/refresh';
+export {
+  gitHubRefreshAsk, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type GitHubRefreshOutcome,
+  type WorkspaceGitHubView,
+} from './github/refresh';
 
 export { readGitHubRemotes } from './github/remotes';
 

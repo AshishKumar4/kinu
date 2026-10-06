@@ -681,6 +681,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   const navigate = useNavigate();
   const drawer = useLayoutDrawer();
   const agentsNav = useAgentsNav();
+  const logo = useWorkspaceRoster().entries.find((entry) => entry.name === workspace)?.logo;
   const [removing, setRemoving] = useState(false);
   const [deleting, setDeleting] = useState<{ title: string; path: string } | null>(null);
 
@@ -694,7 +695,8 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
     <>
       <WorkspaceHeader
         workspace={{
-          title, to: `/workspace/${workspace}/overview`, editValue,
+          name: workspace,
+          title, logo, to: `/workspace/${workspace}/overview`, editValue,
           rename: async (name) => { await state.setDisplayName(name); }, remove: () => setRemoving(true),
         }}
         chats={chats}
@@ -732,11 +734,13 @@ function WorkspaceView({ view, workspace, title, state, agents, open }: {
   agents: readonly PanelAgent[];
   open: (agent: PanelAgent) => void;
 }) {
-  if (view === "settings") return <WorkspaceSettings workspace={workspace} state={state} />;
+  const logo = useWorkspaceRoster().entries.find((entry) => entry.name === workspace)?.logo;
+
+  if (view === "settings") return <WorkspaceSettings workspace={workspace} title={title} logo={logo} state={state} />;
 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
 
-  return <WorkspaceOverview workspace={workspace} title={title} rpc={state.rpc} readMoves={state.readMoves}
+  return <WorkspaceOverview workspace={workspace} title={title} logo={logo} rpc={state.rpc} readMoves={state.readMoves}
     lineage={state.agentStatus?.forkLineage ?? null} agents={agents} open={open} />;
 }
 

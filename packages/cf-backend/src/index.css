@@ -479,7 +479,8 @@ body { background: var(--c-bg); color: var(--c-text); }
   ul, ol { margin: 0.35em 0; padding-left: 1.1rem; }
   ul { list-style: disc; } ol { list-style: decimal; }
   h1, h2, h3 { font-size: 1em; font-weight: 600; margin: 0.5em 0 0.2em; color: var(--c-text-2); }
-  &[data-folded] { max-height: 3lh; overflow: hidden; mask-image: linear-gradient(to bottom, #000 45%, transparent); }
+  &[data-folded] { max-height: 3lh; overflow: hidden; }
+  &[data-folded][data-overflows] { mask-image: linear-gradient(to bottom, #000 45%, transparent); }
 }
 
 /* ── Type roles — the scale lives here, not in per-component literals ─ */
@@ -1561,7 +1562,7 @@ body > .annotation-toolbar {
   height: 38px;
 }
 .p-bar-tab[data-active] { flex-shrink: 0; }
-.p-bar-tab[data-title] { min-width: 120px; max-width: 300px; flex-shrink: 2; }
+.p-bar-tab[data-title] { min-width: 144px; max-width: 320px; flex-shrink: 2; }
 .p-bar-sizer, .p-bar-link {
   display: flex;
   align-items: center;
@@ -1577,7 +1578,7 @@ body > .annotation-toolbar {
 .p-bar-tab[data-active] .p-bar-sizer { font-weight: 500; }
 @media (max-width: 767px) {
   .p-bar-tab { min-width: 96px; }
-  .p-bar-tab[data-title] { min-width: 56px; }
+  .p-bar-tab[data-title] { min-width: 76px; }
 }
 .p-bar-tab + .p-bar-tab::before {
   content: "";
@@ -1697,7 +1698,7 @@ body > .annotation-toolbar {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: 1.5px solid color-mix(in srgb, var(--c-accent-mark) 24%, transparent);
+  border: 2px solid color-mix(in srgb, var(--c-accent-mark) 32%, transparent);
   border-top-color: var(--c-accent-mark);
   animation: p-status-turn 1.15s linear infinite;
 }
@@ -1717,38 +1718,82 @@ body > .annotation-toolbar {
 }
 
 /* Working: the name's words carry a slow light, left to right. Needing the
-   person: a soft red glow breathes around the tab or row. A failure stays a
-   still red mark, so it never reads as the live pulse. */
-.p-status-label { --shimmer-base: var(--c-text-3); --shimmer-peak: color-mix(in srgb, var(--c-accent-mark) 75%, var(--c-text)); }
+   person: a soft red light rises under the tab from the bar's hairline, or
+   washes in from a row's edge, and breathes; never an outline. A failure
+   stays a still red mark, so it never reads as the live pulse. */
+.p-status-label { --shimmer-base: var(--c-text-3); --shimmer-peak: var(--c-accent-mark); }
 [data-status="working"] .p-status-label {
   color: transparent;
-  background: linear-gradient(100deg, var(--shimmer-base) 0 32%, var(--shimmer-peak) 50%, var(--shimmer-base) 68% 100%) 100% 0 / 280% 100% no-repeat;
+  background: linear-gradient(100deg, var(--shimmer-base) 0 18%, var(--shimmer-peak) 42% 58%, var(--shimmer-base) 82% 100%) 100% 0 / 280% 100% no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
   animation: p-shimmer 2.8s ease-in-out infinite;
 }
 @keyframes p-shimmer { to { background-position: 0 0; } }
-.p-halo { --halo-inset: 0; isolation: isolate; }
-.p-bar-tab.p-halo { --halo-inset: 7px calc(var(--flare) + 3px) 6px; }
-[data-status="waiting"].p-halo::after {
+.p-halo { isolation: isolate; }
+.p-bar-tab.p-halo[data-status="waiting"] .p-bar-link::before,
+[data-status="waiting"].p-halo:not(.p-bar-tab)::after {
   content: "";
   position: absolute;
-  inset: var(--halo-inset);
-  z-index: -1;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--c-danger) 7%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-danger) 40%, transparent), 0 0 14px 1px color-mix(in srgb, var(--c-danger) 30%, transparent);
   pointer-events: none;
   animation: p-attention 2.6s ease-in-out infinite;
 }
-@keyframes p-attention { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+.p-bar-tab.p-halo[data-status="waiting"] .p-bar-link::before {
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 16px;
+  background: radial-gradient(55% 100% at 50% 100%, color-mix(in srgb, var(--c-danger) 55%, transparent), transparent 80%);
+}
+[data-status="waiting"].p-halo:not(.p-bar-tab)::after {
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: radial-gradient(60% 160% at 0% 50%, color-mix(in srgb, var(--c-danger) 16%, transparent), transparent 75%);
+}
+@keyframes p-attention { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .p-agent-status::before { animation: none !important; }
   .p-agent-status[data-status="working"]::before { border-right-color: var(--c-accent-mark); }
   .p-agent-status[data-status="waiting"]::before { box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--c-danger) 28%, transparent); }
   [data-status="working"] .p-status-label { animation: none; color: inherit; background: none; }
-  [data-status="waiting"].p-halo::after { animation: none; opacity: 0.8; }
+  .p-bar-tab.p-halo[data-status="waiting"] .p-bar-link::before,
+  [data-status="waiting"].p-halo:not(.p-bar-tab)::after { animation: none; opacity: 0.7; }
 }
+
+.p-mascot { position: relative; display: inline-flex; flex-shrink: 0; }
+.p-mascot > svg { overflow: visible; }
+.p-bar-sizer > .p-mascot { width: 16px; height: 16px; }
+.p-mascot * { transform-box: view-box; }
+.p-mascot-tile { transform-origin: 16px 16px; }
+.p-mascot-eyes { transform-origin: 16px 15px; animation: p-mascot-glance 5.2s ease-in-out infinite; animation-delay: var(--mascot-phase); }
+.p-mascot-eye { transform-box: fill-box; transform-origin: center; animation: p-mascot-blink 4.6s linear infinite; animation-delay: var(--mascot-phase); }
+@keyframes p-mascot-glance { 0%, 40% { transform: translateX(0); } 50%, 65% { transform: translateX(-1.6px); } 75%, 90% { transform: translateX(1.6px); } 100% { transform: translateX(0); } }
+@keyframes p-mascot-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+[data-face="working"] .p-mascot-eyes { animation: none; }
+[data-face="working"] .p-mascot-eye { transform-box: view-box; animation: p-mascot-type 0.6s ease-in-out infinite; }
+[data-face="working"] .p-mascot-eye + .p-mascot-eye { animation-delay: 0.2s; }
+@keyframes p-mascot-type { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2.6px); } }
+.p-mascot-sheen { animation: p-mascot-sheen 1.6s ease-in-out infinite; }
+@keyframes p-mascot-sheen { 0% { transform: translateX(-28px); } 60%, 100% { transform: translateX(28px); } }
+[data-face="waiting"] .p-mascot-tile { animation: p-mascot-pulse 1.3s ease-in-out infinite; }
+[data-face="waiting"] .p-mascot-eyes { animation: none; transform: translateY(-1.4px) scale(1.12); }
+.p-mascot-badge { animation: p-mascot-alert 1.3s ease-in-out infinite; }
+@keyframes p-mascot-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.09); } }
+@keyframes p-mascot-alert { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+[data-face="failed"] .p-mascot-tile { transform: rotate(-10deg); filter: saturate(0.4); }
+@media (prefers-reduced-motion: reduce) {
+  .p-mascot * { animation: none !important; }
+}
+[data-workspace-chat] .p-mascot, [data-agent-row] .p-mascot { --mascot-ring: var(--c-sidebar); }
+
+.p-monogram {
+  display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; font-weight: 600; line-height: 1;
+  color: var(--c-accent-fg); background: color-mix(in srgb, var(--c-accent-mark) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-accent-mark) 22%, transparent);
+}
+.p-logo-badge { position: absolute; right: -2px; bottom: -2px; display: flex; }
+.p-logo-badge > span { box-shadow: 0 0 0 1.5px var(--c-sidebar, var(--c-bg)); }
 
 /* A nested list: rows indented under their parent, with one thin guide
    line under the parent's mark. */

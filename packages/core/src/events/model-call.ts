@@ -24,6 +24,7 @@ export const SPEND_SOURCES = [
   'warming',
   'test',
   'rating',
+  'logo',
 ] as const;
 
 export type SpendSource = (typeof SPEND_SOURCES)[number];
@@ -44,6 +45,7 @@ export const SPEND_SOURCE_LABEL = {
   warming: 'Cache warming',
   test: 'Model tests',
   rating: 'Turn ratings',
+  logo: 'Workspace logos',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 export const SPEND_SOURCE_DETAIL = {
@@ -65,6 +67,7 @@ export const SPEND_SOURCE_DETAIL = {
     + 'at most three per idle stretch (providers/cache-warming.ts)',
   test: 'a model\'s Test button: one request asking for one word through the path a turn takes',
   rating: 'the decision model reading the user\'s reply to a turn: one call per answered turn',
+  logo: 'the workspace\'s own model drawing its logo: once at creation, and on each regenerate',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 /**

@@ -3643,15 +3643,19 @@ export abstract class ActorAgent extends Agent<Env> {
    * fast tier's chain like every fixed-tier call ({@link completeOnRoute}).
    */
   protected async suggestTitle(mission: string): Promise<string | null> {
-    const route = resolveModelRoute('fast', await this.routingProfile());
+    return suggestWorkspaceTitle(await this.oneShotOn('fast'), mission);
+  }
 
-    return suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
+  protected async oneShotOn(source: 'fast' | 'logo'): Promise<(system: string, prompt: string) => Promise<string>> {
+    const route = resolveModelRoute(source, await this.routingProfile());
+
+    return (system, prompt) => completeOnRoute(route, {
       llm: (resolution) => routedLlm((serving) => this.modelForResolution(serving), resolution, {
         report: (report) => this.reportModelCall(report), operations: this.modelOperations,
       }, system),
       credentialOf: (spec) => this.ownedModelServices.credentialFor(spec),
       refusals: this.tierRefusals,
-    }, prompt), mission);
+    }, prompt);
   }
 
   private refusalNotices: TierRefusals | null = null;
