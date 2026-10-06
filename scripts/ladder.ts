@@ -4051,9 +4051,11 @@ if (import.meta.main) {
   // in order with its output live, which is how `--gate` reads it.
   const concurrent = pending.length > 1 && !process.argv.includes('--serial');
   let stdio: 'inherit' | 'pipe' | 'tee' = 'inherit';
+  // A CI part or a single CI row reports each row's output and each file's seconds in its verdict file.
+  const verdictRows = ciPart !== undefined || rowGate !== undefined;
 
   if (concurrent) stdio = 'pipe';
-  else if (deployPhase !== undefined || ciPart !== undefined) stdio = 'tee';
+  else if (deployPhase !== undefined || verdictRows) stdio = 'tee';
   const failed: string[] = [];
   // A tier stops launching at its first red: the fastest path to a finding. A deploy phase never does (L18).
   const stopped = (): boolean => deployPhase === undefined && ciPart === undefined && failed.length > 0;
@@ -4141,7 +4143,7 @@ if (import.meta.main) {
     if (!concurrent) console.log([header, ...lines].join('\n'));
 
     const timingPath = resolve(root, 'bench-artifacts/ci/file-' + String(index) + '.json');
-    const argv = entry.argv === undefined ? rowArgv(gate, tracked, deployPhase !== undefined, ciPart === undefined ? undefined : timingPath) : [...entry.argv];
+    const argv = entry.argv === undefined ? rowArgv(gate, tracked, deployPhase !== undefined, verdictRows ? timingPath : undefined) : [...entry.argv];
 
     const env = cacheRunEnvironment(closure, argv);
 
