@@ -271,7 +271,10 @@ function installedFiberRecoveryScene() {
       id TEXT PRIMARY KEY NOT NULL,
       name TEXT NOT NULL,
       snapshot TEXT,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      outcome TEXT,
+      error_message TEXT
     );
     CREATE TABLE cf_agents_fibers (
       fiber_id TEXT PRIMARY KEY,
@@ -399,7 +402,7 @@ describe('the installed Agents recovery scan', () => {
         .toEqual(['fresh-control', 'ledger-only']);
 
       const runMetadataPages = scene.queries.filter(({ query }) => (
-        query.includes('SELECT rowid AS rowid, id, name, created_at FROM cf_agents_runs')
+        query.includes('SELECT rowid AS rowid, id, name, created_at, completed_at, outcome,') && query.includes('FROM cf_agents_runs')
       ));
 
       expect(runMetadataPages.length).toBeGreaterThan(expiredRuns);
@@ -429,7 +432,7 @@ describe('the installed Agents recovery scan', () => {
       ));
 
       const firstRunPage = scene.queries.findIndex(({ query }) => (
-        query.includes('SELECT rowid AS rowid, id, name, created_at FROM cf_agents_runs')
+        query.includes('SELECT rowid AS rowid, id, name, created_at, completed_at, outcome,') && query.includes('FROM cf_agents_runs')
       ));
 
       const freshSnapshot = scene.queries.findIndex(({ query, bindings }) => (
@@ -457,10 +460,11 @@ describe('the installed Agents recovery scan', () => {
 
       expect(scene.recovered).toEqual(['fresh-control', 'ledger-only']);
       expect(scene.terminalNotifications).toEqual(['terminal-managed', 'ledger-only']);
+      // Since agents 0.25 (cloudflare/agents#2363) a fiber that already finished is settled, never reported interrupted.
       expect(scene.events
         .filter(({ name }) => name === 'fiber:run:interrupted')
         .map(({ payload }) => payload.fiberId))
-        .toEqual(['terminal-managed', 'fresh-control', 'ledger-only']);
+        .toEqual(['fresh-control', 'ledger-only']);
       expect(scene.database.query('SELECT id FROM cf_agents_runs').all()).toEqual([]);
       expect(
         scene.database.query('SELECT status FROM cf_agents_fibers WHERE fiber_id = ?')
@@ -644,7 +648,7 @@ const NOW = 1_700_000_000_000;
   });
 
   test('the PATCHED framework scan carries the same row budget, never a stopwatch', async () => {
-    // patches/agents@0.24.0.patch rewrites _checkRunFibers as Kinu code; its budget must match the sweep's.
+    // patches/agents@0.26.0.patch rewrites _checkRunFibers as Kinu code; its budget must match the sweep's.
     const scene = installedFiberRecoveryScene();
 
     try {
