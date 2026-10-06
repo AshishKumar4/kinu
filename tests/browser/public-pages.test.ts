@@ -1204,6 +1204,79 @@ describe('the standalone landing runs', () => {
   });
 });
 
+/** How the browser answers the hero's WebGPU probe: no `navigator.gpu`, no adapter, or an adapter whose device is refused. */
+type GpuAnswer = 'absent' | 'no-adapter' | 'refused';
+
+/** What the hero showed with that answer: its renderer, whether its clock ran and the canvas painted, what it reported, and whether it downloaded the WebGPU renderer. */
+async function heroWith(gallery: Gallery, answer: GpuAnswer) {
+  const page = await gallery.newPage();
+  const reported: string[] = [];
+  const fetched: string[] = [];
+
+  page.on('console', (message) => { if (message.type() === 'error') reported.push(message.text()); });
+  page.on('request', (request) => { fetched.push(request.url()); });
+  await page.setViewport(DESKTOP);
+  await page.evaluateOnNewDocument((given: GpuAnswer) => {
+    if (given === 'absent') {
+      Reflect.deleteProperty(Navigator.prototype, 'gpu');
+
+      return;
+    }
+
+    // An adapter with no features, as vgpu reads it, whose device request the browser refuses.
+    const adapter = { features: new Set<string>(), info: null, requestDevice: () => Promise.reject(new TypeError('device request was denied')) };
+
+    Object.defineProperty(Navigator.prototype, 'gpu', {
+      configurable: true,
+      get: () => ({ requestAdapter: () => Promise.resolve(given === 'no-adapter' ? null : adapter), getPreferredCanvasFormat: () => 'bgra8unorm' }),
+    });
+  }, answer);
+  await page.goto(`${gallery.origin}/landing.html`, { waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => window.__kinuSearchTree?.renderer() === 'canvas');
+  const started = await page.evaluate(() => window.__kinuSearchTree?.time() ?? 0);
+
+  await page.waitForFunction((from) => (window.__kinuSearchTree?.time() ?? 0) > from, {}, started);
+  // Painted, not just mounted: some pixel of the hero's canvas is drawn.
+  await page.waitForFunction(() => {
+    const canvas = document.querySelector('[data-hero-graph] canvas');
+    const context = canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0 ? canvas.getContext('2d') : null;
+    const pixels = context?.getImageData(0, 0, context.canvas.width, context.canvas.height).data ?? [];
+
+    return pixels.some((value, index) => index % 4 === 3 && value !== 0);
+  }, { polling: 100 });
+
+  const seen = {
+    canvasRenderer: await page.$eval('[data-hero-graph] canvas', (canvas) => canvas.getAttribute('data-renderer')),
+    failure: reported.find((line) => line.includes('landing.hero_webgpu_failed')) ?? null,
+    downloadedWebGpu: fetched.some((url) => url.includes('renderer-webgpu')),
+  };
+
+  await page.close();
+
+  return seen;
+}
+
+/**
+ * Wherever the GPU half gives out before it starts, the hero still runs on Canvas2D: a browser with no WebGPU and one
+ * with no adapter never download the WebGPU renderer and report nothing, since neither is a failure; a device the
+ * browser refuses is reported with its reason. Unlike the device-loss row above, these hold on every lane.
+ */
+describe('the hero runs on Canvas2D when WebGPU cannot start', () => {
+  test('with no WebGPU, no adapter, or a refused device, the hero paints and its clock runs', async () => {
+    await withGallery(async (gallery) => {
+      const absent = await heroWith(gallery, 'absent');
+      const noAdapter = await heroWith(gallery, 'no-adapter');
+      const refused = await heroWith(gallery, 'refused');
+
+      for (const seen of [absent, noAdapter, refused]) expect(seen.canvasRenderer).toBe('canvas');
+      expect([absent.downloadedWebGpu, noAdapter.downloadedWebGpu]).toEqual([false, false]);
+      expect([absent.failure, noAdapter.failure]).toEqual([null, null]);
+      expect(refused.downloadedWebGpu).toBe(true);
+      expect(refused.failure).toContain('device request was denied');
+    });
+  });
+});
+
 describe('the landing demonstration leads with its result', () => {
   test('the crafted-tool card is gone and the frame names itself a sample', () => {
     const persists = required(facts.persists, 'persists card');

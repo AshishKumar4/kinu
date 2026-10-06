@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import type { Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
 
 
@@ -130,3 +131,194 @@ test('a delayed snapshot cannot overwrite any surface refreshed after it was adm
   });
 });
 
+
+/** The gallery socket's record of what the page did: forced redials, failures still scripted when it redialled, snapshot reads. */
+function socketRecord(page: Page): Promise<{ redials: number; redialAt: number | null; snapshotReads: number; scripted: number }> {
+  return page.evaluate(() => {
+    const root = document.documentElement.dataset;
+
+    return {
+      redials: Number(root.galleryRedials ?? '0'),
+      redialAt: root.galleryRedialAt === undefined ? null : Number(root.galleryRedialAt),
+      snapshotReads: Number(root.gallerySnapshotReads ?? '0'),
+      scripted: (root.galleryRpcFailures ?? '').split(',').filter(Boolean).length,
+    };
+  });
+}
+
+/**
+ * A socket that still claims to be open but answers nothing is only noticed by its calls timing out. Three timeouts in
+ * a row condemn it and the page redials once, then re-reads what it shows; a fast refusal in between is proof the
+ * origin is alive and starts the count again.
+ */
+test('a socket open but answering nothing is redialled after three timeouts in a row, and the page re-reads', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1920, height: 1100 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&workspaceFault=1`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-composer-root]');
+    await page.click('button[title="Files"]');
+    await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('before.txt'));
+
+    // Two timeouts, a refusal, then three timeouts: only the last three are in a row.
+    await page.evaluate(() => {
+      document.documentElement.dataset.workspaceRevision = 'current';
+      document.documentElement.dataset.galleryRpcFailures = 'timeout,timeout,fast,timeout,timeout,timeout';
+    });
+
+    for (let presses = 0; (await socketRecord(page)).scripted > 0; presses += 1) {
+      if (presses > 12) throw new Error(`Refresh drained no scripted failure: ${JSON.stringify(await socketRecord(page))}`);
+      const before = (await socketRecord(page)).scripted;
+
+      await page.click('[aria-label="Refresh"]');
+      await page.waitForFunction((was) => (document.documentElement.dataset.galleryRpcFailures ?? '').split(',').filter(Boolean).length < was, {}, before);
+    }
+
+    await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('current.txt'));
+    const record = await socketRecord(page);
+
+    // One redial, made on the last timeout and not before.
+    expect({ redials: record.redials, redialAt: record.redialAt }).toEqual({ redials: 1, redialAt: 0 });
+    await page.close();
+  });
+});
+
+/** Presses the button showing `words` inside `within`. */
+async function pressButtonIn(page: Page, within: string, words: string): Promise<void> {
+  await page.$$eval(`${within} button`, (buttons, label) => {
+    const button = buttons.find((each) => each.textContent?.trim() === label);
+
+    if (!(button instanceof HTMLElement)) throw new Error(`no ${label} on the page`);
+    button.click();
+  }, words);
+}
+
+const pressButton = (page: Page, words: string): Promise<void> => pressButtonIn(page, 'body', words);
+
+/** Retry re-reads; on a socket the SDK has given up on, it redials first. */
+test('Retry re-reads the workspace, and redials first only when the socket was closed for good', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&snapshot=failed`, { waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => document.body.textContent?.includes('Could not open this workspace'));
+    const failed = await socketRecord(page);
+
+    await pressButton(page, 'Retry');
+    await page.waitForFunction((was) => Number(document.documentElement.dataset.gallerySnapshotReads ?? '0') > was, {}, failed.snapshotReads);
+    expect((await socketRecord(page)).redials).toBe(0);
+
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&terminal=denied`, { waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => document.body.textContent?.includes('Access to this workspace was denied'));
+    const denied = await socketRecord(page);
+
+    await pressButton(page, 'Try again');
+    await page.waitForFunction((was) => Number(document.documentElement.dataset.gallerySnapshotReads ?? '0') > was, {}, denied.snapshotReads);
+    expect((await socketRecord(page)).redials).toBe(1);
+    await page.close();
+  });
+});
+
+/** Settles the held resolution of consent `id`, failing it with `failed` when given. */
+async function settleConsent(page: Page, id: string, failed?: string): Promise<void> {
+  await page.evaluate((detail) => { window.dispatchEvent(new CustomEvent('gallery:consent-settle', { detail })); }, { id, ...(failed !== undefined && { failed }) });
+}
+
+/** The consent cards on the page, by id. */
+function consentCards(page: Page): Promise<(string | null)[]> {
+  return page.$$eval('[data-device-bind]', (cards) => cards.map((card) => card.getAttribute('data-device-bind')));
+}
+
+/**
+ * Two device commands waiting at once are decided apart: one refused by the device hub keeps its card and says why,
+ * the other's card goes, a re-read of the waiting list keeps the reason standing, and deciding the first again clears it.
+ */
+test('two waiting device commands are decided independently, and a refused decision keeps its card and its reason', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&consent=two`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-device-bind="c-2"]');
+    expect(await consentCards(page)).toEqual(['c-1', 'c-2']);
+
+    await pressButtonIn(page, '[data-device-bind="c-1"]', 'Use studio');
+    await pressButtonIn(page, '[data-device-bind="c-2"]', 'Not now');
+    await settleConsent(page, 'c-1', 'device hub unavailable');
+    await page.waitForFunction(() => document.body.textContent?.includes('device hub unavailable'));
+    await settleConsent(page, 'c-2');
+    await page.waitForFunction(() => document.querySelector('[data-device-bind="c-2"]') === null);
+    expect(await consentCards(page)).toEqual(['c-1']);
+
+    // The waiting list is read again: the refused command is still waiting, and still says why.
+    await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
+    await page.waitForFunction(() => document.querySelector('[data-device-bind="c-1"]') !== null);
+    expect(await consentCards(page)).toEqual(['c-1']);
+    expect(await page.evaluate(() => document.body.textContent?.includes('device hub unavailable'))).toBe(true);
+
+    await pressButtonIn(page, '[data-device-bind="c-1"]', 'Use studio');
+    await settleConsent(page, 'c-1');
+    await page.waitForFunction(() => document.querySelector('[data-device-bind]') === null);
+    expect(await page.evaluate(() => document.body.textContent?.includes('device hub unavailable'))).toBe(false);
+    await page.close();
+  });
+});
+
+/** Three frames drawn: long enough for an answered read's promise chain to reach the screen. */
+async function framesDrawn(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((drawn) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => { drawn(); })));
+  }));
+}
+
+const jobReads = (page: Page): Promise<number> => page.evaluate(() => Number(document.documentElement.dataset.galleryJobReads ?? '0'));
+
+/** Answers the jobs read numbered `at` with one running job, or fails it. */
+async function answerJobs(page: Page, at: number, answer: { label?: string; failed?: string }): Promise<void> {
+  await page.evaluate((detail) => { window.dispatchEvent(new CustomEvent('gallery:jobs-answer', { detail })); }, { at, ...answer });
+}
+
+/** Has the server say the jobs moved, and returns the number of the read that starts. */
+async function jobsMoved(page: Page): Promise<number> {
+  const at = await jobReads(page);
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: { type: 'reads_changed', reads: ['listBackgroundJobs'] } })));
+  await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryJobReads ?? '0') > was, {}, at);
+
+  return at;
+}
+
+const pageSays = (page: Page, words: string): Promise<boolean> => page.evaluate((said) => document.body.textContent?.includes(said) === true, words);
+
+/** Two reads of the same list in flight: whichever was asked later decides what shows, whatever order they answer in. */
+test('a late answer to an older read never replaces a newer one, nor reports its failure over it', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&jobs=held`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[aria-label="Work"]');
+    await page.click('[aria-label="Work"]');
+    await page.waitForSelector('[data-back-to-work]');
+    await page.click('[data-back-to-work]');
+    await page.waitForFunction(() => document.body.textContent?.includes('first build'));
+    await page.evaluate(() => { document.documentElement.dataset.galleryJobsHold = '1'; });
+
+    const older = await jobsMoved(page);
+    const newer = await jobsMoved(page);
+
+    await answerJobs(page, newer, { label: 'newer build' });
+    await page.waitForFunction(() => document.body.textContent?.includes('newer build'));
+    await answerJobs(page, older, { label: 'older build' });
+    await framesDrawn(page);
+    expect([await pageSays(page, 'newer build'), await pageSays(page, 'older build')]).toEqual([true, false]);
+
+    const olderAgain = await jobsMoved(page);
+    const latest = await jobsMoved(page);
+
+    await answerJobs(page, latest, { label: 'latest build' });
+    await page.waitForFunction(() => document.body.textContent?.includes('latest build'));
+    await answerJobs(page, olderAgain, { failed: 'older request failed' });
+    await framesDrawn(page);
+    expect([await pageSays(page, 'latest build'), await pageSays(page, 'older request failed')]).toEqual([true, false]);
+    await page.close();
+  });
+});
