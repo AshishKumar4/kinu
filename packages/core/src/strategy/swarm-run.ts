@@ -53,8 +53,9 @@ import {
   selectParetoFrontierNode,
 } from './swarm-tree';
 import type { Expansion, LevelMember, TreeNode } from './swarm-tree';
-import { expandChild, sharedPrefix } from './swarm-expansion';
+import { expandChild, modelSpecOf, sharedPrefix } from './swarm-expansion';
 import type { ExpandChildCtx } from './swarm-expansion';
+import type { ModelWindow } from '../context-window';
 import { measureChild, reportGate, scoreExpansion } from './swarm-scoring';
 import { settleRun } from './settle';
 
@@ -101,6 +102,8 @@ export interface SwarmRunDeps {
     messages: readonly ModelMessage[],
     basis: { readonly contextWindow: number; readonly key: string },
   ) => Promise<readonly ModelMessage[]>;
+  /** A model's catalog window, the basis {@link compactShared}'s threshold measures; absent, it is unknown. */
+  readonly windowOf?: (spec: string) => Promise<ModelWindow>;
   /** The resolved turn profile, recorded at `begin` so a re-drive re-enters under it. */
   readonly profile?: SwarmProfileSnapshot;
   /** Resolves a tier's model spec to the model a node runs on. Required whenever {@link profile} is present. */
@@ -113,6 +116,11 @@ export interface SwarmRunDeps {
 }
 
 /** Run a resolved swarm, or refuse. Refusals are ordered by cost; nothing spends before the baseline. */
+/** The node model's catalog window, the shared prefix's threshold basis; null when unknown. */
+async function windowOfModel(deps: SwarmRunDeps, model: LanguageModel): Promise<number | null> {
+  return deps.windowOf === undefined ? null : (await deps.windowOf(modelSpecOf(model))).contextWindow;
+}
+
 export async function runSwarm(
   deps: SwarmRunDeps,
   resolved: ResolvedSwarm,
@@ -222,6 +230,7 @@ export async function runSwarm(
 
   if ('reason' in nodeModelResult) return nodeModelResult;
   const nodeModel = nodeModelResult.model;
+  const nodeWindow = await windowOfModel(deps, nodeModel);
 
   const contendedRefusal = refuseContendedRun({
     searchLedger, reentry, task: resolved.task, preset: resolved.preset,
@@ -359,7 +368,7 @@ export async function runSwarm(
     expandChild: (input) => expandChild(expandCtx, input),
     measureChild,
     sharedPrefix: agentNodes
-      ? (parent) => sharedPrefix({ parent, compactShared: deps.compactShared, model: nodeModel, log, preset: resolved.preset })
+      ? (parent) => sharedPrefix({ parent, compactShared: deps.compactShared, window: nodeWindow, log, preset: resolved.preset })
       : undefined,
   });
 
@@ -445,7 +454,7 @@ export async function runSwarm(
 
     // *Inherited context* barrier: one compacted view per branch point, before any child starts.
     const prefix = agentNodes
-      ? await sharedPrefix({ parent, compactShared: deps.compactShared, model: nodeModel, log, preset: resolved.preset })
+      ? await sharedPrefix({ parent, compactShared: deps.compactShared, window: nodeWindow, log, preset: resolved.preset })
       : [];
 
     // The proposal's per-branch context where granted, otherwise the run's `context`.

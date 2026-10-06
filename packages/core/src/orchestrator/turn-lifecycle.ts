@@ -280,7 +280,7 @@ export function applyOverflowRecovery(opts: {
   error: string;
   /** Undefined when no step reported one; the size heuristic then does not apply. */
   lastPromptTokens: number | undefined;
-  contextWindow: number;
+  contextWindow: number | null;
   turnWasOverflowRetry: boolean;
   state: CompactionTriggerState;
   sessionKey: string;

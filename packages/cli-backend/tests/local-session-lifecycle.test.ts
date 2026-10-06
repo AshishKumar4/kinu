@@ -345,7 +345,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         models: [{ provider: 'openai', id: 'gpt-5.5', label: 'gpt', capabilities: ['streaming'] }],
         failures: [],
       }),
-      modelInfo: async () => null,
+      // As models.dev lists it: the window server-side compaction is sized against.
+      modelInfo: async () => ({ id: 'gpt-5.5', contextWindow: 1_050_000 }),
       ...resolverRest,
     };
 

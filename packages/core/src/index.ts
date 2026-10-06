@@ -383,6 +383,7 @@ export { StepInjections, type RecordedInjection } from './prompting/step-injecti
 export {
   classifyTurnFailure,
   planOverflowRecovery,
+  statedContextLimit,
   OVERFLOW_RETRY_EVENT,
   OVERFLOW_RETRY_TEXT,
   type TurnFailureClass,
@@ -415,10 +416,7 @@ export {
 
 export type { Usage } from './usage';
 
-export {
-  contextWindowForModel, resolveModelWindow, stepContextLimit, outputReserveTokens,
-  type ContextWindowEstimate, type ModelWindow, type ResolvedModelWindow,
-} from './context-window';
+export { modelWindow, stepContextLimit, outputReserveTokens, type ModelWindow } from './context-window';
 
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
 export {

@@ -130,7 +130,7 @@ describe('a head is admitted against its model\'s window as the catalog reports 
     });
 
     const report = await runHeadInference(input, await deps(model, {
-      window: { contextWindow: 1_048_576, modelOutputLimit: null, windowMeasured: true },
+      window: { contextWindow: 1_048_576, modelOutputLimit: null },
     }));
 
     expect([report.status, report.errorMessage]).toEqual(['completed', undefined]);

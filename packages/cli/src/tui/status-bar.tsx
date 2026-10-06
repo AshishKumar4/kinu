@@ -88,7 +88,7 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
     ...(profile !== undefined
       ? [{ id: 'profile', text: `  ${profile.role.label} · ${profile.tier.id}`, color: colors.intent.accent }]
       : []),
-    { id: 'context', text: `  ${formatContextUsage(model, contextTokens, contextWindow)}`, color: colors.text.muted },
+    { id: 'context', text: `  ${formatContextUsage(contextTokens, contextWindow)}`, color: colors.text.muted },
     ...(width >= 100 ? [{ id: 'effort', text: `  effort ${reasoningEffort}`, color: colors.text.muted }] : []),
     ...(autoEvolve !== undefined
       ? [{

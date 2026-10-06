@@ -21,7 +21,7 @@ import {
   promptCacheOptions,
   resolvePromptCacheStrategy,
 } from '../prompting/cache-breakpoints';
-import { contextWindowForModel } from '../context-window';
+import { modelWindow } from '../context-window';
 import { clampSerializedToolResult, clampToolResult } from '../tools/clamp';
 import { applyFileEdits, formatFileSlice } from '../tools/file-edit';
 import { scanFileWindow } from '../tools/file-scan';
@@ -77,7 +77,7 @@ export interface PipelineSubjects {
   readonly cacheableSystem: typeof cacheableSystem;
   readonly promptCacheOptions: typeof promptCacheOptions;
 
-  readonly contextWindowForModel: typeof contextWindowForModel;
+  readonly modelWindow: typeof modelWindow;
   readonly clampToolResult: typeof clampToolResult;
   readonly clampSerializedToolResult: typeof clampSerializedToolResult;
 
@@ -154,7 +154,7 @@ export const SUBJECT_SOURCE = {
   cacheableSystem: 'prompting/cache-breakpoints.ts',
   promptCacheOptions: 'prompting/cache-breakpoints.ts',
 
-  contextWindowForModel: 'context-window.ts',
+  modelWindow: 'context-window.ts',
   clampToolResult: 'tools/clamp.ts',
   clampSerializedToolResult: 'tools/clamp.ts',
 
@@ -230,7 +230,7 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     cacheableSystem,
     promptCacheOptions,
 
-    contextWindowForModel,
+    modelWindow,
     clampToolResult,
     clampSerializedToolResult,
 

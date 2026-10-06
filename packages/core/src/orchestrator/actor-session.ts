@@ -41,7 +41,7 @@ import type { TemporaryAgentPort } from '../types/subordinates';
 import type { AnsweredEvolutionHelper } from '../identity/evolution-helpers';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
-import { contextWindowForModel } from '../context-window';
+import { modelWindow } from '../context-window';
 import { SessionHistory, type MaterializedHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
@@ -313,7 +313,7 @@ export class ActorSession {
 
     if (this.options.orchestration.engine.hasAdvisorNoteForTurn(turnId) || port.reclaim(advisorLane(turnId)) !== null) return;
 
-    const task = buildAdvisorPrompt(snapshot.turn, snapshot.reachable, await this.advisorGuidance(snapshot));
+    const task = buildAdvisorPrompt(snapshot.turn, snapshot.reachable, await this.advisorGuidance());
     const hired = await port.start({ role: ADVISOR_ROLE_ID, roleLabel: ADVISOR_ROLE_ID, task, mode: 'build', lane: advisorLane(turnId) });
 
     if (!('status' in hired) || hired.status === 'failed') {
@@ -421,11 +421,11 @@ export class ActorSession {
     }).pipe(Effect.catch(deliveryFailed(turnId))));
   }
 
-  private async advisorGuidance(snapshot: AdvisorRecoverySnapshot): Promise<string> {
-    const contextWindow = contextWindowForModel(snapshot.model ?? '').window;
+  /** No catalog reaches the review, so its window is unknown and nothing in the guidance is trimmed by it. */
+  private async advisorGuidance(): Promise<string> {
     const workspace = await this.options.advisor?.workspace() ?? this.runtime.agentStateVfs ?? this.runtime.storage.vfs;
 
-    return await advisorWorkspaceGuidance({ vfs: workspace, limits: async () => ({ contextWindow, modelOutputLimit: null }) });
+    return await advisorWorkspaceGuidance({ vfs: workspace, limits: async () => modelWindow(null) });
   }
 
   /** An active turn stages authored replacement; idle replacement commits immediately. */
@@ -773,7 +773,7 @@ export class ActorSession {
   /** Null mid-turn: that turn measures its own. */
   async measureNextRequest(
     input: Omit<ActorExecutionInput, 'task'>, profile: ResolvedTurnProfile,
-  ): Promise<{ readonly tokens: number; readonly contextWindow: number } | null> {
+  ): Promise<{ readonly tokens: number; readonly contextWindow: number | null } | null> {
     if (this.inFlight) return null;
     const { tools, extensions } = this.turnToolset(input, profile);
     const { messages } = await this.canonical.materialize();

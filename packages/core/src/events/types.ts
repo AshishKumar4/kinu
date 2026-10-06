@@ -33,6 +33,7 @@ export type RunEventType =
   | 'provider_wait'
   | 'model_fallback'
   | 'context_admitted'
+  | 'context_overflow'
   | 'model_operation'
   | 'head_split'
   | 'head_merge'
@@ -153,6 +154,8 @@ export type RunEvent =
   | (RunEventBase & { type: 'model_fallback'; from: string; to: string; reason: string })
   /** Null `tokens`: the next request could not be measured, so no true number exists. */
   | (RunEventBase & { type: 'context_admitted'; tokens: number | null; contextWindow: number | null })
+  /** A provider refused `model`'s request as too long; `window` is its stated limit, else the refused request's size. */
+  | (RunEventBase & { type: 'context_overflow'; model: string; window: number })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
   /** `totalTokens` is absent when no head reported usage: unknown, not zero. */
   | (RunEventBase & { type: 'head_merge'; rootId: string; headCount: number;

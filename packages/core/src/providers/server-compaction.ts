@@ -46,7 +46,7 @@ export function serverCompactor(spec: string | undefined): ServerCompactor | nul
  * (`/compact`, an overflow's recovery) passes the request's own input, so this request compacts.
  */
 export function serverCompactionOptions(
-  spec: string | undefined, contextWindow: number | undefined, forcedInput?: number,
+  spec: string | undefined, contextWindow: number | null | undefined, forcedInput?: number,
 ): ProviderOptions | undefined {
   const threshold = Math.floor(((contextWindow ?? 0) * COMPACTION_TRIGGER_PERCENT) / 100);
   const vendor = serverCompactor(spec);

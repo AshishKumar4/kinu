@@ -97,6 +97,7 @@ export const RunEventSchema = v.variant('type', [
     source: v.picklist(PROVIDER_WAIT_SOURCES) }),
   v.object({ ...BaseFields, type: v.literal('model_fallback'), from: v.string(), to: v.string(), reason: v.string() }),
   v.object({ ...BaseFields, type: v.literal('context_admitted'), tokens: v.nullable(v.number()), contextWindow: v.nullable(v.number()) }),
+  v.object({ ...BaseFields, type: v.literal('context_overflow'), model: v.string(), window: v.number() }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
@@ -313,6 +314,8 @@ function spendTallyOf(row: Omit<SpendAggregateRow, 'source'>): SpendTally {
 export class RunEventRecorder {
   private publications: (() => void)[] | null = null;
   private readonly listeners = new Set<RunEventListener>();
+  /** Read once an activation per model; a committed refusal replaces it, so a turn asks the table nothing. */
+  private readonly measuredWindows = new Map<string, number | null>();
   readonly actorId: string;
 
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
@@ -357,12 +360,16 @@ export class RunEventRecorder {
 
       return {
         event,
-        publish: () => settleSync(Effect.forEach(this.listeners, (listener) => Effect.try({
-          try: () => listener(event),
-          catch: (cause) => toKinuError({ doing: 'notify a run-event listener', cause, otherwise: 'io' }),
-        }).pipe(Effect.catch((failure) => Effect.sync(() => {
-          diagnostics.failure('event.listener_failed', failure, { runId, eventType: event.type });
-        }))), { discard: true })),
+        publish: () => {
+          if (event.type === 'context_overflow') this.measuredWindows.set(event.model, event.window);
+
+          return settleSync(Effect.forEach(this.listeners, (listener) => Effect.try({
+            try: () => listener(event),
+            catch: (cause) => toKinuError({ doing: 'notify a run-event listener', cause, otherwise: 'io' }),
+          }).pipe(Effect.catch((failure) => Effect.sync(() => {
+            diagnostics.failure('event.listener_failed', failure, { runId, eventType: event.type });
+          }))), { discard: true }));
+        },
       };
     }));
   }
@@ -690,6 +697,25 @@ export class RunEventRecorder {
       LIMIT ${capped}`;
 
     return rows.map((r) => parseStoredRunEvent(r.payload)).reverse();
+  }
+
+  /** The window this actor's last too-long refusal on `model` measured, or null. */
+  measuredWindow(model: string): number | null {
+    this.actor.assertCurrent();
+    const known = this.measuredWindows.get(model);
+
+    if (known !== undefined) return known;
+
+    const row = this.sql<{ measured: number | null }>`
+      SELECT json_extract(payload, '$.window') AS measured FROM run_events
+      WHERE actor_id = ${this.actorId} AND type = 'context_overflow' AND json_extract(payload, '$.model') = ${model}
+      ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
+
+    const measured = row?.measured ?? null;
+
+    this.measuredWindows.set(model, measured);
+
+    return measured;
   }
 
   readContextMeasures(): ContextMeasures {

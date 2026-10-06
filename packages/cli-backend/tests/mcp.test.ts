@@ -279,12 +279,14 @@ function sessionWithWindows(model: LanguageModel, windows: Readonly<Record<strin
   rt.actor.config.setModel('local/small');
   const authority = createLocalProfileAuthority({ config: rt.actor.config, plane: resolverModelPlane(modelResolver) });
 
+  const events: SessionEvent[] = [];
+
   const session = new LocalAgentSession({
-    rt, db, model, modelResolver, onEvent: () => {},
+    rt, db, model, modelResolver, onEvent: (e) => events.push(e),
     profileAuthority: () => authority.envelope(),
   });
 
-  return { session };
+  return { session, events };
 }
 
 describe('LocalAgentSession MCP admission', () => {
@@ -316,10 +318,10 @@ describe('LocalAgentSession MCP admission', () => {
   });
 
   test('a tool larger than the session step allocation is deferred with its arithmetic', async () => {
-    // `huge` carries ~600KB each of description and schema against a ~117k-token step remainder;
+    // `huge` carries ~600KB each of description and schema against a ~113k-token step remainder;
     // schemas are never truncated, so it defers whole.
     let captured: CapturedRequest = { native: [], prompt: '' };
-    const { session, events } = sessionWithModel(capturingModel((request) => { captured = request; }));
+    const { session, events } = sessionWithWindows(capturingModel((request) => { captured = request; }), { 'local/small': 128_000 });
 
     try {
       await session.connectMcp(mcpServers());
@@ -349,7 +351,7 @@ describe('LocalAgentSession MCP admission', () => {
 
   test('tools admit in (server, tool) order regardless of config map order', async () => {
     // Admission sorts by (server, tool) name, not config key order: `zulu` is configured first and must still lose.
-    const { session } = sessionWithModel(capturingModel(() => {}));
+    const { session } = sessionWithWindows(capturingModel(() => {}), { 'local/small': 128_000 });
 
     try {
       await session.connectMcp({

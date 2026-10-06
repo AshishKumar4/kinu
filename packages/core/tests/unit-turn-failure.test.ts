@@ -3,6 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   classifyTurnFailure,
+  statedContextLimit,
   planOverflowRecovery,
   OVERFLOW_RETRY_EVENT,
   OVERFLOW_RETRY_TEXT,
@@ -66,6 +67,19 @@ describe('classifyTurnFailure', () => {
     expect(classifyTurnFailure(rateLimited, { lastPromptTokens: 0, contextWindow: 128_000 }))
       .toBe('rate_limit');
     expect(classifyTurnFailure(rateLimited, { lastPromptTokens: 70_000 })).toBe('rate_limit');
+  });
+});
+
+// The window a too-long refusal measures for the session, in each provider's own wording.
+describe('statedContextLimit', () => {
+  test.each([
+    ["This model's maximum context length is 128000 tokens. However, your messages resulted in 130512 tokens.", 128_000],
+    ['prompt is too long: 213432 tokens > 200000 maximum', 200_000],
+    ['The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).', 1_048_576],
+    ['Request exceeds the context window of 131,072 tokens', 131_072],
+    ['context_length_exceeded: prompt is too long', null],
+  ])('%s', (error, limit) => {
+    expect(statedContextLimit(error)).toBe(limit);
   });
 });
 

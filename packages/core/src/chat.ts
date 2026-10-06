@@ -32,7 +32,7 @@ import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality 
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import type { LostToolCall } from './tools/effect-claim';
-import { resolveModelWindow } from './context-window';
+import { modelWindow, type ModelWindow } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
@@ -89,7 +89,7 @@ export type ChatEvent = (
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
   | { type: 'error'; message: string }
   | { type: 'model-fallback'; from: string; to: string; reason: string }
-  | { type: 'context-admitted'; tokens: number; contextWindow: number }
+  | { type: 'context-admitted'; tokens: number; contextWindow: number | null }
   /** `text`: the answer, else what streamed, else a tool-result synthesis. `answer`: only the final step's text
    *  ({@link answerFromSteps}), absent when there is none. */
   | { type: 'done'; text: string; responseMessages: ModelMessage[]; answer?: string }
@@ -108,6 +108,8 @@ export interface ChatFallback {
   readonly spec: string;
   /** The media this model takes, so a tool result's image reaches it or leaves a note (`tool-result-images.ts`). */
   readonly accepts: ReadonlySet<MediaModality>;
+  /** Its own catalog window, which its attempt is assembled and compacted against. */
+  readonly window: ModelWindow;
   readonly bind: () => {
     readonly model: LanguageModel;
     readonly provider: string;
@@ -633,7 +635,7 @@ function dialectSpec(current: { readonly spec: string; readonly provider: string
 
 /** One chat turn; callers append its response messages to history. A cut turn yields `done`, then throws
  *  {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`. */
-function* admittedEvent(tokens: number | undefined, contextWindow: number): Generator<ChatEvent> {
+function* admittedEvent(tokens: number | undefined, contextWindow: number | null): Generator<ChatEvent> {
   if (tokens !== undefined) yield { type: 'context-admitted', tokens, contextWindow, source: 'native' };
 }
 
@@ -648,7 +650,7 @@ async function admitRequest(opts: ChatOptions) {
   // Extension tools never shadow a caller tool of the same name.
   const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
-  const window = resolveModelWindow(opts.modelContext?.id ?? '', opts.modelContext ?? null);
+  const window = modelWindow(opts.modelContext);
   const { contextWindow } = window;
 
   // Shared turn-context assembly (orchestrator/turn-context.ts); cf's beforeTurn runs the same function.
@@ -694,7 +696,7 @@ async function admitRequest(opts: ChatOptions) {
 }
 
 /** Only the transform's own fold may call a model. */
-export async function measureTurnRequest(opts: ChatOptions): Promise<{ readonly tokens: number; readonly contextWindow: number } | null> {
+export async function measureTurnRequest(opts: ChatOptions): Promise<{ readonly tokens: number; readonly contextWindow: number | null } | null> {
   const { admitted, window } = await admitRequest({ ...opts, stepContext: undefined });
 
   return admitted.admittedTokens === undefined ? null : { tokens: admitted.admittedTokens, contextWindow: window.contextWindow };
@@ -740,7 +742,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const forcedInput = opts.transformTrigger === 'force' ? admittedTokens : undefined;
 
   /** One attempt's provider options: the turn's cache, the serving model's server compaction, then its own. */
-  const optionsFor = (spec: string | undefined, served: number | undefined, own: ChatOptions['providerOptions']) => mergeProviderOptions(
+  const optionsFor = (spec: string | undefined, served: number | null | undefined, own: ChatOptions['providerOptions']) => mergeProviderOptions(
     mergeProviderOptions(cache.providerOptions, serverCompactionOptions(spec, served, forcedInput)), own);
 
   /** The model each attempt calls, with the media it takes: the turn's for the primary, its own for a fallback. */
@@ -984,7 +986,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   /** A model that compacts with another provider, or none, cannot read the request built for the last one: rebuilt. */
   const takeOver = async (next: ChatFallback): Promise<void> => {
     const bound = next.bind();
-    const served = resolveModelWindow(next.spec, null).contextWindow;
+    const served = next.window.contextWindow;
     const rebuild = serverCompactor(next.spec) !== serverCompactor(serving.model);
 
     serving = { ...assembly, model: next.spec, contextWindow: served };

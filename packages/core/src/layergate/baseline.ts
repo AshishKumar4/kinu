@@ -27,7 +27,7 @@ export const LOCKED_BASELINE: Baseline = {
   'context-budget/clamp-serialized': 'a5989b0c183dd32c',
   'context-budget/clamp-under-budget-passthrough': 'd280decb04d8ed39',
   'context-budget/turn-spill-accounting': 'fcdee7aee16b452b',
-  'context-budget/window-table': '9c7b583a0828c959',
+  'context-budget/window-from-catalog': 'f082438ba6d17af6',
   'craft-fitness/blame-by-stamp-only': 'd09cc4f766d07f42',
   'craft-fitness/call-sites': '6035d5d4e4b1fc2c',
   'craft-fitness/prose-is-not-a-call': '80a84c1aea5c97e9',

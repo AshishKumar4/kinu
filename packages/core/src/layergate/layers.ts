@@ -198,17 +198,6 @@ const REVIEW_OWNERS = Object.freeze(['agent', 'user'] as const);
 
 const USER_DEVICE = Object.freeze({ name: 'device', filesOwner: 'user' } as const);
 
-const MODEL_SPECS = Object.freeze([
-  'anthropic/claude-sonnet-4-7',
-  'anthropic/claude-3-5-haiku',
-  'openai/gpt-5.5',
-  'codex/gpt-5.3-codex-spark',
-  'moonshot/kimi-k3-instruct',
-  'google/gemini-2.5-pro',
-  'meta/llama-4-scout',
-  'some/unknown-model',
-]);
-
 const PROVIDERS = Object.freeze([
   ['anthropic', 'claude-sonnet-4-7'],
   ['openai', 'gpt-5.5'],
@@ -704,15 +693,19 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     id: 'context-budget',
     owns: 'the token budget: model window sizing, and at-source tool-result clamping against one shared cap',
     subjects: [
-      'contextWindowForModel',
+      'modelWindow',
       'clampToolResult',
       'clampSerializedToolResult',
     ],
     probes: [
       {
-        id: 'context-budget/window-table',
-        asserts: 'the static window fallback resolves each model family, and unknown specs get the default',
-        observe: (s) => MODEL_SPECS.map((spec) => [spec, s.contextWindowForModel(spec)]),
+        id: 'context-budget/window-from-catalog',
+        asserts: 'a window is the catalog row\'s, and a model no row names has an unknown one',
+        observe: (s) => [
+          s.modelWindow({ contextWindow: 1_000_000, modelOutputLimit: 128_000 }),
+          s.modelWindow({ modelOutputLimit: 16_384 }),
+          s.modelWindow(null),
+        ],
       },
       {
         id: 'context-budget/clamp-under-budget-passthrough',

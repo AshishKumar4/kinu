@@ -3486,7 +3486,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private contextFill(): ContextFill | null {
-    return contextFill(this.eventRecorder.readContextMeasures(), this.modelCatalog.contextWindow() || null);
+    return contextFill(this.eventRecorder.readContextMeasures(), this.modelCatalog.contextWindow());
   }
 
   async getToolList() {
@@ -4334,8 +4334,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         },
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
-      contextWindow: this.modelCatalog.contextWindow() || null,
-      fill: contextFill(measures, this.modelCatalog.contextWindow() || null),
+      contextWindow: this.modelCatalog.contextWindow(),
+      fill: contextFill(measures, this.modelCatalog.contextWindow()),
       // Every step in the window, reporting or not: `summarizeSteps` counts the
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.

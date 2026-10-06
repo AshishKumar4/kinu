@@ -1,58 +1,22 @@
-// Per-model context windows and the input allocation they compose into. The table answers only for
-// measured models; anything else is a marked stand-in no gate may spend as a fact.
+// A model's window is its catalog row's or unknown, and the input allocation it composes into. An unknown window
+// sizes, triggers and refuses nothing.
 import { describe, test, expect } from "bun:test";
 import type { ModelMessage } from "ai";
 import {
   assembleTurnMessages,
   catalogModelInfo,
   classifyTurnFailure,
-  contextWindowForModel,
   ModelCatalogSession,
   stepContextLimit,
   type ModelProvider,
   type ProviderDeps,
 } from "@kinu.run/core";
 
-describe("contextWindowForModel", () => {
-  test("matches known model families on their spec", () => {
-    expect(contextWindowForModel("minimax/m3").window).toBe(1_000_000);
-    expect(contextWindowForModel("workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813").window).toBe(1_048_576);
-    expect(contextWindowForModel("workers-ai/@cf/zai-org/glm-5.3").window).toBe(1_048_576);
-    expect(contextWindowForModel("@cf/moonshotai/kimi-k2.6").window).toBe(262_144);
-    expect(contextWindowForModel("@cf/meta/llama-4-scout").window).toBe(131_072);
-    expect(contextWindowForModel("anthropic/claude-opus-4-7").window).toBe(1_000_000);
-    expect(contextWindowForModel("openai/gpt-5.5").window).toBe(1_050_000);
-    expect(contextWindowForModel("codex/gpt-5.5").window).toBe(272_000);
-    expect(contextWindowForModel("openai/gpt-5.1").window).toBe(256_000);
-    expect(contextWindowForModel("google/gemini-2.5-pro").window).toBe(1_000_000);
-    // Every match is a figure read off a published catalog, so it may gate a request.
-    expect(contextWindowForModel("openai/gpt-5.1").measured).toBe(true);
-  });
-
-  test("the families this product's own catalogs serve are measured, not stood in for", () => {
-    // #20: a spec matching no entry got the stand-in window and was refused against half of it.
-    expect(contextWindowForModel("opencode-go/muse-spark-1.3-contributor"))
-      .toEqual({ measured: true, window: 1_048_576 });
-    expect(contextWindowForModel("workers-ai/@cf/nvidia/nemotron-3-120b-a12b"))
-      .toEqual({ measured: true, window: 256_000 });
-    expect(contextWindowForModel("workers-ai/@cf/google/gemma-4-26b-a4b-it"))
-      .toEqual({ measured: true, window: 256_000 });
-    // Not the gpt-5 rule's figure: nobody measured that for GPT-OSS.
-    expect(contextWindowForModel("workers-ai/@cf/openai/gpt-oss-120b"))
-      .toEqual({ measured: true, window: 128_000 });
-  });
-
-  test("an unmeasured spec says so instead of reporting a window as a fact", () => {
-    expect(contextWindowForModel("")).toEqual({ measured: false, window: 128_000 });
-    expect(contextWindowForModel("some/unknown-model")).toEqual({ measured: false, window: 128_000 });
-  });
-});
-
 // #20: the defect was the composition. An unanswered catalog read as "the answer may take the whole
 // window", halving an unmeasured window and refusing a 124,644-token request against 64,000.
 describe("the input allocation a resolved model leaves", () => {
   function unanswered(spec: string): ModelCatalogSession {
-    const session = new ModelCatalogSession({ effectiveSpec: () => spec, lookup: async () => null });
+    const session = new ModelCatalogSession({ effectiveSpec: () => spec, lookup: async () => null, measured: () => null });
     session.info();
 
     return session;
@@ -65,56 +29,44 @@ describe("the input allocation a resolved model leaves", () => {
     });
   }
 
-  test("an unreported answer allowance reserves nothing, so the whole window is admitted", async () => {
-    const session = unanswered("opencode-go/muse-spark-1.3-contributor");
-    await Promise.resolve();
-
-    expect(session.contextWindow()).toBe(1_048_576);
-    expect(session.window().modelOutputLimit).toBeNull();
-    expect(allocation(session)).toBe(1_048_576);
-  });
-
-  test("an unlisted spec does not yield a 64,000-token input allocation", async () => {
+  test("an unanswered catalog leaves the window unknown and the allocation unbounded, never a halved guess", async () => {
     const session = unanswered("opencode-go/unlisted-model-9");
     await Promise.resolve();
 
-    // The stand-in window may size a budget, but is spent whole rather than halved by an unreported allowance.
-    expect(allocation(session)).not.toBe(64_000);
-    expect(allocation(session)).toBe(session.contextWindow());
+    expect(session.contextWindow()).toBeNull();
+    expect(allocation(session)).toBe(Number.POSITIVE_INFINITY);
   });
 
   test("a REPORTED allowance is still bounded by half the window", async () => {
     const session = new ModelCatalogSession({
       effectiveSpec: () => "anthropic/claude-opus-4-7",
       lookup: async () => ({ id: "claude-opus-4-7", contextWindow: 1_000_000, modelOutputLimit: 128_000 }),
+      measured: () => null,
     });
 
-    expect(await session.resolved()).toEqual({
-      contextWindow: 1_000_000, modelOutputLimit: 128_000, windowMeasured: true,
-    });
+    expect(await session.resolved()).toEqual({ contextWindow: 1_000_000, modelOutputLimit: 128_000 });
     expect(allocation(session)).toBe(872_000);
   });
 });
 
-// #20, the admission: provenance alone decides whether a request may be refused; the two cases
-// below differ in nothing else.
-describe("admission on an unmeasured window", () => {
+// #20, the admission: only a known window refuses; the two cases below differ in nothing else.
+describe("admission on an unknown window", () => {
   const HISTORY: ModelMessage[] = [
     { role: "user", content: "the long conversation this turn continues" },
   ];
 
   /** The turn of #20, already force-compacted so its one compaction is spent. */
-  async function admit(windowMeasured: boolean): Promise<ModelMessage[] | Error> {
+  async function admit(contextWindow: number | null): Promise<ModelMessage[] | Error> {
     try {
       return (await assembleTurnMessages({
         system: "SYS",
         history: HISTORY,
         sessionKey: "k",
-        contextWindow: 128_000,
+        contextWindow,
         trigger: "force",
         admission: {
           count: async () => ({ kind: "counted", tokens: 124_644 }),
-          limits: { contextWindow: 128_000, modelOutputLimit: 128_000, windowMeasured },
+          limits: { contextWindow, modelOutputLimit: 128_000 },
         },
       })).messages;
     } catch (caught) {
@@ -122,19 +74,19 @@ describe("admission on an unmeasured window", () => {
     }
   }
 
-  test("a request over a stand-in allocation is admitted, and the provider answers", async () => {
-    expect(await admit(false)).toEqual(HISTORY);
+  test("a request on an unknown window is admitted, and the provider answers", async () => {
+    expect(await admit(null)).toEqual(HISTORY);
   });
 
-  test("the same request on a MEASURED window is still refused before submission", async () => {
+  test("the same request on a KNOWN window is still refused before submission", async () => {
     // Negative control: an admission that refuses nothing would otherwise pass.
-    const refused = await admit(true);
+    const refused = await admit(128_000);
     expect(refused).toBeInstanceOf(Error);
     expect(refused instanceof Error ? refused.message : "").toContain("refused before submission");
   });
 
   test("the refusal is not a transient blip the client should retry through", async () => {
-    const refused = await admit(true);
+    const refused = await admit(128_000);
     expect(refused).toBeInstanceOf(Error);
     // The class is pinned in packages/core/tests/unit-turn-admission.test.ts; here, the refusal must be one
     // the client acts on rather than retries.

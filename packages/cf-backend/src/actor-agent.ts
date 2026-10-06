@@ -155,7 +155,7 @@ import {
   type InstructionApproval, type InstructionTrustResolver,
   InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
-  type ResolvedModelWindow,
+  type ModelWindow,
   reasoningEffortOptions,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
@@ -299,7 +299,7 @@ interface ComposedTurn {
   readonly operation: OperationProfile;
   /** Window for admission, compaction and pruning; records whether figures are the
    * catalog's or the static table's stand-in. */
-  readonly window: ResolvedModelWindow;
+  readonly window: ModelWindow;
   readonly memoryTail: string | undefined;
   readonly countInputTokens: (request: CountableRequest) => Promise<InputTokenCount>;
   readonly reasoningOptions: ReturnType<typeof reasoningEffortOptions>;
@@ -2679,6 +2679,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return {
       rt, model, originContext, compactShared,
+      windowOf: (spec) => this.modelCatalog.windowFor(spec),
       reportModelCall: (report) => { this.reportModelCall(report); },
       nodeCodemode: (actor) => nodeCodemodeTool(seams, actor),
       webSearch: seams.webSearch(),
@@ -3963,6 +3964,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly modelCatalog = new ModelCatalogSession({
     effectiveSpec: () => this.effectiveModelSpec(),
     lookup: async (spec) => (spec ? this.catalogEntry(spec) : null),
+    measured: (spec) => this.stores.eventRecorder.measuredWindow(spec),
   });
 
   protected async catalogEntry(spec: string): Promise<ModelInfo | null> {
@@ -4068,7 +4070,6 @@ export abstract class ActorAgent extends Agent<Env> {
       modelContext: {
         id: composed.promptModel.id,
         contextWindow: composed.window.contextWindow,
-        windowMeasured: composed.window.windowMeasured,
         modelOutputLimit: composed.window.modelOutputLimit,
       },
       system: composed.system,
@@ -4100,6 +4101,7 @@ export abstract class ActorAgent extends Agent<Env> {
     liveTurn.fallbacks = composed.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
       spec: providers.normalizeSpecSync(spec),
       accepts: this.modelCatalog.acceptedMedia(spec),
+      window: this.modelCatalog.window(spec),
       bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
     }));
 
@@ -4359,7 +4361,6 @@ export abstract class ActorAgent extends Agent<Env> {
     this.orch.restrictTurnWorkMode(composed.profile.workMode);
     this.recordSystemPromptHash(composed.system);
     this._turnDurableLength = composed.rawMessages.length;
-    this._turnContextWindow = composed.window.contextWindow;
     const measured = measureCompactionTrigger(this.compactionState, this.name, composed.rawMessages.length);
 
     // Forced rebuild is armed by overflow recovery (onChatResponse).
@@ -4368,8 +4369,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return { ...composed, measured };
   }
 
-  /** Set in beforeTurn; read by beforeStep's prune budget every step. */
-  protected _turnContextWindow = 0;
   private _turnOrigin: ContextSelection | null = null;
 
   private async turnOriginContext(): Promise<readonly ModelMessage[]> {

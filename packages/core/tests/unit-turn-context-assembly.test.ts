@@ -72,7 +72,7 @@ describe('assembleTurnMessages', () => {
   });
 
   test('the transform receives sessionKey, window, trigger, and the measured token signal', async () => {
-    const seen: Array<{ sessionKey: string; contextWindow: number; trigger: string; providerReportedTokens?: number }> = [];
+    const seen: Array<{ sessionKey: string; contextWindow: number | null; trigger: string; providerReportedTokens?: number }> = [];
 
     const extensions = new ExtensionHost().register({
       name: 'test.ctx',

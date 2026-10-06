@@ -1676,7 +1676,7 @@ export class LocalAgentSession {
 
     if (measured.providerReportedTokens !== undefined) chat.providerReportedTokens = measured.providerReportedTokens;
 
-    return { execution: { ...execution, chat }, sessionKey, contextWindow: chat.modelContext?.contextWindow ?? 0, historyLength, trial: artifacts.trial };
+    return { execution: { ...execution, chat }, sessionKey, contextWindow: chat.modelContext?.contextWindow ?? null, historyLength, trial: artifacts.trial };
   }
 
   /** The turn's evolved text; between turns, the promoted text. */
@@ -1799,7 +1799,6 @@ export class LocalAgentSession {
       modelContext: {
         id: turnSpec,
         contextWindow: window.contextWindow,
-        windowMeasured: window.windowMeasured,
         modelOutputLimit: window.modelOutputLimit,
       },
       system: systemPrompt,
@@ -1827,6 +1826,7 @@ export class LocalAgentSession {
       liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
         spec: normalize(spec),
         accepts: this.modelCatalog.acceptedMedia(spec),
+        window: this.modelCatalog.window(spec),
         bind: () => {
           const { provider } = parseModelSpec(normalize(spec));
 
@@ -2496,6 +2496,7 @@ export class LocalAgentSession {
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
       // picks the spec; a swarm with a profile refuses rather than run the caller's model.
       resolveModel: (spec: string) => this.resolveModelForSpec(spec),
+      windowOf: (spec) => this.modelCatalog.windowFor(spec),
       // Nodes work in the folder the user opened, on the shared plane: a real folder has no uid registry for a private home.
       provisionNodeHome: () => (node) => nodeWorkspace(node),
     };
@@ -2653,10 +2654,11 @@ export class LocalAgentSession {
     return this.fallbackModel;
   }
 
-  /** Shared catalog view (core model-catalog); static fallbacks answer until the lookup lands. */
+  /** Shared catalog view (core model-catalog); the window is unknown until the lookup lands. */
   private readonly modelCatalog = new ModelCatalogSession({
     effectiveSpec: () => this.effectiveModelSpec(),
     lookup: (spec) => this.modelResolver ? this.modelResolver.modelInfo(spec) : Promise.resolve(null),
+    measured: (spec) => this.eventRecorder.measuredWindow(spec),
   });
 
   private ensureModelState(): LanguageModel {

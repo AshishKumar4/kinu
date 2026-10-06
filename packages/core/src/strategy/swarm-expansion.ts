@@ -12,7 +12,6 @@ import { renderIssues } from '../utils/json';
 import { renderThrownChain, type Logger } from '../obs/index';
 import { settleSync } from '../obs/effect';
 import { estimateTokens } from '../llm';
-import { contextWindowForModel } from '../context-window';
 import { sha256Hex } from '../safety/argument-digest';
 import {
   BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, isTreeAdvance,
@@ -234,7 +233,7 @@ export function branchPrompt(input: {
 const CONTEXT_COMPACTION_THRESHOLD = 0.85;
 
 /** The model's identifier for the window lookup; an empty spec resolves to the default window. */
-function modelSpecOf(model: LanguageModel): string {
+export function modelSpecOf(model: LanguageModel): string {
   const asSpec = v.safeParse(v.string(), model);
 
   if (asSpec.success) return asSpec.output;
@@ -250,8 +249,8 @@ function modelSpecOf(model: LanguageModel): string {
  * the prefix is handed over whole and the absence is reported.
  */
 export async function sharedPrefix(input: {
-  /** The children's model, whose window the threshold is measured against. */
-  readonly model: LanguageModel;
+  /** The children's catalog window, the threshold's basis; null when unknown, which compacts nothing. */
+  readonly window: number | null;
   readonly parent: TreeNode;
   /** As {@link SwarmRunDeps.compactShared}; narrowed so this module needs no runner import. */
   readonly compactShared?: (
@@ -271,7 +270,9 @@ export async function sharedPrefix(input: {
     (total, message) => total + JSON.stringify(message.content).length, 0,
   );
 
-  const window = contextWindowForModel(modelSpecOf(input.model)).window;
+  const { window } = input;
+
+  if (window === null) return parent.transcript;
   const room = window * CONTEXT_COMPACTION_THRESHOLD;
 
   if (estimateTokens(chars) < room) return parent.transcript;
