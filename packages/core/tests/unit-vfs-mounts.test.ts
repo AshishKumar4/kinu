@@ -59,6 +59,30 @@ function fakeTree(entries: Record<string, string>): VFS {
 	};
 }
 
+/** `tree` with every call it answers recorded as `<method> <path>`. */
+function counted(tree: VFS, calls: string[]): VFS {
+	const record = (method: string, path: string) => { calls.push(`${method} ${path}`); };
+
+	return {
+		...tree,
+		readFile: async (path) => {
+			record('readFile', path);
+
+			return tree.readFile(path);
+		},
+		stat: async (path, options) => {
+			record('stat', path);
+
+			return tree.stat(path, options);
+		},
+		readdir: async (path) => {
+			record('readdir', path);
+
+			return tree.readdir(path);
+		},
+	};
+}
+
 function mountOf(name: string, files: VFS | null, reason = 'not live'): VfsMount {
 	return { name, files: () => files, absentReason: () => reason, filesOwner: 'user' };
 }
@@ -177,7 +201,7 @@ describe('the workspace plane mount table', () => {
 
 			if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
 			expect(error.code).toBe('ENXIO');
-			expect(error.message).toContain('/pc: no device connected');
+			expect(error.message).toContain('/pc — no device connected');
 		}
 
 		const conditional = mounted.writeFileIfRevision?.bind(mounted);
@@ -230,8 +254,10 @@ describe('the workspace plane mount table', () => {
 		expect(await readText(mounted, '/pc/home/dev/notes.txt')).toBe('consented');
 		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toMatchObject({
 			code: 'EACCES',
-			path: '/etc/secrets.key',
+			path: '/pc/etc/secrets.key',
 		});
+		// `..` is lexical and the device judges the path it lands on: the consented root is never climbed out of.
+		await expect(mounted.readFile('/pc/home/dev/../../etc/secrets.key')).rejects.toMatchObject({ code: 'EACCES' });
 		await expect(mounted.readFile(spill)).rejects.toMatchObject({ code: 'EACCES' });
 
 		// Sandboxed, the daemon maps /tmp to the agent's own temp directory, where a long command's
@@ -294,21 +320,19 @@ describe('the workspace plane mount table', () => {
 		])).toThrow(/not a usable VFS mount name/);
 	});
 
-	test('a mounted path cannot climb through its mount point with ..', async () => {
+	test('.. past a mount point leaves it lexically, into the workspace, and never past the workspace root', async () => {
 		const base = fakeTree({ '/workspace-only.txt': 'workspace bytes' });
 
 		const device: VFS = {
 			...fakeTree({ '/home/dev/notes.txt': 'device bytes' }),
-			readFile: async () => { throw new Error('a confined path must not reach the mounted tree'); },
+			readFile: async () => { throw new Error('a path that left the mount must not reach the mounted tree'); },
 		};
 
 		const mounted = withMountTable(base, [mountOf('pc', device)]);
 
-		await expect(mounted.readFile('/pc/../workspace-only.txt')).rejects.toMatchObject({
-			code: 'EPERM',
-			path: '/pc/../workspace-only.txt',
-		});
-		expect(await readText(base, '/workspace-only.txt')).toBe('workspace bytes');
+		// POSIX: `..` at the mount's root is the directory holding the mount point, here the workspace root.
+		expect(await readText(mounted, '/pc/../workspace-only.txt')).toBe('workspace bytes');
+		expect(await readText(mounted, '/pc/../../../workspace-only.txt')).toBe('workspace bytes');
 	});
 
 	test('standardMounts gate per environment kind', async () => {
@@ -327,7 +351,7 @@ describe('the workspace plane mount table', () => {
 
 		// A device tunnel is a presence: unavailable means absent.
 		await expect(Promise.resolve(mounted.readdir('/pc')).then(entries => entries.map(({ name }) => name))).rejects.toMatchObject({ code: 'ENXIO' });
-		await expect(Promise.resolve(mounted.readdir('/pc')).then(entries => entries.map(({ name }) => name))).rejects.toThrow('/pc: no device connected');
+		await expect(Promise.resolve(mounted.readdir('/pc')).then(entries => entries.map(({ name }) => name))).rejects.toThrow('/pc — no device connected');
 		// A container is a binding: it provisions on first touch.
 		expect(await readText(mounted, '/sandbox/workspace/b.txt')).toBe('y');
 		expect(EXECUTOR_MOUNTS.device).toBe('/pc');
@@ -414,7 +438,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		const mounted = withMountTable(base, [mountOf('pc', device)]);
 
 		await expect(mounted.rename('/report.txt', '/pc/home/dev/report.txt')).rejects.toMatchObject({
-			code: 'EPERM',
+			code: 'EXDEV',
 			path: '/report.txt',
 		});
 		expect(await readText(base, '/report.txt')).toBe('workspace copy');
@@ -433,7 +457,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		await expect(mounted.rename(
 			'/pc/home/dev/report.txt',
 			'/sandbox/workspace/report.txt',
-		)).rejects.toMatchObject({ code: 'EPERM' });
+		)).rejects.toMatchObject({ code: 'EXDEV' });
 		expect(await readText(pc, '/home/dev/report.txt')).toBe('device copy');
 		expect(await readText(sandbox, '/workspace/report.txt')).toBe('container copy');
 	});
@@ -452,11 +476,11 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 	test('a mount point is part of this plane and cannot be mutated', async () => {
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', fakeTree({ '/a.txt': 'x' }))]);
 
-		await expect(mounted.rename('/pc', '/device')).rejects.toMatchObject({ code: 'EPERM' });
-		await expect(mounted.removeRecursive('/pc')).rejects.toMatchObject({ code: 'EPERM' });
-		await expect(writeText(mounted, '/pc', 'x')).rejects.toMatchObject({ code: 'EPERM' });
-		await expect(mounted.unlink('/pc')).rejects.toMatchObject({ code: 'EPERM' });
-		await expect(mounted.mkdir('/pc')).rejects.toMatchObject({ code: 'EPERM' });
+		await expect(mounted.rename('/pc', '/device')).rejects.toMatchObject({ code: 'EBUSY' });
+		await expect(mounted.removeRecursive('/pc')).rejects.toMatchObject({ code: 'EBUSY' });
+		await expect(writeText(mounted, '/pc', 'x')).rejects.toMatchObject({ code: 'EBUSY' });
+		await expect(mounted.unlink('/pc')).rejects.toMatchObject({ code: 'EISDIR' });
+		await expect(mounted.mkdir('/pc')).rejects.toMatchObject({ code: 'EBUSY' });
 	});
 
 	test('removeRecursive delegates to the native tree removal where one exists', async () => {
@@ -659,6 +683,59 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		expect((await agent.shell.exec('df')).stdout).not.toContain('/pc');
 
 		expect((await agent.shell.exec('ls /pc')).stdout.split(/\s+/).filter(Boolean)).toEqual(['laptop', 'studio']);
+	});
+
+	for (const name of ['pc', 'sandbox', 'shared']) {
+		test(`a read under /${name} asks its backend only for the file, from the shell and the file plane alike (m1960)`, async () => {
+			const bundle = createWorkspaceBundle(new Database(':memory:'));
+			const calls: string[] = [];
+			const backend = counted(fakeTree({ '/home/me/a/b/c.txt': 'deep' }), calls);
+			const table = withMountTable(bundle.vfs, [mountOf(name, backend)]);
+			bundle.mountTable(table);
+
+			// Walked a component at a time, this `cat` asked the backend 36 times (34 of them a stat of an ancestor); now
+			// `cat` asks only of the file it names, as it would of a local one.
+			expect(await bundle.shell.exec(`cat /${name}/home/me/a/b/c.txt`)).toMatchObject({ stdout: 'deep', exitCode: 0 });
+			expect(calls.filter((call) => !call.endsWith(' /home/me/a/b/c.txt'))).toEqual([]);
+			expect(calls.length).toBeLessThanOrEqual(5);
+
+			calls.length = 0;
+			expect(await readText(table, `/${name}/home/me/a/b/c.txt`)).toBe('deep');
+			expect(calls).toEqual(['readFile /home/me/a/b/c.txt']);
+		});
+	}
+
+	test('a consented file is read though the device refuses to show its ancestors', async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const tree = fakeTree({ '/home/me/project/notes.md': 'consented' });
+
+		// A device shows only what is under its consented directory: /home and /home/me are not shown.
+		const device: VFS = {
+			...tree,
+			stat: async (path) => {
+				if (!path.startsWith('/home/me/project')) throw new VfsError('EACCES', 'outside the consented device directory', path);
+
+				return tree.stat(path);
+			},
+		};
+
+		bundle.mountTable(withMountTable(bundle.vfs, [mountOf('pc', device)]));
+
+		expect(await bundle.shell.exec('cat /pc/home/me/project/notes.md')).toMatchObject({ stdout: 'consented', exitCode: 0 });
+		expect((await bundle.shell.exec('cat /pc/etc/passwd')).exitCode).not.toBe(0);
+	});
+
+	test('a read-only mount refuses every write from the shell and the file plane, and keeps its bytes', async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const skills = fakeTree({ '/kept.md': 'kept' });
+		const table = withMountTable(bundle.vfs, [{ ...mountOf('skills', skills), readOnly: true }]);
+		bundle.mountTable(table);
+
+		expect((await bundle.shell.exec('echo changed > /skills/kept.md')).exitCode).not.toBe(0);
+		await expect(writeText(table, '/skills/kept.md', 'changed')).rejects.toMatchObject({ code: 'EROFS' });
+		await expect(table.writeFileWithReport?.('/skills/kept.md', new TextEncoder().encode('changed'))).rejects.toMatchObject({ code: 'EROFS' });
+		await expect(table.rename('/skills/kept.md', '/skills/moved.md')).rejects.toMatchObject({ code: 'EROFS' });
+		expect(await readText(skills, '/kept.md')).toBe('kept');
 	});
 
 	test('mv between two mounts copies across, since each mount is its own device', async () => {

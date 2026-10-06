@@ -60,9 +60,10 @@ async function openFixture(): Promise<Fixture> {
     transactions,
     generation: 1,
     processes,
+    env: { HOME: WORKSPACE_ROOT },
   });
 
-  // As Kinu's boot leaves it: the workspace root, and its old name a link to it.
+  // As Kinu's boot leaves it: Nimbus seeds the configured home, and root owns /home.
   settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
 
   const host = programmaticHostOver(workspace).host;

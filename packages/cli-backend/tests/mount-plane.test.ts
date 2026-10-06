@@ -77,7 +77,10 @@ describe('the local backend file plane', () => {
       }
     };
 
-    expect([await writing('/sandbox/notes.md'), await writing('/elsewhere/notes.md')]).toEqual(['EACCES', 'EACCES']);
+    const sandbox = await writing('/sandbox/notes.md');
+
+    expect(sandbox).toBe(await writing('/elsewhere/notes.md'));
+    expect(['written', 'ENXIO']).not.toContain(sandbox);
   });
 
 });

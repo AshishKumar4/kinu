@@ -266,6 +266,33 @@ second. Pinned by `unit-activation-boot-failure` (the ask waited on the start
 and failed with the boot's cause; now it answers false). Superseded
 2026-10-01 by devbox D56: the box no longer asks; it rests on its own use.
 
+W3. Every file plane is a Nimbus `CompositeVFS`, and each Kinu mount resolves
+its own paths (`MountOptions.resolvesPaths`). Decided 2026-10-06, owner
+message m1960 ("rebuild on new Nimbus VFS/composite instead of path
+shenanigans"). Reversed: Kinu's own mount router (`withMountTable` in
+`core/vfs/mounts.ts`), which parsed mount names, handled `..`, refused
+mount-point mutations and refused renames across mounts itself. Also
+reversed: the shell's mounts (`shellMounts`) walked a mounted path one
+component at a time. Measured with `unit-vfs-mounts`'s counting backend: one
+`cat /pc/home/me/a/b/c.txt` asked the backend 36 times, 34 of them a `stat`
+of an ancestor. Now `cat` asks only about the file it names, and the file
+plane reads with one call. The same is pinned for `/sandbox` and `/shared`.
+The walk was also wrong: a device that shows nothing above its consented
+directory refused the walk's `stat('/home')`, so a consented file could not
+be read from the shell. "a consented file is read though the device refuses
+to show its ancestors" pins that. Behaviour that is now POSIX's: a rename
+across mounts answers EXDEV and moves nothing; a mount point answers EBUSY
+(EISDIR for unlink); `..` is lexical, so `/pc/..` is the workspace root and
+`/pc/home/dev/../../etc` lands on the device's `/etc`, which the device's
+consent then refuses. Kinu keeps only its own mount metadata (owner,
+read-only, store view), the ENXIO a stat of an absent mount states, and a
+write report asked of the device directly until Nimbus routes a path to its
+mount (NIMBUS-ASKS #23). The `vfs://` prefix rows stay: they are the spelling
+agents, links and prompts use, not mounts. The local resolver's subtree rows
+stay too: the CLI's shell runs on the machine, so `vfs://local/x` must become
+the folder's real path. Phase two, the file tool reading the shell's own
+namespace, waits on NIMBUS-ASKS #23 and #24.
+
 ## Chat loop
 
 C1. The stored assistant row holds the turn's answer. The runner selects it

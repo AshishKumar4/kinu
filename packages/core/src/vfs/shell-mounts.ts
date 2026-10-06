@@ -44,7 +44,12 @@ export function shellMounts(filesystem: ProcessFiles, table: ShellMountTable): S
           }
 
           return files;
-        }, { readOnly, absentReason: (principal) => mountFor(principal, name)?.absentReason() ?? `nothing is mounted at /${name} for this user` });
+        }, {
+          // Each backend resolves its own paths (m1960): one call per operation, no walk of ancestors it may not show.
+          resolvesPaths: true,
+          readOnly,
+          absentReason: (principal) => mountFor(principal, name)?.absentReason() ?? `nothing is mounted at /${name} for this user`,
+        });
       }
     },
   };
