@@ -93,7 +93,7 @@ export async function memoryBytes(vfs: VFS, dir = 'memory'): Promise<number> {
   return total;
 }
 
-/** Indexes every note when the index is empty: an archive carries notes, never their index. */
+/** Indexes every note when the index is empty: a local import carries notes, never their index. */
 export async function reconcileMemoryIndex(memory: Pick<Memory, 'index'>, store: Pick<MemoryStore, 'isEmpty'>, vfs: VFS): Promise<void> {
   if (store.isEmpty()) await indexNotes(memory, vfs, MEMORY_DIR.slice(0, -1));
 }

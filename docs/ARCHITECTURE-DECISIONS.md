@@ -300,13 +300,19 @@ attribution hears the namespace's `observeWrites`. Both are a local patch of
 composite the file tool built over the bare kernel tree, beside the one the
 shells read, with an observing wrapper of its own. Locally everything is real
 files: `vfs://` is the workspace's own space `~/.kinu/<workspace>/` and
-`local://` the folder. Conversations, memory, jobs and settings stay in
-`agent.db`: that is data, not files, so `/context` (a rendering of the
-conversation) and `/skills` (the builtins and the workspace's own skills) stay
-views the file tool reads and the prompt names as such, and `/agent` shows
-the scaffold read-only. `/shared`, never bound locally, is gone there. The
-CLI's file plane is the host's, so its head attribution keeps the observing
-wrapper (`core/vfs/observe.ts`).
+`local://` the folder, and the file plane is one host-root composite, the
+shell's namespace, so an absolute path is the machine's. SOUL.md, the memory
+notes and the scaffold are files of `home/main/`; the notes and the scaffold
+are read-only mounts to the file tool (the memory tool and the loop's writer
+change them). Conversations, the memory index, jobs and settings stay in
+`agent.db`: that is data, not files. The index keeps no text of its own: a
+contentless FTS5 reads each hit from its note and re-chunks one a shell
+changed. `/context` (a rendering of the conversation) and `/skills` (the
+builtins and the workspace's own skills) stay views at `<space>/<name>`, which
+the prompt names as the file tool's alone. `/shared`, never bound locally, is
+gone there, and so are the agent view and `core/vfs/observe.ts`: heads hear
+writes through `observeWrites`, a head's write to its parent under its own
+actor.
 
 W5. `SOUL.md` is the soul's only copy: an ordinary file of main's home
 (1000:1000, 0664) the owner sets and every agent of the workspace edits, read

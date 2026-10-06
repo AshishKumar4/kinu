@@ -56,7 +56,7 @@ import {
   type UserCredentialSource,
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
-import { adaptMemory, backfillMemoryVectors, reconcileMemoryIndex } from "@kinu.run/core";
+import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import { agentAffinityKey } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 
@@ -477,8 +477,6 @@ export function createCFRuntime(
     await Promise.all([
       (async (): Promise<void> => {
         try {
-          // A restored or forked workspace's index is rebuilt from its notes before their vectors are.
-          await reconcileMemoryIndex(memory, memoryStore, originVfs);
           await backfillMemoryVectors(memoryStore, memoryConfig, vectorStore);
         } catch (cause) {
           diagnostics.failure('memory.vector_backfill_detached_failed', toKinuError({
