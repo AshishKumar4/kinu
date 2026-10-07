@@ -7,7 +7,7 @@
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
-import { SLEEP_TIME_CADENCE, hostedActorSocketPath, JsonValueSchema } from '@kinu.run/core';
+import { HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, hostedActorSocketPath, JsonValueSchema } from '@kinu.run/core';
 import {
   createCompositeLogger,
   createConsoleLogger,
@@ -1368,13 +1368,14 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   /** A hired agent's own turn, held at the model in its isolate: the workspace's work read asks the agent, whose wake is armed. */
   async agentHeldWork(): Promise<AgentHeldWork> {
     const { target, workspace } = await this.claimQueueWorkspace('agent-work');
-    const created = v.parse(v.object({ name: v.string() }), await target.createSubordinateAgent());
+    const created = v.parse(v.object({ name: v.string(), subordinate: v.object({ actorId: v.string() }) }), await target.createSubordinateAgent());
 
     await awaitSettled(target);
     await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 1 }) });
 
+    // The edge names the addressed agent on its path's upgrade; the chat it sends lands in that agent's own isolate.
     const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`, {
-      headers: { Upgrade: 'websocket' },
+      headers: { Upgrade: 'websocket', [HOSTED_ACTOR_ID_HEADER]: created.subordinate.actorId },
     }));
 
     const socket = response.webSocket;
