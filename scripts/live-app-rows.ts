@@ -1405,11 +1405,14 @@ interface PlanTasksVerdict {
   readonly unlinked: readonly string[];
 }
 
-const PLAN_CARDS = `[...document.querySelectorAll('[data-plan-card]')].map((card) => [...card.querySelectorAll('[data-task-depth]')]
-  .map((row) => [row.querySelector('.p-row-text')?.firstChild?.textContent ?? '', Number(row.getAttribute('data-task-depth'))]))`;
+const TASK_TITLE = `(row) => row.querySelector('.p-row-text')?.firstChild?.textContent ?? ''`;
 
-const PLANLESS_TASKS = `[...document.querySelectorAll('[data-task-depth]')].filter((row) => row.closest('[data-plan-card]') === null)
-  .map((row) => row.querySelector('.p-row-text')?.firstChild?.textContent ?? '')`;
+const PLAN_CARDS = `[...document.querySelectorAll('[data-plan-card]')].map((card) => [...card.querySelectorAll('[data-task-depth]')]
+  .map((row) => [(${TASK_TITLE})(row), Number(row.getAttribute('data-task-depth'))]))`;
+
+/** Now lists every open task, a plan's too, so the planless ones are those no plan card holds. */
+const PLANLESS_TASKS = `((planned) => [...document.querySelectorAll('[data-task-depth]')].filter((row) => row.closest('[data-plan-card]') === null)
+  .map(${TASK_TITLE}).filter((title) => !planned.has(title)))(new Set([...document.querySelectorAll('[data-plan-card] [data-task-depth]')].map(${TASK_TITLE})))`;
 
 /** Presses the button showing `words` among those `buttons` selects. */
 async function pressButton(page: Page, buttons: string, words: string): Promise<void> {
