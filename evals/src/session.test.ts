@@ -48,7 +48,7 @@ import { SubordinateInspectionRequestSchema } from '../../packages/core/src/subo
 import { measurePromptUsage } from './results';
 import {
   BROADCAST_FRAME, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID,
-  RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatTerminalFrame, chatTurnFrames, replayCompleteFrame, rpcReplyFrame,
+  RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatTerminalFrame, chatTurnFrames, rpcReplyFrame,
   streamResumingFrame,
 } from './fixtures/session-frames';
 
@@ -422,76 +422,6 @@ test('a frame naming a live read moves that read before the answer to a later ca
   } finally { await session.teardown(); await server.stop(true); }
 });
 
-test('a turn survives a dropped socket: the redial resumes its stream and the answer lands', async () => {
-  // Browser parity: the socket drops mid-turn (1006 at the edge), the turn is durable up there, and
-  // the redial's stream-resume frames finish it. Unfixed, the close rejected the turn and cost the trial.
-  let upgrades = 0;
-  let requestId = '';
-  const replayed = Promise.withResolvers<void>();
-
-  const start: RunEvent = {
-    type: 'run_start', runId: 'turn-run', eventIndex: 0, timestamp: '2000-01-01T00:00:00.000Z', agentId: 'root',
-  };
-
-  const end: RunEvent = {
-    type: 'run_end', runId: 'turn-run', eventIndex: 1, timestamp: '9999-01-01T00:00:00.000Z', reason: 'completed',
-  };
-
-  const server = Bun.serve<{ connection: number }>({ port: 0, hostname: '127.0.0.1',
-    async fetch(request, upgrading) {
-      if (request.method === 'DELETE') return Response.json({ ok: true });
-
-      // Numbered at the upgrade: Bun opens the socket inside `upgrade`, before a counter bumped after it.
-      if (upgrading.upgrade(request, { data: { connection: upgrades + 1 } })) {
-        upgrades += 1;
-
-        return;
-      }
-
-      // The ledger answers only after the resumed stream went out, so the turn settles from the stream.
-      await replayed.promise;
-      const path = new URL(request.url).pathname;
-
-      if (path.endsWith('/runs')) return Response.json({ status: 'end', items: [{ runId: 'turn-run' }] });
-
-      if (path.endsWith('/events')) return Response.json([start, end]);
-
-      return new Response('Not found', { status: 404 });
-    },
-    websocket: {
-      open(socket) {
-        if (socket.data.connection === 2) socket.send(streamResumingFrame(requestId, requestId));
-      },
-      message(socket, message) {
-        if (socket.data.connection === 1) {
-          requestId = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString())).id;
-          socket.close(1012, 'dropped mid-turn');
-
-          return;
-        }
-
-        // The resume ack: replay the whole stream, terminal frame included.
-        for (const frame of chatTurnFrames({ requestId, chunks: FILE_TURN_CHUNKS, replay: true })) socket.send(frame);
-        replayed.resolve();
-      },
-    },
-  });
-
-  const session = new KinuPublicSession({
-    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'dropped socket',
-    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
-  }, 'probe');
-
-  try {
-    await session.connect();
-    const result = await session.submit('Write note.txt.').settled;
-
-    if (result.landed !== 'turn') throw new Error('expected the turn itself to land');
-    expect(result.text).toBe('Wrote note.txt.');
-    expect(upgrades).toBe(2);
-  } finally { await session.teardown(); await server.stop(true); }
-});
-
 test('a tool call is in flight from its input to its last output, and only while its turn is heard', async () => {
   // The ledger writes a call only at its end: on 2026-10-01 a lead's `agents` hire ran 840 s with nothing written.
   const opened = Promise.withResolvers<(frames: readonly string[]) => void>();
@@ -634,7 +564,7 @@ test('a socket that meets a turn the product opened acknowledges it, and hears t
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
     websocket: {
       // A background job's wake streams when the socket opens: the deployment announces it and holds its live chunks back.
-      open(socket) { socket.send(streamResumingFrame('wake-1', 'wake-turn')); },
+      open(socket) { socket.send(streamResumingFrame('wake-1')); },
       message(socket, message) {
         const frame = v.parse(v.looseObject({ type: v.string(), id: v.string() }), JSON.parse(message.toString()));
 
@@ -743,8 +673,8 @@ test("a helper's room opened mid-call acknowledges the turn once, and the replay
       open(socket) {
         if (!socket.data.room) return;
         room.resolve(socket);
-        socket.send(streamResumingFrame('helper-turn', 'helper-turn'));
-        socket.send(streamResumingFrame('helper-turn', 'helper-turn'));
+        socket.send(streamResumingFrame('helper-turn'));
+        socket.send(streamResumingFrame('helper-turn'));
       },
       message(socket, message) {
         const frame = v.parse(v.looseObject({ type: v.string(), id: v.optional(v.string()) }), JSON.parse(message.toString()));
@@ -782,129 +712,6 @@ test("a helper's room opened mid-call acknowledges the turn once, and the replay
   } finally { await session.teardown(); await server.stop(true); }
 });
 
-/**
- * A turn whose activation ends once per script: connection 1 takes the request and streams FILE_TURN_CHUNKS up to
- * `cut`, then each later connection is a later activation's. It tells the redial the turn is pending, then resuming
- * under the stream that activation re-opened it under, then sends its script; every activation but the last ends there.
- */
-async function turnAcrossEndedActivations(cut: number, scripts: readonly ((stream: string) => readonly string[])[]) {
-  let upgrades = 0;
-  let messageId = '';
-  const resumed = Promise.withResolvers<void>();
-
-  const start: RunEvent = {
-    type: 'run_start', runId: 'turn-run', eventIndex: 0, timestamp: '2000-01-01T00:00:00.000Z', agentId: 'root',
-  };
-
-  const end: RunEvent = {
-    type: 'run_end', runId: 'turn-run', eventIndex: 1, timestamp: '9999-01-01T00:00:00.000Z', reason: 'completed',
-  };
-
-  const server = Bun.serve<{ connection: number }>({ port: 0, hostname: '127.0.0.1',
-    async fetch(request, upgrading) {
-      if (request.method === 'DELETE') return Response.json({ ok: true });
-
-      if (upgrading.upgrade(request, { data: { connection: upgrades + 1 } })) {
-        upgrades += 1;
-
-        return;
-      }
-
-      // The ledger answers only once the last activation's stream went out, so the turn settles from the stream.
-      await resumed.promise;
-      const path = new URL(request.url).pathname;
-
-      if (path.endsWith('/runs')) return Response.json({ status: 'end', items: [{ runId: 'turn-run' }] });
-
-      if (path.endsWith('/events')) return Response.json([start, end]);
-
-      return new Response('Not found', { status: 404 });
-    },
-    websocket: {
-      open(socket) {
-        const script = scripts[socket.data.connection - 2];
-
-        if (script === undefined) return;
-        const stream = `stream-of-activation-${String(socket.data.connection)}`;
-        socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_PENDING }));
-        socket.send(streamResumingFrame(stream, messageId));
-
-        for (const frame of script(stream)) socket.send(frame);
-
-        if (socket.data.connection === scripts.length + 1) resumed.resolve();
-        else socket.close(1012, 'the activation ended');
-      },
-      message(socket, message) {
-        if (socket.data.connection !== 1) return;
-        const frame = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString()));
-        messageId = v.parse(v.object({ messages: v.tuple([v.object({ id: v.string() })]) }), JSON.parse(frame.init.body)).messages[0].id;
-
-        for (const chunk of FILE_TURN_CHUNKS.slice(0, cut)) socket.send(chatChunkFrame({ requestId: frame.id, chunk }));
-        socket.close(1012, 'the activation ended');
-      },
-    },
-  });
-
-  const session = new KinuPublicSession({
-    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'ended activation',
-    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
-  }, 'probe');
-
-  try {
-    await session.connect();
-    const turn = await session.submit('Write note.txt.').settled;
-
-    if (turn.landed !== 'turn') throw new Error('expected the turn itself to land');
-
-    return { text: turn.text, tools: turn.toolCalls.map((call) => [call.name, call.result]), steps: turn.steps, upgrades };
-  } finally { await session.teardown(); await server.stop(true); }
-}
-
-/** A replay's frames as the DO sends them: the message opened, `restated` chunks from the ledger, the relay's chunks. */
-function replayFrames(stream: string, restated: readonly UIMessageChunk[], relayed: readonly UIMessageChunk[]): string[] {
-  return [
-    chatChunkFrame({ requestId: stream, chunk: { type: 'start' }, replay: true }),
-    ...restated.map((chunk) => chatChunkFrame({ requestId: stream, chunk, replay: true, restated: true })),
-    ...relayed.map((chunk) => chatChunkFrame({ requestId: stream, chunk, replay: true })),
-    replayCompleteFrame(stream),
-  ];
-}
-
-const STEP_ONE_CHUNKS = FILE_TURN_CHUNKS.slice(1, 5);
-
-test('a turn survives an ended activation: the redial follows it onto the stream the next activation re-opened', async () => {
-  // F2 on staging a4e564ce1 (2026-09-30): the object's activation ended after step 1 and its wake re-drove the turn
-  // under a request id the new activation minted. The redial is told the turn is pending, then resuming under that id,
-  // named for the turn by the message the request carried. Unfixed, the session ignored it and failed at the run's end:
-  // "the turn's run ended before its stream could be resumed, so its answer was never observed". Its replay restates
-  // step 1 from the ledger (2026-10-01), which this session streamed before the cut and must not hold twice.
-  const turn = await turnAcrossEndedActivations(5, [(stream) => [
-    ...replayFrames(stream, STEP_ONE_CHUNKS, FILE_TURN_CHUNKS.slice(5, 8)),
-    ...FILE_TURN_CHUNKS.slice(8).map((chunk) => chatChunkFrame({ requestId: stream, chunk })),
-    chatTerminalFrame({ requestId: stream }),
-  ]]);
-
-  expect(turn).toEqual({ text: 'Wrote note.txt.', tools: [['file', 'Wrote note.txt']], steps: 2, upgrades: 2 });
-});
-
-test('a turn survives two ended activations on one open session: each step held once, the cut one replaced by its re-run', async () => {
-  // The second activation streams `Wrote ` of step 2 and ends inside it; the third restates step 1 and runs step 2
-  // again whole. A follower that appended what each replay restates would hold step 1 three times.
-  const turn = await turnAcrossEndedActivations(5, [
-    (stream) => replayFrames(stream, STEP_ONE_CHUNKS, FILE_TURN_CHUNKS.slice(5, 8)),
-    (stream) => [
-      ...replayFrames(stream, STEP_ONE_CHUNKS, [
-        { type: 'data-kinu-step-cut', data: { stepIndex: 2 }, transient: true },
-        ...FILE_TURN_CHUNKS.slice(5, 11),
-      ]),
-      chatChunkFrame({ requestId: stream, chunk: { type: 'finish' } }),
-      chatTerminalFrame({ requestId: stream }),
-    ],
-  ]);
-
-  expect(turn).toEqual({ text: 'Wrote note.txt.', tools: [['file', 'Wrote note.txt']], steps: 2, upgrades: 3 });
-});
-
 /** The run that absorbs a spliced send: it starts before the send lands and ends after. */
 const ABSORBING_START: RunEvent = {
   type: 'run_start', runId: 'absorbing', eventIndex: 0,
@@ -915,6 +722,104 @@ const ABSORBING_END: RunEvent = {
   type: 'run_end', runId: 'absorbing', eventIndex: 2,
   timestamp: '9999-01-01T00:00:00.000Z', reason: 'completed',
 };
+
+/**
+ * A turn whose socket drops after its first step: connection 1 takes the request, streams step 1 and closes; the redial
+ * is asked `awaitSend` for it and answers `state`, and the transcript holds its answer. The absorbing run is closed.
+ */
+async function turnAfterDrop(state: (requestId: string) => JsonValue) {
+  let upgrades = 0;
+  let requestId = '';
+  const asked: JsonValue[] = [];
+
+  const server = Bun.serve<{ connection: number }>({ port: 0, hostname: '127.0.0.1',
+    fetch(request, upgrading) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+
+      // Numbered at the upgrade: Bun opens the socket inside `upgrade`, before a counter bumped after it.
+      if (upgrading.upgrade(request, { data: { connection: upgrades + 1 } })) {
+        upgrades += 1;
+
+        return;
+      }
+
+      const path = new URL(request.url).pathname;
+
+      if (path.endsWith('/get-messages')) {
+        return Response.json([
+          { id: requestId, role: 'user', parts: [{ type: 'text', text: 'Write note.txt.' }] },
+          { id: 'answer', role: 'assistant', parts: [{ type: 'text', text: 'Wrote note.txt.' }] },
+        ]);
+      }
+
+      if (path.endsWith('/runs')) return Response.json({ status: 'end', items: [{ runId: 'absorbing' }] });
+
+      if (path.endsWith('/events')) return Response.json([ABSORBING_START, ABSORBING_END]);
+
+      return new Response('Not found', { status: 404 });
+    },
+    websocket: {
+      message(socket, message) {
+        if (socket.data.connection === 1) {
+          requestId = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString())).id;
+
+          for (const chunk of FILE_TURN_CHUNKS.slice(0, 5)) socket.send(chatChunkFrame({ requestId, chunk }));
+          socket.close(1012, 'dropped mid-turn');
+
+          return;
+        }
+
+        const rpc = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
+        asked.push([rpc.method, ...v.parse(v.array(JsonValueSchema), rpc.args)]);
+        socket.send(rpcReplyFrame({ requestId: rpc.id, result: state(requestId) }));
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'dropped socket',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    const [settled] = await Promise.allSettled([session.submit('Write note.txt.').settled]);
+
+    return { settled, asked: asked.map((call) => JSON.stringify(call).replace(requestId, 'the-send')), upgrades };
+  } finally { await session.teardown(); await server.stop(true); }
+}
+
+test('a turn its socket dropped is asked how it ended, and ends on the answer its transcript recorded', async () => {
+  const { settled, asked, upgrades } = await turnAfterDrop((turnId) => ({ status: 'settled', turnId, outcome: 'completed' }));
+
+  if (settled.status === 'rejected' || settled.value.landed !== 'turn') throw new Error('expected the turn itself to land');
+  const turn = settled.value;
+
+  expect({ text: turn.text, tools: turn.toolCalls.map((call) => [call.name, call.result]), steps: turn.steps, hadError: turn.hadError })
+    .toEqual({ text: 'Wrote note.txt.', tools: [['file', 'Wrote note.txt']], steps: 1, hadError: false });
+  expect({ asked, upgrades }).toEqual({ asked: ['["awaitSend","the-send"]'], upgrades: 2 });
+});
+
+test('a dropped turn the workspace records as failed ends failed', async () => {
+  const { settled } = await turnAfterDrop((turnId) => ({ status: 'settled', turnId, outcome: 'error' }));
+
+  if (settled.status === 'rejected' || settled.value.landed !== 'turn') throw new Error('expected the turn itself to land');
+  expect(settled.value.hadError).toBe(true);
+});
+
+test('a dropped send another turn read lands mid-turn, answered by the run open when it was sent', async () => {
+  const { settled } = await turnAfterDrop(() => ({ status: 'settled', turnId: 'the-running-turn', outcome: 'completed' }));
+
+  expect(settled).toEqual({ status: 'fulfilled', value: { landed: 'mid-turn', absorbedBy: 'absorbing' } });
+});
+
+test('a dropped send no turn took fails as the infrastructure, never as an answer', async () => {
+  const { settled } = await turnAfterDrop(() => ({ status: 'none' }));
+
+  if (settled.status === 'fulfilled') throw new Error('a send no turn took settled');
+  expect(String(settled.reason)).toContain(INFRA_FAILURE_MARKER);
+  expect(String(settled.reason)).toContain('no turn took the message');
+});
 
 /** The absorbing run's stream from `cursor`: from its start, one step and the stream ends; from that step, the run's end. */
 function absorbingRunStream(cursor: string): Response {
@@ -1198,45 +1103,25 @@ describe('the public session speaks the frames the web client speaks', () => {
     expect(turn.hadError).toBe(true);
   });
 
-  test('a replayed stream does not double the answer', () => {
-    // The DO replays a resumed stream FROM CHUNK ZERO on every ack
-    // (agents/dist/chat/index.js:666-675), so a session that applied what
-    // arrived would render the answer twice — and a trajectory that counted the
-    // steps twice would report a turn that took twice the work it did.
-    const live = chatTurnFrames({ requestId: FIXTURE_REQUEST_ID, chunks: FILE_TURN_CHUNKS });
+  test('a turn its socket dropped keeps what it heard, and ends on the answer the workspace recorded', () => {
     const recorder = recordPublicTurn();
 
-    for (const raw of live.slice(0, 5)) {
+    for (const raw of chatTurnFrames({ requestId: FIXTURE_REQUEST_ID, chunks: FILE_TURN_CHUNKS }).slice(0, 8)) {
       const frame = decodeFrame(raw);
 
       if (frame?.kind === 'response') recorder.apply(frame.frame);
     }
 
-    expect(recorder.settled()).toBeNull();
-
-    const replayed = chatTurnFrames({
-      requestId: FIXTURE_REQUEST_ID, chunks: FILE_TURN_CHUNKS, replay: true,
-    });
-
-    // The replay answers an ack, which the session marks as it sends it.
-    recorder.beginReplay();
-
-    for (const raw of replayed) {
-      const frame = decodeFrame(raw);
-
-      if (frame?.kind === 'response') recorder.apply(frame.frame);
-    }
-
+    recorder.finish('Wrote note.txt.', false);
     const turn = recorder.settled();
 
-    if (turn === null || turn.landed !== 'turn') throw new Error('the replayed terminal frame did not settle the turn');
-    expect(turn.text).toBe('Wrote note.txt.');
-    expect(turn.toolCalls).toHaveLength(1);
-    expect(turn.steps).toBe(2);
+    if (turn === null || turn.landed !== 'turn') throw new Error('finishing did not settle the turn');
+    expect({ text: turn.text, calls: turn.toolCalls.length, steps: turn.steps, hadError: turn.hadError })
+      .toEqual({ text: 'Wrote note.txt.', calls: 1, steps: 1, hadError: false });
   });
 
   test('the resume and RPC frames are recognised, and a broadcast is not a fault', () => {
-    expect(decodeFrame(streamResumingFrame('turn-9', 'turn-1'))).toEqual({ kind: 'resuming', id: 'turn-9', turnId: 'turn-1' });
+    expect(decodeFrame(streamResumingFrame('turn-9'))).toEqual({ kind: 'resuming', id: 'turn-9' });
     expect(decodeFrame(rpcReplyFrame({ requestId: 'rpc-1', result: { spec: '@cf/x' } })))
       .toEqual({ kind: 'rpc', id: 'rpc-1', result: { spec: '@cf/x' }, error: null });
     expect(decodeFrame(rpcReplyFrame({ requestId: 'rpc-1', error: 'no such method' })))

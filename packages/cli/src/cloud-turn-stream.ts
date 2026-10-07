@@ -1,7 +1,4 @@
-/**
- * One cloud turn's accumulated stream. An ack's replay restates the turn from its first step; it is matched to what is
- * held step by step (D23 (8)).
- */
+/** One cloud turn's accumulated stream, as its live frames arrive. */
 import * as v from 'valibot';
 import {
   JsonObjectSchema, parseJsonValue,
@@ -12,20 +9,12 @@ import { asRecord } from './options';
 import type { AgentClientEvent, AgentSendResult, AgentTurnResult } from './agent-client';
 
 export class CloudTurnStream {
-  /** Every ack replays from chunk zero, so the ack goes out once per socket generation. */
-  resumeAcked = false;
-  /** Still set on a second drop means no progress: the turn is reported rather than chased forever. */
-  awaitingRebind = false;
-
   private readonly startedAt = Date.now();
   private text = '';
   private steps = 0;
   private readonly toolCalls: AgentTurnResult['toolCalls'] = [];
   private readonly toolById = new Map<string, AgentTurnResult['toolCalls'][number]>();
   private readonly began: { readonly text: number; readonly calls: number }[] = [{ text: 0, calls: 0 }];
-  private stepChunks = 0;
-  private foreign = false;
-  private cursor: { step: number; chunk: number } | null = null;
 
   /** Turn-start owed only if the server answers with a stream; null once announced. */
   private deferredStart: string | null;
@@ -43,27 +32,10 @@ export class CloudTurnStream {
     this.resolve({ landed: 'mid-turn' });
   }
 
-  beginReplay(): void {
-    this.cursor = { step: 0, chunk: 0 };
-  }
+  apply(body: string | undefined): void {
+    const chunk = body === undefined || body.trim() === '' ? null : decodeChunk(body);
 
-  follow(): void {
-    this.foreign = true;
-  }
-
-  apply(frame: { readonly body?: string; readonly replay?: boolean; readonly restated?: boolean; readonly replayComplete?: boolean }): void {
-    if (frame.body !== undefined && frame.body.trim() !== '') this.applyChunk(frame.body, frame.replay === true, frame.restated === true);
-
-    if (frame.replayComplete !== true) return;
-
-    this.cursor = null;
-    this.foreign = false;
-  }
-
-  private applyChunk(body: string, replay: boolean, restated: boolean): void {
-    const chunk = decodeChunk(body);
-
-    if (chunk === null || (replay && this.repeats(chunk.type, restated))) return;
+    if (chunk === null) return;
 
     if (this.deferredStart !== null) {
       this.emit({ type: 'turn-start', kind: 'user', text: this.deferredStart });
@@ -72,16 +44,16 @@ export class CloudTurnStream {
 
     this.decode(chunk.type, chunk.fields);
 
-    if (chunk.type === 'start') return;
+    if (chunk.type === 'finish-step') this.began[this.steps] = { text: this.text.length, calls: this.toolCalls.length };
+  }
 
-    if (chunk.type !== 'finish-step') {
-      this.stepChunks += 1;
+  /** The answer as the workspace recorded it, once the stream that was showing it is gone: what was not shown follows. */
+  finish(answer: string): void {
+    const rest = answer.startsWith(this.text) ? answer.slice(this.text.length) : `\n${answer}`;
 
-      return;
-    }
+    this.text = answer;
 
-    this.stepChunks = 0;
-    this.began[this.steps] = { text: this.text.length, calls: this.toolCalls.length };
+    if (rest !== '') this.emit({ type: 'text-delta', delta: rest });
   }
 
   /** Exactly one turn-end per turn-start, after any error event. */
@@ -103,30 +75,6 @@ export class CloudTurnStream {
     this.resolve({ landed: 'turn', ...result });
   }
 
-  private repeats(type: string, restated: boolean): boolean {
-    const { cursor } = this;
-
-    if (cursor === null) return false;
-
-    if (type === 'start') return true;
-    const sameStream = !restated && !this.foreign;
-    const held = cursor.step < this.steps ? restated || sameStream : cursor.step === this.steps && sameStream && cursor.chunk < this.stepChunks;
-
-    if (!held) {
-      this.cursor = null;
-      this.foreign = false;
-
-      return false;
-    }
-
-    if (type === 'finish-step') {
-      cursor.step += 1;
-      cursor.chunk = 0;
-    } else cursor.chunk += 1;
-
-    return true;
-  }
-
   private cut(step: number): void {
     const mark = this.began[step];
 
@@ -138,7 +86,6 @@ export class CloudTurnStream {
     }
 
     this.steps = step;
-    this.stepChunks = 0;
     this.began.length = step + 1;
   }
 
@@ -213,36 +160,6 @@ export class CloudTurnStream {
         return;
       }
     }
-  }
-}
-
-/** A re-opened turn's stream, to its request: the turn's id is the request's own. */
-export class TurnStreams {
-  private readonly moved = new Map<string, string>();
-
-  requestOf(stream: string): string {
-    return this.moved.get(stream) ?? stream;
-  }
-
-  resuming<T>(stream: string, turnId: string | undefined, open: ReadonlyMap<string, T>): { readonly turn: T; readonly moved: boolean } | null {
-    const turn = open.get(this.requestOf(stream));
-
-    if (turn !== undefined) return { turn, moved: false };
-
-    const named = turnId === undefined ? undefined : open.get(turnId);
-
-    if (turnId === undefined || named === undefined) return null;
-    this.moved.set(stream, turnId);
-
-    return { turn: named, moved: true };
-  }
-
-  ended(stream: string): void {
-    this.moved.delete(stream);
-  }
-
-  clear(): void {
-    this.moved.clear();
   }
 }
 

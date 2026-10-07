@@ -93,15 +93,8 @@ export interface PublicResponseFrame {
    *  the send was spliced into the run already open, 'turn' when it opened one
    *  of its own. Absent on streamed bodies and on builds that predate the field. */
   readonly landed?: 'mid-turn' | 'turn';
-  /** Set by the DO on every frame of a stream it REPLAYS. Carried because the
-   *  accumulator needs it to stay idempotent across a resume. */
+  /** Set by the DO on every frame of a stream it REPLAYS: heard, but not the workspace working now. */
   readonly replay?: boolean;
-  /** On a replayed chunk: a step the ledger records, restated rather than
-   *  relayed, which a client that streamed it skips. A build before 2026-10-01
-   *  restates nothing. */
-  readonly restated?: boolean;
-  /** The replay's last frame: the live chunks follow. */
-  readonly replayComplete?: boolean;
 }
 
 /** What one decoded socket frame is. `other` is not an error: the DO fans
@@ -117,14 +110,9 @@ export type PublicFrame =
       /** The reply's failure text, or null when it succeeded. */
       readonly error: string | null;
     }
-  /** The DO announcing it holds a resumable stream for `id`, or that it holds
-   *  none. Both are answered rather than ignored, because a socket that dropped
-   *  mid-turn is the one case where the turn is still running up there. A turn a
-   *  later activation re-opened streams under an id that activation minted;
-   *  `turnId` names the turn by its opening message, the request's own here. A
-   *  build before 2026-09-30 sends none. */
-  | { readonly kind: 'resuming'; readonly id: string; readonly turnId: string | undefined }
-  | { readonly kind: 'resume-none' }
+  /** The DO announcing a stream for `id` it keeps from this socket until acked: its live chunks are the workspace
+   *  working. */
+  | { readonly kind: 'resuming'; readonly id: string }
   /** The DO's account of where a steered message is: taken, read by the
    *  running turn at a step, run as a turn of its own, or handed back. */
   | { readonly kind: 'steer'; readonly steerId: string; readonly status: SteerStatus }
@@ -152,11 +140,8 @@ const FrameSchema = v.object({
    *  admitted here and each branch below reads the one it means. */
   error: v.optional(v.union([v.boolean(), JsonValueSchema])),
   replay: v.optional(v.boolean()),
-  restated: v.optional(v.boolean()),
-  replayComplete: v.optional(v.boolean()),
   success: v.optional(v.boolean()),
   result: v.optional(JsonValueSchema),
-  turnId: v.optional(v.string()),
   reads: v.optional(v.array(v.string())),
 });
 
@@ -190,8 +175,6 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
         done: frame.output.done,
         error: frame.output.error === true,
         replay: frame.output.replay,
-        restated: frame.output.restated,
-        replayComplete: frame.output.replayComplete,
         landed: frame.output.landed,
       },
     };
@@ -215,11 +198,7 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
     };
   }
 
-  if (type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && id !== undefined) {
-    return { kind: 'resuming', id, turnId: frame.output.turnId };
-  }
-
-  if (type === CHAT_MESSAGE_TYPES.STREAM_RESUME_NONE) return { kind: 'resume-none' };
+  if (type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && id !== undefined) return { kind: 'resuming', id };
 
   if (type === READS_CHANGED_EVENT && frame.output.reads !== undefined) return { kind: 'reads', reads: frame.output.reads };
 
@@ -281,10 +260,8 @@ export type PublicTurn = AgentSendResult;
 export interface PublicTurnRecorder {
   /** Feed one response frame. */
   apply(frame: PublicResponseFrame): void;
-  /** Called on each ack: the replay that follows starts at the stream's chunk zero. */
-  beginReplay(): void;
-  /** Called when the turn moves to a stream a later activation re-opened it under. */
-  follow(): void;
+  /** End a turn its socket dropped: the answer the workspace recorded, and whether the turn ended in error. */
+  finish(answer: string, hadError: boolean): void;
   /** The send's settled result, or null while it is still open. */
   settled(): PublicTurn | null;
 }
@@ -294,8 +271,7 @@ export interface PublicTurnRecorder {
  *
  * The pure seam this module is tested through: a suite can hand it recorded
  * frames and assert the turn that comes out — the text, the tool calls paired to
- * their outputs, the step count, and the replay idempotence a resumed stream
- * depends on — with no socket and no deployment.
+ * their outputs and the step count — with no socket and no deployment.
  */
 export function recordPublicTurn(): PublicTurnRecorder {
   let settled: PublicTurn | null = null;
@@ -314,7 +290,7 @@ export function recordPublicTurn(): PublicTurnRecorder {
         return;
       }
 
-      stream.apply(frame);
+      stream.apply(frame.body);
 
       // The done frame is the DO's verdict on WHERE the send landed. A
       // mid-turn answer opens no stream of its own — `settle` would mint a
@@ -325,8 +301,10 @@ export function recordPublicTurn(): PublicTurnRecorder {
         else stream.settle();
       }
     },
-    beginReplay: () => { stream.beginReplay(); },
-    follow: () => { stream.follow(); },
+    finish(answer, hadError) {
+      stream.finish(answer);
+      stream.settle(hadError);
+    },
     settled: () => settled,
   };
 }

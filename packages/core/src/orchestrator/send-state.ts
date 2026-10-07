@@ -1,16 +1,20 @@
-import type { ActorClaimStore, ClaimOutcome } from './actor-claims';
+import * as v from 'valibot';
+import { CLAIM_OUTCOMES, type ActorClaimStore } from './actor-claims';
 import type { PendingSendStore } from './inbox';
 import type { SessionTranscriptReader } from '../session/transcript';
 
 /** Where a send stands, read from its durable facts alone: what a client asks after any break, never inferred. */
-export type SendState =
+export const SendStateSchema = v.variant('status', [
   /** Its reservation is owed: no turn has taken it yet. */
-  | { readonly status: 'queued' }
+  v.object({ status: v.literal('queued') }),
   /** The entry under its id names the turn that took it; that turn's claim holds no outcome yet. */
-  | { readonly status: 'running'; readonly turnId: string }
-  | { readonly status: 'settled'; readonly turnId: string; readonly outcome: ClaimOutcome }
+  v.object({ status: v.literal('running'), turnId: v.string() }),
+  v.object({ status: v.literal('settled'), turnId: v.string(), outcome: v.picklist(CLAIM_OUTCOMES) }),
   /** Neither: handed back to its sender, refused before a turn took it, or never sent. */
-  | { readonly status: 'none' };
+  v.object({ status: v.literal('none') }),
+]);
+
+export type SendState = v.InferOutput<typeof SendStateSchema>;
 
 export interface SendFacts {
   readonly transcript: Pick<SessionTranscriptReader, 'read'>;
