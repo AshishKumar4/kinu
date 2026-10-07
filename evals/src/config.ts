@@ -16,6 +16,19 @@ export const DEFAULT_MODELS: readonly [string, ...string[]] = [
  */
 export const REVIEW_MODEL = 'openrouter/openai/gpt-6.1-sol';
 
+/**
+ * The owner's ChatGPT Pro logins the reviewer moves to (2026-10-07), first to last, each the eval identity's own codex
+ * sign-in on a deployment (`evals/scripts/reviewer-sign-in.ts`), the second the first's fallback. The owner's own agents run
+ * `gpt-6.1-sol` on these logins through the same chatgpt.com Codex route; whether a deployment lists it for the eval
+ * identity is measured at the first sign-in, and {@link REVIEW_MODEL} names the chain only once it does.
+ */
+export const REVIEW_ACCOUNTS = ['ashishkmr472', 'aksnip4284'] as const;
+
+/** GPT 6.1 Sol through codex on one of {@link REVIEW_ACCOUNTS}. */
+export function codexReviewModel(account: (typeof REVIEW_ACCOUNTS)[number]): string {
+  return `codex@${account}/gpt-6.1-sol`;
+}
+
 /** The reviewer a run's review asks: `KINU_EVAL_REVIEW_MODEL`, else {@link REVIEW_MODEL}. */
 export function reviewModel(env: Env): string {
   const named = env.KINU_EVAL_REVIEW_MODEL?.trim() ?? '';

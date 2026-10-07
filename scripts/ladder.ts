@@ -1557,7 +1557,8 @@ export const LADDER: readonly Gate[] = [
       + 'without the types it alone writes, a check that throws failing alone, a slate call the deployment could '
       + 'not carry failing the trial as infrastructure rather than a check, the session '
       + 'client\'s frame and socket handling, and a page read in Chrome as a person sees it '
-      + '(each name\'s own part of the page, what hides it, the control pressed). Plus the preflight that refuses to measure a '
+      + '(each name\'s own part of the page, what hides it, the control pressed), and the reviewer\'s login asked of '
+      + 'the owner when the deployment lacks it and only then. Plus the preflight that refuses to measure a '
       + 'deployment serving another revision.',
     blind: 'anything a model does, and whether a task\'s checker is right about its task. That '
       + 'is proved per task, before its first run, against hand-written reference slates on the '
