@@ -33,8 +33,9 @@ const DIST = join(CF_BACKEND, 'dist/kinu');
 export const GATE = 'worker-heap';
 
 /** Measured 2026-10-07: 45.4 MB used on b0de8580f, where 15 dependents each bundled their own zod; 35.7-36.5 MB over 3
- *  runs on lane/memory-gap 9875bab49 with one. Plus 5 MB of room for the product to grow before this row asks why. */
-export const HEAP_AFTER_SETUP_BOUND_BYTES = 41_500_000;
+ *  runs on lane/memory-gap 9875bab49 with one; 26.4-26.5 MB on 871e789f1, where a module compiles when first imported
+ *  (`new_module_registry`) and the slate vendor waits for a slate. Plus 4 MB of room for the product to grow. */
+export const HEAP_AFTER_SETUP_BOUND_BYTES = 30_500_000;
 
 /** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
@@ -69,10 +70,12 @@ export const HELPER_TURN_LIVE_BOUND_BYTES = 3_600_000;
  *  stale park (1-2 MB, before the tree started) or the helper's own next step (16-17 MB, mid-turn over its pages). */
 export const WAITING_PARENT_LIVE_BOUND_BYTES = 14_500_000;
 
-/** Measured 2026-10-01 at {@link LONG_TURN}, after the setup, step and heads above in the same isolate: 98.4-104.5 MB
+/** Measured 2026-10-07 at {@link LONG_TURN}: 106.3-112.9 MB used over 3 runs on b0de8580f, 89.2-100.1 MB on
+ *  lane/memory-gap 871e789f1. V8 grows the old generation by a factor of what is live, so this row falls only as the
+ *  live heap does. Measured 2026-10-01, after the setup, step and heads above in the same isolate: 98.4-104.5 MB
  *  used over 3 runs on lane/staging-fix-1 c7beb9ce1. The collector decides when garbage goes, hence the spread; this
  *  row trips only as the peak nears the 128 MB isolate, and the growth row below is the one that pins what a turn keeps. */
-export const LONG_TURN_PEAK_BOUND_BYTES = 124_000_000;
+export const LONG_TURN_PEAK_BOUND_BYTES = 115_000_000;
 
 /** Measured 2026-10-07 at {@link LONG_TURN}: 5.7-5.9 MB over 3 runs on lane/memory-gap 9875bab49, once the chat room
  *  keeps only the step in progress; 6.9-7.1 MB before. Measured 2026-10-01: 2.9-6.8 MB over 7 runs on lane/staging-fix-1
