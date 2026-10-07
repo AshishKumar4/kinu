@@ -14,7 +14,8 @@ export interface Attempt {
   /** Aborted when the attempt is abandoned or its caller cancels. */
   readonly signal: AbortSignal;
   readonly heard: () => void;
-  /** True once per attempt: the innermost decorated transport reports, the ones wrapped around it do not. */
+  /** True once per attempt: the innermost decorated transport to receive an answer reports, the ones wrapped around it do
+   *  not. */
   readonly claim: () => boolean;
 }
 
@@ -51,7 +52,8 @@ export function attemptBound(model: LanguageModelV4): LanguageModelV4 {
 export function heardFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
   return asFetchFunction(async (input, init) => {
     const response = await fetch(input, init);
-    const body = heardBody(response.body);
+    // A refusal is read whole, and a renewed login asks again within the attempt: only an answer claims it.
+    const body = response.ok ? heardBody(response.body) : null;
 
     return body === null ? response : new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
   });
@@ -69,7 +71,7 @@ export function heardBinding<Binding extends object>(binding: Binding & { run(..
 
 function heardAnswer(answer: BindingAnswer): BindingAnswer {
   if (answer instanceof Response) {
-    const body = heardBody(answer.body);
+    const body = answer.ok ? heardBody(answer.body) : null;
 
     return body === null ? answer : new Response(body, { status: answer.status, statusText: answer.statusText, headers: answer.headers });
   }
