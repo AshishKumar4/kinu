@@ -65,7 +65,7 @@ import {
 } from './two-turn-shapes';
 import { CHAT_SESSION_ID, changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type SessionTranscript, type WorkMode } from '@kinu.run/core';
 import { renderThrownChain, type Refusal } from '@kinu.run/core/obs';
-import { seedTranscriptEntry } from '@kinu.run/test-utils';
+import { seedTranscriptEntry } from '@kinu.run/test-utils/transcript';
 import type { ToolSet } from 'ai';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
