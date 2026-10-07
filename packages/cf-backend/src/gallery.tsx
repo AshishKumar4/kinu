@@ -2312,6 +2312,7 @@ function galleryOwedWork(): JsonValue {
 
   return v.parse(JsonValueSchema, inspectWork({
     turns: OWED_TURNS.filter((claim) => !recovered || claim.turnId !== "turn-stranded"),
+    agentTurns: [],
     executing: new Set(["turn-live"]),
     effects: [
       { ...OWED_EFFECT, key: "e-due", rawName: "turn_record", status: "pending", attempts: 1, nextAttemptAt: NOW - 1e3 },

@@ -191,17 +191,18 @@ describe('two real turns over the HTTP model seam', () => {
     expect(settledWork).toEqual([]);
   });
 
-  // A dead activation left a root turn nothing runs, and an older build an effect this one cannot run. The work read
-  // reports both blocked, each with why; the person's Recover settles the turn, and only the effect is still owed.
-  it('the work read reports a stranded turn and an effect this build cannot run, and Recover leaves only the effect', async () => {
+  // A dead activation left a root turn nothing runs and a turn out at an agent's isolate it never heard end, and an
+  // older build an effect this one cannot run. The work read reports all three blocked, each with why; the person's
+  // Recover settles the root's turn, and the agent's turn, which the alarm recovers, and the effect are still owed.
+  it('the work read reports stranded turns and an effect this build cannot run, and Recover settles the root turn', async () => {
     const work = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('stranded-driver')).strandedWork();
-    const effect = { kind: 'effect', id: 'retired', phase: 'blocked', attempt: 0 };
+    const left = [{ kind: 'turn', id: 'agent-turn', phase: 'blocked', attempt: null }, { kind: 'effect', id: 'retired', phase: 'blocked', attempt: 0 }];
     const brief = (rows: typeof work.after) => rows.map(({ kind, id, phase, attempt }) => ({ kind, id, phase, attempt }));
 
-    expect(brief(work.stranded), JSON.stringify(work)).toEqual([{ kind: 'turn', id: 'turn-stranded', phase: 'blocked', attempt: 2 }, effect]);
-    expect(work.stranded.map((row) => row.blocked === null)).toEqual([false, false]);
+    expect(brief(work.stranded), JSON.stringify(work)).toEqual([{ kind: 'turn', id: 'turn-stranded', phase: 'blocked', attempt: 2 }, ...left]);
+    expect(work.stranded.map((row) => row.blocked === null)).toEqual([false, false, false]);
     expect(work.recovered).not.toBe('none');
-    expect(brief(work.after)).toEqual([effect]);
+    expect(brief(work.after)).toEqual(left);
   });
 
   // A dead activation left two replies owed. After a real eviction, the alarm's recovery dispatches the answer that

@@ -54,7 +54,7 @@ function timeUntil(ms: number): string {
 export function InspectedRow({ work, now }: { work: InspectedWork; now: number }) {
   const notes = [
     work.phase,
-    work.attempt > 1 ? `attempt ${String(work.attempt)}` : null,
+    work.attempt !== null && work.attempt > 1 ? `attempt ${String(work.attempt)}` : null,
     work.blocked,
     work.until !== null && work.until > now ? `next try ${timeUntil(work.until - now)}` : null,
   ].filter((note) => note !== null);

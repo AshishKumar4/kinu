@@ -353,7 +353,7 @@ export interface OwedWorkRow {
   readonly kind: string;
   readonly id: string;
   readonly phase: string;
-  readonly attempt: number;
+  readonly attempt: number | null;
   readonly blocked: string | null;
 }
 

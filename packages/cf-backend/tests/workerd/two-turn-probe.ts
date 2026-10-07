@@ -244,16 +244,19 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   /**
-   * What a dead activation and an older build left: a root turn no activation runs, and an effect this build cannot
-   * run. Seeded and read in one call, so no wake recovers the turn in between; then the person's Recover.
+   * What a dead activation and an older build left: a root turn no activation runs, a turn it handed to `agent`'s own
+   * isolate and never heard end, and an effect this build cannot run. Seeded and read in one call, so no wake recovers
+   * them in between; then the person's Recover.
    */
-  async strandedWork(): Promise<StrandedWork> {
+  async strandedWork(agent: string): Promise<StrandedWork> {
     const actorId = this.actorHandle().actorId;
+    const agentId = textColumn(this.unmetered('SELECT actor_id FROM workspace_actors WHERE name = ?', agent).one().actor_id);
 
     this.unmetered(`INSERT INTO actor_turn_claims (actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version, claimed_at)
       VALUES (?, 'turn-stranded', 'run-stranded', 2, 'build', 'builtin', 1, ?)`, actorId, Date.now());
     this.unmetered(`INSERT INTO terminal_effects (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status)
       VALUES (?, 'seq-retired', 'retired', 'no_such_effect', '', 0, '{}', 'pending')`, actorId);
+    this.unmetered("INSERT INTO agent_open_turns (actor_id, turn_id, opened_at) VALUES (?, 'agent-turn', ?)", agentId, Date.now());
     const stranded = await this.inspectWork();
     const { recovered } = await this.recoverStrandedTurn();
 
@@ -1356,8 +1359,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   async strandedWork(): Promise<StrandedWork> {
     const { target } = await this.claimQueueWorkspace('stranded');
+    const hired = v.parse(v.object({ name: v.string() }), await target.createSubordinateAgent());
 
-    return await target.strandedWork();
+    return await target.strandedWork(hired.name);
   }
 
   /** Owed replies seeded in a workspace whose activation then dies; returns the workspace to read after the eviction. */

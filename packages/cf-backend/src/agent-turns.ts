@@ -188,6 +188,11 @@ export class AgentTurns {
     return null;
   }
 
+  /** Handed out by this activation and not yet over. */
+  holds(turnId: string): boolean {
+    return this.pending.get(turnId)?.over === false;
+  }
+
   inFlight(actorId: string): boolean {
     return this.running(actorId) !== null;
   }
