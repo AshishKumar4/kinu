@@ -135,7 +135,7 @@ export interface ChatOptions {
   attachments?: AttachmentPolicy;
   modelContext?: PromptModelContext;
   /** The turn model's spec, normalized as its fallbacks' are. */
-  modelSpec?: string;
+  modelSpec: string;
   /** A spec's stored credential; a 401 skips entries holding the refused one. */
   credentialOf?: (spec: string) => Promise<string | null>;
   retries?: number;
@@ -674,7 +674,7 @@ async function admitRequest(opts: ChatOptions) {
     extensions,
     sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
-    model: opts.modelSpec ?? opts.modelContext?.id,
+    model: opts.modelSpec,
     providerReportedTokens: opts.providerReportedTokens,
     trigger: opts.transformTrigger ?? 'auto',
     abortSignal: opts.signal,
@@ -682,7 +682,7 @@ async function admitRequest(opts: ChatOptions) {
   };
 
   const primary = {
-    spec: opts.modelSpec ?? opts.modelContext?.id ?? 'the turn model',
+    spec: opts.modelSpec,
     provider: opts.modelContext?.provider ?? opts.cache?.providerId,
   };
 
@@ -1009,17 +1009,16 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     return { steps, produced: paired, finishReason: call.lastFinishReason, interrupted: cut, failure: null };
   };
 
-  /** A fallback gets its own provider's cache, replay and options; one compacting elsewhere, or not at all, is rebuilt. */
+  /** A fallback gets its own provider's cache, replay and options, and a request assembled for it: its window, its
+   *  compaction and its attachment prices. */
   const takeOver = async (next: ChatFallback): Promise<void> => {
     const bound = next.bind();
     const served = next.window.contextWindow;
-    const rebuild = serverCompactor(next.spec) !== serverCompactor(serving.model);
 
     serving = { ...assembly, model: next.spec, contextWindow: served };
-
-    if (rebuild) initialContextAvailable = false;
+    initialContextAvailable = false;
     const history = initialContext?.messages ?? assembly.history;
-    const messages = rebuild ? (await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined })).messages : turnMessages;
+    const { messages } = await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined });
 
     servingRoute = { providerId: bound.provider, modelId: parseModelSpec(next.spec).modelId, retention: turnRoute.retention };
     cache = attemptCachePlan(opts, servingRoute, messages, tools);

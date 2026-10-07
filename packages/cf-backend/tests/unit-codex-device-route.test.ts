@@ -143,7 +143,7 @@ function newTurn(): OperationProfile {
 /** One model request of `turn`, as the turn loop issues it: inside the turn's operation scope. */
 async function step(model: Rig['model'], turn: OperationProfile): Promise<ChatEvent[]> {
   const events: ChatEvent[] = [];
-  const chat = runChat({ model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {} });
+  const chat = runChat({ modelSpec: 'test/model', model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {} });
 
   for await (const event of operationProfileStream(chat, turn)) events.push(event);
 

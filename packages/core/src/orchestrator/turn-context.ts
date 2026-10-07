@@ -32,7 +32,7 @@ export interface TurnContextInput {
   /** Null when unknown: nothing compacts by size. */
   contextWindow: number | null;
   /** The model the request is built for. */
-  model?: string | undefined;
+  model: string;
   providerReportedTokens?: number;
   trigger: CompactionTrigger;
   abortSignal?: AbortSignal | undefined;

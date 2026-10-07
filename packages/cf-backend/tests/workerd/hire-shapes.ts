@@ -53,6 +53,7 @@ export interface JobRow {
 export interface JobWatchState {
   readonly incarnation: string;
   readonly terminalRetry: boolean;
+  readonly agentWakes: number;
   readonly fibers: number;
   readonly wakes: number;
   readonly started: boolean;

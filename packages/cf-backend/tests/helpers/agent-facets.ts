@@ -14,7 +14,7 @@ const databases = new Map<string, Database>();
 export interface InProcessAgentFacets {
   open(placement: AgentFacetPlacement, workspace: AgentWorkspaceHost): Promise<AgentFacetCalls>;
   drop(storageKey: string): void;
-  /** Every open agent's chat runs nothing and its settled turns' effects have closed. */
+  /** Every open agent's chat runs nothing, its settled turns' effects have closed, and it told its workspace so. */
   idle(): Promise<void>;
   reset(storageKey: string): void;
   /** Every live-output call an agent's isolate made to the workspace, in order: each is an RPC in production. */
@@ -116,11 +116,12 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           prepareChat: (request) => host.prepareChat(request),
           bindProfile: (turnId, profile) => host.bindProfile(turnId, profile),
           chatEvent: (event) => host.chatEvent(event),
+          turnEnded: (event, figures) => host.turnEnded(event, figures),
           owedReport: (...args) => host.owedReport(...args),
           parentReport: (report) => host.parentReport(report),
           autoTitle: (subject, title) => host.autoTitle(subject, title),
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
-          armWake: (atMs) => host.armWake(atMs),
+          owes: (next) => host.owes(next),
           birthContext: (drainTurnId) => host.birthContext(drainTurnId),
           steerSkills: (text, alreadyActive) => host.steerSkills(text, alreadyActive),
           advise: (review) => host.advise(review),

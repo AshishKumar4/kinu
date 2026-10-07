@@ -671,8 +671,8 @@ async function buildCLIHeadRuntime(
 
   // Heard on its own plane, and on its parent's under its own actor.
   const unobserved = writeObserver === undefined ? [] : [
-    observeNamespace(agentVfs.namespace, writeObserver),
-    observeNamespace(parent.plane.namespace, writeObserver, (writer) => writer.actor === actor.actorId),
+    observeNamespace(agentVfs.composite, writeObserver),
+    observeNamespace(parent.plane.composite, writeObserver, (writer) => writer.actor === actor.actorId),
   ];
 
   // A head runs its own gated, checkpointed host shell over the shared folder.
@@ -692,7 +692,7 @@ async function buildCLIHeadRuntime(
 
   executionRouter.register(createInlineExecutor(inlineOptions));
 
-  const parentVfs = withMountTable({ namespace: async () => parent.plane.namespace.as(CRED_SESSION_USER, actor.actorId), home: folder }, parent.plane.mounts());
+  const parentVfs = withMountTable({ namespace: async () => parent.plane.composite.as(CRED_SESSION_USER, actor.actorId), home: folder }, parent.plane.mounts());
 
   const parentHandle: ParentWorkspaceHandle = {
     read: (path) => answerParentRpc(path, async () => parentVfs.readFile(path)),

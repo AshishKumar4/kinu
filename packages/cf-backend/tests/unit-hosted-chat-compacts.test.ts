@@ -75,7 +75,7 @@ test('a hosted chat refused as too long compacts its earlier turns and answers o
 
   for (const question of QUESTIONS) {
     await asPane(pane, () => workspace.agent.send(question, crypto.randomUUID()));
-    await workspace.agent.harnessSettleDetached();
+    await workspace.agent.harnessAgentsIdle();
   }
 
   await driveUntil(workspace, 'the agent never answered on a folded history', () => last.some((text) => text.includes(FOLDED)));
@@ -161,7 +161,7 @@ test("an added agent's chat compacts, hires, starts a search, and keeps answerin
 
   const say = async (text: string): Promise<void> => {
     await asPane(pane, () => workspace.agent.send(text, crypto.randomUUID()));
-    await workspace.agent.harnessSettleDetached();
+    await workspace.agent.harnessAgentsIdle();
   };
 
   for (const question of QUESTIONS.slice(0, 3)) await say(question);

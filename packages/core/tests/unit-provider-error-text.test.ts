@@ -37,6 +37,7 @@ function inBandErrorModel(error: JsonValue | Error): LanguageModel {
 
 async function runToCompletion(model: LanguageModel): Promise<void> {
   for await (const _ of runChat({
+    modelSpec: 'test/model',
     model,
     system: 'sys',
     history: [{ role: 'user', content: 'go' }],
@@ -293,6 +294,7 @@ describe('a Cloudflare AI refusal reaches the user in Cloudflare\'s words', () =
     // A chain entry takes its call with no retries.
     const thrown = await rejectionOf(async () => {
       for await (const _ of runChat({
+        modelSpec: 'test/model',
         model: model(waiting),
         system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {}, stopWhen: isStepCount(1), retries: 0,
       })) { /* drain */ }

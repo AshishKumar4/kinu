@@ -29,7 +29,7 @@ export type {
 
 export interface ScaffoldBridgeOpts extends ScaffoldRunControl {
   model: LanguageModel;
-  spec?: string;
+  spec: string;
   modelContext?: ChatOptions['modelContext'];
   /** Resolved per call so mid-turn rebuilds land. */
   tools: () => ToolSet;
@@ -84,7 +84,7 @@ async function* streamScaffoldChat(
 
   try {
     for await (const event of runChat({
-      ...frame, model: opts.model, modelContext: opts.modelContext ?? frame.modelContext,
+      ...frame, model: opts.model, modelSpec: opts.spec, modelContext: opts.modelContext ?? frame.modelContext,
       signal: opts.signal, extensions,
       providerOptions: opts.streamOptions?.providerOptions,
       stopWhen: opts.streamOptions?.stopWhen,
@@ -99,7 +99,7 @@ async function* streamScaffoldChat(
         const stepUsage = normalizeUsage(step.usage);
 
         if (usageReported(stepUsage)) {
-          opts.streamOptions?.budget?.debit(usageTotal(stepUsage) ?? 0, { calls: 1, usage: stepUsage, ...(opts.spec !== undefined && { spec: opts.spec }) });
+          opts.streamOptions?.budget?.debit(usageTotal(stepUsage) ?? 0, { calls: 1, usage: stepUsage, spec: opts.spec });
         }
 
         await opts.streamOptions?.onStep?.(step, messages);

@@ -2,7 +2,7 @@ export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 
-export { AgentOpenTurns, AgentWakes, type AgentOpenTurn } from './subordinates/open-turns';
+export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
@@ -673,6 +673,8 @@ export { createTasksDispatcher, type TasksToolInput } from './tools/tasks-tool';
 export { createReportCodemodeProvider } from './delegation/report-codemode';
 
 export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './tools/file-tool';
+
+export { imageModelOutput } from './tools/image-results';
 
 export {
   summarizeToolCall, describeToolCall, describeCommand,
@@ -1956,7 +1958,7 @@ export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, Position
 export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
 
 export {
-  restoredRows, rowText, transcriptRole,
+  restoredRows, rowText, transcriptRole, UIMessageSchema,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 

@@ -53,6 +53,7 @@ export type RunEventType =
   | 'approval_consumed'
   | 'execution_escalation'
   | 'budget_exhausted'
+  | 'stop_requested'
   | 'fiber_recovered'
   | 'error'
   | 'turn_end'
@@ -212,6 +213,8 @@ export type RunEvent =
         failedSignature: string }> })
   | (RunEventBase & { type: 'execution_escalation' } & EscalationSnapshot)
   | (RunEventBase & { type: 'budget_exhausted' } & Omit<MissionBudgetRefusal, 'error'>)
+  /** The owner's Stop reached the running turn: what ends it, should its process die before it settles. */
+  | (RunEventBase & { type: 'stop_requested' })
   | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
   /** The only durable consumption record; safety/deferred-approval.ts spends by deleting. */
   | (RunEventBase & { type: 'approval_consumed'; approvalId: string;

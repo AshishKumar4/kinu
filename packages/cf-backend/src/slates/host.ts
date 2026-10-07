@@ -21,7 +21,7 @@ import {
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
   type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
   type MissionGovernor, type WorkspaceOverviewShare, slateCapabilityGraph, type SlateCapabilityGraph,
-  type EphemeralSlateAddress,
+  ephemeralSlateAddress, type EphemeralSlateAddress,
 } from '@kinu.run/core';
 import { SLATES_ROOT } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
@@ -60,6 +60,14 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   messageBlock?(address: EphemeralSlateAddress): Promise<MessageBlock>;
 }
 
+
+/**
+ * The key a slate's process is held under: one per caller for a directory slate, and one per answer's page, whose
+ * author's mode is read at each call rather than fixed by the process.
+ */
+function heldKey(caller: SlateCaller, id: string): string {
+  return ephemeralSlateAddress(id) === null ? `${slateCallerKey(caller)}#${id}` : `page#${id}`;
+}
 
 /** Answers' pages that keep a process and a reservation at once; drawing another retires the least recently drawn. */
 const EPHEMERAL_SLATES_KEPT = 16;
@@ -705,7 +713,7 @@ export class SlateHost {
     const issued = this.invocations.get(target);
     // Only the invocation this process holds, so it cannot retire another's lineage.
 
-    if (issued === undefined || issued.id !== id || issued.held !== `${slateCallerKey(caller)}#${id}`) {
+    if (issued === undefined || issued.id !== id || issued.held !== heldKey(caller, id)) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} host call`, cause: new KinuError('denied', `Slate ${id} named app invocation ${target}, which this host is not running`), otherwise: 'io' })) };
     }
 
@@ -792,9 +800,11 @@ export class SlateHost {
         return result;
       }
 
-      const { project } = await this.slateSources.resolve(caller.cred, id);
+      const source = await this.slateSources.resolve(caller.cred, id);
+      // An answer's page calls as its author as of now, in the mode the author's next turn runs in.
+      const callsAs = source.kind === 'message' ? source.author : caller;
 
-      return await this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output, chain }));
+      return await this.run(callsAs, routeSlateBindingCall({ id, project: source.project, name, request: parsed.output, chain }));
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} binding ${name}`, cause, otherwise: 'io' })) };
     }
@@ -874,7 +884,7 @@ export class SlateHost {
   private async booted(viewer: SlateCaller, id: string): Promise<RunningSlate> {
     const source = await this.slateSources.resolve(viewer.cred, id);
     const caller = source.kind === 'message' ? source.author : viewer;
-    const held = `${slateCallerKey(caller)}#${id}`;
+    const held = heldKey(caller, id);
     const starting = this.starting.get(held);
 
     if (starting !== undefined) return starting;
@@ -898,15 +908,9 @@ export class SlateHost {
     }
   }
 
-  /**
-   * An answer's page has one process, whatever mode its author's last one ran in, and only the pages drawn most
-   * recently keep theirs: the rest give up their process and reservation, and are booted again if drawn again.
-   */
-  private async keepPage(id: string, held: string): Promise<void> {
-    for (const [other, running] of this.running) {
-      if (running.id === id && other !== held) await this.stopHeld(other);
-    }
-
+  /** Only the answers' pages drawn most recently keep a process: the rest give up their process and reservation, and are
+   *  booted again if drawn again. */
+  private async keepPage(id: string): Promise<void> {
     for (const retired of this.pages.drawn(id, Date.now(), EPHEMERAL_SLATES_KEPT)) {
       for (const [other, running] of this.running) {
         if (running.id === retired) await this.stopHeld(other);
@@ -941,7 +945,7 @@ export class SlateHost {
 
       await this.stopHeld(held);
 
-      if (source.kind === 'message') await this.keepPage(id, held);
+      if (source.kind === 'message') await this.keepPage(id);
       const bindings: Record<string, Fetcher<SlateBinding>> = {};
 
       for (const name of Object.keys(project.slate.bindings)) {

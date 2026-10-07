@@ -513,6 +513,7 @@ async function driveTurn(
   };
 
   for await (const event of runChat({
+    modelSpec: 'test/model',
     model: entry.model(deps),
     system: SYSTEM,
     history: [...HISTORY],

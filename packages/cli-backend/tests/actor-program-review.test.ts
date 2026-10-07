@@ -75,7 +75,7 @@ test('abort after preparation refuses program entry before memory or text effect
   const abort = new AbortController();
 
   const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
-    chat: { model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
+    chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const reason = new Error('cancelled before first next');
   abort.abort(reason);
@@ -93,7 +93,7 @@ test('cancellation retains an admitted memory effect but refuses subsequent effe
   const abort = new AbortController();
 
   const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
-    chat: { model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
+    chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const running = collect(prepared.events);
   await started.promise;
@@ -129,7 +129,7 @@ test('a native refusal keeps the same failed outcome at capture and scaffold bou
   } }) }, capture);
 
   const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
-    chat: { model: unusedModel(), system: 'sys', history: [], tools } });
+    chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools } });
 
   const events = await collect(prepared.events);
   expect(events.find(event => event.type === 'tool-result')).toMatchObject({ success: false, reason: 'denied' });
@@ -206,7 +206,7 @@ test('the turn receives a tool\'s actual output data, not its model-side renderi
   const events = await collect(scaffoldChatTransform({
     program: await prepareActorProgram({ runtime: rt, mode: 'build', version: 1 }),
     chat: (async function* () {})(),
-    run: { rt, task: 'go', llmStream: createScaffoldLLMStream({ model, tools: () => tools }) },
+    run: { rt, task: 'go', llmStream: createScaffoldLLMStream({ model, spec: 'test/model', tools: () => tools }) },
   }));
 
   // The result event carries the tool's returned data; the model sees the tool's own rendering.
@@ -276,7 +276,7 @@ test('invalid native argument containers cannot become an empty successful call'
   let effects = 0;
 
   const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
-    chat: { model: unusedModel(), system: 'sys', history: [],
+    chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [],
       tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
     },
   });
@@ -305,7 +305,7 @@ test('router namespace effects use the same lifetime admission as host effects',
   const abort = new AbortController();
 
   const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
-    chat: { model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
+    chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const running = collect(prepared.events);
   await started.promise;

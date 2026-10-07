@@ -1,14 +1,13 @@
 // Backend conformance over the production `kinu create` + open chain; compareSurface fails on any
 // disagreement with core/src/conformance/manifest.ts.
 import { describe, test, expect, afterAll } from 'bun:test';
-import { Database } from 'bun:sqlite';
 
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
-  compareSurface, normalizeObservedTables, observedActionEnum, wiredProducers,
+  compareSurface, observedActionEnum, wiredProducers,
   renderConformanceFindings, NO_COUNT_ENDPOINT, BUILTIN_PROFILE_CATALOG, profileCatalogDigest,
   type ObservedSurface, type ProfileCatalog,
 } from '@kinu.run/core';
@@ -142,15 +141,9 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   const session = await host.acquire(AGENT_NAME);
   await session.send('what can you do?', { id: crypto.randomUUID() });
 
-  const db = new Database(dbPath, { readonly: true });
   // Only a function tool carries an input schema; provider-defined tools have no Kinu action enum.
   const byName = new Map(captured.flatMap((tool) => tool.type === 'function' ? [[tool.name, tool] as const] : []));
 
-  const tables = db.query<{ name: string }, []>(
-    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-  ).all().map((row) => row.name);
-
-  db.close();
   await host.close();
 
   if (!runtime) throw new Error('LocalAgentHost did not open the workspace runtime');
@@ -163,7 +156,6 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
         tool: new Set(byName.keys()),
         'agents-action': observedActionEnum(byName.get('agents')?.inputSchema),
         'memory-action': observedActionEnum(byName.get('memory')?.inputSchema),
-        table: normalizeObservedTables(tables),
         producer: wiredProducers(runtime),
       },
     },
@@ -179,7 +171,6 @@ describe('cli backend conformance', () => {
     expect(report.unmeasured).toEqual([]);
 
     expect(captured.length).toBeGreaterThanOrEqual(5);
-    expect(present(observed.planes.table, 'the table plane').size).toBeGreaterThanOrEqual(25);
     expect(present(observed.planes.tool, 'the tool plane').has('eval')).toBe(true);
     // `event_id` is in the advertised schema exactly when the host wired peer transport.
     expect(present(observed.planes['agents-action'], 'the agents-action plane').has('msg')).toBe(true);

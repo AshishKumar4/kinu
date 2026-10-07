@@ -46,8 +46,18 @@ import { SessionHistory, type MaterializedHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
+import { decideInterruptedTurn, type InterruptedTurnVerdict } from './turn-recovery';
 import { lostToolCall } from '../tools/effect-claim';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
+
+/** What the owner reads when a run a dead process left is not run on, by why recovery closed it. */
+const RESTORE_REFUSALS: Readonly<Record<Extract<InterruptedTurnVerdict, { kind: 'closed' }>['cause'], string>> = {
+  settled: 'This turn ended before the last process did, so it is not run again.',
+  stopped: 'This turn was stopped before the last process ended, so it is not run again.',
+  record_unreadable: 'The record of what this turn had done could not be read after the last process ended, so it is not run again.',
+  stalled: 'This turn made no progress across two runs, so it is not run a third time.',
+  unverified: 'The program this turn ran has changed since the last process ended, so it is not run again under another.',
+};
 
 /** A hosted actor shares workspace priorities, but delivers feedback to itself. */
 export interface ActorAdvisorContext {
@@ -601,9 +611,34 @@ export class ActorSession {
     return dropped;
   }
 
-  /** Unread input stays queued for the settle to rerun. */
+  /**
+   * Unread input stays queued for the settle to rerun. The stop is a row of the run before the abort lands: a process
+   * that dies before the turn settles leaves it, and the next start ends the turn as this one would have.
+   */
   stop(): void {
-    if (this.active?.phase !== 'settling') this.active?.abort.abort();
+    const active = this.active;
+
+    if (active === null || active.phase === 'settling') return;
+    this.options.recording?.emit(active.lease.runId, { type: 'stop_requested' });
+    active.abort.abort();
+  }
+
+  /**
+   * A run a dead process left open goes on only if recovery says it may: the recovery sweep's own decision. Any other
+   * ends as a stop ends it, before anything runs.
+   */
+  resumeOrClose(lease: ActorTurnLease): Promise<void> {
+    const active = this.requireTurn(lease);
+
+    return settle(Effect.map(decideInterruptedTurn({
+      runtime: this.runtime, stores: { claims: this.options.claims, history: this.options.history }, runs: this.options.recording ?? null,
+      installedBuild: this.options.installedBuild, workspace: this.options.workspace ?? '', actor: this.runtime.identity.name,
+      runId: lease.runId, claim: this.options.claims.read(lease.turnId),
+      // This session holds the turn: it is the one deciding.
+      turnOpen: () => false,
+    }), (verdict) => {
+      if (verdict.kind === 'closed') active.abort.abort(new KinuError('cancelled', RESTORE_REFUSALS[verdict.cause]));
+    }));
   }
 
   /** An unnamed outcome settles `indeterminate`, never `completed`. */

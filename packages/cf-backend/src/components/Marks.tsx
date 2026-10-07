@@ -22,6 +22,13 @@ function hashOf(seed: string): number {
 
 export const mascotSeed = (workspace: string, chat: string): string => `${workspace}/${chat}`;
 
+export const MASCOT_COLOURS = HUES.length;
+
+/** Which of the {@link MASCOT_COLOURS} a chat's tile is drawn in. */
+export function mascotColour(seed: string): number {
+  return hashOf(seed) % HUES.length;
+}
+
 type Face = "idle" | "working" | "waiting" | "failed" | "done";
 
 const FACE: Record<AgentActivity, Face> = {
@@ -46,7 +53,7 @@ function Eyes({ face }: { face: Face }) {
 /** A chat's tile; its eyes carry its state. */
 export function ChatMascot({ seed, activity, size = 16 }: { seed: string; activity: AgentActivity | undefined; size?: number }) {
   const hash = hashOf(seed);
-  const hue = HUES[hash % HUES.length] ?? HUES[0];
+  const hue = HUES[mascotColour(seed)] ?? HUES[0];
   const id = `mascot${useId().replace(/[^\w-]/g, "")}`;
   const face = FACE[activity ?? "idle"];
   const status = STATUS[face];

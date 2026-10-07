@@ -1,7 +1,7 @@
 /** A non-main agent's chat in its own isolate (D9). */
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
-  assembleActorTurn, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork, planHandoffStillOwed, projectJsonValue,
+  announcementOf, assembleActorTurn, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork, planHandoffStillOwed, projectJsonValue,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type ChatTurnInput, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -9,13 +9,13 @@ import {
   type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
-import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentDatabase } from './agent-database';
 import { FacetSpend, facetTurnSources, facetTurnTools, type AgentWorkspace, type LiveTurn } from './agent-turn';
 
-/** The words reach the room on the turn's own stream. */
-const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'turn-end', 'step-cut', 'error', 'broadcast', 'history-reverted']);
+/** The words reach the room on the turn's own stream, and a turn's end on its own call. */
+const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'step-cut', 'error', 'broadcast', 'history-reverted']);
 
 export interface FacetChatDeps {
   readonly actor: HostedActor;
@@ -42,6 +42,11 @@ export class FacetChat {
 
   private terminalTransitions: TerminalTransitions | null = null;
 
+  /** What it owes is told in the order it is read, so an older answer never lands over a newer one. */
+  private telling: Promise<unknown> = Promise.resolve();
+
+  private resting: Promise<unknown> = Promise.resolve();
+
   constructor(private readonly deps: FacetChatDeps) {
     const { actor, storage, workspace } = deps;
     const sql = actor.runtime.storage.sql;
@@ -58,7 +63,13 @@ export class FacetChat {
       eventRecorder: actor.stores.eventRecorder,
       compactionState: this.trigger.state,
       transaction: (body) => storage.transactionSync(body),
-      transport: { deliver: (event) => (ROOM_EVENTS.has(event.type) ? workspace.chatEvent(event) : undefined) },
+      transport: {
+        deliver: (event) => {
+          if (event.type === 'turn-end') return workspace.turnEnded(event, deps.database.figures());
+
+          return ROOM_EVENTS.has(event.type) ? workspace.chatEvent(event) : undefined;
+        },
+      },
       mintAnswerId: () => crypto.randomUUID(),
       ports: {
         prepareTurn: (item, lease) => this.prepareTurn(item, lease),
@@ -72,7 +83,8 @@ export class FacetChat {
         ),
         terminal: () => this.terminal,
         driverGate: () => null,
-        armTurnWake: (atMs) => workspace.armWake(atMs),
+        armTurnWake: (atMs) => this.tell(atMs),
+        quiet: () => { this.atRest(); },
         taskList: () => actor.stores.taskList,
         // Its jobs run in the workspace, whose settle wakes it.
         hasPendingAsyncWake: () => false,
@@ -163,7 +175,8 @@ export class FacetChat {
         parentReport: {
           text: report.content,
           status: report.status,
-          sequenceId: `${this.deps.actor.record.actorId}:turn-end:${input.messageId}`,
+          // An assignment's turn is keyed by it, so a re-run after a reset answers it once.
+          sequenceId: this.parentDriven ? announcementOf(this.session.currentTurnId ?? '') : `${this.deps.actor.record.actorId}:turn-end:${input.messageId}`,
           ...(report.quiet === true && { quiet: true as const }),
         },
       }),
@@ -190,10 +203,13 @@ export class FacetChat {
       now: () => Date.now(),
       transaction: (body) => storage.transactionSync(body),
       turnIsLive: (turnId) => this.session.turnMayStillRun(turnId),
-      scheduleRetry: (atMs) => workspace.armWake(atMs),
+      scheduleRetry: (atMs) => this.tell(atMs),
       settled: async () => {},
       // An eviction leaves the effects owed; the workspace's wake re-drives them.
-      hold: (close) => close(),
+      hold: async (close) => {
+        await close();
+        this.atRest();
+      },
     });
 
     return this.terminalTransitions;
@@ -205,11 +221,13 @@ export class FacetChat {
       await this.terminal.idle();
     }
 
+    await this.resting;
     await this.spend.settled();
   }
 
-  /** Every wake re-arms what is still owed, so an effect still closing when it fires keeps a wake after it. */
-  wake(): Promise<AgentOwed> {
+  /** Every wake re-arms what is still owed, so an effect still closing when it fires keeps a wake after it; the pump
+   *  it ends on tells the workspace what is left once it rests. */
+  wake(): Promise<void> {
     return settle(attempt({ doing: "resuming what an agent's isolate owed", otherwise: 'unavailable' }, async () => {
       this.session.reclaimStrandedEventDeliveries();
       await this.terminal.replayOwedAndRearm();
@@ -217,8 +235,32 @@ export class FacetChat {
     }).pipe(
       Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('agent.wake_failed', failure); })),
       Effect.ensuring(Effect.sync(() => { this.session.pump(); })),
-      Effect.map(() => this.owed()),
     ));
+  }
+
+  /** At rest once no turn runs or waits and no close is held, and each rest is told once. */
+  private atRest(): void {
+    if (this.session.pumping || this.terminal.closing) return;
+    this.resting = hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => this.tell()));
+  }
+
+  /** Once every answer of what it owes sent so far has landed: input acknowledged after it has no older answer behind it
+   *  that could cancel the workspace's arm for it. */
+  async told(): Promise<void> {
+    await this.telling;
+  }
+
+  /** `at` asks for a wake no later than it. */
+  private tell(at?: number): Promise<void> {
+    const told = this.telling.then(() => {
+      const owed = this.owed();
+
+      return this.deps.workspace.owes(at === undefined ? owed : Math.min(at, owed ?? Infinity));
+    });
+
+    this.telling = hold(attempt({ doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => told));
+
+    return told;
   }
 
   /** Its own turns and effects still owed, folded as the workspace's read folds the root's. */
@@ -271,19 +313,12 @@ export class FacetChat {
     await this.terminal.modelSettingsChanged();
   }
 
-  /** A turn running or queued, or effects still closing, is looked at again a lap later. */
-  private owed(): AgentOwed {
+  /** The next instant to wake it, or none: a turn running or queued, or effects still closing, is looked at again a lap
+   *  later. */
+  private owed(): number | null {
     const busy = this.session.turnOwed || this.terminal.closing || this.terminal.hasIncomplete();
     const next = Math.min(this.terminal.nextRetryAt() ?? Infinity, busy ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : Infinity);
 
-    return { next: Number.isFinite(next) ? next : null, turnId: this.session.pumping ? this.session.currentTurnId : null };
+    return Number.isFinite(next) ? next : null;
   }
-}
-
-/** What an agent's isolate still owes, as a wake answers it. */
-export interface AgentOwed {
-  /** The next instant to wake it; null when it owes nothing. */
-  readonly next: number | null;
-  /** The turn its chat is running. */
-  readonly turnId: string | null;
 }

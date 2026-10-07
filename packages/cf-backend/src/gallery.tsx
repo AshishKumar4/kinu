@@ -69,6 +69,7 @@ import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspa
 import { CreateWebhookModal, NewWebhookCard } from "@/components/WorkspaceAutomations";
 import { AddServerCard } from "@/components/account/McpServersPanel";
 import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
+import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import { driveDesignFrame } from "@/gallery-drive-design";
@@ -6697,6 +6698,7 @@ async function mount() {
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
     ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["characters", { node: <CharactersFrame />, entries: ["/"] }],
     ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
   ]);
 
