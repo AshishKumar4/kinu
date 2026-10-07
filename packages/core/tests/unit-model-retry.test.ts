@@ -203,6 +203,27 @@ describe('the model stack retries every call once, in one place', () => {
     expect(harness.waits).toHaveLength(retries);
   });
 
+  test('the call\'s own options are spent here and never handed to the provider', async () => {
+    const seen: unknown[] = [];
+    const inner = createOpenAICompatible({ name: 'example', baseURL: 'https://api.example.com/v1', fetch: asFetchFunction(async () => answer()) }).chatModel('m');
+
+    const model = wrapLanguageModel({ model: inner, middleware: [
+      retryMiddleware({ provider: 'example', lane: LANE, warn: () => {} }),
+      {
+        specificationVersion: 'v4',
+        transformParams: async ({ params }) => {
+          seen.push(params.providerOptions);
+
+          return params;
+        },
+      },
+    ] });
+
+    await generateText({ model, prompt: 'hi', maxRetries: 0, providerOptions: { ...callRetries(1), example: { user: 'u' } } });
+
+    expect(seen).toEqual([{ example: { user: 'u' } }]);
+  });
+
   test('stops provider waits only when the caller cancels', async () => {
     const controller = new AbortController();
     const reason = new Error('cancelled by user');
