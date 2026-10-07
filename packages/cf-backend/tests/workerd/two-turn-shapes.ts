@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'close';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'close';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
@@ -364,6 +364,14 @@ export interface ClaimUnderRecovery {
   readonly settled: string | null;
   readonly heldWork: readonly OwedWorkRow[];
   readonly settledWork: readonly OwedWorkRow[];
+}
+
+/** A hired agent's answer with a `<slate-ui>` block, as a page's `workspace` call resolves it: under its own id the
+ *  block is found and nothing is bound to it; a user message's id and the answer named as the workspace's hold none. */
+export interface AgentSlateUi {
+  readonly answered: string;
+  readonly fromUser: string;
+  readonly asWorkspace: string;
 }
 
 /** The work read while a hired agent's own turn is held at the model, and the agent's name. */

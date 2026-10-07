@@ -6,7 +6,7 @@ import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { findPlaneReferences, isWholeReference, MAX_LINES_PER_FILE, SLATE_LINK, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
-import { ephemeralSlateId, slateUiSegments, type SlateUiSegment } from "@kinu.run/core";
+import { ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type SlateUiSegment } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -117,31 +117,36 @@ export function SlateLink({ id }: { id: string }) {
 
 /** A `<slate-ui>` block of a stored answer, drawn by the same slate path a file slate is; where no slate can be drawn,
  *  its source, folded. */
-function SlateUiBlock({ messageId, name, html, drawn }: { messageId: string; name: string; html: string; drawn: boolean }) {
+function SlateUiBlock({ address, html }: { address: EphemeralSlateAddress | null; html: string }) {
   const inline = useContext(SlateInlineContext);
 
-  if (inline === null || !drawn) {
+  if (inline === null || address === null) {
     return (
       <details className="my-2">
-        <summary className="p-meta p-text-3 cursor-pointer">{name}</summary>
+        <summary className="p-meta p-text-3 cursor-pointer">{address?.name ?? "slate-ui"}</summary>
         <CodeBlock className="language-html">{html}</CodeBlock>
       </details>
     );
   }
 
-  return <InlineSlate id={ephemeralSlateId({ messageId, name })} block={name} rpc={inline.rpc} display="inline" />;
+  return <InlineSlate id={ephemeralSlateId(address)} block={address.name} rpc={inline.rpc} display="inline" />;
+}
+
+/** Which chat an answer is in: the workspace's own (null), or a hired agent's. */
+export interface AnswerChat {
+  readonly actorId: string | null;
 }
 
 interface AnswerPlace {
   readonly messageId: string;
   /** Whether the answer is stored, so its blocks can be read back. */
   readonly stored: boolean;
-  /** Whether this transcript is the one a block's id is resolved in; elsewhere a block shows its source. */
-  readonly drawn?: boolean;
+  /** The chat a block's id is resolved in; absent where none is, and a block shows its source. */
+  readonly chat?: AnswerChat | undefined;
 }
 
 function AnswerSegment({ segment, place }: { segment: SlateUiSegment; place: AnswerPlace }) {
-  const drawn = place.drawn === true;
+  const drawn = place.chat !== undefined;
 
   if (segment.kind === "text" || (segment.kind === "open" && (place.stored || !drawn))) return <MarkdownContent content={segment.text} />;
 
@@ -150,7 +155,9 @@ function AnswerSegment({ segment, place }: { segment: SlateUiSegment; place: Ans
     return <div data-slate-ui-pending={segment.name} aria-label={`Drawing ${segment.name}`} className="my-2 h-8 rounded-md p-recessed animate-pulse" />;
   }
 
-  return <SlateUiBlock messageId={place.messageId} name={segment.name} html={segment.html} drawn={drawn} />;
+  const address = place.chat === undefined ? null : { actorId: place.chat.actorId, messageId: place.messageId, name: segment.name };
+
+  return <SlateUiBlock address={address} html={segment.html} />;
 }
 
 /** An answer's text with its `<slate-ui>` blocks drawn in place. */

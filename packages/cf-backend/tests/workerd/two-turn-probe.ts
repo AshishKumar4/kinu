@@ -7,7 +7,7 @@
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
-import { HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, hostedActorSocketPath, JsonValueSchema } from '@kinu.run/core';
+import { HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, hostedActorSocketPath, JsonValueSchema, type SlateCallResult } from '@kinu.run/core';
 import {
   createCompositeLogger,
   createConsoleLogger,
@@ -18,6 +18,7 @@ import {
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
+import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { SqlMeter, type OperationCost } from './sql-meter';
 import type {
@@ -28,6 +29,7 @@ import type {
   OwedRepliesRecovered,
   ClaimUnderRecovery,
   AgentHeldWork,
+  AgentSlateUi,
   StrandedWork,
   EffectStatus,
   HeldClose,
@@ -170,7 +172,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'replyLeases');
     Reflect.deleteProperty(this, 'transitionState');
     Reflect.deleteProperty(this, 'strandedWork');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork']);
+    Reflect.deleteProperty(this, 'answerSlates');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates']);
   }
 
   /** What the loop's driver gate answers once refused, as when another activation holds the lease. */
@@ -265,6 +268,20 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const { recovered } = await this.recoverStrandedTurn();
 
     return { stranded, recovered, after: await this.inspectWork() };
+  }
+
+  /** How the agent's last answer's block, its last ask and the answer named as the workspace's resolve, as a preview
+   *  and as a page's `workspace` call: `ok`, or the refusal's reason. */
+  async answerSlates(agent: string): Promise<AgentSlateUi> {
+    const reason = (result: SlateCallResult) => (result.ok ? 'ok' : result.reason);
+    // A page's own binding call resolves its source first, so a block that resolves is refused only for what is bound.
+    const call = async (id: string) => reason(await this.slateBindingCallAs(ROOT_SLATE_CALLER, id, 'workspace', { member: 'exists', args: ['/home'], invocation: null }));
+    const { items } = await this.agentStores(agent).historyPage({});
+    const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
+    const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
+    const ids = { answered: `${agent}/${answer}/card`, fromUser: `${agent}/${ask}/card`, asWorkspace: `${answer}/card` };
+
+    return { answered: await call(ids.answered), fromUser: await call(ids.fromUser), asWorkspace: await call(ids.asWorkspace) };
   }
 
   /** `done` once a transition closed; an open one answers that it resumed. */
@@ -674,7 +691,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   | 'createSubordinateAgent'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -752,6 +769,9 @@ function createWorkspaceRecording(): WorkspaceRecording {
     until: (workspace, holds) => recording.until((emitted) => holds(own(emitted, workspace))),
   };
 }
+
+/** What the agent is asked; the queue model echoes it, so its answer holds a block named `card`. */
+const AGENT_SLATE_ASK = 'Show this:\n<slate-ui name="card">\n<!doctype html><p>agent-card-2f61</p>\n</slate-ui>';
 
 async function awaitWithLimit<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
   const expiry = Promise.withResolvers<never>();
@@ -926,7 +946,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'close'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'close'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1398,6 +1418,40 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     } finally {
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       socket.close(1000, 'agent work probe complete');
+    }
+  }
+
+  /** A hired agent answers with a `<slate-ui>` block (the queue model echoes the ask); the workspace resolves its id. */
+  async agentSlateUi(): Promise<AgentSlateUi> {
+    const { target, workspace } = await this.claimQueueWorkspace('agent-slate');
+    const created = v.parse(v.object({ name: v.string(), subordinate: v.object({ actorId: v.string() }) }), await target.createSubordinateAgent());
+
+    await awaitSettled(target);
+
+    const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`, {
+      headers: { Upgrade: 'websocket', [HOSTED_ACTOR_ID_HEADER]: created.subordinate.actorId },
+    }));
+
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error(`the hosted actor path answered ${String(response.status)}, not a socket`);
+    socket.accept();
+    const ended = Promise.withResolvers<void>();
+
+    socket.addEventListener('message', (event) => {
+      const frame = v.safeParse(v.looseObject({ type: v.string(), done: v.optional(v.boolean()) }),
+        v.is(v.string(), event.data) && event.data.startsWith('{') ? JSON.parse(event.data) : {});
+
+      if (frame.success && frame.output.type === 'cf_agent_use_chat_response' && frame.output.done === true) ended.resolve();
+    });
+
+    try {
+      socket.send(JSON.stringify({ type: 'rpc', id: 'agent-send', method: 'send', args: [AGENT_SLATE_ASK, 'agent-slate-1'] }));
+      await awaitWithLimit(ended.promise, 20000, 'agent slate probe: the agent never finished its answer');
+
+      return await target.answerSlates(created.subordinate.actorId);
+    } finally {
+      socket.close(1000, 'agent slate probe complete');
     }
   }
 
