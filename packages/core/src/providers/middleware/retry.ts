@@ -97,7 +97,7 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
     },
     wrapGenerate: ({ doGenerate, doStream, params }) => settle(retrying(policy, params, policy.generateByStream === true
       ? async (last) => {
-        const opened = await openStream({ provider: policy.provider, start: doStream, last, keepRaw: false });
+        const opened = await openStream({ provider: policy.provider, start: doStream, last, keepRaw: false, caller: params.abortSignal });
 
         if (opened.kind !== 'answer') return opened;
         const [collected] = await Promise.allSettled([generateFromStream(opened.value)]);
@@ -106,7 +106,7 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
       }
       : async () => ({ kind: 'answer', value: await doGenerate() }))),
     wrapStream: ({ doStream, params }) => settle(retrying(policy, params, (last) => openStream({
-      provider: policy.provider, start: doStream, last, keepRaw: kinuOptions(params).raw,
+      provider: policy.provider, start: doStream, last, keepRaw: kinuOptions(params).raw, caller: params.abortSignal,
     }))),
   };
 }
@@ -277,6 +277,8 @@ interface StreamAttempt {
   readonly start: () => PromiseLike<LanguageModelV4StreamResult>;
   readonly last: boolean;
   readonly keepRaw: boolean;
+  /** The caller's own cancel, which ends the attempt too. */
+  readonly caller: AbortSignal | undefined;
 }
 
 /** The first event decides: an error opens a backoff unless no retry is left; anything else is the answer, still read
@@ -284,7 +286,7 @@ interface StreamAttempt {
 async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV4StreamResult>> {
   const started = Date.now();
   const silent = Promise.withResolvers<null>();
-  const bound = new SilenceBound(attempt.provider, async () => { silent.resolve(null); });
+  const bound = new SilenceBound(attempt.provider, attempt.caller, async () => { silent.resolve(null); });
   const opening = Promise.resolve(inAttempt(bound.attempt, attempt.start));
   const opened = await Promise.race([opening, silent.promise]);
 
@@ -383,18 +385,19 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
     },
     pull: async (controller) => {
       for (;;) {
-        const next = await parts.read();
+        const [read] = await Promise.allSettled([parts.read()]);
 
         if (bound.fired) return;
-        bound.hear();
 
-        if (next === 'end') {
+        if (read.status === 'rejected' || read.value === 'end') {
           bound.stop();
 
-          return controller.close();
+          return read.status === 'rejected' ? controller.error(read.reason) : controller.close();
         }
 
-        if (shown(next)) return controller.enqueue(next);
+        bound.hear();
+
+        if (shown(read.value)) return controller.enqueue(read.value);
       }
     },
     cancel: () => {
@@ -407,33 +410,41 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
   return { kind: 'answer', value: { ...opened, stream } };
 }
 
-/** The attempt's watchdog: every event or wire chunk re-arms it, and silence past the bound aborts the attempt's request
- *  and declares the stall. */
+/** The attempt's watchdog: one timer at a time, armed for what is left of the catalog's silence bound since the last
+ *  event or wire chunk (a timer per event cost the heap gate's long turn 14 MB); silence past the bound aborts the
+ *  attempt's request and declares the stall. The
+ *  caller's cancel is forwarded by a listener the attempt removes when it ends, not joined with `AbortSignal.any`, whose
+ *  dependents a turn-long signal holds for the whole turn. */
 class SilenceBound {
   fired = false;
-  readonly failure: APICallError;
   readonly attempt: Attempt;
   private stopped = false;
+  private heard = Date.now();
+  private stall: APICallError | undefined;
   private readonly cut = new AbortController();
+  private readonly forward: () => void;
   private silenced: () => Promise<void>;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(provider: string, silenced: () => Promise<void>) {
+  constructor(private readonly provider: string, private readonly caller: AbortSignal | undefined, silenced: () => Promise<void>) {
     this.silenced = silenced;
-    this.failure = stalled(provider);
     this.attempt = { signal: this.cut.signal, heard: () => { this.hear(); } };
-    this.hear();
+    this.forward = () => { this.cut.abort(caller?.reason); };
+
+    if (caller?.aborted === true) this.forward();
+    else caller?.addEventListener('abort', this.forward, { once: true });
+    this.arm(silenceBoundMs('provider.stream.idle_ms'));
+  }
+
+  /** Built when first needed: an error's stack is not paid by every attempt that never stalls. */
+  get failure(): APICallError {
+    this.stall ??= stalled(this.provider);
+
+    return this.stall;
   }
 
   hear(): void {
-    if (this.stopped || this.fired) return;
-    clearTimeout(this.timer);
-
-    this.timer = setTimeout(() => {
-      this.fired = true;
-      this.cut.abort(this.failure);
-      detach(Effect.promise(() => this.silenced()));
-    }, silenceBoundMs('provider.stream.idle_ms'));
+    this.heard = Date.now();
   }
 
   onSilence(silenced: () => Promise<void>): void {
@@ -443,12 +454,40 @@ class SilenceBound {
   stop(): void {
     this.stopped = true;
     clearTimeout(this.timer);
+    this.caller?.removeEventListener('abort', this.forward);
   }
 
   /** No longer wanted: its request is aborted. */
   abandon(): void {
     this.stop();
     this.cut.abort(this.failure);
+  }
+
+  private arm(ms: number): void {
+    this.timer = setTimeout(() => {
+      detach(Effect.promise(async () => {
+        if (this.expired()) await this.silenced();
+      }));
+    }, ms);
+  }
+
+  /** Waits again for what is left of the bound, or, silent for all of it, aborts the request. */
+  private expired(): boolean {
+    const left = this.heard + silenceBoundMs('provider.stream.idle_ms') - Date.now();
+
+    if (this.stopped) return false;
+
+    if (left > 0) {
+      this.arm(left);
+
+      return false;
+    }
+
+    this.fired = true;
+    this.caller?.removeEventListener('abort', this.forward);
+    this.cut.abort(this.failure);
+
+    return true;
   }
 }
 

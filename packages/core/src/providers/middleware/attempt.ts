@@ -8,6 +8,7 @@ import type { LanguageModelV4, LanguageModelV4CallOptions } from '@ai-sdk/provid
 import { asFetchFunction } from '../fetch-shim';
 
 export interface Attempt {
+  /** Aborted when the attempt is abandoned or its caller cancels. */
   readonly signal: AbortSignal;
   readonly heard: () => void;
 }
@@ -18,14 +19,15 @@ export function inAttempt<T>(attempt: Attempt, run: () => T): T {
   return current.run(attempt, run);
 }
 
-/** The model under the stack: each call's cancel joined with its attempt's, so an abandoned attempt stops upstream. */
+/** The model under the stack: each call is cancelled by its attempt's signal, which also carries the caller's cancel, so
+ *  an abandoned attempt stops upstream. */
 export function attemptBound(model: LanguageModelV4): LanguageModelV4 {
   const signalled = (options: LanguageModelV4CallOptions): LanguageModelV4CallOptions => {
     const attempt = current.getStore();
 
     if (attempt === undefined) return options;
 
-    return { ...options, abortSignal: options.abortSignal === undefined ? attempt.signal : AbortSignal.any([options.abortSignal, attempt.signal]) };
+    return { ...options, abortSignal: attempt.signal };
   };
 
   return {
