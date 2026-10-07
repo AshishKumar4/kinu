@@ -21,6 +21,11 @@ export const STORM_FILES = 50;
 
 export const STORM_DIR = 'storm';
 
+/** The live-memory row's ask, and the note its turn saves. */
+export const MEMORY_ASK = 'Flow memory: save the release note.';
+
+export const FLOW_MEMORY_NOTE = 'The release ships on Thursday.';
+
 /** The written-file row's one turn. */
 export const WRITE_FILE_ASK = `Use your file tool to write a new file named ${FLOW_PROBE} in the workspace, `
   + 'containing exactly the words browser flow probe. Then reply with one line: DONE.';
@@ -108,6 +113,10 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
   }
 
   const latest = request.userTexts.at(-1) ?? '';
+
+  if (latest.includes(MEMORY_ASK)) {
+    return request.turn.length > 0 ? { text: 'DONE' } : { toolCall: { name: 'memory', arguments: { action: 'save', content: FLOW_MEMORY_NOTE } } };
+  }
 
   if (latest.includes(STORM_SEED_ASK) || latest.includes(STORM_ASK)) {
     if (request.turn.length > 0) return { text: 'DONE' };

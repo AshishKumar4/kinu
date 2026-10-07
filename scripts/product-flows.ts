@@ -30,7 +30,9 @@ import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
 import { beatWorkspace, webHeaders, type PublicWebIdentity } from '../evals/src/session';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
-import { FLOW_SHELL_PROBE, FLOW_SLATE, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK } from './flows-script';
+import {
+  FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
+} from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
   documentScriptFailures, explained, FAILED_APP_SCRIPT, recordScriptFailures, SCRIPT_FAILED, type ScriptFailure,
@@ -1497,6 +1499,54 @@ export async function changesStormStaysBounded(target: FlowTarget): Promise<Chan
       burstFrames: burst.map((counts) => counts.received.reads_changed ?? 0),
       idleReads: after.slice(0, 2).map((counts, at) => reads(counts) - reads(burst[at] ?? counts)),
     };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface LiveMemoryVerdict {
+  readonly workspace: string;
+  /** What the watching tab's memory section said once the other tab's turn ended. */
+  readonly shown: string;
+  /** The watching tab's memory reads during that turn, and while the sending tab then worked. */
+  readonly turnReads: number;
+  readonly idleReads: number;
+}
+
+const MEMORY_SECTION = `document.querySelector('#inspector [data-section="memory"]')?.textContent ?? ''`;
+
+/**
+ * One tab's turn saves a memory note while another holds the Agent tab open: the open pane shows the note without a
+ * reload, from the write's own frame, and reads nothing more while the first tab works on.
+ */
+export async function openMemoryFollowsItsWriter(target: FlowTarget): Promise<LiveMemoryVerdict> {
+  const workspace = await createFlowWorkspace(target, 'live-memory');
+
+  try {
+    const path = `/workspace/${encodeURIComponent(workspace)}`;
+    const sender = await openWorkspacePage(target, path);
+    const watcher = await openWorkspacePage(target, path);
+
+    await openInspector(watcher);
+    await watcher.evaluate(stripTab('Agent'));
+    await until(watcher, "the Agent tab's memory section", `document.querySelector('#inspector [data-section="memory"]') !== null`);
+    const counter = await countRpc(watcher);
+    const reads = () => counter.counts().sent.getMemoryContent ?? 0;
+
+    await sendAndSettle(sender, MEMORY_ASK);
+    await until(watcher, 'the saved note in the open memory section', `(${MEMORY_SECTION}).includes(${JSON.stringify(FLOW_MEMORY_NOTE)})`);
+    const turnReads = reads();
+
+    await openInspector(sender);
+    await sender.evaluate(stripTab('Files'));
+    await until(sender, "the Files tab's listing", FILES_SETTLED);
+    const idleReads = reads() - turnReads;
+    const shown = v.parse(v.string(), await watcher.evaluate(MEMORY_SECTION));
+
+    await counter.stop();
+    await Promise.all([sender.close(), watcher.close()]);
+
+    return { workspace, shown, turnReads, idleReads };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

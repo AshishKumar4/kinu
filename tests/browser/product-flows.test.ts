@@ -13,12 +13,12 @@ import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   slateOpensFromMyStuff, slateSharesWithNoBindings, slateShowsItsPreview, workspaceGetsFirstAnswer,
-  writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
-  type AgentReturnVerdict, type ChangesStormVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
+  writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
+  type AgentReturnVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
-import { FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, STORM_FILES } from '../../scripts/flows-script';
+import { FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, STORM_FILES } from '../../scripts/flows-script';
 import { rowVerdicts } from '../../scripts/row-verdicts';
 
 interface FlowVerdicts {
@@ -29,6 +29,7 @@ interface FlowVerdicts {
   stamped: StampedCardVerdict | null;
   writtenFile: WrittenFileVerdict | null;
   storm: ChangesStormVerdict | null;
+  liveMemory: LiveMemoryVerdict | null;
   slate: SlatePreviewVerdict | null;
   drive: DriveVerdict | null;
   driveOpens: DriveOpensVerdict | null;
@@ -37,7 +38,7 @@ interface FlowVerdicts {
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, panel: null, stamped: null, writtenFile: null, storm: null, slate: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
   driveOpens: null, slateOpens: null, slateShare: null,
 };
 
@@ -75,6 +76,7 @@ beforeAll(async () => {
     observed.stamped = await attempt('stamped', () => eachPaneKeepsItsTranscript(target));
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
     observed.storm = await attempt('changes-storm', () => changesStormStaysBounded(target));
+    observed.liveMemory = await attempt('live-memory', () => openMemoryFollowsItsWriter(target));
     observed.slate = await attempt('slate-preview', () => slateShowsItsPreview(target));
     observed.drive = await attempt('drive', () => driveKeepsWhatIsDone(target));
     observed.driveOpens = await attempt('drive-opens', () => driveOpens(target));
@@ -279,5 +281,16 @@ describe('a burst of writes under three open Changes panes', () => {
 
   test('settled panes read nothing while another tab works', () => {
     expect(verdictOf(observed.storm, 'changes-storm').idleReads).toEqual([0, 0]);
+  });
+});
+
+// A pane open on another tab follows a write made by a turn it did not send, from the write's own frame.
+describe("an open memory pane follows another tab's turn", () => {
+  test('it shows the saved note without a reload, and reads nothing more while the other tab works', () => {
+    const memory = verdictOf(observed.liveMemory, 'live-memory');
+
+    expect(memory.shown).toContain(FLOW_MEMORY_NOTE);
+    expect(memory.turnReads).toBeGreaterThan(0);
+    expect(memory.idleReads).toBe(0);
   });
 });
