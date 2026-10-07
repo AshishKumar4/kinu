@@ -173,6 +173,11 @@ for path in tops:
         put(os.path.join('tree', parent, '.wh.' + base))
 if records:
     put('.devbox-delta/manifest.json', json.dumps({'v': 4, 'files': records}).encode())
+# Every path this layer answers for, in it for a later merge and on this disk for the next one (D77).
+held = b''.join(path.encode('utf-8', 'surrogateescape') + b'\\0' for path in changed + deleted)
+put('.devbox-delta/paths', held)
+os.makedirs(os.path.dirname(listing), exist_ok=True)
+open(listing, 'wb').write(held)
 with open(os.path.join(nxt, 'paths'), 'wb') as listing:
     for path in sorted(known):
         listing.write(path.encode('utf-8', 'surrogateescape') + b'\\0')
@@ -181,4 +186,40 @@ try:
 except BrokenPipeError:
     # The archiver stops reading at the end-of-archive blocks; the record's padding after them has no reader.
     pass
+`;
+
+/**
+ * How many of a chain's deltas a save keeps, and how many saves its own layer then covers (D77). A binary counter: the
+ * new layer takes in each newest layer no larger than what it has gathered, so n saves since the base are held in at
+ * most floor(log2 n) + 1 deltas. A layer a recovery has mounted stays while it is mounted.
+ */
+export function levelsAfter(deltas: readonly { readonly key: string; readonly saves: number }[], mounted: ReadonlySet<string>) {
+  let keep = deltas.length;
+  let saves = 1;
+
+  for (let last = deltas[keep - 1]; last !== undefined && !mounted.has(last.key) && last.saves <= saves; last = deltas[keep - 1]) {
+    saves += last.saves;
+    keep -= 1;
+  }
+
+  return { keep, saves };
+}
+
+/** A merged layer's changes since the boundary below it: each path its layers or this save touched, as it is now. */
+export function mergeListsCommand(changes: string, inventory: string, lists: readonly string[]): string {
+  return `python3 -c ${shellPath(MERGE_LISTS)} ${[changes, inventory, ...lists].map(shellPath).join(' ')}`;
+}
+
+const MERGE_LISTS = `
+import sys
+changes, inventory, *lists = sys.argv[1:]
+def entries(path):
+    return [item for item in open(path, 'rb').read().split(b'\\0') if item]
+touched = set(entries(changes + '.changed')) | set(entries(changes + '.deleted'))
+for listing in lists:
+    touched.update(entries(listing))
+now = {item.split(b'\\t', 1)[0] for item in entries(inventory)}
+for suffix, paths in (('.changed', touched & now), ('.deleted', touched - now)):
+    with open(changes + suffix, 'wb') as out:
+        out.write(b''.join(path + b'\\0' for path in sorted(paths)))
 `;

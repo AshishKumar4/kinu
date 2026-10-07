@@ -24,6 +24,53 @@ function equal<Value>(actual: Value, expected: Value): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`disk contract mismatch: ${JSON.stringify({ actual, expected })}`);
 }
 
+interface LevelsBox {
+  readonly sh: (command: string) => Promise<string>;
+  readonly save: (checkpoint?: 'tick' | 'quiesce') => Promise<CheckpointOutcome>;
+  readonly attach: (snapshot?: boolean) => Promise<{ readonly detail: string }>;
+  readonly reset: () => Promise<void>;
+  readonly copied: () => Promise<string>;
+  readonly poke: (offset: number, bytes: number, byte: string) => Promise<string>;
+  readonly small: (saved: CheckpointOutcome) => void;
+  readonly deltaSaves: () => number[] | undefined;
+}
+
+/** Saves are held as a binary counter's layers (D77); each merged layer is cut from its boundary's digests, so an edited
+ *  block travels as a block, and the chain reads back exactly. A directory becomes a file on the way. */
+async function levelsContract(box: LevelsBox): Promise<void> {
+  await box.sh(`set -e; cd ${WD}; mkdir -p a keep; echo 0 >keep/f; echo x >a/b; head -c 2097152 /dev/urandom >db.bin`);
+  equal((await box.save()).kind, 'committed');
+  const counts: number[][] = [];
+
+  for (let n = 1; n <= 7; n++) {
+    await box.sh(`echo ${String(n)} >${WD}/keep/f; echo ${String(n)} >${WD}/n${String(n)}`);
+
+    if (n === 2) await box.sh(`rm -rf ${WD}/a; echo file >${WD}/a`);
+
+    if (n === 3 || n === 6) await box.poke(n * 300_000, 4096, n === 3 ? 'L' : 'M');
+
+    if (n === 5) await box.sh(`rm ${WD}/n1 ${WD}/n4`);
+    box.small(await box.save());
+    counts.push(box.deltaSaves() ?? []);
+  }
+
+  equal(counts, [[1], [2], [2, 1], [4], [4, 1], [4, 2], [4, 2, 1]]);
+  const expected = await box.sh(TREE);
+  await box.reset(); await box.attach(); equal(await box.sh(TREE), expected);
+  // A save on a mounted recovery takes in none of its layers.
+  await box.copied();
+  await box.sh(`echo 8 >${WD}/keep/f`);
+  box.small(await box.save());
+  equal(box.deltaSaves(), [4, 2, 1, 1]);
+  // Once the copy is the workspace, the next save takes them all in, their lists read from their objects.
+  await box.sh(UNMOUNT); equal((await box.attach(true)).detail, 'recovery made plain');
+  await box.sh(`echo 9 >${WD}/keep/f`);
+  equal((await box.save()).kind, 'committed');
+  equal(box.deltaSaves(), [9]);
+  const later = await box.sh(TREE);
+  await box.reset(); await box.attach(); equal(await box.sh(TREE), later);
+}
+
 export async function diskContract(kind: DiskContract, input: {
   readonly container: Container;
   readonly kv: DurableObjectStorage['kv'];
@@ -120,6 +167,8 @@ export async function diskContract(kind: DiskContract, input: {
       await sh(`python3 -c "import mmap,sqlite3; p='${WD}/map.bin'; open(p,'wb').write(b'A'*4096); f=open(p,'r+b'); m=mmap.mmap(f.fileno(),0); m[0:4]=b'WAL!'; m.flush(); m.close(); c=sqlite3.connect('${WD}/wal.db'); assert c.execute('pragma journal_mode=wal').fetchone()[0]=='wal'; c.execute('create table t(x)'); c.execute('insert into t values(7)'); c.commit(); r=sqlite3.connect('${WD}/wal.db'); assert r.execute('select x from t').fetchone()[0]==7"`);
       break;
     }
+
+    case 'levels': await levelsContract({ sh, save, attach, reset, copied, poke, small, deltaSaves: () => readState()?.deltas.map(delta => delta.saves) }); break;
 
     case 'compact': {
       await sh(`head -c 1048576 /dev/urandom >${WD}/a; echo small >${WD}/s`);

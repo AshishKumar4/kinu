@@ -1,11 +1,12 @@
 // D55's R2 backup: a save publishes a layer of what changed, a large file as its changed blocks
-// (D63); a recovery mounts the layers lazily in the gate (R1, R2) and copies them to disk.
+// (D63), and takes in the newest layers as a binary counter does (D77); a recovery mounts the layers lazily in the gate
+// (R1, R2) and copies them to disk.
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { DEVBOX_RUNTIME_DIR, DEVBOX_WORKDIR, type AttachOutcome, type CheckpointKind, type CheckpointOutcome, type DevboxStorage } from './storage';
 import { STORE_MOUNT } from './store-gateway';
-import { deltaTarCommand } from './disk-delta';
+import { deltaTarCommand, levelsAfter, mergeListsCommand } from './disk-delta';
 import { type ArchiveSource, DISK_STREAM, normalizeArchiveExclude, shellPath, streamCommand } from './stream-archive';
 
 /** What a save leaves out unless a box names its own: each regenerates from the rest. */
@@ -15,19 +16,20 @@ const DISK_CHAIN_FORMAT = 'disk-chain/2';
 
 const Layer = v.object({ key: v.string(), bytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)), committedAt: v.number() });
 
+/** `saves`: how many saves the layer covers, from the boundary below it; a delta from before D77 covers one. */
+const Delta = v.object({ ...Layer.entries, saves: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1)), 1) });
+
 export const DiskChainStateSchema = v.object({
   format: v.literal(DISK_CHAIN_FORMAT),
   rev: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
   base: Layer,
-  deltas: v.array(Layer),
+  deltas: v.array(Delta),
   committedAt: v.number(),
 });
 
 export type DiskChainState = v.InferOutput<typeof DiskChainStateSchema>;
 
 const COMPACT_SHARE = 0.25;
-
-const COMPACT_LAYERS = 8;
 
 const COPY_HEADROOM = 1024 * 1024 * 1024;
 
@@ -71,6 +73,50 @@ const BLOCKS = `${RT}/disk-blocks`;
 const BLOCKS_REV = `${RT}/disk-blocks.rev`;
 
 const BLOCK_LOWER = `${RT}/disk-blk`;
+
+/** Each kept delta's own list of the paths it answers for: a merge's changes are their union. */
+const LEVELS = `${RT}/disk-levels`;
+
+/** The block digests held for each boundary below a kept layer, so a merge cut from there sends changed blocks. */
+const BOUNDS = `${RT}/disk-bounds`;
+
+/** A layer's name on this disk: its object's base directory and file, unique to it. */
+function levelName(key: string): string {
+  return key.split('/').slice(-2).join('-');
+}
+
+function levelList(key: string): string {
+  return `${LEVELS}/${levelName(key)}.paths`;
+}
+
+/** The digests of the tree the last save left, kept as the boundary `bound` names, if they are that tree's. */
+function keepBoundCommand(bound: string, rev: string): string {
+  const keep = `[ "$(cat ${shellPath(BLOCKS_REV)} 2>/dev/null)" = ${shellPath(rev)} ] || exit 0; `
+    + `mkdir -p ${shellPath(BOUNDS)} && rm -rf ${shellPath(bound)} && cp -al ${shellPath(BLOCKS)} ${shellPath(bound)}`;
+
+  return `flock ${shellPath(`${BLOCKS}.lock`)} sh -c ${shellPath(keep)}`;
+}
+
+/** Each merged layer's list, from this disk or else from its object; a line for each that neither holds. */
+function gatherCommand(root: string, keys: readonly string[]): string {
+  const scratch = shellPath(`${LEVELS}/.gather`);
+
+  return [`mkdir -p ${shellPath(LEVELS)}`, ...keys.map((key) => {
+    const local = shellPath(levelList(key));
+
+    return `[ -e ${local} ] || { rm -rf ${scratch}; /usr/bin/unsquashfs -no-progress -d ${scratch} -f ${shellPath(mounted(root, key))} .devbox-delta/paths >/dev/null 2>&1; `
+      + `[ -e ${scratch}/.devbox-delta/paths ] && mv ${scratch}/.devbox-delta/paths ${local}; rm -rf ${scratch}; }; [ -e ${local} ] || echo missing`;
+  })].join('\n');
+}
+
+/** Only what a later merge is cut from: each kept delta's list, and the digests of each boundary below a kept delta. */
+function pruneLevelsCommand(state: DiskChainState): string {
+  const sweep = (dir: string, keep: readonly string[]) => `keep=${shellPath(` ${keep.join(' ')} `)}; for f in ${shellPath(dir)}/*; do [ -e "$f" ] || continue; `
+    + 'case "$keep" in *" $(basename "$f") "*) ;; *) rm -rf "$f";; esac; done';
+
+  return `${sweep(LEVELS, state.deltas.map((delta) => `${levelName(delta.key)}.paths`))}; `
+    + `${sweep(BOUNDS, [state.base, ...state.deltas.slice(0, -1)].map((layer) => levelName(layer.key)))}`;
+}
 
 export interface DiskChainPorts {
   readonly exec: (command: string) => Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number }>;
@@ -235,6 +281,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     const bytes = yield* publish(key, { sourceDir: DEVBOX_WORKDIR, excludeFile: `${RT}/disk-pack/excludes.txt`, excludes: ports.excludes() });
     const state: DiskChainState = { format: DISK_CHAIN_FORMAT, rev: (prior?.rev ?? 0) + 1, base: { key, bytes, committedAt: at }, deltas: [], committedAt: at };
     yield* advance(state, prior?.rev ?? null, false);
+    yield* run('forgetting the levels', `rm -rf ${shellPath(LEVELS)} ${shellPath(BOUNDS)}`);
     yield* run('caching the base\'s block digests', blockCacheCommand(DEVBOX_WORKDIR, INVENTORY, state.rev, true)).pipe(
       Effect.catchTag('DevboxError', failure => Effect.sync(() => ports.log(`the next save sends changed large files whole: ${failure.message}`))),
     );
@@ -334,21 +381,41 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     // A baseline not the record's can only save a base.
     if (state === null || baseline !== String(state.rev)) return yield* commitBase(state, at);
 
-    if (kind === 'quiesce' && !recovering && (state.deltas.length >= COMPACT_LAYERS || heldBytes(state) - state.base.bytes > COMPACT_SHARE * state.base.bytes)) {
-      return yield* commitBase(state, at);
-    }
-
-    const cached = (yield* read(BLOCKS_REV)) === baseline;
+    if (kind === 'quiesce' && !recovering && heldBytes(state) - state.base.bytes > COMPACT_SHARE * state.base.bytes) return yield* commitBase(state, at);
     const [changed = '0', deleted = '0'] = (yield* run('listing the changes', changesCommand(INVENTORY, NEXT_INVENTORY))).split(' ');
 
     if (changed === '0' && deleted === '0') {
       return { kind: 'skipped', reason: 'nothing changed since the last save', bytes: heldBytes(state), movedBytes: 0 } satisfies CheckpointOutcome;
     }
 
-    const key = `${state.base.key.slice(0, state.base.key.lastIndexOf('/'))}/delta-${String(state.deltas.length + 1)}-${crypto.randomUUID()}.sqsh`;
-    const bytes = yield* publish(key, { tar: deltaTarCommand({ dir, changes: CHANGES, below: cached ? BLOCKS : null, next: `${BLOCKS}.next`, listing: '/dev/null' }) });
-    const next: DiskChainState = { ...state, rev: state.rev + 1, deltas: [...state.deltas, { key, bytes, committedAt: at }], committedAt: at };
+    const { keep, saves } = levelsAfter(state.deltas, new Set(recovered?.layers));
+    const replaced = state.deltas.slice(keep);
+    const bound = `${BOUNDS}/${levelName((state.deltas[keep - 1] ?? state.base).key)}`;
+
+    // An appended layer is cut from the tree the last save left, whose digests become the boundary below it.
+    if (replaced.length === 0) yield* run('keeping the boundary', keepBoundCommand(bound, baseline));
+
+    if (replaced.length !== 0 && (yield* run('gathering the merged layers\' paths', gatherCommand(ports.storeRoot(), replaced.map(layer => layer.key)))) !== '') {
+      ports.log('a merged layer\'s paths are held neither here nor in its object, so this save is a base');
+
+      return yield* commitBase(state, at);
+    }
+
+    if (replaced.length !== 0) yield* run('merging the change lists', mergeListsCommand(CHANGES, NEXT_INVENTORY, replaced.map(layer => levelList(layer.key))));
+    const below = (yield* run('finding the boundary\'s digests', `[ -d ${shellPath(bound)} ] && echo held || true`)) === 'held' ? bound : null;
+    const key = `${state.base.key.slice(0, state.base.key.lastIndexOf('/'))}/delta-${String(keep + 1)}-${crypto.randomUUID()}.sqsh`;
+    const bytes = yield* publish(key, { tar: deltaTarCommand({ dir, changes: CHANGES, below, next: `${BLOCKS}.next`, listing: levelList(key) }) });
+    const next: DiskChainState = { ...state, rev: state.rev + 1, deltas: [...state.deltas.slice(0, keep), { key, bytes, committedAt: at, saves }], committedAt: at };
     yield* advance(next, state.rev, true);
+    yield* run('pruning the levels', pruneLevelsCommand(next)).pipe(
+      Effect.catchTag('DevboxError', failure => Effect.sync(() => ports.log(`stale levels stay on this disk: ${failure.message}`))),
+    );
+
+    if (replaced.length !== 0) {
+      yield* attempt('io', () => ports.deleteObjects(replaced.map(layer => layer.key))).pipe(
+        Effect.catchTag('DevboxError', failure => Effect.sync(() => ports.log(`the merged layers stay in the store: ${failure.message}`))),
+      );
+    }
 
     return { kind: 'committed', reason: undefined, bytes: heldBytes(next), movedBytes: bytes } satisfies CheckpointOutcome;
   });

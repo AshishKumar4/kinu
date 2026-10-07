@@ -2,7 +2,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -42,6 +42,14 @@ test('a directory that became a file is one file, with nothing whited out under 
   const entries = cut('dir-to-file', (tree) => { writeFileSync(join(tree, 'a'), 'now a file\n'); }, ['a'], ['a/b']);
 
   expect(named(entries, 'tree/a').map(([name, type]) => [name, type])).toEqual([['tree/a', '0']]);
+});
+
+// A layer carries the paths it answers for, and leaves the same list on this disk, so a later merge can be cut from it.
+test('a delta holds the list of the paths it answers for, and leaves it on this disk', () => {
+  const entries = cut('listed', (tree) => { writeFileSync(join(tree, 'kept'), 'kept\n'); }, ['kept'], ['gone']);
+
+  expect(entries.some(([name]) => name === '.devbox-delta/paths')).toBe(true);
+  expect(readFileSync(join(root, 'listed', 'listing'), 'utf8')).toBe('kept\0gone\0');
 });
 
 // A whiteout's directory is written once, as it is: a second, made-up entry for it would replace its mode.
