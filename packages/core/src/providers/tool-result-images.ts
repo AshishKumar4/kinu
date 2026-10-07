@@ -29,6 +29,11 @@ function isImage(item: ContentItem): item is ImageItem {
   return item.type === 'file' && (item.mediaType === 'image' || item.mediaType.startsWith('image/'));
 }
 
+function carriesImage(message: LanguageModelV4Message): boolean {
+  return message.role === 'tool'
+    && message.content.some((part) => part.type === 'tool-result' && part.output.type === 'content' && part.output.value.some(isImage));
+}
+
 /** Each image a note: the model cannot see it on any API. */
 function withoutImages(message: LanguageModelV4Message): LanguageModelV4Message {
   if (message.role !== 'tool') return message;
@@ -45,7 +50,9 @@ function withoutImages(message: LanguageModelV4Message): LanguageModelV4Message 
  * Chat Completions: each tool message as text, and, where the model takes images, its images in one user message
  * after the batch; otherwise a note in each image's place.
  */
-function chatToolResults(prompt: readonly LanguageModelV4Message[], moveImages: boolean): LanguageModelV4Message[] {
+function chatToolResults(prompt: LanguageModelV4Message[], moveImages: boolean): LanguageModelV4Message[] {
+  // Every call passes the whole prompt here; one with no image in a tool result goes on as it came.
+  if (!prompt.some(carriesImage)) return prompt;
   const out: LanguageModelV4Message[] = [];
   let pending: ImageItem[] = [];
 
