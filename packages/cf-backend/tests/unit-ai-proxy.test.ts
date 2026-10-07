@@ -390,6 +390,24 @@ describe('AI proxy model → upstream selection', () => {
     expect(body).toContain('data: [DONE]');
   });
 
+  test('a usage frame without choices after an OpenAI finish leaves that finish the last word', async () => {
+    // KINU-049's mixed dialect: Cloudflare's usage-only frame follows the model's own `length` finish.
+    const { env } = setupEnv({
+      evalService: true,
+      directStream: [
+        'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"cut"}}]}\n\n',
+        'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"length"}]}\n\n',
+        'data: {"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}\n\n',
+        'data: [DONE]\n\n',
+      ].join(''),
+    });
+
+    const res = await aiProxy(chatRequest(AI_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [{ role: 'user', content: 'ping' }], stream: true }), env);
+    const finishes = [...(await res?.text() ?? '').matchAll(/"finish_reason":"(\w+)"/gu)].map((match) => match[1]);
+
+    expect(finishes).toEqual(['length']);
+  });
+
   test('a binding that answers a whole completion refuses the streamed request', async () => {
     const { env } = setupEnv({
       evalService: true,
