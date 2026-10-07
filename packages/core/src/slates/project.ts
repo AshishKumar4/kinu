@@ -58,6 +58,18 @@ export type SlateProject = v.InferOutput<typeof Project>;
 
 export type SlateBinding = v.InferOutput<typeof Binding>;
 
+/** What an owner's ephemeral slate is bound to (m2171): the agent's codemode reach without delegation or eval, plus the send to its author. */
+export function ephemeralBindings() {
+  return {
+    workspace: { kind: 'namespace', namespace: 'workspace' },
+    memory: { kind: 'memory' },
+    tasks: { kind: 'tasks' },
+    web: { kind: 'web' },
+    db: { kind: 'namespace', namespace: 'db' },
+    agent: { kind: 'agent' },
+  } satisfies Record<string, SlateBinding>;
+}
+
 /** Pre-validation input; accepts readonly arrays from `as const` literals. */
 type PackageDocument = JsonPrimitive | readonly PackageDocument[] | { readonly [key: string]: PackageDocument };
 
@@ -70,10 +82,6 @@ export function slateProject(input: PackageDocument): Effect.Effect<SlateProject
 
   if (!parsed.success) return Effect.fail(new KinuError('bad_input', `package.json: ${renderIssues(parsed.issues)}`));
   const project = parsed.output;
-
-  if (project.slate.runtime === 'worker' && project.main === undefined) {
-    return Effect.fail(new KinuError('bad_input', 'package.json main must name the module that exports class Slate extends SlateObject from kinu:slate'));
-  }
 
   if (project.slate.runtime === 'node') {
     if (project.slate.port === undefined) return Effect.fail(new KinuError('bad_input', 'package.json slate.port must name the server port'));

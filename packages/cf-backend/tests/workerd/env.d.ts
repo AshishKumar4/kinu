@@ -35,7 +35,7 @@ import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
-  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork,
+  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork, AgentHeldWork,
   HeldClose, HeldCloseRecovered,
 } from './two-turn-shapes';
 import type {
@@ -107,6 +107,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   refusedChangeNotes(): Promise<{ readonly sent: boolean; readonly owed: { readonly sends: number; readonly cards: number } }>;
   claimUnderRecovery(): Promise<ClaimUnderRecovery>;
   strandedWork(): Promise<StrandedWork>;
+  agentHeldWork(): Promise<AgentHeldWork>;
   seedOwedReplyWorkspace(): Promise<string>;
   recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered>;
   heldCloseWorkspace(): Promise<HeldClose>;
@@ -232,7 +233,7 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   esbuildInThisIsolate(): Promise<boolean>;
   facetImages(): Promise<string[]>;
   call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
-  socket(method: string, args?: JsonValue[]): Promise<{ ok?: boolean; value?: string; error?: string }>;
+  socket(method: string, args?: JsonValue[], binding?: string): Promise<{ ok?: boolean; value?: string; error?: string }>;
   route(path?: string, chain?: string[]): Promise<{ status: number; body: string; contentType: string | null }>;
   artifacts(): Promise<{ application: string; client?: string; shell?: string }>;
   paths(): Promise<{ kinuInSlateRoot: boolean; entries: string[] }>;

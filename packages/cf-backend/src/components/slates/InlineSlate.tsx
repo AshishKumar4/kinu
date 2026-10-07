@@ -6,7 +6,7 @@ import type { Rpc, SlateCallResult } from "@kinu.run/core";
 import {
   buildSlateHostContext, isPreviewUrl, isSlateFrameMessage, PREVIEW_SANDBOX, slateFrameSrc,
   slateInlineHeight, SLATE_HOST_CONTEXT_MESSAGE, SLATE_THEME_TOKENS,
-  SlateFrameMessageSchema,
+  SlateFrameMessageSchema, SLATE_UI_ATTRIBUTE,
 } from "@kinu.run/core";
 import { useElementSize } from "@/hooks/use-element-size";
 import { useTheme } from "@/hooks/use-theme";
@@ -65,7 +65,9 @@ function usePainted(): boolean {
   return painted;
 }
 
-function SlateCard({ id, measure, children }: { id: string; measure: Ref<HTMLSpanElement>; children: ReactNode }) {
+/** No chrome: the frame sits in the answer, and its fold and open controls show over it on hover, or always where
+ *  there is no hover. Folded, it is one quiet line naming it and why. */
+function SlateCard({ id, block, measure, children }: { id: string; block?: string; measure: Ref<HTMLSpanElement>; children: ReactNode }) {
   const inline = useContext(SlateInlineContext);
   const previews = inline?.chat?.previews;
   const [card, setCard] = useState<HTMLSpanElement | null>(null);
@@ -98,32 +100,41 @@ function SlateCard({ id, measure, children }: { id: string; measure: Ref<HTMLSpa
 
   if (folded && auto) why = superseded ? "Updated below" : "Shown in the work surface";
 
+  const name = block ?? id;
+
+  const controls = folded
+    ? "flex items-center gap-1 py-0.5"
+    : "absolute right-1 top-1 z-10 flex items-center gap-1 rounded-md p-elevated opacity-0 transition-opacity group-hover/slate:opacity-100 group-focus-within/slate:opacity-100 [@media(hover:none)]:opacity-100";
+
   // Spans only: the card renders inside a markdown <p>, where a <div> trips React's dev validator.
   return (
-    <span ref={measure} data-slate-inline={id} data-fold-still={painted ? undefined : ""} className="block my-2 overflow-hidden rounded-lg border p-border p-fill">
-      <span ref={register} className="flex items-center gap-1 py-1 pl-1.5 pr-1">
-        <button type="button" onClick={() => setHand(!folded)} aria-expanded={!folded} aria-controls={body}
+    <span ref={measure} data-slate-inline={id} {...(block === undefined ? {} : { [SLATE_UI_ATTRIBUTE]: block })}
+      data-fold-still={painted ? undefined : ""} className="group/slate relative block my-2">
+      <span ref={register} className={controls}>
+        <button type="button" onClick={() => setHand(!folded)} aria-expanded={!folded} aria-controls={body} title={folded ? `Show ${name}` : `Fold ${name}`}
           className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-[var(--c-elevated)]">
           <CaretRightIcon size={10} weight="bold" className={`shrink-0 p-text-4 p-fold-turn ${folded ? "" : "rotate-90"}`} />
-          <code className="p-annotation p-text-3 truncate">{id}</code>
+          {folded && <code className="p-annotation p-text-3 truncate">{name}</code>}
           {why !== null && <span className="ml-auto shrink-0 pl-2 p-meta p-text-4">{why}</span>}
         </button>
         {openSlate !== undefined && (
-          <button type="button" onClick={() => openSlate(id)} aria-label={`Open ${id} in the work surface`} title="Open in the work surface"
+          <button type="button" onClick={() => openSlate(id)} aria-label={`Open ${name} in the work surface`} title="Open in the work surface"
             className="p-text-3 hover:p-text p-1 shrink-0 inline-flex rounded-md transition-colors hover:bg-[var(--c-elevated)]">
             <ArrowSquareOutIcon size={11} />
           </button>
         )}
       </span>
       <span id={body} className="p-fold" data-folded={folded ? "" : undefined} inert={folded}>
-        <span><span className="block border-t p-border">{children}</span></span>
+        <span><span className="block">{children}</span></span>
       </span>
     </span>
   );
 }
 
-export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
+export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }: {
   id: string;
+  /** The `<slate-ui>` block's name when the slate is an answer's own. */
+  block?: string;
   rpc: Rpc;
   display: 'inline' | 'pane';
   reloadKey?: number;
@@ -228,7 +239,7 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
         src={src}
         title={id}
         onLoad={() => setLoaded(true)}
-        className={pane ? 'p-bg flex-1 min-h-0 w-full border-0' : 'p-bg w-full border-0 p-fold-frame'}
+        className={pane ? 'p-bg flex-1 min-h-0 w-full border-0' : 'w-full border-0 p-fold-frame'}
         style={pane ? undefined : { height: height ?? 320 }}
         sandbox={PREVIEW_SANDBOX}
       />
@@ -263,7 +274,7 @@ export function InlineSlate({ id, rpc, display, reloadKey = 0, onReady }: {
   }
 
   return (
-    <SlateCard id={id} measure={attach}>
+    <SlateCard id={id} block={block} measure={attach}>
       {refusal !== null && (
         <span className="block p-notice-danger px-3 py-2 text-xs">
           <span className="block break-words m-0">{refusal}</span>

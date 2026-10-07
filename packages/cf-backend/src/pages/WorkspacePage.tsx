@@ -1142,6 +1142,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                     <MessageView
                       message={msg}
                       steers={steers}
+                      answerSlates
                       liveTail={i === thread.entries.length - 1 ? mainTail : null}
                       onFork={onForkMessage}
                       onFeedback={onMessageFeedback}

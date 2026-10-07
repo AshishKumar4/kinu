@@ -2311,14 +2311,17 @@ function galleryOwedWork(): JsonValue {
   const recovered = document.documentElement.dataset.galleryRecoveries !== undefined;
 
   return v.parse(JsonValueSchema, inspectWork({
-    turns: OWED_TURNS.filter((claim) => !recovered || claim.turnId !== "turn-stranded"),
+    claims: OWED_TURNS.filter((claim) => !recovered || claim.turnId !== "turn-stranded").map((claim) => ({ claim, actor: null })),
     agentTurns: [],
     executing: new Set(["turn-live"]),
     effects: [
-      { ...OWED_EFFECT, key: "e-due", rawName: "turn_record", status: "pending", attempts: 1, nextAttemptAt: NOW - 1e3 },
-      { ...OWED_EFFECT, key: "e-backoff", rawName: "follow_up_turn", status: "pending", attempts: 2, nextAttemptAt: NOW + 90e3 },
-      { ...OWED_EFFECT, key: "e-parked", rawName: "drain", status: "parked", attempts: 1, nextAttemptAt: NOW },
-      { ...OWED_EFFECT, key: "e-blocked", rawName: "retired_effect", status: "blocked", attempts: 4, nextAttemptAt: NOW, blocked: "this build does not implement retired_effect" },
+      { effect: { ...OWED_EFFECT, key: "e-due", rawName: "turn_record", status: "pending", attempts: 1, nextAttemptAt: NOW - 1e3 }, actor: null },
+      { effect: { ...OWED_EFFECT, key: "e-backoff", rawName: "follow_up_turn", status: "pending", attempts: 2, nextAttemptAt: NOW + 90e3 }, actor: null },
+      { effect: { ...OWED_EFFECT, key: "e-parked", rawName: "drain", status: "parked", attempts: 1, nextAttemptAt: NOW }, actor: null },
+      {
+        effect: { ...OWED_EFFECT, key: "e-blocked", rawName: "retired_effect", status: "blocked", attempts: 4, nextAttemptAt: NOW, blocked: "this build does not implement retired_effect" },
+        actor: null,
+      },
     ],
     now: NOW,
   }));
