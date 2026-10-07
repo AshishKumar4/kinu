@@ -117,6 +117,10 @@ describe("an answer's slate-ui blocks are drawn in place", () => {
     expect({ read, heard }).toEqual({ read: SLATE_UI_FILE.content, heard: true });
   });
 
+  test("a page's open control shows it in the work surface", () => {
+    expect(verdictOf(observed.slateUi, 'slate-ui').opened).toBe(SLATE_UI_PAGES.first);
+  });
+
   test('a reload draws them again from the stored answer', () => {
     const { redrawn, reshown } = verdictOf(observed.slateUi, 'slate-ui');
 
