@@ -246,12 +246,13 @@ describe('two real turns over the HTTP model seam', () => {
     expect(alien).toEqual({ status: 'blocked', transition: 'resumed' });
   });
 
-  // An answer's page calls as its author as of each call: its write lands while the owner's turns are Auto, and is
-  // refused once the owner's next ask is a Plan one, with nothing restarted in between.
-  it("an answer's page calls in the mode its author's next turn runs in", async () => {
+  // An answer's page calls as its author as of each call, with nothing restarted in between: its write lands while the
+  // owner's turns are Auto, is refused after a Plan ask, lands again after an Auto one, and is refused once the
+  // author's role is planner, which holds every call to Plan whatever the last ask asked for.
+  it("an answer's page calls in the mode its author's role and next turn leave it", async () => {
     const modes = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('page-modes-driver')).answerPageModesIn();
 
-    expect(modes).toEqual({ auto: 'ok', plan: 'denied' });
+    expect(modes).toEqual({ auto: 'ok', plan: 'denied', autoAgain: 'ok', planner: 'denied' });
   });
 
   // A hired agent's answer is read from its own isolate. Under the agent's id its block is found, and its page's
@@ -273,6 +274,7 @@ describe('two real turns over the HTTP model seam', () => {
 
     expect(brief(work.stranded), JSON.stringify(work)).toEqual([{ kind: 'turn', id: 'turn-stranded', phase: 'blocked', attempt: 2 }, ...left]);
     expect(work.stranded.map((row) => row.blocked === null)).toEqual([false, false, false]);
+    expect(work.shown).toBe(true);
     expect(work.recovered).not.toBe('none');
     expect(brief(work.after)).toEqual(left);
   });

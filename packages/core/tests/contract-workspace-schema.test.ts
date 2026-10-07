@@ -76,7 +76,7 @@ const OWNED = {
 
 /** The surface a workspace root has and an actor scope does not. */
 const ROOT_ONLY_TABLES = [
-  'agent_figures', 'agent_open_turns', 'ephemeral_slates', 'fork_lineage', 'fork_staged_files', 'fork_transfer', 'fork_transfer_counts',
+  'agent_figures', 'agent_open_turns', 'agent_owed_work', 'ephemeral_slates', 'fork_lineage', 'fork_staged_files', 'fork_transfer', 'fork_transfer_counts',
   'slate_file_manifest', 'slate_live_share_users', 'slate_live_shares', 'slate_publications',
   'slate_share_users', 'slate_shares', 'slate_state', 'slate_versions',
   'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity',

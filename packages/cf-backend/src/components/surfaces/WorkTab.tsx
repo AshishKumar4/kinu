@@ -171,7 +171,7 @@ export function WorkTab({
 
   const nothingAtAll = work !== null && changelog !== null && !hasWorkspaceWork({
     work, pending: pendingActions, jobs: backgroundJobs,
-    changes: changelog.entries, notes: memory,
+    changes: changelog.entries, notes: memory, owed: inspectedWork,
   });
 
   if (nothingAtAll && !hasPlans && !plan) {

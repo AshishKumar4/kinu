@@ -186,11 +186,15 @@ export const SEARCH_QUERY = 'Cloudflare Durable Objects documentation';
 export const SEARCH_ASK = `With the web tool, search the web for "${SEARCH_QUERY}". Then reply with ONE line: `
   + 'the URL of the FIRST result, exactly as the search gave it.';
 
-/** workspace-panes: the file the turn writes, named so no scaffold file can be it. */
+/** workspace-panes: the file the turn writes, named so no scaffold file can be it, and the task it adds, which is the
+ *  Work tab's content (a file write is the Changes pane's, not Work's). */
 export const PANES_PROBE = 'panes-probe.txt';
 
+export const PANES_TASK_TITLE = 'panes probe task';
+
 export const PANES_ASK = `Use your file tool to write a new file named ${PANES_PROBE} in the workspace, `
-  + 'containing exactly the words panes probe. Then reply with one line: DONE.';
+  + `containing exactly the words panes probe. Then, with the tasks tool, add one task titled "${PANES_TASK_TITLE}". `
+  + 'Then reply with one line: DONE.';
 
 /** every-tool: what each call leaves where the case reads it back. */
 export const TOOLS_PROBE_PATH = '/home/main/tools-probe.txt';

@@ -47,8 +47,9 @@ export interface AgentWorkspace {
   /** Persists the title the agent suggested itself; null lands the stand-in alone. */
   autoTitle(subject: string, title: string | null): Promise<void>;
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
-  /** A facet sets no alarm: the instant it next owes work, or none, replacing what it said before. */
-  owes(next: number | null): Promise<void>;
+  /** A facet sets no alarm: the instant it next needs waking, or none, and whether it holds owed work at all (a parked
+   *  effect needs no wake but is still owed), replacing what it said before. */
+  owes(next: number | null, holds: boolean): Promise<void>;
   birthContext(drainTurnId: string): Promise<SerializedMessage[]>;
   steerSkills(text: string, alreadyActive: readonly string[]): Promise<string | null>;
   advise(review: AgentReview): Promise<void>;
