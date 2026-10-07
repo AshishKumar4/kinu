@@ -1,13 +1,14 @@
 // The ChatGPT plan provider (Sign in with ChatGPT) against api.openai.com faked at its fetch seam: the request
 // shape the preview accepts, and each answer the plan route documents (developers.openai.com/siwc, 2026-09-30).
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, jest, test } from 'bun:test';
 import { APICallError, generateText, jsonSchema, streamText, tool, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import {
-  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema,
+  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, silenceBoundMs,
   type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { KinuError, createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { PROVIDER_RETRIES_HEADER } from '../src/providers/rate-limit-retry';
 
 interface Sent {
   readonly url: string;
@@ -195,7 +196,29 @@ describe('the request the preview accepts', () => {
     expect(result.text).toBe('ok');
     expect(result.usage.inputTokens).toBe(7);
   });
+
+  test('a call that wants one answer is held to the silence bound its stream is', async () => {
+    jest.useFakeTimers();
+    const opened = Promise.withResolvers<void>();
+
+    const api = openai(() => {
+      opened.resolve();
+
+      return new Response(new ReadableStream({ pull() {} }, { highWaterMark: 0 }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+
+    const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
+    // No transport retry, so the one silent attempt is the whole call.
+    const failure = failureOf(generateText({ model, prompt: 'hello', maxRetries: 0, headers: { [PROVIDER_RETRIES_HEADER]: '0' } }));
+
+    await opened.promise;
+    jest.advanceTimersByTime(silenceBoundMs('provider.stream.idle_ms'));
+
+    expect(await failure).not.toBeNull();
+  });
 });
+
+afterEach(() => { jest.useRealTimers(); });
 
 describe('what the plan route answers', () => {
   test.each([
