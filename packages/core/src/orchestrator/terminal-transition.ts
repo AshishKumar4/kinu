@@ -170,9 +170,20 @@ export class TerminalTransitions {
     this.hold(transition, async () => {
       await run.reported;
       this.end(transition);
-
-      if (this.nextRetryAt() === null) await this.deps.settled();
+      await this.closed();
     });
+  }
+
+  /**
+   * Once a close has ended, the wake goes to what is still owed, or the host is told nothing is. Read only now: until
+   * the close left, its own sequence was deferred as in flight, so a wake armed meanwhile (a recovery pass re-arming
+   * after its replay) may have put it at the ceiling.
+   */
+  private async closed(): Promise<void> {
+    const next = this.nextRetryAt();
+
+    if (next === null) await this.deps.settled();
+    else await this.deps.scheduleRetry(next);
   }
 
   /** Whether a settled turn's detached effects are still closing here. */
@@ -279,6 +290,7 @@ export class TerminalTransitions {
     this.hold(transition, async () => {
       await run.reported;
       this.end(transition);
+      await this.closed();
     });
   }
 
