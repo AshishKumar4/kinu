@@ -19,7 +19,7 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { apiJson } from './live-app-harness';
 import {
   FALLBACK_ANSWER, SCRIPTED_MODELS_BODY, pacedStream, readScriptedRequest, scriptedBody,
-  type ScriptedAnswer, type ScriptedModel, type ScriptedPace, type ScriptedRequest,
+  type ScriptedAnswer, type ScriptedCall, type ScriptedModel, type ScriptedPace, type ScriptedRequest,
 } from './scripted-protocol';
 
 /** The account credential a scripted run's workspaces are served through. */
@@ -388,41 +388,49 @@ const PLAN_TASKS_MARKDOWN = ['# Guard the segment read', '', '1. Guard the read.
 /** The ids a native `tasks` add answers with. */
 const TasksAddedSchema = v.pipe(v.string(), v.parseJson(), v.looseObject({ added: v.array(v.looseObject({ id: v.string() })) }));
 
+/** Whether the conversation already holds a call to `name` whose arguments name `named`. */
+function madeCall(request: ScriptedRequest, name: string, named = ''): ScriptedCall | undefined {
+  return request.calls.find((call) => call.name === name && call.arguments.includes(named));
+}
+
 /** The approved plan's build turn: the step, its subtask under the id the step was given, then a step from a program. */
 function planTasksBuild(request: ScriptedRequest): ScriptedAnswer {
-  const adds = request.turn.filter((call) => call.name === 'tasks');
-  const [first] = adds;
+  const step = madeCall(request, 'tasks', PLAN_TASK_TITLES.step);
 
-  if (first === undefined) return { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.step] } } };
+  if (step === undefined) return { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.step] } } };
 
-  if (adds.length === 1) {
-    const step = v.safeParse(TasksAddedSchema, first.result);
-    const parent = step.success ? step.output.added[0]?.id : undefined;
+  if (madeCall(request, 'tasks', PLAN_TASK_TITLES.sub) === undefined) {
+    const added = v.safeParse(TasksAddedSchema, step.result);
+    const parent = added.success ? added.output.added[0]?.id : undefined;
 
-    if (parent === undefined) return { text: `The step's id was not in its answer: ${first.result}` };
+    if (parent === undefined) return { text: `The step's id was not in its answer: ${step.result}` };
 
     return { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.sub], parent } } };
   }
 
-  if (!request.turn.some((call) => call.name === 'eval')) {
+  if (madeCall(request, 'eval') === undefined) {
     return { toolCall: { name: 'eval', arguments: { code: `// Add the last step\nawait tasks.add([${JSON.stringify(PLAN_TASK_TITLES.programmed)}]);\nreturn 'added';` } } };
   }
 
   return { text: 'Implemented the approved plan.' };
 }
 
-/** The plan-tasks row's turns, or null for any other request. */
+/**
+ * The plan-tasks row's turns, or null for any other request. Each step is keyed on what the conversation already
+ * holds, by the titles its calls name, so a request repeated within a turn never repeats a call.
+ */
 export function planTasksProbe(request: ScriptedRequest): ScriptedAnswer | null {
   if (request.available.length === 0 || !request.userTexts.some((text) => text.includes('Plan tasks probe'))) return null;
   const last = request.userTexts.at(-1) ?? '';
-  const done = (name: string) => request.turn.some((call) => call.name === name);
 
   if (last.includes(PLAN_TASKS_CHORE)) {
-    return done('tasks') ? { text: 'Noted.' } : { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.chore] } } };
+    return madeCall(request, 'tasks', PLAN_TASK_TITLES.chore) === undefined
+      ? { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.chore] } } }
+      : { text: 'Noted.' };
   }
 
   if (last.includes(PLAN_TASKS_PLAN)) {
-    if (done('submit_plan') || !request.available.includes('submit_plan')) return { text: 'The plan is ready for your review.' };
+    if (madeCall(request, 'submit_plan') !== undefined || !request.available.includes('submit_plan')) return { text: 'The plan is ready for your review.' };
 
     return { toolCall: { name: 'submit_plan', arguments: { edits: [{ start: 1, content: PLAN_TASKS_MARKDOWN }] } } };
   }

@@ -106,8 +106,16 @@ describe('the providers list', () => {
 
         if (llama instanceof HTMLElement) llama.click();
       });
-      await page.waitForFunction(async () => JSON.stringify(await (await fetch('/api/user/profile-catalog')).json())
-        .includes('"default":{"model":"groq/llama-3.3-70b-versatile"'));
+      // The tier is a draft until saved; saved, the button reads Save again, with nothing left to save.
+      await page.waitForFunction(() => [...document.querySelectorAll('button')].some((button) => /^Save (tiers|roles and tiers)$/u.test(button.textContent?.trim() ?? '') && !button.disabled));
+      await page.$$eval('button', (buttons) => {
+        const save = buttons.find((button) => /^Save (tiers|roles and tiers)$/u.test(button.textContent?.trim() ?? ''));
+
+        if (save instanceof HTMLElement) save.click();
+      });
+      await page.waitForFunction(() => [...document.querySelectorAll('button')].some((button) => /^Save (tiers|roles and tiers)$/u.test(button.textContent?.trim() ?? '') && button.disabled));
+      expect(await page.evaluate(async () => JSON.stringify(await (await fetch('/api/user/profile-catalog')).json())))
+        .toContain('"default":{"model":"groq/llama-3.3-70b-versatile"');
 
       // Disconnected after its warning, the key and the model go together.
       await page.keyboard.press('Escape');
