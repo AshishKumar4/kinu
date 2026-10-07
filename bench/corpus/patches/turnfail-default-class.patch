@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/turn-failure.ts b/packages/core/src/turn-failure.ts
-index 316aee93f..27e9a5661 100644
+index 57a4003aa..b70e72ebf 100644
 --- a/packages/core/src/turn-failure.ts
 +++ b/packages/core/src/turn-failure.ts
-@@ -94,7 +94,7 @@ export function classifyTurnFailure(error: string, signals: TurnFailureSignals =
+@@ -117,7 +117,7 @@ export function classifyTurnFailure(failure: string | Error, signals: TurnFailur
  
-   if (AUTH_PATTERNS.some((re) => re.test(error))) return 'auth';
+     if (RATE_LIMIT_PATTERNS.some((re) => re.test(error))) return rateLimited(signals);
  
--  return 'transient';
-+  return 'rate_limit';
- }
+-    return AUTH_PATTERNS.some((re) => re.test(error)) ? 'auth' : 'transient';
++    return AUTH_PATTERNS.some((re) => re.test(error)) ? 'auth' : 'rate_limit';
+   }
  
- export interface OverflowRecoveryInput extends TurnFailureSignals {
+   if (status === 413 || (status === 429 && UNSERVABLE_REQUEST.test(error))) return 'context_length';

@@ -6,6 +6,7 @@ import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { retryMiddleware, type RetryPolicy } from './middleware/retry';
+import { toolSchemaDialect } from './middleware/tool-schema-dialect';
 import { toolImages } from './tool-result-images';
 import { statelessResponses } from './util';
 
@@ -74,7 +75,7 @@ export function createWireModel(input: WireModelInput): LanguageModelV4 {
 export function withModelStack(model: LanguageModel, policy: RetryPolicy): LanguageModel {
   if (v.is(v.string(), model) || model.specificationVersion === 'v2') return model;
 
-  return wrapLanguageModel({ model, middleware: [retryMiddleware(policy), toolImages(undefined)] });
+  return wrapLanguageModel({ model, middleware: [retryMiddleware(policy), toolSchemaDialect, toolImages(undefined)] });
 }
 
 /** Anthropic's SDK sends a key as `x-api-key` and a token as a bearer: a given header is moved into its setting, and

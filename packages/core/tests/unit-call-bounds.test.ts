@@ -8,9 +8,9 @@ import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrat
 import { DEFAULT_ATTEMPT_BUDGET } from '../src/bench/types';
 import { jsonSchema, tool } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
-import { runChat, UNBOUNDED_STEPS } from '../src/index';
+import { runChat } from '../src/index';
 
-test('the shared chat driver completes work beyond ten tool steps', async () => {
+test('the shared chat driver, given no stop condition, completes work beyond ten tool steps', async () => {
   let calls = 0;
   let executed = 0;
 
@@ -37,7 +37,6 @@ test('the shared chat driver completes work beyond ten tool steps', async () => 
   for await (const event of runChat({
     model, system: 'Complete the work.', history: [{ role: 'user', content: 'go' }],
     tools: { advance: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }), execute: async () => ++executed }) },
-    stopWhen: UNBOUNDED_STEPS,
   })) {
     if (event.type === 'text-delta') answer += event.delta;
   }
