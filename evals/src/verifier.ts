@@ -249,11 +249,14 @@ export class EvalVerifier {
     return browsing(this.#session.web, body);
   }
 
-  /** A model's yes or no on what no check can compute, over pictures of what the pages drew (`judge.ts`). */
+  /**
+   * A model's yes or no on what no check can compute, over pictures of what the pages drew (`judge.ts`). Asked as the
+   * eval identity's own account, not the trial's: the reviewer's provider sign-in is that account's alone.
+   */
   judgement(question: string, pictures: readonly Uint8Array<ArrayBuffer>[]): Promise<Judgement> {
     const { origin, identity } = this.#session.web;
 
-    return judge({ origin, identity }, question, pictures);
+    return judge({ origin, identity: identity.kind === 'secret' ? { kind: 'secret', secret: identity.secret } : { kind: 'loopback' } }, question, pictures);
   }
 
   /**

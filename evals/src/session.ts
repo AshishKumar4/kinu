@@ -102,7 +102,7 @@ import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
   RunEventSchema, STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
-  type SubordinateInspectionRequest, type WorkspaceSpend,
+  type SubordinateInspectionRequest, type WorkMode, type WorkspaceSpend,
   QualityDaySchema, type QualityDay, ProfileCatalogEnvelopeSchema, betaSwarms,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate, detach } from '../../packages/core/src/obs/index';
@@ -1135,13 +1135,13 @@ export class KinuPublicSession {
   /** Start a turn and hand back its id and its promise. The promise resolves
    *  when the run that ANSWERS the prompt closes — the prompt's own turn, or
    *  the run it spliced into when the done frame answers `mid-turn`. */
-  submit(text: string): PublicSubmission {
+  submit(text: string, mode?: WorkMode): PublicSubmission {
     const requestId = this.mintId('turn');
     const recorder = recordPublicTurn();
 
     const admitted = new Promise<PublicTurn>((resolve, reject) => {
       this.turns.set(requestId, { recorder, resolve, reject, sentAt: new Date().toISOString() });
-      this.send(encodeChatRequest({ requestId, text })).catch(reject);
+      this.send(encodeChatRequest({ requestId, text, ...(mode !== undefined && { mode }) })).catch(reject);
     });
 
     // The observation window IS the absorbing run: a mid-turn landing is
@@ -1194,9 +1194,9 @@ export class KinuPublicSession {
    *  from a turn that was merely still running. A send the DO answers
    *  `mid-turn` resolves when the run it spliced into closes — the same
    *  denominator rule, one run further up. */
-  prompt(text: string): Promise<PublicSendResult> {
+  prompt(text: string, mode?: WorkMode): Promise<PublicSendResult> {
     return this.boundary(`turn on ${this.input.origin}/${this.workspace}`, () =>
-      this.submit(text).settled);
+      this.submit(text, mode).settled);
   }
 
   /**

@@ -74,9 +74,11 @@ export function openWorkspace(target: EvalTarget, request: { subject: string; mi
 }
 
 /**
- * One question put to a model in a fresh eval workspace of its own: `files` written into it, `prompt` sent, the
- * workspace waited out, and its last reply, trimmed. The workspace is deleted whatever happened. The diagnosis and the
- * judge ask through it.
+ * One question put to a model in a fresh eval workspace of its own: `files` written into it, `prompt` sent in Plan, the
+ * workspace waited out, and its last reply, trimmed. The workspace is deleted whatever happened. The diagnosis, the
+ * trajectory review and the judge ask through it, and read what they are given as untrusted: Plan is the product's own
+ * confinement to the tools that change nothing, so a trajectory that tells its reader to write or run something is
+ * refused by the turn, not by the prompt's request.
  */
 export async function askOnce(target: EvalTarget, request: {
   subject: string; mission: string; model: string; files: readonly SeedFile[]; prompt: string;
@@ -88,7 +90,7 @@ export async function askOnce(target: EvalTarget, request: {
 
     const watch = new TurnWatch(session);
 
-    await answered(watch, session.prompt(request.prompt));
+    await answered(watch, session.prompt(request.prompt, 'plan'));
     await settle(watch);
 
     return repliesTo(await session.history(), request.prompt).at(-1)?.trim() ?? '';
