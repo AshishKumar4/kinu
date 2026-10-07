@@ -47,38 +47,49 @@ const LOG = `${Object.entries(P95).flatMap(([hour, p95]) => hourOfRequests(hour,
 
 const LATE_LINES = `${hourOfRequests(LATE_HOUR.hour, LATE_HOUR.p95).join('\n')}\n`;
 
-/** A chart that shows each of `values`, as the text a person reads off it. */
-function charts(values: readonly number[]): (sight: Sight) => boolean {
-  return (sight) => values.every((value) => shows(sight.text, value));
+/** An hour's label as the user asks for it. */
+const label = (hour: string): string => `${hour}:00`;
+
+/**
+ * A chart that shows each hour's p95 under, over or beside that hour's own label, as a person reads a bar off its axis.
+ * A page that dumps the raw log shows the planted values too, but under no hour's label: its timestamps name minutes.
+ */
+function charts(hours: Readonly<Record<string, number>>) {
+  return {
+    names: Object.keys(hours).map(label),
+    done: (sight: Sight) => Object.entries(hours).every(([hour, p95]) => (sight.regions[label(hour)] ?? []).some((region) => shows(region.text, p95))),
+  };
 }
 
-const SEEDED: readonly number[] = Object.values(P95);
+const SEEDED = charts(P95);
+
+const GROWN = charts({ ...P95, [LATE_HOUR.hour]: LATE_HOUR.p95 });
 
 const task = defineEvalTask({
   id: 'latency-chart',
   mission: MISSION,
   turns: [{
     seed: [{ path: LOG_PATH, content: LOG }],
-    prompt: `Chart the p95 latency of the requests in ${LOG_PATH} by hour, with each hour's p95 written on the
-chart so I can read it. The log keeps growing through the day, so the chart should read the file each time
-it's shown rather than keep a copy of today's numbers.`,
+    prompt: `Chart the p95 latency of the requests in ${LOG_PATH} by hour, labelling each hour like 09:00 and
+writing each hour's p95 on the chart so I can read it. The log keeps growing through the day, so the chart should
+read the file each time it's shown rather than keep a copy of today's numbers.`,
     verify: async (verifier) => {
       await answersWithSlates(verifier, 1);
       await madeNoApp(verifier);
 
-      await verifier.check('the-chart-shows-each-hours-p95', () => answerShows(verifier, [], charts(SEEDED)));
-      await verifier.check('a-reload-shows-the-same', () => answerShows(verifier, [], charts(SEEDED)));
+      await verifier.check('the-chart-shows-each-hours-p95', () => answerShows(verifier, SEEDED.names, SEEDED.done));
+      await verifier.check('a-reload-shows-the-same', () => answerShows(verifier, SEEDED.names, SEEDED.done));
 
       await verifier.check('the-chart-reads-the-file', async () => {
         await verifier.writeFile(LOG_PATH, `${LOG}${LATE_LINES}`);
 
-        return answerShows(verifier, [], charts([...SEEDED, LATE_HOUR.p95]));
+        return answerShows(verifier, GROWN.names, GROWN.done);
       });
     },
   }],
 });
 
 // Every hour's planted p95 is distinct, so one shown value cannot stand for two hours.
-if (new Set([...SEEDED, LATE_HOUR.p95]).size !== SEEDED.length + 1) throw new Error('two hours share a planted p95');
+if (new Set([...Object.values(P95), LATE_HOUR.p95]).size !== Object.keys(P95).length + 1) throw new Error('two hours share a planted p95');
 
 defineTaskEval(task);

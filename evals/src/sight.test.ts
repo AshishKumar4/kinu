@@ -87,17 +87,41 @@ describe('a page read as a person sees it', () => {
     expect(shown(sight, 'design', [2000])).toBe(false);
   });
 
-  test('what a person cannot see is not read: a closed select, a hidden note, a script, text past the page\'s side', async () => {
+  test('what a person cannot see is not read: a closed select, a hidden note, a script, text cut off or past the side', async () => {
     const page = `<select>${TEAMS.map((team) => `<option>${team}</option>`).join('')}</select>
       <div><span>design</span> <span style="display:none">9999.99</span> <span style="visibility:hidden">8888</span> 1500</div>
+      <div style="height:0;overflow:hidden">6666</div><div style="width:40px;overflow:hidden;white-space:nowrap">platform 5555555555555</div>
       <script>"design 7777"</script>
       <div style="display:flex;width:1200px"><span style="flex:0 0 900px">growth</span><span>3000</span></div>`;
 
     const narrow = await read(page, 600);
 
     expect(shown(narrow, 'design', [1500])).toBe(true);
-    expect([9999.99, 8888, 7777, 3000].some((hidden) => shows(narrow.text, hidden))).toBe(false);
+    expect([9999.99, 8888, 7777, 6666, 5555555555555, 3000].some((hidden) => shows(narrow.text, hidden))).toBe(false);
     expect(shown(await read(page, 1400), 'growth', [3000])).toBe(true);
+  });
+
+  test('a name split across text nodes is one label, and copy that mentions a name in passing is none', async () => {
+    const sight = await read(`<div style="display:flex">${TEAMS.map((team, index) => `<section><h3><b>${team.slice(0, 3)}</b>${team.slice(3)}</h3>
+      <p>${String(1000 * (index + 1))}</p><p>${index === 2 ? 'Everything in design and growth, plus more' : 'The basics'}</p></section>`).join('')}</div>`);
+
+    expect(shown(sight, 'design', [1000])).toBe(true);
+    expect(shown(sight, 'platform', [3000])).toBe(true);
+    expect(shown(sight, 'design', [3000])).toBe(false);
+  });
+
+  test('a column ends with its table, and a chart\'s bar is read under and over its label', async () => {
+    const stacked = await read(`${COLUMNS}<table><tr>${[...TEAMS].reverse().map((team) => `<th>${team}</th>`).join('')}</tr><tr><td>7</td><td>8</td><td>9</td></tr></table>`);
+
+    const chart = await read(`<svg width="300" height="200">${TEAMS.map((team, index) => `<text x="${String(50 + index * 100)}" y="20" text-anchor="middle">${String(100 * (index + 1))}</text>
+      <rect x="${String(35 + index * 100)}" y="30" width="30" height="${String(40 * (index + 1))}"></rect>
+      <text x="${String(50 + index * 100)}" y="190" text-anchor="middle">${team}</text>`).join('')}</svg>`);
+
+    expect(shown(stacked, 'growth', [3000, 2705])).toBe(true);
+    expect(shown(stacked, 'growth', [7])).toBe(false);
+    expect(shown(stacked, 'design', [9])).toBe(true);
+    expect(shown(chart, 'growth', [200])).toBe(true);
+    expect(shown(chart, 'growth', [100])).toBe(false);
   });
 
   test('figures read whatever their grouping and sign, to the cent', () => {

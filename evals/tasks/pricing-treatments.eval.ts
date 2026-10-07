@@ -29,20 +29,18 @@ function yearlyUsd(plan: (typeof PLANS)[number]): number {
   return Math.round(plan.monthlyUsd * 12 * (100 - plan.discountPct)) / 100;
 }
 
-/**
- * The treatment names every plan and shows its monthly and yearly price, all within the chat's width. Read over the
- * whole treatment, not plan by plan: pricing copy names other plans ("everything in Team, plus"), so no part of a card
- * names one plan alone.
- */
+const NAMES = PLANS.map((plan) => plan.plan);
+
+/** Every plan shows its own monthly and yearly price in its own part of the treatment, its row, card or column; copy
+ *  that mentions another plan in passing ("everything in Team, plus") is no other plan's label (`sight.ts`). */
 function showsEveryPrice(sight: Sight): boolean {
-  return PLANS.every((plan) => sight.text.toLowerCase().includes(plan.plan.toLowerCase())
-    && shows(sight.text, plan.monthlyUsd) && shows(sight.text, yearlyUsd(plan)));
+  return PLANS.every((plan) => (sight.regions[plan.plan] ?? []).some((region) => shows(region.text, plan.monthlyUsd) && shows(region.text, yearlyUsd(plan))));
 }
 
 /** A fresh chat page draws the answer's slates, at least three, each showing every price. */
 function everyTreatment(verifier: EvalVerifier): Promise<EvalCheckOutcome> {
   return verifier.browse(async (browser) => {
-    const readings = await readAnswer(browser, 3, [], showsEveryPrice);
+    const readings = await readAnswer(browser, 3, NAMES, showsEveryPrice);
 
     return { pass: readings.length >= 3 && readings.every((reading) => reading.held), evidence: readings.map(readingEvidence) };
   });
@@ -64,7 +62,7 @@ yearly price with the annual discount taken off.`,
 
       // Pictured in a browser of its own, so a picture that cannot be taken fails this check alone.
       await verifier.check('the-treatments-look-different', () => verifier.browse(async (browser) => {
-        const pictures = await browser.answerPictures(await browser.open(), 3);
+        const pictures = await browser.answerPictures(await browser.open(), 3, NAMES, showsEveryPrice);
         const judged = await verifier.judgement(DIFFERENT_DESIGNS, pictures);
 
         return { pass: pictures.length >= 3 && judged.verdict === true, evidence: { judged, treatments: pictures.length } };
