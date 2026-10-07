@@ -675,6 +675,7 @@ describe('through a real runChat turn', () => {
     };
 
     for await (const _ of runChat({
+      modelSpec: 'test/model',
       model: grindingModel(prompts),
       system: 'sys',
       history: followUp('build caffe'),
@@ -711,6 +712,7 @@ describe('through a real runChat turn', () => {
     };
 
     for await (const _ of runChat({
+      modelSpec: 'test/model',
       model: repeatingModel(prompts, 'make'),
       system: 'sys',
       history: followUp('build it'),
@@ -742,6 +744,7 @@ describe('through a real runChat turn', () => {
     };
 
     for await (const _ of runChat({
+      modelSpec: 'test/model',
       model: repeatingModel(prompts, null),
       system: 'sys',
       history: followUp('look around'),
@@ -767,6 +770,7 @@ describe('through a real runChat turn', () => {
     };
 
     for await (const _ of runChat({
+      modelSpec: 'test/model',
       model: repeatingModel(prompts, null),
       system: 'sys',
       history: [user('add caching to the api and update the docs')],

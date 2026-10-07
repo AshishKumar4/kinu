@@ -59,8 +59,9 @@ export interface TransformContext {
   readonly system: string;
   /** Null when unknown: nothing compacts by size. */
   readonly contextWindow: number | null;
-  /** The model this request is built for: its server compaction, if any, decides the mode. */
-  readonly model?: string;
+  /** The model serving this request, a fallback once one took over: it prices attachments, and its server
+   *  compaction, if any, decides the mode. */
+  readonly model: string;
   /** Previous turn's measured prompt tokens; preferred over chars/4 estimates. */
   readonly providerReportedTokens?: number;
   readonly trigger: CompactionTrigger;

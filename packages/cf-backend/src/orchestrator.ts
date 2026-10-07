@@ -69,6 +69,7 @@ import {
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
+import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubordinateReport, temporaryRunSettles, type ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
@@ -1154,7 +1155,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * hire/ask/send/list/dismiss vanish from the enum rather than refusing.
    */
   private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
-    const swarm = this.swarmDeps(turn.runtime, () => turn.model, () => this.agentStores(turn.actor.handle.actorId).workingContext());
+    // The hire's own ladder over its own files, as its turns compact in its isolate.
+    const compaction = hostedActorCompaction(turn.actor, {
+      logger: compactionDiagnostics,
+      summarizer: () => turn.model,
+      spend: { report: (report) => this.reportModelCall(report), operations: this.modelOperations },
+    });
+
+    const swarm = this.swarmDeps(turn.runtime, () => turn.model, () => this.agentStores(turn.actor.handle.actorId).workingContext(), compaction.extension.compactShared);
 
     const deps: AgentsToolDeps = {
       mode: turn.input.mode,

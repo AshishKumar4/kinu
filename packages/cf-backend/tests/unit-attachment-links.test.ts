@@ -17,6 +17,6 @@ test('the file tool shows the agent a screenshot the rung moved out, from the li
 
   expect(await present(file.toModelOutput, 'the image output')({ toolCallId: 'reopen', input: {}, output: read })).toEqual({
     type: 'content',
-    value: [{ type: 'text', text: `${links[0]}: image/png 1280x800, 40000 bytes` }, { type: 'file', data: { type: 'data', data: screenshot(0) }, mediaType: 'image/png' }],
+    value: [{ type: 'text', text: `${links[0]}: image/png 1280x800, ${String(Buffer.from(screenshot(0), 'base64').length)} bytes` }, { type: 'file', data: { type: 'data', data: screenshot(0) }, mediaType: 'image/png' }],
   });
 });
