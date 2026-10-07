@@ -30,7 +30,7 @@ import { DEFAULT_CACHE_RETENTION, parseModelSpec, type CacheRetention } from './
 import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import { modelStepMessages } from './prompting/tool-error-feedback';
-import type { MissionGovernor } from './mission-budget';
+import type { SpendGate } from './mission-budget';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
@@ -160,7 +160,7 @@ export interface ChatOptions {
   /** The subset of `tools` the model may call; the rest stay wired for execution. Absent, all are offered. */
   activeTools?: readonly string[];
   /** A label whose cumulative cap is spent declines the next request. */
-  budget?: MissionGovernor;
+  budget?: SpendGate;
   /** An extra stop reason. Absent, no step cap: `streamText`'s own default is `isStepCount(1)`. */
   stopWhen?: StopCondition<ToolSet>;
   /** Each finished step, raw and as its own recorded messages, awaited, since the sink may be another DO the next request

@@ -147,7 +147,8 @@ async function fixture(opts?: {
   readonly model?: MockLanguageModelV4;
 }): Promise<Fixture> {
   const { rt, db } = createTestRuntime();
-  const seats = hostedSeatsOver({ rt, db });
+  const model = opts?.model ?? scriptedReporter(opts?.answer ?? 'sort once instead of comparing every pair', opts?.offered);
+  const seats = hostedSeatsOver({ rt, db, model: () => model });
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
 
   const input: NodeAgentInput = {
@@ -170,8 +171,6 @@ async function fixture(opts?: {
   const deps: NodeAgentDeps = {
     reportModelCall: unobservedSpend,
     hostNode: seats.hostNode,
-    model: opts?.model
-      ?? scriptedReporter(opts?.answer ?? 'sort once instead of comparing every pair', opts?.offered),
     journal,
     logger: createRecordingLogger(),
   };
@@ -409,41 +408,7 @@ describe('a proposal is answered at most once', () => {
     let asked = 0;
     let firstDecision: BranchDecision | null = null;
 
-    const { input, deps } = await fixture({
-      arbitrate: (proposal) => {
-        asked += 1;
-
-        const decision: BranchDecision = {
-          kind: 'granted', width: 2, nodeIds: ['c1', 'c2'], proposal,
-        };
-
-        if (asked === 1) firstDecision = decision;
-
-        return decision;
-      },
-    });
-
-    let call = 0;
-
-    const usage = {
-      inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined },
-      outputTokens: { total: 7, text: 7, reasoning: undefined },
-    };
-
-    const propose = (id: string) => ({
-      type: 'tool-call' as const,
-      toolCallId: id,
-      toolName: PROPOSE_BRANCH_TOOL,
-      input: JSON.stringify({
-        rationale: 'two angles genuinely diverge',
-        branches: [
-          { task: 'sort once', rationale: 'fewer comparisons', context: 'fresh' },
-          { task: 'tournament', rationale: 'linear in n', context: 'fresh' },
-        ],
-      }),
-    });
-
-    deps.model = scriptedTurnModel({
+    const model = scriptedTurnModel({
       provider: 'fake',
       modelId: 'fake-double-propose',
       doGenerate: async () => {
@@ -477,6 +442,42 @@ describe('a proposal is answered at most once', () => {
         };
       },
     });
+
+    const { input, deps } = await fixture({
+      model,
+      arbitrate: (proposal) => {
+        asked += 1;
+
+        const decision: BranchDecision = {
+          kind: 'granted', width: 2, nodeIds: ['c1', 'c2'], proposal,
+        };
+
+        if (asked === 1) firstDecision = decision;
+
+        return decision;
+      },
+    });
+
+    let call = 0;
+
+    const usage = {
+      inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 7, text: 7, reasoning: undefined },
+    };
+
+    const propose = (id: string) => ({
+      type: 'tool-call' as const,
+      toolCallId: id,
+      toolName: PROPOSE_BRANCH_TOOL,
+      input: JSON.stringify({
+        rationale: 'two angles genuinely diverge',
+        branches: [
+          { task: 'sort once', rationale: 'fewer comparisons', context: 'fresh' },
+          { task: 'tournament', rationale: 'linear in n', context: 'fresh' },
+        ],
+      }),
+    });
+
 
     const run = await runNodeAgent(input, deps);
 

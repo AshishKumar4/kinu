@@ -1,11 +1,10 @@
-import type { LanguageModel } from 'ai';
 import { REAL_CLOCK } from '../types/clock';
 import type { MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/provider';
 import type { WriteObserver } from '../vfs/write-events';
 import type { HostedNodeSeat } from '../strategy/node-agent';
 import type { SpawnedHead } from './controller';
-import { HeadCapture, runHeadInference, type HeadInferenceDeps } from './head-inference';
+import { buildHeadSystemPrompt, HeadCapture, type RunInference } from './head-inference';
 import { CONFINED_BACKGROUNDABLE_TOOLS } from '../jobs/background-wrap';
 import { stepLoopJobs } from '../jobs/step-loop';
 import { buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult, type HeadToolDeps } from './head-tools';
@@ -20,7 +19,6 @@ export interface HeadSeat extends HostedNodeSeat {
 
 export interface SeatedHeadDeps {
   seat(input: HeadInput, writes: WriteObserver): Promise<HeadSeat>;
-  model(input: HeadInput, seat: HeadSeat): Promise<{ readonly model: LanguageModel; readonly spec: string | null }>;
   codemodeTool(seat: HeadSeat): HeadToolDeps['codemodeTool'];
   readonly webSearch: WebSearchProvider;
   split(seat: HeadSeat, input: HeadInput): (request: HeadSplitRequest) => Promise<HeadSplitResult>;
@@ -35,41 +33,35 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
   let stopped: string | null = null;
 
   const run = async (seat: HeadSeat, capture: HeadCapture): Promise<HeadReport> => {
-    const { model, spec } = await deps.model(input, seat);
     // Long calls detach into its jobs; a settle wakes it.
     const { runner, next, detach } = stepLoopJobs({ actor: seat.actor, seat: seat.jobs });
 
-    const inference: HeadInferenceDeps = {
+    const inference: RunInference = {
       actor: seat.actor,
       runId: seat.runId,
       clock: REAL_CLOCK,
-      model,
-      window: await seat.windowOf(spec),
+      sources: seat.sources,
       tools: buildHeadToolSet({
         input, capture, rt: seat.actor.runtime, conversations: seat.conversations,
         codemodeTool: deps.codemodeTool(seat), webSearch: deps.webSearch, split: deps.split(seat, input),
         jobs: { jobRunner: runner, backgroundable: CONFINED_BACKGROUNDABLE_TOOLS, mode: () => input.mode },
       }),
+      brief: (callable) => buildHeadSystemPrompt(input, callable, 'shared-workspace'),
       capture,
-      workspaceLayout: 'shared-workspace',
       signal: abort.signal,
       isAborted: () => stopped !== null,
       abortReason: () => stopped,
-      profile: seat.profile,
-      dynamic: seat.dynamic,
       reportStep: (seq, step) => deps.reportStep(input.id, seq, step),
       reportDelta: deps.reportDelta,
       resume: next,
     };
 
-    const mission = deps.mission(input, spec);
+    const mission = deps.mission(input, input.model ?? null);
 
     if (mission !== null) inference.mission = mission;
 
-    if (spec !== null) inference.modelSpec = spec;
-
     try {
-      return await (seat.infer ?? runHeadInference)(input, inference);
+      return await seat.infer(input, inference);
     } finally {
       // Its jobs' results have no reader left.
       runner.cancelRunning();

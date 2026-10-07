@@ -14,7 +14,7 @@ import {
   type BranchContext, type SwarmUnitSetting,
 } from '../src/strategy/swarm';
 import { runSwarm } from '../src/strategy/swarm-run';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { swarmSeats } from './helpers-actor-host';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 
 /** Needed for a preset's measured row; without an objective a preset resolves to its judged sweep. */
@@ -292,9 +292,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
 
     const result = await runSwarm({
       reportModelCall: unobservedSpend,
-      rt, hostNode: hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true, advisorPort: advisor }).hostNode,
-      mode: 'build',
-      model: () => scriptedTurnModel({ doGenerate: async () => ({
+      rt, ...swarmSeats({ rt, db: testSql.db, autoEvolve: true, advisorPort: advisor }, () => scriptedTurnModel({ doGenerate: async () => ({
         content: [{ type: 'text', text: 'A candidate solution.' }],
         finishReason: { unified: 'stop', raw: undefined },
         usage: {
@@ -302,7 +300,8 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
           outputTokens: { total: 3, text: 3, reasoning: undefined },
         },
         warnings: [],
-      }) }),
+      }) })),
+      mode: 'build',
     }, resolved);
 
     if ('reason' in result) throw new Error(result.error);
@@ -320,8 +319,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
       reportModelCall: unobservedSpend,
       rt,
       // `unit:'answer'` is an agent node: each node acquires a real seat.
-      hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
-      model: () => scriptedTurnModel({
+      ...swarmSeats({ rt, db: testSql.db }, () => scriptedTurnModel({
         provider: 'fake',
         modelId: 'fake-unit-axis',
         doGenerate: async () => ({
@@ -333,7 +331,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
           },
           warnings: [],
         }),
-      }),
+      })),
       mode: 'build',
     }, (() => {
       const resolved = resolveSwarm(unitCall({ unit: { kind: 'answer' }, context: 'fresh' }));

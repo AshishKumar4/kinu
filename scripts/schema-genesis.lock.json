@@ -136,6 +136,15 @@
     "session_id TEXT",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "agent_turn_reports@packages/cf-backend/src/agent-facet/agent-database.ts": [
+    "turn_id TEXT PRIMARY KEY",
+    "spoke INTEGER NOT NULL",
+    "settled INTEGER NOT NULL"
+  ],
+  "agent_wakes@packages/core/src/subordinates/open-turns.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "wake_at INTEGER NOT NULL"
+  ],
   "alternate_takes@packages/core/src/mcts/takes.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",

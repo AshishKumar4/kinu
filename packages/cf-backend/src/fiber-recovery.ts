@@ -152,7 +152,7 @@ export function classifyRecoveredFiber(
   return settleSync(Effect.catchCause(Effect.sync((): FiberRecoveryResult => {
     if (ctx.name.startsWith(BACKGROUND_FIBER_PREFIX)) return redriveBackgroundJobLane(transports, ctx);
 
-    // Not `settleEvolution()`: its promises died with the last isolate. `runDueSessionEvolution()`
+    // Not `settleTracked()`: its promises died with the last isolate. `runDueSessionEvolution()`
     // drains the durable queues and is idempotent.
     if (ctx.name === EVOLUTION_LANE_FIBER) {
       return redriveLane(transports, ctx, { name: EVOLUTION_LANE_FIBER, redrive: 'session-evolution' }, () => transports.runDueSessionEvolution());

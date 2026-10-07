@@ -25,8 +25,9 @@ function planRequest(id: string): string {
 }
 
 /** The tools of each workspace request that takes the hire's report up. */
-async function takingUpThePlanReport(calls: readonly GatewayToolCall[]): Promise<(readonly string[])[]> {
+async function takingUpThePlanReport(calls: readonly GatewayToolCall[]): Promise<{ readonly takenUp: (readonly string[])[]; readonly hireAsked: number }> {
   const takenUp: (readonly string[])[] = [];
+  let hireAsked = 0;
 
   const workspace = gatewayWorkspace(stubAiBinding((run) => {
     const { messages, tools } = requestOf(run);
@@ -40,6 +41,7 @@ async function takingUpThePlanReport(calls: readonly GatewayToolCall[]): Promise
     }
 
     if (openingOf(run).includes(BRIEF)) {
+      hireAsked++;
       const call = calls[step];
 
       return call === undefined ? chatCompletion(run, ANSWER) : toolCallCompletion(run, call, `call_${String(step)}`);
@@ -56,14 +58,16 @@ async function takingUpThePlanReport(calls: readonly GatewayToolCall[]): Promise
   await driveUntil(workspace, 'the workspace never took the report up', () => takenUp.length > 0);
   await answered;
 
-  return takenUp;
+  return { takenUp, hireAsked };
 }
 
 test.each([
   { source: 'its report tool', calls: [{ tool: 'report', args: { status: 'completed', content: ANSWER } }] },
   { source: 'its turn end', calls: [] },
 ])("a Plan hire's answer through $source wakes its hirer in Plan", async ({ calls }) => {
-  const takenUp = await takingUpThePlanReport(calls);
+  const { takenUp, hireAsked } = await takingUpThePlanReport(calls);
 
+  // The hire worked its Plan task, rather than refusing it.
+  expect(hireAsked).toBeGreaterThan(0);
   expect(takenUp[0]).toContain('submit_plan');
 });

@@ -3,10 +3,11 @@ import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { decodeModelMessageValues, relayedAnswer, remoteContextTree } from '@kinu.run/core';
-import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
+import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
-import type { AgentFigures, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, AgentTurnEnd, TurnRequestAt } from '@kinu.run/core';
+import type { AdvisorRecoverySnapshot, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
+import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/agent-facet';
@@ -53,14 +54,23 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.answers.guard(turnId, ...args); }
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.answers.debit(turnId, ...args); }
   prepareTurn(turnId: string) { return this.answers.prepareTurn(turnId); }
-  profile(turnId: string, availableTools: readonly string[], workMode: WorkMode) { return this.answers.profile(turnId, availableTools, workMode); }
   advise(review: AgentReview) { return this.answers.advise(review); }
   enqueueTurn(input: ProgrammaticTurn) { return this.answers.enqueueTurn(input); }
   executeTool(call: AgentToolCall) { return this.answers.executeTool(call); }
   observe(lines: ReadableStream<Uint8Array>, call: ObservedCall) { return this.answers.observe(lines, call); }
   answerMetadata(turnId: string, narration: readonly string[]) { return this.answers.answerMetadata(turnId, narration); }
-  finishTurn(turnId: string, end: AgentTurnEnd) { return this.answers.finishTurn(turnId, end); }
-  failTurn(turnId: string, failure: string, figures: AgentFigures) { return this.answers.failTurn(turnId, failure, figures); }
+  reportModelCall(report: ModelCallReport) { return this.answers.reportModelCall(report); }
+  reportModelOperation(event: ModelOperationEvent) { return this.answers.reportModelOperation(event); }
+  prepareChat(request: ChatTurnRequest) { return this.answers.prepareChat(request); }
+  bindProfile(turnId: string, profile: ResolvedTurnProfile) { return this.answers.bindProfile(turnId, profile); }
+  chatEvent(event: SessionEvent) { return this.answers.chatEvent(event); }
+  owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.answers.owedReport(...args); }
+  parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.answers.parentReport(report); }
+  autoTitle(subject: string) { return this.answers.autoTitle(subject); }
+  hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.answers.hireAdvisor(advisor); }
+  armWake(atMs: number) { return this.answers.armWake(atMs); }
+  birthContext(drainTurnId: string) { return this.answers.birthContext(drainTurnId); }
+  steerSkills(text: string, alreadyActive: readonly string[]) { return this.answers.steerSkills(text, alreadyActive); }
   getAuth(key: string, opts?: AuthRequest) { return this.answers.getAuth(key, opts); }
   listCredentials() { return this.answers.listCredentials(); }
   relayDevice(provider: RelayedProvider) { return this.answers.relayDevice(provider); }
@@ -118,14 +128,23 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return relayedAnswer(this.host().guard(turnId, ...args)); }
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return relayedAnswer(this.host().debit(turnId, ...args)); }
   prepareTurn(turnId: string) { return relayedAnswer(this.host().prepareTurn(turnId)); }
-  profile(turnId: string, availableTools: readonly string[], workMode: WorkMode) { return relayedAnswer(this.host().profile(turnId, availableTools, workMode)); }
   advise(review: AgentReview) { return relayedAnswer(this.host().advise(review)); }
   enqueueTurn(input: ProgrammaticTurn) { return relayedAnswer(this.host().enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return relayedAnswer(this.host().executeTool(call)); }
   observe(lines: ReadableStream<Uint8Array>, call: ObservedCall) { return relayedAnswer(this.host().observe(lines, call)); }
   answerMetadata(turnId: string, narration: readonly string[]) { return relayedAnswer(this.host().answerMetadata(turnId, narration)); }
-  finishTurn(turnId: string, end: AgentTurnEnd) { return relayedAnswer(this.host().finishTurn(turnId, end)); }
-  failTurn(turnId: string, failure: string, figures: AgentFigures) { return relayedAnswer(this.host().failTurn(turnId, failure, figures)); }
+  reportModelCall(report: ModelCallReport) { return relayedAnswer(this.host().reportModelCall(report)); }
+  reportModelOperation(event: ModelOperationEvent) { return relayedAnswer(this.host().reportModelOperation(event)); }
+  prepareChat(request: ChatTurnRequest) { return relayedAnswer(this.host().prepareChat(request)); }
+  bindProfile(turnId: string, profile: ResolvedTurnProfile) { return relayedAnswer(this.host().bindProfile(turnId, profile)); }
+  chatEvent(event: SessionEvent) { return relayedAnswer(this.host().chatEvent(event)); }
+  owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return relayedAnswer(this.host().owedReport(...args)); }
+  parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return relayedAnswer(this.host().parentReport(report)); }
+  autoTitle(subject: string) { return relayedAnswer(this.host().autoTitle(subject)); }
+  hireAdvisor(advisor: AdvisorRecoverySnapshot) { return relayedAnswer(this.host().hireAdvisor(advisor)); }
+  armWake(atMs: number) { return relayedAnswer(this.host().armWake(atMs)); }
+  birthContext(drainTurnId: string) { return relayedAnswer(this.host().birthContext(drainTurnId)); }
+  steerSkills(text: string, alreadyActive: readonly string[]) { return relayedAnswer(this.host().steerSkills(text, alreadyActive)); }
   getAuth(key: string, opts?: AuthRequest) { return relayedAnswer(this.host().getAuth(key, opts)); }
   listCredentials() { return relayedAnswer(this.host().listCredentials()); }
   relayDevice(provider: RelayedProvider) { return relayedAnswer(this.host().relayDevice(provider)); }

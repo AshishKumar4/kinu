@@ -25,7 +25,7 @@ import {
   TriggerRegistry,
   delegationExhausted,
   SUBORDINATE_REPORT_STATUSES,
-  HeadCapture, runHeadInference, codenameFor,
+  HeadCapture, codenameFor,
   bindActorHandle,
   READS_CHANGED_EVENT,
   type ActorHandle,
@@ -1422,15 +1422,17 @@ describe('LocalAgentHost', () => {
     const session = await host.acquire('root');
     const seat = await session.hostNode({ nodeId: 'advised-node', rootId: 'swarm-run', depth: 1 });
 
-    const report = await runHeadInference({
+    const model = streamingModel('The probe succeeded.', (options) => { reviews.push(isReview(options)); });
+
+    // The seat's own run, on its production sources and compaction; only the model is the suite's.
+    const report = await seat.infer({
       id: 'advised-node', rootId: 'swarm-run', parentId: null, depth: 1,
       task: 'Check the probe.', rationale: 'Check the probe.', mode: 'build', inheritedContext: [],
       mergeStrategy: 'synthesize', budget: { maxDepth: 0, spawnedAt: Date.now() }, loop: { kind: 'builtin' },
     }, {
-      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
-      model: streamingModel('The probe succeeded.', (options) => { reviews.push(isReview(options)); }),
-      window: await seat.windowOf(null),
-      clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), isAborted: () => false, workspaceLayout: 'shared-workspace',
+      actor: seat.actor, runId: seat.runId,
+      sources: { ...seat.sources, models: { ...seat.sources.models, resolve: () => model } },
+      clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), isAborted: () => false,
     });
 
     await host.close();

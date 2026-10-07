@@ -36,16 +36,34 @@ const scriptFailures = new WeakMap<Page, ScriptFailure[]>();
  *  requests failed: the page sees only that a module graph failed, the browser's network events say why. */
 export async function recordScriptFailures(page: Page): Promise<void> {
   const failures: ScriptFailure[] = [];
+  const requests = new Map<string, string>();
 
   scriptFailures.set(page, failures);
-  page.on('requestfailed', (request) => {
-    if (request.resourceType() !== 'script') return;
-    failures.push({ at: Date.now(), url: request.url(), reason: request.failure()?.errorText ?? 'no error text' });
+
+  const cdp = await page.createCDPSession();
+
+  cdp.on('Network.requestWillBeSent', (event) => {
+    if (event.type === 'Script') requests.set(event.requestId, event.request.url);
   });
-  page.on('response', (response) => {
-    if (response.request().resourceType() !== 'script' || response.status() < 400) return;
-    failures.push({ at: Date.now(), url: response.url(), reason: `HTTP ${String(response.status())}` });
+  // Cancelled module responses can omit ExtraInfo, which Puppeteer's response event waits for.
+  cdp.on('Network.responseReceived', (event) => {
+    if (event.type !== 'Script' || event.response.status < 400) return;
+
+    failures.push({ at: Date.now(), url: event.response.url, reason: `HTTP ${String(event.response.status)}` });
+    requests.delete(event.requestId);
   });
+  cdp.on('Network.loadingFailed', (event) => {
+    const url = requests.get(event.requestId);
+    requests.delete(event.requestId);
+
+    if (event.type !== 'Script' || url === undefined) return;
+    failures.push({ at: Date.now(), url, reason: event.errorText });
+  });
+  cdp.on('Network.loadingFinished', (event) => {
+    requests.delete(event.requestId);
+  });
+
+  await cdp.send('Network.enable');
   await page.evaluateOnNewDocument(RECORD_SCRIPT_FAILURES);
 }
 

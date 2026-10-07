@@ -10,7 +10,7 @@ import {
   PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
   NotePencilIcon, ArrowLeftIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
-import { hasWorkspaceWork, revealMisrepresenting, timeAgo } from "@kinu.run/core";
+import { hasWorkspaceWork, jobPhase, revealMisrepresenting, timeAgo, type InspectedWork } from "@kinu.run/core";
 import type { AgentTaskTree, ChangelogEntry, MemoryEntry, Omitted, OwnedPlan, PanelAgent, ParkedWriteReview, PendingAction, PendingActionKind, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
@@ -20,7 +20,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { Section } from "./shared";
 import { HelperRow, isClosedTree, PlanProgress, TaskTree } from "./work-tasks";
-import { JobCard } from "./work-jobs";
+import { InspectedRow, JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView } from "./changelog-entries";
 import type { SurfaceKind } from "@kinu.run/core";
 import { renderThrownChain, detach, settle } from "@kinu.run/core/obs";
@@ -63,6 +63,7 @@ export interface WorkTabProps {
   /** Polled by the hook so the tab badge and this queue are one read. */
   pendingActions: PendingAction[];
   backgroundJobs: BackgroundJob[];
+  inspectedWork: readonly InspectedWork[];
   onRefreshJobs: () => void;
   onOpenSurface: (surface: SurfaceKind) => void;
   onChangelogSeen?: () => void;
@@ -75,7 +76,7 @@ export interface WorkTabProps {
 }
 
 export function WorkTab({
-  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {}, agents,
+  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, inspectedWork, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {}, agents,
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
   const [hasPlans, setHasPlans] = useState(plan !== null);
@@ -115,10 +116,9 @@ export function WorkTab({
 
   const openTasks = taskRows.filter(({ task }) => !isClosedTree(task));
   const closedTasks = taskRows.filter(({ task }) => isClosedTree(task));
-  // A serving job still runs: it sits with the running ones, never in the settled journal.
-  const runningJobs = backgroundJobs.filter((job) => job.status === "running" || job.status === "serving");
   const helpers = useMemo(() => (agents?.list ?? []).filter((agent) => agent.category === "background"), [agents]);
-  const settledJobs = backgroundJobs.filter((job) => job.status !== "running" && job.status !== "serving");
+  const runningJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) !== "settled");
+  const settledJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) === "settled");
 
   const journal = useMemo(
     () => buildJournal(settledJobs, closedTasks, changelog?.entries ?? []),
@@ -184,7 +184,7 @@ export function WorkTab({
     <div className="space-y-6 animate-fade-in">
       <WorkPlans work={work} owner={planOwner ?? "main"} arrival={workspacePlanArrival} onPresence={setHasPlans} onNewPlan={onNewPlan} onOpenReview={openReview} />
       <NeedsYou pendingActions={pendingActions} rpc={rpc} onDecided={onRefreshQueue} onOpenSurface={onOpenSurface} onOpenReview={setReview} />
-      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} helpers={helpers} onOpenHelper={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
+      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} inspected={inspectedWork} runningJobs={runningJobs} helpers={helpers} onOpenHelper={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
       <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
       <Learnings memory={memory} onOpenSurface={onOpenSurface} />
     </div>
@@ -271,10 +271,12 @@ export interface WorkTaskRow {
 }
 
 /** The read's tri-state gates only the work half, so a running job never waits behind the plan's spinner. */
-function WorkNow({ work, taskRows, openTasks, runningJobs, helpers, onOpenHelper, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
+function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, helpers, onOpenHelper, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
   work: WorkspaceWork | null;
   taskRows: WorkTaskRow[];
   openTasks: WorkTaskRow[];
+  /** Turns and effects still owed, by their recorded phase. */
+  inspected: readonly InspectedWork[];
   runningJobs: BackgroundJob[];
   helpers: readonly PanelAgent[];
   onOpenHelper?: (agent: PanelAgent) => void;
@@ -284,7 +286,8 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, helpers, onOpenHelper
   onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
   rpc: Rpc;
 }) {
-  const nowEmpty = work !== null && openTasks.length === 0 && runningJobs.length === 0 && helpers.length === 0;
+  const nowEmpty = work !== null && openTasks.length === 0 && inspected.length === 0 && runningJobs.length === 0 && helpers.length === 0;
+  const now = Date.now();
 
   if (nowEmpty && resource.status !== "error") return null;
 
@@ -305,6 +308,11 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, helpers, onOpenHelper
               </div>
             )}
           </>
+        )}
+        {inspected.length > 0 && (
+          <div className="space-y-1">
+            {inspected.map((owed) => <InspectedRow key={`${owed.kind}:${owed.id}`} work={owed} now={now} />)}
+          </div>
         )}
         {runningJobs.length > 0 && (
           <div className="space-y-2">

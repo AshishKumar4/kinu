@@ -64,8 +64,10 @@ export interface PromptFile {
 
 export interface EnqueueTurnResult {
   /** 'skipped': pre-empted by a newer turn generation (caller leaves a breadcrumb). 'yielded': an
-     *  operator message took the slot; consumed, never retried. */
-  readonly status: 'queued' | 'skipped' | 'yielded';
+     *  operator message took the slot; consumed, never retried. 'failed': the turn opened and ended on `reason`
+     *  before it could answer (its preparation threw). */
+  readonly status: 'queued' | 'skipped' | 'yielded' | 'failed';
+  readonly reason?: string;
 }
 
 export interface BackendHost {

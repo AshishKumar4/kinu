@@ -2,13 +2,14 @@ import type { AgentFigures } from '../read-models/agent-figures';
 import type { JSONSchema7, ModelMessage } from 'ai';
 import type { CompletedTurn } from '../evolution/types';
 import type { DynamicContext } from '../prompting/volatile-context';
-import type { HeadCapture, HeadInferenceDeps } from '../heads/head-inference';
+import type { HeadCapture } from '../heads/head-inference';
 import type { HeadInput, HeadReport, HeadStep } from '../heads/types';
 import type { HeadStreamKind } from '../heads/head-stream';
 import type { JsonObject, JsonValue } from '../utils/json';
 import type { ModelPricing } from '../providers/types';
-import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles/resolve';
 import type { WorkMode } from '../types/turn';
+import type { TurnSourcesBundle } from '../orchestrator/turn-assembly';
+import type { SubordinateReportLedger } from './ingress';
 
 export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | null>>;
 
@@ -16,6 +17,7 @@ export interface AgentSnapshot {
   readonly identity: StoredRow;
   readonly lineage: readonly StoredRow[];
   readonly config: readonly StoredRow[];
+  readonly scaffold: readonly StoredRow[];
   readonly workspaceName: string;
   readonly installedBuild: string | null;
   readonly artifactDirectory: string;
@@ -45,27 +47,21 @@ export interface PreparedAgentTurn {
   readonly runId: string;
   /** In the session codec's durable form: a ModelMessage's type is too deep for an RPC signature. */
   readonly birthContext?: readonly JsonValue[];
-  readonly model: string;
-  readonly window: HeadInferenceDeps['window'];
+  readonly sources: TurnSourcesBundle;
   readonly pricing: ModelPricing | null;
   readonly accounts: Readonly<Record<string, string>>;
   readonly scaffold: StoredRow;
   readonly languages: readonly [string, ...string[]];
-  /** Its messages in the codec's durable form, as `birthContext`. */
-  readonly framing?: { readonly system: string; readonly messages: readonly JsonValue[] };
-  readonly workspaceLayout: HeadInferenceDeps['workspaceLayout'];
+  /** A run's framing; absent for a chat turn. */
+  readonly brief?: string;
+  readonly opening: readonly JsonValue[];
   readonly tools: readonly AgentToolDescriptor[];
   readonly dynamic: DynamicContext;
+  readonly reviewsTurns: boolean;
   readonly missionLabels?: readonly string[];
   readonly trace: boolean;
   readonly resume: boolean;
   readonly reportMessages: boolean;
-}
-
-export interface AgentTurnProfile {
-  readonly profile: ResolvedTurnProfile;
-  readonly inputs: ProfileAuthorityInputs;
-  readonly dynamic: DynamicContext;
 }
 
 export interface AgentTurnActivity {
@@ -76,6 +72,7 @@ export interface AgentTurnActivity {
 export interface AgentToolCall {
   readonly activity: readonly AgentTurnActivity[];
   readonly turnId: string;
+  readonly mode: WorkMode;
   readonly callId: string;
   readonly name: string;
   readonly input: JsonValue;
@@ -100,6 +97,8 @@ export interface AgentToolAnswer {
   readonly output: unknown;
   readonly captured: AgentCaptureDelta;
   readonly dynamic: DynamicContext;
+  /** What the turn has told its hirer by now; the agent keeps it, so a reset of the workspace forgets none of it. */
+  readonly reports: SubordinateReportLedger;
 }
 
 export interface AgentTrace {
@@ -118,7 +117,7 @@ export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
   readonly figures: AgentFigures;
   readonly errorMessage: string | null;
   readonly narration: string;
-  readonly produced?: readonly ModelMessage[];
+  readonly produced?: readonly JsonValue[];
 }
 
 export interface TurnRequestAt {

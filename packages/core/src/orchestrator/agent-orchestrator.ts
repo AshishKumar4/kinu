@@ -1,7 +1,8 @@
 // Backend-agnostic per-turn agent logic: turn accounting, evolution cadence, and the event→turn reactor.
 //
 // Evolution exit contract. Every dispatch is detached; `end()` decides what to wait for.
-//   Turn lane (outcome review): `settleEvolution()` joins it with no elapsed bound (owner ruling, 2026-08).
+//   Turn lane (outcome review): `settleTracked()` joins it, and all work a backend `track()`s, with no elapsed bound
+//     (owner ruling, 2026-08).
 //     A `oneShot` host defers it as a durable row drained by `runDeferredTurnReviews` at the next session open.
 //   Cadence lane (session/lifetime chain, the live trial and the proposer): never joined; only started by a host
 //     that can afford to finish it. Safe because the session window closes only after its pass settles
@@ -114,12 +115,13 @@ export class AgentOrchestrator {
   private activeMissions: readonly string[] = [];
   private readonly reflectionInterval = DEFAULT_SESSION_REFLECTION_INTERVAL;
   private readonly drains: DrainScheduler;
-  /** Turn lane: dispatched, unsettled turn-level evolution, joined by settleEvolution. */
+  /** Tracked and unsettled: the turn lane's evolution and what a backend tracks (a scaffold bootstrap, a history
+   *  restore, a context measure), joined by settleTracked. */
   private readonly inFlight = new Map<Promise<void>, string>();
   /** Cadence lane latch: at most one pass, since `claim()` retires nothing until the pass settles. */
   private sessionEvolution: Promise<void> | null = null;
   /** Cadence lane observer, not a latch: a no-op pass must not hide a window that fills meanwhile.
-   *  Deliberately not joined by `settleEvolution`. */
+   *  Deliberately not joined by `settleTracked`. */
   private cadencePasses: Promise<void> = Promise.resolve();
   /** Cadence lane: trial-drain latch, separate from the window pass so trials never run twice
    *  and a no-op drain never hides a filled window. */
@@ -360,10 +362,10 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Join the turn lane with no elapsed bound; unjoined work is killed at process exit.
+   * Join all tracked work with no elapsed bound; unjoined work is killed at process exit.
    * The cadence lane is deliberately not joined (see module header).
    */
-  async settleEvolution(): Promise<void> {
+  async settleTracked(): Promise<void> {
     const started = Date.now();
     // Named on the success path too: a slow exit tail is otherwise silent.
     const waitedOn = [...new Set(this.inFlight.values())];
@@ -376,11 +378,11 @@ export class AgentOrchestrator {
     const waitedMs = Date.now() - started;
 
     if (waitedMs > 1_000) {
-      diagnostics.event('evolution.settled', { waitedMs, waitedOn: waitedOn.join(', ') });
+      diagnostics.event('orchestrator.tracked_settled', { waitedMs, waitedOn: waitedOn.join(', ') });
     }
   }
 
-  /** Join backend-owned post-turn evolution to the turn lane. */
+  /** Joined by settleTracked, as the turn lane is. */
   track(work: Promise<void>, label: string): void {
     this.detach(work, label);
   }

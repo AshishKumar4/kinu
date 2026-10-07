@@ -2,7 +2,7 @@ export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 
-export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
+export { AgentOpenTurns, AgentWakes, type AgentOpenTurn } from './subordinates/open-turns';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
@@ -17,12 +17,17 @@ export {
 export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
 
 export {
+  assembleActorTurn, withCompactionTrigger, promptCacheKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, metadataTier,
+  type AssembledTurn, type RunTurnSources, type TurnSourcesBundle, type LocalTurnSources, type PinValues, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
+} from './orchestrator/turn-assembly';
+
+export {
   TerminalTransitions, TERMINAL_TRANSITION_CALL_ID,
   type TerminalTransition, type TerminalDisposition, type TerminalTransitionDeps,
 } from './orchestrator/terminal-transition';
 
 export {
-  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, branchesTerminalEffect,
+  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, subordinateTerminalEffects, branchesTerminalEffect,
   terminalEffectKey, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
@@ -546,7 +551,7 @@ export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {
   describeMcpTool, toolSurfaceTokens, omitEmptyOptionalArgs,
   buildMcpToolSet, listMcpToolsLeniently,
-  McpToolSurfaceSchema, McpToolSurfaceCache, servedMcpDescriptors,
+  McpToolSurfaceSchema, McpToolSurfaceCache,
   type SerializableToolDescriptor, type RemoteMcpTool, type McpToolRefusal, type ListedMcpTools,
   type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild, type McpServedSurface,
 } from './tools/mcp-surface';
@@ -695,14 +700,12 @@ export {
 } from './tools/crafted-executor';
 
 export {
-  assignedTurnFraming,
   buildSystemPromptSync,
   currentDateForPrompt,
   FALLBACK_PURPOSE,
   renderUnverifiedInstructions,
   WORKSPACE_INSTRUCTIONS_HEADER,
   type UnverifiedInstructions,
-  type AssignedTurnFraming,
   type SystemPromptOptions,
 } from './prompt';
 
@@ -1516,7 +1519,7 @@ export {
   extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
-  type HeadInferenceDeps, type HeadWorkspaceLayout,
+  type HeadInferenceDeps, type RunInference, type HeadWorkspaceLayout,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS, spawnSeatedHead, type HeadSeat, type SeatedHeadDeps,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
   HeadFileChanges,
@@ -1673,7 +1676,7 @@ export {
 } from './jobs/background-wrap';
 
 export {
-  resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
+  resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolSetBySkills,
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 
@@ -1949,7 +1952,7 @@ export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor
 
 export {
   restoredRows, rowText, transcriptRole,
-  PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
+  PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
 export type { TurnAuthor } from './utils/ui-message';
@@ -2190,6 +2193,8 @@ export { messagesUpTo, turnRows } from './read-models/fork-count';
 export {
   turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,
 } from './read-models/turn-liveness';
+
+export { inspectWork, jobPhase, type InspectedWork } from './read-models/work-inspection';
 
 export {
   breakdownView, shareOfMeasured,
@@ -2490,5 +2495,5 @@ export {
 
 export type {
   AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
-  AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow, TurnRequestAt,
+  AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';

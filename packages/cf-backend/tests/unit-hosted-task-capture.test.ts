@@ -1,8 +1,6 @@
 /**
- * Defends: a delegated turn's report coming back empty because the runner and
- * the tool surface recorded into two different `HeadCapture`s.
- * The main actor hires through its `agents` tool, the wake runs the hire's assignment, and the hire's
- * report lands in the main actor's inbox; every model call is the platform gateway's.
+ * A hire's advisor: the main actor hires through its `agents` tool, the wake runs the hire's assignment, and the
+ * advice lands where its severity sends it; every model call is the platform gateway's.
  */
 import type { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
@@ -31,28 +29,6 @@ function hiring(run: RecordedGatewayRun, agent: string | undefined, lifetime?: '
 function advisedHire(db: Database): string {
   return db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE name = 'advised'").get()?.actor_id ?? '';
 }
-
-test("a delegated turn's tool call reaches the answer its caller gets", async () => {
-  const gateway = stubAiBinding((run) => {
-    if (!forTheHire(run)) return hiring(run, 'reader');
-    const step = requestOf(run).messages.filter((message) => message.role === 'tool').length;
-
-    // One call, then whitespace with no prose: the loop reads a step's text as final only when non-blank,
-    // so the answer is synthesised from the capture.
-    return step === 0
-      ? toolCallCompletion(run, { tool: 'file', args: { action: 'list', path: '/home/main' } }, 'file_0')
-      : chatCompletion(run, '  ');
-  });
-
-  const workspace = gatewayWorkspace(gateway);
-
-  await catalogTurn(workspace.agent, 'Have a reader catalogue the home directory.');
-  await workspace.agent.terminalRetryPass();
-  await joinHarnessFibers();
-
-  // No decision or finding, so the synthesis falls to the tool tally from the shared capture.
-  expect(relayedReports(workspace.db)).toEqual(['Ran 1 tool call(s): file']);
-});
 
 test('a hosted subordinate hires its advisor, whose note opens its next turn, without adding to either evolution window', async () => {
   const note = 'The probe failed but the reply claimed success. Read the exit status.';

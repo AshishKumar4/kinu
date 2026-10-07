@@ -47,6 +47,7 @@ import {
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
 import { terminalChatError, type ChatTurnError } from "@kinu.run/core";
 import { turnLiveness, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
+import { jobPhase, type InspectedWork } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
 import { SubordinateActivityEventSchema, useSocketFrames, type MctsProgress, type SocketFrame } from "./socket-frames";
 import { pruneSlateReloads } from "@kinu.run/core";
@@ -236,6 +237,7 @@ export type LiveRefreshSource =
   | "snapshot"
   | "roster"
   | "jobs"
+  | "work"
   | "pendingActions"
   | "presence"
   | "memoryContent"
@@ -257,6 +259,7 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "snapshot", label: "this workspace" },
   { source: "roster", label: "the agent roster" },
   { source: "jobs", label: "background jobs" },
+  { source: "work", label: "work in progress" },
   { source: "pendingActions", label: "pending actions" },
   { source: "memoryContent", label: "memory content" },
   { source: "presence", label: "tab presence" },
@@ -534,10 +537,6 @@ export interface WorkspacePlanArrival {
   claim(reference: WorkspacePlanReference): boolean;
 }
 
-
-function runningJob(job: BackgroundJob): boolean {
-  return job.status === "running" || job.status === "serving";
-}
 
 interface WorkspaceExtension {
   readonly snapshot: (snap: WorkspaceSnapshot, isSourceCurrent: (source: LiveRefreshSource) => boolean) => Promise<void>;
@@ -1328,7 +1327,7 @@ function useWorkspaceReads(link: ChatLink) {
   const liveJobs = useMemo(() => backgroundJobs.map((job) => {
     const told = jobOutputs[job.id];
 
-    if (told === undefined || !runningJob(job) || (job.output?.seq ?? 0) >= told.seq) return job;
+    if (told === undefined || jobPhase(job, Date.now()) === "settled" || (job.output?.seq ?? 0) >= told.seq) return job;
 
     return { ...job, output: told };
   }), [backgroundJobs, jobOutputs]);
@@ -1419,6 +1418,14 @@ function useWorkspaceReads(link: ChatLink) {
     "jobs",
     () => rpc<BackgroundJob[]>("listBackgroundJobs", [50]),
     setBackgroundJobs,
+  ), [refreshCurrentLiveResource, rpc]);
+
+  const [inspectedWork, setInspectedWork] = useState<InspectedWork[]>([]);
+
+  const refreshInspectedWork = useCallback(() => refreshCurrentLiveResource(
+    "work",
+    () => rpc<InspectedWork[]>("inspectWork", []),
+    setInspectedWork,
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshPendingConsents = useCallback(() => refreshCurrentLiveResource(
@@ -1515,7 +1522,7 @@ function useWorkspaceReads(link: ChatLink) {
       await reread('background_jobs', refreshBackgroundJobs);
     } else if (msg.type === JOB_OUTPUT_EVENT) {
       const listed = listedJobs.current.find((job) => job.id === msg.jobId)?.output;
-      const running = new Set(listedJobs.current.filter(runningJob).map((job) => job.id));
+      const running = new Set(listedJobs.current.filter((job) => jobPhase(job, Date.now()) !== "settled").map((job) => job.id));
 
       setJobOutputs((told) => ({
         ...Object.fromEntries(Object.entries(told).filter(([id]) => running.has(id))),
@@ -1650,13 +1657,14 @@ function useWorkspaceReads(link: ChatLink) {
     listWorkspaceAgents: () => refreshCurrentLiveResource("agents", () => rpc<PanelAgent[]>("listWorkspaceAgents", []), setWorkspaceAgents),
     listSubordinates: refreshRoster,
     listBackgroundJobs: refreshBackgroundJobs,
+    inspectWork: refreshInspectedWork,
     listPendingActions: refreshPendingActions,
     getWorkspaceTabPresence: refreshTabPresence,
     listSlates: refreshSlates,
     getActivePlanReview: rereadPlan,
   }), [
-    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshPendingActions, refreshRoster, refreshSlates,
-    refreshTabPresence, rereadPlan, rpc,
+    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshInspectedWork, refreshPendingActions, refreshRoster,
+    refreshSlates, refreshTabPresence, rereadPlan, rpc,
   ]);
 
   const liveRefreshTaskId = useRef(0);
@@ -1731,7 +1739,7 @@ function useWorkspaceReads(link: ChatLink) {
 
     try {
       await Promise.all([
-        refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshPendingConsents(),
+        refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshInspectedWork(), refreshPendingConsents(),
         liveReads.listWorkspaceAgents?.(),
       ]);
     } catch (cause) {
@@ -1760,6 +1768,7 @@ function useWorkspaceReads(link: ChatLink) {
     setPreviewError(null);
     setPreviewStarting([]);
     setBackgroundJobs([]);
+    setInspectedWork([]);
     setSlates([]);
     setTabPresence(undefined);
     knownSlates.current = null;
@@ -1866,6 +1875,7 @@ function useWorkspaceReads(link: ChatLink) {
       previewStarting,
       refreshExposedPorts,
       backgroundJobs: liveJobs,
+      inspectedWork,
       refreshBackgroundJobs,
       pendingActions,
       /** Called by Work's decide so a decided row leaves the list at once, not on the next poll. */

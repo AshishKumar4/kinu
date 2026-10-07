@@ -225,8 +225,7 @@ describe('node proposal merges after the eval finish', () => {
     const deps: NodeAgentDeps = {
       reportModelCall: unobservedSpend,
       // One seat per node: a shared `rt` would give every node of a wave one actor.
-      hostNode: hostedSeatsOver({ rt, db }).hostNode,
-      model,
+      hostNode: hostedSeatsOver({ rt, db, model: () => model }).hostNode,
       journal,
       logger: createRecordingLogger(),
       nodeCodemode: () => codemodeTool,
@@ -248,7 +247,7 @@ describe('node proposal merges after the eval finish', () => {
 describe("a seated head's long call becomes its own job, and the settle wakes it", () => {
   test('the call answers with a handle, its output streams, and the head reads the settled result', async () => {
     const { rt, db } = createTestRuntime();
-    const seats = hostedSeatsOver({ rt, db });
+    const seats = hostedSeatsOver({ rt, db, model: () => model });
     const clock = handClock(Date.now());
     const frames: JobOutputFrame[] = [];
     const prompts: string[] = [];
@@ -292,7 +291,6 @@ describe("a seated head's long call becomes its own job, and the settle wakes it
         // The workspace's clock, which the call's window and the build run on.
         return { ...seat, release: async () => {}, jobs: { ...seat.jobs, ports: { jobOutput: (frame) => { frames.push(frame); }, clock } } };
       },
-      model: async () => ({ model, spec: null }),
       codemodeTool: () => build,
       webSearch: stubWeb,
       split: () => neverSplit,

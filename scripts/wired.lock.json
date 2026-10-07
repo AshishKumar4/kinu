@@ -236,8 +236,6 @@
   "packages/core/src/strategy/merge-back.ts#planMemberApply (unreached-export)",
   "packages/core/src/strategy/node-agent.ts#NODE_BUILTIN_TOOLS (unreached-export)",
   "packages/core/src/strategy/node-agent.ts#NODE_WITHHELD_TOOLS (unreached-export)",
-  "packages/core/src/strategy/node-agent.ts#NodeAgentDeps.backgroundPolicy (unsupplied-field)",
-  "packages/core/src/strategy/node-agent.ts#NodeAgentDeps.gradeReport (unsupplied-field)",
   "packages/core/src/strategy/node-agent.ts#PROPOSE_BRANCH_TOOL (unreached-export)",
   "packages/core/src/strategy/node-agent.ts#nodeSystemPrompt (unreached-export)",
   "packages/core/src/strategy/node-agent.ts#readNodeReport (unreached-export)",

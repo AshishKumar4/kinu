@@ -10,7 +10,7 @@ import { FAILURE_WITHOUT_ERROR, type RunEventInput } from '../events/types';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { TurnEscalationLedger } from '../execution/escalation';
 import { renderToolResult } from '../utils/evidence-window';
-import { priceCall, type MissionGovernor } from '../mission-budget';
+import { priceCall, type MissionGovernor, type SpendGate } from '../mission-budget';
 import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '../usage';
 import * as v from 'valibot';
 import { digestJsonValue, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
@@ -90,10 +90,22 @@ export class TurnAccumulator {
   /** Messages already durable; a shorter array is a re-drive, resynced without recording the step twice. */
   private durableMessages = 0;
 
+  private gate: SpendGate | undefined;
+
   constructor(
     private readonly sinks: TurnSinks = {},
     private readonly budget?: MissionGovernor,
   ) {}
+
+  private get charged(): SpendGate | undefined {
+    return this.gate ?? this.budget;
+  }
+
+  chargeTo(gate: SpendGate | undefined): () => void {
+    this.gate = gate;
+
+    return () => { this.gate = undefined; };
+  }
 
   reset(now: number): void {
     this.toolCalls = [];
@@ -245,7 +257,7 @@ export class TurnAccumulator {
     const reported = usageReported(usage);
 
     // Debit only a real report. `cacheRead`/`cacheWrite` are subsets of `input`.
-    if (reported) this.budget?.debit(usageTotal(usage) ?? 0, { calls: 1, usage, spec: ctx.fallback });
+    if (reported) this.charged?.debit(usageTotal(usage) ?? 0, { calls: 1, usage, spec: ctx.fallback });
 
 
     // Every reported field, zeros included: `cacheRead=0` is a cold prefix, not silence.

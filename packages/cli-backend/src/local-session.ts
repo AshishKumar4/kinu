@@ -13,29 +13,26 @@ import type { LanguageModel, ToolSet } from 'ai';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  createCompactionExtension, createVfsTranscriptStore,
-  createCompactionStateStore, createModelSummarizer,
+  createActorCompaction, compactionDiagnostics, hostedActorCompaction,
+  createCompactionStateStore,
   type CompactionExtension, type CompactionStateStore,
 } from '@kinu.run/compaction';
 import type {
-  ChatOptions,
   TurnContinuity, FiberCtx,
   LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding,
   BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
-  ActiveSkillSet, TurnSkillSurface, FactsStore,
+  ActiveSkillSet, FactsStore,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   DeferredApproval, DeferredApprovalAnswer,
   AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps, TemporaryAgentPort,
   DynamicContextInput, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery,
-  BuiltinToolName,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
   WorkMode, SessionHistory,
 } from '@kinu.run/core';
-import { TierIdSchema,
-  ActorSession, type ActorTurnLease, type ActorExecutionInput,
+import { ActorSession, type ActorTurnLease,
   recoverActorTurns,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
@@ -52,41 +49,34 @@ import { TierIdSchema,
   TriggerRegistry,
   createTimerTrigger, cancelTrigger, fireDueTriggers,
   EvolutionEngine,
-  readMemoryTail,
   agentsActionsFor, betaSwarms, type ProfileCatalog,
   actorHomeName, explorationActorKey,
   type HeadSeat, type HostedNodeSeat, type NodeIdentity, type ModelPricing,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
-  resolveTurnSkills, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock, filterToolSetBySkills,
+  steerSkillsBlock,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
-  BUILTIN_TOOL_NAMES,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
-  branchesTerminalEffect, chatTerminalEffects,
-  SUBORDINATE_REPORT_STATUSES,
+  assembleActorTurn, runHeadInference, withCompactionTrigger, promptCacheKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
+  branchesTerminalEffect, chatTerminalEffects, subordinateTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
   terminalEffect,
-  RunEndReasonSchema, WorkModeSchema,
-  type TerminalTransition, type TerminalEffectTable, type TerminalEffectFault,
+  type TerminalEffectTable, type TerminalEffectFault,
   type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
-  buildActorTools, buildMcpToolSet, buildSystemPromptSync, currentDateForPrompt,
+  buildActorTools, buildMcpToolSet, currentDateForPrompt,
   type ActorToolsetDeps,
-  turnArtifactBodies, artifactOverrides, currentArtifacts, withToolText, type TurnOpening,
+  turnArtifactBodies, artifactOverrides, currentArtifacts, type TurnOpening,
   turnReasonForMetadata, type TurnReason,
-  type CountableRequest,
-  parseModelSpec, agentAffinityKey, bindRoute, routedLlm,
-  measureCompactionTrigger,
+  agentAffinityKey, bindRoute, routedLlm,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
-  AdvisorRecoverySnapshotSchema,
   createDefaultWebSearchProvider, createWebCodemodeProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider,
   createReportCodemodeProvider, REPORT_TOOL, type ReportToolDeps,
   MissionGovernor,
-  renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
   type RuntimeFacts,
@@ -114,19 +104,18 @@ import { TierIdSchema,
   type AlarmScheduler, type BackgroundJob, type ListedBackgroundJob,
   type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
-  reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
-  resolveAgentTurnProfile, resolveModelRoute, completeOnRoute,
-  resolveRoutingProfile, currentOperationProfile, ownProfileChoices, ancestorPins,
+  resolveModelRoute, completeOnRoute,
+  resolveRoutingProfile, currentOperationProfile, captureOperationProfile, ancestorPins,
   type PinnedProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   type WorkspaceTitleState,
   type PromptIdentity,
   narrowToolSurface, codemodeCapabilitiesFor,
-  type ResolvedTurnProfile, type TierId,
-  decodeJsonValue, projectJsonValue, JsonValueSchema,
+  type ResolvedTurnProfile,
+  decodeJsonValue, projectJsonValue,
   agentSelfHost, createAgentSelfProvider,
   cancelBackgroundJob, jobResult, listBackgroundJobs,
   getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
@@ -137,10 +126,9 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  McpToolSurfaceCache, servedMcpDescriptors, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
+  McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
-  type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
-  type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
+  type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
@@ -198,15 +186,6 @@ type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
 
 const NEXT_OWNER_TURN: TurnAsked = { kind: 'user', text: '' };
 
-interface ResolvedLocalTurn {
-  readonly profileInputs: ProfileAuthorityInputs;
-  readonly profile: ResolvedTurnProfile;
-  readonly availableSkills: TurnSkillSurface['available'];
-  readonly activeSkills: TurnSkillSurface['activeSkills'];
-  readonly agentActions: ReturnType<typeof agentsActionsFor>;
-  readonly turn: TurnReason;
-}
-
 export function createLocalOrchestration(input: LocalOrchestrationInput): LocalOrchestration {
   // Opt-in spend governor: no label means no cap.
   const budget = new MissionGovernor({
@@ -252,8 +231,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     },
   };
 }
-
-type PromptCacheIdentity = NonNullable<ChatOptions['cache']>;
 
 type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
 
@@ -330,10 +307,6 @@ export interface LocalAgentSessionOpts {
 /** A job fiber's checkpoint names its job. */
 const FiberJobSchema = v.looseObject({ jobId: v.string() });
 
-const TurnTierMetadataSchema = v.object({
-  profile_tier: v.optional(TierIdSchema),
-});
-
 /** `read` of the seat, or `gone` once host teardown removed it. */
 function seatRead<T>(input: LocalOrchestrationInput, read: (session: LocalAgentSession) => T, gone: T): T {
   try {
@@ -342,13 +315,6 @@ function seatRead<T>(input: LocalOrchestrationInput, read: (session: LocalAgentS
     if (cause instanceof KinuError && cause.code === 'missing') return gone;
     throw cause;
   }
-}
-
-function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | undefined {
-  if (metadata === undefined) return undefined;
-  const parsed = v.safeParse(TurnTierMetadataSchema, metadata);
-
-  return parsed.success ? parsed.output.profile_tier : undefined;
 }
 
 
@@ -429,7 +395,7 @@ export class LocalAgentSession {
   private _planActions: PlanReviewActions | null = null;
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledAlarmAt: number | null = null;
-  private _headRuntime: HeadRuntime;
+  private readonly _headRuntime: HeadRuntime;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
   private pendingShellApproval: DynamicApproval | null = null;
   private shellApprovalSequence = 0;
@@ -610,9 +576,6 @@ export class LocalAgentSession {
         composeRequest: () => this.composeNextRequest(),
         // Only a root chat can approve a plan; a subordinate's plan is refused at admission.
         stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
-        planTurnRefusal: () => this.planReviewSurface()
-          ? null
-          : 'Plan review belongs to the owner of this workspace; a delegated task reports its result instead.',
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         // Only the host knows the child's lifetime and whether the parent drove the turn.
         owedReport: async (ending, assistantText, narration) => await this.parentRelay?.owed(ending, assistantText, narration) ?? null,
@@ -620,7 +583,6 @@ export class LocalAgentSession {
         // A running job's settle wakes the session; a reminder would race it.
         hasPendingAsyncWake: () => this.jobs.listRunning(1).total > 0,
         terminal: () => this.terminal,
-        holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
         driverGate: () => this.driverGate?.() ?? null,
         // No durable wake: this process is the wake, and a crashed turn re-arms from the ledger on restart.
         armTurnWake: async () => {},
@@ -650,31 +612,16 @@ export class LocalAgentSession {
         currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID,
       );
     });
-    this.compactionExtension = createCompactionExtension({
-      ports: {
-        transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
-        plans: this.compactionState.plans,
-        logger: {
-          info: (message) => { diagnostics.event('compaction.info', { message }); },
-          debug: (message) => { diagnostics.event('compaction.debug', { message }); },
-          warn: (message) => { diagnostics.failure('compaction.degraded', new KinuError('unavailable', message)); },
-          error: (message) => { diagnostics.failure('compaction.failed', new KinuError('io', message)); },
-        },
-      },
-      archive: this.compactionState.archive,
-      summarize: createModelSummarizer(() => this.ensureModelState(), {
-        source: 'compaction', report: (report) => this.modelCallSink(report),
-      }),
-      ephemeral: this.actorSession.dynamic,
-      onOutcome: ({ outcome }) => {
-        if (outcome !== 'replayed') this.actorSession.dynamic.reset();
-      },
+    this.compactionExtension = createActorCompaction({
+      files: () => this.rt,
+      state: this.compactionState,
+      ledger: this.actorSession.dynamic,
+      logger: compactionDiagnostics,
+      summarizer: () => this.ensureModelState(),
+      spend: { report: (report) => this.modelCallSink(report) },
       model: () => this.effectiveModelSpec(),
-      attachments: { files: () => this.rt },
     });
-    this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(
-      () => this.cachedModel ?? this.defaultModel("a head with no model of its own"),
-    ));
+    this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions());
     this.rt.setTurnFileLedgerProvider?.(() => this.actorSession.orchestrator.acc.files);
     // The runtime's judge/fast/reflection seams predate this session; a runtime holds one sink.
     this.rt.setModelCallSink?.(this.modelCallSink);
@@ -1192,7 +1139,7 @@ export class LocalAgentSession {
 
   /** Overflow recovery's fold, at the next turn. */
   armCompaction(): void {
-    this.compactionState.armCompaction(this.cacheIdentity().sessionKey);
+    this.compactionState.armCompaction(this.compactionKey());
   }
 
   /** Aborted by {@link end}, so an MCP connect that never answers cannot block ending. */
@@ -1291,7 +1238,7 @@ export class LocalAgentSession {
 
     if (this.sleepTimeTimer) clearTimeout(this.sleepTimeTimer);
     const t0 = Date.now();
-    await this.actorSession.orchestrator.settleEvolution();
+    await this.actorSession.orchestrator.settleTracked();
     const t1 = Date.now();
     await this.joinBackgroundFibers(this.drainDeadline());
     const t2 = Date.now();
@@ -1302,7 +1249,7 @@ export class LocalAgentSession {
     // Quiet under 1s: the --json contract promises an empty stderr on a fast exit.
     if (t3 - t0 > 1_000) {
       diagnostics.event('session.settle_timings', {
-        evolutionMs: t1 - t0, fibersMs: t2 - t1, mcpMs: t3 - t2,
+        trackedMs: t1 - t0, fibersMs: t2 - t1, mcpMs: t3 - t2,
       });
     }
   }
@@ -1500,7 +1447,7 @@ export class LocalAgentSession {
       return;
     }
 
-    await this.terminal.resumeAll();
+    await this.terminal.replayOwedAndRearm();
     // A replayed sequence can enqueue a turn; the advisor gate state travels in the row, not RAM.
     this.chat.pump();
   }
@@ -1661,28 +1608,29 @@ export class LocalAgentSession {
     if (item.kind === 'user') this.actorSession.orchestrator.observeUserTurn(item.text, this.turnContinuity);
 
     if (item.kind === 'user' && this.oneShot) this.chat.completionGate.arm(item.text);
-    const resolved = await this.resolveTurnProfile(item);
-    this.turnActiveSkillNames = resolved.activeSkills?.active.map((skill) => skill.name) ?? [];
-    this.actorSession.bindProfile(lease, resolved.profile, resolved.profileInputs);
-    this.invalidateModelState();
-    const model = this.ensureModelState();
-    this.activateToolMode(this.actorSession.workMode);
-    const { execution, sessionKey } = await this.composeTurnRequest(resolved, model);
-    const context = execution.chat.modelContext;
 
-    await this.admitMcp(context?.contextWindow === undefined
-      ? await this.modelCatalog.resolved()
-      : { contextWindow: context.contextWindow, modelOutputLimit: context.modelOutputLimit ?? null });
-    this.turnExternalTools = this.externalToolsFor(resolved.profile);
-    this.recordSystemPromptHash(execution.chat.system);
+    const assembled = await assembleActorTurn({
+      ...this.turnSources(item, lease),
+      // Bound before the callable tools are read: the head runtime and `eval`'s reach follow the profile.
+      settle: (profile, inputs) => {
+        this.actorSession.bindProfile(lease, profile, inputs);
+        this.invalidateModelState();
+        this.ensureModelState();
+      },
+    }, this.turnRequest(item));
+
+    this.turnActiveSkillNames = assembled.activeSkills?.active.map((skill) => skill.name) ?? [];
+    this.activateToolMode(this.actorSession.workMode);
+    this.turnExternalTools = assembled.externalTools;
+    this.recordSystemPromptHash(assembled.execution.chat.system);
     // `historyLength` is the durable length the measurement is bound to (orchestrator/turn-context.ts).
     const historyLength = this.actorSession.history.length;
-    const measured = measureCompactionTrigger(this.compactionState, sessionKey, historyLength);
-    const chat: ActorExecutionInput['chat'] = { ...execution.chat, transformTrigger: measured.trigger };
+    const sessionKey = this.compactionKey();
 
-    if (measured.providerReportedTokens !== undefined) chat.providerReportedTokens = measured.providerReportedTokens;
-
-    return { execution: { ...execution, chat }, sessionKey, contextWindow: chat.modelContext?.contextWindow ?? null, historyLength, trial: artifacts.trial };
+    return {
+      execution: withCompactionTrigger(assembled.execution, this.compactionState, sessionKey, historyLength),
+      sessionKey, contextWindow: assembled.window.contextWindow, historyLength, trial: artifacts.trial,
+    };
   }
 
   /** The turn's evolved text; between turns, the promoted text. */
@@ -1692,176 +1640,80 @@ export class LocalAgentSession {
     return this.turnArtifacts ?? artifactOverrides(currentArtifacts(this.rt.storage.sql, this.rt.actor));
   }
 
-  private async resolveTurnProfile(item: TurnAsked): Promise<ResolvedLocalTurn> {
-    const profileInputs = await this.profiles().inputs();
+  private turnRequest(item: TurnAsked): TurnAssemblyRequest {
+    return { userText: item.text, workMode: this.turnWorkMode(item), explicitTier: metadataTier(item.metadata) };
+  }
 
-    this.followAccountSwarms(profileInputs.envelope.catalog);
-
-    const activeRoleId = this.getActiveRoleId();
-    const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
-    const { available: availableSkills, activeSkills } = await this.resolveTurnSkills(item.text, roleSkills);
-    // Read once so the tool list, codemode providers and profile agree.
-    const workMode = this.turnWorkMode(item);
-    const parentAssigned = item.kind === 'programmatic';
-
-    const candidateBuiltinNames = Object.keys(filterToolSetBySkills(this.toolSurface(workMode), activeSkills)).filter(
-      (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
-    );
-
-    const profile = resolveAgentTurnProfile({
-      ...profileInputs,
-      workMode,
-      availableTools: [
-        ...candidateBuiltinNames,
-        // Every connected tool: what fits this turn's model is admitted after its window is known.
-        ...servedMcpDescriptors(this.mcpServed?.descriptors ?? []).map((descriptor) => descriptor.toolKey),
-        // `report` is added to the toolset after this resolution; name it or a role's tool list drops it.
-        ...(this.reportDeps !== null && parentAssigned ? [REPORT_TOOL] : []),
-        // `submit_plan` lives outside BUILTIN_TOOLS; same reason as `report`.
-        ...(this.planSubmissionOpen(workMode) ? [SUBMIT_PLAN_TOOL] : []),
-        // Sandbox-only namespaces have no native tool id; derive them from the wired providers.
-        ...codemodeCapabilitiesFor(this.codemodeProviders(workMode)),
-      ],
-      activeSkills: activeSkills?.active.map((skill) => skill.name) ?? [],
-      ...ownProfileChoices(this.config, profileInputs, this.ancestors?.(), { explicitTier: tierFromMetadata(item.metadata) ?? undefined }),
-    });
+  private turnModels(): TurnModelSources {
+    const resolver = this.modelResolver;
 
     return {
-      profileInputs, profile, availableSkills, activeSkills,
-      agentActions: agentsActionsFor(this.agentsToolDeps(workMode)), turn: turnReasonForMetadata(item.metadata),
+      catalog: this.modelCatalog,
+      normalize: (spec) => this.profiles().normalizeSpec(spec),
+      resolve: (spec) => (resolver ? resolver.resolveModel(spec, this.conversation()) : this.defaultModel('this static-model session')),
+      ...(resolver && {
+        routed: { credentialFor: (spec) => resolver.credentialFor(spec), countInputTokens: (spec, request) => resolver.countInputTokens(spec, request) },
+      }),
     };
   }
 
-  /** Effect-free: a measure between turns uses it. */
-  private async composeTurnRequest(resolved: ResolvedLocalTurn, model: LanguageModel): Promise<ComposedRequest> {
-    const { profile, availableSkills, activeSkills, turn } = resolved;
-    // The resolved tier, not the bound one: a switch may have moved it.
-    const turnSpec = this.profiles().normalizeSpec(profile.tier.model);
-    const executors = this.rt.executionRouter?.listExecutors() ?? [];
-    const allowedTools = new Set(profile.allowedTools);
-    const toolAllowed = (name: string): boolean => allowedTools.has(name);
-
-    const filteredBuiltins = Object.fromEntries(
-      Object.entries(filterToolSetBySkills(this.toolSurface(profile.workMode), activeSkills)).filter(([name]) => toolAllowed(name)),
-    );
-
-    const turnTools = withToolText(filteredBuiltins, this.currentTurnArtifacts().tools);
-
-    const availableBuiltins = Object.keys(filteredBuiltins).filter(
-      (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
-    );
-
-
-    const resolvedAgentActions = toolAllowed('agents') ? resolved.agentActions : [];
-    const memoryTail = await readMemoryTail(this.rt.memory);
-
-    // Re-statted each turn; only files fitting the model window are read, each classified by owner approval.
-    const agentsMd = await discoverAgentsMd(this.cwd, this.modelCatalog.window(), this.instructionTrust);
-
-    // The workspace's SOUL.md as its agents left it; a missing one renders the default.
-    const soul = soulIn(this.rt.space);
-
-    const systemPromptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
-      executors,
-      availableTools: availableBuiltins,
-      agentsActions: resolvedAgentActions,
-      // A session with no roster substrate never advertises the temporary rung.
-      temporaryAsk: this.teamDeps?.temporary !== undefined,
-      backend: 'cli-local',
-      roleSection: profile.role,
-      model: { id: turnSpec },
-      // Read here: the builder is the byte-stable cacheable prefix and does no I/O.
-      sectionOverrides: this.currentTurnArtifacts().sections,
-      identity: this.promptIdentity(),
-    };
-
-    systemPromptOptions.agentsMd = agentsMd;
-
-    if (availableSkills.lines.length > 0) systemPromptOptions.availableSkills = availableSkills;
-
-    const { pinned, invoked } = splitTurnSkills(activeSkills);
-
-    if (pinned) systemPromptOptions.activeSkills = pinned;
-
-    if (soul) systemPromptOptions.soulOverride = soul;
-    const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
-    // Why the turn runs and the unapproved instruction files ride the dynamic-context ledger, out of the cached
-    // prefix: provenance flips when a background job lands.
-    const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
-    const cache = this.cacheIdentity(turnSpec);
-    // Normalized spelling: `parseModelSpec` refuses a bare tier id without a slash.
-    const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, parseModelSpec(turnSpec).provider);
-
-    // Awaited once per turn: the sync catalog reads answer from a static stand-in while the lookup is
-    // in flight, which measured a 1M-window model against 128k (#20). The fallbacks' rates price their steps.
-    const [window] = await Promise.all([
-      turnSpec === this.effectiveModelSpec() ? this.modelCatalog.resolved() : this.modelCatalog.contextFor(turnSpec),
-      this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model)),
-    ]);
-
-    const liveTurn: ActorExecutionInput['chat'] = {
-      model,
-      // Both halves: omitting `modelOutputLimit` treats the whole window as the answer's allowance.
-      modelContext: {
-        id: turnSpec,
-        contextWindow: window.contextWindow,
-        modelOutputLimit: window.modelOutputLimit,
-      },
-      system: systemPrompt,
-      // Applied to the whole history before the transform seam; this.history is never mutated.
-      attachments: {
-        accepts: this.modelCatalog.acceptedMedia(), vfs: this.rt.storage.vfs, budget: this.actorSession.orchestrator.acc.context,
-      },
-      tools: turnTools,
-      cache,
-      budget: this.budget,
-      operations: this.modelOperations,
-    };
-
-    if (providerOptions) liveTurn.providerOptions = providerOptions;
-    // A static-model session has no registry to count with, so it is assembled ungated.
-    const resolver = this.modelResolver;
-
-    if (resolver) {
-      liveTurn.countInputTokens = (request: CountableRequest) => resolver.countInputTokens(turnSpec, request);
-
-      const normalize = (spec: string) => this.profiles().normalizeSpec(spec);
-      liveTurn.modelSpec = turnSpec;
-      liveTurn.credentialOf = (spec) => resolver.credentialFor(spec);
-      liveTurn.retries = profile.retries;
-      liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
-        spec: normalize(spec),
-        accepts: this.modelCatalog.acceptedMedia(spec),
-        window: this.modelCatalog.window(spec),
-        bind: () => {
-          const { provider } = parseModelSpec(normalize(spec));
-
-          return { model: resolver.resolveModel(spec, this.conversation()), provider, providerOptions: reasoningEffortOptions(reasoningEffort, provider) };
-        },
-      }));
-    }
+  /** Where this session's turns are assembled from (core orchestrator/turn-assembly.ts). */
+  private turnSources(item: TurnAsked, lease: Pick<ActorTurnLease, 'runId' | 'turnId'> | null): TurnAssemblySources {
+    const turn = turnReasonForMetadata(item.metadata);
 
     return {
-      execution: {
-        loopVersion: await this.rt.identity.scaffold.version(),
-        chat: liveTurn,
-        extensions: [this.compactionExtension],
-        dynamic: (requestProfile, tools) => this.dynamicContextSnapshot(memoryTail, requestProfile, tools, { turn, activeSkills }),
-        instructions,
-        activated: invoked ? activatedSkillsBlock(invoked) : null,
-        scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
+      rt: this.rt,
+      backend: 'cli-local',
+      executors: () => this.rt.executionRouter?.listExecutors() ?? [],
+      config: this.config,
+      skills: vfsTurnSkills(this.rt.ownFiles, this.config, this.instructionTrust),
+      models: this.turnModels(),
+      profileInputs: async () => {
+        const inputs = await this.profiles().inputs();
+        this.followAccountSwarms(inputs.envelope.catalog);
+
+        return inputs;
       },
-      profile,
-      sessionKey: cache.sessionKey,
+      ...(this.ancestors && { ancestors: this.ancestors }),
+      toolset: (mode) => this.turnToolSet(mode),
+      externalTools: async (window) => {
+        await this.admitMcp(window);
+
+        return this.extraTools;
+      },
+      // Built into the turn's tool set by its gates, and outside the builtins, so named here.
+      wiredToolNames: (mode) => [
+        ...(this.reportDeps !== null && item.kind === 'programmatic' ? [REPORT_TOOL] : []),
+        ...(this.planSubmissionOpen(mode) ? [SUBMIT_PLAN_TOOL] : []),
+      ],
+      codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.codemodeProviders(mode)),
+      agentsActions: (mode) => agentsActionsFor(this.agentsToolDeps(mode)),
+      // A session with no roster substrate never advertises the temporary rung.
+      temporaryAsk: () => this.teamDeps?.temporary !== undefined,
+      // The workspace's SOUL.md as its agents left it; a missing one renders the default.
+      soul: async () => soulIn(this.rt.space) ?? undefined,
+      // Re-statted each turn; only files fitting the model window are read, each classified by owner approval.
+      agentsMd: (window) => discoverAgentsMd(this.cwd, window, this.instructionTrust),
+      identity: async () => this.promptIdentity(),
+      artifacts: () => this.currentTurnArtifacts(),
+      taskPlan: () => null,
+      cacheKey: () => this.compactionKey(),
+      budget: this.budget,
+      operations: this.modelOperations,
+      scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
+      attachmentBudget: this.actorSession.orchestrator.acc.context,
+      extensions: () => [this.compactionExtension],
+      dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.dynamicContextSnapshot(memoryTail, profile, tools, { turn, activeSkills: activeSkills ?? undefined }),
+      operation: (profile, inputs) => captureOperationProfile({
+        actor: this.rt.actor, profile, inputs, runId: lease?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID, turnId: lease?.turnId ?? null,
+      }),
     };
   }
 
   private async composeNextRequest(): Promise<ComposedRequest> {
-    const resolved = await this.resolveTurnProfile(NEXT_OWNER_TURN);
-    const spec = this.profiles().normalizeSpec(resolved.profile.tier.model);
-    const model = this.modelResolver ? this.modelResolver.resolveModel(spec, this.conversation()) : this.defaultModel('the next request\'s measure');
+    const assembled = await assembleActorTurn(this.turnSources(NEXT_OWNER_TURN, null), this.turnRequest(NEXT_OWNER_TURN));
 
-    return this.composeTurnRequest(resolved, model);
+    return { execution: assembled.execution, profile: assembled.profile, sessionKey: this.compactionKey() };
   }
 
   // Terminal transition: core owns vocabulary, roster, state machine, ledger and replay; this backend
@@ -1932,7 +1784,7 @@ export class LocalAgentSession {
   private terminalEffectTable(): TerminalEffectTable {
     const relay = this.parentRelay;
 
-    const base = {
+    return {
       sleep_time: this.sleepTime.effect(),
 
       branches: branchesTerminalEffect({
@@ -1992,50 +1844,13 @@ export class LocalAgentSession {
         },
       }),
       ...chatTerminalEffects({ chat: () => this.chat, orchestrator: this.actorSession.orchestrator, engine: this.engine }),
-
-      // The CLI's lanes run elsewhere (evolution on its own queue); the row keeps the roster whole.
-      improvement_lanes: terminalEffect({
-        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
-        runSync: () => ({ status: 'completed' }),
-      }),
-
-      // The snapshot is the row's input, so a replay hires on the tool surface the turn had; the hire is
-      // keyed on the turn, so a replay hires no second advisor.
-      advisor_review: terminalEffect({
-        input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
-        run: async ({ status, workMode, advisor }) => {
-          if (this.actorSession.orchestrator.improvementLanesOpen(status, workMode)) await this.actorSession.hireAdvisor(advisor);
-
-          return { status: 'completed' };
-        },
-      }),
-
-      auto_title: terminalEffect({
-        input: v.object({ subject: v.string() }),
-        // Once-only: a persisted title no longer matches the plan. Awaited so a one-shot close joins it.
-        run: async ({ subject }) => {
-          await this.applyAutoTitle(subject);
-
-          return { status: 'completed' };
-        },
-      }),
-    };
-
-    // Subordinates only. Replayable via the parent's dedupe key; the mode comes off the row so a cold
-    // replay cannot turn a Plan report into a Build one.
-    if (relay === null) return base;
-
-    return {
-      ...base,
-      parent_report: terminalEffect({
-        input: v.object({
-          text: v.string(), status: v.picklist(SUBORDINATE_REPORT_STATUSES),
-          sequenceId: v.string(), mode: WorkModeSchema, quiet: v.optional(v.boolean()),
-        }),
-        run: async ({ text, status, sequenceId, mode, quiet }) => ({
-          status: 'completed',
-          detail: await relay.send({ text, status, mode, sequenceId, ...(quiet === true && { quiet }) }),
-        }),
+      // The CLI's lanes run elsewhere (evolution on its own queue); subordinates only report.
+      ...subordinateTerminalEffects({
+        orchestrator: this.actorSession.orchestrator,
+        hireAdvisor: (advisor) => this.actorSession.hireAdvisor(advisor),
+        // Awaited so a one-shot close joins it.
+        applyTitle: (subject) => this.applyAutoTitle(subject),
+        ...(relay !== null && { sendReport: (report) => relay.send(report) }),
       }),
     };
   }
@@ -2054,7 +1869,7 @@ export class LocalAgentSession {
         transaction: <T,>(body: () => T): T => writeTransaction(this.db, body),
         // A re-announced turn keeps its id, so two responses can share a `turnId`; without this a close
         // deleted the live claim.
-        turnIsLive: (turnId) => this.chat.pumping && this.chat.currentTurnId === turnId,
+        turnIsLive: (turnId) => this.chat.turnMayStillRun(turnId),
       scheduleRetry: (atMs) => this.scheduleTerminalRetry(atMs),
       // The timer also wakes a deferred job; it goes only when neither ledger owes it.
       settled: () => {
@@ -2062,6 +1877,8 @@ export class LocalAgentSession {
 
         return Promise.resolve();
       },
+      // `end()`/`settleBackgroundWork()` join it before the database closes (the DO's durable fiber equivalent).
+      hold: (close) => this.trackFiber('turn.terminal_close', close),
     });
 
     return this.terminalTransitions;
@@ -2142,19 +1959,6 @@ export class LocalAgentSession {
   /** Test-only clock skew past the retry backoff; zero in production. */
   protected terminalClockSkewMs = 0;
 
-  /** Keep the process alive for a terminal close; `end()`/`settleBackgroundWork()` join it before the
-   *  database closes (the DO's durable fiber equivalent). */
-  private holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void {
-    const closing = this.trackFiber('turn.terminal_close', async () => { await close(); });
-    this.tracked(async () => {
-      try {
-        await closing;
-      } catch (cause) {
-        await this.terminal.closeFailed(transition, { cause });
-      }
-    });
-  }
-
   /** Prompt names: the workspace, plus the subagent's own name. Never the slug, which is an address. */
   private promptIdentity(): PromptIdentity {
     const own = this.config.getDisplayName();
@@ -2213,20 +2017,9 @@ export class LocalAgentSession {
     return agentAffinityKey(this.agentName());
   }
 
-  /** Prompt-cache identity: provider/model, the conversation with this session's id, and configured retention. */
-  private cacheIdentity(spec = this.effectiveModelSpec()): PromptCacheIdentity {
-    const sessionKey = `${this.conversation()}:${this.sessionId}`;
-    const retention = this.config.getCacheRetention();
-
-    try {
-      const { provider, modelId } = parseModelSpec(spec);
-
-      return { providerId: provider, modelId, sessionKey, retention };
-    } catch (error) {
-      diagnostics.event('local_session.model_spec_unparseable', { error: renderThrownChain({ cause: error }) });
-
-      return { sessionKey, retention };
-    }
+  /** This session's conversation: its prompt cache and its compaction state are kept under it. */
+  private compactionKey(): string {
+    return promptCacheKey(this.conversation(), this.sessionId);
   }
 
   /** Key-less by default (DuckDuckGo + local HTML→markdown); a stored `tavily` credential upgrades search. */
@@ -2257,20 +2050,6 @@ export class LocalAgentSession {
 
   /** Skill bodies already in the turn's prompt, so a mid-turn steer adds only new ones. */
   private turnActiveSkillNames: readonly string[] = [];
-
-  private resolveTurnSkills(
-    userText: string,
-    roleSkills: readonly string[] = [],
-  ): Promise<TurnSkillSurface> {
-    return resolveTurnSkills({
-      vfs: this.rt.ownFiles,
-      config: this.config,
-      userText,
-      roleSkills,
-      trust: this.instructionTrust,
-      limits: this.modelCatalog.window(),
-    });
-  }
 
   private get scaffoldControl(): ScaffoldControl {
     return {
@@ -2707,7 +2486,7 @@ export class LocalAgentSession {
     this.cachedModelSpec = spec;
     // Start the lookup at claim time: `kinu exec` runs one turn, and a lazy lookup would never land in time.
     this.modelCatalog.info();
-    this.rebuildModelBoundState(model);
+    this.rebuildModelBoundState();
 
     return model;
   }
@@ -2729,7 +2508,7 @@ export class LocalAgentSession {
         jobs: () => this.jobs,
         budget: () => this.budget,
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
-        armCompactNow: () => { this.compactionState.armCompaction(this.cacheIdentity().sessionKey); },
+        armCompactNow: () => { this.compactionState.armCompaction(this.compactionKey()); },
       })),
       createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
       createStateCodemodeProvider(this.rt.actor.programState),
@@ -2752,12 +2531,9 @@ export class LocalAgentSession {
   }
 
   /** One builder for constructor and rebind. */
-  private headRuntimeOptions(
-    model: () => LanguageModel,
-  ): CLIHeadRuntimeDeps {
+  private headRuntimeOptions(): CLIHeadRuntimeDeps {
     // Named interface, not Parameters<...>[0], so the field-supply census sees this site.
     return {
-      model,
       // Merge model, effort and spend label are core's policy (`headMergeLLM`).
       profile: () => this.routingProfile(),
       bindMergeModel: (route) => this.bindRouteModel(route),
@@ -2772,7 +2548,6 @@ export class LocalAgentSession {
       journal: () => this.headJournal,
       publishHeadStream: this.publishHeadStream,
       hostHead: (input, writes) => this.hostHead(input, writes),
-      resolveModel: (spec) => this.resolveModelForSpec(spec),
     };
   }
 
@@ -2834,15 +2609,22 @@ export class LocalAgentSession {
 
     declare(binding.reference.actorId);
     const actor = await this.actorHost.acquire(binding.reference);
+    const runId = this.chat.currentRunId ?? WORKSPACE_RUN_ID;
+
+    const compaction = hostedActorCompaction(actor, {
+      logger: compactionDiagnostics,
+      summarizer: () => this.ensureModelState(),
+      spend: { report: (report) => this.modelCallSink(report) },
+      model: () => this.effectiveModelSpec(),
+    });
 
     return {
       binding,
       seat: {
         actor,
-        runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
-        profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
-        dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
-        windowOf: (spec) => (spec === null ? this.modelCatalog.resolved() : this.modelCatalog.windowFor(spec)),
+        runId,
+        sources: this.runActorSources(actor, runId, compaction.extension),
+        infer: (input, inference) => runHeadInference(input, { ...inference, compaction: compaction.trigger }),
         conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
         jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
       },
@@ -2864,29 +2646,39 @@ export class LocalAgentSession {
     return (await this.seatRunActor(node.nodeId, (actorId) => { this.nodeSeats.add(actorId); })).seat;
   }
 
-  /** Profile for one claimed hosted-actor turn, via the same authority as chat turns. */
-  private async resolveActorTurnProfile(
-    actor: HostedActor,
-    input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode },
-  ): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
-    const inputs = await this.profiles().inputs();
+  /** Where a run actor's turns are assembled from: its own stores, pins and lineage, this workspace's
+   *  instruction files and skills. It delegates nothing, so it advertises no agents actions. */
+  private runActorSources(actor: HostedActor, runId: string, compaction: CompactionExtension): RunTurnSources {
+    return {
+      rt: actor.runtime,
+      backend: 'cli-local',
+      executors: () => actor.runtime.executionRouter?.listExecutors() ?? [],
+      config: actor.stores.config,
+      skills: vfsTurnSkills(actor.runtime.storage.vfs, actor.stores.config, this.instructionTrust),
+      models: this.turnModels(),
+      profileInputs: () => this.profiles().inputs(),
+      ancestors: () => ancestorPins(actor.handle.parentActorId, { actorId: this.rt.actor.actorId, pins: this.config }, (id) => {
+        const parent = this.actorHost.describe(id);
 
-    const ancestors = ancestorPins(actor.handle.parentActorId, { actorId: this.rt.actor.actorId, pins: this.config }, (id) => {
-      const parent = this.actorHost.describe(id);
-
-      return parent === null ? null : { parentActorId: parent.parentActorId, pins: this.actorHost.bindStores(actorReferenceOf(parent)).handle.config };
-    });
-
-    const profile = resolveAgentTurnProfile({
-      ...inputs,
-      ...ownProfileChoices(actor.handle.config, inputs, ancestors),
-      workMode: input.workMode,
-      availableTools: [...input.availableTools],
-      // A fork explores under its parent's promoted program and that program's skills.
-      activeSkills: [],
-    });
-
-    return { profile, inputs };
+        return parent === null ? null : { parentActorId: parent.parentActorId, pins: this.actorHost.bindStores(actorReferenceOf(parent)).handle.config };
+      }),
+      agentsActions: () => [],
+      temporaryAsk: () => false,
+      // The workspace's SOUL.md as its agents left it; a missing one renders the default.
+      soul: async () => soulIn(this.rt.space) ?? undefined,
+      agentsMd: (window) => discoverAgentsMd(this.cwd, window, this.instructionTrust),
+      // Addressed as a named agent of this workspace, not the workspace's own chat.
+      identity: async () => ({ ...(await this.promptIdentity()), agent: actor.stores.config.getDisplayName() ?? actor.record.name }),
+      artifacts: () => artifactOverrides(currentArtifacts(this.rt.storage.sql, actor.handle)),
+      taskPlan: () => null,
+      cacheKey: () => promptCacheKey(this.conversation(), actor.record.actorId),
+      operations: this.modelOperations,
+      scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
+      attachmentBudget: actor.session.orchestrator.acc.context,
+      extensions: () => [compaction],
+      dynamic: () => (profile, tools) => this.actorDynamicContext(actor, profile, tools),
+      operation: (profile, inputs) => captureOperationProfile({ actor: actor.handle, profile, inputs, runId, turnId: null }),
+    };
   }
 
   /** Per-step context from the hosted actor's own stores, never this session's. */
@@ -2904,8 +2696,7 @@ export class LocalAgentSession {
     });
   }
 
-  private rebuildModelBoundState(model: LanguageModel): void {
-    this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(() => model));
+  private rebuildModelBoundState(): void {
     this.buildToolSets();
   }
 
@@ -2987,6 +2778,20 @@ export class LocalAgentSession {
   private activateToolMode(mode: WorkMode): void {
     this.tools = this.toolSurface(mode);
   }
+
+  /** The tool set this turn's gates (`report`, `submit_plan`) build; rebuilt when they moved, never re-resolving a model. */
+  private turnToolSet(mode: WorkMode): ToolSet {
+    const gates = `${String(this.reportGateOpen())}:${String(this.planReviewSurface())}`;
+
+    if (this.toolSets[mode] === undefined || this.toolSetGates !== gates) {
+      this.buildToolSets();
+      this.toolSetGates = gates;
+    }
+
+    return this.toolSurface(mode);
+  }
+
+  private toolSetGates: string | null = null;
 
   private toolSurface(mode: WorkMode): ToolSet {
     const surface = this.toolSets[mode];

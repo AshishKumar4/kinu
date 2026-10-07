@@ -36,6 +36,7 @@ function ledger(opts: { readonly cutBeforeRecord?: boolean } = {}) {
     transaction: <T>(body: () => T): T => db.transaction(body)(),
     turnIsLive: () => false,
     settled: async () => {},
+    hold: (close) => close(),
   });
 
   const transitions = activation();
@@ -109,7 +110,6 @@ describe('the terminal transition claim', () => {
     await expect(transitions.settle({
       transition,
       declare: () => [{ name: 'turn_record', scope: 'a-live-wake', input: {}, lane: 'inline' }],
-      hold: () => {},
     })).rejects.toThrow('interrupted before its side effect');
 
     const owedAt = transitions.ledger.nextRetryAt(new Set());

@@ -54,6 +54,7 @@ const renderStrip = (tabPresence: TabPresence | undefined, presencePending = fal
     executorOutputs: new Map(),
     onExecute: () => Promise.withResolvers<never>().promise,
     backgroundJobs: [],
+    inspectedWork: [],
     onRefreshJobs: () => {},
     pendingActions: [],
     tabPresence,

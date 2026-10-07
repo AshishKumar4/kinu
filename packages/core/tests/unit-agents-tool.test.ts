@@ -2,7 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Tool-side contract of the unified `agents` tool; transports are covered in cf-backend tests.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { swarmSeats } from './helpers-actor-host';
 
 import * as v from 'valibot';
 import { AGENTS_ACTION_FIELDS, delegationChoices } from '../src/delegation/agents-tool';
@@ -117,8 +117,7 @@ function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
   const { rt, testSql } = createTestRuntime();
 
   return {
-    rt, model: () => testModel,
-    hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+    rt, ...swarmSeats({ rt, db: testSql.db }, () => testModel),
     ...unobservedSearchSeams(),
     ...overrides,
   };

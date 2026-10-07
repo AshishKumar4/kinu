@@ -48,6 +48,7 @@ import {
 } from './manifest';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
+
 export interface CompactionOutcomeEvent {
   sessionKey: string;
   /** Anything but 'replayed' changed the stream and invalidates frozen positions (e.g. ledger blocks). */
@@ -101,7 +102,7 @@ interface PrefixUpgradeInputs {
   readonly rollingSummaryAttempted: boolean;
 }
 
-/** The extension a backend registers, and the swarm's shared-prefix half of the same ladder (`SwarmRunDeps.compactShared`). */
+/** The extension an actor registers, and the swarm's shared-prefix half (`SwarmRunDeps.compactShared`). */
 export type CompactionExtension = KinuExtension & { readonly compactShared: SharedPrefixCompactor };
 
 export function createCompactionExtension(deps: CompactionExtensionDeps): CompactionExtension {
@@ -119,7 +120,7 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
   const engine = createEngine(spec, deps.ports);
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
 
-  /** Per-turn summarizer: a cancelled turn cancels only its own calls and its abort is not a summary failure. */
+  /** A cancelled turn cancels only its own calls; its abort is no summary failure. */
   const summarizerFor = (signal: AbortSignal | undefined, failure: AbortController | null): Summarizer => ({
     async complete(job) {
       try {

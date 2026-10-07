@@ -10,7 +10,7 @@ import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
 import { tabCls, tabStripH } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
-import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
+import { executorLabel, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
 import { Loader } from "@cloudflare/kumo";
 import type { MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -82,6 +82,7 @@ export interface WorkSurfaceProps {
   lastActiveExecutor?: string | null;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   backgroundJobs: BackgroundJob[];
+  inspectedWork: readonly InspectedWork[];
   onRefreshJobs: () => void;
   pendingActions: PendingAction[];
   /** Called after a decision so the decided row leaves on click, not on the next poll. */
@@ -308,6 +309,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               pendingActions={props.pendingActions}
               onRefreshQueue={props.onRefreshQueue}
               backgroundJobs={props.backgroundJobs}
+              inspectedWork={props.inspectedWork}
               onRefreshJobs={props.onRefreshJobs}
               onOpenSurface={focus.navigate}
               onChangelogSeen={props.onChangelogSeen}

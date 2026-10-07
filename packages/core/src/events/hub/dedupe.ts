@@ -17,7 +17,7 @@ function subordinateTaskDedupeKey(payload: SubordinateTaskPayload): string | nul
 }
 
 /** The key a chat message's assignment is admitted under: one assignment per message. */
-export function subordinateMessageDedupeKey(messageId: string): string {
+function subordinateMessageDedupeKey(messageId: string): string {
   return `subordinate-message:${messageId}`;
 }
 

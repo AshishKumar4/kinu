@@ -118,22 +118,27 @@ function harness(input: {
   const pinned = countingModel('m-pinned');
   const resolvedSpecs: string[] = [];
 
+  const pick = (spec: string) => {
+    if (spec === 'm-default') return caller.model;
+
+    if (spec === 'm-deep-v1') return deepV1.model;
+
+    if (spec === 'm-deep-v2') return deepV2.model;
+
+    if (spec === 'm-pinned') return pinned.model;
+    throw new Error(`test fixture has no model for ${spec}`);
+  };
+
   const swarm: AgentsSwarmDeps = {
     rt,
-    hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+    // A node resolves the spec its run routed it to through its own seat.
+    hostNode: hostedSeatsOver({ rt, db: testSql.db, model: pick }).hostNode,
     model: () => caller.model,
     ...unobservedSearchSeams(),
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);
 
-      if (spec === 'm-default') return caller.model;
-
-      if (spec === 'm-deep-v1') return deepV1.model;
-
-      if (spec === 'm-deep-v2') return deepV2.model;
-
-      if (spec === 'm-pinned') return pinned.model;
-      throw new Error(`test fixture has no model for ${spec}`);
+      return pick(spec);
     },
   };
 
@@ -271,7 +276,7 @@ describe('a delegated tier routes the model its nodes run', () => {
 
     const entry = createAgentsTool({
       mode: 'build', swarms: true,
-      swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: () => caller.model, ...unobservedSearchSeams() },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db, model: () => caller.model }).hostNode, model: () => caller.model, ...unobservedSearchSeams() },
     });
 
     if (!entry) throw new Error('Expected the agents tool to be created');
@@ -382,20 +387,27 @@ function perNodeHarness() {
   const b = countingModel('m-beta');
   const resolvedSpecs: string[] = [];
 
+  const pick = (spec: string) => {
+    // The fixture's tier, which every actor's own profile resolves when no list routes it: the caller's model here.
+    if (spec === 'test-model') return caller.model;
+
+    if (spec === 'm-alpha') return a.model;
+
+    if (spec === 'm-beta') return b.model;
+
+    if (spec === 'm-default') return caller.model;
+    throw new Error(`test fixture has no model for ${spec}`);
+  };
+
   const swarm: AgentsSwarmDeps = {
     rt,
-    hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+    hostNode: hostedSeatsOver({ rt, db: testSql.db, model: pick }).hostNode,
     model: () => caller.model,
     ...unobservedSearchSeams(),
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);
 
-      if (spec === 'm-alpha') return a.model;
-
-      if (spec === 'm-beta') return b.model;
-
-      if (spec === 'm-default') return caller.model;
-      throw new Error(`test fixture has no model for ${spec}`);
+      return pick(spec);
     },
   };
 
