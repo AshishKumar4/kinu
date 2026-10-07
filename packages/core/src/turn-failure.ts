@@ -2,6 +2,8 @@
  * Turn-failure classification and overflow recovery shared by both backends.
  * `context_length` arms force-compaction plus one retry; `rate_limit` does not, unless the last per-request prompt exceeded half the window.
  */
+import { APICallError, RetryError } from 'ai';
+import { renderThrownChain } from './obs/index';
 
 /** `auth` and `admission_refused` (our own pre-submission gate, #20) are never `transient`: a retry can only fail again. */
 export type TurnFailureClass = 'context_length' | 'rate_limit' | 'auth' | 'admission_refused' | 'transient';
@@ -26,6 +28,9 @@ const CONTEXT_LENGTH_PATTERNS: readonly RegExp[] = [
   /exceeds? the (?:maximum )?(?:token|context)/i,
 ];
 
+/** OpenAI's 429 for one request over the whole per-minute budget, which no wait cures: "Request too large for …". */
+const UNSERVABLE_REQUEST = /request too large/i;
+
 const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
   /\b429\b/,
   /too many requests/i,
@@ -36,7 +41,7 @@ const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
 /** Leads the message `refuseOversizedRequest` (orchestrator/turn-context.ts) raises. */
 export const ADMISSION_REFUSAL_MARK = 'Request refused before submission';
 
-/** Kept in step with the texts `cloudflare-ai-fetch.ts` and `providers/codex.ts` emit. */
+/** A credential refused before any response (an OAuth refresh's `invalid_grant`); a refused request has its 401 or 403. */
 const AUTH_PATTERNS: readonly RegExp[] = [
   /\b401\b/,
   /unauthorized/i,
@@ -73,30 +78,61 @@ export interface TurnFailureSignals {
   contextWindow?: number | null;
 }
 
-export function classifyTurnFailure(error: string, signals: TurnFailureSignals = {}): TurnFailureClass {
-  // First: the refusal text also matches the context-length patterns.
-  if (error.includes(ADMISSION_REFUSAL_MARK)) return 'admission_refused';
+/** A rate limit on a prompt past half the window is the prompt's size, which compaction cures. */
+function rateLimited(signals: TurnFailureSignals): TurnFailureClass {
+  const { lastPromptTokens, contextWindow } = signals;
 
-  if (CONTEXT_LENGTH_PATTERNS.some((re) => re.test(error))) return 'context_length';
+  const oversized =
+    lastPromptTokens !== undefined && lastPromptTokens > 0 &&
+    contextWindow !== undefined && contextWindow !== null && contextWindow > 0 &&
+    lastPromptTokens > contextWindow * 0.5;
 
-  if (RATE_LIMIT_PATTERNS.some((re) => re.test(error))) {
-    const { lastPromptTokens, contextWindow } = signals;
+  return oversized ? 'context_length' : 'rate_limit';
+}
 
-    const oversized =
-      lastPromptTokens !== undefined && lastPromptTokens > 0 &&
-      contextWindow !== undefined && contextWindow !== null && contextWindow > 0 &&
-      lastPromptTokens > contextWindow * 0.5;
+/** The status a provider refused with, through `streamText`'s retry wrapper; a 2xx `APICallError` wraps a failed read. */
+function refusalStatus(failure: Error): number | undefined {
+  const seen = new Set<unknown>();
 
-    return oversized ? 'context_length' : 'rate_limit';
+  for (let link: unknown = failure; link instanceof Error && !seen.has(link); link = RetryError.isInstance(link) ? link.lastError : link.cause) {
+    seen.add(link);
+
+    if (APICallError.isInstance(link) && link.statusCode !== undefined && link.statusCode >= 400) return link.statusCode;
   }
 
-  if (AUTH_PATTERNS.some((re) => re.test(error))) return 'auth';
+  return undefined;
+}
 
-  return 'transient';
+/** A provider's refusal by its HTTP status; only a failure with none (a dropped connection, a local refusal) by its text. */
+export function classifyTurnFailure(failure: string | Error, signals: TurnFailureSignals = {}): TurnFailureClass {
+  const error = failure instanceof Error ? renderThrownChain({ cause: failure }) : failure;
+
+  // First: the refusal text also matches the context-length patterns.
+  if (error.includes(ADMISSION_REFUSAL_MARK)) return 'admission_refused';
+  const status = failure instanceof Error ? refusalStatus(failure) : undefined;
+  const tooLong = CONTEXT_LENGTH_PATTERNS.some((re) => re.test(error));
+
+  if (status === undefined) {
+    if (tooLong) return 'context_length';
+
+    if (RATE_LIMIT_PATTERNS.some((re) => re.test(error))) return rateLimited(signals);
+
+    return AUTH_PATTERNS.some((re) => re.test(error)) ? 'auth' : 'transient';
+  }
+
+  if (status === 413 || (status === 429 && UNSERVABLE_REQUEST.test(error))) return 'context_length';
+
+  if (status === 429) return rateLimited(signals);
+
+  if (status === 401 || status === 403) return 'auth';
+
+  // A too-long request has no status of its own (OpenAI, Anthropic and Gemini answer 400): only its text says so.
+  return tooLong ? 'context_length' : 'transient';
 }
 
 export interface OverflowRecoveryInput extends TurnFailureSignals {
-  error: string | undefined;
+  /** The turn's failure: an `APICallError` anywhere in its chain is read by its status. */
+  error: string | Error | undefined;
   turnWasOverflowRetry: boolean;
 }
 
@@ -108,7 +144,7 @@ export interface OverflowRecoveryDecision {
 }
 
 export function planOverflowRecovery(input: OverflowRecoveryInput): OverflowRecoveryDecision {
-  if (!input.error) return { failureClass: null, forceCompaction: false, enqueueRetry: false };
+  if (input.error === undefined || input.error === '') return { failureClass: null, forceCompaction: false, enqueueRetry: false };
   const failureClass = classifyTurnFailure(input.error, input);
 
   if (failureClass !== 'context_length') return { failureClass, forceCompaction: false, enqueueRetry: false };

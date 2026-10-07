@@ -373,11 +373,11 @@ export class ChatSession {
   get currentRunId(): string | null { return this.runId; }
 
   /** Arms the forced compaction and says whether to retry; a too-long refusal also records the window it measured. */
-  private recoverOverflow(prepared: PreparedTurn, error: string, turnWasOverflowRetry: boolean): boolean {
+  private recoverOverflow(prepared: PreparedTurn, failure: Error, error: string, turnWasOverflowRetry: boolean): boolean {
     const lastPromptTokens = this.actorSession.orchestrator.acc.lastPromptTokens;
 
     const recovery = applyOverflowRecovery({
-      error, lastPromptTokens, contextWindow: prepared.contextWindow, turnWasOverflowRetry, state: this.compactionState, sessionKey: prepared.sessionKey,
+      error: failure, lastPromptTokens, contextWindow: prepared.contextWindow, turnWasOverflowRetry, state: this.compactionState, sessionKey: prepared.sessionKey,
     });
 
     const model = prepared.execution.chat.modelSpec ?? prepared.execution.chat.modelContext?.id;
@@ -1123,7 +1123,7 @@ export class ChatSession {
     if (execution.failure !== null) {
       const message = renderThrownChain({ cause: execution.failure });
       runError = message.slice(0, 500);
-      overflowRetry = this.recoverOverflow(prepared, message, item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT);
+      overflowRetry = this.recoverOverflow(prepared, execution.failure, message, item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT);
     }
 
     // Classified once: the classifier also files the mid-work defect.

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/turn-failure.ts b/packages/core/src/turn-failure.ts
-index b4236bb73..1227688d2 100644
+index 57a4003aa..653a395fa 100644
 --- a/packages/core/src/turn-failure.ts
 +++ b/packages/core/src/turn-failure.ts
-@@ -85,7 +85,7 @@ export function classifyTurnFailure(error: string, signals: TurnFailureSignals =
-     const oversized =
-       lastPromptTokens !== undefined && lastPromptTokens > 0 &&
-       contextWindow !== undefined && contextWindow !== null && contextWindow > 0 &&
--      lastPromptTokens > contextWindow * 0.5;
-+      lastPromptTokens > contextWindow * 5;
+@@ -85,7 +85,7 @@ function rateLimited(signals: TurnFailureSignals): TurnFailureClass {
+   const oversized =
+     lastPromptTokens !== undefined && lastPromptTokens > 0 &&
+     contextWindow !== undefined && contextWindow !== null && contextWindow > 0 &&
+-    lastPromptTokens > contextWindow * 0.5;
++    lastPromptTokens > contextWindow * 5;
  
-     return oversized ? 'context_length' : 'rate_limit';
-   }
+   return oversized ? 'context_length' : 'rate_limit';
+ }

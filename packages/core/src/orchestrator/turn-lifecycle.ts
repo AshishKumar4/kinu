@@ -277,7 +277,8 @@ export function persistMeasuredPromptTokens(
  * no provider/network await can sit between a persisted answer and its claim.
  */
 export function applyOverflowRecovery(opts: {
-  error: string;
+  /** The turn's failure, as thrown: an `APICallError` in its chain is read by its status. */
+  error: string | Error;
   /** Undefined when no step reported one; the size heuristic then does not apply. */
   lastPromptTokens: number | undefined;
   contextWindow: number | null;
