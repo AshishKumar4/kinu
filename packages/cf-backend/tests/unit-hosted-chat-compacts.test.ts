@@ -99,13 +99,12 @@ const SEARCH_TASK = 'Name one way to tokenize faster.';
 
 const STILL = 'Are you still with me?';
 
-/** Whether a request answers a tool call it made: its turn's next step. */
-const answeredTool = (run: RecordedGatewayRun): boolean => requestOf(run).messages.at(-1)?.role === 'tool';
-
 test("an added agent's chat compacts, hires, starts a search, and keeps answering", async () => {
   const nodes: string[] = [];
   const hiring: string[] = [];
   const asked = { hire: 0, node: nodes, report: 0, still: 0 };
+  // Each tool is called once, rather than read back from the next step's history.
+  const called = { hire: false, swarm: false };
 
   const gateway = stubAiBinding((run) => {
     const text = textOf(run);
@@ -126,7 +125,7 @@ test("an added agent's chat compacts, hires, starts a search, and keeps answerin
       return chatCompletion(run, 'Use a lookup table for single-byte tokens.');
     }
 
-    if (text.includes('[subordinate_report]') && !answeredTool(run)) asked.report += 1;
+    if (text.includes('[subordinate_report]')) asked.report += 1;
 
     if (text.includes(STILL)) {
       asked.still += 1;
@@ -134,20 +133,23 @@ test("an added agent's chat compacts, hires, starts a search, and keeps answerin
       return chatCompletion(run, 'Still here, with the lexer checked and the search running.');
     }
 
-    if (text.includes(SEARCH_ASK) && !text.includes('swarm_0')) {
+    if (text.includes(SEARCH_ASK) && !called.swarm) {
+      called.swarm = true;
+
       return toolCallCompletion(run, { tool: 'agents', args: { action: 'swarm', task: SEARCH_TASK, preset: 'ideate', branches: 1, depth: 1 } }, 'swarm_0');
     }
 
-    if (text.includes(HIRE_ASK) && !text.includes('hire_0')) {
+    if (text.includes(HIRE_ASK) && !called.hire) {
       hiring.push(text);
 
       // The first ask overruns the window: the fold runs, and the one retry hires on the folded history.
-      return hiring.length === 1
-        ? Response.json(TOO_LONG, { status: 400 })
-        : toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: HIRE_BRIEF } }, 'hire_0');
+      if (hiring.length === 1) return Response.json(TOO_LONG, { status: 400 });
+      called.hire = true;
+
+      return toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: HIRE_BRIEF } }, 'hire_0');
     }
 
-    return chatCompletion(run, answeredTool(run) ? 'Done.' : ANSWER);
+    return chatCompletion(run, hiring.length === 0 ? ANSWER : 'Done.');
   });
 
   const workspace = gatewayWorkspace(gateway);

@@ -11,7 +11,7 @@ import {
   actorOver, driveUntil, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, rosterOver, wakeForDelegatedTask,
   type StartedHarness,
 } from './helpers/actor-harness';
-import { chatCompletion, openingOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
+import { chatCompletion, openingOf, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 
 afterEach(() => { setSystemTime(); });
 
@@ -127,7 +127,9 @@ test("a delegated task whose turn cannot be prepared is answered to its hirer as
   rosterOver(workspace.db).assign('drafter', SECOND);
   await wakeForDelegatedTask(workspace, child.reference.actorId, SECOND);
 
-  const told = () => openings().filter((text) => text.includes('[subordinate_report]') && text.includes('failed to run its assigned turn'));
+  // The hirer's later turns open on its first report, so the second is read from the whole request.
+  const told = () => gateway.runs.map((run) => JSON.stringify(requestOf(run).messages))
+    .filter((text) => text.includes('[subordinate_report]') && text.includes('failed to run its assigned turn'));
 
   await driveUntil(workspace, 'the hirer was never told the second task could not run', () => told().length > 0);
   // The report names what refused the turn: the pinned model its provider does not list.
