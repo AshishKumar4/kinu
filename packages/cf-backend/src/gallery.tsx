@@ -80,7 +80,7 @@ import UserSettingsPage from "@/pages/UserSettingsPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
-  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, workspaceGenesisSignal,
+  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, TURN_CLAIM_FRAME, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
@@ -1308,10 +1308,14 @@ window.WebSocket = new Proxy(RealWebSocket, {
   },
 });
 
-/** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo. */
+/** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo; `turn_claim` is the root's claim as it changes; `head_stream` and `head_activity` are a swarm head's live paint and landed step. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity"]),
   reads: v.optional(v.array(v.string())),
+  claim: v.optional(JsonObjectSchema),
+  headId: v.optional(v.string()),
+  kind: v.optional(v.string()),
+  delta: v.optional(v.string()),
   actorId: v.optional(v.string()),
   id: v.optional(v.string()),
   state: v.optional(v.string()),
@@ -2264,6 +2268,16 @@ async function galleryDecidePlan(args?: unknown[]): Promise<JsonValue> {
   return v.parse(JsonValueSchema, galleryPlanRpc("decidePlanReview", args)?.value ?? null);
 }
 
+/** Settles a stranded turn as the server does: the claim frame says so, and `data-gallery-recoveries` counts the asks. */
+async function galleryRecoverTurn(): Promise<JsonValue> {
+  const root = document.documentElement.dataset;
+
+  root.galleryRecoveries = String(Number(root.galleryRecoveries ?? "0") + 1);
+  galleryServerPush(JSON.stringify({ type: TURN_CLAIM_FRAME, claim: { kind: "settled" } }));
+
+  return null;
+}
+
 /** What went to the running turn rather than opening one. */
 async function galleryMidTurnSend(args?: unknown[]): Promise<JsonValue> {
   const asks = document.documentElement.dataset;
@@ -2301,6 +2315,7 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["resolveDeviceConsent", galleryResolveConsent],
   ["listBackgroundJobs", galleryJobsRead],
   ["decidePlanReview", galleryDecidePlan],
+  ["recoverStrandedTurn", galleryRecoverTurn],
 ]);
 
 /** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
@@ -2349,12 +2364,15 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 
     if (method === "listMounts") return rpcResult([]).json<T>();
 
-    if (method === "getMemoryContent") return rpcResult(`Memory ${revision}`).json<T>();
+    // `data-workspace-revision="empty"`: the workspace remembers nothing.
+    const memory = revision === "empty" ? "" : `Memory ${revision}`;
+
+    if (method === "getMemoryContent") return rpcResult(memory).json<T>();
 
     if (method === "getWorkspaceSnapshot") {
       const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
 
-      return rpcResult(v.parse(JsonValueSchema, { ...snapshot, memoryContent: `Memory ${revision}`, activePlan: galleryAgentPlan })).json<T>();
+      return rpcResult(v.parse(JsonValueSchema, { ...snapshot, memoryContent: memory, activePlan: galleryAgentPlan })).json<T>();
     }
   }
 
@@ -6328,11 +6346,11 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
 }
 
 /** The only dynamic import in this dispatch: the page pulls d3 and the tree renderer. It reads through `useKinu`, resolved to `gallery-agent-stub` here. */
-async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
+async function mctsExplorerFrame(run: string | null): Promise<MountedFrame> {
   const { default: SwarmExplorer } = await import("@/pages/SwarmExplorer");
-  serveGalleryRpc(focusRun(run));
+  serveGalleryRpc(run === null ? forkRpc : focusRun(run));
 
-  return routedPage(`/swarm/checkout-fixes?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
+  return routedPage(run === null ? "/swarm/checkout-fixes" : `/swarm/checkout-fixes?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
 }
 
 function routedPage(entry: string, path: string, page: React.ReactNode, height = "h-screen"): MountedFrame {
@@ -6643,6 +6661,8 @@ async function mount() {
     ["forkfull", () => mctsExplorerFrame("n000")],
     ["forkbig", () => mctsExplorerFrame("n000")],
     ["forkswarmfull", () => mctsExplorerFrame("sw000")],
+    // `&run=` is the permalink's run, as any id the reader typed; none opens the newest.
+    ["forkexplorer", () => mctsExplorerFrame(new URLSearchParams(location.search).get("run"))],
     ["settings", settingsFrame],
     ["control", controlFrame],
     ["home", homeFrame],

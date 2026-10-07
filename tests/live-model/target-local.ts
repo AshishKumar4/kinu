@@ -33,6 +33,7 @@
  *     after a paid episode.
  */
 import { Database } from 'bun:sqlite';
+import { workspaceDatabase } from '@kinu.run/test-utils';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -73,8 +74,7 @@ export function localTargetFolder(dir: string): string {
 export async function provisionLocalTarget(opts: LocalTargetOptions): Promise<LocalTarget> {
   mkdirSync(opts.dir, { recursive: true });
   const dbPath = join(opts.dir, 'agent.db');
-  const db = new Database(dbPath);
-  db.exec('PRAGMA journal_mode = WAL');
+  const db = workspaceDatabase(dbPath);
 
   await createWorkspace(db, { name: opts.workspace, purpose: opts.purpose, llm: opts.llm, home: workspaceHome(db) });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));

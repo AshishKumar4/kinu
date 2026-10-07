@@ -32,7 +32,8 @@ import { buildEvalAgentSurface, collectStepText, createStepToolCallLog } from '.
 import { localTargetFolder, provisionLocalTarget } from './target-local';
 import { seedTranscriptEntry, finalIntegerAnswer,
 liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
-UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
+UNCONFIGURED_LLM, workspaceDatabase,
+} from '@kinu.run/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
 // which target and cost basis this run used, or why it is skipping — and throws
@@ -313,7 +314,7 @@ describe('E2E Full Lifecycle', () => {
   liveTest('6. close and reopen agent — verify persistence', async () => {
     db.close();
 
-    const db2 = new Database(DB_PATH);
+    const db2 = workspaceDatabase(DB_PATH);
     const { rt: rt2, info } = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG, cwd: localTargetFolder(TEST_DIR) });
     // Hand over the reopened database and runtime before any assertion can
     // throw. Otherwise, an assertion failure leaves later steps holding the

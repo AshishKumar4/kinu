@@ -1,7 +1,6 @@
 // Resuming a workspace a previous process left mid-fork settles stale `running` head rows and tells the agent.
 // Core pins the read and wake (core/tests/integration-cancelled-fork-visibility.test.ts); this pins `recoverBackgroundJobs`.
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { TestLanguageModelV2 } from './test-language-model';
 import { HeadJournal, defaultLoopOrigin, initHeadsTables, initBackgroundJobsTable } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
@@ -9,7 +8,7 @@ import type { LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { makeExecRaw, makeSql } from '../src/runtime';
-import { scratchPath, scratchDir } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -46,7 +45,7 @@ const RATIONALE = 'four angles on the research question';
 
 /** Four head rows still `running` while the fork's job is already `cancelled by operator`, as `kinu stop` leaves it. */
 function interruptedWorkspace() {
-  const db = new Database(scratchPath('local-session-fork-resume', 'agent.db'), { create: true });
+  const db = workspaceDatabase(scratchPath('local-session-fork-resume', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   const execRaw = makeExecRaw(db);
@@ -112,7 +111,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
   });
 
   test('a clean workspace resumes silently', async () => {
-    const db = new Database(scratchPath('local-session-fork-clean', 'agent.db'), { create: true });
+    const db = workspaceDatabase(scratchPath('local-session-fork-clean', 'agent.db'), { create: true });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const events: SessionEvent[] = [];

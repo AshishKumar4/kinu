@@ -2,7 +2,6 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The mutable scaffold on a local workspace through LocalAgentSession: a promoted scaffold drives the turn,
 // and a pending proposal resolves, so maybeEvolveScaffold's pending guard cannot deadlock the loop.
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { AgentRuntime, LLMProviderConfig } from '@kinu.run/core';
@@ -14,7 +13,7 @@ import {
 } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { readTranscriptRows, scratchPath, scratchDir } from '@kinu.run/test-utils';
+import { readTranscriptRows, scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 
@@ -46,7 +45,7 @@ function fakeModel(answer: string): LanguageModel {
 }
 
 async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean } = {}) {
-  const db = new Database(scratchPath('scaffold-turn', 'agent.db'), { create: true });
+  const db = workspaceDatabase(scratchPath('scaffold-turn', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   // What `kinu create` provisions (workspace-birth.ts), minus the shadow-rollout ledger,

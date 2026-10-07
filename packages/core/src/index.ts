@@ -1310,6 +1310,7 @@ export {
   DEV_IDENTITY_HEADER,
   EVAL_ACCOUNTS,
   EVAL_TRIAL_ACCOUNTS,
+  inheritedRows,
   parseEvalAccount,
   type EvalAccount,
   DEVICE_CONNECT_PATH,

@@ -231,7 +231,7 @@ export function EmptyState({ icon, title, hint, children }: {
   icon?: ReactNode; title: string; hint?: ReactNode; children?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
+    <div className="flex flex-col items-center justify-center py-16 text-center" data-empty>
       <div className={`mb-3 ${icon ? "p-text-3 opacity-60" : "text-[var(--c-accent)] opacity-55"}`}>
         {icon ?? <KinuMark size={30} />}
       </div>
@@ -291,7 +291,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
   };
 
   return (
-    <section>
+    <section data-section={id}>
       <button
         type="button"
         onClick={toggle}

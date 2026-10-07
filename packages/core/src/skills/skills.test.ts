@@ -57,7 +57,7 @@ function memoryVfs(
       calls.stat.push(p);
       const v = files.get(p);
 
-      if (v === undefined) return null;
+      if (v === undefined) return [...files.keys()].some((k) => k.startsWith(`${p.replace(/\/$/, '')}/`)) ? { size: 0, mtimeMs: 0, type: 'directory' } : null;
 
       return { size: opts.sizes?.[p] ?? new TextEncoder().encode(v).byteLength, mtimeMs: 0, type: 'file' };
     },
@@ -745,8 +745,8 @@ describe('discoverSkills', () => {
 
     for (const skill of found.skills) expect('body' in skill).toBe(false);
     expect(v.calls.readFile.sort()).toEqual([`${WORKSPACE_SKILLS_DIR}/one.md`, `${WORKSPACE_SKILLS_DIR}/two.md`]);
-    // Size is consulted before bytes, for every candidate.
-    expect(v.calls.stat.sort()).toEqual([`${WORKSPACE_SKILLS_DIR}/one.md`, `${WORKSPACE_SKILLS_DIR}/two.md`]);
+    // Each root is looked up once before it is listed, and each candidate sized before its bytes.
+    expect(v.calls.stat.sort()).toEqual([SHARED_SKILLS_DIR, WORKSPACE_SKILLS_DIR, `${WORKSPACE_SKILLS_DIR}/one.md`, `${WORKSPACE_SKILLS_DIR}/two.md`].sort());
     const one = found.skills.find(s => s.name === 'one');
     expect(one?.bodyRef).toEqual({ kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/one.md`, chars: 'BODY-ONE'.length });
   });

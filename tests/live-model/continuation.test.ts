@@ -14,7 +14,6 @@
  * answer is right.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
@@ -29,7 +28,7 @@ import {
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
 import {
   EVAL_BACKEND_ENV, liveModelCallSink, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
-  reportLiveModelSpend, resolveEvalBackend, scratchDir, scratchPath, UNCONFIGURED_LLM,
+  reportLiveModelSpend, resolveEvalBackend, scratchDir, scratchPath, UNCONFIGURED_LLM, workspaceDatabase,
 } from '@kinu.run/test-utils';
 
 const BACKEND = resolveEvalBackend();
@@ -119,7 +118,7 @@ function unpairedCalls(request: SentRequest): string[] {
   return request.messages.flatMap((message) => (message.tool_calls ?? []).map((call) => call.id)).filter((id) => !answered.has(id));
 }
 
-const db = new Database(scratchPath('continuation', 'agent.db'));
+const db = workspaceDatabase(scratchPath('continuation', 'agent.db'));
 
 initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 

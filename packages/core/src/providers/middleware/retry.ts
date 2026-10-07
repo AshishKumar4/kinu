@@ -3,7 +3,10 @@
  * an opening error or a silent attempt is backed off, and a call with no retries left hands over to the fallback chain.
  * A stream is bounded by silence, never by duration: each provider event, keepalives included, resets the bound.
  */
-import type { LanguageModelV4CallOptions, LanguageModelV4StreamPart, LanguageModelV4StreamResult, SharedV4ProviderOptions } from '@ai-sdk/provider';
+import type {
+  LanguageModelV4CallOptions, LanguageModelV4Content, LanguageModelV4GenerateResult, LanguageModelV4Reasoning, LanguageModelV4ResponseMetadata,
+  LanguageModelV4StreamPart, LanguageModelV4StreamResult, LanguageModelV4Text, SharedV4ProviderOptions, SharedV4Warning,
+} from '@ai-sdk/provider';
 import { APICallError, type LanguageModelMiddleware } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -33,6 +36,9 @@ export interface RetryPolicy {
   readonly lane: string;
   /** Called before each sleep, including joined cooldowns; a throw is reported and ignored. */
   readonly onWait?: (info: ProviderWaitInfo) => void;
+  /** The provider streams every call on its wire (the ChatGPT plan): a generate is its stream collected, under the
+   *  same silence bound. */
+  readonly generateByStream?: boolean;
   readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   readonly now?: () => number;
   readonly random?: () => number;
@@ -63,6 +69,7 @@ function kinuOptions(params: LanguageModelV4CallOptions): KinuOptions {
 
 type Opened<T> =
   | { readonly kind: 'answer'; readonly value: T }
+  | { readonly kind: 'failed'; readonly error: unknown }
   | { readonly kind: 'stall' | 'backoff' };
 
 /** One call to the provider; `last` once no retry is left. */
@@ -76,7 +83,13 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
       includeRawChunks: true,
       providerOptions: { ...params.providerOptions, kinu: { ...params.providerOptions?.kinu, raw: params.includeRawChunks === true } },
     }),
-    wrapGenerate: ({ doGenerate, params }) => settle(retrying(policy, params, async () => ({ kind: 'answer', value: await doGenerate() }))),
+    wrapGenerate: ({ doGenerate, doStream, params }) => settle(retrying(policy, params, policy.generateByStream === true
+      ? async (last) => {
+        const opened = await openStream({ provider: policy.provider, opening: doStream(), last, keepRaw: false });
+
+        return opened.kind === 'answer' ? await collected(opened.value) : opened;
+      }
+      : async () => ({ kind: 'answer', value: await doGenerate() }))),
     wrapStream: ({ doStream, params }) => settle(retrying(policy, params, (last) => openStream({
       provider: policy.provider, opening: doStream(), last, keepRaw: kinuOptions(params).raw,
     }))),
@@ -139,6 +152,8 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
         const outcome = opened.value;
 
         if (outcome.kind === 'answer') return outcome.value;
+
+        if (outcome.kind === 'failed') return yield* Effect.die(outcome.error);
         yield* spendRetry(() => stalled(policy.provider));
         const waitMs = Math.floor(random() * backoffCeiling(attemptNumber));
 
@@ -244,6 +259,48 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
 
     return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: null });
   }
+}
+
+type Block = LanguageModelV4Text | LanguageModelV4Reasoning;
+
+/** A stream read to its end as a generate's answer: its text and reasoning joined per block, its other content as it
+ *  came, its usage and finish from the `finish` part. */
+async function collected(answer: LanguageModelV4StreamResult): Promise<Opened<LanguageModelV4GenerateResult>> {
+  const content: Array<LanguageModelV4Content | string> = [];
+  const blocks = new Map<string, Block>();
+  const parts = partsOf(answer.stream);
+  let warnings: SharedV4Warning[] = [];
+  let metadata: LanguageModelV4ResponseMetadata = {};
+
+  for (let part = await parts.read(); part !== 'end'; part = await parts.read()) {
+    if (part.type === 'error') return { kind: 'failed', error: part.error };
+
+    if (part.type === 'finish') {
+      const order = content.flatMap((entry) => (typeof entry === 'string' ? [blocks.get(entry)] : [entry]))
+        .flatMap((entry) => (entry === undefined ? [] : [entry]));
+
+      return { kind: 'answer', value: {
+        content: order, finishReason: part.finishReason, usage: part.usage, warnings,
+        ...(part.providerMetadata !== undefined && { providerMetadata: part.providerMetadata }),
+        ...(answer.request !== undefined && { request: answer.request }),
+        response: { ...answer.response, ...metadata },
+      } };
+    }
+
+    if (part.type === 'stream-start') warnings = part.warnings;
+    else if (part.type === 'response-metadata') metadata = { id: part.id, timestamp: part.timestamp, modelId: part.modelId };
+    else if (part.type === 'text-start' || part.type === 'reasoning-start') {
+      blocks.set(part.id, { type: part.type === 'text-start' ? 'text' : 'reasoning', text: '', ...(part.providerMetadata !== undefined && { providerMetadata: part.providerMetadata }) });
+      content.push(part.id);
+    } else if (part.type === 'text-delta' || part.type === 'reasoning-delta') {
+      const block = blocks.get(part.id);
+
+      if (block !== undefined) blocks.set(part.id, { ...block, text: block.text + part.delta });
+    } else if (part.type === 'tool-call' || part.type === 'tool-result' || part.type === 'file' || part.type === 'reasoning-file'
+      || part.type === 'source' || part.type === 'custom' || part.type === 'tool-approval-request') content.push(part);
+  }
+
+  return { kind: 'failed', error: new APICallError({ message: 'the stream ended without its finish', url: 'stream', requestBodyValues: undefined, isRetryable: true }) };
 }
 
 /** A stream's parts one at a time, then `end`. */

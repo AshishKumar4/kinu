@@ -1,13 +1,12 @@
 import { expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { createCLIRuntime } from '../src/runtime';
 import { localActorDirectory, actorHomeName } from '@kinu.run/core';
 import { SessionPayloads } from '../../core/src/session/payload';
-import { scratchDir, scratchPath } from '@kinu.run/test-utils';
+import { scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 
 // The homes are directories of the own space (2026-10-04); the uid wall between siblings was the in-SQLite plane's.
 test('large canonical payloads use the issued child home', async () => {
-  const db = new Database(scratchPath('workspace', 'agent.db'));
+  const db = workspaceDatabase(scratchPath('workspace', 'agent.db'));
   const runtime = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' } });
 
   try {
@@ -34,7 +33,7 @@ test('large canonical payloads use the issued child home', async () => {
 
 // A home is named by storage key: two parents may each hire a `helper`, and one name would be one home for both.
 test('two hires of one name under two parents keep separate homes, named as the shell and retirement name them', async () => {
-  const db = new Database(scratchPath('workspace', 'agent.db'));
+  const db = workspaceDatabase(scratchPath('workspace', 'agent.db'));
   const runtime = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' } });
 
   try {

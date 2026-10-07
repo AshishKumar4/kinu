@@ -186,6 +186,9 @@ export interface ModelProvider {
   /** Where a model's waits are shared, beside its account; the provider by default. */
   laneOf?(modelId: string): string;
 
+  /** Its wire streams every call, a generate included, so the stack collects a generate from the stream. */
+  readonly streamsGenerate?: boolean;
+
   /** Pre-request token count via the provider's documented endpoint; absent means none.
    *  Report `unsupported` rather than drop an unrepresentable part. */
   countInputTokens?(

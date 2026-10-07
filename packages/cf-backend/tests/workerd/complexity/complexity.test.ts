@@ -36,6 +36,17 @@ interface Subject {
   readonly why: string;
 }
 
+/** The Diffs read and the Changes poll at each size, measured on one fresh object seeded once for both. */
+const diffs = new Map<number, Promise<{ readonly read: OperationCost; readonly poll: OperationCost }>>();
+
+function diffsAt(size: number): Promise<{ readonly read: OperationCost; readonly poll: OperationCost }> {
+  const measured = diffs.get(size) ?? env.COMPLEXITY_PROBE.get(env.COMPLEXITY_PROBE.idFromName(`diffs/${String(size)}/${crypto.randomUUID()}`)).diffReadAndPoll(size);
+
+  diffs.set(size, measured);
+
+  return measured;
+}
+
 const SUBJECTS: readonly Subject[] = [{
   name: 'activation, the open-turn lookup',
   unit: 'finished turns',
@@ -91,7 +102,7 @@ const SUBJECTS: readonly Subject[] = [{
   name: 'workspace Diffs, one read',
   unit: 'files in the workspace',
   sizes: [10, 1_000, 10_000],
-  run: async (probe, size) => await probe.diffRead(size),
+  run: async (_probe, size) => (await diffsAt(size)).read,
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
   why: 'the baseline is a Nimbus snapshot of the store, and a read pages its diff, which visits only the paths '
     + 'written since the review; it reads the two sides of each of those and writes nothing',
@@ -99,7 +110,7 @@ const SUBJECTS: readonly Subject[] = [{
   name: 'workspace Diffs, a poll with nothing changed',
   unit: 'files in the workspace',
   sizes: [1_000, 10_000],
-  run: async (probe, size) => await probe.diffPoll(size),
+  run: async (_probe, size) => (await diffsAt(size)).poll,
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
   why: 'the change-set is held until a file event on a reviewed path or a review moves it, so a poll with '
     + 'nothing changed reads nothing of the store',
@@ -154,8 +165,12 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * lookups because its tree lives in SQL instead of an in-memory inode map: 398. 397 as measured in every run since
  * eec3dad1e8 (CI at eec3dad1e8, drained and release, same tables): one statement left the turn after c82a2a0e15 set
  * 398. Parking owner-fixable refusals rides the claim's one statement and loads an actor's notices once (T1-T3).
+ * agents 0.26 records a fiber's outcome on its `cf_agents_runs` row before deleting it (+1 a fiber), and the MCP warm,
+ * whose recovery only drops it, left its fiber for `keepAliveWhile` (-4): 396, measured at d240dd3b8 against 400.
+ * 393 once an absent SOUL.md is one lookup on the namespace, not three on the bundle plane, and a missing skills
+ * root one, not the namespace's two (-3; the bun harness turn 314 -> 311, the same vfs tables CI counted).
  */
-const TURN_STATEMENTS = 397;
+const TURN_STATEMENTS = 393;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

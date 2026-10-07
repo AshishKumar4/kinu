@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { AwaitedList, scratchPath, scratchDir } from '@kinu.run/test-utils';
+import { AwaitedList, scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
 import { EventLog } from '../../core/src/events/hub/index';
@@ -79,7 +79,7 @@ class DroppedTimerSession extends LocalAgentSession {
 
 
 function openDb(name: string): Database {
-  const db = new Database(scratchPath('loop-admission', `${name}.db`));
+  const db = workspaceDatabase(scratchPath('loop-admission', `${name}.db`));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   return db;

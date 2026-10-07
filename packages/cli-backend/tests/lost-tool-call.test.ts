@@ -5,11 +5,10 @@
  * first process is killed inside it (`fixtures/lost-call-process.ts`).
  */
 import { expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { existsSync, readFileSync } from 'node:fs';
 import type { LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
-import { scratchPath, scratchDir, spawnTest } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir, spawnTest, workspaceDatabase } from '@kinu.run/test-utils';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -64,7 +63,7 @@ test('a process killed after its call\'s effect: the next runs it no second time
   dying.kill('SIGKILL');
   await dying.exited;
 
-  const db = new Database(dbPath);
+  const db = workspaceDatabase(dbPath);
   const rt = createCLIRuntime(db, { cwd, llm: DUMMY_LLM });
 
   rt.actor.config.setLearning(false);

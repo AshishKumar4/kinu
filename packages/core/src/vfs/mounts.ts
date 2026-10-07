@@ -285,7 +285,8 @@ export function workspaceFilePlane(box: NamespaceBox, input: {
 			return ready;
 		});
 
-		const files = withMountTable({ namespace: opened, home: input.home }, input.mounts);
+		// The workspace's own files made a write's missing directories; its namespace does so as the principal.
+		const files = withMountTable({ namespace: opened, home: input.home, writesParents: true }, input.mounts);
 
 		return { files, unmount: () => { unobserve(); unmount(); } };
 	}));
@@ -372,11 +373,8 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		return byName.has(name) ? name : null;
 	};
 
-	/**
-	 * Where `path` lands: the VFS that serves it and the path it takes, and, on the namespace, the path its links resolve
-	 * to and that path's route, which every decision here reads, so a link cannot carry an op past the mount it reaches.
-	 */
-	const landing = async (path: string, follow = true): Promise<Landing> => {
+	/** Where `path` lands as spelled: the VFS that serves it, the path it takes and the mount that path names. */
+	const lexical = async (path: string): Promise<Landing> => {
 		let absolute = path;
 
 		if (!path.startsWith('/')) {
@@ -385,22 +383,38 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		}
 
 		const namespace = await plane.namespace();
-		// Lexical, as the approval gate reads the path it decides on.
 		const normal = normalizePath(absolute);
-		const resolved = await namespace.resolvePath(normal, { follow, creating: true });
 
-		return { files: namespace, path: normal, resolved, route: namespace.routeOf(resolved) };
+		return { files: namespace, path: normal, resolved: normal, route: namespace.routeOf(normal) };
 	};
 
-	const via = async <T>(path: string, op: (files: VFS, at: string) => Awaitable<T>, follow = true): Promise<T> => {
-		const target = await landing(path, follow);
+	/**
+	 * As {@link lexical}, with the path its links resolve to and that path's route: what a move, a removal and a device's
+	 * write report decide on, so a link cannot carry one past the mount it reaches. Every other op is the namespace's
+	 * own, which resolves links as it runs, so it pays for no second walk.
+	 */
+	const landing = async (path: string, follow = true): Promise<Landing> => {
+		const target = await lexical(path);
+
+		if (!(target.files instanceof CompositeVFS)) return target;
+		const resolved = await target.files.resolvePath(target.path, { follow, creating: true });
+
+		return { ...target, resolved, route: target.files.routeOf(resolved) };
+	};
+
+	const write = (files: VFS, at: string, data: Uint8Array): Awaitable<void> => (
+		parents && files instanceof CompositeVFS ? files.writeFile(at, data, { parents: true }) : files.writeFile(at, data)
+	);
+
+	const via = async <T>(path: string, op: (files: VFS, at: string) => Awaitable<T>): Promise<T> => {
+		const target = await lexical(path);
 
 		return op(target.files, target.path);
 	};
 
 	/** The plane's optional operation as `ask` starts it, or ENOTSUP with `reason` where the plane has none. */
-	const optional = <T>(path: string, reason: string, ask: (files: VFS, path: string, route: MountRoute | null) => Awaitable<T> | undefined, follow = true): Effect.Effect<T, VfsError> => Effect.gen(function* () {
-		const target = yield* Effect.promise(async () => landing(path, follow));
+	const optional = <T>(path: string, reason: string, ask: (files: VFS, path: string, route: MountRoute | null) => Awaitable<T> | undefined): Effect.Effect<T, VfsError> => Effect.gen(function* () {
+		const target = yield* Effect.promise(async () => lexical(path));
 		const answer = ask(target.files, target.path, target.route);
 
 		return answer === undefined ? yield* Effect.fail(new VfsError('ENOTSUP', reason, path)) : yield* Effect.promise(async () => answer);
@@ -416,7 +430,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		mounts: () => [...mounts],
 		userRoots: () => userRoots,
 		stat: async (path, options) => {
-			const target = await landing(path, options?.follow !== false);
+			const target = await lexical(path);
 
 			if (target.route !== null && target.route.source === null) {
 				return settle(Effect.fail(new VfsError('ENXIO', target.route.absentReason ?? target.route.point, path)));
@@ -425,11 +439,10 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			return target.files.stat(target.path, options);
 		},
 		readFile: (path) => via(path, (files, at) => files.readFile(at)),
-		writeFile: (path, data) => via(path, (files, at) => (parents && files instanceof CompositeVFS ? files.writeFile(at, data, { parents: true }) : files.writeFile(at, data))),
+		writeFile: (path, data) => via(path, (files, at) => write(files, at, data)),
 		readdir: (path) => via(path, (files, at) => files.readdir(at)),
 		mkdir: (path, options) => via(path, (files, at) => files.mkdir(at, options)),
-		// The last link is the entry an unlink or a readlink is of, never where it points.
-		unlink: (path) => via(path, (files, at) => files.unlink(at), false),
+		unlink: (path) => via(path, (files, at) => files.unlink(at)),
 		async rename(from, to) {
 			const [source, target] = await Promise.all([landing(from, false), landing(to, false)]);
 
@@ -453,7 +466,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		readRange: (path, offset, length) => settle(optional(path, 'this plane serves no ranged read', (files, at, route) => (
 			mounted(route) !== null && mounted(route)?.readRange === undefined ? undefined : files.readRange?.(at, offset, length)
 		))),
-		readlink: (path) => settle(optional(path, 'this plane serves no readlink', (files, at) => files.readlink?.(at), false)),
+		readlink: (path) => settle(optional(path, 'this plane serves no readlink', (files, at) => files.readlink?.(at))),
 		readFileAtRevision: (path, revision, range) => settle(optional(path, 'this file plane does not retain file revisions',
 			(files, at) => files.readFileAtRevision?.(at, revision, range))),
 		writeFileIfRevision: (path, data, expected) => settle(optional(path, 'this file plane does not support revision-checked writes',
@@ -467,7 +480,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 				return own.writeFileWithReport(target.route.path, data);
 			}
 
-			await target.files.writeFile(target.path, data);
+			await write(target.files, target.path, data);
 
 			return null;
 		},

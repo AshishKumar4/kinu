@@ -17,7 +17,7 @@ import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { makeSql, makeExecRaw, makeSqlExec, conversationsFor } from './helpers';
-import { createTestRuntime, createTestActors, toolExecute } from '@kinu.run/test-utils';
+import { createTestRuntime, createTestActors, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { inWorkMode } from '../src/execution/work-mode';
 import { createSqlFiber } from '../src/execution/fiber';
@@ -793,7 +793,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
   /** Two processes on one SQLite file: this one, and a live `sleep` standing in for the other. */
   async function twoProcesses() {
     const path = scratchPath('job-claim', 'jobs.db');
-    const [first, second] = [new Database(path), new Database(path)];
+    const [first, second] = [workspaceDatabase(path), workspaceDatabase(path)];
     const other = Bun.spawn(['sleep', '600']);
     const gone = Bun.spawn(['true']);
     await gone.exited;

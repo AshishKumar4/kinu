@@ -1,7 +1,7 @@
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: steering, durable sends, branches and the run-event log.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
+import { AwaitedList, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams, workspaceDatabase } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
 import { agentAffinityKey, initWorkspaceSchema } from '@kinu.run/core';
 import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
@@ -1826,7 +1826,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
       },
     });
 
-    const db = new Database(scratchPath('workspace', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('workspace', 'agent.db'));
     // Production initializer: a swarm node claims a working revision in the workspace's tables
     // (without it, `no such table: actor_working_revisions`).
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
@@ -2282,7 +2282,7 @@ test('the actual local turn executes its selected version instead of the mutable
 describe('LocalAgentSession — a workspace bound to a directory', () => {
   test('tells the model its files are local:// in a system prompt that stays byte-identical across turns', async () => {
     const root = scratchDir('local-session-bound-prefix');
-    const db = new Database(scratchPath('local-session-bound-prefix', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('local-session-bound-prefix', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: root });
     const systems: string[] = [];

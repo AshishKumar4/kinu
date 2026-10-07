@@ -1,11 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { buildBuiltinTools, type AgentRuntime, type JsonValue } from '@kinu.run/core';
-import { present, scratchDir, toolExecute } from '@kinu.run/test-utils';
+import { present, scratchDir, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { createCLIRuntime } from '../../../cli-backend/src/runtime';
 import { conversationsFor } from '../../../core/tests/helpers';
@@ -45,9 +44,7 @@ async function publicPlane(name: 'cf' | 'cli') {
   mkdirSync(cwd);
   mkdirSync(space);
 
-  const db = new Database(join(space, 'agent.db'));
-  // As `kinu create` publishes one: in WAL a commit waits on no fsync.
-  db.exec('PRAGMA journal_mode = WAL');
+  const db = workspaceDatabase(join(space, 'agent.db'));
   const rt = createCLIRuntime(db, { llm: null, cwd });
 
   return {

@@ -278,6 +278,7 @@ export function createProviderRegistry(): ProviderRegistry {
           return withModelStack(provider.createModel(parsed.modelId, own), {
             provider: parsed.provider, modelId: parsed.modelId, lane: `${provider.laneOf?.(parsed.modelId) ?? parsed.provider}@${account}`,
             ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
+            ...(provider.streamsGenerate === true && { generateByStream: true }),
           });
         })
         : Effect.die(new Error(`Unknown provider ${JSON.stringify(parsed.provider)} (registered: ${Array.from(byId.keys()).join(', ') || 'none'}).`)));

@@ -6,13 +6,11 @@ import { Database } from 'bun:sqlite';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createInlineWorkspace, inlineWorkspaceStorage } from '@kinu.run/core/identity';
-import { scratchPath } from '@kinu.run/test-utils';
+import { scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 
 /** The store under test, alone: a CLI runtime's own plane is host files, which bind no BLOB. */
 function freshVfs() {
-  const db = new Database(scratchPath('vfs-blob', 'agent.db'), { create: true });
-  // As `kinu create` publishes one: in WAL a commit waits on no fsync.
-  db.exec('PRAGMA journal_mode = WAL');
+  const db = workspaceDatabase(scratchPath('vfs-blob', 'agent.db'), { create: true });
 
   return createInlineWorkspace(db).vfs;
 }
@@ -53,7 +51,7 @@ describe('workspace filesystem over a read-only handle', () => {
   // each guard is load-bearing on its own, see docs/DEVBOX-DECISIONS.md D21, D22 and D23-N.
   test('a current filesystem opens read-only and reads what a writer left', async () => {
     const path = scratchPath('vfs-readonly', 'agent.db');
-    const writer = new Database(path, { create: true });
+    const writer = workspaceDatabase(path, { create: true });
 
     const written = inlineWorkspaceStorage(writer);
     await new SqliteVFS(written.sql, written.transactions).as(CRED_KERNEL).writeFile('/note.txt', 'kept');

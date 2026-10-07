@@ -16,7 +16,6 @@
   "packages/cf-backend/src/hooks/use-kinu.ts#createLiveRefreshAdmission (unreached-export)",
   "packages/cf-backend/src/hooks/use-kinu.ts#loadWorkspaceSnapshot (unreached-export)",
   "packages/cf-backend/src/hooks/use-kinu.ts#refreshLiveResource (unreached-export)",
-  "packages/cf-backend/src/hooks/use-kinu.ts#resolvePendingConsent (unreached-export)",
   "packages/cf-backend/src/hooks/use-pending-attachments.ts#admitAttachments (unreached-export)",
   "packages/cf-backend/src/lazy-route.tsx#CHUNK_RELOAD_KEY (unreached-export)",
   "packages/cf-backend/src/lazy-route.tsx#loadRouteChunk (unreached-export)",

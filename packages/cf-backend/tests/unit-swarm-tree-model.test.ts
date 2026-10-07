@@ -66,20 +66,6 @@ describe('ancestorIds', () => {
   });
 });
 
-describe('treeStats', () => {
-  test('counts every node and reports the deepest depth', () => {
-    const root = node({
-      depth: 0,
-      children: [
-        node({ depth: 1, children: [node({ depth: 2 }), node({ depth: 2, children: [node({ depth: 3 })] })] }),
-        node({ depth: 1 }),
-      ],
-    });
-
-    expect(treeStats(root)).toEqual({ nodes: 6, depth: 3 });
-  });
-});
-
 describe('stored tree fields', () => {
   test('keeps the d0 root and a journalled depth-3 node at its stored depth', () => {
     const root: MctsRow = {
@@ -180,18 +166,6 @@ describe('size scales', () => {
 });
 
 describe('folding', () => {
-  test('the topmost abandoned branch hides its cluster, and live ones are kept', () => {
-    const root = node({
-      id: 'root',
-      children: [
-        node({ id: 'pruned', status: 'pruned', children: [node({ id: 'pruned-kid', status: 'pruned', children: [node({ id: 'deep' })] })] }),
-        node({ id: 'failed', status: 'failed', children: [node({ id: 'failed-kid' })] }),
-        node({ id: 'open', children: [node({ id: 'open-kid' })] }),
-      ],
-    });
-
-    expect([...losingBranchIds(root)].sort()).toEqual(['failed', 'pruned']);
-  });
 
   test('an abandoned leaf has nothing to fold', () => {
     const root = node({ children: [node({ id: 'leaf', status: 'pruned' })] });

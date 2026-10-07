@@ -112,7 +112,8 @@ export function sweepUnrecoverableFibers(
 
 export const EVOLUTION_LANE_FIBER = 'evolution:settle';
 
-export const MCP_WARM_LANE_FIBER = 'mcp:warm';
+/** A row only a deploy before the MCP warm left its fiber can hold; dropped, as the warm itself would be. */
+const MCP_WARM_LANE_FIBER = 'mcp:warm';
 
 export const TERMINAL_LANE_FIBER = 'terminal:effects';
 

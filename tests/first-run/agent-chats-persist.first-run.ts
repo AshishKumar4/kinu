@@ -41,7 +41,7 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
 import {
-  ChatHistoryEntrySchema, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValue,
+  ChatHistoryEntrySchema, codenameFor, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValue,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import type { Page } from 'puppeteer';
@@ -95,6 +95,50 @@ const CreatedSchema = v.object({
 });
 
 const RosterSchema = v.array(v.object({ name: v.string(), status: v.optional(v.string()) }));
+
+/** The roster's names as the tab strip shows them, and whose each is: the system's or the owner's. */
+const NamedRosterSchema = v.array(v.object({ name: v.string(), displayName: v.string(), nameOrigin: v.picklist(['user', 'auto']) }));
+
+/** The owner's name for the second agent, typed before it is spoken to. */
+const OWNER_NAME = 'Jarvis';
+
+/** Each created agent's shown name and its origin, by its name; empty when the roster read failed. */
+async function namesOn(socket: PublicSocket): Promise<Map<string, { shown: string; origin: string }>> {
+  const answer = await ask(socket, 'listSubordinates', []);
+  const roster = answer.ok ? v.safeParse(NamedRosterSchema, answer.value) : null;
+
+  return new Map(roster?.success === true ? roster.output.map((entry) => [entry.name, { shown: entry.displayName, origin: entry.nameOrigin }]) : []);
+}
+
+/** Both agents are born with the system's codename; the owner then renames the second, and the roster says so. */
+async function renamedAtBirth(socket: PublicSocket, names: readonly string[]): Promise<EvalSubgoal> {
+  const born = await namesOn(socket);
+  const renamed = names[1] ?? '';
+
+  await ask(socket, 'renameSubordinateAgent', [renamed, OWNER_NAME]);
+  const after = await namesOn(socket);
+  const codenamed = names.every((name) => born.get(name)?.shown === codenameFor(name) && born.get(name)?.origin === 'auto');
+
+  return {
+    what: 'agents-named',
+    reached: codenamed && after.get(renamed)?.shown === OWNER_NAME && after.get(renamed)?.origin === 'user',
+    detail: `born ${JSON.stringify([...born])}; after the owner's rename ${JSON.stringify(after.get(renamed))}`,
+  };
+}
+
+/** The system-named agent carries a title of its own, and the renamed one still carries the owner's name. */
+async function namesHeld(what: string, socket: PublicSocket, names: readonly string[], when: string): Promise<EvalSubgoal> {
+  const shown = await namesOn(socket);
+  const titled = shown.get(names[0] ?? '');
+  const owners = shown.get(names[1] ?? '');
+
+  return {
+    what,
+    reached: titled !== undefined && titled.shown !== codenameFor(names[0] ?? '') && titled.origin === 'auto'
+      && owners?.shown === OWNER_NAME && owners.origin === 'user',
+    detail: `${when}: ${JSON.stringify([...shown])}`,
+  };
+}
 
 /** The page `getChatHistoryPage` answers, read as the chat pane's own pager
  *  reads it — the product's row schema, not a second copy of it. */
@@ -268,6 +312,9 @@ describe(SUITE, () => {
             detail: `createSubordinateAgent answered twice: ${JSON.stringify(names)}`,
           });
 
+          // ── Named by the system, then one renamed by its owner. ─────────
+          subgoals.push(await renamedAtBirth(first, names));
+
           // ── One thing said in each child's own room. ────────────────────
           const said: string[] = [];
 
@@ -307,6 +354,9 @@ describe(SUITE, () => {
             detail: `both agents answered a message on their own room`,
           });
 
+          // ── The first message titles the agent the system named, never the one its owner did. ─
+          subgoals.push(await namesHeld('first-message-titles', first, names, 'after one message each'));
+
           // ── NAVIGATE AWAY. Every socket dropped, so nothing that follows
           //    can be served out of an activation this row kept alive. ─────
           for (const socket of live.splice(0)) socket.close('navigated away');
@@ -340,6 +390,9 @@ describe(SUITE, () => {
                 : null,
             }),
           });
+
+          // ── The names survive too: still titled, and still the owner's. ─
+          subgoals.push(await namesHeld('names-retained', back, names, 'on the way back'));
 
           // ── Each chat, re-opened from nothing, still holding its words. ─
           const reachable: string[] = [];

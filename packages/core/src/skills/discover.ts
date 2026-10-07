@@ -223,7 +223,10 @@ export function discoverSkills(
 /** One root's unopened candidates in name order; a missing directory or mount is empty. */
 function listSkillCandidates(vfs: VFS, dir: string): Effect.Effect<Omit<SkillFile, 'source'>[]> {
   return Effect.gen(function* () {
-    const entries = yield* Effect.tryPromise({ try: async () => (await vfs.readdir(dir)).map(({ name }) => name), catch: (cause) => ({ cause }) }).pipe(
+    // Looked up before it is listed: a listing walks to a missing root twice, and every turn asks for every root.
+    const listed = async (): Promise<string[]> => ((await vfs.stat(dir, { follow: false })) === null ? [] : (await vfs.readdir(dir)).map(({ name }) => name));
+
+    const entries = yield* Effect.tryPromise({ try: listed, catch: (cause) => ({ cause }) }).pipe(
       Effect.catch((failed) => (classify(failed) === 'enoent' || (isVfsError(failed.cause) && failed.cause.code === 'ENXIO')
         ? Effect.succeed<string[]>([])
         : Effect.die(failed.cause))),

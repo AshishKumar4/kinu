@@ -324,33 +324,12 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     return { store: await this.workspace(), cred: CRED_SESSION_USER };
   }
 
-  /** Subject: one Diffs read of a workspace of `files` files with one edited since its baseline. */
-  async diffRead(files: number): Promise<OperationCost> {
-    const actor = this.main();
-    const vfs = this.agentFiles();
-    const baselines = await this.baselines();
-
-    for (let index = 0; index < files; index += 1) await writeText(vfs, filePath(index), fileText(index));
-
-    await resetWorkspaceBaseline({ actor }, baselines);
-    const edited = Math.floor(files / 2);
-
-    await writeText(vfs, filePath(edited), fileText(edited, 1));
-
-    return await this.meter.measure(async () => {
-      const diff = await getWorkspaceDiff({ actor }, baselines);
-
-      if (diff.files.length !== 1) throw new Error(`the Diffs read saw ${String(diff.files.length)} changed files, not the 1 edited`);
-
-      return null;
-    });
-  }
-
   /**
-   * The Changes poll with nothing changed since the last one, as the orchestrator serves it: its change-set held by a
-   * `ChangeSetCache` the workspace's file events keep, after one edit's read has refreshed it.
+   * Two subjects over one seeding of `files` files with one edited since its baseline, since the seeding is what
+   * costs: one Diffs read, then the Changes poll with nothing changed since, as the orchestrator serves it, its
+   * change-set held by a `ChangeSetCache` the workspace's file events keep, after one edit's read has refreshed it.
    */
-  async diffPoll(files: number): Promise<OperationCost> {
+  async diffReadAndPoll(files: number): Promise<{ readonly read: OperationCost; readonly poll: OperationCost }> {
     const actor = this.main();
     const vfs = this.agentFiles();
     // No page listens here: the subject is the read, not the frame.
@@ -363,16 +342,29 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     await resetWorkspaceBaseline({ actor }, baselines);
     changes.moved();
-    await writeText(vfs, filePath(Math.floor(files / 2)), fileText(Math.floor(files / 2), 1));
+    const edited = Math.floor(files / 2);
+
+    await writeText(vfs, filePath(edited), fileText(edited, 1));
+
+    const read = await this.meter.measure(async () => {
+      const diff = await getWorkspaceDiff({ actor }, baselines);
+
+      if (diff.files.length !== 1) throw new Error(`the Diffs read saw ${String(diff.files.length)} changed files, not the 1 edited`);
+
+      return null;
+    });
+
     const first = await changes.read(() => getWorkspaceDiff({ actor }, baselines));
 
-    return await this.meter.measure(async () => {
+    const poll = await this.meter.measure(async () => {
       const again = await changes.read(() => getWorkspaceDiff({ actor }, baselines));
 
       if (again.files.length !== 1 || first.files.length !== 1) throw new Error(`the poll saw ${String(again.files.length)} changed files, not the 1 edited`);
 
       return null;
     });
+
+    return { read, poll };
   }
 
   /** The slate file plane as the slate host builds it, over the workspace schema the orchestrator creates. */

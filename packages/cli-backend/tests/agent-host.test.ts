@@ -46,7 +46,7 @@ import {
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
-import { createMemoryVfs, present, readTranscriptRows } from '@kinu.run/test-utils';
+import { createMemoryVfs, present, readTranscriptRows, workspaceDatabase } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
@@ -417,8 +417,7 @@ function narratedThenFailingChildModel(narration: readonly string[]) {
 async function seedAgent(state: string, name: string): Promise<string> {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
-  db.exec('PRAGMA journal_mode = WAL');
+  const db = workspaceDatabase(dbPath);
 
   try {
     await createWorkspace(db, {
@@ -625,7 +624,7 @@ describe('LocalAgentHost', () => {
     await host.tick('root', fireAt);
 
     expect(delivered).toHaveLength(deliveredBeforeDisconnect);
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
     const sql = makeSql(db);
     const main = openWorkspaceMainActor(sql);
 
@@ -649,7 +648,7 @@ describe('LocalAgentHost', () => {
     const dbPath = await seedAgent(state, 'root');
     const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
     const jobId = 'bgjob-restart';
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
     const sql = makeSql(db);
     const main = openWorkspaceMainActor(sql);
     const store = new BackgroundJobStore(sql, main);
@@ -679,7 +678,7 @@ describe('LocalAgentHost', () => {
     expect(calls).toBe(1);
     await redriven.close();
 
-    const check = new Database(dbPath);
+    const check = workspaceDatabase(dbPath);
     const checkSql = makeSql(check);
     const checkActorId = openWorkspaceMainActor(checkSql).actorId;
     const wakeId = `programmatic:${backgroundJobWakeTrigger(jobId)}`;
@@ -1659,7 +1658,7 @@ describe('LocalAgentHost', () => {
         && event.event.status === 'completed') reported.resolve();
     });
     await team.assign({ name: 'ask-researcher-late', task: 'Report it.', mode: 'build' });
-    const roster = new Database(dbPath);
+    const roster = workspaceDatabase(dbPath);
     roster.run("UPDATE workspace_actors SET lifetime='task' WHERE actor_id = (SELECT json_extract(actor_reference, '$.actorId') FROM actor_subordinates WHERE name='ask-researcher-late')");
     roster.close();
     await reported.promise;
@@ -1688,7 +1687,7 @@ describe('LocalAgentHost', () => {
     const team = await host.team('root');
     await team.spawn({ name: 'ask-refiner-x1', role: 'researcher', mission: 'Propose refinements.', mode: 'build' });
 
-    const seed = new Database(dbPath);
+    const seed = workspaceDatabase(dbPath);
     const actorId = present(seed.query<{ actor_id: string }, []>('SELECT actor_id FROM actor_subordinates LIMIT 1').get(), 'the root').actor_id;
     const now = Date.now();
     seed.prepare(`INSERT INTO refinement_requests
@@ -1728,7 +1727,7 @@ describe('LocalAgentHost', () => {
 
     await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
     // The helper the lane hires is task-lived, and durable verbs refuse one: so it becomes one after the handoff.
-    const helper = new Database(dbPath);
+    const helper = workspaceDatabase(dbPath);
     helper.run(`UPDATE workspace_actors SET origin = 'evolution', tab = 0, input = 0, lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
     helper.close();
     await held.promise;
@@ -2192,7 +2191,7 @@ async function userMessages(dbPath: string, actorId?: string): Promise<string[]>
 
 /** Schedule a timer from another handle, as `kinu triggers <name> at` does; the host's own pass fires it. */
 async function scheduleTimer(dbPath: string, label: string, atMs: number): Promise<void> {
-  const db = new Database(dbPath);
+  const db = workspaceDatabase(dbPath);
 
   try {
     const registry = new TriggerRegistry(makeSqlExec(db), openWorkspaceMainActor(makeSql(db)), { scheduleAt: async () => {} });
@@ -2221,7 +2220,7 @@ describe('LocalAgentHost — the driver lease', () => {
   function rivalHolds(dbPath: string, kind: DriverKind): number {
     const rival = Bun.spawn({ cmd: ['sleep', '120'], stdout: 'ignore', stderr: 'ignore' });
     rivals.push(rival);
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
 
     try {
       const hold = new DriverLeaseHold({
@@ -2241,7 +2240,7 @@ describe('LocalAgentHost — the driver lease', () => {
   }
 
   function holderAt(dbPath: string): DriverLeaseHolder | null {
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
 
     try {
       return leaseHolder(db);
@@ -2285,7 +2284,7 @@ describe('LocalAgentHost — the driver lease', () => {
   test('a refused opener preserves the live driver claim and starts no model work', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
 
     const claim = await rt.stores.claims.admit({
@@ -2314,7 +2313,7 @@ describe('LocalAgentHost — the driver lease', () => {
   test('constructing a refused opener cannot reset the live driver review claim', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
     initCompletedTurnTable(rt.storage.execRaw);
     const window = createCompletedTurnStore(rt.storage.sql, rt.actor);
@@ -2402,7 +2401,7 @@ describe('LocalAgentHost — the driver lease', () => {
       await before.host.close();
     }
 
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
 
     try {
       db.query(`UPDATE agent_log SET turn_id = 'evt-dead', step_idx = 0, consumed_at = 5 WHERE kind = 'event'`).run();
@@ -2435,7 +2434,7 @@ describe('LocalAgentHost — the driver lease', () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
 
     try {
       db.query(

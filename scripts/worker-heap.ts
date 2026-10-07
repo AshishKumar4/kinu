@@ -210,21 +210,30 @@ interface Allocations {
   readonly sites: readonly { readonly site: string; readonly bytes: number }[];
 }
 
-/** Every sampled allocation by the function that made it, collected or not: the churn, not what stays. */
+function frameName(node: ProfileNode): string {
+  const { functionName, url, lineNumber } = node.callFrame;
+
+  return `${functionName === '' ? '(anonymous)' : functionName} ${url.split('/').slice(-2).join('/')}:${String(lineNumber + 1)}`;
+}
+
+/** Every sampled allocation by the function that made it and the five nearest distinct callers (a library's own
+ *  recursion collapses), collected or not: the churn, not what stays. */
 function allocationSites(head: ProfileNode): Allocations {
   const bySite = new Map<string, number>();
-  const pending = [head];
+  const pending: { node: ProfileNode; callers: readonly string[] }[] = [{ node: head, callers: [] }];
   let total = 0;
 
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    const { functionName, url, lineNumber } = node.callFrame;
-    const site = `${functionName === '' ? '(anonymous)' : functionName} ${url.split('/').slice(-2).join('/')}:${String(lineNumber + 1)}`;
-    bySite.set(site, (bySite.get(site) ?? 0) + node.selfSize);
-    total += node.selfSize;
-    pending.push(...node.children);
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const name = frameName(next.node);
+    const outer = next.callers.filter((caller) => caller !== name).slice(-5).reverse();
+    const site = outer.length === 0 ? name : `${name}  <-  ${outer.join('  <-  ')}`;
+    bySite.set(site, (bySite.get(site) ?? 0) + next.node.selfSize);
+    total += next.node.selfSize;
+    const callers = next.callers.at(-1) === name ? next.callers : [...next.callers, name];
+    pending.push(...next.node.children.map((node) => ({ node, callers })));
   }
 
-  const sites = [...bySite].map(([site, bytes]) => ({ site, bytes })).sort((a, b) => b.bytes - a.bytes).slice(0, 15);
+  const sites = [...bySite].map(([site, bytes]) => ({ site, bytes })).sort((a, b) => b.bytes - a.bytes).slice(0, 25);
 
   return { total, sites };
 }
@@ -611,6 +620,15 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`a ${String(LONG_TURN.steps)}-step turn peaks at ${mb(measured.longTurnPeak)} used, over ${mb(LONG_TURN_PEAK_BOUND_BYTES)}`);
   }
 
+  // Every figure, red or green, so two runs compare.
+  console.log(`${GATE}: ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
+    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
+    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
+    + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
+    + `own hire ${mb(measured.waitingParentLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
+    + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
+  console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
+
   if (findings.length > 0) {
     console.error(`${GATE}: ${String(findings.length)} finding(s)\n`);
 
@@ -619,13 +637,7 @@ async function main(args: readonly string[]): Promise<number> {
     return 1;
   }
 
-  console.log(`${GATE}: ok — ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
-    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
-    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
-    + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
-    + `own hire ${mb(measured.waitingParentLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
-    + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
-  console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
+  console.log(`${GATE}: ok`);
 
   return 0;
 }

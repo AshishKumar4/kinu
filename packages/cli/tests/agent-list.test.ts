@@ -1,10 +1,9 @@
-import { runToExit } from '@kinu.run/test-utils';
+import { runToExit, workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { agentWorkspaceKey, groupAgentWorkspaces, reconcileAgentRefs, type ListedAgent } from '../src/agent-list';
 import * as v from 'valibot';
 
@@ -318,7 +317,7 @@ describe('the sidebar roster for one directory', () => {
       writeFileSync(join(home, name, 'agent.db'), '');
     }
 
-    const writerDb = new Database(join(home, 'writer', 'agent.db'));
+    const writerDb = workspaceDatabase(join(home, 'writer', 'agent.db'));
     createCLIRuntime(writerDb, { llm: null, agentName: 'writer', cwd: projectDir }).actor.config.setDisplayName('Writer Bot');
     writerDb.close();
     writeFileSync(join(home, 'config.json'), JSON.stringify({

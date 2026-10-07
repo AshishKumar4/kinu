@@ -339,6 +339,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
   const relayed = async (deps: ProviderDeps): Promise<ChatGptDeviceRoute | null> => (device === undefined || await deps.hasCredential(CHATGPT_CRED_KEY) ? null : device);
 
   return {
+    streamsGenerate: true,
     id: 'chatgpt',
     credentialKey: CHATGPT_CRED_KEY,
     label: 'ChatGPT',

@@ -1,10 +1,9 @@
 /** Shadow-git checkpoint engine against real git: per-turn snapshot, exact restore, user .git untouched, bounded retention. */
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs';
-import { scratchDir, git, present } from '@kinu.run/test-utils';
+import { scratchDir, git, present, workspaceDatabase } from '@kinu.run/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Database } from 'bun:sqlite';
 import { summarizeRestorePlan } from '@kinu.run/core';
 import { createHostCheckpoints } from '../src/checkpoints';
 import { createCLIRuntime } from '../src/runtime';
@@ -360,7 +359,7 @@ describe('createHostCheckpoints', () => {
 describe('checkpointed runtime shell', () => {
   test('any shell exec snapshots the cwd before running (first mutation per turn)', async () => {
     const { root, work } = setup();
-    const db = new Database(join(root, 'agent.db'), { create: true });
+    const db = workspaceDatabase(join(root, 'agent.db'), { create: true });
 
     try {
       writeFileSync(join(work, 'precious.txt'), 'original');

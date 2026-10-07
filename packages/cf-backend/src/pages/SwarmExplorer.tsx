@@ -87,7 +87,7 @@ export default function SwarmExplorer() {
         <div className="hidden sm:block h-4 w-px shrink-0 bg-[var(--c-border)]" />
         <GitForkIcon size={16} className="p-accent shrink-0" />
         <span className="font-semibold text-sm p-text shrink-0">Swarm explorer</span>
-        {run && <span className="min-w-0 flex-1 text-xs p-text-2 truncate" title={run.task}>{run.name}</span>}
+        {run && <span className="min-w-0 flex-1 text-xs p-text-2 truncate" title={run.task} data-explorer-run>{run.name}</span>}
       </div>
       {run && selectionResource.status === "error" && (
         <LoadFailure what="fresh exploration runs" message={selectionResource.message} onRetry={reloadSelection} className="px-5 py-2 border-b p-border" />

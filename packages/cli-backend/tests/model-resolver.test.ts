@@ -10,8 +10,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asFetchFunction, callRetries, requestUrl } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend, WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils';
-import { Database } from 'bun:sqlite';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend, WORKERS_AI_MODELS_DEV, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
@@ -54,7 +53,7 @@ describe('createLocalModelResolver', () => {
     } });
 
     const llm = { name: 'workers-ai', baseURL: server.url.toString(), headers: { Authorization: 'Bearer test' }, model: '@cf/test/session-retries' };
-    const db = new Database(scratchPath('session-retries', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('session-retries', 'agent.db'));
     const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm });
     let session: LocalAgentSession | undefined;
 
@@ -222,7 +221,7 @@ describe('createLocalModelResolver', () => {
       },
     });
 
-    const db = new Database(scratchPath('model-resolver', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('model-resolver', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
     const rt = createCLIRuntime(db, {
@@ -256,7 +255,7 @@ describe('createLocalModelResolver', () => {
       },
     });
 
-    const db = new Database(scratchPath('model-resolver', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('model-resolver', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
     const rt = createCLIRuntime(db, {
