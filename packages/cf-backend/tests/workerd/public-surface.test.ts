@@ -88,6 +88,10 @@ interface Pane {
   responseIds(): string[];
   transcriptsCarrying(text: string): number;
   rpc<T>(id: string, schema: v.GenericSchema<T>): Promise<T>;
+  /** Every frame heard, parsed, in arrival order. */
+  heard(): v.InferOutput<typeof FrameSchema>[];
+  /** Resolves once a frame `holds` has been heard. */
+  until(holds: (frame: v.InferOutput<typeof FrameSchema>) => boolean): Promise<void>;
   close(): void;
 }
 
@@ -103,6 +107,7 @@ async function openPane(path: string): Promise<Pane> {
   socket.accept();
 
   const frames: string[] = [];
+  const watchers: { readonly holds: (frame: v.InferOutput<typeof FrameSchema>) => boolean; readonly resolve: () => void }[] = [];
   const rpcs = new Map<string, PromiseWithResolvers<unknown>>();
   const turns = new Map<string, PromiseWithResolvers<void>>();
 
@@ -120,6 +125,13 @@ async function openPane(path: string): Promise<Pane> {
     const raw = v.is(v.string(), event.data) ? event.data : '';
     frames.push(raw);
     const frame = v.safeParse(FrameSchema, raw.startsWith('{') ? JSON.parse(raw) : {});
+
+    if (frame.success) {
+      for (const watcher of watchers.splice(0)) {
+        if (watcher.holds(frame.output)) watcher.resolve();
+        else watchers.push(watcher);
+      }
+    }
 
     if (!frame.success || frame.output.id === undefined) return;
 
@@ -162,6 +174,13 @@ async function openPane(path: string): Promise<Pane> {
       .flatMap((frame) => frame.id === undefined ? [] : [frame.id]),
     transcriptsCarrying: (text) => frames
       .filter((raw) => raw.includes(`"${CHAT_MESSAGE_TYPES.CHAT_MESSAGES}"`) && raw.includes(text)).length,
+    heard: parsed,
+    until: async (holds) => {
+      if (parsed().some(holds)) return;
+      const { promise, resolve } = Promise.withResolvers<void>();
+      watchers.push({ holds, resolve });
+      await promise;
+    },
     close: () => { socket.close(); },
   };
 }
@@ -457,6 +476,72 @@ describe('a chat longer than one page', () => {
     expect(await root.rpc('quiet-page', PageSchema)).toMatchObject({ status: 'end', items: [] });
     root.close();
     await env.SURFACE_CONTROL.resetModelLog();
+  });
+});
+
+describe('a pane that joins a room while its turn is in a tool call', () => {
+  const ChunkSchema = v.looseObject({ type: v.string(), toolCallId: v.optional(v.string()) });
+
+  /** The tool-call chunks `stream` carried to `pane`, in order. */
+  const callChunks = (pane: Pane, stream: string): string[] => pane.heard().flatMap((frame) => {
+    if (frame.type !== CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE || frame.id !== stream || frame.body === undefined || frame.body === '') return [];
+    const chunk = v.safeParse(ChunkSchema, JSON.parse(frame.body));
+
+    return chunk.success && chunk.output.toolCallId !== undefined ? [chunk.output.type] : [];
+  });
+
+  /** The room at `path` runs a `-TOOL` turn parked after its call; a second pane joins, resumes, and hears it end. */
+  const joinMidCall = async (path: string, marker: string): Promise<{ chunks: string[]; ends: number }> => {
+    const sender = await openPane(path);
+
+    await env.SURFACE_CONTROL.holdParityModel('partial');
+
+    try {
+      sender.send(chatRequest(marker, `${marker}-TOOL`));
+      await env.SURFACE_CONTROL.parityParked();
+      const joiner = await openPane(path);
+
+      joiner.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_REQUEST }));
+      await joiner.until((frame) => frame.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING);
+      const stream = joiner.heard().find((frame) => frame.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING)?.id ?? '';
+
+      joiner.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: stream }));
+      await env.SURFACE_CONTROL.releaseParityModel();
+      await joiner.until((frame) => frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE && frame.id === stream && frame.done === true);
+      await sender.settled(marker);
+      const ends = joiner.heard().filter((frame) => frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE && frame.id === stream && frame.done === true).length;
+
+      joiner.close();
+      sender.close();
+
+      return { chunks: callChunks(joiner, stream), ends };
+    } finally {
+      await env.SURFACE_CONTROL.releaseParityModel();
+      await env.SURFACE_CONTROL.resetModelLog();
+    }
+  };
+
+  it('is told the call and hears the turn end once, in the workspace\'s room and in a hosted actor\'s alike', async () => {
+    const { rootPath, actorPath } = await workspaceWithTwoChats('pool-join-mid-call');
+    // The workspace's model, which its hosted actors answer on too.
+    const root = await openPane(rootPath);
+
+    root.send(rpcRequest('parity', 'setModel', ['openai-compat/probe-parity']));
+    await root.rpc('parity', SetModelSchema);
+    root.close();
+
+    for (const [path, marker] of [[rootPath, 'root-joined'], [actorPath, 'actor-joined']] as const) {
+      const joined = await joinMidCall(path, marker);
+
+      // The call's input, whether or not it was streamed in parts, then its one outcome, then the turn's one end.
+      const outcomes = joined.chunks.filter((chunk) => chunk.startsWith('tool-output-'));
+
+      expect(joined.chunks.filter((chunk) => chunk === 'tool-input-available')).toHaveLength(1);
+      expect(outcomes).toHaveLength(1);
+      expect(joined.chunks.at(-1)).toMatch(/^tool-output-(available|error)$/u);
+      expect(joined.chunks.indexOf('tool-input-available')).toBeLessThan(joined.chunks.length - 1);
+      expect(joined.ends).toBe(1);
+    }
   });
 });
 

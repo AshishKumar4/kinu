@@ -66,6 +66,22 @@ export class SurfaceControl extends WorkerEntrypoint<SurfaceEnv> {
     await probeControl('/queue/release', 'POST');
   }
 
+  /** Arms the parity hold: `partial` parks a `-TOOL` turn's answering step after its tool call has run. */
+  async holdParityModel(parkAt: 'first' | 'partial'): Promise<void> {
+    const response = await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt }) });
+
+    if (!response.ok) throw new Error(`probe-control refused the parity hold: ${String(response.status)}`);
+  }
+
+  /** Answers once the held parity call is parked. */
+  async parityParked(): Promise<void> {
+    await probeControl('/parity/arrived', 'GET');
+  }
+
+  async releaseParityModel(): Promise<void> {
+    await probeControl('/parity/release', 'POST');
+  }
+
   /** A `kinu auth` bearer for a fresh user, minted by the production UserDO as an approved device flow mints it. */
   async mintCliBearer(): Promise<string> {
     const userId = crypto.randomUUID().replaceAll('-', '');
