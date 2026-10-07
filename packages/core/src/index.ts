@@ -669,6 +669,8 @@ export { createReportCodemodeProvider } from './delegation/report-codemode';
 
 export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './tools/file-tool';
 
+export { imageModelOutput } from './tools/image-results';
+
 export {
   summarizeToolCall, describeToolCall, describeCommand,
   toolCallEffect, clip,
