@@ -639,6 +639,15 @@ export class RunEventRecorder {
     });
   }
 
+  /** How many steps the run finished, counted without reading them. */
+  finishedStepCount(runId: string): number {
+    this.actor.assertCurrent();
+
+    return this.sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'step_finish' satisfies RunEventType}`[0]?.n ?? 0;
+  }
+
   /** Sealed-step output in run order. */
   transcript(runId: string): ModelMessage[] {
     return this.finishedSteps(runId).flatMap((step) => decodeModelMessageValues(step.messages));

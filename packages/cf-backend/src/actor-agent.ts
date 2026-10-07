@@ -1724,6 +1724,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
         return run === null ? [] : this.eventRecorder.finishedSteps(run).map(({ messages }) => drawnStep(messages));
       },
+      recordedSteps: () => {
+        const run = this.eventRecorder.openRun();
+
+        return run === null ? 0 : this.eventRecorder.finishedStepCount(run);
+      },
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
       history: (limit) => this.chatTranscript.history(limit),

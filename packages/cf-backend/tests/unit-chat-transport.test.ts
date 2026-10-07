@@ -61,6 +61,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   const wire: ChatWire = {
     turnOwed: () => owed,
     steps: () => recorded,
+    recordedSteps: () => recorded.length,
     broadcast: (message, exclude) => {
       broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude });
 
