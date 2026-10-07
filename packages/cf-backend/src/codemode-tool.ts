@@ -70,8 +70,8 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
   return {
     async callTool(surface, name, input) {
       const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async () => {
-        // A slate's call runs no program, so there is no eval to stop it with.
-        const functions = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.native), undefined);
+        // A slate's call runs no program, so there is no eval to stop it with; `native` carries its Plan check.
+        const functions = nativeToolFunctions(surface.native, undefined);
         const entry = Object.hasOwn(functions, name) ? functions[name] : undefined;
 
         if (entry !== undefined) {
@@ -114,19 +114,19 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
         const toolsProvider: CodemodeProvider = {
           name: CRAFTED_TOOL_NAMESPACE,
-          tools: nativeToolFunctions(toolsInWorkMode(mode, reachable), signal),
+          tools: nativeToolFunctions(reachable, signal),
           // Declared by schemas
           types: '',
           positionalArgs: true,
         };
 
-        const providers: CodemodeProvider[] = [toolsProvider, stateProvider];
+        const providers: CodemodeProvider[] = [stateProvider];
 
         if (agentsProvider) providers.push(agentsProvider);
 
         if (options.extraProviders) providers.push(...options.extraProviders());
         providers.push(webProvider, ...executorProviders);
-        const bound = providersInWorkMode(mode, options.reach.narrowProviders(providers));
+        const bound = [...options.reach.narrowProviders([toolsProvider]), ...providersInWorkMode(mode, options.reach.narrowProviders(providers))];
 
         const built = createCodeTool({
           // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.

@@ -137,7 +137,7 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  McpToolSurfaceCache, servedMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, type McpServedSurface, type McpSurfaceBudget,
+  McpToolSurfaceCache, servedMcpDescriptors, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
@@ -1745,7 +1745,7 @@ export class LocalAgentSession {
       Object.entries(filterToolSetBySkills(this.toolSurface(profile.workMode), activeSkills)).filter(([name]) => toolAllowed(name)),
     );
 
-    const turnTools = withToolText(toolsInWorkMode(profile.workMode, filteredBuiltins), this.currentTurnArtifacts().tools);
+    const turnTools = withToolText(filteredBuiltins, this.currentTurnArtifacts().tools);
 
     const availableBuiltins = Object.keys(filteredBuiltins).filter(
       (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),

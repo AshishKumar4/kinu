@@ -6,7 +6,7 @@
 import type { ToolSet } from 'ai';
 import { buildToolSurface, type BuiltinToolDeps, type CodemodeBuilder } from '../tools/builtins';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool';
-import { withEffectClaims, type EffectClaimDeps } from '../tools/effect-claim';
+import type { EffectClaimDeps } from '../tools/effect-claim';
 import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
 
 // Not `ActorToolDeps`: cf-backend's actor-agent.ts already owns that name.
@@ -33,7 +33,7 @@ export function buildActorTools(deps: ActorToolsetDeps): ActorToolsets {
     extra = { agents: createAgentsTool(deps.agents) };
   }
 
-  const raw = withEffectClaims(buildToolSurface({ ...deps, extra }), deps.effectClaims);
+  const raw = buildToolSurface({ ...deps, extra });
 
   return { raw, turn: wrapToolsForBackground(raw, deps.jobs) };
 }
