@@ -3,7 +3,7 @@ import { WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
 import { shows, sightEvidence, type Sight } from '../src/sight';
 import { defineEvalTask, type EvidenceCall } from '../src/task';
-import { matchesReference, SLATE_CAUSE, SlateRefusal, type EvalCheckOutcome, type EvalVerifier, type Normalize, type Script, type SlateClient } from '../src/verifier';
+import { matchesReference, SlateRefusal, type EvalCheckOutcome, type EvalVerifier, type Normalize, type Script, type SlateClient } from '../src/verifier';
 
 // Two slates that depend on each other: a ledger of team expenses, and a budget board that reads
 // the ledger through an app binding instead of keeping its own copy. The board gets a page, checked
@@ -437,7 +437,7 @@ how far over budget the team is, in dollars, and which of its expenses that mont
         const written = await verifier.readFile(note);
 
         return {
-          pass: early === '' && reached.runs.some((run) => run.cause === SLATE_CAUSE && run.tools.length > 0) && shows(written, over)
+          pass: early === '' && reached.runs.some((run) => run.tools.length > 0) && shows(written, over)
             && largest !== undefined && (written.includes(largest.id) || shows(written, largest.amountCents / 100)),
           evidence: { early: early.slice(0, 300), ...reached, expected: { over, largest: largest?.id }, note: written.slice(0, 600) },
         };

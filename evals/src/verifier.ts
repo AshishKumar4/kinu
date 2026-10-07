@@ -64,10 +64,10 @@ export function finishedWork(helpers: readonly HelperWork[], subject: string): s
 
 /** The cause the ledger gives a run a slate's page started: cf-backend's slate dispatcher sends the agent a `slate`
  *  signal, and its kind becomes the run's `caused_by`. */
-export const SLATE_CAUSE = 'slate';
+const SLATE_CAUSE = 'slate';
 
-/** A run a person's action on a page started: what the ledger says caused it, and the tools it called. */
-export type ReachedRun = { readonly cause: string | null; readonly tools: readonly string[] };
+/** A run a slate's message started: the tools it called. */
+export type ReachedRun = { readonly tools: readonly string[] };
 
 /** What a check saw: JSON-like data, projected to JSON when it is recorded. */
 export type Evidence = string | number | boolean | null | undefined | readonly Evidence[] | { readonly [key: string]: Evidence };
@@ -261,16 +261,21 @@ export class EvalVerifier {
 
   /**
    * Do what a person does on a page to reach the agent (`act`, a click; false when the page offered no way to), then
-   * wait for the run it starts and for the workspace to settle after it, as a prompt's turn is waited out. The runs it
-   * started: none when no run began within the page's budget (`DRAW_MS`), as the page never delivered it.
+   * wait for the run a slate's message starts (`SLATE_CAUSE`) and for the workspace to settle after it, as a prompt's
+   * turn is waited out. Runs anything else started meanwhile are neither waited for nor counted. The slate runs it
+   * started: none when none began within the page's budget (`DRAW_MS`), as the page never delivered it. A page that
+   * sends the agent something unasked on load is not told apart from the click: the checks read what the run then did.
    */
   async reach(act: () => Promise<boolean>): Promise<{ acted: boolean; runs: ReachedRun[] }> {
     const before = new Set((await this.#session.runEvents()).map((event) => event.runId));
     const due = Date.now() + DRAW_MS;
 
+    const slateStarts = (events: readonly RunEvent[]) => events.filter((event): event is Extract<RunEvent, { type: 'run_start' }> =>
+      event.type === 'run_start' && event.caused_by === SLATE_CAUSE && !before.has(event.runId));
+
     if (!await act()) return { acted: false, runs: [] };
 
-    while (!(await this.#session.runEvents()).some((event) => event.type === 'run_start' && !before.has(event.runId))) {
+    while (slateStarts(await this.#session.runEvents()).length === 0) {
       if (Date.now() >= due) return { acted: true, runs: [] };
       await sleep(1_000);
     }
@@ -280,10 +285,9 @@ export class EvalVerifier {
 
     return {
       acted: true,
-      runs: events.flatMap((start) => start.type !== 'run_start' || before.has(start.runId) ? [] : [{
-        cause: start.caused_by ?? null,
+      runs: slateStarts(events).map((start) => ({
         tools: events.flatMap((event) => event.type === 'tool_call_end' && event.runId === start.runId ? [event.name] : []),
-      }]),
+      })),
     };
   }
 

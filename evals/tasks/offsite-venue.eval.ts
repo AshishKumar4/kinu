@@ -2,7 +2,7 @@ import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { shows, sightEvidence, type Sight } from '../src/sight';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
-import { SLATE_CAUSE, type EvalCheckOutcome, type EvalVerifier } from '../src/verifier';
+import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
 import { answerShows, answersWithSlates, madeNoApp, readAnswer } from './ephemeral';
 
 // The agent's choice between the two kinds of slate. First a pick-one card in the chat: the venues that fit the team,
@@ -51,13 +51,14 @@ function namesThePick(text: string): boolean {
     && shows(text, HEADCOUNT) && shows(text, totalUsd(PICK));
 }
 
-/** One of the workspace's file slates, opened in the work surface, shows the pick's booking with its total. */
+/** One of the workspace's file slates, opened in the work surface, shows the pick's booking: its venue, date, headcount
+ *  and total together in the booking's own part of the page, as a record and not a catalogue's price. */
 async function anAppShowsTheBooking(verifier: EvalVerifier): Promise<EvalCheckOutcome> {
   const listing = await verifier.slates();
 
   const readings = await verifier.browse((browser) => Promise.all(listing.slates.map(async (slate) => {
     const view = await browser.workSurface(slate.id);
-    const { sight, held } = await view.until(NAMES, (seen) => (seen.regions[PICK.name] ?? []).some((region) => shows(region.text, totalUsd(PICK))));
+    const { sight, held } = await view.until(NAMES, (seen) => (seen.regions[PICK.name] ?? []).some((region) => namesThePick(region.text)));
 
     return { slate: slate.id, held, seen: sightEvidence(sight) };
   })));
@@ -97,7 +98,7 @@ date, the headcount and the total.`,
         const booking = await verifier.readFile(BOOKING_PATH);
 
         return {
-          pass: early === '' && reached.runs.some((run) => run.cause === SLATE_CAUSE && run.tools.length > 0) && namesThePick(booking),
+          pass: early === '' && reached.runs.some((run) => run.tools.length > 0) && namesThePick(booking),
           evidence: { early: early.slice(0, 300), ...reached, pick: PICK.name, total: totalUsd(PICK), booking: booking.slice(0, 600) },
         };
       });
