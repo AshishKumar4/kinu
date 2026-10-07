@@ -30,8 +30,6 @@ export interface ChatWire {
   turnOwed(): boolean;
   /** The open turn's finished steps as its ledger records them, drawn. */
   steps(): readonly (readonly JsonObject[])[];
-  /** How many there are, without drawing them. */
-  recordedSteps(): number;
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
@@ -75,8 +73,8 @@ interface LiveStream {
   /** The answer's row id, on every provider call's `start`, so the answer stays one message. */
   readonly messageId: string;
   readonly open: OpenParts;
-  /** The chunks a replay sends after the recorded steps, with their step: the steps finished before them. */
-  relayed: { readonly step: number; readonly type: string; readonly body: string }[];
+  /** Every chunk this turn relayed, in order, with its step: the steps finished before it. Dropped with the turn. */
+  readonly relayed: { readonly step: number; readonly type: string; readonly body: string }[];
   /** Steps whose last chunk went out, those before this activation included. */
   finished: number;
   /** Tabs already replayed it: told again by their own probe, they are not held back again. */
@@ -549,13 +547,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         // The row id on every `start`: a missing or SDK-minted one draws the answer twice.
         if (chunk.type === 'start') chunk.messageId = live.messageId;
-
-        // A replay restates every recorded step from the ledger; of those it reads only their cut markers here. The
-        // ledger is asked only once an earlier step's chunks are held.
-        if (chunk.type === 'start-step' && live.relayed.some((entry) => entry.step < live.finished && entry.type !== 'data-kinu-step-cut')) {
-          const restated = Math.min(this.wire.recordedSteps(), live.finished);
-          live.relayed = live.relayed.filter((entry) => entry.step >= restated || entry.type === 'data-kinu-step-cut');
-        }
 
         const body = JSON.stringify(chunk);
 

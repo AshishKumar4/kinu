@@ -77,8 +77,8 @@ export const WAITING_PARENT_LIVE_BOUND_BYTES = 14_500_000;
  *  row trips only as the peak nears the 128 MB isolate, and the growth row below is the one that pins what a turn keeps. */
 export const LONG_TURN_PEAK_BOUND_BYTES = 115_000_000;
 
-/** Measured 2026-10-07 at {@link LONG_TURN}: 5.7-5.9 MB over 3 runs on lane/memory-gap 9875bab49, once the chat room
- *  keeps only the step in progress; 6.9-7.1 MB before. Measured 2026-10-01: 2.9-6.8 MB over 7 runs on lane/staging-fix-1
+/** Measured 2026-10-07 at {@link LONG_TURN}: 6.9-7.1 MB over 3 runs on b0de8580f, about 1 MB of it the chat room's relay
+ *  of every chunk body and 2 MB workerd's open-pipe promise chains. Measured 2026-10-01: 2.9-6.8 MB over 7 runs on lane/staging-fix-1
  *  c7beb9ce1; 32.1-35.2 MB over 2 with each step's request body left on the AI SDK's record (98517e993 reverted), as
  *  production 2f660875cc ran.
  *  The `file stat` turn this row measured before read 7.7 MB for that defect against 3.6-4.0 MB: its requests shared
