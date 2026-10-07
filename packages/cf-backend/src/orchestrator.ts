@@ -783,8 +783,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (!this.liveActor(actorId)) return await this.agentWakes.owes(actorId, null);
         await this.agentWakes.owes(actorId, next);
 
-        // At rest owing nothing, its isolate asks nothing more of the copy here until new work reopens it: released any
-        // sooner, a closing effect's call lands on the release.
         if (next === null) this.releaseIdleHosted(actorReferenceOf(this.liveAgentOf(actorId)));
       },
       birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.boundExec(), this.agentBound(actorId).handle), drainTurnId),
@@ -1530,9 +1528,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** A waiting hired agent holds no transcript; its rows reopen it. A running job keeps its runtime to the settle's turn. */
+  /** A waiting hired agent holds no transcript; its rows reopen it. A running job keeps its runtime to the settle's turn,
+   *  and an agent whose isolate has not yet told this workspace it rests keeps it too: a closing effect calls it. */
   private releaseIdleHosted(reference: ActorReference): void {
-    if (this.actorHost().hosted(reference) === null || this.hostedTurnInFlight(reference)) return;
+    if (this.actorHost().hosted(reference) === null || this.hostedTurnInFlight(reference) || this.agentWakes.armed(reference.actorId)) return;
 
     if ((this.jobAuthorities.live(reference.actorId)?.runner.inFlight ?? 0) > 0) return;
     this.actorHost().release(reference);
@@ -1644,10 +1643,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (status === 'failed' || status === 'skipped') await this.hireCouldNotRun(record, reference, task, reason ?? 'its chat could not open the turn');
         log.markTurnCompleted(task.turnId);
 
-        // Released first, once its isolate is at rest (its rest skips a release while this hand-off is out): a drain armed
-        // on this session would fire against the release and keep its transcript until then. Mid-turn reports, a reset's
-        // re-run too, go to the durable wake, which reopens the agent.
-        if (!this.agentWakes.armed(record.actorId)) this.releaseIdleHosted(reference);
+        // Released first, if its isolate already rests: a drain armed on this session would fire against the release and
+        // keep its transcript until then. Mid-turn reports, a reset's re-run too, go to the durable wake, which reopens it.
+        this.releaseIdleHosted(reference);
 
         if (!this.settledTaskAgent(record)) this.hostedSeams().scheduleDrain(this.actorHost().bindStores(reference));
       },
@@ -2171,10 +2169,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override async hostedAdmit(actorId: string, input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<void> {
-    await whenActorTakesInput(this.boundSql, actorId, async () => {
-      await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
-      await (await this.agentCalls(actorId)).admit(this.agentSnapshot(actorId), { text: input.text, files: input.files }, { id: input.id, mode: input.mode });
-    });
+    await whenActorTakesInput(this.boundSql, actorId, () => this.handInput(actorId,
+      async () => { await (await this.agentCalls(actorId)).admit(this.agentSnapshot(actorId), { text: input.text, files: input.files }, { id: input.id, mode: input.mode }); }));
+  }
+
+  /** Armed before the words cross, and again once the agent took them: an answer it sent before taking them may have
+   *  cancelled the first arm on its way, and its later answers replace the second. */
+  private async handInput<A>(actorId: string, hand: () => Promise<A>): Promise<A> {
+    await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
+    const taken = await hand();
+
+    await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
+
+    return taken;
   }
 
   protected override hostedChatWire(actorId: string): ChatWire | null {
@@ -2192,11 +2199,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
       history: (limit) => this.agentStores(actorId).history(limit),
       admitted: (id) => this.agentStores(actorId).admitted(id),
-      send: (input) => whenActorTakesInput(this.boundSql, actorId, async () => {
-        await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
-
-        return await (await facet()).send(snapshot(), { text: input.text, files: input.files }, { id: input.id, mode: input.mode });
-      }),
+      send: (input) => whenActorTakesInput(this.boundSql, actorId, () => this.handInput(actorId,
+        async () => await (await facet()).send(snapshot(), { text: input.text, files: input.files }, { id: input.id, mode: input.mode }))),
       retry: (claim) => whenActorTakesInput(this.boundSql, actorId, async () => await (await facet()).retry(snapshot(), claim)),
       interrupt: () => {
         this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));

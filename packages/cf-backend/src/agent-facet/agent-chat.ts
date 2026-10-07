@@ -84,7 +84,7 @@ export class FacetChat {
         terminal: () => this.terminal,
         driverGate: () => null,
         armTurnWake: (atMs) => this.tell(atMs),
-        quiet: () => { this.rest(); },
+        quiet: () => { this.atRest(); },
         taskList: () => actor.stores.taskList,
         // Its jobs run in the workspace, whose settle wakes it.
         hasPendingAsyncWake: () => false,
@@ -208,7 +208,7 @@ export class FacetChat {
       // An eviction leaves the effects owed; the workspace's wake re-drives them.
       hold: async (close) => {
         await close();
-        this.rest();
+        this.atRest();
       },
     });
 
@@ -239,9 +239,15 @@ export class FacetChat {
   }
 
   /** At rest once no turn runs or waits and no close is held, and each rest is told once. */
-  private rest(): void {
+  private atRest(): void {
     if (this.session.pumping || this.terminal.closing) return;
     this.resting = hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => this.tell()));
+  }
+
+  /** Once every answer of what it owes sent so far has landed: input acknowledged after it has no older answer behind it
+   *  that could cancel the workspace's arm for it. */
+  async told(): Promise<void> {
+    await this.telling;
   }
 
   /** `at` asks for a wake no later than it. */

@@ -1271,11 +1271,13 @@ export abstract class ActorAgent extends Agent<Env> {
       // has its own terminal claim.
       turnIsLive: (turnId) => this.chatLoop.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
-      settled: () => this.restWhenIdle(),
-      // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber.
+      settled: async () => {},
+      // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber. Rests
+      // once the close has left the held set, so of a close's end and a quiet pump, whichever comes last rests the actor.
       hold: (close) => this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
         ctx.stash({ lane: TERMINAL_LANE_FIBER });
         await close();
+        await this.restWhenIdle();
       }).finally(() => { this.overviewChanged(); }),
     });
 

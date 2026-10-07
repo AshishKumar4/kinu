@@ -173,15 +173,19 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding> {
-    const { session } = await this.chatOf(snapshot);
+    const chat = await this.chatOf(snapshot);
+    const landing = await chat.session.send(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
 
-    return await session.send(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
+    await chat.told();
+
+    return landing;
   }
 
   async admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void> {
-    const { session } = await this.chatOf(snapshot);
+    const chat = await this.chatOf(snapshot);
 
-    await session.admit(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
+    await chat.session.admit(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
+    await chat.told();
   }
 
   async retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding> {
