@@ -19,7 +19,24 @@ const REVIEWER_ROLE: RoleDefinition = {
   plan: true,
 };
 
-/** The reviewer's role in the account's catalog, as defined here: a stale definition is replaced, not trusted. */
-export const REVIEWER_CATALOG: CatalogNeed = (catalog) => JSON.stringify(catalog.roles[REVIEWER_ROLE_ID]) === JSON.stringify(REVIEWER_ROLE)
-  ? null
-  : { ...catalog, roles: { ...catalog.roles, [REVIEWER_ROLE_ID]: REVIEWER_ROLE } };
+/**
+ * The reviewer's role in the account's catalog, as defined here, and `fallbacks` as the chain `model` falls back along
+ * when its provider refuses (`modelFallbacks`, which a workspace pinned to `model` follows): a stale definition or chain
+ * is replaced, not trusted.
+ */
+export function reviewerCatalog(model: string, fallbacks: readonly string[]): CatalogNeed {
+  return (catalog) => {
+    const roleHeld = JSON.stringify(catalog.roles[REVIEWER_ROLE_ID]) === JSON.stringify(REVIEWER_ROLE);
+    const chainHeld = JSON.stringify(catalog.modelFallbacks?.[model] ?? []) === JSON.stringify(fallbacks);
+
+    if (roleHeld && chainHeld) return null;
+
+    const others = Object.entries(catalog.modelFallbacks ?? {}).filter(([spec]) => spec !== model);
+
+    return {
+      ...catalog,
+      roles: { ...catalog.roles, [REVIEWER_ROLE_ID]: REVIEWER_ROLE },
+      modelFallbacks: Object.fromEntries(fallbacks.length > 0 ? [...others, [model, fallbacks]] : others),
+    };
+  };
+}

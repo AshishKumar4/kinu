@@ -6,7 +6,7 @@
  * `GET /api/user/credentials` does not list, this starts the sign-in for that account, prints where to approve it and
  * the code, and waits while the owner approves it in a browser. One the deployment holds is left alone, so a deploy asks
  * only after a reset wiped it. With no terminal to ask at, it asks nothing and says which login is missing. Then it reads
- * whether the deployment lists the reviewer's model on each login: the measurement `REVIEW_MODEL` waits on. It prints
+ * whether the deployment lists the reviewer's model on each login, which `REVIEW_MODELS` tries first. It prints
  * outcomes and ChatGPT account ids, never a token; whatever is missing is a notice in the deploy's report and the exit
  * is 1.
  *   bun evals/scripts/reviewer-sign-in.ts <origin>

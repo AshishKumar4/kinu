@@ -21,7 +21,7 @@ import { basename, join } from 'node:path';
 import * as v from 'valibot';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, inheritedRows, type EvalAccount } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
-import { DEFAULT_TRIALS, evalMatrix, REVIEW_MODEL } from '../evals/src/config';
+import { DEFAULT_TRIALS, evalMatrix, REVIEW_KEYED_MODEL } from '../evals/src/config';
 import { WORKSPACE_LEASE_MS } from '../evals/src/session';
 import { trialAccounts, trialAccountsAt } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
@@ -242,7 +242,7 @@ if (import.meta.main) {
   const identityEnv = evalWebIdentityEnv(origin);
   const matrix = evalMatrix(process.env, ARMS.map((arm) => arm.id));
   // The models a pass runs: those it measures, and the one that reviews it.
-  const models = [...matrix.models, REVIEW_MODEL];
+  const models = [...matrix.models, REVIEW_KEYED_MODEL];
   const identity = process.env[identityEnv]?.trim();
   const taskFiles = trackedFiles().filter(isEvalTask).map((file) => basename(file));
 

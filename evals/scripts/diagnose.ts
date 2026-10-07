@@ -4,7 +4,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { EXERCISED_PATHS, reviewModel } from '../src/config';
+import { EXERCISED_PATHS, reviewModelOverride } from '../src/config';
 import { CHANGES, ORCHESTRATION_CAUSES, SIMPLE_CAUSES, parseDiagnosis, renderDiagnosis } from '../src/diagnosis';
 import { evidenceDirectories, evidenceDirectory, extractInsights, readTrialEvidence, resultsRow } from '../src/insights';
 import { redact } from '../src/redact';
@@ -127,7 +127,7 @@ const reviews = failed.map((assertion, index) => {
 
 const target = resolveEvalTarget(process.env);
 
-const model = reviewModel(process.env);
+const model = reviewModelOverride(process.env) ?? undefined;
 
 const files = [
   { path: `${REVIEW}/comparison.json`, content: redact(comparisonText) },

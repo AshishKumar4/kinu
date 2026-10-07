@@ -10,30 +10,34 @@ export const DEFAULT_MODELS: readonly [string, ...string[]] = [
 ];
 
 /**
- * The model that reads a run rather than being measured by it: the diagnosis, the trajectory review and the judge of
- * what no check computes. GPT 6.1 Sol, the owner's choice (2026-10-07), through the `openrouter.bearer` key the eval
- * accounts hold (`scripts/eval-provider-keys.ts`); staging's eval-service listed it on 2026-10-07.
- */
-export const REVIEW_MODEL = 'openrouter/openai/gpt-6.1-sol';
-
-/**
- * The owner's ChatGPT Pro logins the reviewer moves to (2026-10-07), first to last, each the eval identity's own codex
- * sign-in on a deployment (`evals/scripts/reviewer-sign-in.ts`), the second the first's fallback. The owner's own agents run
- * `gpt-6.1-sol` on these logins through the same chatgpt.com Codex route; whether a deployment lists it for the eval
- * identity is measured at the first sign-in, and {@link REVIEW_MODEL} names the chain only once it does.
+ * The owner's ChatGPT Pro logins the reviewer runs on (2026-10-07), first to last, each the eval identity's own Codex
+ * sign-in on a deployment, asked of the owner only when the deployment lacks it (`evals/scripts/reviewer-sign-in.ts`).
  */
 export const REVIEW_ACCOUNTS = ['ashishkmr472', 'aksnip4284'] as const;
 
-/** GPT 6.1 Sol through codex on one of {@link REVIEW_ACCOUNTS}. */
+/** GPT 6.1 Sol through Codex on one of {@link REVIEW_ACCOUNTS}. */
 export function codexReviewModel(account: (typeof REVIEW_ACCOUNTS)[number]): string {
   return `codex@${account}/gpt-6.1-sol`;
 }
 
-/** The reviewer a run's review asks: `KINU_EVAL_REVIEW_MODEL`, else {@link REVIEW_MODEL}. */
-export function reviewModel(env: Env): string {
+/**
+ * GPT 6.1 Sol through the `openrouter.bearer` key every eval account holds (`scripts/eval-provider-keys.ts`, which
+ * requires it listed): the reviewer's last resort, when neither Codex login is held. Staging listed it on 2026-10-07.
+ */
+export const REVIEW_KEYED_MODEL = 'openrouter/openai/gpt-6.1-sol';
+
+/**
+ * The model that reads a run rather than being measured by it, the owner's choice (2026-10-07): the diagnosis, the
+ * trajectory review and the judge of what no check computes. GPT 6.1 Sol, first choice first; a review runs on the
+ * first its deployment lists for the eval identity, and falls back to the others it lists (`reviewerModels`).
+ */
+export const REVIEW_MODELS: readonly string[] = [...REVIEW_ACCOUNTS.map(codexReviewModel), REVIEW_KEYED_MODEL];
+
+/** A reviewer `KINU_EVAL_REVIEW_MODEL` names in place of {@link REVIEW_MODELS}, or null. */
+export function reviewModelOverride(env: Env): string | null {
   const named = env.KINU_EVAL_REVIEW_MODEL?.trim() ?? '';
 
-  return named === '' ? REVIEW_MODEL : named;
+  return named === '' ? null : named;
 }
 
 /** The product as deployed, with no workspace setting changed. */

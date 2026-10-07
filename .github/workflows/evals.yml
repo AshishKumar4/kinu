@@ -265,8 +265,8 @@ jobs:
     needs: [plan, compare]
     if: ${{ !cancelled() && needs.compare.result == 'success' }}
     runs-on: ubuntu-latest
-    # Advisory: a diagnosis that fails or comes back out of shape posts nothing and fails nothing.
-    continue-on-error: true
+    # Advisory: the Verdict does not wait on it, so a review that fails or comes back out of shape posts nothing and
+    # blocks nothing; it fails here, where it shows.
     environment: eval
     permissions:
       contents: read
@@ -316,9 +316,12 @@ jobs:
           name: kinu-evals-comparison
           path: artifacts/comparison
 
+      # The review runs on production as eval-service, whose secret this is: production keeps the reviewer's logins and
+      # keys between deploys, where staging is reset.
       - name: Ask a Kinu workspace why, and how the work changed
         id: why
         env:
+          KINU_EVAL_ORIGIN: https://kinu.run
           KINU_EVAL_WEB_IDENTITY: ${{ secrets.KINU_EVAL_WEB_IDENTITY }}
         run: |
           args=(--results artifacts/candidate/results.json --comparison artifacts/comparison/comparison.json

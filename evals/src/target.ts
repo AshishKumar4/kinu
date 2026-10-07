@@ -2,9 +2,10 @@ import * as v from 'valibot';
 import { USER_AI_PROXY_PATH } from '@kinu.run/core';
 import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
 import {
-  openPublicSession, resolveWebIdentity, type CatalogNeed, type KinuPublicSession, type PublicWebIdentity,
+  openPublicSession, resolveWebIdentity, webHeaders, type CatalogNeed, type KinuPublicSession, type PublicWebIdentity,
 } from './session';
-import { REVIEWER_CATALOG, REVIEWER_ROLE_ID } from './reviewer';
+import { REVIEW_MODELS } from './config';
+import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
 import type { SeedFile } from './task';
 import { answered, repliesTo, settle, TurnWatch } from './workspace-completion';
 
@@ -78,17 +79,43 @@ export function openWorkspace(target: EvalTarget, request: {
   });
 }
 
+const ModelsSchema = v.object({ models: v.array(v.object({ spec: v.string() })) });
+
+/**
+ * The reviewer's models the deployment lists for the eval identity, first choice first (`REVIEW_MODELS`): a Codex login
+ * the deployment does not hold is not listed, so the review runs on the next. None listed fails the review, naming what
+ * would list one.
+ */
+export function reviewerModels(target: EvalTarget): Promise<[string, ...string[]]> {
+  return infraBoundary(`GET ${target.origin}/api/user/models`, async () => {
+    const response = await fetch(`${target.origin}/api/user/models`, { headers: webHeaders(target.identity) });
+
+    if (!response.ok) throw new DeploymentAnswer(`/api/user/models answered ${String(response.status)}`, response.status);
+    const listed = new Set(v.parse(ModelsSchema, await response.json()).models.map((model) => model.spec));
+    const [first, ...rest] = REVIEW_MODELS.filter((model) => listed.has(model));
+
+    if (first === undefined) {
+      throw new Error(`${target.origin} lists none of the reviewer's models (${REVIEW_MODELS.join(', ')}) for the eval identity: `
+        + `sign it in (bun evals/scripts/reviewer-sign-in.ts ${target.origin}) or store its keys (bun scripts/eval-provider-keys.ts ${target.origin})`);
+    }
+
+    return [first, ...rest];
+  });
+}
+
 /**
  * One question put to a model in a fresh eval workspace of its own: `files` written into it, `prompt` sent in Plan, the
  * workspace waited out, and its last reply, trimmed. The workspace is deleted whatever happened. The diagnosis, the
  * trajectory review and the judge ask through it, and read what they are given as untrusted, so the workspace is the
  * reviewer's role (`REVIEWER_ROLE`): the product itself offers the turn the file tool alone, and Plan refuses its writes.
  * A trajectory that tells its reader to write, run, fetch or remember something is refused by the turn, not the prompt.
+ * It runs on `model` when one is named, else on the first of the reviewer's models listed, falling back to the rest.
  */
 export async function askOnce(target: EvalTarget, request: {
-  subject: string; mission: string; model: string; files: readonly SeedFile[]; prompt: string;
+  subject: string; mission: string; model?: string | undefined; files: readonly SeedFile[]; prompt: string;
 }): Promise<string> {
-  const session = await openWorkspace(target, { ...request, role: REVIEWER_ROLE_ID, catalog: [REVIEWER_CATALOG] });
+  const [model, ...fallbacks] = request.model === undefined ? await reviewerModels(target) : [request.model];
+  const session = await openWorkspace(target, { ...request, model, role: REVIEWER_ROLE_ID, catalog: [reviewerCatalog(model, fallbacks)] });
 
   try {
     for (const file of request.files) await session.writeFile(file.path, file.content);
