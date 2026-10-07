@@ -5,7 +5,8 @@
 
 import type { ToolSet } from 'ai';
 import { buildToolSurface, type BuiltinToolDeps, type CodemodeBuilder } from '../tools/builtins';
-import { createAgentsTool, type AgentsToolDeps } from './agents-tool';
+import type { AgentsToolDeps } from './agents-tool';
+import { createAgentsTool } from './agents-operations';
 import type { EffectClaimDeps } from '../tools/effect-claim';
 import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
 

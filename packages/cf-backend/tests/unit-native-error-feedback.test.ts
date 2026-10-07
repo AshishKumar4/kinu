@@ -12,7 +12,7 @@ function modelCallingFile() {
 
     return {
       content: call
-        ? [{ type: 'tool-call', toolCallId: 'native-file-refusal', toolName: 'file', input: JSON.stringify({ action: 'transmogrify', path: '/' }) }]
+        ? [{ type: 'tool-call', toolCallId: 'native-file-refusal', toolName: 'file', input: JSON.stringify({ op: 'transmogrify', path: '/' }) }]
         : [{ type: 'text', text: 'done' }],
       finishReason: { unified: call ? 'tool-calls' : 'stop', raw: undefined },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },

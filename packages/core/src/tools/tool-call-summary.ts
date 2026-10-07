@@ -24,12 +24,7 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined): 
   const parsed = v.safeParse(JsonObjectSchema, input);
 
   if (!parsed.success) return 'unknown';
-  const action = str(parsed.output, 'action');
-
-  if (toolName === 'tasks' && action === 'mode') {
-    return str(parsed.output, 'role') ? 'mutate' : 'read';
-  }
-
+  const action = str(parsed.output, 'op');
   const actions: Readonly<Record<string, SlateMemberEffect>> | undefined = Object.entries(NATIVE_ACTION_EFFECTS).find(([name]) => name === toolName)?.[1];
 
   return actions !== undefined && Object.hasOwn(actions, action) ? actions[action] : 'unknown';

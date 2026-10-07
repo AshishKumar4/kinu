@@ -73,7 +73,7 @@ describe('saving a tool that reads a file', () => {
     const { db, provider } = workspaceOf();
 
     try {
-      const declared = renderCodemodeDescription([provider.types]);
+      const declared = renderCodemodeDescription([provider], {});
 
       expect(declared).toContain('async (args) => JSON.parse(await workspace.readFile(args.path))');
       expect(declared).toContain('not an eval script');

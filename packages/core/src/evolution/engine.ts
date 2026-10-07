@@ -131,12 +131,9 @@ const CORROBORATING_CORRECTION = 0.8;
 /** The rating the review decides by: the ledger's effective row, or an unkeyed turn's own reading. */
 type EffectiveRating = Pick<TurnRating, 'score' | 'corrected' | 'wrong' | 'source'>;
 
-/** Read-only calls prove nothing about whether the turn's work landed, so the
- *  pattern extractor skips them. `fact` and `memory` name the same recall. */
+/** Read-only calls prove nothing about whether the turn's work landed, so the pattern extractor skips them. */
 function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'args'>): boolean {
-  if (call.name === 'memory') return call.args.action === 'search' || call.args.action === 'recall';
-
-  return call.name === 'fact' && call.args.action === 'recall';
+  return call.name === 'memory' && v.is(v.picklist(['recall', 'search', 'searchConversations', 'readConversation', 'listConversations']), call.args.op);
 }
 
 export class EvolutionEngine {

@@ -4,6 +4,7 @@
  * the bundled text; an override changes only the agent that promoted it. The scaffold keeps `scaffold_versions`.
  */
 import * as v from 'valibot';
+import { jsonSchema } from 'ai';
 import type { ActorHandle } from '../identity/actor-handle';
 import { ARTIFACT_STATUSES } from './artifact-schema';
 import type { SqlExecutor } from '../types/primitives';
@@ -15,13 +16,15 @@ import { templateContract } from '../prompting/template';
 import { PROMPT_SECTIONS, type PromptSectionOverrides } from '../prompting/section-templates';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { fieldDescriptions, type ToolTextOverrides } from '../tools/tool-text';
-import { FileToolInputSchema } from '../tools/file-tool';
-import { MemoryToolInputSchema } from '../tools/memory-tool';
-import { ReportToolInputSchema } from '../tools/report-tool';
-import { TasksToolInputSchema } from '../tools/tasks-tool';
-import { WebToolInputSchema } from '../tools/web-tool';
+import { FILE } from '../operations/file';
+import { MEMORY } from '../operations/memory';
+import { nativeToolSchema } from '../tools/operation-surfaces';
+import { inputJsonSchema } from '../operations/operation';
+import { REPORT } from '../operations/report';
+import { TASKS } from '../operations/tasks';
+import { WEB } from '../operations/web';
 import { codemodeInputSchema } from '../tools/sandbox-contract';
-import { shellInputSchema } from '../tools/shell-tool';
+import { SHELL } from '../operations/shell';
 
 /** About twice the largest shipped section, so a runaway is refused before it is judged. */
 const PROMPT_SECTION_MAX_BYTES = 4800;
@@ -97,12 +100,12 @@ const versionOf = (row: ArtifactRow): ArtifactVersion => ({
 /** The built-in input schemas whose field text evolves; the agents tool's is built per account and does not. */
 const BUILTIN_INPUT_SCHEMAS = {
   eval: codemodeInputSchema(),
-  shell: shellInputSchema([]),
-  file: FileToolInputSchema,
-  tasks: TasksToolInputSchema,
-  memory: MemoryToolInputSchema,
-  web: WebToolInputSchema,
-  report: ReportToolInputSchema,
+  shell: jsonSchema(inputJsonSchema(SHELL.run)),
+  file: jsonSchema(nativeToolSchema(Object.values(FILE))),
+  tasks: jsonSchema(nativeToolSchema(Object.values(TASKS))),
+  memory: jsonSchema(nativeToolSchema(Object.values(MEMORY))),
+  web: jsonSchema(nativeToolSchema([WEB.search, WEB.fetch, WEB.screenshot])),
+  report: jsonSchema(inputJsonSchema(REPORT.send)),
 };
 
 function builtinFieldDescriptions(tool: string): Record<string, string> | null {

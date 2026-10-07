@@ -64,9 +64,16 @@ export function branchableToolCall<Result>(call: () => Promise<Result>) {
 interface ProgramInvocation {
   failures: BindingFailure[];
   pending: Promise<JsonValue | undefined>[];
+  /** The eval's own: stopping the program stops what it called. */
+  readonly signal: AbortSignal | undefined;
 }
 
 const program = new AsyncLocalStorage<ProgramInvocation>();
+
+/** The running program's stop signal, for an operation it called. */
+export function programSignal(): AbortSignal | undefined {
+  return program.getStore()?.signal;
+}
 
 const ProgramFailuresSchema = v.object({ failures: v.array(BindingFailureSchema) });
 
@@ -85,7 +92,7 @@ class CodemodeProgramError extends Data.TaggedError('CodemodeProgramError')<{ re
 
 /** Capture the invocation before crossing RPC, whose callback has no caller async context. */
 export function bindProgramCall<Args extends unknown[]>(
-  binding: { tool: string; action: string | null },
+  binding: { tool: string; op: string | null },
   invoke: (...args: Args) => Promise<JsonValue | undefined>,
   returnedRefusals = false,
 ): (...args: Args) => Promise<JsonValue | undefined> {
@@ -104,9 +111,10 @@ export function bindProgramCall<Args extends unknown[]>(
       const failure = strict ?? recovered;
 
       if (failure === null) return value;
-      const input = v.safeParse(v.object({ action: v.string() }), args[0]);
-      const action = binding.action ?? (binding.tool !== 'shell' && input.success ? input.output.action : null);
-      active?.failures.push({ ...failure, tool: binding.tool, action });
+      // A native tool called from a program names its operation in its input.
+      const input = v.safeParse(v.object({ op: v.string() }), args[0]);
+      const op = binding.op ?? (input.success ? input.output.op : null);
+      active?.failures.push({ ...failure, tool: binding.tool, op });
 
       return failure;
     });
@@ -120,9 +128,10 @@ export function bindProgramCall<Args extends unknown[]>(
 /** Program recovery is success; returning or throwing a binding refusal propagates it. */
 export async function withCodemodeProgram<Result extends { result?: unknown; logs?: string[] }>(
   invoke: () => Promise<Result>,
+  signal?: AbortSignal,
 ): Promise<Result & { failures?: BindingFailure[] }> {
   if (program.getStore() !== undefined) return invoke();
-  const active: ProgramInvocation = { failures: [], pending: [] };
+  const active: ProgramInvocation = { failures: [], pending: [], signal };
 
   const settled = Effect.promise(() => Promise.all(active.pending));
 

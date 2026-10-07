@@ -396,7 +396,7 @@ test('native tool bindings use the caller file plane and lose reach immediately 
   const caller = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'native-reader');
 
   const call = () => parent.agent.slateBindingCallAs(caller, 'native-reader', 'FILE', {
-    member: 'call', args: [{ action: 'read', path: '/home/main/slate-note.txt' }], invocation: null,
+    member: 'call', args: [{ op: 'read', path: '/home/main/slate-note.txt' }], invocation: null,
   });
 
   expect(await call()).toMatchObject({ ok: true, value: expect.stringContaining('root note') });
@@ -427,7 +427,7 @@ test('a slate cannot bind the agent, delegate through a tool alias, or widen a p
   await bind({ kind: 'agent' });
   expect(await call('hire')).toMatchObject({ ok: false, reason: 'denied' });
   await bind({ kind: 'tool', name: 'agents' });
-  expect(await call('call', [{ action: 'hire', role: 'task', mission: 'should not run' }])).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
+  expect(await call('call', [{ op: 'hire', role: 'task', mission: 'should not run' }])).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
 
   for (const namespace of ['agent', 'agents']) {
     await bind({ kind: 'namespace', namespace });
@@ -469,7 +469,7 @@ test('a tool binding keeps native Plan checks and the same approval ladder as co
   const planning: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
 
   const write = () => actor.agent.slateBindingCallAs(planning, 'tool-gate', 'FILE', {
-    member: 'call', args: [{ action: 'write', path: marker, content: 'must not land' }], invocation: null,
+    member: 'call', args: [{ op: 'write', path: marker, content: 'must not land' }], invocation: null,
   });
 
   expect(await write()).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });

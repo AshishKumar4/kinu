@@ -1,15 +1,15 @@
 /** Plan-review contract shared by the builtins tool surface without importing the review store. */
-import { z } from 'zod';
+import * as v from 'valibot';
 
-/** One edit to a submitted plan: the `submit_plan` tool's input item, and what the review store applies. */
-export const PlanEditSchema = z.object({
-  start: z.number().int().min(1).describe('First affected line, one-indexed.'),
-  end: z.number().int().min(1).nullable().optional()
-    .describe('Last affected line, inclusive. Omit to replace through end of plan.'),
-  content: z.string().describe('Replacement Markdown. Empty with an explicit end deletes the range.'),
+/** One edit to a submitted plan: the `submit_plan` tool's input item, and what the review store applies. A key it does
+ *  not read is dropped, as calls that ran before took it. */
+export const PlanEditSchema = v.object({
+  start: v.pipe(v.number(), v.integer(), v.minValue(1), v.description('First affected line, one-indexed.')),
+  end: v.optional(v.pipe(v.nullable(v.pipe(v.number(), v.integer(), v.minValue(1))), v.description('Last affected line, inclusive. Omit to replace through the end of the plan.'))),
+  content: v.pipe(v.string(), v.description('Replacement Markdown. Empty with an explicit end deletes the range.')),
 });
 
-export type PlanEdit = z.infer<typeof PlanEditSchema>;
+export type PlanEdit = v.InferOutput<typeof PlanEditSchema>;
 
 export type PlanReviewStatus = 'pending' | 'changes_requested' | 'approved' | 'superseded' | 'dismissed';
 

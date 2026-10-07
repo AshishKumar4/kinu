@@ -194,7 +194,7 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
         content.push({ type: 'text', text: 'Reading the current implementation first.' });
         content.push({
           type: 'tool-call', toolCallId: `read-${String(generations)}`, toolName: 'file',
-          input: JSON.stringify({ action: 'read', path: REFERENCE_PATH }),
+          input: JSON.stringify({ op: 'read', path: REFERENCE_PATH }),
         });
         calls.push('file');
       } else if (proposes && own === 1) {

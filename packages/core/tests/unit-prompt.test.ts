@@ -208,7 +208,7 @@ describe('buildSystemPromptSync', () => {
     // `ideate` is the one preset that legally takes no `objective`, so the example is a complete call.
     const { rt } = createTestRuntime();
     const example = BUILTIN_TOOL_SPECS.agents.example;
-    expect(example).toContain("action:'swarm'");
+    expect(example).toContain("op:'swarm'");
     expect(example).toContain("preset:'ideate'");
     expect(example).toContain('task:');
     expect(buildSystemPromptSync(rt)).toContain(example);
@@ -852,7 +852,7 @@ describe('buildSystemPromptSync', () => {
           return {
             content: step < 2
               ? [{ type: 'tool-call', toolName: 'file', toolCallId: `file-${phase}-${step}`,
-                input: JSON.stringify(step === 0 ? { action: 'read', path } : { action: 'write', path, content: 'changed' }) }]
+                input: JSON.stringify(step === 0 ? { op: 'read', path } : { op: 'write', path, content: 'changed' }) }]
               : [{ type: 'text', text: 'done' }],
             finishReason: { unified: step < 2 ? 'tool-calls' : 'stop', raw: undefined },
             usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },

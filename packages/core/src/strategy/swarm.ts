@@ -482,7 +482,7 @@ function instrumentFreeAlternative(resolved: ResolvedSwarm): string {
   const row = SWARM_PRESET_POINTS[resolved.preset];
 
   return 'If nothing here can be measured by running code, DROP `objective` and this same call '
-    + `works as it stands: {action:"swarm", preset:"${resolved.preset}", task:"..."} runs a judged `
+    + `works as it stands: {op:"swarm", preset:"${resolved.preset}", task:"..."} runs a judged `
     + `sweep of ${String(row.branches)}, ranked, with no instrument and no other field required.`;
 }
 

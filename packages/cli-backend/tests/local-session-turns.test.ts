@@ -43,7 +43,7 @@ test('parallel native calls retain their SDK identities after reverse completion
 
     return {
       content: calls ? ['call-A', 'call-B'].map((toolCallId) => ({
-        type: 'tool-call' as const, toolCallId, toolName: 'file', input: JSON.stringify({ action: 'read', path: `${toolCallId}.txt` }),
+        type: 'tool-call' as const, toolCallId, toolName: 'file', input: JSON.stringify({ op: 'read', path: `${toolCallId}.txt` }),
       })) : [{ type: 'text', text: 'done' }],
       finishReason: { unified: calls ? 'tool-calls' : 'stop', raw: undefined },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -90,7 +90,7 @@ test('a provider failing after a real tool result retains that completed call ex
       provider = controller;
       controller.enqueue({ type: 'stream-start', warnings: [] });
       controller.enqueue({ type: 'tool-call', toolCallId: 'completed-save', toolName: 'memory',
-        input: JSON.stringify({ action: 'save', topic: 'completed', content: 'saved before the provider failed' }) });
+        input: JSON.stringify({ op: 'note', topic: 'completed', content: 'saved before the provider failed' }) });
       // ai 7 runs a step's tools once its model call finishes; the stream stays open for the failure.
       controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
     } }),
@@ -706,7 +706,7 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
                 controller.enqueue({ type: 'stream-start', warnings: [] });
                 controller.enqueue({
                   type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
-                  input: JSON.stringify({ action: 'save', content: 'note' }),
+                  input: JSON.stringify({ op: 'note', content: 'note' }),
                 });
                 controller.enqueue({
                   type: 'finish', finishReason: 'tool-calls', usage: firstFinishUsage,

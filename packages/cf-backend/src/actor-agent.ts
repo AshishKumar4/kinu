@@ -129,7 +129,7 @@ import {
   answerParentRpc,
   type ParentExecResult,
   type ParentRpcWrite,
-  type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
+  type TeamToolDeps, type PeersToolDeps, type ReportDeps,
   type SubordinateRuntime, type TemporaryAgentPort,
   SubordinateRosterStore, subordinateTitle,
   createTeamToolDeps, createTemporaryAgentPort, receiveSubordinateEvent,
@@ -156,7 +156,7 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
-  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
+  agentRoleSwitch, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
@@ -392,7 +392,7 @@ export interface ActorToolDeps {
    * (see AgentsToolDeps.peers in core delegation/agents-tool.ts). */
   peers?: PeersToolDeps;
   /** Subordinate-only. */
-  report?: ReportToolDeps;
+  report?: ReportDeps;
   /** Present on actors whose current turn belongs to the owner; surfaced only in Plan mode. */
   submitPlan?: SubmitPlanToolDeps;
 }
@@ -458,11 +458,16 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, co
 
   const providers: CodemodeProvider[] = [
     ...(runtime.executionRouter?.getProviders() ?? []),
-    createSlateWebCodemodeProvider(webSearch),
+    // A slate's visitor writes nothing into the workspace and holds no browser.
+    createWebCodemodeProvider({ provider: webSearch, files: null }),
     createDbCodemodeProvider(actor.stores.appData),
     createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
     createMemoryCodemodeProvider(() => ({
       memory: runtime.memory, vectorStore: runtime.vectorStore, facts: actor.stores.facts, actor: actor.handle, conversations,
+    })),
+    createFileCodemodeProvider(() => ({
+      vfs: runtime.toolFiles, home: runtime.storage.home, planes: runtime.planes, memory: runtime.memory,
+      ledger: actor.session.orchestrator.acc.files, budget: actor.session.orchestrator.acc.context,
     })),
   ];
 
@@ -3123,6 +3128,9 @@ export abstract class ActorAgent extends Agent<Env> {
         memory: this.rt.memory, vectorStore: this.rt.vectorStore,
         facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
       })),
+      createFileCodemodeProvider(() => ({
+        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
+      })),
       createTasksCodemodeProvider(this.taskList, this.config),
     ];
   }
@@ -3148,7 +3156,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []),
-      createSlateWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
+      createWebCodemodeProvider({ provider: this.ownedModelServices.getWebSearchProvider(), files: null }),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
       ...this.turnCodemodeProviders(),
     ];

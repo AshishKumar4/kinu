@@ -13,7 +13,7 @@ test('the file tool shows the agent a screenshot the rung moved out, from the li
   const rt = (await hostedMainActor(orchestratorHarness())).actor.runtime;
   const { links } = await compactedScreenshots(rt);
   const file = present(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }).file, 'the file tool');
-  const read = await toolExecute<JsonValue, JsonValue>(file)({ action: 'read', path: links[0] ?? '' });
+  const read = await toolExecute<JsonValue, JsonValue>(file)({ op: 'read', path: links[0] ?? '' });
 
   expect(await present(file.toModelOutput, 'the image output')({ toolCallId: 'reopen', input: {}, output: read })).toEqual({
     type: 'content',

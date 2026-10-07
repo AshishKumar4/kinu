@@ -2,6 +2,7 @@
  * The only way an agent opens a span. Context dies across `alarm()`, a wake or a cold start, so a
  * handle is revoked on settle; no `AsyncLocalStorage`, which has no revocation point.
  */
+import type { ToolExecutionOptions } from 'ai';
 import { Effect } from 'effect';
 import { analyticsDigest } from './analytics/privacy';
 import { settleSync } from './effect';
@@ -44,6 +45,9 @@ export interface TurnIdentity {
 export interface TurnUnitTimer {
   end(stamp?: (span: ScopedSpan) => void): void;
 }
+
+/** A native tool call's options, with the turn's trace for a call that times what it starts. */
+export type TracedToolOptions = ToolExecutionOptions<unknown> & { readonly trace?: TurnTrace };
 
 export interface TurnTrace {
   begin(name: string): TurnUnitTimer;

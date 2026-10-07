@@ -7,7 +7,6 @@
 import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
-import { z } from 'zod';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ConversationRecall } from '../memory/conversation-search';
 import type { ExecutorProviderSurface } from '../execution/types';
@@ -19,25 +18,27 @@ import { withClampedToolResult } from './clamp';
 import { withCheckedInput, withCheckedInputs } from './tool-schema';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 import { codemodeInputSchema } from './sandbox-contract';
-import { dispatchReport, ReportBodySchema, ReportToolInputSchema } from './report-tool';
-import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
-import { createFileTool } from './file-tool';
-import { createShellTool } from './shell-tool';
+import { serveReport, type ReportDeps } from './report-operations';
+import { createFileTool } from './file-operations';
+import { serveShell } from './shell-operations';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { TurnContextBudget } from '../context-budget';
 import { isMcpToolKey } from './mcp-naming';
 import { selectInjectableCraftedTools, type CraftedToolSource } from './crafted-executor';
 import { TurnEscalationLedger } from '../execution/escalation';
-import { createMemoryDispatcher, memoryToolInputSchema } from './memory-tool';
-import { createTasksDispatcher, TasksToolInputSchema, type RoleSwitch } from './tasks-tool';
+import { serveMemory } from './memory-operations';
+import { nativeTool, operationTool } from './operation-surfaces';
+import { serveTasks, type RoleSwitch } from './tasks-operations';
 import type { WebSearchProvider } from '../web/index';
-import { createWebTool } from './web-tool';
-import { PlanEditSchema, type SubmitPlanToolDeps } from '../types/plans';
+import { serveWeb } from './web-operations';
+import type { SubmitPlanToolDeps } from '../types/plans';
+import { PLAN } from '../operations/plan';
+import { servePlan } from './plan-operations';
 import type { JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, settleSync, type Logger } from '../obs/index';
 // heads/types.ts holds no runtime import, so this edge cannot close a ring.
-import { toolsInWorkMode, permitInPlan } from '../execution/work-mode';
+import { toolsInWorkMode } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
@@ -86,7 +87,7 @@ export interface BuiltinToolDeps {
   facts?: import('../memory/facts').FactsStore;
   conversations: ConversationRecall;
   /** Wired only on subordinate actors. */
-  report?: ReportToolDeps;
+  report?: ReportDeps;
   webSearch?: WebSearchProvider;
   /** Plan mode only; its absence is the gate. */
   submitPlan?: SubmitPlanToolDeps;
@@ -102,18 +103,6 @@ export interface BuiltinToolDeps {
   roleSwitch?: RoleSwitch;
 }
 
-export interface ReportToolDeps {
-  report(input: {
-    status: SubordinateReportStatus;
-    content: string;
-    /** Absent when the model sent none; never present on a `bodyOnly` destination. */
-    handoff?: SubordinateReportHandoff;
-  }): Promise<JsonValue | undefined>;
-  /** Destination consumes only the prose body (search node reports), so handoff fields are not declared. */
-  readonly bodyOnly?: boolean;
-}
-
-const PlanEditsInputSchema = z.object({ edits: z.array(PlanEditSchema).min(1) });
 
 export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const { rt } = deps;
@@ -144,78 +133,39 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     files: rt.storage, budget, producer: 'eval', images: true,
   });
 
-  tools.shell = createShellTool({
+  tools.shell = operationTool(BUILTIN_TOOL_DESCRIPTIONS.shell, serveShell({
     shell: rt.shell, router: rt.executionRouter, files: rt.storage, budget, escalations, logger,
-  });
+  }));
 
-  tools.file = createFileTool({
-    vfs: rt.toolFiles,
-    home: rt.storage.home,
-    ledger: deps.fileLedger ?? new TurnFileLedger(),
-    budget,
-    memory,
-    planes: rt.planes,
-  });
+  const files = { vfs: rt.toolFiles, home: rt.storage.home, ledger: deps.fileLedger ?? new TurnFileLedger(), budget, memory, planes: rt.planes };
 
-  // Dispatch shared with the `memory.*` codemode namespace (memory-tool.ts).
+  tools.file = createFileTool(files);
+
+  // The same operations as `memory.*` in a program.
   const facts = deps.facts;
 
-  const runMemoryAction = createMemoryDispatcher({
-    memory, vectorStore: deps.vectorStore, facts, actor: rt.actor, conversations: deps.conversations,
-  });
-
-  tools.memory = permitInPlan(tool({
-    description: renderToolSchemaDescription(memoryToolSpec(facts !== undefined)),
-    inputSchema: memoryToolInputSchema(facts !== undefined),
-    execute: async (args) => runMemoryAction(args),
-  }));
+  tools.memory = nativeTool(renderToolSchemaDescription(memoryToolSpec(facts !== undefined)), serveMemory(() => ({
+    memory, vectorStore: deps.vectorStore, ...(facts !== undefined && { facts }), actor: rt.actor, conversations: deps.conversations,
+  })));
 
   const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
-  const runTasksAction = createTasksDispatcher(taskList, rt.actor.config, deps.roleSwitch);
-  tools.tasks = permitInPlan(tool({
-    description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
-    inputSchema: TasksToolInputSchema,
-    execute: async (args) => runTasksAction(args),
-  }));
+  tools.tasks = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.tasks, serveTasks(taskList, rt.actor.config, deps.roleSwitch));
 
-  if (deps.webSearch) tools.web = createWebTool({ provider: deps.webSearch, files: rt.storage, budget });
+  if (deps.webSearch) {
+    tools.web = withClampedToolResult(nativeTool(BUILTIN_TOOL_DESCRIPTIONS.web, serveWeb({ provider: deps.webSearch, files: rt.storage })),
+      { files: rt.storage, budget, producer: 'web_fetch', images: true });
+  }
 
   if (deps.report) {
     const report = deps.report;
-    const description = BUILTIN_TOOL_DESCRIPTIONS.report;
 
-    // A `bodyOnly` destination is offered no handoff.
-    tools.report = permitInPlan(report.bodyOnly
-      ? tool({ description, inputSchema: ReportBodySchema, execute: async (args) => dispatchReport(report, args) })
-      : tool({ description, inputSchema: ReportToolInputSchema, execute: async (args) => dispatchReport(report, args) }));
+    tools.report = operationTool(BUILTIN_TOOL_DESCRIPTIONS.report, serveReport(() => report));
   }
 
   // Outside BUILTIN_TOOLS: exists only on Plan turns.
   const submitPlan = deps.submitPlan;
 
-  if (submitPlan) {
-    tools.submit_plan = permitInPlan(tool({
-      description: [
-        'Submit the current Markdown implementation plan for interactive owner review.',
-        'On the first call, write the full plan with one edit starting at line 1. After changes are requested, use the line numbers in the feedback turn to make targeted edits.',
-        'Line numbers are one-indexed and inclusive; omit end to replace through the end of the plan. Do not implement after submission: end the turn and await the owner decision.',
-      ].join('\n'),
-      inputSchema: PlanEditsInputSchema,
-      execute: async ({ edits }) => {
-        const result = await submitPlan.submit(edits);
-
-        if (!result.ok) return result;
-
-        return {
-          ok: true,
-          planId: result.plan.id,
-          revision: result.plan.revision,
-          status: result.plan.status,
-          message: 'Plan submitted and awaiting review. Do not implement or produce a preview; end this turn now.',
-        };
-      },
-    }));
-  }
+  if (submitPlan) tools.submit_plan = operationTool(PLAN.submit.help, servePlan(submitPlan));
 
   // `mcp_` is reserved for MCP (isMcpToolKey).
   for (const name of Object.keys(tools)) {

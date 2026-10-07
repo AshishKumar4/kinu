@@ -33,7 +33,7 @@ function swarmAsker(offered: string[][]): TestLanguageModelV2 {
             controller.enqueue({ type: 'stream-start', warnings: [] });
 
             if (asks) {
-              controller.enqueue({ type: 'tool-call', toolCallId: crypto.randomUUID(), toolName: 'agents', input: JSON.stringify({ action: 'swarm', task: 'rank three caching designs' }) });
+              controller.enqueue({ type: 'tool-call', toolCallId: crypto.randomUUID(), toolName: 'agents', input: JSON.stringify({ op: 'swarm', task: 'rank three caching designs' }) });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: USAGE });
             } else {
               controller.enqueue({ type: 'text-start', id: '0' });

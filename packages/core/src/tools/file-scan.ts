@@ -125,7 +125,7 @@ export async function scanFileWindow(
     if (before?.revision !== undefined && after !== before.revision) {
       return yield* Effect.die(new FileRefusalError('stale',
         `${path} changed while it was being read, so what came back would be part of one version and `
-        + `part of another. Read it again (action=read path=${path}).`));
+        + `part of another. Read it again (op=read path=${path}).`));
     }
 
     return scan.done(before?.revision);

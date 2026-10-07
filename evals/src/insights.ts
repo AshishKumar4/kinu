@@ -114,13 +114,16 @@ function lineCount(content: string): number {
   return kept === '' ? 0 : kept.split('\n').length;
 }
 
+/** A program's file writes, by namespace. */
+const PROGRAM_WRITES = new Map([['workspace', ['writeFile', 'editFile']], ['file', ['write', 'edit']]]);
+
 /** Only explicit write submissions count, never reading an output or mentioning it in a reply. */
 function writtenPaths(call: Call): string[] {
   if (failed(call.event)) return [];
 
   const args = object(call.args);
 
-  if (call.event.name === 'file' && ['write', 'edit'].includes(stringOf(args.action))) return [stringOf(args.path)];
+  if (call.event.name === 'file' && ['write', 'edit'].includes(stringOf(args.op))) return [stringOf(args.path)];
 
   if (call.event.name === 'eval') {
     const source = parseSync('trial.ts', stringOf(args.code));
@@ -130,8 +133,8 @@ function writtenPaths(call: Call): string[] {
       CallExpression(node) {
         const callee = node.callee;
 
-        if (callee.type !== 'MemberExpression' || callee.object.type !== 'Identifier' || callee.object.name !== 'workspace'
-          || callee.property.type !== 'Identifier' || !['writeFile', 'editFile'].includes(callee.property.name)) return;
+        if (callee.type !== 'MemberExpression' || callee.object.type !== 'Identifier' || callee.property.type !== 'Identifier'
+          || PROGRAM_WRITES.get(callee.object.name)?.includes(callee.property.name) !== true) return;
 
         const path = node.arguments[0];
 
@@ -319,9 +322,9 @@ function recordedHelper(helper: Helper, old: HelperObservation | undefined, sour
 
 function assignedHelper(call: Call, helpers: HelperObservations, add: RecordFact): Assignment | null {
   const args = object(call.args), answer = object(call.event.result);
-  const action = stringOf(args.action);
+  const op = stringOf(args.op);
 
-  if (action === 'hire' && stringOf(args.agent) === '' && stringOf(answer.name) !== '') {
+  if (op === 'hire' && stringOf(answer.name) !== '') {
     const name = stringOf(answer.name);
 
     add('helper-hired', { helper: name, mission: args.mission ?? null, lifetime: args.lifetime ?? null }, call.evidence);
@@ -330,10 +333,10 @@ function assignedHelper(call: Call, helpers: HelperObservations, add: RecordFact
     return { helper: name, brief: stringOf(args.mission), evidence: call.evidence, call };
   }
 
-  if ((action === 'hire' || action === 'msg') && stringOf(args.agent) !== '') {
+  if ((op === 'assign' || op === 'message') && stringOf(args.agent) !== '') {
     const name = stringOf(args.agent);
 
-    add('helper-message', { helper: name, action, message: args.message ?? null, delivery: answer.delivery ?? answer.status ?? null,
+    add('helper-message', { helper: name, op, message: args.message ?? null, delivery: answer.delivery ?? answer.status ?? null,
       eventId: answer.event_id ?? null }, call.evidence);
 
     return { helper: name, brief: stringOf(args.message), evidence: call.evidence, call };
@@ -350,9 +353,9 @@ function recordDelegations(calls: readonly Call[], add: RecordFact) {
     if (call.event.name !== 'agents') continue;
 
     const args = object(call.args);
-    const action = stringOf(args.action);
+    const op = stringOf(args.op);
 
-    if (action === 'swarm') {
+    if (op === 'swarm') {
       add('swarm-run', { task: args.task ?? null, outcome: failed(call.event) ? 'failed' : 'returned',
         code: call.event.outcome?.success === false ? call.event.outcome.reason : null, result: call.event.result ?? null }, call.evidence);
     }
@@ -363,7 +366,7 @@ function recordDelegations(calls: readonly Call[], add: RecordFact) {
 
     if (assignment !== null) assignments.push(assignment);
 
-    if (action === 'list') {
+    if (op === 'list') {
       const roster = v.safeParse(v.object({ subordinates: v.array(Helper) }), call.event.result);
 
       for (const helper of roster.success ? roster.output.subordinates : []) {

@@ -68,7 +68,7 @@ import {
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
-import { publishSubordinateReport, temporaryRunSettles, type ReportToolDeps } from "@kinu.run/core";
+import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
@@ -1100,7 +1100,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       extraProviders: () => [createReportCodemodeProvider(() => report)],
     });
 
-    const report: ReportToolDeps = {
+    const report: ReportDeps = {
       report: async (input) => {
         const relayed = await publishSubordinateReport({ mode: turn.input.mode, reports: turn.reports }, {
           status: input.status, content: input.content, origin: 'report_tool',
@@ -2231,11 +2231,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const requirePeer = async (agent: string): Promise<void> => {
       this.requireOwnerUserId();
 
-      if (agent === this.name) throw new KinuError('bad_input', 'that is this agent: pick another peer (action:"list")');
+      if (agent === this.name) throw new KinuError('bad_input', 'that is this agent: pick another peer (op:"list")');
       const { stub, caller } = await this.userHub();
       const known = await stub.hasWorkspace(caller, agent);
 
-      if (!known) throw new KinuError('missing', `unknown peer "${agent}": list your team with action:"list"`);
+      if (!known) throw new KinuError('missing', `unknown peer "${agent}": list your team with op:"list"`);
     };
 
     return {

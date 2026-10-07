@@ -87,8 +87,8 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
     const step = calls++;
 
     const steps: ScriptedTurnResult['content'][] = [
-      [{ type: 'tool-call', toolName: 'file', toolCallId: 'call-file', input: JSON.stringify({ action: 'write', path: 'plan.txt', content: FILE_TEXT }) }],
-      [{ type: 'tool-call', toolName: 'agents', toolCallId: 'call-msg', input: JSON.stringify({ action: 'msg', agent: 'researcher', message: MESSAGE }) }],
+      [{ type: 'tool-call', toolName: 'file', toolCallId: 'call-file', input: JSON.stringify({ op: 'write', path: 'plan.txt', content: FILE_TEXT }) }],
+      [{ type: 'tool-call', toolName: 'agents', toolCallId: 'call-msg', input: JSON.stringify({ op: 'message', agent: 'researcher', message: MESSAGE }) }],
     ];
 
     const content = steps[step] ?? [{ type: 'text', text: ANSWER }];

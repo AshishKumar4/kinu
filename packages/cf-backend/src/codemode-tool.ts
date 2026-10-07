@@ -42,9 +42,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
   const stateProvider = createStateCodemodeProvider(rt.actor.programState);
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
 
-  const webProvider = createWebCodemodeProvider({
-    provider: webSearch, files: rt.storage, sessions: { sessions: options.browserSessions }, prelude: { source: BROWSER_PRELUDE },
-  });
+  const webProvider = createWebCodemodeProvider({ provider: webSearch, files: rt.storage, sessions: options.browserSessions, prelude: { source: BROWSER_PRELUDE } });
 
   const executorProviders = (rt.executionRouter?.getProviders() ?? []).map((p) => {
     const wrapped: typeof p.tools = {};
@@ -130,7 +128,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
         const built = createCodeTool({
           // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.
-          description: renderCodemodeDescription(bound.map((provider) => provider.types)),
+          description: renderCodemodeDescription(bound, surface.native),
           tools: bound,
           executor: {
             // Crafted set and prelude are read as the program starts.
@@ -180,7 +178,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
             } finally {
               deviceRequests = outer;
             }
-          });
+          }, context.abortSignal);
         },
       }), surface.craftedTools);
     },

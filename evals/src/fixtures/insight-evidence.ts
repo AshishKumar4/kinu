@@ -12,7 +12,7 @@ export const start: Extract<RunEvent, { type: 'run_start' }> = { ...base, type: 
 export const end: Extract<RunEvent, { type: 'run_end' }> = { ...base, type: 'run_end', reason: 'completed' };
 
 export const missingFile: Extract<RunEvent, { type: 'tool_call_end' }> = { ...base, type: 'tool_call_end', name: 'file', toolCallId: 'call',
-  args: { action: 'list', path: 'slates' }, error: "ENOENT: no such file or directory, scandir '/home/main/slates'", outcome: { success: false, reason: 'missing' } };
+  args: { op: 'list', path: 'slates' }, error: "ENOENT: no such file or directory, scandir '/home/main/slates'", outcome: { success: false, reason: 'missing' } };
 
 export function assertion(turns: HarnessRun['output']['turns'] = []): Assertion {
   return { status: 'failed', duration: 1, meta: { harness: { run: v.parse(HarnessRunSchema, {

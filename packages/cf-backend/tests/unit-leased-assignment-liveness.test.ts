@@ -208,7 +208,7 @@ test('a task hire whose answer settled its waiting hirer is not run again after 
     const step = requestOf(run).messages.filter((message) => message.role === 'tool').length;
 
     return step === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'task', mission: BRIEF } }, 'hire_0')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: BRIEF } }, 'hire_0')
       : chatCompletion(run, 'Done.');
   });
 

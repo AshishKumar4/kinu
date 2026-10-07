@@ -6,18 +6,8 @@
 import type { ToolResultOutput } from '@ai-sdk/provider-utils';
 import * as v from 'valibot';
 import { isJsonObject, JsonValueSchema, type JsonValue } from '../utils/json';
+import { ImageCarrierSchema, type ToolImage } from '../types/tool-images';
 
-export interface ToolImage {
-  readonly mediaType: string;
-  /** Base64. */
-  readonly data: string;
-}
-
-const ToolImageSchema = v.object({ mediaType: v.string(), data: v.string() });
-
-const ImageCarrierSchema = v.object({ output: JsonValueSchema, images: v.array(ToolImageSchema) });
-
-export type ImageCarrier = v.InferOutput<typeof ImageCarrierSchema>;
 
 const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+=*)$/u;
 

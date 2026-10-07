@@ -30,9 +30,9 @@ function systemPrompt(runs: readonly RecordedGatewayRun[]): string {
 
 test('a hired subordinate saves and searches memory and lists its roster in its assigned turn', async () => {
   const gateway = scriptedGateway([
-    { tool: 'memory', args: { action: 'save', content: NOTE } },
-    { tool: 'memory', args: { action: 'search', query: 'streaming parser' } },
-    { tool: 'agents', args: { action: 'list' } },
+    { tool: 'memory', args: { op: 'note', content: NOTE } },
+    { tool: 'memory', args: { op: 'search', query: 'streaming parser' } },
+    { tool: 'agents', args: { op: 'list' } },
   ]);
 
   const workspace = gatewayWorkspace(gateway);

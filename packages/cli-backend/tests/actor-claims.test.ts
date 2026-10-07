@@ -5,14 +5,13 @@ import { createHash } from 'node:crypto';
 import { jsonSchema, tool } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
-  contextMount, localContextTree, withMountTable, createFileDispatcher, TurnContextBudget, WORKSPACE_ROOT, cloudPlanes,
-} from '@kinu.run/core';
+  contextMount, localContextTree, withMountTable, createFileTool, TurnContextBudget, WORKSPACE_ROOT, cloudPlanes, type JsonObject } from '@kinu.run/core';
 import type {
-  ActorHandle, AgentRuntime, AgentStores, ChatEvent, FileToolInput, ProfileAuthorityInputs,
+  ActorHandle, AgentRuntime, AgentStores, ChatEvent, FileDeps, ProfileAuthorityInputs,
   StoredActorClaim, WorkMode,
 } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
@@ -143,6 +142,14 @@ function ownTree(actor: { readonly handle: ActorHandle; readonly stores: Pick<Ag
   const tree = localContextTree(() => ({ claims: actor.stores.claims, events: null }), { author: actor.handle.actorId, child: false });
 
   return () => tree;
+}
+
+/** A file call as the model makes it: `op` and that operation's fields. */
+type FileCall = JsonObject & { readonly op: string };
+
+/** The native `file` tool over one turn's ledger. */
+function createFileDispatcher(deps: FileDeps) {
+  return toolExecute<FileCall, unknown>(createFileTool(deps));
 }
 
 test('the claim and its admitted context are durable before the first model call', async () => {
@@ -369,8 +376,8 @@ test('a context edit written through the native file tool reaches the NEXT model
     const at = step++;
 
     const call = at === 0
-      ? { action: 'read', path: '/context/working.jsonl' }
-      : { action: 'edit', path: '/context/working.jsonl',
+      ? { op: 'read', path: '/context/working.jsonl' }
+      : { op: 'edit', path: '/context/working.jsonl',
           edits: [{ old_text: 'the WRONG premise', new_text: 'the RIGHT premise' }] };
 
     return { content: at < 2
@@ -380,16 +387,16 @@ test('a context edit written through the native file tool reaches the NEXT model
   } });
 
   const tools = { file: tool({
-    inputSchema: jsonSchema<FileToolInput>({
+    inputSchema: jsonSchema<FileCall>({
       type: 'object',
       properties: {
-        action: { type: 'string' },
+        op: { type: 'string' },
         path: { type: 'string' },
         edits: { type: 'array', items: { type: 'object' } },
       },
-      required: ['action', 'path'],
+      required: ['op', 'path'],
     }),
-    execute: async (args: FileToolInput) => {
+    execute: async (args: FileCall) => {
       let output: Awaited<ReturnType<typeof file>>;
 
       try {
@@ -399,7 +406,7 @@ test('a context edit written through the native file tool reaches the NEXT model
         throw cause;
       }
 
-      if (args.action === 'edit') edits.push(JSON.stringify(output));
+      if (args.op === 'edit') edits.push(JSON.stringify(output));
 
       return output;
     },
@@ -412,7 +419,7 @@ test('a context edit written through the native file tool reaches the NEXT model
 
   expect(fileErrors).toEqual([]);
   expect(edits).toHaveLength(1);
-  expect(JSON.parse(edits[0] ?? 'null')).toMatchObject({ ok: true });
+  expect(JSON.parse(edits[0] ?? 'null')).toMatchObject({ applied: [expect.any(Object)] });
 
   expect(requests[0]).toContain('the WRONG premise');
   expect(requests[1]).toContain('the WRONG premise');
@@ -454,7 +461,7 @@ test('a versioned context edit refuses a replaced target and preserves its histo
 
   const file = createFileDispatcher({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
   const path = '/context/working.jsonl';
-  await file({ action: 'read', path });
+  await file({ op: 'read', path });
   const revision = (await files.stat(path))?.revision;
 
   if (revision === undefined || files.readFileAtRevision === undefined) throw new Error('context must expose immutable revisions');
@@ -463,7 +470,7 @@ test('a versioned context edit refuses a replaced target and preserves its histo
   await selectedInput(left, [{ role: 'user', content: 'peer replacement' }]);
 
   expect(await files.readFileAtRevision(path, revision)).toEqual(original);
-  await expect(file({ action: 'edit', path, edits: [{ old_text: 'original premise', new_text: 'lost update' }] }))
+  await expect(file({ op: 'edit', path, edits: [{ old_text: 'original premise', new_text: 'lost update' }] }))
     .rejects.toMatchObject({ verdict: 'stale' });
   expect((await left.stores.history.materialize()).messages).toEqual([{ role: 'user', content: 'peer replacement' }]);
 });
@@ -480,13 +487,13 @@ test('pending context edits can be read and revised but cannot overwrite another
   const first = createFileDispatcher({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
   const second = createFileDispatcher({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
   const path = '/context/working.jsonl';
-  await first({ action: 'read', path });
-  await second({ action: 'read', path });
-  await first({ action: 'edit', path, edits: [{ old_text: 'original premise', new_text: 'first proposal' }] });
-  await expect(second({ action: 'edit', path, edits: [{ old_text: 'original premise', new_text: 'stale proposal' }] }))
+  await first({ op: 'read', path });
+  await second({ op: 'read', path });
+  await first({ op: 'edit', path, edits: [{ old_text: 'original premise', new_text: 'first proposal' }] });
+  await expect(second({ op: 'edit', path, edits: [{ old_text: 'original premise', new_text: 'stale proposal' }] }))
     .rejects.toMatchObject({ verdict: 'stale' });
-  await first({ action: 'read', path });
-  await first({ action: 'edit', path, edits: [{ old_text: 'first proposal', new_text: 'revised proposal' }] });
+  await first({ op: 'read', path });
+  await first({ op: 'edit', path, edits: [{ old_text: 'first proposal', new_text: 'revised proposal' }] });
   const next = await left.stores.history.stepBase(() => left.handle.assertCurrent());
   expect(next.messages).toEqual([{ role: 'user', content: 'revised proposal' }]);
 });

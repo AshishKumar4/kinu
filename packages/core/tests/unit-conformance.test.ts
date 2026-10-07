@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_ROOTS, PLANE_UNIVERSE,
-  compareSurface, normalizeObservedTables, observedActionEnum, phantomCallables,
+  compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables,
   renderConformanceFindings,
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOLS,
   type ConformanceManifest, type ObservedSurface, type RootStatuses,
@@ -38,14 +38,14 @@ describe('compareSurface can fail (canaries)', () => {
 
   test('an unmeasured plane is reported, never silently conformant', () => {
     const report = compareSurface(observing({ tool: new Set() }));
-    expect(report.unmeasured).toEqual(['agents-action', 'memory-action', 'table', 'producer']);
+    expect(report.unmeasured).toEqual(['agents-op', 'memory-op', 'table', 'producer']);
   });
 
   test('a fully conforming observation yields zero findings', () => {
     const manifest: ConformanceManifest = {
       tool: { ...BACKEND_CONFORMANCE.tool },
-      'agents-action': { ...BACKEND_CONFORMANCE['agents-action'] },
-      'memory-action': { ...BACKEND_CONFORMANCE['memory-action'] },
+      'agents-op': { ...BACKEND_CONFORMANCE['agents-op'] },
+      'memory-op': { ...BACKEND_CONFORMANCE['memory-op'] },
       table: {},
       producer: { ...BACKEND_CONFORMANCE.producer },
     };
@@ -55,8 +55,8 @@ describe('compareSurface can fail (canaries)', () => {
 
     const report = compareSurface(observing({
       tool: wiredOnCli(manifest.tool),
-      'agents-action': wiredOnCli(manifest['agents-action']),
-      'memory-action': wiredOnCli(manifest['memory-action']),
+      'agents-op': wiredOnCli(manifest['agents-op']),
+      'memory-op': wiredOnCli(manifest['memory-op']),
       table: new Set(),
       producer: wiredOnCli(manifest.producer),
     }), manifest);
@@ -68,8 +68,8 @@ describe('compareSurface can fail (canaries)', () => {
   test('a capability created on first use is neither missing at boot nor contradicted once built', () => {
     const manifest: ConformanceManifest = {
       tool: { ...BACKEND_CONFORMANCE.tool },
-      'agents-action': { ...BACKEND_CONFORMANCE['agents-action'] },
-      'memory-action': { ...BACKEND_CONFORMANCE['memory-action'] },
+      'agents-op': { ...BACKEND_CONFORMANCE['agents-op'] },
+      'memory-op': { ...BACKEND_CONFORMANCE['memory-op'] },
       table: {
         built_on_first_use: {
           'cf-orchestrator': { lazy: 'created on first use by a registration' },
@@ -111,8 +111,8 @@ describe('manifest hygiene', () => {
   test('the closed planes cover their registry universe exactly', () => {
     // The Record key type catches this at compile time; this locks the runtime view.
     expect(Object.keys(BACKEND_CONFORMANCE.tool).sort()).toEqual([...PLANE_UNIVERSE.tool].sort());
-    expect(Object.keys(BACKEND_CONFORMANCE['agents-action']).sort()).toEqual([...AGENTS_TOOL_ACTIONS].sort());
-    expect(Object.keys(BACKEND_CONFORMANCE['memory-action']).sort()).toEqual([...PLANE_UNIVERSE['memory-action']].sort());
+    expect(Object.keys(BACKEND_CONFORMANCE['agents-op']).sort()).toEqual([...AGENTS_TOOL_ACTIONS].sort());
+    expect(Object.keys(BACKEND_CONFORMANCE['memory-op']).sort()).toEqual([...PLANE_UNIVERSE['memory-op']].sort());
     expect(Object.keys(BACKEND_CONFORMANCE.producer).sort()).toEqual([...PLANE_UNIVERSE.producer].sort());
   });
 
@@ -159,13 +159,13 @@ describe('normalizeObservedTables', () => {
   });
 });
 
-describe('observedActionEnum', () => {
+describe('observedOpEnum', () => {
   test('reads the action enum from the JSON Schema a provider is sent', () => {
-    expect([...observedActionEnum({ type: 'object', properties: { action: { type: 'string', enum: ['hire', 'fork'] } } })].sort())
+    expect([...observedOpEnum({ type: 'object', properties: { action: { type: 'string', enum: ['hire', 'fork'] } } })].sort())
       .toEqual(['fork', 'hire']);
   });
   test('an absent schema observes as empty, not as everything', () => {
-    expect(observedActionEnum(undefined).size).toBe(0);
+    expect(observedOpEnum(undefined).size).toBe(0);
   });
 });
 

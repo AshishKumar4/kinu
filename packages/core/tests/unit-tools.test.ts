@@ -18,8 +18,7 @@ import {
   type CodemodeProvider,
   type CodemodeBuilder,
   type JsonValue,
-  type MemoryToolInput,
-  type ReportToolDeps,
+  type ReportDeps,
   type SubordinateReportHandoff,
   type TeamToolDeps,
   type AgentRuntime,
@@ -27,6 +26,7 @@ import {
 } from '../src/index';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import type { JsonObject } from '../src/utils/json';
 
 interface CircularValue {
   self?: CircularValue;
@@ -191,28 +191,27 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(BUILTIN_TOOL_DESCRIPTIONS.shell).not.toContain('running programs there fails');
   });
 
-  test('memory action=save appends to MEMORY.md', async () => {
+  test('memory op=note appends to MEMORY.md', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const memoryTool = { execute: toolExecute<{ action: 'save' | 'search'; content?: string; query?: string }, string>(t.memory) };
+    const memoryTool = { execute: toolExecute<{ op: 'note' | 'search'; content?: string; query?: string }, JsonValue>(t.memory) };
 
-    const result = await memoryTool.execute({ action: 'save', content: 'Remember: Python prefers snake_case' });
-    expect(result).toContain('saved');
+    expect(await memoryTool.execute({ op: 'note', content: 'Remember: Python prefers snake_case' })).toEqual({ saved: true });
 
     const memory = await rt.memory.read('memory/MEMORY.md');
     expect(memory).toContain('snake_case');
   });
 
-  test('memory action=search returns a string', async () => {
+  test('memory op=search finds a note by its words', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
 
     await rt.memory.write('memory/test.md', 'This is about machine learning');
     await rt.memory.index('memory/test.md');
 
-    const memoryTool = { execute: toolExecute<{ action: 'save' | 'search'; content?: string; query?: string }, string>(t.memory) };
-    const result = await memoryTool.execute({ action: 'search', query: 'machine learning' });
-    expect(result).toContain('machine learning');
+    const memoryTool = { execute: toolExecute<{ op: 'note' | 'search'; content?: string; query?: string }, JsonValue>(t.memory) };
+    const result = await memoryTool.execute({ op: 'search', query: 'machine learning' });
+    expect(JSON.stringify(result)).toContain('machine learning');
   });
 
   test('memory keyed-fact actions round-trip through the facts store', async () => {
@@ -225,48 +224,32 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       facts,
     });
 
-    const memory = { execute: toolExecute<MemoryToolInput, JsonValue>(t.memory) };
+    const memory = { execute: toolExecute<JsonObject, JsonValue>(t.memory) };
 
-    expect(await memory.execute({ action: 'remember', key: 'user.tz', value: 'UTC', confidence: 0.9 }))
-      .toEqual({ ok: true, key: 'user.tz' });
-    expect(await memory.execute({ action: 'recall', key: 'user.tz' })).toMatchObject({
-      found: true, key: 'user.tz', value: 'UTC', confidence: 0.9,
-    });
-    expect(await memory.execute({ action: 'forget', key: 'user.tz' }))
-      .toEqual({ ok: true, key: 'user.tz', existed: true });
-    expect(await memory.execute({ action: 'recall', key: 'user.tz' })).toEqual({ found: false, key: 'user.tz' });
+    expect(await memory.execute({ op: 'remember', key: 'user.tz', value: 'UTC', confidence: 0.9 })).toEqual({ key: 'user.tz' });
+    expect(await memory.execute({ op: 'recall', key: 'user.tz' })).toMatchObject({ key: 'user.tz', value: 'UTC', confidence: 0.9 });
+    expect(await memory.execute({ op: 'forget', key: 'user.tz' })).toEqual({ key: 'user.tz', existed: true });
+    expect(await memory.execute({ op: 'recall', key: 'user.tz' })).toBeNull();
 
     // The pre-flight that keeps a non-serializable value from crashing the turn.
     const circular: CircularValue = {};
     circular.self = circular;
-    await expect(memory.execute({ action: 'remember', key: 'k', value: circular })).rejects.toMatchObject({ code: 'bad_input' });
-    await expect(memory.execute({ action: 'recall', key: '' })).rejects.toThrow('key must be a non-empty string');
+    const remember = toolExecute<{ op: string; key: string; value: CircularValue }, JsonValue>(t.memory);
+    await expect(remember({ op: 'remember', key: 'k', value: circular })).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(memory.execute({ op: 'recall', key: '' })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('"key"') });
   });
 
-  test('the full durable-state surface renders the registry description verbatim', () => {
-    // The cache prefix advertises BUILTIN_TOOL_DESCRIPTIONS.memory; the tool's own must not drift from it.
-    const { rt } = createTestRuntime();
-
-    const t = buildBuiltinTools({
-      rt,
-      conversations: conversationsFor(rt),
-      facts: { upsert: () => 'created' as const, recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [] },
-    });
-
-    expect(t.memory.description).toBe(BUILTIN_TOOL_DESCRIPTIONS.memory);
-  });
-
-  test('without a facts store the keyed-fact actions are not on the schema', async () => {
+  test('without a facts store the keyed-fact operations are not offered', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
 
     const schema = v.parse(v.object({
       jsonSchema: v.object({
-        properties: v.object({ action: v.object({ enum: v.array(v.string()) }) }),
+        properties: v.object({ op: v.object({ enum: v.array(v.string()) }) }),
       }),
     }), { jsonSchema: await asSchema(t.memory.inputSchema).jsonSchema });
 
-    expect(schema.jsonSchema.properties.action.enum).toEqual(['save', 'search', 'conversations']);
+    expect(schema.jsonSchema.properties.op.enum).toEqual(['note', 'search', 'searchConversations', 'readConversation', 'listConversations']);
     expect(t.memory.description).not.toContain('remember');
   });
 
@@ -282,9 +265,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     }));
 
     // No facts wired: remember/recall/forget are absent, as in the native tool.
-    expect(Object.keys(provider.tools).sort()).toEqual(['conversations', 'save', 'search']);
-    const saved = await codemodeExecute(provider, 'save')('Remember: prefer snake_case');
-    expect(v.parse(v.string(), saved)).toContain('saved');
+    expect(Object.keys(provider.tools).sort()).toEqual(['listConversations', 'note', 'readConversation', 'search', 'searchConversations']);
+    expect(await codemodeExecute(provider, 'note')('Remember: prefer snake_case')).toEqual({ saved: true });
     const found = await rt.memory.read('memory/MEMORY.md');
     expect(found).toContain('snake_case');
   });
@@ -300,22 +282,17 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     }));
 
     expect(Object.keys(provider.tools)).toContain('remember');
-    await codemodeExecute(provider, 'remember')('user.tz', 'UTC', 0.9);
+    await codemodeExecute(provider, 'remember')('user.tz', 'UTC', { confidence: 0.9 });
     expect(store.get('user.tz')?.value).toBe('UTC');
 
-    const recalled = v.parse(v.object({
-      found: v.boolean(), key: v.string(), value: v.unknown(), confidence: v.number(),
-      source: v.string(), lastObservedAt: v.number(),
-    }), await codemodeExecute(provider, 'recall')('user.tz'));
-
-    expect(recalled).toEqual({ found: true, key: 'user.tz', value: 'UTC', confidence: 0.9, source: 'tool', lastObservedAt: 7 });
+    expect(await codemodeExecute(provider, 'recall')('user.tz')).toEqual({ key: 'user.tz', value: 'UTC', confidence: 0.9, source: 'tool', lastObservedAt: 7 });
     await codemodeExecute(provider, 'forget')('user.tz');
     expect(store.has('user.tz')).toBe(false);
   });
 
   // tasks.* codemode parity is tested in unit-tasks-tool.test.ts.
 
-  test('report.* dispatches through the SAME ReportToolDeps.report the native `report` tool calls', async () => {
+  test('report.* dispatches through the SAME ReportDeps.report the native `report` tool calls', async () => {
     let captured = {} satisfies { status?: string; content?: string };
 
     const deps = { report: async (input: { status: 'progress' | 'completed' | 'blocked'; content: string }) => {
@@ -333,7 +310,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('report.send carries a third-argument handoff to the same deps, and refuses a field it does not own', async () => {
     const delivered: Array<{ status: string; content: string; handoff?: SubordinateReportHandoff }> = [];
 
-    const deps: ReportToolDeps = { report: async (input) => {
+    const deps: ReportDeps = { report: async (input) => {
       delivered.push(input);
 
       return { ok: true };
@@ -363,12 +340,12 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('the native `report` declares the handoff fields — except to a destination that reads only the body', async () => {
     const { rt } = createTestRuntime();
 
-    const propertiesOf = async (report: ReportToolDeps): Promise<string[]> => Object.keys(v.parse(
+    const propertiesOf = async (report: ReportDeps): Promise<string[]> => Object.keys(v.parse(
       v.object({ properties: v.record(v.string(), v.unknown()) }),
       await asSchema(buildBuiltinTools({ rt, report, conversations: conversationsFor(rt) }).report?.inputSchema).jsonSchema,
     ).properties);
 
-    const sink: ReportToolDeps['report'] = async () => ({ ok: true });
+    const sink: ReportDeps['report'] = async () => ({ ok: true });
     expect(await propertiesOf({ report: sink }))
       .toEqual(['status', 'content', 'concerns', 'deviations', 'findings', 'open_work']);
     // A slot the destination drops must not be offered: the model fills it and the parent never sees it.

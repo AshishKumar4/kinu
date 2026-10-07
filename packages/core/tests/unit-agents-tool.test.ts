@@ -5,17 +5,14 @@ import { createTestRuntime, toolExecute, scriptedTurnModel, unobservedSearchSeam
 import { swarmSeats } from './helpers-actor-host';
 
 import * as v from 'valibot';
-import { AGENTS_ACTION_FIELDS, delegationChoices } from '../src/delegation/agents-tool';
-import { AGENTS_TOOL_NOTES } from '../src/tools/registry';
+import { delegationChoices } from '../src/delegation/agents-tool';
+import { AGENTS_OPS } from '../src/operations/agents';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
-  agentsActionsFor, buildBuiltinTools, createAgentsTool, parseAgentsToolInput,
-  renderAgentsToolDescription, resumableAgentsInput,
-  AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS,
+  agentsActionsFor, buildBuiltinTools, createAgentsTool, resumableAgentsInput,
   deriveChildDelegationBudget, ROOT_DELEGATION_BUDGET,
   PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema, failedToolOutcome,
-  type AgentsToolInput,
   type AgentsSwarmDeps, type AgentsToolDeps,
   type AgentsProfileContext,
   type TeamToolDeps,
@@ -27,8 +24,12 @@ import { inWorkMode } from '../src/execution/work-mode';
 import { buildToolSurface } from '../src/tools/builtins';
 import { conversationsFor } from './helpers';
 import { handoff, makeTeam, makePeers, rosterEntry, temporaryPortStub } from './helpers-agents';
+import type { JsonObject } from '../src/utils/json';
 
-async function recordedFailure(pending: Promise<AgentsTestResult>, args: AgentsToolInput) {
+/** A call to the native `agents` tool: its `op` and that operation's fields. */
+type AgentsCall = JsonObject;
+
+async function recordedFailure(pending: Promise<AgentsTestResult>, args: AgentsCall) {
   try { await pending; }
   catch (cause) {
     return classifyToolFailure({ type: 'tool_call_end', eventIndex: 0, runId: 'run-1',
@@ -76,7 +77,7 @@ function agentsTool(deps: TestAgentsToolDeps) {
 
   if (!entry) throw new Error('Expected agents tool to be created');
 
-  return { ...entry, execute: toolExecute<AgentsToolInput, AgentsTestResult>(entry) };
+  return { ...entry, execute: toolExecute<AgentsCall, AgentsTestResult>(entry) };
 }
 
 /** Answers one text step via both generate and stream; bare `MockLanguageModelV3()` implements neither. */
@@ -123,70 +124,56 @@ function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
   };
 }
 
-function actionEnum(input: { value: unknown }): string[] {
+/** The operations the native tool offers. */
+function opsOf(input: { value: unknown }): string[] {
   return v.parse(v.object({
     jsonSchema: v.object({
-      properties: v.object({ action: v.object({ enum: v.array(v.string()) }) }),
+      properties: v.object({ op: v.object({ enum: v.array(v.string()) }) }),
     }),
-  }), input.value).jsonSchema.properties.action.enum;
+  }), input.value).jsonSchema.properties.op.enum;
 }
 
-/** The action enum's description, where per-actor facts (verbs, remaining depth) ride. */
-function actionDescription(input: { value: unknown }): string {
-  return v.parse(v.object({
-    jsonSchema: v.object({
-      properties: v.object({ action: v.object({ description: v.string() }) }),
-    }),
-  }), input.value).jsonSchema.properties.action.description;
+/** The native tool's input properties. */
+function propertyNames(input: { value: unknown }): string[] {
+  return Object.keys(v.parse(v.object({
+    jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }),
+  }), input.value).jsonSchema.properties);
 }
 
 describe('agents tool — registration and dep-gating', () => {
-  test('hire accepts a birth-time context choice and refuses it on existing agents', async () => {
-    expect(parseAgentsToolInput({ input: { action: 'hire', role: 'researcher', mission: 'Continue', context: 'inherit' } }))
-      .toMatchObject({ context: 'inherit' });
-    const { deps } = makeTeam();
-    await expect(agentsTool({ team: deps, profile: testProfile }).execute({
-      action: 'hire', agent: 'researcher', message: 'Continue', context: 'inherit',
-    })).rejects.toMatchObject({ code: 'bad_input' });
+  test('a new helper takes its birth context; an existing agent is refused one', async () => {
+    const { deps, calls } = makeTeam();
+    const t = agentsTool({ team: deps, profile: testProfile });
+
+    await expect(t.execute({ op: 'assign', agent: 'researcher', message: 'Continue', context: 'inherit' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('unknown field "context"') });
+    expect(calls).toEqual([]);
   });
 
   test('no deps groups → no agents tool at all', () => {
     const { rt } = createTestRuntime();
     const tools = buildBuiltinTools({ rt, conversations: conversationsFor(rt) });
     expect(Object.keys(tools)).not.toContain('agents');
-    expect(Object.keys(tools)).not.toContain('think');
-    expect(Object.keys(tools)).not.toContain('team');
-    expect(Object.keys(tools)).not.toContain('peers');
   });
 
-  test('the exploration substrate (the CLI / subordinate surface) exposes the search rung alone', () => {
+  test('the exploration substrate (the CLI / subordinate surface) offers the search alone', () => {
     const deps = withBuildMode({ swarm: swarmDeps() });
     expect(agentsActionsFor(deps)).toEqual(['swarm']);
-    const t = agentsTool(deps);
-    expect(actionEnum({ value: t.inputSchema })).toEqual(['swarm']);
-    expect(t.description).toContain(AGENTS_TOOL_NOTES.swarm);
-    expect(t.description).not.toContain(AGENTS_TOOL_NOTES.hire);
-    expect(t.description).not.toContain(AGENTS_TOOL_NOTES.converse);
+    expect(opsOf({ value: agentsTool(deps).inputSchema })).toEqual(['swarm']);
   });
 
-  test('full deps (the workspace orchestrator) expose every action and the registry docstring verbatim', () => {
+  test('full deps (the workspace orchestrator) offer every operation', () => {
     const deps = withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps });
-    expect(agentsActionsFor(deps)).toEqual([...AGENTS_TOOL_ACTIONS]);
-    const t = agentsTool(deps);
-    expect(actionEnum({ value: t.inputSchema })).toEqual([...AGENTS_TOOL_ACTIONS]);
-    expect(t.description).toBe(BUILTIN_TOOL_DESCRIPTIONS.agents);
+    expect(opsOf({ value: agentsTool(deps).inputSchema })).toEqual([...AGENTS_OPS]);
   });
 
-  test('with "Beta: swarms" off the tool offers no swarm, in its schema or its words, and refuses one naming the setting', async () => {
-    const off = withBuildMode({ swarm: swarmDeps(), swarms: false, team: makeTeam().deps, peers: makePeers().deps });
-    const t = agentsTool(off);
+  test('with "Beta: swarms" off the tool offers no swarm, in its schema or its words, and refuses one', async () => {
+    const t = agentsTool({ swarm: swarmDeps(), swarms: false, team: makeTeam().deps, peers: makePeers().deps });
 
-    expect(agentsActionsFor(off)).not.toContain('swarm');
-    expect(actionEnum({ value: t.inputSchema })).toEqual(AGENTS_TOOL_ACTIONS.filter((action) => action !== 'swarm'));
-    expect(t.description).not.toContain(AGENTS_TOOL_NOTES.swarm);
-    expect(JSON.stringify(t.inputSchema)).not.toContain('preset');
-    await expect(t.execute({ action: 'swarm', task: 'rank the three caching designs', preset: 'ideate' }))
-      .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('"Beta: swarms"') });
+    expect(opsOf({ value: t.inputSchema })).toEqual(AGENTS_OPS.filter((op) => op !== 'swarm'));
+    expect(JSON.stringify({ description: t.description, schema: t.inputSchema })).not.toContain('preset');
+    await expect(t.execute({ op: 'swarm', task: 'rank the three caching designs', preset: 'ideate' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('unknown op "swarm"') });
   });
 
   test('with it off, two accounts\' tools are byte-identical, whatever roles and tiers their catalogs hold', () => {
@@ -209,139 +196,75 @@ describe('agents tool — registration and dep-gating', () => {
     expect(delegationChoices(testProfile(own))).toMatchObject({ roles: expect.arrayContaining(['reviewer: Reviews pull requests.']), tiers: expect.arrayContaining(['careful']) });
   });
 
-  // `lifetime` is in the schema only with a temporary substrate, so its paragraph must be too.
-  test('the task lifetime is described only where the actor can run one', () => {
-    const temporaryCapable = withBuildMode({ team: makeTeam().deps });
-    const durableOnly = withBuildMode({ team: { ...makeTeam().deps, temporary: undefined } });
+  test('the task lifetime is offered only where the actor can run one', () => {
+    const temporaryCapable = agentsTool({ team: makeTeam().deps });
+    const durableOnly = agentsTool({ team: { ...makeTeam().deps, temporary: undefined } });
 
-    const said = (deps: Parameters<typeof renderAgentsToolDescription>[0]): string =>
-      renderAgentsToolDescription(deps);
-
-    expect(said(temporaryCapable)).toContain(AGENTS_TOOL_NOTES.task);
-    expect(said(durableOnly)).not.toMatch(/lifetime|durable/i);
-    expect(said(durableOnly)).toContain(AGENTS_TOOL_NOTES.hire);
-
-    const props = (deps: Parameters<typeof agentsTool>[0]): string[] => Object.keys(
-      v.parse(v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }), agentsTool(deps).inputSchema).jsonSchema.properties,
-    );
-
-    expect(props(temporaryCapable)).toContain('lifetime');
-    expect(props(durableOnly)).not.toContain('lifetime');
+    expect(propertyNames({ value: temporaryCapable.inputSchema })).toContain('lifetime');
+    expect(propertyNames({ value: durableOnly.inputSchema })).not.toContain('lifetime');
+    expect(JSON.stringify(durableOnly)).not.toMatch(/lifetime|"task"/u);
   });
 
-  test('team-without-peers gates the peer-only pieces (no event_id target, no scope, no workspace hiring)', () => {
-    const deps = withBuildMode({ team: makeTeam().deps });
-    expect(agentsActionsFor(deps)).toEqual(['hire', 'msg', 'list', 'dismiss']);
-    const t = agentsTool(deps);
-    expect(actionEnum({ value: t.inputSchema })).not.toContain('swarm');
-    expect(Object.keys(v.parse(v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }), t.inputSchema).jsonSchema.properties)).not.toContain('event_id');
-    expect(renderAgentsToolDescription(deps)).not.toMatch(/scope|event_id/);
+  test('team-without-peers offers no peer-only operation or field', () => {
+    const t = agentsTool({ team: makeTeam().deps });
+    expect(opsOf({ value: t.inputSchema })).toEqual(['hire', 'assign', 'message', 'list', 'dismiss']);
+    expect(propertyNames({ value: t.inputSchema })).not.toContain('eventId');
+    expect(JSON.stringify({ description: t.description, schema: t.inputSchema })).not.toMatch(/workspace hire|eventId|topic/u);
   });
 
-  test('an unavailable action is a sharp error, not a deps call', async () => {
+  test('an operation this actor is not wired for is refused, naming the ones it has', async () => {
     const t = agentsTool({ swarm: swarmDeps() });
-    await expect(t.execute({ action: 'hire', role: 'r', mission: 'm' })).rejects.toMatchObject({ code: 'unsupported', message: 'action "hire" is not available here. Available: swarm' });
+    await expect(t.execute({ op: 'hire', role: 'r', mission: 'm' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: 'unknown op "hire"; the ops are: swarm' });
   });
 });
 
-// Unknown fields are refused with a correctable message rather than silently dropped.
-
 describe('agents tool — the field contract', () => {
-  const fullDeps = () => withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps });
-
-  function propertyNames(input: { value: unknown }): string[] {
-    return Object.keys(v.parse(v.object({
-      jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }),
-    }), input.value).jsonSchema.properties);
-  }
-
-  test('a camelCase cap is refused by the tool, naming the field it meant', async () => {
-    const t = agentsTool({ swarm: swarmDeps() });
-
-    /* SAFETY: an undeclared field, as reaches `execute` in production (AI SDK checks types, not names). */
-    const input: AgentsToolInput & { budgetUsd: number; budgetLabel: string } = {
-      action: 'swarm', task: 'explore', budgetUsd: 5, budgetLabel: 'audit',
-    };
-
-    const pending = t.execute(input);
+  test('a cap spelled the engine\'s way is refused, naming the operation\'s fields', async () => {
+    const pending = agentsTool({ swarm: swarmDeps() }).execute({ op: 'swarm', task: 'explore', budget_usd: 5 });
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
-    await expect(pending).rejects.toThrow('unknown field "budgetUsd": did you mean "budget_usd"?');
-    await expect(pending).rejects.toThrow('unknown field "budgetLabel": did you mean "budget_label"?');
+    await expect(pending).rejects.toThrow('unknown field "budget_usd"');
+    await expect(pending).rejects.toThrow('budgetUsd');
   });
 
   test('the refusal counts as the tool DECLINING, not as the tool breaking', async () => {
     // A parse refusal must classify as `refused`, not `broke` (read-models/tool-failures.ts).
-    const args: AgentsToolInput & { budgetUsd: number } = { action: 'swarm', task: 'explore', budgetUsd: 5 };
+    const args = { op: 'swarm', task: 'explore', budget_usd: 5 } satisfies AgentsCall;
     expect(await recordedFailure(agentsTool({ swarm: swarmDeps() }).execute(args), args)).toEqual({
-      tool: 'agents', action: 'swarm', reason: 'bad_input',
+      tool: 'agents', op: 'swarm', reason: 'bad_input',
       refused: true, workFailed: false, runtimeMissing: false,
     });
   });
 
   test('the correctly spelled call reaches the handler — the refusal is about names, not caps', async () => {
-    // Control: snake_case caps pass the name check and hit the missing-`preset` refusal instead.
-    const t = agentsTool({ swarm: swarmDeps() });
-    const pending = t.execute({ action: 'swarm', task: 'explore', budget_usd: 5, budget_label: 'audit' });
+    const pending = agentsTool({ swarm: swarmDeps() }).execute({ op: 'swarm', task: 'explore', budgetUsd: 5, budgetLabel: 'audit' });
     await expect(pending).rejects.toThrow('swarm needs `preset`');
     await expect(pending).rejects.not.toThrow('unknown field');
   });
 
-  function propertyDescription(input: { value: unknown }, field: string): string {
-    const properties = v.parse(v.object({
-      jsonSchema: v.object({ properties: v.record(v.string(), v.object({ description: v.optional(v.string()) })) }),
-    }), input.value).jsonSchema.properties;
-
-    const property = properties[field];
-
-    if (!property) throw new Error(`the swarm surface advertises no \`${field}\``);
-
-    return property.description ?? '';
-  }
-
-  test('a hire takes `context`; a swarm refuses it', () => {
-    expect(parseAgentsToolInput({ input: { action: 'hire', role: 'researcher', mission: 'Read' } }))
-      .not.toHaveProperty('context');
-    expect(() => parseAgentsToolInput({ input: { action: 'swarm', task: 'Read', context: 'inherit' } })).toThrow('hire');
+  test('a swarm refuses a hire\'s `context`', async () => {
+    await expect(agentsTool({ swarm: swarmDeps() }).execute({ op: 'swarm', task: 'Read', context: 'inherit' }))
+      .rejects.toThrow('unknown field "context"');
   });
 
-  test('the `preset` description names every preset', () => {
-    const preset = propertyDescription({ value: agentsTool({ swarm: swarmDeps() }).inputSchema }, 'preset');
+  test('the `preset` field names every preset', () => {
+    const preset = JSON.stringify(v.parse(v.object({ jsonSchema: v.object({ properties: v.object({ preset: v.unknown() }) }) }),
+      agentsTool({ swarm: swarmDeps() }).inputSchema).jsonSchema.properties.preset);
 
     for (const name of SWARM_PRESETS) expect(preset).toContain(name);
   });
 
   test('the missing-`preset` refusal names every preset', async () => {
-    const pending = agentsTool({ swarm: swarmDeps() }).execute({ action: 'swarm', task: 'explore' });
+    const pending = agentsTool({ swarm: swarmDeps() }).execute({ op: 'swarm', task: 'explore' });
 
     for (const name of SWARM_PRESETS) await expect(pending).rejects.toThrow(name);
   });
 
-  test('a cap on an action that cannot spend it is refused, not accepted and ignored', async () => {
-    // `budget_usd` is read only by `swarm`; on `hire` it is refused before spawning.
+  test('a cap on an operation that cannot spend it is refused, not accepted and ignored', async () => {
     const team = makeTeam();
-    const t = agentsTool({ team: team.deps });
-    const pending = t.execute({ action: 'hire', role: 'researcher', mission: 'survey the landscape', budget_usd: 5 });
-    await expect(pending).rejects.toThrow('field "budget_usd" does not apply to action "hire"');
-    await expect(pending).rejects.toThrow('it is read by swarm');
-    await expect(pending).rejects.toThrow('action "hire" takes: role, mission, agent');
+    const pending = agentsTool({ team: team.deps }).execute({ op: 'hire', role: 'researcher', mission: 'survey the landscape', budgetUsd: 5 });
+    await expect(pending).rejects.toThrow('unknown field "budgetUsd"');
     expect(team.calls).toEqual([]);
-  });
-
-  test('every advertised property is a field some action reads, and every field is advertised', () => {
-    // Under full deps, because the property set is dep-gated; the union must agree with the map.
-    const advertised = propertyNames({ value: agentsTool(fullDeps()).inputSchema }).sort();
-    const claimed = [...new Set(AGENTS_TOOL_ACTIONS.flatMap((action) => [...AGENTS_ACTION_FIELDS[action]]))];
-    expect(advertised).toEqual(['action', ...claimed].sort());
-    expect(advertised).not.toContain('timeout_seconds');
-    expect(claimed).not.toContain('timeout_seconds');
-  });
-
-  test('a dep-gated actor advertises a subset, and never a field no action of its own reads', () => {
-    // Non-vacuity: a search-only actor is offered a strict subset.
-    const searchOnly = propertyNames({ value: agentsTool({ swarm: swarmDeps() }).inputSchema }).sort();
-    expect(searchOnly).toEqual(['action', ...AGENTS_ACTION_FIELDS.swarm].sort());
-    expect(searchOnly).not.toContain('agent');
-    expect(searchOnly).not.toContain('mission');
   });
 });
 
@@ -365,12 +288,12 @@ describe('agents tool — delegation depth', () => {
   test('depth 4 is reachable and depth 5 is refused, at the boundary', async () => {
     // Depth 3 hire produces depth 4, the deepest allowed.
     const below = depthDeps(3);
-    expect(await agentsTool(below.deps).execute({ action: 'hire', role: 'researcher', mission: 'm' }))
+    expect(await agentsTool(below.deps).execute({ op: 'hire', role: 'researcher', mission: 'm' }))
       .toEqual({ name: 'researcher', displayName: 'Researcher' });
     expect(below.team.calls).toMatchObject([{ action: 'spawn' }]);
 
     const atCap = depthDeps(4);
-    const pending = agentsTool(atCap.deps).execute({ action: 'hire', role: 'researcher', mission: 'm' });
+    const pending = agentsTool(atCap.deps).execute({ op: 'hire', role: 'researcher', mission: 'm' });
     await expect(pending).rejects.toMatchObject({ code: 'denied' });
     await expect(pending).rejects.toThrow('depth 4');
     await expect(pending).rejects.toThrow('depth 5');
@@ -379,26 +302,24 @@ describe('agents tool — delegation depth', () => {
 
   test('the refusal lands in refused, not in broke', async () => {
     const { deps } = depthDeps(4);
-    const args: AgentsToolInput = { action: 'hire', role: 'researcher', mission: 'm' };
+    const args = { op: 'hire', role: 'researcher', mission: 'm' } satisfies AgentsCall;
     expect(await recordedFailure(agentsTool(deps).execute(args), args)).toMatchObject({ reason: 'denied', refused: true });
   });
 
-  // Minting a workspace would reset depth to 0; `peers` is never wired below the orchestrator.
+  // Minting a workspace would reset depth to 0; `peers` is never wired below the orchestrator, so a subordinate is not offered it.
   test('a subordinate cannot mint a fresh root to escape its own subtree', async () => {
     const { deps, team } = depthDeps(2);
-    const pending = agentsTool(deps).execute({ action: 'hire', scope: 'workspace', mission: 'a tree of my own', message: 'go' });
-    await expect(pending).rejects.toMatchObject({ code: 'denied' });
-    await expect(pending).rejects.toThrow('only the workspace orchestrator');
+    const pending = agentsTool(deps).execute({ op: 'hireWorkspace', mission: 'a tree of my own', message: 'go' });
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('unknown op "hireWorkspace"') });
     expect(team.calls).toEqual([]);
-    expect(await agentsTool(deps).execute({ action: 'hire', role: 'researcher', mission: 'm' }))
+    expect(await agentsTool(deps).execute({ op: 'hire', role: 'researcher', mission: 'm' }))
       .toEqual({ name: 'researcher', displayName: 'Researcher' });
   });
 
-  test('the remaining depth is advertised where head-tools advertises nesting room', () => {
-    expect(agentsTool(depthDeps(0).deps).description).toBeTruthy();
-    const enumDescription = (depth: number) => actionDescription({ value: agentsTool(depthDeps(depth).deps).inputSchema });
-    expect(enumDescription(0)).toContain('3 level(s) further');
-    expect(enumDescription(3)).not.toContain('level(s) further');
+  test('the remaining depth is said with hire, as head-tools says nesting room', () => {
+    const said = (depth: number) => agentsTool(depthDeps(depth).deps).description;
+    expect(said(0)).toContain('3 level(s) further');
+    expect(said(3)).not.toContain('level(s) further');
   });
 });
 
@@ -413,26 +334,26 @@ describe('agents tool — the swarm refusal seam', () => {
   test('a swarm with no preset is refused at the seam — before the spawn is announced', async () => {
     const tool = agentsTool({ swarm: swarmDeps() });
     let announced = 0;
-    const pending = tool.execute({ action: 'swarm', task: 'split the work' }, spawnAnnouncing(() => { announced += 1; }));
+    const pending = tool.execute({ op: 'swarm', task: 'split the work' }, spawnAnnouncing(() => { announced += 1; }));
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow(/\bpreset\b/);
     expect(announced).toBe(0);
   });
 
-  test('a swarm with no task is the same refusal, and names where the metric goes', async () => {
+  test('a swarm with no task is the same refusal, and its fields say where the metric goes', async () => {
     const tool = agentsTool({ swarm: swarmDeps() });
     let announced = 0;
-    const pending = tool.execute({ action: 'swarm', preset: 'ideate' }, spawnAnnouncing(() => { announced += 1; }));
-    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
-    await expect(pending).rejects.toThrow('`objective`');
+    const pending = tool.execute({ op: 'swarm', preset: 'ideate' }, spawnAnnouncing(() => { announced += 1; }));
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('"task" is required') });
+    expect(JSON.stringify(tool.inputSchema)).toContain('The measured quantity goes in `objective`');
     expect(announced).toBe(0);
   });
 
   test('a swarm refusal counts as the tool DECLINING, not as the tool breaking', async () => {
     const tool = agentsTool({ swarm: swarmDeps() });
-    const args: AgentsToolInput = { action: 'swarm', task: 't' };
+    const args = { op: 'swarm', task: 't' } satisfies AgentsCall;
     expect(await recordedFailure(tool.execute(args), args)).toEqual({
-      tool: 'agents', action: 'swarm', reason: 'bad_input',
+      tool: 'agents', op: 'swarm', reason: 'bad_input',
       refused: true, workFailed: false, runtimeMissing: false,
     });
   });
@@ -457,8 +378,8 @@ describe('agents tool — subordinate actions', () => {
 
           if (file === undefined) throw new Error('Child has no file tool');
           const execute = toolExecute(file);
-          await execute({ action: 'read', path });
-          const pending = execute({ action: 'write', path, content: 'changed' });
+          await execute({ op: 'read', path });
+          const pending = execute({ op: 'write', path, content: 'changed' });
 
           if (request.mode === 'plan') {
             await expect(pending).rejects.toMatchObject({ code: 'denied' });
@@ -472,12 +393,12 @@ describe('agents tool — subordinate actions', () => {
     };
 
     const parent = agentsTool({ mode: 'build', team: childTransport, profile: () => testProfile() });
-    const planned = await inWorkMode('plan', () => parent.execute({ action: 'hire', lifetime: 'task', role: 'researcher', mission: 'Inspect' }));
+    const planned = await inWorkMode('plan', () => parent.execute({ op: 'hire', lifetime: 'task', role: 'researcher', mission: 'Inspect' }));
     expect(planned).toMatchObject({ status: 'working', answer: expect.stringContaining('denied') });
     expect(await readText(rt.storage.vfs, path)).toBe('original');
-    await expect(inWorkMode('plan', () => parent.execute({ action: 'hire', role: 'researcher', mission: 'Create a permanent worker' })))
+    await expect(inWorkMode('plan', () => parent.execute({ op: 'hire', role: 'researcher', mission: 'Create a permanent worker' })))
       .rejects.toMatchObject({ code: 'denied' });
-    await parent.execute({ action: 'hire', lifetime: 'task', role: 'researcher', mission: 'Implement' });
+    await parent.execute({ op: 'hire', lifetime: 'task', role: 'researcher', mission: 'Implement' });
     expect(await readText(rt.storage.vfs, path)).toBe('changed');
   });
 
@@ -486,7 +407,7 @@ describe('agents tool — subordinate actions', () => {
     const t = agentsTool({ team: deps, profile: () => testProfile() });
 
     const result = await t.execute({
-      action: 'hire', agent: 'scout', role: 'researcher', mission: 'Map the landscape',
+      op: 'hire', name: 'scout', role: 'researcher', mission: 'Map the landscape',
     });
 
     expect(result).toEqual({ name: 'scout', displayName: 'Researcher' });
@@ -498,8 +419,8 @@ describe('agents tool — subordinate actions', () => {
   test('a hire at either lifetime refuses without a catalog', async () => {
     const { deps } = makeTeam();
     const t = agentsTool({ team: deps });
-    await expect(t.execute({ action: 'hire', role: 'researcher', mission: 'Map the landscape' })).rejects.toMatchObject({ code: 'denied' });
-    await expect(t.execute({ action: 'hire', lifetime: 'task', role: 'researcher', mission: 'Survey auth' })).rejects.toMatchObject({ code: 'denied' });
+    await expect(t.execute({ op: 'hire', role: 'researcher', mission: 'Map the landscape' })).rejects.toMatchObject({ code: 'denied' });
+    await expect(t.execute({ op: 'hire', lifetime: 'task', role: 'researcher', mission: 'Survey auth' })).rejects.toMatchObject({ code: 'denied' });
   });
 
 
@@ -508,7 +429,7 @@ describe('agents tool — subordinate actions', () => {
     const t = agentsTool({ team: deps });
 
     const result = v.parse(WorkingResultSchema, await t.execute({
-      action: 'hire', agent: 'researcher', message: 'Survey auth', deliverable: 'a note',
+      op: 'assign', agent: 'researcher', message: 'Survey auth', deliverable: 'a note',
     }));
 
     expect(result.status).toBe('working');
@@ -524,19 +445,20 @@ describe('agents tool — subordinate actions', () => {
   test('a hire to an existing agent refuses create-only fields by name', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps, profile: () => testProfile() });
-    await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'Survey auth', mission: 'Map it' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "mission" is not available on a hire that names an existing agent: its brief is `message`' });
-    await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'Survey auth', tier: 'deep' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "tier" is not available on a hire that names an existing agent: it already runs at its own tier' });
-    await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'Survey auth', lifetime: 'task' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "lifetime" is not available on a hire that names an existing agent: it already has one; `lifetime` belongs to a hire that creates with `role`' });
+
+    for (const [field, value] of [['mission', 'Map it'], ['tier', 'deep'], ['lifetime', 'task']] as const) {
+      await expect(t.execute({ op: 'assign', agent: 'researcher', message: 'Survey auth', [field]: value })).rejects.toMatchObject({
+        code: 'bad_input', message: `agents.assign: unknown field "${field}". It takes: agent, message, deliverable.`,
+      });
+    }
+
     expect(calls).toEqual([]);
   });
 
   test('a lifetime:"task" hire refuses tier and runs at its role tier', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps, profile: () => testProfile() });
-    await expect(t.execute({ action: 'hire', lifetime: 'task', role: 'researcher', mission: 'Survey auth', tier: 'deep' }))
+    await expect(t.execute({ op: 'hire', lifetime: 'task', role: 'researcher', mission: 'Survey auth', tier: 'deep' }))
       .rejects.toMatchObject({ code: 'bad_input', message: 'field "tier" is not available on a lifetime:"task" hire: it runs at its role\'s tier; omit it, or hire `durable` for an override' });
     expect(calls).toEqual([]);
   });
@@ -544,10 +466,12 @@ describe('agents tool — subordinate actions', () => {
   test('a hire that creates refuses the existing-agent fields by name', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps, profile: () => testProfile() });
-    await expect(t.execute({ action: 'hire', role: 'researcher', mission: 'Map it', deliverable: 'a note' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "deliverable" is not available on a hire that creates an agent: say what the result should be in `mission`' });
-    await expect(t.execute({ action: 'hire', role: 'researcher', mission: 'Map it', topic: 'auth' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "topic" is not available on a hire that creates an agent: it labels a message to an agent that already exists' });
+
+    for (const field of ['deliverable', 'topic']) {
+      await expect(t.execute({ op: 'hire', role: 'researcher', mission: 'Map it', [field]: 'x' }))
+        .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining(`unknown field "${field}"`) });
+    }
+
     expect(calls).toEqual([]);
   });
 
@@ -557,7 +481,7 @@ describe('agents tool — subordinate actions', () => {
 
     const result = v.parse(
       HandoffResultSchema,
-      await t.execute({ action: 'hire', agent: 'researcher', message: 'Survey auth' }),
+      await t.execute({ op: 'assign', agent: 'researcher', message: 'Survey auth' }),
     );
 
     expect(result.event_id).toBe('evt-queued');
@@ -584,7 +508,7 @@ describe('agents tool — subordinate actions', () => {
 
       const result = v.parse(
         DeliveryNoteSchema,
-        await t.execute({ action: 'hire', agent: 'researcher', message: 'x' }),
+        await t.execute({ op: 'assign', agent: 'researcher', message: 'x' }),
       );
 
       expect(result.delivery).toBe(hire.delivery);
@@ -595,7 +519,7 @@ describe('agents tool — subordinate actions', () => {
   test('msg to a roster name injects a conversational note', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
-    const result = await t.execute({ action: 'msg', agent: 'researcher', message: 'also check the CLI' });
+    const result = await t.execute({ op: 'message', agent: 'researcher', message: 'also check the CLI' });
     expect(result).toEqual({
       status: 'delivered',
       agent: 'researcher',
@@ -617,9 +541,9 @@ describe('agents tool — subordinate actions', () => {
       message: async (input) => ({ ok: true, name: input.name, ...handoff('queued', true) }),
     }).deps });
 
-    expect(await delivered.execute({ action: 'msg', agent: 'researcher', message: 'x' }))
+    expect(await delivered.execute({ op: 'message', agent: 'researcher', message: 'x' }))
       .toMatchObject({ status: 'delivered', delivery: 'starts_now' });
-    expect(await backlogged.execute({ action: 'msg', agent: 'researcher', message: 'x' }))
+    expect(await backlogged.execute({ op: 'message', agent: 'researcher', message: 'x' }))
       .toMatchObject({ status: 'queued', delivery: 'queued' });
   });
 
@@ -630,7 +554,7 @@ describe('agents tool — subordinate actions', () => {
 
     const result = v.parse(
       v.object({ status: v.string() }),
-      await t.execute({ action: 'hire', agent: 'researcher', message: 'one more thing' }),
+      await t.execute({ op: 'assign', agent: 'researcher', message: 'one more thing' }),
     );
 
     expect(result.status).toBe('working');
@@ -640,13 +564,13 @@ describe('agents tool — subordinate actions', () => {
   test('list returns the unified roster; empty roster hints hire', async () => {
     const { deps } = makeTeam();
     const t = agentsTool({ team: deps });
-    expect(await t.execute({ action: 'list' })).toEqual({ subordinates: [rosterEntry] });
+    expect(await t.execute({ op: 'list' })).toEqual({ subordinates: [rosterEntry] });
 
     const empty = agentsTool({ team: makeTeam({ list: async () => [] }).deps });
 
     const emptyResult = v.parse(v.object({
       subordinates: v.array(v.unknown()), note: v.optional(v.string()),
-    }), await empty.execute({ action: 'list' }));
+    }), await empty.execute({ op: 'list' }));
 
     expect(emptyResult.subordinates).toEqual([]);
     expect(emptyResult.note).toContain('hire');
@@ -655,7 +579,7 @@ describe('agents tool — subordinate actions', () => {
   test('list with a subordinate name returns its live status view', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
-    const result = await t.execute({ action: 'list', agent: 'researcher' });
+    const result = await t.execute({ op: 'list', agent: 'researcher' });
     expect(result).toEqual({ roster: [rosterEntry] });
     expect(calls[0]).toEqual({ action: 'status', input: { name: 'researcher' } });
   });
@@ -663,10 +587,10 @@ describe('agents tool — subordinate actions', () => {
   test('dismiss ARCHIVES by default — context kept unless keep_history is explicitly false', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
-    expect(await t.execute({ action: 'dismiss', agent: 'researcher' }))
+    expect(await t.execute({ op: 'dismiss', agent: 'researcher' }))
       .toEqual({ ok: true, name: 'researcher', historyKept: true, stoppedJobs: [] });
     expect(calls[0].input).toEqual({ name: 'researcher', keepHistory: true });
-    expect(await t.execute({ action: 'dismiss', agent: 'researcher', keep_history: false }))
+    expect(await t.execute({ op: 'dismiss', agent: 'researcher', keepHistory: false }))
       .toEqual({ ok: true, name: 'researcher', historyKept: false, stoppedJobs: [] });
     expect(calls[1].input).toEqual({ name: 'researcher', keepHistory: false });
   });
@@ -674,23 +598,23 @@ describe('agents tool — subordinate actions', () => {
   test('missing required args are sharp refusals, classified bad_input — not deps calls, not defects', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
-    await expect(t.execute({ action: 'hire', role: 'r' })).rejects.toMatchObject({ code: 'bad_input', message: 'hire requires role and mission' });
-    await expect(t.execute({ action: 'hire', agent: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'hire requires a target and a brief: `role` with `mission` to create an agent, or `agent` with `message` to hand the workstream to one that exists.' });
-    await expect(t.execute({ action: 'msg', agent: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'msg requires a message' });
-    await expect(t.execute({ action: 'dismiss' })).rejects.toMatchObject({ code: 'bad_input', message: 'dismiss requires agent' });
+
+    for (const [call, missing] of [[{ op: 'hire', role: 'r' }, 'mission'], [{ op: 'assign', agent: 'x' }, 'message'], [{ op: 'message', agent: 'x' }, 'message'], [{ op: 'dismiss' }, 'agent']] as const) {
+      await expect(t.execute(call)).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining(`"${missing}" is required`) });
+    }
+
     expect(calls).toEqual([]);
   });
 
-  test('a peers-only actor that asks to hire a SUBORDINATE is denied, not indicted', async () => {
-    // A peers-only actor can name the subordinate scope; that must classify as `refused`.
+  test('a peers-only actor is not offered a subordinate hire, and asking for one is refused, not indicted', async () => {
     const t = agentsTool({ peers: makePeers().deps });
-    await expect(t.execute({ action: 'hire', role: 'r', mission: 'm' })).rejects.toMatchObject({ code: 'denied', message: 'hiring subordinates is not available on this actor' });
+    await expect(t.execute({ op: 'hire', role: 'r', mission: 'm' })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('unknown op "hire"') });
   });
 
   test('a name on neither roster is a caller mistake, not an unknown transport state', async () => {
     const t = agentsTool({ team: makeTeam().deps });
-    await expect(t.execute({ action: 'hire', agent: 'ghost', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'unknown agent "ghost": check the roster with action:"list"' });
-    await expect(t.execute({ action: 'msg', agent: 'ghost', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'unknown agent "ghost": check the roster with action:"list"' });
+    await expect(t.execute({ op: 'assign', agent: 'ghost', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'unknown agent "ghost": check the roster with op:"list"' });
+    await expect(t.execute({ op: 'message', agent: 'ghost', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'unknown agent "ghost": check the roster with op:"list"' });
   });
 
   test('deps exceptions surface as tool error objects (never throw into the turn)', async () => {
@@ -699,7 +623,7 @@ describe('agents tool — subordinate actions', () => {
     });
 
     const t = agentsTool({ team: deps });
-    await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'x' })).rejects.toThrow('dismissed');
+    await expect(t.execute({ op: 'assign', agent: 'researcher', message: 'x' })).rejects.toThrow('dismissed');
   });
 });
 
@@ -708,7 +632,7 @@ describe('agents tool — peer workspace actions', () => {
     const team = makeTeam();
     const peers = makePeers();
     const t = agentsTool({ team: team.deps, peers: peers.deps });
-    const result = await t.execute({ action: 'hire', agent: 'scout', message: 'What changed?', topic: 'research' });
+    const result = await t.execute({ op: 'assign', agent: 'scout', message: 'What changed?', topic: 'research' });
     expect(result).toEqual({ status: 'replied', from: 'scout', reply: 'answer' });
     expect(peers.calls[0].input).toMatchObject({ agent: 'scout', topic: 'research', message: 'What changed?', mode: 'build' });
     expect(team.calls).toEqual([]);
@@ -718,7 +642,7 @@ describe('agents tool — peer workspace actions', () => {
     const team = makeTeam();
     const peers = makePeers({ listPeers: async () => [{ name: 'researcher' }] });
     const t = agentsTool({ team: team.deps, peers: peers.deps });
-    await t.execute({ action: 'hire', agent: 'researcher', message: 'x' });
+    await t.execute({ op: 'assign', agent: 'researcher', message: 'x' });
     expect(team.calls[0]?.action).toBe('assign');
     expect(peers.calls).toEqual([]);
   });
@@ -726,7 +650,7 @@ describe('agents tool — peer workspace actions', () => {
   test('a peer hire has no elapsed deadline and refuses the retired field', async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
-    await t.execute({ action: 'hire', agent: 'scout', message: 'x' });
+    await t.execute({ op: 'assign', agent: 'scout', message: 'x' });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.input).toEqual({
@@ -734,36 +658,26 @@ describe('agents tool — peer workspace actions', () => {
     });
     expect('timeoutMs' in (calls[0]?.input ?? {})).toBe(false);
 
-    expect(() => parseAgentsToolInput({
-      input: { action: 'hire', agent: 'scout', message: 'x', timeout_seconds: 1 },
-    })).toThrow('unknown field "timeout_seconds"');
+    await expect(t.execute({ op: 'assign', agent: 'scout', message: 'x', timeout_seconds: 1 })).rejects.toThrow('unknown field "timeout_seconds"');
     expect(calls).toHaveLength(1);
   });
 
   test('msg by agent is fire-and-forget; msg by event_id answers that event', async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
-    expect(await t.execute({ action: 'msg', agent: 'scout', message: 'FYI' }))
+    expect(await t.execute({ op: 'message', agent: 'scout', message: 'FYI' }))
       .toEqual({ status: 'delivered', message_id: 'ox1' });
-    expect(await t.execute({ action: 'msg', event_id: 'pe1', message: 'here you go' })).toEqual({ ok: true });
+    expect(await t.execute({ op: 'reply', eventId: 'pe1', message: 'here you go' })).toEqual({ ok: true });
     expect(calls[1].input).toEqual({ eventId: 'pe1', message: 'here you go' });
   });
 
-  test('msg naming both targets is refused, naming the fix for each intent', async () => {
+  test('a reply names its event and a message names its agent, never both', async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
-    await expect(t.execute({ action: 'msg', agent: 'scout', event_id: 'pe1', message: 'x' }))
-      .rejects.toMatchObject({
-        code: 'bad_input',
-        message: 'msg takes ONE target: `agent` to name an agent, or `event_id` to answer the agent '
-          + 'message event you were given. Naming both leaves it undecided who this is for: '
-          + 'drop `event_id` to message the named agent, or drop `agent` to answer that event.',
-      });
-    await expect(t.execute({ action: 'msg', message: 'x' }))
-      .rejects.toMatchObject({
-        code: 'bad_input',
-        message: 'msg requires a target: `agent` to name an agent, or `event_id` to answer the agent message event you were given.',
-      });
+    await expect(t.execute({ op: 'reply', agent: 'scout', eventId: 'pe1', message: 'x' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: 'agents.reply: unknown field "agent". It takes: eventId, message.' });
+    await expect(t.execute({ op: 'message', message: 'x' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('"agent" is required') });
     expect(calls).toEqual([]);
   });
 
@@ -772,7 +686,7 @@ describe('agents tool — peer workspace actions', () => {
     const t = agentsTool({ peers: deps });
 
     const result = await t.execute({
-      action: 'hire', scope: 'workspace', mission: 'summarize research papers', message: 'Summarize X',
+      op: 'hireWorkspace', mission: 'summarize research papers', message: 'Summarize X',
     });
 
     expect(result).toMatchObject({ agent: 'specialist', created: true, status: 'replied' });
@@ -783,7 +697,7 @@ describe('agents tool — peer workspace actions', () => {
 
   test('list merges subordinates and peers into one roster', async () => {
     const t = agentsTool({ team: makeTeam().deps, peers: makePeers().deps });
-    expect(await t.execute({ action: 'list' })).toEqual({
+    expect(await t.execute({ op: 'list' })).toEqual({
       subordinates: [rosterEntry],
       peers: [{ name: 'scout', displayName: 'Scout' }],
     });
@@ -792,16 +706,18 @@ describe('agents tool — peer workspace actions', () => {
   test('missing required args are sharp errors, not deps calls', async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
-    await expect(t.execute({ action: 'hire', agent: 'scout' })).rejects.toMatchObject({ code: 'bad_input', message: 'hire requires agent and message' });
-    await expect(t.execute({ action: 'msg', agent: 'scout' })).rejects.toMatchObject({ code: 'bad_input', message: 'msg requires a message' });
-    await expect(t.execute({ action: 'hire', scope: 'workspace', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'hire scope=workspace requires mission and message' });
+
+    for (const [call, missing] of [[{ op: 'assign', agent: 'scout' }, 'message'], [{ op: 'message', agent: 'scout' }, 'message'], [{ op: 'hireWorkspace', message: 'x' }, 'mission']] as const) {
+      await expect(t.execute(call)).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining(`"${missing}" is required`) });
+    }
+
     expect(calls).toEqual([]);
   });
 
   test(`the reserved "${PEER_REPLY_TOPIC}" topic is rejected`, async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
-    await expect(t.execute({ action: 'msg', agent: 'scout', message: 'x', topic: PEER_REPLY_TOPIC }))
+    await expect(t.execute({ op: 'message', agent: 'scout', message: 'x', topic: PEER_REPLY_TOPIC }))
       .rejects.toThrow('reserved');
     expect(calls).toEqual([]);
   });
@@ -827,39 +743,30 @@ describe('agents tool — resuming a stored delegation row', () => {
   test('a row of swarm fields resumes exactly as it was stored', () => {
     // Also the detach gate: non-null here is what lets a live search detach.
     expect(resumableAgentsInput('agents', {
-      action: 'swarm', preset: 'optimise', task: 'search', depth: 3, budget_usd: 5,
-    })).toEqual({ action: 'swarm', preset: 'optimise', task: 'search', depth: 3, budget_usd: 5 });
+      op: 'swarm', preset: 'optimise', task: 'search', depth: 3, budgetUsd: 5,
+    })).toEqual({ op: 'swarm', preset: 'optimise', task: 'search', depth: 3, budgetUsd: 5 });
   });
 
-  test('a stored inherit-context row resumes under the renamed value', () => {
-    // `context:'fork'` is rewritten before the parse, which refuses the old spelling.
-    const { result: resumed } = captureEvents(() => resumableAgentsInput('agents', {
-      action: 'swarm', preset: 'custom', task: 'search', config: { context: 'fork' },
-    }));
-
-    expect(resumed).toEqual({ action: 'swarm', preset: 'custom', task: 'search', config: { context: 'inherit' } });
-  });
-
-  test('a row carrying a field the parse now refuses still resumes, and the drop is logged', () => {
+  test('a row carrying a field a search does not take still resumes, and the drop is logged', () => {
     const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
-      action: 'swarm', preset: 'ideate', task: 'search', budgetUsd: 5,
+      op: 'swarm', preset: 'ideate', task: 'search', budget_usd: 5,
     }));
 
-    // `budgetUsd` never applied originally, so dropping it reproduces that run.
-    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
+    // `budget_usd` never applied originally, so dropping it reproduces that run.
+    expect(resumed).toEqual({ op: 'swarm', preset: 'ideate', task: 'search' });
     const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));
     expect(dropped).toHaveLength(1);
-    expect(dropped[0]).toContain('budgetUsd');
+    expect(dropped[0]).toContain('budget_usd');
   });
 
   test('a stored field the target action does not read is narrowed away, so the re-drive is not refused', async () => {
     // `topic` is declared, so a lenient parse keeps it and the strict tool parse would refuse the row;
     // the filter builds the call from the target action's fields only.
     const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
-      action: 'swarm', preset: 'ideate', task: 'search', topic: 'stale',
+      op: 'swarm', preset: 'ideate', task: 'search', topic: 'stale',
     }));
 
-    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
+    expect(resumed).toEqual({ op: 'swarm', preset: 'ideate', task: 'search' });
     expect(lines.filter((line) => line.includes('agents.resume.fields_dropped'))).toHaveLength(1);
 
     if (!resumed) throw new Error('expected a resumable agents input');
@@ -873,7 +780,7 @@ describe('agents tool — resuming a stored delegation row', () => {
     // `fork` is an action the tool no longer has: refused like any action it never had.
     expect(resumableAgentsInput('agents', { action: 'fork', task: 'search', forks: twoForks })).toBeNull();
     expect(resumableAgentsInput('agents', { action: 'probe', task: 'search' })).toBeNull();
-    expect(resumableAgentsInput('agents', { action: 'hire', role: 'r', mission: 'm' })).toBeNull();
+    expect(resumableAgentsInput('agents', { op: 'hire', role: 'r', mission: 'm' })).toBeNull();
     expect(resumableAgentsInput('agents', { action: 'ask', agent: 'a', message: 'm' })).toBeNull();
     expect(resumableAgentsInput('shell', { command: 'ls' })).toBeNull();
   });

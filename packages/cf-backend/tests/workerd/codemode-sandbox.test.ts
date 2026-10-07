@@ -163,13 +163,13 @@ describe('the eval sandbox under workerd', () => {
 
     const program = [
       '// Call a native tool and two crafted tools',
-      "const native = await tools.file({ action: 'read', path: 'notes.md' });",
+      "const native = await tools.file({ op: 'read', path: 'notes.md' });",
       'return { native, quad: await tools.quad(3) };',
     ].join('\n');
 
     const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
     expect(result.error).toBeUndefined();
-    expect(result.result).toEqual({ native: { echoed: { action: 'read', path: 'notes.md' } }, quad: 12 });
+    expect(result.result).toEqual({ native: { echoed: { op: 'read', path: 'notes.md' } }, quad: 12 });
   });
 
   test('admitted crafted source retains the module metadata of its hosted runtime', async () => {
@@ -252,20 +252,20 @@ describe('the eval sandbox under workerd', () => {
 
     const providers = [{ name: 'tools', fns: Object.fromEntries(Object.entries(native).map(([name, entry]) => [name, entry.execute])) }];
     const run = (code: string) => withCodemodeProgram(() => executor.execute(code, providers));
-    const recovered = await run('const failure = await tools.file({action:"read"}); if (failure.success === false) return failure.reason; throw new Error("missing failure shape");');
+    const recovered = await run('const failure = await tools.file({op:"read"}); if (failure.success === false) return failure.reason; throw new Error("missing failure shape");');
     expect(recovered.result).toBe('unavailable');
     expect(successfulToolOutcome('eval', { output: recovered })).toEqual({ success: true, failures: [
-      { success: false, tool: 'file', action: 'read', reason: 'unavailable', error: 'file plane offline' },
+      { success: false, tool: 'file', op: 'read', reason: 'unavailable', error: 'file plane offline' },
     ] });
 
-    for (const code of ['return await tools.file({action:"read"});', 'throw await tools.file({action:"read"});']) {
+    for (const code of ['return await tools.file({op:"read"});', 'throw await tools.file({op:"read"});']) {
       let caught: unknown;
 
       try { await run(code); } catch (cause) { caught = cause; }
 
       expect(caught).toBeInstanceOf(Error);
       expect(failedToolOutcome({ cause: caught })).toMatchObject({ success: false, reason: 'unavailable', failures: [
-        { tool: 'file', action: 'read', reason: 'unavailable' },
+        { tool: 'file', op: 'read', reason: 'unavailable' },
       ] });
     }
   });
@@ -301,7 +301,7 @@ describe('the eval sandbox under workerd', () => {
 
     const provider: WebSearchProvider = { search: unused, fetch: unused, render: unused, screenshot: unused };
 
-    const web = createWebCodemodeProvider({ provider, files: null, sessions: { missing: 'no sessions here' }, prelude: { source: BROWSER_PRELUDE } });
+    const web = createWebCodemodeProvider({ provider, files: null, sessions: { open: unused, list: unused, close: unused }, prelude: { source: BROWSER_PRELUDE } });
     const fns = Object.fromEntries(Object.entries(web.tools).map(([name, entry]) => [name, (...args: unknown[]) => entry.execute(...args)]));
     const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }));
 

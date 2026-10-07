@@ -9,8 +9,10 @@ import { buildBuiltinTools } from '../src/tools/builtins';
 import { withApprovalGatedFiles } from '../src/execution/approval';
 import { createInlineExecutor } from '../src/tools/inline-executor';
 import type { ShellApprovalPolicy } from '../src/safety/approval-gate';
-import type { FileToolInput } from '../src/tools/file-tool';
-import type { JsonValue } from '../src/utils/json';
+
+type FileToolInput = JsonObject & { readonly op: string };
+
+import type { JsonValue, JsonObject } from '../src/utils/json';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { createTestRuntime, conversationsFor } from './helpers';
 import { cloudPlanes } from '../src/vfs/resolve';
@@ -95,7 +97,7 @@ describe('a file on another machine', () => {
   test('is read through its mount from that machine, not from the other one', async () => {
     const { transport, file } = fileToolOverTheFleet();
 
-    expect(await file({ action: 'read', path: '/pc/mrwhite@rig/home/notes.md' })).toContain('notes kept on dev-rig');
+    expect(await file({ op: 'read', path: '/pc/mrwhite@rig/home/notes.md' })).toContain('notes kept on dev-rig');
     expect(transport.frames.filter((frame) => frame.path === '/home/notes.md').map((frame) => frame.deviceId))
       .toEqual(expect.arrayContaining(['dev-rig']));
     expect(transport.frames.map((frame) => frame.deviceId)).not.toContain('dev-studio');
@@ -104,9 +106,9 @@ describe('a file on another machine', () => {
   test('is written on that machine and named by its reference', async () => {
     const { transport, file } = fileToolOverTheFleet();
 
-    await file({ action: 'read', path: '/pc/ashish@studio/home/notes.md' });
+    await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' });
 
-    expect(await file({ action: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
+    expect(await file({ op: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
       .toMatchObject({ ok: true, reference: 'ashish@studio://home/notes.md' });
     expect(transport.frames.filter((frame) => frame.method === 'writeFile'))
       .toEqual([{ method: 'writeFile', path: '/home/notes.md', deviceId: 'dev-studio' }]);
@@ -118,12 +120,12 @@ describe('a file on another machine', () => {
     const { file } = fileToolOverTheFleet({ success: true, uncheckpointed: { dir: '/home', why } });
     const undo = `No checkpoint covers /home: ${why}, so undo cannot restore what this write changed there.`;
 
-    await file({ action: 'read', path: '/pc/ashish@studio/home/notes.md' });
-    expect(await file({ action: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
+    await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' });
+    expect(await file({ op: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
       .toMatchObject({ ok: true, undo });
     // This fleet never keeps a write, so the edit reads the machine's own bytes first.
-    await file({ action: 'read', path: '/pc/ashish@studio/home/notes.md' });
-    expect(await file({ action: 'edit', path: '/pc/ashish@studio/home/notes.md', edits: [{ old_text: 'kept', new_text: 'moved' }] }))
+    await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' });
+    expect(await file({ op: 'edit', path: '/pc/ashish@studio/home/notes.md', edits: [{ old_text: 'kept', new_text: 'moved' }] }))
       .toMatchObject({ ok: true, undo });
   });
 
@@ -133,8 +135,8 @@ describe('a file on another machine', () => {
     const { file, readFile, writeFile } = fileToolOverTheFleet({ success: true, uncheckpointed: { dir: '/home', why } }, true);
     const undo = `No checkpoint covers /home: ${why}, so undo cannot restore what this write changed there.`;
 
-    await file({ action: 'read', path: '/pc/ashish@studio/home/notes.md' });
-    expect(await file({ action: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
+    await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' });
+    expect(await file({ op: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
       .toMatchObject({ ok: true, undo });
 
     await readFile('/pc/ashish@studio/home/notes.md');

@@ -42,7 +42,7 @@ test('tool bindings accept native JSON input and projection bindings retain code
     id: 'app', project, name, request: { member, args, invocation: null }, chain: [],
   });
 
-  expect(call('FILE', 'call', [{ action: 'read', path: 'note' }])).toEqual({ kind: 'tool', name: 'file', input: { action: 'read', path: 'note' } });
+  expect(call('FILE', 'call', [{ op: 'read', path: 'note' }])).toEqual({ kind: 'tool', name: 'file', input: { op: 'read', path: 'note' } });
   expect(() => call('FILE', 'read', [{}])).toThrow('offers call(input)');
   expect(() => call('FILE', 'call', [1])).toThrow('one JSON object');
   expect(() => call('FILE', 'call', [{}, {}])).toThrow('one JSON object');

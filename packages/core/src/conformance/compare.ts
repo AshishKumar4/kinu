@@ -44,8 +44,8 @@ function declaredEntries(
 ): Array<[string, RootStatuses]> {
   switch (plane) {
     case 'tool': return Object.entries(manifest.tool);
-    case 'agents-action': return Object.entries(manifest['agents-action']);
-    case 'memory-action': return Object.entries(manifest['memory-action']);
+    case 'agents-op': return Object.entries(manifest['agents-op']);
+    case 'memory-op': return Object.entries(manifest['memory-op']);
     case 'table': return Object.entries(manifest.table);
     case 'producer': return Object.entries(manifest.producer);
   }
@@ -127,16 +127,13 @@ export function normalizeObservedTables(names: Iterable<string>): Set<string> {
   return out;
 }
 
-const ActionEnumSchema = v.object({
-  properties: v.object({
-    action: v.object({ enum: v.array(v.string()) }),
-  }),
-});
+const OpEnumSchema = v.object({ properties: v.object({ op: v.object({ enum: v.array(v.string()) }) }) });
 
-export function observedActionEnum(sent: JSONSchema7 | undefined): Set<string> {
-  const parsedAction = v.safeParse(ActionEnumSchema, sent);
+/** The operations a capability's native tool offers. */
+export function observedOpEnum(sent: JSONSchema7 | undefined): Set<string> {
+  const parsed = v.safeParse(OpEnumSchema, sent);
 
-  return new Set(parsedAction.success ? parsedAction.output.properties.action.enum : []);
+  return new Set(parsed.success ? parsed.output.properties.op.enum : []);
 }
 
 /** Presence (`!== undefined`) is the contract; unset means the consumer's documented fallback. */

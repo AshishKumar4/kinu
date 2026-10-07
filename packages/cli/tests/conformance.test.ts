@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
-  compareSurface, normalizeObservedTables, observedActionEnum, wiredProducers,
+  compareSurface, normalizeObservedTables, observedOpEnum, wiredProducers,
   renderConformanceFindings, NO_COUNT_ENDPOINT, BUILTIN_PROFILE_CATALOG, profileCatalogDigest,
   type ObservedSurface, type ProfileCatalog,
 } from '@kinu.run/core';
@@ -161,8 +161,8 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
       root: 'cli',
       planes: {
         tool: new Set(byName.keys()),
-        'agents-action': observedActionEnum(byName.get('agents')?.inputSchema),
-        'memory-action': observedActionEnum(byName.get('memory')?.inputSchema),
+        'agents-op': observedOpEnum(byName.get('agents')?.inputSchema),
+        'memory-op': observedOpEnum(byName.get('memory')?.inputSchema),
         table: normalizeObservedTables(tables),
         producer: wiredProducers(runtime),
       },
@@ -182,7 +182,7 @@ describe('cli backend conformance', () => {
     expect(present(observed.planes.table, 'the table plane').size).toBeGreaterThanOrEqual(25);
     expect(present(observed.planes.tool, 'the tool plane').has('eval')).toBe(true);
     // `event_id` is in the advertised schema exactly when the host wired peer transport.
-    expect(present(observed.planes['agents-action'], 'the agents-action plane').has('msg')).toBe(true);
+    expect(present(observed.planes['agents-op'], 'the agents-action plane').has('msg')).toBe(true);
     expect(JSON.stringify(captured.find((tool) => tool.name === 'agents') ?? {}))
       .toContain('event_id');
   });

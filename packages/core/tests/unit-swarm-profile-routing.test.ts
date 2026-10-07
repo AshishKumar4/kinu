@@ -14,7 +14,7 @@ import { readStartedSwarmProfile } from '../src/strategy/swarm-resume';
 import { configDigestOf, resolveSwarm } from '../src/strategy/swarm';
 import {
   agentsProfileContext, createAgentsTool, profileCatalogDigest, resolveTurnProfile,
-  type AgentsSwarmDeps, type AgentsProfileContext, type AgentsToolDeps, type AgentsToolInput,
+  type AgentsSwarmDeps, type AgentsProfileContext, type AgentsToolDeps,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot, type ResolvedTurnProfile,
   type RoleDefinition, type SwarmProfileSnapshot, type TierAssignments,
 } from '../src/index';
@@ -96,7 +96,7 @@ function countingModel(modelId: string): CountingModel {
 }
 
 interface Harness {
-  readonly execute: (input: AgentsToolInput, options?: ToolExecutionOptions<unknown>) => Promise<JsonObject>;
+  readonly execute: (input: JsonObject, options?: ToolExecutionOptions<unknown>) => Promise<JsonObject>;
   readonly rt: AgentRuntime;
   readonly resolvedSpecs: string[];
   readonly callerCalls: () => number;
@@ -152,7 +152,7 @@ function harness(input: {
   if (!entry) throw new Error('Expected the agents tool to be created');
 
   return {
-    execute: toolExecute<AgentsToolInput, JsonObject>(entry),
+    execute: toolExecute<JsonObject, JsonObject>(entry),
     rt,
     resolvedSpecs,
     callerCalls: caller.calls,
@@ -226,7 +226,7 @@ describe('a delegated tier routes the model its nodes run', () => {
     const h = harness({ envelope: envelopeOf(TIERS_V1, 1), roleId: 'lead' });
 
     const result = v.parse(RoutedResultSchema, await h.execute({
-      action: 'swarm',
+      op: 'swarm',
       preset: 'ideate',
       task: 'three ways to shrink the cold start',
       tier: 'deep',
@@ -257,7 +257,7 @@ describe('a delegated tier routes the model its nodes run', () => {
     const h = harness({ envelope: envelopeOf(TIERS_V1, 1), roleId: 'auditor' });
 
     const result = v.parse(RoutedResultSchema, await h.execute({
-      action: 'swarm',
+      op: 'swarm',
       preset: 'ideate',
       task: 'where does this design break',
       branches: 1,
@@ -281,8 +281,8 @@ describe('a delegated tier routes the model its nodes run', () => {
 
     if (!entry) throw new Error('Expected the agents tool to be created');
 
-    const result = v.parse(v.object({ preset: v.string() }), await toolExecute<AgentsToolInput, unknown>(entry)({
-      action: 'swarm', preset: 'ideate', task: 'anything', branches: 1, depth: 1,
+    const result = v.parse(v.object({ preset: v.string() }), await toolExecute<JsonObject, unknown>(entry)({
+      op: 'swarm', preset: 'ideate', task: 'anything', branches: 1, depth: 1,
     }));
 
     expect(result.preset).toBe('ideate');
@@ -304,7 +304,7 @@ describe('a swarm runs on its turn\'s model', () => {
     const h = harness({ envelope, roleId: 'auditor', caller });
 
     const result = v.parse(RoutedResultSchema, await h.execute({
-      action: 'swarm', preset: 'ideate', task: 'where does this design break', branches: 1, depth: 1,
+      op: 'swarm', preset: 'ideate', task: 'where does this design break', branches: 1, depth: 1,
     }));
 
     expect(h.resolvedSpecs).toEqual(['m-pinned']);
@@ -324,7 +324,7 @@ describe('a re-drive continues under the profile it started under', () => {
     seedInterruptedRun({ rt: h.rt, task, roleId: 'lead' });
 
     const result = v.parse(RoutedResultSchema, await h.execute({
-      action: 'swarm', task, branches: 1, depth: 1,
+      op: 'swarm', task, branches: 1, depth: 1,
     }, REDRIVE));
 
     expect(h.resolvedSpecs).toEqual(['m-deep-v1']);
@@ -339,7 +339,7 @@ describe('a re-drive continues under the profile it started under', () => {
     // and only `audit` asks this harness's unparseable judge and faults.
     const stored = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: stored.rt, task, roleId: 'auditor' });
-    const pending = stored.execute({ action: 'swarm', task }, REDRIVE);
+    const pending = stored.execute({ op: 'swarm', task }, REDRIVE);
     await expect(pending).rejects.toMatchObject({ code: 'unavailable' });
     await expect(pending).rejects.toThrow('the judge faulted while scoring');
 
@@ -347,7 +347,7 @@ describe('a re-drive continues under the profile it started under', () => {
     seedInterruptedRun({ rt: flat.rt, task, roleId: 'lead' });
 
     const result = v.parse(RoutedResultSchema, await flat.execute({
-      action: 'swarm', task,
+      op: 'swarm', task,
     }, REDRIVE));
 
     expect(result.preset).toBe('ideate');
@@ -417,7 +417,7 @@ function perNodeHarness() {
   if (!entry) throw new Error('Expected the agents tool to be created');
 
   return {
-    execute: toolExecute<AgentsToolInput, JsonObject>(entry),
+    execute: toolExecute<JsonObject, JsonObject>(entry),
     resolvedSpecs,
     aCalls: a.calls,
     bCalls: b.calls,
@@ -430,7 +430,7 @@ describe('`models` routes each node to its own assigned model', () => {
     const h = perNodeHarness();
 
     const result = v.parse(PerNodeResultSchema, await h.execute({
-      action: 'swarm', preset: 'ideate', task: 'three angles on the cold start',
+      op: 'swarm', preset: 'ideate', task: 'three angles on the cold start',
       branches: 2, depth: 1,
     }));
 
@@ -445,7 +445,7 @@ describe('`models` routes each node to its own assigned model', () => {
     const h = perNodeHarness();
 
     const result = v.parse(PerNodeResultSchema, await h.execute({
-      action: 'swarm', preset: 'ideate', task: 'recon then synthesis',
+      op: 'swarm', preset: 'ideate', task: 'recon then synthesis',
       models: ['m-alpha', 'm-beta'],
       branches: 4, depth: 1,
     }));
@@ -466,7 +466,7 @@ describe('`models` routes each node to its own assigned model', () => {
     const one = perNodeHarness();
 
     const oneResult = v.parse(PerNodeResultSchema, await one.execute({
-      action: 'swarm', preset: 'ideate', task: 'one model everywhere',
+      op: 'swarm', preset: 'ideate', task: 'one model everywhere',
       models: ['m-alpha'], branches: 3, depth: 1,
     }));
 
@@ -477,7 +477,7 @@ describe('`models` routes each node to its own assigned model', () => {
     const long = perNodeHarness();
 
     const longResult = v.parse(PerNodeResultSchema, await long.execute({
-      action: 'swarm', preset: 'ideate', task: 'a wide list on a narrow wave',
+      op: 'swarm', preset: 'ideate', task: 'a wide list on a narrow wave',
       models: ['m-alpha', 'm-beta', 'm-default', 'm-alpha', 'm-beta'],
       branches: 2, depth: 1,
     }));
@@ -491,7 +491,7 @@ describe('`models` routes each node to its own assigned model', () => {
   test('an unresolvable spec is refused by name, before any node runs', async () => {
     const h = perNodeHarness();
 
-    const pending = h.execute({ action: 'swarm', preset: 'ideate', task: 'refuse me cleanly',
+    const pending = h.execute({ op: 'swarm', preset: 'ideate', task: 'refuse me cleanly',
       models: ['m-alpha', 'm-ghost'], branches: 2, depth: 1 });
 
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
@@ -506,7 +506,7 @@ describe('`models` routes each node to its own assigned model', () => {
   test('naming models and tier together is refused rather than resolved by precedence', async () => {
     const h = harness({ envelope: envelopeOf(TIERS_V1, 1), roleId: 'lead' });
 
-    const pending = h.execute({ action: 'swarm', preset: 'ideate', task: 'two routing decisions',
+    const pending = h.execute({ op: 'swarm', preset: 'ideate', task: 'two routing decisions',
       models: ['m-alpha'], tier: 'deep', branches: 1, depth: 1 });
 
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });

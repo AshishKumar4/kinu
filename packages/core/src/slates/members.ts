@@ -1,39 +1,43 @@
 /**
- * Read-only versus mutating per (binding, member); unnamed members are mutating (fail closed).
- * `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
+ * Read-only versus mutating per (binding, member); unnamed members are mutating (fail closed). An operation's effect is
+ * its impact: observing reads, anything else acts. `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
  */
 import * as v from 'valibot';
 import type { JsonObject } from '../utils/json';
+import type { Operation } from '../operations/operation';
+import { MEMORY } from '../operations/memory';
+import { TASKS } from '../operations/tasks';
+import { WEB } from '../operations/web';
+import { FILE } from '../operations/file';
+import { AGENTS_IMPACTS } from '../operations/agents';
 
 export type SlateMemberEffect = 'read' | 'mutate';
 
+const effectOfImpact = (impact: Operation['impact']): SlateMemberEffect => (impact === 'observe' ? 'read' : 'mutate');
+
+/** Each operation a slate may reach, by name, with its effect. */
+function effects(ops: Readonly<Record<string, Operation>>): Readonly<Record<string, SlateMemberEffect>> {
+  return Object.fromEntries(Object.values(ops).filter((op) => op.slate).map((op) => [op.name, effectOfImpact(op.impact)]));
+}
+
 const EXECUTOR_MEMBER_EFFECTS = {
-  readFile: 'read', readdir: 'read', exists: 'read', stat: 'read', searchMemory: 'read', listTools: 'read',
-  writeFile: 'mutate', editFile: 'mutate', mkdir: 'mutate', remove: 'mutate', exec: 'mutate',
-  saveNote: 'mutate', createTool: 'mutate', slate: 'mutate', git: 'mutate',
+  readFile: 'read', readdir: 'read', exists: 'read', stat: 'read', listTools: 'read',
+  writeFile: 'mutate', mkdir: 'mutate', remove: 'mutate', exec: 'mutate', createTool: 'mutate', slate: 'mutate', git: 'mutate',
 } as const satisfies Readonly<Record<string, SlateMemberEffect>>;
 
-export const MEMORY_MEMBER_EFFECTS = {
-  search: 'read', recall: 'read', conversations: 'read',
-  save: 'mutate', remember: 'mutate', forget: 'mutate',
-} as const satisfies Readonly<Record<string, SlateMemberEffect>>;
+export const MEMORY_MEMBER_EFFECTS = effects(MEMORY);
 
-export const TASKS_MEMBER_EFFECTS = {
-  list: 'read', add: 'mutate', update: 'mutate', mode: 'mutate',
-} as const satisfies Readonly<Record<string, SlateMemberEffect>>;
+export const TASKS_MEMBER_EFFECTS = effects(TASKS);
 
-/** The `web` namespace's members write nothing. */
-export const WEB_MEMBER_EFFECTS = {
-  search: 'read', fetch: 'read', screenshot: 'read',
-} as const satisfies Readonly<Record<string, SlateMemberEffect>>;
+export const WEB_MEMBER_EFFECTS = effects(WEB);
 
-/** Per native action; the native web tool writes (a spilled page, a screenshot). */
+/** Per native operation, named by `op`. */
 export const NATIVE_ACTION_EFFECTS = {
-  file: { read: 'read', list: 'read', stat: 'read', search: 'read', write: 'mutate', edit: 'mutate' },
+  file: effects(FILE),
   memory: MEMORY_MEMBER_EFFECTS,
-  tasks: TASKS_MEMBER_EFFECTS,
-  web: { search: 'read', fetch: 'mutate', screenshot: 'mutate' },
-  agents: { list: 'read', swarm: 'mutate', hire: 'mutate', msg: 'mutate', dismiss: 'mutate' },
+  tasks: Object.fromEntries(Object.values(TASKS).map((op) => [op.name, effectOfImpact(op.impact)])),
+  web: WEB_MEMBER_EFFECTS,
+  agents: Object.fromEntries(Object.entries(AGENTS_IMPACTS).map(([op, impact]) => [op, effectOfImpact(impact)])),
 } as const satisfies Readonly<Record<string, Readonly<Record<string, SlateMemberEffect>>>>;
 
 /** Tools with one undifferentiated `call` member have no read shape, so `call` is mutating. */
@@ -73,13 +77,13 @@ export function memberEffect(
   }
 }
 
-/** The action for a discriminating tool; `call` otherwise, or when the input carries no string action. */
+/** The operation a capability tool's call names; `call` otherwise, or when the input names none. */
 export function toolActionMember(tool: string, input: JsonObject): string {
   const actions = actionTable(tool);
 
   if (actions === undefined || (Object.keys(actions).length === 1 && 'call' in actions)) return 'call';
 
-  return v.is(v.string(), input.action) ? input.action : 'call';
+  return v.is(v.string(), input.op) ? input.op : 'call';
 }
 
 export function toolActionEffect(tool: string, member: string): SlateMemberEffect {

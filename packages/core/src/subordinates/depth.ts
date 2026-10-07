@@ -71,8 +71,8 @@ export function delegationDepthRefusal(budget: DelegationBudget): DelegationDept
       + `global maximum ${DELEGATION_MAX_DEPTH}, so a child of it would be depth ${budget.depth + 1}. `
       + 'This covers BOTH lifetimes that birth a child: a durable hire and a `lifetime:"task"` '
       + 'hire, because they add a level through the same substrate. Hand the work to an agent '
-      + 'that already exists with `hire` naming `agent` instead (that adds no depth), or run '
-      + 'the work as a search: agents({action:"swarm", task, config:{context:"inherit"}}) inherits '
+      + 'that already exists with agents({op:"assign", agent, message}) instead (that adds no depth), or run '
+      + 'the work as a search: agents({op:"swarm", task, config:{context:"inherit"}}) inherits '
       + 'your conversation and adds no depth to the subordinate tree.',
   };
 }

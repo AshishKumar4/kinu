@@ -66,7 +66,7 @@ export function gatedFactCallStream(
       controller.enqueue({ type: 'stream-start', warnings: [] });
       controller.enqueue({
         type: 'tool-call', toolCallId, toolName: 'fact',
-        input: JSON.stringify({ action: 'recall', key: 'probe' }),
+        input: JSON.stringify({ op: 'recall', key: 'probe' }),
       });
       await gate;
       controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
@@ -357,7 +357,7 @@ export function searchingModel(): LanguageModel {
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call-1', toolName: 'agents',
                 input: JSON.stringify({
-                  action: 'swarm', task: 'explore two angles',
+                  op: 'swarm', task: 'explore two angles',
                   preset: 'ideate', branches: 2, depth: 1,
                 }),
               });
@@ -407,7 +407,7 @@ export function codingSearchModel() {
 
       if (JSON.stringify(options.prompt).includes(SEARCH_ASK)) {
         const stream = step === 0
-          ? toolCallStream('agents', { action: 'swarm', task: SEARCH_TASK, preset: 'ideate', branches: 2, depth: 1 }, usage)
+          ? toolCallStream('agents', { op: 'swarm', task: SEARCH_TASK, preset: 'ideate', branches: 2, depth: 1 }, usage)
           : textStream('Searching.', usage);
 
         return { stream, response: { headers: {} } };

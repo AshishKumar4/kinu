@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-07",
-  "files": 3001,
-  "functions": 78655,
+  "files": 2987,
+  "functions": 78898,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -215,10 +215,6 @@
     },
     {
       "key": "packages/core/src/slates/capability-graph.ts#riskOf",
-      "complexity": 29
-    },
-    {
-      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
       "complexity": 29
     },
     {

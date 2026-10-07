@@ -1,4 +1,3 @@
-import type { Storage } from '../types/primitives';
 /**
  * Web search/fetch provider shared by both backends; key-less by default (DuckDuckGo), Tavily when a `tavily`
  * credential is stored. Rendered fetches and screenshots go through Browser Run (`browser-run.ts`).
@@ -10,15 +9,9 @@ import { decodeEntities, htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, s
 import { quickAction, type BrowserRunAccess, type QuickActionEngine, type QuickActionTransport } from './browser-run';
 import type { AuthResolution, AuthResolver } from '../providers/types';
 import { TAVILY_CRED_KEY } from '../credentials/validate';
-import { TOOL_REACH } from '../tools/registry';
-import { readExecSignal } from '../execution/signal';
-import { codemodeText } from '../tools/sandbox-contract';
 import { attempt, attemptInItsWords, diagnostics, inItsWords, KinuError, settle, tolerate } from '../obs/index';
 import { Data, Effect } from 'effect';
-import type { CodemodeProvider } from '../types/codemode';
 
-import { bytesToBase64 } from '../utils/base64';
-import { saveScreenshot } from './screenshots';
 
 
 const TAVILY_API = 'https://api.tavily.com';
@@ -89,7 +82,6 @@ const TavilyResponseSchema = v.object({
   }))),
 });
 
-const WebSearchOptionsSchema = v.object({ limit: v.optional(v.number()) });
 
 const MAX_FETCH_BYTES = 2_000_000;
 
@@ -428,31 +420,6 @@ async function readCappedBody(res: Response, cap: number): Promise<{ bytes: Uint
   return { bytes, clipped };
 }
 
-/** Explicit because members take positional args; a generated declaration would suggest `web.search({ query })`. */
-const TYPES = `export declare const web: {
-  /** Up to \`limit\` ranked results (default 5, max 20). */
-  search(query: string, opts?: { limit?: number }): Promise<{
-    query: string;
-    results: Array<{ title: string; url: string; snippet: string; date?: string; position: number }>;
-    answer?: string;
-    source: string;
-  } | Refusal>;
-  /** \`render\`: load the page in a browser first, for a page its scripts build. \`engine\` (with \`render\` or a screenshot): Kitesurf by default; Chrome gets through some bot-checked and rate-limited sites. */
-  fetch(url: string, opts?: { render?: boolean; engine?: 'kitesurf' | 'chrome' }): Promise<{ url: string; title?: string; retrievedAt: string; markdown: string } | Refusal>;
-  /** In eval, saved at \`path\`, and a program that returns a data:image URL shows you the image; a slate gets no \`path\` (it writes nothing) and shows \`dataUrl\` in an <img>. */
-  screenshot(url: string, opts?: { fullPage?: boolean; engine?: 'kitesurf' | 'chrome' }): Promise<{ url: string; path?: string; retrievedAt: string; dataUrl: string } | Refusal>;
-  /** A browser for \`connectBrowser\`. Chrome: kept across programs and turns until closed or idle 20 min; \`liveView\` lets the owner watch or take over (a login, a captcha), so give it to them; \`lab\` enables the page's WebMCP tools. Kitesurf: lighter, with WebMCP; each connect starts a browser that ends with its program, and it has no Live View. */
-  openBrowser(opts?: { browser?: 'chrome' | 'kitesurf'; lab?: boolean }): Promise<{ id: string; liveView: string | null } | Refusal>;
-  browsers(): Promise<Array<{ id: string; liveView: string }> | Refusal>;
-  closeBrowser(id: string): Promise<null | Refusal>;
-  /** A @cloudflare/puppeteer \`Browser\` on an \`openBrowser\` id. \`page.accessibility.snapshot()\` reads the accessibility tree. */
-  connectBrowser(id: string): Promise<Browser | Refusal>;
-  /** The page's WebMCP tools, and a call to one. */
-  pageTools(page: Page): Promise<Array<{ name: string; description: string; inputSchema: object }> | Refusal>;
-  callPageTool(page: Page, name: string, input: object): Promise<unknown>;
-};
-`;
-
 export interface BrowserSessionView {
   readonly id: string;
   readonly liveView: string;
@@ -463,154 +430,6 @@ export interface BrowserSessions {
   open(opts: { readonly lab: boolean }): Promise<BrowserSessionView>;
   list(): Promise<BrowserSessionView[]>;
   close(id: string): Promise<void>;
-}
-
-export type BrowserSessionsAccess = { readonly sessions: BrowserSessions } | { readonly missing: string };
-
-export interface WebCodemodeDeps {
-  readonly provider: WebSearchProvider;
-  /** Where a screenshot is saved; null on a slate's route, where a share visitor writes nothing into the workspace. */
-  readonly files: Pick<Storage, 'vfs' | 'home'> | null;
-  readonly sessions: BrowserSessionsAccess;
-  /** Sandbox-side `connectBrowser`, `pageTools` and `callPageTool`; without it they refuse, naming `missing`. */
-  readonly prelude?: { readonly source: string } | { readonly missing: string };
-}
-
-const EngineSchema = v.optional(v.picklist(['kitesurf', 'chrome']));
-
-/** What the sandbox half of a browser member hands its host member when it fails (cf-backend `browser-prelude.ts`). */
-const SandboxRefusalSchema = v.object({ refused: v.string(), reason: v.picklist(['denied', 'unavailable']) });
-
-type SandboxRefusal = v.InferOutput<typeof SandboxRefusalSchema>;
-
-/** The first argument a browser member's host half received, as a sandbox refusal when it is one. */
-function sandboxRefusal(input: { readonly argument: unknown }): SandboxRefusal | undefined {
-  const parsed = v.safeParse(SandboxRefusalSchema, input.argument);
-
-  return parsed.success ? parsed.output : undefined;
-}
-
-const FetchOptionsSchema = v.object({ render: v.optional(v.boolean()), engine: EngineSchema });
-
-const ScreenshotOptionsSchema = v.object({ fullPage: v.optional(v.boolean()), engine: EngineSchema });
-
-const OpenBrowserOptionsSchema = v.object({ browser: v.optional(v.picklist(['chrome', 'kitesurf'])), lab: v.optional(v.boolean()) });
-
-/**
- * The engine `openBrowser` picks when the call names none. Chrome, because only a Chrome session outlives its
- * connection, keeps a Live View, and reconnects by id (measured 2026-09-28); Kitesurf's id is its connection.
- */
-const OPEN_BROWSER_DEFAULT = 'chrome';
-
-/** Kitesurf has no session to keep: `connectBrowser` starts one per program under this id. */
-export const KITESURF_SESSION_ID = 'kitesurf';
-
-/** A slate's \`web\`: the one-shot members only, writing nothing into the workspace, since a share visitor may call it. */
-export function createSlateWebCodemodeProvider(provider: WebSearchProvider): CodemodeProvider {
-  return createWebCodemodeProvider({
-    provider, files: null,
-    sessions: { missing: 'a slate holds no browser session; it has web.search, web.fetch and web.screenshot' },
-  });
-}
-
-export function createWebCodemodeProvider(deps: WebCodemodeDeps): CodemodeProvider {
-  const { provider, files } = deps;
-
-  const sessions: Effect.Effect<BrowserSessions, KinuError> = 'missing' in deps.sessions
-    ? Effect.fail(new KinuError('unavailable', deps.sessions.missing))
-    : Effect.succeed(deps.sessions.sessions);
-
-  const withSessions = <A>(run: (open: BrowserSessions) => Promise<A>): Effect.Effect<A, KinuError> => (
-    Effect.flatMap(sessions, (open) => attemptInItsWords('unavailable', () => run(open)))
-  );
-
-  /**
-   * Where no prelude defines the member, a call reaches the host, which refuses it. Where one does, its failure
-   * arrives here as a `SandboxRefusal`, so the program's census records it as it records a host member's.
-   */
-  const sandboxOnly = (member: string, refused: SandboxRefusal | undefined): Effect.Effect<never, KinuError> => {
-    if (refused !== undefined) return Effect.fail(new KinuError(refused.reason, `web.${member}: ${refused.refused}`));
-
-    return Effect.fail(new KinuError('unsupported', deps.prelude !== undefined && 'missing' in deps.prelude
-      ? deps.prelude.missing
-      : `web.${member} runs only inside an eval program`));
-  };
-
-  const tools: CodemodeProvider['tools'] = {
-    search: {
-      planAllowed: true,
-      description: 'web.search(query, { limit? }) -> { results: [{ title, url, snippet, date, position }], answer?, source }',
-      execute: async (...args: unknown[]) => {
-        const query = codemodeText({ value: args[0], parameter: 'web.search(query)' });
-        const parsedOpts = v.safeParse(WebSearchOptionsSchema, args[1]);
-        const opts = parsedOpts.success ? parsedOpts.output : undefined;
-
-        return provider.search(query, { ...opts, signal: readExecSignal({ context: args[2] }) });
-      },
-    },
-    fetch: {
-      planAllowed: true,
-      description: 'web.fetch(url, { render?, engine? }) -> { url, title?, retrievedAt, markdown }',
-      execute: async (...args: unknown[]) => {
-        const url = codemodeText({ value: args[0], parameter: 'web.fetch(url)' });
-        const opts = v.safeParse(FetchOptionsSchema, args[1] ?? {});
-        const signal = readExecSignal({ context: args[2] });
-
-        if (!opts.success) return settle(Effect.fail(new KinuError('bad_input', `web.fetch takes { render?: boolean, engine?: 'kitesurf' | 'chrome' }`)));
-        const { render = false, engine } = opts.output;
-
-        if (engine !== undefined && !render) return settle(Effect.fail(new KinuError('bad_input', 'web.fetch: `engine` applies to a rendered fetch; add `render: true`')));
-
-        return render ? provider.render(url, { engine, signal }) : provider.fetch(url, { signal });
-      },
-    },
-    screenshot: {
-      description: 'web.screenshot(url, { fullPage?, engine? }) -> { url, path?, retrievedAt, dataUrl }',
-      execute: async (...args: unknown[]) => {
-        const url = codemodeText({ value: args[0], parameter: 'web.screenshot(url)' });
-        const opts = v.safeParse(ScreenshotOptionsSchema, args[1] ?? {});
-
-        if (!opts.success) return settle(Effect.fail(new KinuError('bad_input', `web.screenshot takes { fullPage?: boolean, engine?: 'kitesurf' | 'chrome' }`)));
-        const shot = await provider.screenshot(url, { fullPage: opts.output.fullPage === true, engine: opts.output.engine, signal: readExecSignal({ context: args[2] }) });
-        const dataUrl = `data:image/png;base64,${bytesToBase64(shot.bytes)}`;
-
-        if (files === null) return { url: shot.url, retrievedAt: shot.retrievedAt, dataUrl };
-
-        return { url: shot.url, path: await saveScreenshot(files, shot), retrievedAt: shot.retrievedAt, dataUrl };
-      },
-    },
-    openBrowser: {
-      description: 'web.openBrowser({ browser?, lab? }) -> { id, liveView }',
-      execute: async (...args: unknown[]) => {
-        const parsed = v.safeParse(OpenBrowserOptionsSchema, args[0] ?? {});
-
-        if (!parsed.success) return settle(Effect.fail(new KinuError('bad_input', `web.openBrowser takes { browser?: 'chrome' | 'kitesurf', lab?: boolean }`)));
-        const { browser = OPEN_BROWSER_DEFAULT, lab = false } = parsed.output;
-
-        if (browser === 'chrome') return settle(withSessions((open) => open.open({ lab })));
-
-        if (lab) return settle(Effect.fail(new KinuError('bad_input', 'web.openBrowser: `lab` is a Chrome option; Kitesurf has WebMCP already')));
-
-        return { id: KITESURF_SESSION_ID, liveView: null };
-      },
-    },
-    browsers: {
-      planAllowed: true,
-      description: 'web.browsers() -> [{ id, liveView }]',
-      execute: async () => settle(withSessions((open) => open.list())),
-    },
-    closeBrowser: {
-      description: 'web.closeBrowser(id) -> null',
-      execute: async (...args: unknown[]) => settle(Effect.as(withSessions((open) => open.close(codemodeText({ value: args[0], parameter: 'web.closeBrowser(id)' }))), null)),
-    },
-    connectBrowser: { description: 'web.connectBrowser(id): puppeteer in the eval sandbox', execute: async (...args: unknown[]) => settle(sandboxOnly('connectBrowser', sandboxRefusal({ argument: args[0] }))) },
-    pageTools: { description: 'web.pageTools(page): WebMCP in the eval sandbox', execute: async (...args: unknown[]) => settle(sandboxOnly('pageTools', sandboxRefusal({ argument: args[0] }))) },
-    callPageTool: { description: 'web.callPageTool(page, name, input): WebMCP in the eval sandbox', execute: async (...args: unknown[]) => settle(sandboxOnly('callPageTool', sandboxRefusal({ argument: args[0] }))) },
-  };
-
-  return deps.prelude !== undefined && 'source' in deps.prelude
-    ? { name: TOOL_REACH.web.codemode, types: TYPES, tools, prelude: deps.prelude.source }
-    : { name: TOOL_REACH.web.codemode, types: TYPES, tools };
 }
 
 function clampLimit(limit: number | undefined): number {

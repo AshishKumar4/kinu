@@ -149,9 +149,9 @@ describe('ChatEvent tool success/error fidelity', () => {
     })]));
   });
   test.each([
-    { stage: 'resolution', input: { action: 'swarm', preset: 'custom', task: 'inspect', label: 'custom-case' }, reason: 'bad_input', detail: 'config' },
-    { stage: 'validity', input: { action: 'swarm', preset: 'ideate', task: 'inspect', depth: 2 }, reason: 'bad_input', detail: 'depth' },
-    { stage: 'runtime', input: { action: 'swarm', preset: 'ideate', task: 'inspect', models: ['fake/missing'] }, reason: 'unsupported', detail: 'resolver' },
+    { stage: 'resolution', input: { op: 'swarm', preset: 'custom', task: 'inspect', label: 'custom-case' }, reason: 'bad_input', detail: 'config' },
+    { stage: 'validity', input: { op: 'swarm', preset: 'ideate', task: 'inspect', depth: 2 }, reason: 'bad_input', detail: 'depth' },
+    { stage: 'runtime', input: { op: 'swarm', preset: 'ideate', task: 'inspect', models: ['fake/missing'] }, reason: 'unsupported', detail: 'resolver' },
   ])('native swarm $stage refusal fails the SDK invocation and remains branchable in codemode', async ({ input, reason, detail }) => {
     const { rt, db } = createTestRuntime();
 

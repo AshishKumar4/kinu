@@ -1,37 +1,16 @@
-/** The native `shell` tool. */
-
-import { tool } from 'ai';
-import type { ToolSet } from 'ai';
+/** `shell.run` served over the execution router: the workspace's shell by default, or the sandbox's, or a user's machine. */
 import * as v from 'valibot';
-import { z } from 'zod';
 import { Effect } from 'effect';
-import { BUILTIN_TOOL_DESCRIPTIONS } from './registry';
 import { clampToolResult, type ClampToolResultOptions } from './clamp';
 import { createFileToolSteer } from './shell-file-steer';
-import { readCallJob, type CallJob } from './call-job';
 import { commandResultAt, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import type { TurnEscalationLedger } from '../execution/escalation';
 import type { ExecutionRouter } from '../execution/types';
-import { requireBuild } from '../execution/work-mode';
 import type { TurnContextBudget } from '../context-budget';
-import type { Shell, ShellExecOptions } from '../types/primitives';
+import type { CallJob, Shell, ShellExecOptions } from '../types/primitives';
 import { attempt, KinuError, settle, type Logger } from '../obs/index';
-
-type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
-
-/** Device nicknames are not in the enum, so it stays advisory: any string passes, and an unknown one is a device. */
-export function shellInputSchema(runtimes: readonly string[]) {
-  return z.object({
-    command: z.string(),
-    runtime: z.string().meta({
-      enum: [...runtimes],
-      description: 'Default: workspace. A user\'s machine goes by its nickname from the execution status, which is required when several are connected.',
-    }).optional(),
-    why: z.string().describe('Optional, for a runtime other than workspace: what it gives that the workspace shell lacks. Recorded with the outcome.').optional(),
-    cwd: z.string().describe('Where the command starts; relative paths are from your home, or from the named shell\'s directory.').optional(),
-    name: z.string().min(1).describe('A shell that keeps its directory and exported variables between the calls naming it.').optional(),
-  });
-}
+import { serve, type Served } from '../operations/operation';
+import { SHELL } from '../operations/shell';
 
 /** What the call hands its runtime: absent keys stay absent, so a runtime reads presence. */
 function shellCallOptions(
@@ -77,7 +56,7 @@ function unprovisionedAdvice(runtimeKey: string): string {
   return `Runtime "${runtimeKey}" is not registered.`;
 }
 
-export interface ShellToolDeps {
+export interface ShellDeps {
   readonly shell: Shell | undefined;
   readonly router: ExecutionRouter | undefined;
   readonly files: ClampToolResultOptions['files'];
@@ -86,17 +65,11 @@ export interface ShellToolDeps {
   readonly logger: Logger;
 }
 
-export function createShellTool({ shell, router, files, budget, escalations, logger }: ShellToolDeps): NonNullable<ToolSet[string]> {
-  const shellRuntimes = [...new Set(['workspace', ...(router?.listExecutors().map(({ name }) => name) ?? [])])];
+/** No fallback chain: an unready runtime refuses, and never silently routes elsewhere. Approval lives at the execution seam. */
+export function serveShell({ shell, router, files, budget, escalations, logger }: ShellDeps): Served {
   const fileToolSteer = createFileToolSteer();
 
-  // No fallback chain: an unready runtime returns a structured error, never silently routes elsewhere.
-  return tool({
-    description: BUILTIN_TOOL_DESCRIPTIONS.shell,
-    inputSchema: shellInputSchema(shellRuntimes),
-    execute: (args, options?: ToolExecutionOptions) => settle(Effect.gen(function* () {
-        requireBuild('Native shell execution');
-        const signal = options?.abortSignal;
+  return serve(SHELL.run, async (args, { signal, job }) => await settle(Effect.gen(function* () {
         // Approval lives at the execution seam (execution/approval.ts), not here.
 
         // The file steer is composed into the clamped text so one cap covers it (shell-file-steer.ts).
@@ -126,7 +99,7 @@ export function createShellTool({ shell, router, files, budget, escalations, log
             return yield* refusal;
           }
 
-          const result = yield* Effect.promise(() => shell.exec(args.command, shellCallOptions(args, signal, readCallJob(options))));
+          const result = yield* Effect.promise(() => shell.exec(args.command, shellCallOptions(args, signal, job)));
 
           return yield* clamp(commandResultAt(result));
         }
@@ -159,7 +132,7 @@ export function createShellTool({ shell, router, files, budget, escalations, log
           return yield* new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
         }
 
-        const context = { ...shellCallOptions(args, signal, readCallJob(options)), device: nickname, reportCwd: true };
+        const context = { ...shellCallOptions(args, signal, job), device: nickname, reportCwd: true };
 
         // Classify cancellations and OOM prose here, or the durable row only records `threw`.
         const result: CommandResult = yield* attempt({ doing: `run \`${args.command}\` on ${runtimeKey}`, otherwise: 'io' },
@@ -177,6 +150,5 @@ export function createShellTool({ shell, router, files, budget, escalations, log
         });
 
         return yield* clamp(result);
-    })),
-  });
+  })));
 }

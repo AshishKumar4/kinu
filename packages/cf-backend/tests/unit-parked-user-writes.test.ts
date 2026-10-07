@@ -111,7 +111,7 @@ const digest = (text: string): string => new Bun.CryptoHasher('sha256').update(t
 test('a new file on the user\u2019s machine needs no approval', async () => {
   const { machine, file, device, parked } = await workspaceWithMachine();
 
-  expect(await file({ action: 'write', path: `${PC}${DEVICE_HOME}/new.md`, content: 'from the file tool\n' })).toMatchObject({ ok: true });
+  expect(await file({ op: 'write', path: `${PC}${DEVICE_HOME}/new.md`, content: 'from the file tool\n' })).toMatchObject({ ok: true });
   expect(await device.writeFile?.execute(`${DEVICE_HOME}/other.md`, 'from codemode\n')).toBe(`Written 14 bytes to ${DEVICE_HOME}/other.md`);
 
   expect(machine.get(`${DEVICE_HOME}/new.md`)).toBe('from the file tool\n');
@@ -123,8 +123,8 @@ test('overwriting the user\u2019s file parks on its bytes, and approving writes 
   const { machine, file, parked, decide } = await workspaceWithMachine();
   const replacement = 'the agent\u2019s rewrite\n';
 
-  await file({ action: 'read', path: `${PC}${NOTES}` });
-  await expect(file({ action: 'write', path: `${PC}${NOTES}`, content: replacement })).rejects.toMatchObject(QUEUED);
+  await file({ op: 'read', path: `${PC}${NOTES}` });
+  await expect(file({ op: 'write', path: `${PC}${NOTES}`, content: replacement })).rejects.toMatchObject(QUEUED);
 
   expect(await parked()).toEqual([`file write ${PC}${NOTES} sha256:${digest(replacement)} over sha256:${digest(OWNERS)}`]);
   expect(machine.get(NOTES)).toBe(OWNERS);
@@ -137,8 +137,8 @@ test('overwriting the user\u2019s file parks on its bytes, and approving writes 
 test('an approval of a file the owner changed since the ask writes nothing', async () => {
   const { machine, file, parked, decide } = await workspaceWithMachine();
 
-  await file({ action: 'read', path: `${PC}${NOTES}` });
-  await expect(file({ action: 'write', path: `${PC}${NOTES}`, content: 'stale rewrite\n' })).rejects.toMatchObject(QUEUED);
+  await file({ op: 'read', path: `${PC}${NOTES}` });
+  await expect(file({ op: 'write', path: `${PC}${NOTES}`, content: 'stale rewrite\n' })).rejects.toMatchObject(QUEUED);
   machine.set(NOTES, 'the owner edited it meanwhile\n');
 
   expect(await decide('approved')).toHaveLength(1);
@@ -149,13 +149,13 @@ test('an approval of a file the owner changed since the ask writes nothing', asy
 test('"always" writes the parked bytes and lets the next overwrite run unasked', async () => {
   const { machine, file, parked, decide } = await workspaceWithMachine();
 
-  await file({ action: 'read', path: `${PC}${NOTES}` });
-  await expect(file({ action: 'write', path: `${PC}${NOTES}`, content: 'first\n' })).rejects.toMatchObject(QUEUED);
+  await file({ op: 'read', path: `${PC}${NOTES}` });
+  await expect(file({ op: 'write', path: `${PC}${NOTES}`, content: 'first\n' })).rejects.toMatchObject(QUEUED);
   await decide('always');
   expect(machine.get(NOTES)).toBe('first\n');
 
-  await file({ action: 'read', path: `${PC}${NOTES}` });
-  expect(await file({ action: 'write', path: `${PC}${NOTES}`, content: 'second\n' })).toMatchObject({ ok: true });
+  await file({ op: 'read', path: `${PC}${NOTES}` });
+  expect(await file({ op: 'write', path: `${PC}${NOTES}`, content: 'second\n' })).toMatchObject({ ok: true });
   expect(machine.get(NOTES)).toBe('second\n');
   expect(await parked()).toEqual([]);
 });
@@ -174,8 +174,8 @@ test('codemode\u2019s device.writeFile over the user\u2019s file parks as the /p
 test('the owner sees a parked overwrite as the lines it changes, before approving it', async () => {
   const { file, review } = await workspaceWithMachine();
 
-  await file({ action: 'read', path: `${PC}${NOTES}` });
-  await expect(file({ action: 'write', path: `${PC}${NOTES}`, content: 'the agent\u2019s rewrite\n' })).rejects.toMatchObject(QUEUED);
+  await file({ op: 'read', path: `${PC}${NOTES}` });
+  await expect(file({ op: 'write', path: `${PC}${NOTES}`, content: 'the agent\u2019s rewrite\n' })).rejects.toMatchObject(QUEUED);
 
   expect(await review()).toMatchObject({
     path: `${PC}${NOTES}`, currentBytes: Buffer.byteLength(OWNERS), changedSinceAsked: false,
@@ -190,8 +190,8 @@ test('a review says when the file changed since the ask, and a binary rewrite sh
   const { machine, file, review } = await workspaceWithMachine();
   const binary = 'PK\u0000\u0003 packed';
 
-  await file({ action: 'read', path: `${PC}${NOTES}` });
-  await expect(file({ action: 'write', path: `${PC}${NOTES}`, content: binary })).rejects.toMatchObject(QUEUED);
+  await file({ op: 'read', path: `${PC}${NOTES}` });
+  await expect(file({ op: 'write', path: `${PC}${NOTES}`, content: binary })).rejects.toMatchObject(QUEUED);
   machine.set(NOTES, 'the owner edited it meanwhile\n');
 
   expect(await review()).toMatchObject({

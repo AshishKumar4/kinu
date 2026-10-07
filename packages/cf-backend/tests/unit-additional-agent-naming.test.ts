@@ -31,10 +31,10 @@ const HIRE = /^Hire (\S+) as ([^:]+): (.*)$/su;
 function askedCall(words: string): JsonObject | null {
   const told = TELL.exec(words);
 
-  if (told !== null) return { action: 'msg', agent: told[1] ?? '', message: told[2] ?? '' };
+  if (told !== null) return { op: 'message', agent: told[1] ?? '', message: told[2] ?? '' };
   const hired = HIRE.exec(words);
 
-  return hired === null ? null : { action: 'hire', agent: hired[1] ?? '', role: hired[2] ?? '', mission: hired[3] ?? '' };
+  return hired === null ? null : { op: 'hire', name: hired[1] ?? '', role: hired[2] ?? '', mission: hired[3] ?? '' };
 }
 
 /**

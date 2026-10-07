@@ -18,8 +18,8 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
 
   if (planFile === undefined) throw new Error('Plan has no file inspection tool');
   const plan = toolExecute<JsonValue, JsonValue>(planFile);
-  expect(await plan({ action: 'read', path })).toEqual(expect.stringContaining('original'));
-  await expect(plan({ action: 'edit', path, edits: [{ old_text: 'original', new_text: 'modified' }] }))
+  expect(await plan({ op: 'read', path })).toEqual(expect.stringContaining('original'));
+  await expect(plan({ op: 'edit', path, edits: [{ old_text: 'original', new_text: 'modified' }] }))
     .rejects.toMatchObject({ code: 'denied' });
   expect(await readText(files, path)).toBe('original');
   await chatSessionTurns(agent).settle({ messageId: 'plan-answer', text: 'Inspection done.', requestId: 'plan-answer' });
@@ -29,10 +29,10 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
 
   if (buildFile === undefined) throw new Error('Build has no file tool');
   const build = toolExecute<JsonValue, JsonValue>(buildFile);
-  await build({ action: 'read', path });
-  expect(await build({ action: 'write', path, content: 'built' })).toMatchObject({ ok: true });
+  await build({ op: 'read', path });
+  expect(await build({ op: 'write', path, content: 'built' })).toMatchObject({ ok: true });
   expect(await readText(files, path)).toBe('built');
-  await expect(plan({ action: 'write', path, content: 'late Plan overwrite' })).rejects.toMatchObject({ code: 'denied' });
+  await expect(plan({ op: 'write', path, content: 'late Plan overwrite' })).rejects.toMatchObject({ code: 'denied' });
   expect(await readText(files, path)).toBe('built');
 });
 

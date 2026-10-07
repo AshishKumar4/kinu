@@ -202,10 +202,10 @@ export const DECLARED = byFile([
     within: ['forkTransferFrames', 'carriedPayloads'],
     reason: 'the fork-frame stream is an async generator: its receiver learns a refused frame from next()',
   }],
-  ['packages/core/src/tools/file-tool.ts', {
+  ['packages/core/src/tools/operation-surfaces.ts', {
     mechanisms: ['result-literal'],
-    within: ['createFileDispatcher'],
-    reason: 'the `file` tool\'s JSON answer, read by the model and by codemode\'s `workspace.writeFile`; `ok` is its field',
+    within: ['nativeCall'],
+    reason: 'a native tool\'s input check answers the AI SDK\'s `ValidationResult`; `success` is its field',
   }],
   ['packages/core/src/tools/inline-executor.ts', {
     mechanisms: ['result-literal'],
@@ -409,6 +409,7 @@ export const DECLARED = byFile([
 export const HOST_BOUNDARIES = new Map<string, string>([
   ['packages/core/src/scaffold/executor.ts', 'a scaffold\'s `host.*` functions answer the sandbox that calls them: a platform-owned call'],
   ['packages/core/src/execution/parent.ts', '`answerParentRpc` answers a fork over DO RPC and in the CLI: a platform-owned call'],
+  ['packages/core/src/tools/operation-surfaces.ts', 'a native tool\'s `execute` answers the AI SDK, and a namespace member the eval sandbox: a platform-owned call'],
 ]);
 
 const RUNNERS: readonly string[] = ['settle', 'settleSync', 'observe', 'detach'];

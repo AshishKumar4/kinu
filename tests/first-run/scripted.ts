@@ -52,7 +52,7 @@ function namesIn(result: string): string[] {
 /** A name as the dismiss ask quotes it: a JSON string. */
 const QuotedNameSchema = v.pipe(v.string(), v.parseJson(), v.string());
 
-const hire = (mission: string): ScriptedAnswer => call('agents', { action: 'hire', lifetime: 'task', role: 'task', mission });
+const hire = (mission: string): ScriptedAnswer => call('agents', { op: 'hire', lifetime: 'task', role: 'task', mission });
 
 const why = 'The owner asked for this command on that machine.';
 
@@ -62,7 +62,7 @@ const steerCorrection: Script = (request) => {
   if (!request.userTexts.includes(STEER_TURN)) return null;
 
   if (latest(request) === LISTING_TURN) {
-    return steps(request, [call('file', { action: 'list', path: 'notes' })],
+    return steps(request, [call('file', { op: 'list', path: 'notes' })],
       ([listing]) => [...new Set(listing?.result.match(/[\w.-]+\.txt/g) ?? [])].join('\n'));
   }
 
@@ -71,18 +71,18 @@ const steerCorrection: Script = (request) => {
 
   if (!wrote('notes/wal.txt')) {
     return call('file', {
-      action: 'write', path: 'notes/wal.txt',
+      op: 'write', path: 'notes/wal.txt',
       content: 'A write-ahead log records each change before it is applied.\nThe record is appended and flushed first.\n'
         + 'After a crash the log is replayed.\nSo no acknowledged change is lost.\n',
     });
   }
 
   if (steered && !wrote('notes/steered.txt')) {
-    return call('file', { action: 'write', path: 'notes/steered.txt', content: `${STEER_MARKER}\nA log written before the data.\n` });
+    return call('file', { op: 'write', path: 'notes/steered.txt', content: `${STEER_MARKER}\nA log written before the data.\n` });
   }
 
   if (!steered && !wrote('notes/short.txt')) {
-    return call('file', { action: 'write', path: 'notes/short.txt', content: 'A log written before the data.\n' });
+    return call('file', { op: 'write', path: 'notes/short.txt', content: 'A log written before the data.\n' });
   }
 
   return { text: 'DONE' };
@@ -129,7 +129,7 @@ const backgroundWake: Script = (request) => {
 
 /** capability-isolation: the three paths, in the ask's order. */
 const capabilityIsolation: Script = (request) => latest(request) !== ISOLATION_ASK ? null : steps(request, [
-  call('web', { action: 'fetch', url: INTERNAL_URL }),
+  call('web', { op: 'fetch', url: INTERNAL_URL }),
   call('eval', { code: INTERNAL_FETCH_PROGRAM }),
   hire(INTERNAL_FETCH_MISSION),
 ], (turn) => `DONE ${turn.map((made) => `${made.name}: ${oneLine(made.result).slice(0, 160)}`).join(' | ')}`);
@@ -146,8 +146,8 @@ const delegation: Script = (request) => {
 
   if (ask === DELEGATION_ROSTER_ASK) {
     return steps(request, [
-      call('agents', { action: 'hire', role: 'task', mission: STANDBY_MISSION }),
-      call('agents', { action: 'list' }),
+      call('agents', { op: 'hire', role: 'task', mission: STANDBY_MISSION }),
+      call('agents', { op: 'list' }),
     ], ([, roster]) => `ROSTER ${namesIn(roster?.result ?? '').join(' ')}`);
   }
 
@@ -156,8 +156,8 @@ const delegation: Script = (request) => {
   if (dismissed === undefined) return null;
 
   return steps(request, [
-    call('agents', { action: 'dismiss', agent: v.parse(QuotedNameSchema, dismissed) }),
-    call('agents', { action: 'list' }),
+    call('agents', { op: 'dismiss', agent: v.parse(QuotedNameSchema, dismissed) }),
+    call('agents', { op: 'list' }),
   ], () => 'RETIRED');
 };
 
@@ -174,7 +174,7 @@ const delegationTree: Script = (request) => {
 };
 
 const exploration: Script = (request) => latest(request) !== SWARM_ASK ? null : steps(request, [
-  call('agents', { action: 'swarm', preset: 'ideate', task: SWARM_TASK }),
+  call('agents', { op: 'swarm', preset: 'ideate', task: SWARM_TASK }),
 ], ([swarm]) => {
   const job = swarm?.result.match(/bgjob-[\w-]+/)?.[0];
 
@@ -194,9 +194,9 @@ const deviceJob: Script = (request) => latest(request) !== DEVICE_JOB_ASK ? null
 ], ([shell]) => `JOB ${/bgjob-[\w-]+/.exec(shell?.result ?? '')?.[0] ?? 'NONE'}`);
 
 const sandboxMountWrite: Script = (request) => latest(request) !== MOUNT_ASK ? null : steps(request, [
-  call('file', { action: 'list', path: MOUNT_TARGET.slice(0, MOUNT_TARGET.lastIndexOf('/')) }),
-  call('file', { action: 'write', path: MOUNT_TARGET, content: MOUNT_BYTES }),
-  call('file', { action: 'read', path: MOUNT_TARGET }),
+  call('file', { op: 'list', path: MOUNT_TARGET.slice(0, MOUNT_TARGET.lastIndexOf('/')) }),
+  call('file', { op: 'write', path: MOUNT_TARGET, content: MOUNT_BYTES }),
+  call('file', { op: 'read', path: MOUNT_TARGET }),
   call('eval', { code: MOUNT_LISTING_PROGRAM }),
 ], () => `Wrote ${MOUNT_TARGET}.`);
 
@@ -217,11 +217,11 @@ const twoMachines: Script = (request) => {
 };
 
 const webSearch: Script = (request) => latest(request) !== SEARCH_ASK ? null : steps(request, [
-  call('web', { action: 'search', query: SEARCH_QUERY }),
+  call('web', { op: 'search', query: SEARCH_QUERY }),
 ], ([search]) => search?.result.match(/https?:\/\/[^\s"'<>\\)]+/)?.[0] ?? 'NONE');
 
 const workspacePanes: Script = (request) => latest(request) !== PANES_ASK ? null : steps(request, [
-  call('file', { action: 'write', path: PANES_PROBE, content: 'panes probe' }),
+  call('file', { op: 'write', path: PANES_PROBE, content: 'panes probe' }),
 ], () => 'DONE');
 
 /** every-tool: the tools the request offers, then one call per tool in the ask's order. */
@@ -233,13 +233,13 @@ const everyTool: Script = (request) => {
   if (ask !== TOOLS_USE_ASK) return null;
 
   return steps(request, [
-    call('file', { action: 'write', path: TOOLS_PROBE_PATH, content: TOOLS_PROBE_BYTES }),
+    call('file', { op: 'write', path: TOOLS_PROBE_PATH, content: TOOLS_PROBE_BYTES }),
     call('shell', { runtime: 'workspace', command: `echo ${TOOLS_RUN_MARK}` }),
     call('eval', { code: `// Return the mark\nreturn '${TOOLS_CODEMODE_MARK}';` }),
-    call('memory', { action: 'save', content: TOOLS_FACT }),
-    call('memory', { action: 'search', query: TOOLS_TASK_TITLE }),
-    call('tasks', { action: 'add', titles: [TOOLS_TASK_TITLE] }),
-    call('web', { action: 'fetch', url: TOOLS_HEALTH_URL }),
+    call('memory', { op: 'note', content: TOOLS_FACT }),
+    call('memory', { op: 'search', query: TOOLS_TASK_TITLE }),
+    call('tasks', { op: 'add', titles: [TOOLS_TASK_TITLE] }),
+    call('web', { op: 'fetch', url: TOOLS_HEALTH_URL }),
   ], (turn) => `DONE ${turn.map((made) => oneLine(made.result).slice(0, 80)).join(' | ')}`);
 };
 
@@ -273,7 +273,7 @@ const HELLO_SLATE_FILES = {
 
 /** slate: the two files, then its preview, then pong beside the URL the preview answered with. */
 const helloSlate: Script = (request) => latest(request) !== HELLO_SLATE_ASK ? null : steps(request, [
-  ...Object.entries(HELLO_SLATE_FILES).map(([name, content]) => call('file', { action: 'write', path: `/slates/${HELLO_SLATE_ID}/${name}`, content })),
+  ...Object.entries(HELLO_SLATE_FILES).map(([name, content]) => call('file', { op: 'write', path: `/slates/${HELLO_SLATE_ID}/${name}`, content })),
   call('eval', { code: `// Start the ${HELLO_SLATE_ID} slate's preview\nreturn await workspace.slates.${HELLO_SLATE_ID}.$preview();` }),
 ], (turn) => `pong\n${turn.at(-1)?.result.match(/https?:\/\/[^\s"'\\]+/)?.[0] ?? 'no preview URL'}`);
 
@@ -286,7 +286,7 @@ const nestedChat: Script = (request) => {
 
   if (request.userTexts.slice(1).some((text) => text.includes(NESTED_WORD))) return { text: NESTED_WORD };
 
-  return steps(request, [call('agents', { action: 'hire', role: 'task', mission: NESTED_MISSION })], () => 'HIRED');
+  return steps(request, [call('agents', { op: 'hire', role: 'task', mission: NESTED_MISSION })], () => 'HIRED');
 };
 
 /** The words every case sends its root agent: a conversation holding one is a case's, never a helper's. */
@@ -303,10 +303,10 @@ const MISSIONS: readonly (readonly [string, Script])[] = [
   [RELAY_MISSION, (request) => request.turn.length === 0 && request.called.includes('agents') && latest(request).includes(TREE_DEEP_WORD)
     ? { text: TREE_DEEP_WORD }
     : steps(request, [hire(sayWordMission(TREE_DEEP_WORD))], () => 'WAITING')],
-  [INTERNAL_FETCH_MISSION, (request) => steps(request, [call('web', { action: 'fetch', url: INTERNAL_URL })], ([fetched]) => oneLine(fetched?.result))],
+  [INTERNAL_FETCH_MISSION, (request) => steps(request, [call('web', { op: 'fetch', url: INTERNAL_URL })], ([fetched]) => oneLine(fetched?.result))],
   ...[DELEGATION_WORD, TREE_DEEP_WORD, TREE_SHALLOW_WORD].map((word): readonly [string, Script] => [sayWordMission(word), () => ({ text: word })]),
   [SWARM_TASK, () => ({ text: 'Banana' })],
-  [NESTED_MISSION, (request) => steps(request, [call('tasks', { action: 'add', titles: [NESTED_TASK_TITLE] })], () => NESTED_WORD)],
+  [NESTED_MISSION, (request) => steps(request, [call('tasks', { op: 'add', titles: [NESTED_TASK_TITLE] })], () => NESTED_WORD)],
 ];
 
 /**

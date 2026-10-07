@@ -9,7 +9,6 @@ import type { ShellSession } from '../execution/shell-session';
 import type { Memory, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
-import { appendMemoryNote } from '../memory/note';
 import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
 import { withVfsErrorHint } from '../vfs/errno';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -24,8 +23,7 @@ import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/m
 import { SlateOperationSchema, requireSlateWorkMode, type SlateOperation, type SlateCallResult } from '../slates/rpc';
 import { currentWorkMode } from '../execution/work-mode';
 import { TOOL_REACH } from './registry';
-import { createFileDispatcher, FileEditInputSchema } from './file-tool';
-import { refusedInput } from '../obs/index';
+import { serveFile } from './file-operations';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
@@ -36,11 +34,7 @@ const StringSchema = v.string();
 
 const OptionalPathSchema = v.optional(v.string());
 
-/** The native `file` tool's edit item: one schema, whether the edit came as a tool call or a program. */
-const FileEditsSchema = FileEditInputSchema.array();
-
 const FileWriteSuccessSchema = v.object({
-  ok: v.literal(true),
   path: v.string(),
   bytes: v.number(),
   action: v.picklist(['created', 'replaced']),
@@ -126,14 +120,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const currentLedger = (): TurnFileLedger => deps.ledger?.() ?? fallbackLedger;
   const currentBudget = (): TurnContextBudget => deps.budget?.() ?? fallbackBudget;
 
-  const currentFileDispatch = () => createFileDispatcher({
-    vfs,
-    home: deps.home ?? WORKSPACE_ROOT,
-    planes: deps.planes ?? cloudPlanes(deps.home ?? WORKSPACE_ROOT),
-    ledger: currentLedger(),
-    budget: currentBudget(),
-    memory,
-  });
+  // The native `file` tool's write, on the same ledger read live per call.
+  const fileWrite = serveFile(() => ({
+    vfs, home: deps.home ?? WORKSPACE_ROOT, planes: deps.planes ?? cloudPlanes(deps.home ?? WORKSPACE_ROOT), ledger: currentLedger(), budget: currentBudget(), memory,
+  })).write;
 
   const tools: ExecutorProvider['tools'] = {
     readFile: {
@@ -164,30 +154,13 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         if (p === undefined) return refusalOf(new KinuError('bad_input', 'workspace.writeFile: path must be a string'));
 
         if (text === undefined) return refusalOf(new KinuError('bad_input', 'workspace.writeFile: content must be a string'));
-        const result = await branchableToolCall(() => currentFileDispatch()({ action: 'write', path: p, content: text }));
+        const result = await branchableToolCall(async () => (await fileWrite.run({ path: p, content: text }, { callId: 'workspace.writeFile' })).value);
         const success = v.safeParse(FileWriteSuccessSchema, result);
 
         if (!success.success) return result;
         const written = `Written ${success.output.bytes} bytes to ${success.output.path}`;
 
         return success.output.undo === undefined ? written : `${written}\n${success.output.undo}`;
-      },
-    },
-
-    editFile: {
-      description: 'Replace exact text inside a file: old_text must occur exactly once and match what a prior readFile/writeFile/editFile here showed; refused if the file was never read/written in this scope or has changed since.',
-      execute: async (...args: unknown[]) => {
-        const path = parseInput(StringSchema, { value: args[0] });
-
-        if (path === undefined) return refusalOf(new KinuError('bad_input', 'workspace.editFile: path must be a string'));
-        const list = FileEditsSchema.safeParse(args[1] ?? []);
-
-        if (!list.success) {
-          return refusalOf(refusedInput('workspace.editFile(path, edits)', list.error));
-        }
-
-        // Same dispatcher and ledger as the native `file` edit, read live per call.
-        return branchableToolCall(() => currentFileDispatch()({ action: 'edit', path, edits: list.data }));
       },
     },
 
@@ -224,35 +197,6 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         }
 
         return commandResult(await shell.exec(command, shellExecOptions({ value: args[1] })));
-      },
-    },
-
-    searchMemory: {
-      planAllowed: true,
-      description: 'Search long-term memory using FTS5 full-text search. Returns matching chunks.',
-      execute: async (...args: unknown[]) => {
-        const query = parseInput(StringSchema, { value: args[0] });
-
-        if (query === undefined) {
-          return refusalOf(new KinuError('bad_input', 'workspace.searchMemory: query must be a string'));
-        }
-
-        const results = await memory.search(query, 10);
-
-        if (results.length === 0) return 'No results found.';
-
-        return results.map(r => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`).join('\n\n');
-      },
-    },
-
-    saveNote: {
-      description: 'Save a note to long-term memory (MEMORY.md). The note is FTS5-indexed for search.',
-      execute: async (...args: unknown[]) => {
-        const content = parseInput(StringSchema, { value: args[0] });
-
-        return content === undefined
-          ? refusalOf(new KinuError('bad_input', 'workspace.saveNote: content must be a string'))
-          : appendMemoryNote(memory, content, { by: actor?.name });
       },
     },
 
@@ -412,16 +356,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 declare namespace workspace {
   function readFile(path: string): Promise<string | Refusal>;
   function writeFile(path: string, content: string): Promise<string | Refusal>;
-  /** The \`file\` tool's edit, over the same read state: read the file first; each old_text is copied verbatim and occurs once. */
-  function editFile(
-    path: string, edits: Array<{ old_text: string; new_text: string }>
-  ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }> } | Refusal>;
   function readdir(path: string): Promise<string[] | Refusal>;
   function exists(path: string): Promise<boolean | Refusal>;
   /** The workspace shell; its working directory persists across calls. */
   function exec(command: string, options?: { cwd?: string; name?: string }): Promise<string | Refusal>;
-  function searchMemory(query: string): Promise<string | Refusal>;
-  function saveNote(content: string): Promise<string | Refusal>;
   /** Your crafted tools. */
   function listTools(): Promise<Array<{ name: string; description: string; qualityScore: number }> | Refusal>;
   /** ${CREATE_TOOL_CONTRACT} */

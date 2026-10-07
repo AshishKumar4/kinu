@@ -1,6 +1,6 @@
 import { BUILTIN_ROLE_DEFINITIONS, type ProfileCatalogEnvelope } from './catalog';
 import { changeActiveRole, roleChangeOutcomeText } from './role-change';
-import type { RoleSwitch } from '../tools/tasks-tool';
+import type { RoleSwitch } from '../tools/tasks-operations';
 
 /** `tasks.mode`; the authority is read per call. */
 export function agentRoleSwitch(authority: () => ProfileCatalogEnvelope | null): RoleSwitch {

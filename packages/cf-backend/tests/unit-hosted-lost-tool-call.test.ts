@@ -15,7 +15,7 @@ import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion
 const BRIEF = 'Find someone to check the release notes.';
 
 /** The effect, then a wait the dying activation never sees end: a hold the harness can name. */
-const CODE = "await tools.tasks({ action: 'add', titles: ['check the release notes'] }); "
+const CODE = "await tools.tasks({ op: 'add', titles: ['check the release notes'] }); "
   + "await globalThis[Symbol.for('kinu.test.hold')]('the claimed eval, cut off');";
 
 test('a hosted turn cut off inside a claimed call makes it once and is told it may have taken effect', async () => {

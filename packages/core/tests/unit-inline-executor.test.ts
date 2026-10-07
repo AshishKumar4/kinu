@@ -8,11 +8,14 @@ import { createTestRuntime } from './helpers';
 import { createInlineExecutor, type InlineExecutorDeps } from '../src/tools/inline-executor';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
-import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
+import { createFileTool } from '../src/tools/file-operations';
+
+type FileToolInput = JsonObject & { readonly op: string };
+
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import { toolExecute } from '@kinu.run/test-utils';
-import type { JsonValue } from '../src/utils/json';
+import type { JsonValue, JsonObject } from '../src/utils/json';
 import type { CraftedTool } from '../src/types/craft';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
@@ -375,7 +378,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
 
     const result = v.parse(FileSuccessSchema, await execute({
-      action: 'edit', path: 'shared.md',
+      op: 'edit', path: 'shared.md',
       edits: [{ old_text: 'shared', new_text: 'REPLACED' }],
     }));
 
@@ -391,7 +394,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     await exec.tools.readFile.execute('unshared.md');
     const fileTool = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
-    await expect(execute({ action: 'edit', path: 'unshared.md', edits: [{ old_text: 'content', new_text: 'changed' }] }))
+    await expect(execute({ op: 'edit', path: 'unshared.md', edits: [{ old_text: 'content', new_text: 'changed' }] }))
       .rejects.toThrow('has not been read here yet');
   });
 });

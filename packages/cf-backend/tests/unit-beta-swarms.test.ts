@@ -31,7 +31,7 @@ describe('a turn offers swarm only when the account turned the beta on', () => {
     const tools = await turnTools(false);
 
     expect(agentsActions(tools)).not.toContain('swarm');
-    await expect(toolExecute<{ action: string; task: string }, unknown>(tools.agents)({ action: 'swarm', task: 'rank them' }))
+    await expect(toolExecute<{ op: string; task: string }, unknown>(tools.agents)({ op: 'swarm', task: 'rank them' }))
       .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('"Beta: swarms"') });
   });
 
@@ -50,7 +50,7 @@ describe('a retried swarm job reads the setting as it stands, not as the toolset
     // The account turns it off; the fan-out that would tell this object is lost.
     agent.harnessInstallCatalog({ betaSwarms: false });
     const jobs = jobsOver(db);
-    jobs.create({ id: 'bgjob-swarm', kind: 'agents', workMode: 'build', now: Date.now(), label: 'swarm: rank designs', input: JSON.stringify({ action: 'swarm', task: 'rank them', preset: 'ideate' }) });
+    jobs.create({ id: 'bgjob-swarm', kind: 'agents', workMode: 'build', now: Date.now(), label: 'swarm: rank designs', input: JSON.stringify({ op: 'swarm', task: 'rank them', preset: 'ideate' }) });
     jobs.fail('bgjob-swarm', 0, 'the first run was interrupted', Date.now());
 
     const retried = await agent.retryBackgroundJob('bgjob-swarm');

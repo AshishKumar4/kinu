@@ -14,9 +14,11 @@ import {
   type SwarmAdvance, type SwarmConfig, type SwarmInput,
 } from '../src/strategy/swarm';
 import { VERIFIER_KINDS, resolveVerifier, unregisteredKindRefusal } from '../src/strategy/verifier-registry';
-import { AGENTS_TOOL_ACTIONS } from '../src/tools/registry';
-import { parseAgentsToolInput } from '../src/delegation/agents-tool';
-import { JsonObjectSchema } from '../src/utils/json';
+import { JsonObjectSchema, JsonValueSchema, type JsonObject } from '../src/utils/json';
+import { createAgentsTool } from '../src/delegation/agents-operations';
+import { asSchema } from 'ai';
+import { createTestRuntime, present, unobservedSearchSeams } from '@kinu.run/test-utils';
+import { swarmSeats } from './helpers-actor-host';
 import { MAJORITY_VOTE } from './fixtures/majority-vote';
 
 const PROBLEM = MAJORITY_VOTE;
@@ -58,14 +60,33 @@ const WIRE_OBJECTIVE = {
 };
 
 const CALL = {
-  action: 'swarm',
+  op: 'swarm',
   preset: 'optimise',
   task: 'Beat reference.mjs on oracle calls. Same answers, fewer comparisons.',
   // Wire form, deliberately untyped: the parse below proves the mapping to camelCase.
   objective: WIRE_OBJECTIVE,
 };
 
-const PARSED = parseAgentsToolInput({ input: CALL });
+/** The native `agents` tool of a workspace with a search substrate. */
+const AGENTS = (() => {
+  const { rt, testSql } = createTestRuntime();
+
+  return createAgentsTool({ mode: 'build', swarms: true, swarm: { rt, ...swarmSeats({ rt, db: testSql.db }, () => { throw new Error('no model here'); }), ...unobservedSearchSeams() } });
+})();
+
+const Validated = v.object({ success: v.boolean(), error: v.optional(v.instance(Error)) });
+
+/** A call's fields, once the native tool takes it; throws its refusal. */
+function parsed(sent: { readonly call: object }): JsonObject {
+  const { op: _op, ...fields } = v.parse(v.objectWithRest({ op: v.string() }, JsonValueSchema), sent.call);
+  const checked = v.parse(Validated, present(asSchema(AGENTS.inputSchema).validate, 'the agents tool validates').call(null, sent.call));
+
+  if (checked.error !== undefined) throw checked.error;
+
+  return fields;
+}
+
+const PARSED = parsed({ call: CALL });
 
 const OBJECTIVE = v.parse(
   v.custom<ScalarObjective>((input) => v.is(v.object({ kind: v.literal('scalar') }), input)),
@@ -98,7 +119,7 @@ describe('entry zero crosses a JSON tool boundary, or it is not a call', () => {
     // The same measurement as a closure, which no JSON tool argument can carry.
     expect(v.is(JsonObjectSchema, { ...WIRE_OBJECTIVE, verify: resolved.verify })).toBe(false);
     // The live parser refuses it too, not just the JSON schema.
-    expect(() => parseAgentsToolInput({ input: {
+    expect(() => parsed({ call: {
       ...CALL, objective: { ...WIRE_OBJECTIVE, verify: resolved.verify },
     } })).toThrow();
   });
@@ -142,7 +163,7 @@ describe('entry zero crosses a JSON tool boundary, or it is not a call', () => {
       'params', 'reference', 'body', 'targetOps', 'lowerBoundOps',
     ]);
     // camelCase for a snake_case field is the expected model error: refused, not dropped.
-    expect(() => parseAgentsToolInput({ input: {
+    expect(() => parsed({ call: {
       ...CALL,
       objective: { ...WIRE_OBJECTIVE, floor: { ...WIRE_FLOOR, bestKnownHonest: 2992 } },
     } })).toThrow();
@@ -252,50 +273,26 @@ describe('resolve(custom): `config` overrides `from`\'s row, and only where it s
 
 describe('what the live tool surface does with entry zero', () => {
   test('swarm IS an action, and the call parses', () => {
-    expect(AGENTS_TOOL_ACTIONS).toContain('swarm');
-    expect(PARSED.action).toBe('swarm');
     expect(PARSED.preset).toBe('optimise');
     expect(PARSED.task).toBe(CALL.task);
     expect(PARSED.objective).toBeDefined();
   });
 
-  test('a field is refused for the action that does not read it, and the refusal names the one that does', () => {
-    // valibot's `object` strips unknown entries, so a field sent to the wrong action would
-    // arrive as absent without this refusal.
-    const smuggle = () => parseAgentsToolInput({ input: {
-      action: 'hire',
-      role: 'researcher',
-      mission: CALL.task,
-      preset: CALL.preset,
-      objective: CALL.objective,
-      branches: 8,
-      depth: 4,
-    } });
+  test('a field sent to an operation that does not take it is refused, every one named', () => {
+    // A field dropped on its way to the wrong operation would arrive as absent without this refusal.
+    const smuggle = () => parsed({ call: { op: 'swarm', task: CALL.task, preset: CALL.preset, mission: CALL.task, role_hint: 'x' } });
 
-    expect(smuggle).toThrow(/field "preset" does not apply to action "hire"/);
-    expect(smuggle).toThrow(/it is read by swarm/);
-
-    // Every misapplied field is named, not just the first.
-    for (const field of ['objective', 'branches', 'depth']) {
-      expect(smuggle).toThrow(new RegExp(`field "${field}" does not apply to action "hire"`));
-    }
-
-    expect(smuggle).toThrow(/action "hire" takes: role, mission, agent/);
+    expect(smuggle).toThrow(/unknown field "mission"/);
+    expect(smuggle).toThrow(/unknown field "role_hint"/);
   });
 
   test('and the money case is refused by the spelling it got wrong', () => {
-    // Dropping `budgetUsd` would silently grant no ceiling; the refusal must name the
-    // snake_case spelling.
-    const camelCase = () => parseAgentsToolInput({ input: {
-      action: 'swarm', preset: PARSED.preset, task: CALL.task, budgetUsd: 5, budgetLabel: 'zero',
-    } });
+    // Dropping a cap would silently grant no ceiling; the refusal names the field the operation takes.
+    const snakeCase = () => parsed({ call: { op: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5 } });
 
-    expect(camelCase).toThrow(/unknown field "budgetUsd": did you mean "budget_usd"\?/);
-    expect(camelCase).toThrow(/unknown field "budgetLabel": did you mean "budget_label"\?/);
-
-    expect(parseAgentsToolInput({ input: {
-      action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5,
-    } })).toEqual({ action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5 });
+    expect(snakeCase).toThrow(/unknown field "budget_usd"/);
+    expect(snakeCase).toThrow(/budgetUsd/);
+    expect(parsed({ call: { op: 'swarm', preset: PARSED.preset, task: CALL.task, budgetUsd: 5 } })).toEqual({ preset: PARSED.preset, task: CALL.task, budgetUsd: 5 });
   });
 });
 

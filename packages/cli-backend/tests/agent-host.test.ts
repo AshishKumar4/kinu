@@ -222,7 +222,7 @@ function treeModel(script: { readonly park: string; readonly hire?: { readonly b
               controller.enqueue({ type: 'stream-start', warnings: [] });
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call_hire', toolName: 'agents',
-                input: JSON.stringify({ action: 'hire', role: 'task', mission: script.hire?.mission }),
+                input: JSON.stringify({ op: 'hire', role: 'task', mission: script.hire?.mission }),
               });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
               controller.close();
@@ -565,7 +565,7 @@ function replyingModel(answer: string) {
                 type: 'tool-call',
                 toolCallId: `reply-${answered.size}`,
                 toolName: 'agents',
-                input: JSON.stringify({ action: 'msg', event_id: replyTo, message: answer }),
+                input: JSON.stringify({ op: 'reply', eventId: replyTo, message: answer }),
               });
             } else {
               controller.enqueue({ type: 'text-start', id: '0' });

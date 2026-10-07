@@ -476,11 +476,6 @@ export {
   replayPolicyFor,
   type ReplayPolicy,
   AGENTS_TOOL_ACTIONS,
-  TASKS_TOOL_ACTIONS,
-  WEB_TOOL_ACTIONS,
-  FILE_TOOL_ACTIONS,
-  memoryActionsFor,
-  AGENTS_TOOL_NOTES,
   renderToolSchemaDescription,
   renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
   TOOL_REACH,
@@ -562,9 +557,9 @@ export {
 } from './tools/mcp-surface';
 
 export {
-  createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
-  parseAgentsToolInput, agentsProfileContext, delegationChoices,
-  AGENTS_ACTION_FIELDS, AGENTS_FIELD_TS_TYPES,
+  agentsActionsFor,
+  agentsProfileContext, delegationChoices,
+  AGENTS_ACTION_FIELDS,
   type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
 } from './delegation/agents-tool';
 
@@ -573,7 +568,9 @@ export {
   type HostedAgentRef, type LocalPeerEndpoint, type LocalPeerEndpointDeps,
 } from './tools/local-peer';
 
-export { createAgentsCodemodeProvider } from './delegation/agents-codemode';
+export { createAgentsCodemodeProvider, createAgentsTool, resumableAgentsInput } from './delegation/agents-operations';
+
+export { AGENTS_OPS } from './operations/agents';
 
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
 
@@ -636,7 +633,6 @@ export {
   codemodeSurface,
   type BuiltinToolDeps,
   type CodemodeBuilder, type CodemodeSurface,
-  type ReportToolDeps,
 } from './tools/builtins';
 
 // An actor surface is buildBuiltinTools plus `agents`; see delegation/actor-tools.ts.
@@ -662,17 +658,29 @@ export * from './web/index';
 
 // Codemode-only, no native tool: see tools/builtins.ts.
 
-export { createMemoryCodemodeProvider } from './tools/memory-codemode';
+export { createMemoryCodemodeProvider, serveMemory, type MemoryDeps } from './tools/memory-operations';
 
-export { createMemoryDispatcher, type MemoryToolDeps, type MemoryToolInput } from './tools/memory-tool';
+export { MEMORY } from './operations/memory';
 
-export { createTasksCodemodeProvider } from './tools/tasks-codemode';
+export { nativeTool, nativeToolSchema, codemodeNamespace } from './tools/operation-surfaces';
 
-export { createTasksDispatcher, type TasksToolInput } from './tools/tasks-tool';
+export {
+  defineOperation, serve, operationId, allowedInPlan, inputJsonSchema,
+  type Operation, type OperationCall, type Served, type Impact,
+} from './operations/operation';
 
-export { createReportCodemodeProvider } from './delegation/report-codemode';
+export { createTasksCodemodeProvider, serveTasks, type RoleSwitch, type RoleSwitchOutcome } from './tools/tasks-operations';
 
-export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './tools/file-tool';
+export { TASK_STATUSES, TASKS } from './operations/tasks';
+
+
+export { createReportCodemodeProvider, serveReport, type ReportDeps } from './tools/report-operations';
+
+export { REPORT } from './operations/report';
+
+export { createFileCodemodeProvider, createFileTool, serveFile, type FileDeps } from './tools/file-operations';
+
+export { FILE } from './operations/file';
 
 export {
   summarizeToolCall, describeToolCall, describeCommand,
@@ -1548,7 +1556,7 @@ export {
 } from './jobs/index';
 
 export {
-  TaskListStore, initTaskListTable, TASK_STATUSES, MAX_TASK_TITLE_CHARS,
+  TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS,
   type AgentTask, type AgentTaskTree, type TaskStatus,
   type TaskAddResult, type TaskAddRejection,
 } from './tools/task-store';
@@ -1792,7 +1800,7 @@ export type {
 // Backend conformance gate
 export {
   BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS, CONFORMANCE_ROOTS, PLANE_UNIVERSE, WIRED,
-  compareSurface, normalizeObservedTables, observedActionEnum, phantomCallables, wiredProducers,
+  compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables, wiredProducers,
   renderConformanceFindings,
 } from './conformance/index';
 

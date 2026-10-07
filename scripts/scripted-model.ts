@@ -205,7 +205,7 @@ function pacedSteps(request: ScriptedRequest): ScriptedAnswer {
     return {
       pace: PACED,
       text: 'Listing the home folder.',
-      toolCall: { name: 'file', arguments: { action: 'list', path: '/home/main' } },
+      toolCall: { name: 'file', arguments: { op: 'list', path: '/home/main' } },
     };
   }
 
@@ -330,7 +330,7 @@ function heldSteps(request: ScriptedRequest, held: HeldCall, midAnswer: boolean,
   if (folder !== undefined) {
     return {
       text: `Step ${String(done + 1)}: listing ${folder === '' ? 'the workspace' : folder}.`,
-      toolCall: { name: 'file', arguments: { action: 'list', path: workspacePath(folder, WORKSPACE_ROOT) } },
+      toolCall: { name: 'file', arguments: { op: 'list', path: workspacePath(folder, WORKSPACE_ROOT) } },
     };
   }
 
@@ -409,7 +409,7 @@ export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedR
   if (request.userTexts.at(-1) !== SLATE_UI_ASK) return null;
 
   if (request.turn.every((call) => call.name !== 'file')) {
-    return { toolCall: { name: 'file', arguments: { action: 'write', path: SLATE_UI_FILE.path, content: SLATE_UI_FILE.content } } };
+    return { toolCall: { name: 'file', arguments: { op: 'write', path: SLATE_UI_FILE.path, content: SLATE_UI_FILE.content } } };
   }
 
   return {
@@ -447,7 +447,7 @@ function madeCall(request: ScriptedRequest, name: string, named = ''): ScriptedC
 function planTasksBuild(request: ScriptedRequest): ScriptedAnswer {
   const step = madeCall(request, 'tasks', PLAN_TASK_TITLES.step);
 
-  if (step === undefined) return { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.step] } } };
+  if (step === undefined) return { toolCall: { name: 'tasks', arguments: { op: 'add', titles: [PLAN_TASK_TITLES.step] } } };
 
   if (madeCall(request, 'tasks', PLAN_TASK_TITLES.sub) === undefined) {
     const added = v.safeParse(TasksAddedSchema, step.result);
@@ -455,7 +455,7 @@ function planTasksBuild(request: ScriptedRequest): ScriptedAnswer {
 
     if (parent === undefined) return { text: `The step's id was not in its answer: ${step.result}` };
 
-    return { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.sub], parent } } };
+    return { toolCall: { name: 'tasks', arguments: { op: 'add', titles: [PLAN_TASK_TITLES.sub], parent } } };
   }
 
   if (madeCall(request, 'eval') === undefined) {
@@ -475,7 +475,7 @@ export function planTasksProbe(request: ScriptedRequest): ScriptedAnswer | null 
 
   if (last.includes(PLAN_TASKS_CHORE)) {
     return madeCall(request, 'tasks', PLAN_TASK_TITLES.chore) === undefined
-      ? { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.chore] } } }
+      ? { toolCall: { name: 'tasks', arguments: { op: 'add', titles: [PLAN_TASK_TITLES.chore] } } }
       // The words the rows read as a page-sent turn's end (live-app-rows' TURN_ANSWERED).
       : { text: 'Done.' };
   }
@@ -555,10 +555,10 @@ const SLATE_ROOT = `${SLATES_ROOT}/${SLATE_ID}`;
 const SLATE_WRITES: readonly ScriptedAnswer[] = [
   {
     text: 'Writing the slate.',
-    toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATE_ROOT}/package.json`, content: SLATE_MANIFEST } },
+    toolCall: { name: 'file', arguments: { op: 'write', path: `${SLATE_ROOT}/package.json`, content: SLATE_MANIFEST } },
   },
   {
-    toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATE_ROOT}/server.ts`, content: SLATE_SERVER } },
+    toolCall: { name: 'file', arguments: { op: 'write', path: `${SLATE_ROOT}/server.ts`, content: SLATE_SERVER } },
   },
 ];
 
@@ -625,15 +625,15 @@ export function keptTabProbe(request: ScriptedRequest): ScriptedAnswer | null {
   if (last.includes(KEPT_TAB_NOTE)) {
     return request.called.includes('memory')
       ? { text: 'Saved.' }
-      : { toolCall: { name: 'memory', arguments: { action: 'save', content: 'The kept-tab probe was here.' } } };
+      : { toolCall: { name: 'memory', arguments: { op: 'note', content: 'The kept-tab probe was here.' } } };
   }
 
   if (last.includes(KEPT_TAB_FORGET)) {
     const edits = request.called.filter((name) => name === 'file').length;
 
-    if (edits === 0) return { toolCall: { name: 'file', arguments: { action: 'read', path: NOTES_FILE } } };
+    if (edits === 0) return { toolCall: { name: 'file', arguments: { op: 'read', path: NOTES_FILE } } };
 
-    if (edits === 1) return { toolCall: { name: 'file', arguments: { action: 'write', path: NOTES_FILE, content: '# Memory\n' } } };
+    if (edits === 1) return { toolCall: { name: 'file', arguments: { op: 'write', path: NOTES_FILE, content: '# Memory\n' } } };
 
     return { text: 'Forgotten.' };
   }

@@ -8,7 +8,7 @@ const REPORT = '/home/user/reports/signups-by-country.json';
 
 // Delegation fields: staging-f3-launch-prep/launch-prep-trial-1/ledger.jsonl:12,24,33,129.
 function hire(helper: string, mission = `write ${REPORT}`): Extract<RunEvent, { type: 'tool_call_end' }> {
-  return { ...base, type: 'tool_call_end', name: 'agents', toolCallId: helper, args: { action: 'hire', mission }, result: { name: helper }, outcome: { success: true } };
+  return { ...base, type: 'tool_call_end', name: 'agents', toolCallId: helper, args: { op: 'hire', mission }, result: { name: helper }, outcome: { success: true } };
 }
 
 function facts(rows: readonly (JsonValue | RunEvent)[], result: Assertion = assertion(), extra: Partial<TrialEvidence> = {}): InsightFact[] {
@@ -30,7 +30,7 @@ describe('deterministic trial insights', () => {
   });
 
   test('finds identical failed inputs despite object-key order and cites both calls', () => {
-    const repeat = { ...missingFile, toolCallId: 'repeat', args: { path: 'slates', action: 'list' } };
+    const repeat = { ...missingFile, toolCallId: 'repeat', args: { path: 'slates', op: 'list' } };
     expect(facts([start, missingFile, repeat, end]).find((fact) => fact.kind === 'failing-call-loop')).toMatchObject({
       data: { tool: 'file', count: 2 }, evidence: [{ file: 'ledger.jsonl', line: 2 }, { file: 'ledger.jsonl', line: 3 }],
     });
@@ -50,8 +50,8 @@ describe('deterministic trial insights', () => {
 
     const step: RunEvent = { ...base, type: 'step_finish', stepIndex: 1, messages: encodeModelMessageValues([{
       role: 'assistant', content: [
-        { type: 'tool-call', toolName: 'file', toolCallId: first.toolCallId, input: { action: 'list', path: '/one' } },
-        { type: 'tool-call', toolName: 'file', toolCallId: second.toolCallId, input: { action: 'list', path: '/two' } },
+        { type: 'tool-call', toolName: 'file', toolCallId: first.toolCallId, input: { op: 'list', path: '/one' } },
+        { type: 'tool-call', toolName: 'file', toolCallId: second.toolCallId, input: { op: 'list', path: '/two' } },
       ],
     }]) };
 
@@ -66,10 +66,10 @@ describe('deterministic trial insights', () => {
   });
 
   test('records existing-helper messages and the product delivery outcome', () => {
-    const message: RunEvent = { ...hire('counter'), args: { action: 'hire', agent: 'counter', message: 'Retry the tally.' }, result: { delivery: 'starts_now' } };
+    const message: RunEvent = { ...hire('counter'), args: { op: 'assign', agent: 'counter', message: 'Retry the tally.' }, result: { delivery: 'starts_now' } };
     const observed = facts([start, message, end]);
     expect(observed.filter((fact) => fact.kind === 'helper-message').map((fact) => fact.data)).toEqual([
-      expect.objectContaining({ helper: 'counter', action: 'hire', delivery: 'starts_now' }),
+      expect.objectContaining({ helper: 'counter', op: 'assign', delivery: 'starts_now' }),
     ]);
   });
 
@@ -95,7 +95,7 @@ describe('deterministic trial insights', () => {
   });
 
   test('identical briefs sent to distinct helpers expose duplicated delegation, not a retry to the same helper', () => {
-    const retry: RunEvent = { ...hire('counter'), args: { action: 'hire', agent: 'counter', message: `write ${REPORT}` }, result: { delivery: 'starts_now' } };
+    const retry: RunEvent = { ...hire('counter'), args: { op: 'assign', agent: 'counter', message: `write ${REPORT}` }, result: { delivery: 'starts_now' } };
     const observed = facts([start, hire('counter'), hire('other-counter'), retry, end]);
     expect(observed.filter((fact) => fact.kind === 'duplicated-delegation').map((fact) => fact.data)).toEqual([
       expect.objectContaining({ helpers: ['counter', 'other-counter'] }),
@@ -121,7 +121,7 @@ describe('deterministic trial insights', () => {
   });
 
   test('a refused swarm call retains its outcome and is not counted as a hired helper', () => {
-    const swarm: RunEvent = { ...hire('swarm'), args: { action: 'swarm', task: 'Build the exchange.' }, error: 'Missing preset.', outcome: { success: false, reason: 'bad_input' } };
+    const swarm: RunEvent = { ...hire('swarm'), args: { op: 'swarm', task: 'Build the exchange.' }, error: 'Missing preset.', outcome: { success: false, reason: 'bad_input' } };
     const observed = facts([start, swarm, end]);
     expect(observed.find((fact) => fact.kind === 'swarm-run')).toMatchObject({ data: { outcome: 'failed', code: 'bad_input' } });
     expect(observed.filter((fact) => fact.kind === 'helper-hired')).toEqual([]);
@@ -164,6 +164,7 @@ describe('deterministic trial insights', () => {
   test('code-mode writes name delegated paths, while reads, examples and comments do not', () => {
     for (const [code, wrote] of [
       [`await workspace.writeFile('${REPORT}', '{}');`, true],
+      [`await file.write('${REPORT}', '{}');`, true],
       [`await workspace.readFile('${REPORT}');`, false],
       [`// workspace.writeFile('${REPORT}', '{}');`, false],
     ] as const) {
@@ -174,7 +175,7 @@ describe('deterministic trial insights', () => {
 
   test('a caught code-mode binding refusal keeps its code without turning the outer successful call into an error', () => {
     const recovered: RunEvent = { ...missingFile, name: 'eval', error: undefined, outcome: { success: true, failures: [
-      { success: false, tool: 'file', action: 'edit', reason: 'unread', error: 'The file has not been read.' },
+      { success: false, tool: 'file', op: 'edit', reason: 'unread', error: 'The file has not been read.' },
     ] } };
 
     const observed = facts([start, recovered, end]);

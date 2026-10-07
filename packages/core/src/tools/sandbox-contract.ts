@@ -10,7 +10,7 @@ import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
 import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
-import { KinuError, settle, settleSync } from '../obs';
+import { KinuError, settle } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 import { parsesAsExpression } from '../craft/source';
 import type { CraftedToolSource } from './crafted-executor';
@@ -102,24 +102,6 @@ export function renderCraftedToolsDeclaration(crafted: readonly CraftedDeclarati
   return `export declare const ${CRAFTED_TOOL_NAMESPACE}: {\n${lines.join('\n')}\n};\n`;
 }
 
-function receivedKind(argument: { readonly value: unknown }): string {
-  if (v.is(v.number(), argument.value)) return 'a number';
-
-  if (v.is(v.boolean(), argument.value)) return 'a boolean';
-
-  return Array.isArray(argument.value) ? 'an array' : 'an object';
-}
-
-/** Omitted reads as empty text; any other non-string is refused here. */
-export function codemodeText(argument: { readonly value: unknown; readonly parameter: string }): string {
-  if (argument.value === undefined || argument.value === null) return '';
-  const text = v.safeParse(v.string(), argument.value);
-
-  if (!text.success) return settleSync(Effect.fail(new KinuError('bad_input', `${argument.parameter} takes a string, not ${receivedKind(argument)}`)));
-
-  return text.output;
-}
-
 /** `signal` is the calling program's: a tool it reaches here is stopped with the eval that called it. */
 export function nativeToolFunctions(tools: ToolSet, signal: AbortSignal | undefined): CodemodeProvider['tools'] {
   const out: Record<string, CodemodeProvider['tools'][string]> = {};
@@ -169,7 +151,7 @@ export function codemodeFunction<Result>(namespace: string, member: string, invo
   const owner = Object.entries(TOOL_REACH).find(([name, reach]) => name === namespace && reach.codemode === namespace);
   const tool = accountedTool(namespace, member, owner?.[0]);
 
-  const call = bindProgramCall({ tool, action: owner === undefined ? null : member }, async (...args: unknown[]) => {
+  const call = bindProgramCall({ tool, op: owner === undefined ? null : member }, async (...args: unknown[]) => {
     const value = await invoke(...args);
 
     return value === undefined ? undefined : decodeJsonValue({ value });

@@ -20,12 +20,13 @@ import { createSandboxExecutor } from '../src/execution/sandbox';
 import { createParentExecutor } from '../src/execution/parent';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
 import { createStateCodemodeProvider } from '../src/tools/state-codemode';
-import { createAgentsCodemodeProvider } from '../src/delegation/agents-codemode';
-import { createReportCodemodeProvider } from '../src/delegation/report-codemode';
-import { createMemoryCodemodeProvider } from '../src/tools/memory-codemode';
-import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
+import { createAgentsCodemodeProvider } from '../src/delegation/agents-operations';
+import { createReportCodemodeProvider } from '../src/tools/report-operations';
+import { createMemoryCodemodeProvider } from '../src/tools/memory-operations';
+import { createTasksCodemodeProvider } from '../src/tools/tasks-operations';
+import { createFileCodemodeProvider } from '../src/tools/file-operations';
 import { createDbCodemodeProvider } from '../src/tools/db-codemode';
-import { createWebCodemodeProvider } from '../src/web/provider';
+import { createWebCodemodeProvider } from '../src/tools/web-operations';
 import { createAgentSelfProvider } from '../src/tools/agent-self';
 import { createTestRuntime, conversationsFor } from './helpers';
 
@@ -103,11 +104,11 @@ test('throwing the failure value propagates its native reason and a malformed pr
   try {
     await withCodemodeProgram(async () => {
       const file = codemodeFunction('tools', 'file', async () => { throw new KinuError('denied', 'blocked'); });
-      throw await file({ action: 'write' });
+      throw await file({ op: 'write' });
     });
   } catch (cause) { error = cause; }
 
-  expect(failedToolOutcome({ cause: error })).toMatchObject({ success: false, reason: 'denied', failures: [{ tool: 'file', action: 'write', reason: 'denied' }] });
+  expect(failedToolOutcome({ cause: error })).toMatchObject({ success: false, reason: 'denied', failures: [{ tool: 'file', op: 'write', reason: 'denied' }] });
   await expect(withCodemodeProgram(async () => { throw new ReferenceError('run is not defined'); })).rejects.toBeInstanceOf(ReferenceError);
 });
 
@@ -161,6 +162,7 @@ test('every member of every namespace refuses with the one declared Refusal, and
     createReportCodemodeProvider(() => refusingDouble()),
     createMemoryCodemodeProvider(() => refusingDouble()),
     createTasksCodemodeProvider(refusingDouble(), refusingDouble()),
+    createFileCodemodeProvider(() => refusingDouble()),
     createDbCodemodeProvider(refusingDouble()),
     createWebCodemodeProvider(refusingDouble()),
     createAgentSelfProvider(refusingDouble()),
@@ -169,10 +171,11 @@ test('every member of every namespace refuses with the one declared Refusal, and
   // What the model reads: every member declared as a signature or a const (native tools by their schemas), and every
   // declared result admitting a Refusal.
   const undeclared = namespaces.filter((namespace) => namespace.name !== CRAFTED_TOOL_NAMESPACE).flatMap((namespace) => Object.keys(namespace.tools)
-    .filter((member) => ![` ${member}(`, `const ${member}:`].some((form) => (namespace.types ?? '').includes(form)))
+    .filter((member) => !('declarations' in namespace && namespace.declarations?.[member] !== undefined)
+      && ![` ${member}(`, `const ${member}:`].some((form) => (namespace.types ?? '').includes(form)))
     .map((member) => `${namespace.name}.${member}`));
 
-  const unadmitted = declaredResults(renderCodemodeDescription(namespaces.map((namespace) => namespace.types)))
+  const unadmitted = declaredResults(renderCodemodeDescription(namespaces, {}))
     .filter((alternatives) => !alternatives.includes('Refusal') && !alternatives.includes('unknown'))
     .map((alternatives) => alternatives.join(' | '));
 

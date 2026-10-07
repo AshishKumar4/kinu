@@ -6,7 +6,7 @@ import { describe, test, expect } from 'bun:test';
 import { asSchema } from 'ai';
 import * as v from 'valibot';
 import {
-  compareSurface, CONFORMANCE_PRODUCERS, normalizeObservedTables, observedActionEnum, renderConformanceFindings,
+  compareSurface, CONFORMANCE_PRODUCERS, normalizeObservedTables, observedOpEnum, renderConformanceFindings,
   wiredProducers, type ObservedSurface,
 } from '@kinu.run/core';
 import {
@@ -58,8 +58,8 @@ async function observe(): Promise<ObservedSurface> {
     root: 'cf-orchestrator',
     planes: {
       tool: new Set(Object.keys(tools)),
-      'agents-action': observedActionEnum(await asSchema(tools.agents?.inputSchema).jsonSchema),
-      'memory-action': observedActionEnum(await asSchema(tools.memory?.inputSchema).jsonSchema),
+      'agents-op': observedOpEnum(await asSchema(tools.agents?.inputSchema).jsonSchema),
+      'memory-op': observedOpEnum(await asSchema(tools.memory?.inputSchema).jsonSchema),
       table: normalizeObservedTables(workspace.tableNames()),
       producer: producersRecorded(workspace),
     },
@@ -85,8 +85,8 @@ async function observeSubordinate(): Promise<ObservedSurface> {
     root: 'cf-subordinate',
     planes: {
       tool: new Set(tools.keys()),
-      'agents-action': observedActionEnum(tools.get('agents')?.inputSchema),
-      'memory-action': observedActionEnum(tools.get('memory')?.inputSchema),
+      'agents-op': observedOpEnum(tools.get('agents')?.inputSchema),
+      'memory-op': observedOpEnum(tools.get('memory')?.inputSchema),
       table: normalizeObservedTables(workspace.tableNames()),
       producer: wiredProducers(child.actor.runtime),
     },

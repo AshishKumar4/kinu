@@ -67,12 +67,12 @@ const FLOW_SLATE_CLIENT = [
 const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
   {
     text: 'Writing the slate.',
-    toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/package.json`, content: JSON.stringify({
+    toolCall: { name: 'file', arguments: { op: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/package.json`, content: JSON.stringify({
       name: FLOW_SLATE.id, main: 'server.ts', browser: 'client.tsx', slate: { title: FLOW_SLATE.title, port: 8788, bindings: {} },
     }, null, 2) } },
   },
   {
-    toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/server.ts`, content: [
+    toolCall: { name: 'file', arguments: { op: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/server.ts`, content: [
       'import { SlateObject } from "kinu:slate";',
       '',
       'export class Slate extends SlateObject {',
@@ -87,7 +87,7 @@ const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
       '',
     ].join('\n') } },
   },
-  { toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/client.tsx`, content: FLOW_SLATE_CLIENT } } },
+  { toolCall: { name: 'file', arguments: { op: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/client.tsx`, content: FLOW_SLATE_CLIENT } } },
   {
     text: 'Starting its preview.',
     toolCall: { name: 'eval', arguments: { code: `return await workspace.slates.${FLOW_SLATE.id}.$preview();` } },
@@ -104,7 +104,7 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   if (asked(WRITE_FILE_ASK) && request.available.includes('file')) {
     if (!request.called.includes('file')) {
-      return { text: 'Writing the file.', toolCall: { name: 'file', arguments: { action: 'write', path: workspacePath(FLOW_PROBE, WORKSPACE_ROOT), content: 'browser flow probe' } } };
+      return { text: 'Writing the file.', toolCall: { name: 'file', arguments: { op: 'write', path: workspacePath(FLOW_PROBE, WORKSPACE_ROOT), content: 'browser flow probe' } } };
     }
 
     return request.called.includes('shell') || !request.available.includes('shell')
@@ -115,14 +115,14 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
   const latest = request.userTexts.at(-1) ?? '';
 
   if (latest.includes(MEMORY_ASK)) {
-    return request.turn.length > 0 ? { text: 'DONE' } : { toolCall: { name: 'memory', arguments: { action: 'save', content: FLOW_MEMORY_NOTE } } };
+    return request.turn.length > 0 ? { text: 'DONE' } : { toolCall: { name: 'memory', arguments: { op: 'note', content: FLOW_MEMORY_NOTE } } };
   }
 
   if (latest.includes(STORM_SEED_ASK) || latest.includes(STORM_ASK)) {
     if (request.turn.length > 0) return { text: 'DONE' };
 
     return latest.includes(STORM_SEED_ASK)
-      ? { toolCall: { name: 'file', arguments: { action: 'write', path: workspacePath('storm-seed.txt', WORKSPACE_ROOT), content: 'seed' } } }
+      ? { toolCall: { name: 'file', arguments: { op: 'write', path: workspacePath('storm-seed.txt', WORKSPACE_ROOT), content: 'seed' } } }
       : { toolCall: { name: 'shell', arguments: {
         runtime: 'workspace',
         command: `mkdir -p ${STORM_DIR} && for i in $(seq 1 ${String(STORM_FILES)}); do echo $i > ${STORM_DIR}/f$i.txt; done`,

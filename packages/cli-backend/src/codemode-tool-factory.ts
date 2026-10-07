@@ -74,7 +74,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
     return withCraftedToolDeclarations(tool({
       // Every provider's `types` must be read into the description, or the model
       // gets callables it was never told about.
-      description: renderCodemodeDescription(providers.map((provider) => provider.types), 'local'),
+      description: renderCodemodeDescription(providers, surface.native, 'local'),
       inputSchema: codemodeInputSchema(),
       execute: (args, options) => withCodemodeProgram(async () => {
         requireBuild('Native JavaScript execution without a constrained runtime');
@@ -112,7 +112,15 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
 
             for (const [toolName, t] of Object.entries(p.tools)) {
               const exec = toolName === 'exec' && p.positionalArgs === true;
-              nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...(exec ? execCallArgs(toolArgs, { signal, channel }) : [...toolArgs, context])));
+              // An operation namespace reads the program's signal from its scope; its arguments are the program's own.
+
+              const call = (toolArgs: unknown[]) => {
+                if (exec) return execCallArgs(toolArgs, { signal, channel });
+
+                return p.declarations === undefined ? [...toolArgs, context] : toolArgs;
+              };
+
+              nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...call(toolArgs)));
             }
 
             providerBindings[p.name] = nsp;
@@ -151,7 +159,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           const message = explainSandboxError(renderThrownChain({ cause: error }));
           throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
         }
-      }),
+      }, options.abortSignal),
     }), () => surface.craftedTools().map(({ name, description }) => ({ name, description })));
   };
 }

@@ -5,8 +5,7 @@ import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   buildBuiltinTools, initAllTables, initTaskListTable,
-  TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS, FILE_TOOL_ACTIONS, memoryActionsFor,
-  SUBORDINATE_REPORT_STATUSES,
+  FILE, TASKS, WEB, SUBORDINATE_REPORT_STATUSES,
   type AgentRuntime, type WebSearchProvider,
 } from '../src/index';
 import { asSchema, type ToolSet } from 'ai';
@@ -31,16 +30,16 @@ const noopWebSearch: WebSearchProvider = {
 
 const SURFACES: readonly DispatchSurface[] = [
   {
-    tool: 'tasks', field: 'action', vocabulary: TASKS_TOOL_ACTIONS,
+    tool: 'tasks', field: 'op', vocabulary: Object.values(TASKS).map((op) => op.name),
     build: (rt) => buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
   },
   {
-    tool: 'web', field: 'action', vocabulary: WEB_TOOL_ACTIONS,
+    tool: 'web', field: 'op', vocabulary: [WEB.search.name, WEB.fetch.name, WEB.screenshot.name],
     build: (rt) => buildBuiltinTools({ rt, webSearch: noopWebSearch, conversations: conversationsFor(rt) }),
   },
   {
     // Facts not wired: the refusal must name only the reachable set.
-    tool: 'memory', field: 'action', vocabulary: memoryActionsFor(false),
+    tool: 'memory', field: 'op', vocabulary: ['note', 'search', 'searchConversations', 'readConversation', 'listConversations'],
     build: (rt) => buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
   },
   {
@@ -48,14 +47,14 @@ const SURFACES: readonly DispatchSurface[] = [
     build: (rt) => buildBuiltinTools({ rt, report: { report: async () => ({ ok: true }) }, conversations: conversationsFor(rt) }),
   },
   {
-    tool: 'file', field: 'action', vocabulary: FILE_TOOL_ACTIONS,
+    tool: 'file', field: 'op', vocabulary: Object.keys(FILE),
     build: (rt) => buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
   },
 ];
 
 /** Enough fields that a refusal proves the discriminant check ran, not a missing-argument guard. */
 interface ProbeArgs {
-  action?: string;
+  op?: string;
   status?: string;
   content?: string;
   query?: string;
@@ -120,7 +119,7 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
       return Object.keys(properties).some((key) => {
         const enumerated = v.safeParse(v.object({ enum: v.array(v.string()) }), properties[key]);
 
-        return enumerated.success && (key === 'action' || key === 'status');
+        return enumerated.success && (key === 'op' || key === 'status');
       });
     });
 
@@ -135,7 +134,7 @@ describe('a well-formed call is unaffected', () => {
 
     const added = v.parse(
       v.object({ added: v.array(v.object({ id: v.string() })) }),
-      await exec({ action: 'add', titles: ['ship it'] }),
+      await exec({ op: 'add', titles: ['ship it'] }),
     );
 
     expect(added.added.map((t) => t.id)).toEqual(['t1']);

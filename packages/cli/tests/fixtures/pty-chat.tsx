@@ -24,7 +24,7 @@ const agent = fakeClient({
       agent.emit({
         type: 'tool-call', toolName: 'file', toolCallId: 'call-1',
         args: {
-          action: 'edit',
+          op: 'edit',
           path: 'src/state.ts',
           edits: [{ old_text: 'export const ready = false;', new_text: 'export const ready = true;' }],
         },

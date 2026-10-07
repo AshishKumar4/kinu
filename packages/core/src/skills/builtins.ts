@@ -26,7 +26,7 @@ skill runs that audit.
 1. Restate what you implemented in two or three sentences: the change,
    the user-facing effect, the files touched.
 
-2. Call \`agents({ action: "swarm", preset: "ideate", branches: 4, task: <the whole audit brief> })\`.
+2. Call \`agents({ op: "swarm", preset: "ideate", branches: 4, task: <the whole audit brief> })\`.
    An audit wants distinct findings rather than a ranked winner, which is what
    \`ideate\` returns; the nodes write their own angles from \`task\`, so name the
    angles you want covered IN the task rather than as per-node briefs:

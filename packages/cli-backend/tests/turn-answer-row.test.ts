@@ -34,7 +34,7 @@ function narratedModel(narration: string, answer: string): TestLanguageModelV2 {
               controller.enqueue({ type: 'text-end', id: '0' });
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
-                input: JSON.stringify({ action: 'recall', key: 'probe' }),
+                input: JSON.stringify({ op: 'recall', key: 'probe' }),
               });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: USAGE });
             } else {

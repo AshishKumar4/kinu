@@ -17,7 +17,8 @@ import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { RunInference } from '../heads/head-inference';
 import type { HostedActor } from '../state/actor-host';
 import type { RunTurnSources } from '../orchestrator/turn-assembly';
-import { buildToolSurface, type ReportToolDeps } from '../tools/builtins';
+import { buildToolSurface } from '../tools/builtins';
+import type { ReportDeps } from '../tools/report-operations';
 import { permitInPlan } from '../execution/work-mode';
 import type { BackgroundJobRunner } from '../jobs/runner';
 import { stepLoopJobs, type StepLoopJobSeat } from '../jobs/step-loop';
@@ -289,7 +290,7 @@ function buildNodeToolSet(input: {
   const { deps, scratch } = input;
 
   // Annotated rather than inline: the only destination that declares `bodyOnly`.
-  const report: ReportToolDeps = {
+  const report: ReportDeps = {
     // A node is measured only on the candidate extracted from `content`; handoff fields reach nobody.
     bodyOnly: true,
     report: async ({ status, content }): Promise<JsonValue> => {

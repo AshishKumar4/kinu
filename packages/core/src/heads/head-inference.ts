@@ -258,7 +258,7 @@ function renderHeadToolConventions(
   }
 
   if (hasHeadTool(tools, 'web')) {
-    lines.push('- Loop `web` action=search to gather, then action=fetch to read the promising results; record_evidence each finding worth surfacing.');
+    lines.push('- Loop `web` op=search to gather, then op=fetch to read the promising results; record_evidence each finding worth surfacing.');
   }
 
   if (hasHeadTool(tools, 'split_subheads')) {

@@ -7,10 +7,13 @@ import * as v from 'valibot';
 import { applyFileEdits, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
-import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
+import { createFileTool } from '../src/tools/file-operations';
+
+type FileToolInput = JsonObject & { readonly op: string };
+
 import { withCheckedInput } from '../src/tools/tool-schema';
 import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
-import { JsonObjectSchema } from '../src/utils/json';
+import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { RESIDENT_TEXT_MAX_BYTES } from '../src/vfs/mounts';
 import type { Memory } from '../src/types/primitives';
@@ -466,7 +469,7 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
 }
 
 /** What a program can pass: it calls `execute` directly, so actions, paths and edits may be off-schema. */
-type FileToolTestInput = FileToolInput | { action: string; path: string | number } | { action: 'edit'; path: string; edits: Array<{ old_text: string }> };
+type FileToolTestInput = FileToolInput | { op: string; path: string | number } | { op: 'edit'; path: string; edits: Array<{ old_text: string }> };
 
 /** The entry as the tool surface serves it: behind the input check a program meets. */
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
@@ -482,10 +485,10 @@ describe('file tool', () => {
   test('read returns the content and authorizes the edit that follows', async () => {
     const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
     const { call } = toolFor(vfs);
-    expect(await call({ action: 'read', path: 'a.ts' })).toBe('const x = 1;\n');
+    expect(await call({ op: 'read', path: 'a.ts' })).toBe('const x = 1;\n');
 
     const edited = await call({
-      action: 'edit', path: 'a.ts',
+      op: 'edit', path: 'a.ts',
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
 
@@ -498,7 +501,7 @@ describe('file tool', () => {
     const { call, ledger } = toolFor(vfs);
 
     const result = call({
-      action: 'edit', path: 'a.ts',
+      op: 'edit', path: 'a.ts',
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
 
@@ -510,11 +513,11 @@ describe('file tool', () => {
   test('an edit after the file moved on is refused as stale, not applied blind', async () => {
     const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
     const { call, ledger } = toolFor(vfs);
-    await call({ action: 'read', path: 'a.ts' });
+    await call({ op: 'read', path: 'a.ts' });
     vfs.files.set('a.ts', 'const x = 1;\nconst y = 2;\n');
 
     const result = call({
-      action: 'edit', path: 'a.ts',
+      op: 'edit', path: 'a.ts',
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 3;' }],
     });
 
@@ -526,10 +529,10 @@ describe('file tool', () => {
   test('a failed edit leaves the file untouched and is counted by reason', async () => {
     const vfs = memoryVfs({ 'a.ts': 'x\nx\n' });
     const { call, ledger } = toolFor(vfs);
-    await call({ action: 'read', path: 'a.ts' });
+    await call({ op: 'read', path: 'a.ts' });
 
     const result = call({
-      action: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }],
+      op: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }],
     });
 
     await expect(result).rejects.toThrow('appears 2 times');
@@ -540,9 +543,9 @@ describe('file tool', () => {
   test('the recovery after a failed edit is visible in the turn snapshot', async () => {
     const vfs = memoryVfs({ 'a.ts': 'x\nx\n' });
     const { call, ledger } = toolFor(vfs);
-    await call({ action: 'read', path: 'a.ts' });
-    await expect(call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }] })).rejects.toBeInstanceOf(KinuError);
-    await call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'x\nx', new_text: 'y\nx' }] });
+    await call({ op: 'read', path: 'a.ts' });
+    await expect(call({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }] })).rejects.toBeInstanceOf(KinuError);
+    await call({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'x\nx', new_text: 'y\nx' }] });
     expect(ledger.snapshot()).toMatchObject({ attempts: 2, applied: 1, recoveredPaths: 1, abandonedPaths: 0 });
   });
 
@@ -550,13 +553,13 @@ describe('file tool', () => {
     const body = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
     const vfs = memoryVfs({ 'big.ts': body });
     const { call } = toolFor(vfs);
-    await call({ action: 'read', path: 'big.ts', limit: 3 });
-    const refused = call({ action: 'write', path: 'big.ts', content: 'wiped\n' });
+    await call({ op: 'read', path: 'big.ts', limit: 3 });
+    const refused = call({ op: 'write', path: 'big.ts', content: 'wiped\n' });
     await expect(refused).rejects.toThrow('read only lines 1-3 of 200');
     await expect(refused).rejects.toThrow('offset=4');
     expect(vfs.files.get('big.ts')).toBe(body);
     expect(await call({
-      action: 'edit', path: 'big.ts', edits: [{ old_text: 'line 1\nline 2\n', new_text: 'line 1\nLINE 2\n' }],
+      op: 'edit', path: 'big.ts', edits: [{ old_text: 'line 1\nline 2\n', new_text: 'line 1\nLINE 2\n' }],
     })).toMatchObject({ ok: true });
   });
 
@@ -564,20 +567,20 @@ describe('file tool', () => {
     const body = 'a\nb\nc\n';
     const vfs = memoryVfs({ 's.txt': body });
     const { call } = toolFor(vfs);
-    await call({ action: 'read', path: 's.txt', limit: 1 });
-    await call({ action: 'read', path: 's.txt', offset: 2 });
-    expect(await call({ action: 'write', path: 's.txt', content: 'z\n' })).toMatchObject({ ok: true, action: 'replaced' });
+    await call({ op: 'read', path: 's.txt', limit: 1 });
+    await call({ op: 'read', path: 's.txt', offset: 2 });
+    expect(await call({ op: 'write', path: 's.txt', content: 'z\n' })).toMatchObject({ ok: true, action: 'replaced' });
   });
 
   test('a BOM is never shown, so the first line the read returns can be matched', async () => {
     const vfs = memoryVfs({ 'a.cs': '\uFEFFusing System;\nclass A {}\n' });
     const { call } = toolFor(vfs);
-    const shown = v.parse(StringResultSchema, await call({ action: 'read', path: 'a.cs' }));
+    const shown = v.parse(StringResultSchema, await call({ op: 'read', path: 'a.cs' }));
     expect(shown.startsWith('\uFEFF')).toBe(false);
     const firstLine = shown.split('\n')[0];
 
     if (firstLine === undefined) throw new Error('file read returned no first line');
-    expect(await call({ action: 'edit', path: 'a.cs', edits: [{ old_text: firstLine, new_text: 'using X;' }] }))
+    expect(await call({ op: 'edit', path: 'a.cs', edits: [{ old_text: firstLine, new_text: 'using X;' }] }))
       .toMatchObject({ ok: true });
     expect(vfs.files.get('a.cs')).toBe('\uFEFFusing X;\nclass A {}\n');
   });
@@ -585,11 +588,11 @@ describe('file tool', () => {
   test('an edit missing new_text is refused, never read as a deletion', async () => {
     const vfs = memoryVfs({ 'a.ts': 'alpha\n' });
     const { call } = toolFor(vfs);
-    await call({ action: 'read', path: 'a.ts' });
-    const result = call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] });
+    await call({ op: 'read', path: 'a.ts' });
+    const result = call({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] });
     await expect(result).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('edits[0].new_text') });
     expect(vfs.files.get('a.ts')).toBe('alpha\n');
-    expect(await call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha', new_text: '' }] }))
+    expect(await call({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha', new_text: '' }] }))
       .toMatchObject({ ok: true });
     expect(vfs.files.get('a.ts')).toBe('\n');
   });
@@ -599,7 +602,7 @@ describe('file tool', () => {
     const dirs: string[] = [];
     const spy: VFS = { ...vfs, mkdir: async (p: string) => { dirs.push(p); } };
     const { call } = toolFor(spy);
-    await call({ action: 'write', path: 'notes.txt', content: 'x' });
+    await call({ op: 'write', path: 'notes.txt', content: 'x' });
     expect(dirs).toEqual([]);
   });
 
@@ -617,7 +620,7 @@ describe('file tool', () => {
 
     for (const path of ['memory/a.md', '/memory/a.md', 'memory/a.md']) {
       const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
-      await toolExecute(entry)({ action: 'write', path, content: 'x' });
+      await toolExecute(entry)({ op: 'write', path, content: 'x' });
     }
 
     expect(indexed).toEqual(['memory/a.md', 'memory/a.md', 'memory/a.md']);
@@ -628,13 +631,13 @@ describe('file tool', () => {
     const bytes = new TextEncoder().encode('hello\n');
     const unranged = { ...memoryVfs({ 'a.bin': 'hello\n' }), readRange: undefined };
     const { call } = toolFor({ ...unranged, readFile: async () => bytes });
-    expect(await call({ action: 'read', path: 'a.bin' })).toBe('hello\n');
+    expect(await call({ op: 'read', path: 'a.bin' })).toBe('hello\n');
   });
 
   test('write creates a new file without a prior read', async () => {
     const vfs = memoryVfs();
     const { call } = toolFor(vfs);
-    expect(await call({ action: 'write', path: 'new.txt', content: 'hi' }))
+    expect(await call({ op: 'write', path: 'new.txt', content: 'hi' }))
       .toEqual({ ok: true, path: 'new.txt', reference: 'vfs://home/main/new.txt', bytes: 2, action: 'created' });
     expect(vfs.files.get('new.txt')).toBe('hi');
   });
@@ -642,11 +645,11 @@ describe('file tool', () => {
   test('write over an existing file is refused until it has been read', async () => {
     const vfs = memoryVfs({ 'a.txt': 'original' });
     const { call } = toolFor(vfs);
-    const refused = call({ action: 'write', path: 'a.txt', content: 'replacement' });
+    const refused = call({ op: 'write', path: 'a.txt', content: 'replacement' });
     await expect(refused).rejects.toThrow('has not been read here yet');
     expect(vfs.files.get('a.txt')).toBe('original');
-    await call({ action: 'read', path: 'a.txt' });
-    expect(await call({ action: 'write', path: 'a.txt', content: 'replacement' }))
+    await call({ op: 'read', path: 'a.txt' });
+    expect(await call({ op: 'write', path: 'a.txt', content: 'replacement' }))
       .toMatchObject({ ok: true, action: 'replaced' });
     expect(vfs.files.get('a.txt')).toBe('replacement');
   });
@@ -654,14 +657,14 @@ describe('file tool', () => {
   test('a write authorizes the edit that follows it — the model authored the content', async () => {
     const vfs = memoryVfs();
     const { call } = toolFor(vfs);
-    await call({ action: 'write', path: 'a.txt', content: 'alpha\n' });
-    expect(await call({ action: 'edit', path: 'a.txt', edits: [{ old_text: 'alpha', new_text: 'beta' }] }))
+    await call({ op: 'write', path: 'a.txt', content: 'alpha\n' });
+    expect(await call({ op: 'edit', path: 'a.txt', edits: [{ old_text: 'alpha', new_text: 'beta' }] }))
       .toMatchObject({ ok: true });
   });
 
   test('a missing file reports the VFS error with the addressing correction', async () => {
     const { call } = toolFor(memoryVfs());
-    const result = call({ action: 'read', path: '/app/main.py' });
+    const result = call({ op: 'read', path: '/app/main.py' });
     await expect(result).rejects.toThrow('ENOENT');
     await expect(result).rejects.toThrow('NOT the machine or container');
     await expect(result).rejects.toThrow('roots are: local');
@@ -672,7 +675,7 @@ describe('file tool', () => {
     const ledger = new TurnFileLedger();
     const budget = new TurnContextBudget();
     const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget });
-    await toolExecute(entry)({ action: 'read', path: 'big.txt' });
+    await toolExecute(entry)({ op: 'read', path: 'big.txt' });
     expect(budget.snapshot().admittedChars).toBe(500);
   });
 
@@ -680,7 +683,7 @@ describe('file tool', () => {
   test('a path of the wrong type is refused, not fed to `path.trim()`', async () => {
     // A non-string path must be answered, not thrown as a TypeError.
     const { call } = toolFor(memoryVfs());
-    await expect(call({ action: 'read', path: 7 })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('path') });
+    await expect(call({ op: 'read', path: 7 })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('path') });
   });
 });
 
@@ -703,7 +706,7 @@ describe('a `file` read never makes the file resident', () => {
     test(`three bytes at a time returns ${what} exactly`, async () => {
       const vfs = memoryVfs({ 'f.txt': body }, { perRead: 3 });
       const { call } = toolFor(vfs);
-      expect(await call({ action: 'read', path: 'f.txt' })).toBe(shown);
+      expect(await call({ op: 'read', path: 'f.txt' })).toBe(shown);
       expect(vfs.wholeReads).toEqual([]);
     });
   }
@@ -711,8 +714,8 @@ describe('a `file` read never makes the file resident', () => {
   test('a BOM split from its own line still never reaches the model, and survives the edit', async () => {
     const vfs = memoryVfs({ 'a.cs': '\uFEFFusing System;\nclass A {}\n' }, { perRead: 2 });
     const { call } = toolFor(vfs);
-    expect(await call({ action: 'read', path: 'a.cs' })).toBe('using System;\nclass A {}\n');
-    expect(await call({ action: 'edit', path: 'a.cs', edits: [{ old_text: 'using System;', new_text: 'using X;' }] }))
+    expect(await call({ op: 'read', path: 'a.cs' })).toBe('using System;\nclass A {}\n');
+    expect(await call({ op: 'edit', path: 'a.cs', edits: [{ old_text: 'using System;', new_text: 'using X;' }] }))
       .toMatchObject({ ok: true });
     expect(vfs.files.get('a.cs')).toBe('\uFEFFusing X;\nclass A {}\n');
   });
@@ -720,7 +723,7 @@ describe('a `file` read never makes the file resident', () => {
   test('a windowed read of a large file returns that window and reads no whole file', async () => {
     const vfs = memoryVfs({ 'big.ts': numbered(4000) }, { perRead: 997 });
     const { call } = toolFor(vfs);
-    const out = v.parse(StringResultSchema, await call({ action: 'read', path: 'big.ts', offset: 5, limit: 3 }));
+    const out = v.parse(StringResultSchema, await call({ op: 'read', path: 'big.ts', offset: 5, limit: 3 }));
     expect(out.split('\n\n[')[0]).toBe('line 5\nline 6\nline 7');
     expect(out).toContain('of 4000 in big.ts');
     expect(out).toContain('offset=8');
@@ -730,9 +733,9 @@ describe('a `file` read never makes the file resident', () => {
   test('an offset past the end says so instead of returning empty, and authorizes nothing', async () => {
     const vfs = memoryVfs({ 'f.txt': numbered(12) }, { perRead: 5 });
     const { call } = toolFor(vfs);
-    expect(await call({ action: 'read', path: 'f.txt', offset: 900 })).toContain('past the end');
+    expect(await call({ op: 'read', path: 'f.txt', offset: 900 })).toContain('past the end');
     expect(vfs.wholeReads).toEqual([]);
-    await expect(call({ action: 'write', path: 'f.txt', content: 'wiped\n' }))
+    await expect(call({ op: 'write', path: 'f.txt', content: 'wiped\n' }))
       .rejects.toThrow('you have not seen');
   });
 
@@ -740,13 +743,13 @@ describe('a `file` read never makes the file resident', () => {
     const giant = 'z'.repeat(DEFAULT_TOOL_RESULT_MAX_CHARS + 1000);
     const vfs = memoryVfs({ 'one.txt': `${giant}\ntail\n` }, { perRead: 1024 });
     const { call } = toolFor(vfs);
-    const out = v.parse(StringResultSchema, await call({ action: 'read', path: 'one.txt' }));
+    const out = v.parse(StringResultSchema, await call({ op: 'read', path: 'one.txt' }));
     expect(out).toContain('does not fit');
     expect(out).toContain(String(giant.length));
     expect(out.length).toBeLessThan(giant.length);
     expect(vfs.wholeReads).toEqual([]);
     // Seeing a prefix of one enormous line is not seeing the file.
-    await expect(call({ action: 'write', path: 'one.txt', content: 'wiped\n' }))
+    await expect(call({ op: 'write', path: 'one.txt', content: 'wiped\n' }))
       .rejects.toThrow('you have not seen');
   });
 
@@ -755,21 +758,21 @@ describe('a `file` read never makes the file resident', () => {
     const vfs = memoryVfs({ 'big.ts': body }, { perRead: 128 });
     const { call } = toolFor(vfs);
 
-    for (const offset of [1, 51, 101, 151]) await call({ action: 'read', path: 'big.ts', offset, limit: 50 });
+    for (const offset of [1, 51, 101, 151]) await call({ op: 'read', path: 'big.ts', offset, limit: 50 });
 
     // Four windows, no whole read (the later overwrite does read the file).
     expect(vfs.wholeReads).toEqual([]);
-    expect(await call({ action: 'write', path: 'big.ts', content: 'replacement\n' }))
+    expect(await call({ op: 'write', path: 'big.ts', content: 'replacement\n' }))
       .toMatchObject({ ok: true, action: 'replaced' });
   });
 
   test('a gap between windows does not, and the refusal names the line to resume from', async () => {
     const vfs = memoryVfs({ 'big.ts': numbered(200) }, { perRead: 128 });
     const { call } = toolFor(vfs);
-    await call({ action: 'read', path: 'big.ts', offset: 1, limit: 50 });
-    await call({ action: 'read', path: 'big.ts', offset: 101, limit: 50 });
+    await call({ op: 'read', path: 'big.ts', offset: 1, limit: 50 });
+    await call({ op: 'read', path: 'big.ts', offset: 101, limit: 50 });
 
-    const refused = call({ action: 'write', path: 'big.ts', content: 'replacement\n' });
+    const refused = call({ op: 'write', path: 'big.ts', content: 'replacement\n' });
     await expect(refused).rejects.toThrow('read only lines 1-50 of 200');
     await expect(refused).rejects.toThrow('offset=51');
   });
@@ -777,10 +780,10 @@ describe('a `file` read never makes the file resident', () => {
   test('content that changed to the same length is still refused — the key is the content, not its size', async () => {
     const vfs = memoryVfs({ 'f.txt': 'alpha\nbeta\n' }, { perRead: 4 });
     const { call } = toolFor(vfs);
-    await call({ action: 'read', path: 'f.txt' });
+    await call({ op: 'read', path: 'f.txt' });
     vfs.files.set('f.txt', 'alpha\nbetX\n');
 
-    await expect(call({ action: 'edit', path: 'f.txt', edits: [{ old_text: 'alpha', new_text: 'ALPHA' }] }))
+    await expect(call({ op: 'edit', path: 'f.txt', edits: [{ old_text: 'alpha', new_text: 'ALPHA' }] }))
       .rejects.toThrow('changed since you read it');
     expect(vfs.files.get('f.txt')).toBe('alpha\nbetX\n');
   });
@@ -802,15 +805,15 @@ describe('a `file` read never makes the file resident', () => {
     };
 
     const { call } = toolFor(vfs);
-    await expect(call({ action: 'read', path: 'f.txt' })).rejects.toThrow('changed while it was being read');
-    await expect(call({ action: 'edit', path: 'f.txt', edits: [{ old_text: 'second', new_text: 'third' }] }))
+    await expect(call({ op: 'read', path: 'f.txt' })).rejects.toThrow('changed while it was being read');
+    await expect(call({ op: 'edit', path: 'f.txt', edits: [{ old_text: 'second', new_text: 'third' }] }))
       .rejects.toThrow('has not been read here yet');
   });
 
   test('a stable revision across the scan is not mistaken for a change', async () => {
     const vfs = memoryVfs({ 'f.txt': 'alpha\nbeta\n' }, { perRead: 3, revisions: true });
     const { call } = toolFor(vfs);
-    expect(await call({ action: 'read', path: 'f.txt' })).toBe('alpha\nbeta\n');
+    expect(await call({ op: 'read', path: 'f.txt' })).toBe('alpha\nbeta\n');
   });
 
   test('a ranged read the credential may not make is reported as denied, not as a broken file', async () => {
@@ -823,17 +826,17 @@ describe('a `file` read never makes the file resident', () => {
 
     const { call } = toolFor(denying);
 
-    await expect(call({ action: 'read', path: 'f.txt' })).rejects.toMatchObject({ code: 'denied' });
+    await expect(call({ op: 'read', path: 'f.txt' })).rejects.toMatchObject({ code: 'denied' });
     expect(plane.wholeReads).toEqual([]);
   });
 
   test('a plane with no ranged read serves a small file and refuses a large one rather than fetching it', async () => {
     const small = { ...memoryVfs({ 'f.txt': 'alpha\nbeta\n' }), readRange: undefined };
-    expect(await toolFor(small).call({ action: 'read', path: 'f.txt' })).toBe('alpha\nbeta\n');
+    expect(await toolFor(small).call({ op: 'read', path: 'f.txt' })).toBe('alpha\nbeta\n');
     expect(small.wholeReads).toEqual(['f.txt']);
 
     const big = { ...memoryVfs({ 'f.txt': 'x'.repeat(RESIDENT_TEXT_MAX_BYTES + 1) }), readRange: undefined };
-    const refused = toolFor(big).call({ action: 'read', path: 'f.txt' });
+    const refused = toolFor(big).call({ op: 'read', path: 'f.txt' });
     await expect(refused).rejects.toMatchObject({ code: 'denied' });
     await expect(refused).rejects.toThrow('no ranged read');
     // The refusal must not read the file.
@@ -848,7 +851,7 @@ describe('a `file` read never makes the file resident', () => {
   };
 
   test('a file that grew between the stat and the read is refused, not carried', async () => {
-    const refused = toolFor(racingVfs('x'.repeat(RESIDENT_TEXT_MAX_BYTES + 1))).call({ action: 'read', path: 'f.txt' });
+    const refused = toolFor(racingVfs('x'.repeat(RESIDENT_TEXT_MAX_BYTES + 1))).call({ op: 'read', path: 'f.txt' });
     await expect(refused).rejects.toMatchObject({ code: 'denied' });
     await expect(refused).rejects.toThrow('characters cannot be read within');
   });
@@ -858,22 +861,22 @@ describe('a `file` read never makes the file resident', () => {
     const cjk = '\u4e2d'.repeat(Math.floor(RESIDENT_TEXT_MAX_BYTES / 2));
     expect(cjk.length).toBeLessThan(RESIDENT_TEXT_MAX_BYTES);
 
-    const refused = toolFor(racingVfs(cjk)).call({ action: 'read', path: 'f.txt' });
+    const refused = toolFor(racingVfs(cjk)).call({ op: 'read', path: 'f.txt' });
     await expect(refused).rejects.toMatchObject({ code: 'denied' });
     await expect(refused).rejects.toThrow('bytes cannot be read within');
   });
 
   test('a result of exactly the budget is served; one byte more is not', async () => {
     const exact = 'a'.repeat(RESIDENT_TEXT_MAX_BYTES);
-    expect(await toolFor(racingVfs(exact)).call({ action: 'read', path: 'f.txt' })).toContain('aaa');
+    expect(await toolFor(racingVfs(exact)).call({ op: 'read', path: 'f.txt' })).toContain('aaa');
 
-    const over = toolFor(racingVfs(`${exact}a`)).call({ action: 'read', path: 'f.txt' });
+    const over = toolFor(racingVfs(`${exact}a`)).call({ op: 'read', path: 'f.txt' });
     await expect(over).rejects.toMatchObject({ code: 'denied' });
   });
 
   test('a path that is not there is reported missing even by a plane that cannot stat it', async () => {
     const unranged = { ...memoryVfs(), readRange: undefined };
-    await expect(toolFor(unranged).call({ action: 'read', path: 'gone.txt' }))
+    await expect(toolFor(unranged).call({ op: 'read', path: 'gone.txt' }))
       .rejects.toMatchObject({ code: 'missing' });
   });
 
@@ -884,8 +887,8 @@ describe('a `file` read never makes the file resident', () => {
 
     const { call } = toolFor(vfs);
 
-    await expect(call({ action: 'read', path: 'absent/file' })).rejects.toMatchObject({ code: 'missing' });
-    await expect(call({ action: 'search', path: 'absent/file', query: 'needle' })).rejects.toMatchObject({ code: 'missing' });
+    await expect(call({ op: 'read', path: 'absent/file' })).rejects.toMatchObject({ code: 'missing' });
+    await expect(call({ op: 'search', path: 'absent/file', query: 'needle' })).rejects.toMatchObject({ code: 'missing' });
     expect(ranges).toBe(0);
     expect(vfs.wholeReads).toEqual([]);
   });
@@ -926,67 +929,67 @@ describe('a `file` failure is attributable from the durable row alone', () => {
     const { call } = toolFor(memoryVfs({ 'a.ts': 'const x = 1;\n' }));
 
     const { failure } = await ledgerRow(call, {
-      action: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
+      op: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
 
     expect(failure).toEqual({
-      tool: 'file', action: 'edit', reason: 'unread', refused: true, workFailed: false, runtimeMissing: false,
+      tool: 'file', op: 'edit', reason: 'unread', refused: true, workFailed: false, runtimeMissing: false,
     });
   });
 
   test('an absent anchor lands as file·edit·not_found, refused', async () => {
     const { call } = toolFor(memoryVfs({ 'a.ts': 'const x = 1;\n' }));
-    await call({ action: 'read', path: 'a.ts' });
+    await call({ op: 'read', path: 'a.ts' });
 
     const { failure } = await ledgerRow(call, {
-      action: 'edit', path: 'a.ts', edits: [{ old_text: 'const y = 9;', new_text: 'z' }],
+      op: 'edit', path: 'a.ts', edits: [{ old_text: 'const y = 9;', new_text: 'z' }],
     });
 
     expect(failure).toEqual({
-      tool: 'file', action: 'edit', reason: 'not_found', refused: true, workFailed: false, runtimeMissing: false,
+      tool: 'file', op: 'edit', reason: 'not_found', refused: true, workFailed: false, runtimeMissing: false,
     });
   });
 
   test('a repeated anchor lands as file·edit·ambiguous, refused', async () => {
     const { call } = toolFor(memoryVfs({ 'a.ts': 'x\nx\n' }));
-    await call({ action: 'read', path: 'a.ts' });
+    await call({ op: 'read', path: 'a.ts' });
 
     const { failure } = await ledgerRow(call, {
-      action: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }],
+      op: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }],
     });
 
-    expect(failure).toMatchObject({ action: 'edit', reason: 'ambiguous', refused: true });
+    expect(failure).toMatchObject({ op: 'edit', reason: 'ambiguous', refused: true });
   });
 
   test('an unread overwrite lands as file·write·unread, refused', async () => {
     const { call } = toolFor(memoryVfs({ 'a.txt': 'original' }));
-    const { failure } = await ledgerRow(call, { action: 'write', path: 'a.txt', content: 'replacement' });
+    const { failure } = await ledgerRow(call, { op: 'write', path: 'a.txt', content: 'replacement' });
     expect(failure).toEqual({
-      tool: 'file', action: 'write', reason: 'unread', refused: true, workFailed: false, runtimeMissing: false,
+      tool: 'file', op: 'write', reason: 'unread', refused: true, workFailed: false, runtimeMissing: false,
     });
   });
 
   test('a path that does not exist lands as missing and is NOT a refusal', async () => {
     // The tool decided nothing here, so this stays a candidate defect.
     const { call } = toolFor(memoryVfs());
-    const { failure } = await ledgerRow(call, { action: 'read', path: 'gone.ts' });
-    expect(failure).toMatchObject({ tool: 'file', action: 'read', reason: 'missing', refused: false });
+    const { failure } = await ledgerRow(call, { op: 'read', path: 'gone.ts' });
+    expect(failure).toMatchObject({ tool: 'file', op: 'read', reason: 'missing', refused: false });
   });
 
   test('malformed edits land as bad_input, refused', async () => {
     const { call } = toolFor(memoryVfs({ 'a.ts': 'x\n' }));
-    const { failure } = await ledgerRow(call, { action: 'edit', path: 'a.ts', edits: [] });
+    const { failure } = await ledgerRow(call, { op: 'edit', path: 'a.ts', edits: [] });
     expect(failure).toEqual({
-      tool: 'file', action: 'edit', reason: 'bad_input', refused: true, workFailed: false, runtimeMissing: false,
+      tool: 'file', op: 'edit', reason: 'bad_input', refused: true, workFailed: false, runtimeMissing: false,
     });
   });
 
   test('a successful edit produces no failure at all', async () => {
     const { call } = toolFor(memoryVfs({ 'a.ts': 'const x = 1;\n' }));
-    await call({ action: 'read', path: 'a.ts' });
+    await call({ op: 'read', path: 'a.ts' });
 
     const { failure } = await ledgerRow(call, {
-      action: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
+      op: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
 
     expect(failure).toBeNull();
@@ -1002,7 +1005,7 @@ describe('a bulk read is bounded where it is produced', () => {
   const listed = async (entries: readonly string[]): Promise<Record<string, JsonValue>> => {
     const vfs = { ...memoryVfs(), async readdir() { return entries.map((name) => ({ name, type: 'file' as const })); } };
     const { call } = toolFor(vfs);
-    const result = await call({ action: 'list', path: '/d' });
+    const result = await call({ op: 'list', path: '/d' });
     const clamped = v.safeParse(v.string(), result);
 
     if (!clamped.success) return v.parse(JsonObjectSchema, result);
@@ -1052,7 +1055,7 @@ describe('a bulk read is bounded where it is produced', () => {
     const head = hit + line.repeat(Math.ceil(RESIDENT_TEXT_MAX_BYTES / line.length) + 4_000);
     const vfs = memoryVfs({ 'big.log': head + hit });
     const { call } = toolFor(vfs);
-    const body = v.parse(JsonObjectSchema, await call({ action: 'search', path: 'big.log', query: 'NEEDLE' }));
+    const body = v.parse(JsonObjectSchema, await call({ op: 'search', path: 'big.log', query: 'NEEDLE' }));
 
     expect(body.matches).toEqual([{ line: 1, text: 'NEEDLE' }]);
     expect(body.truncated).toEqual({ shown: RESIDENT_TEXT_MAX_BYTES, total: (head + hit).length });
@@ -1061,7 +1064,7 @@ describe('a bulk read is bounded where it is produced', () => {
   test('a file that fits is searched whole, and says nothing about truncation', async () => {
     const vfs = memoryVfs({ 's.txt': 'alpha\nNEEDLE\nomega\n' });
     const { call } = toolFor(vfs);
-    const body = v.parse(JsonObjectSchema, await call({ action: 'search', path: 's.txt', query: 'NEEDLE' }));
+    const body = v.parse(JsonObjectSchema, await call({ op: 'search', path: 's.txt', query: 'NEEDLE' }));
 
     expect(body.matches).toEqual([{ line: 2, text: 'NEEDLE' }]);
     expect('truncated' in body).toBe(false);

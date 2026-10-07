@@ -16,13 +16,13 @@ describe('delegationFeatures', () => {
     // The unified `agents` tool: rungs are separated by action.
     const toolCalls: ToolCallRecord[] = [
       call('eval', { code: 'a()' }),
-      call('agents', { action: 'hire', role: 'r' }),
-      call('agents', { action: 'list' }),
-      call('agents', { action: 'dismiss', agent: 'a' }),
-      call('agents', { action: 'swarm', task: 't' }),
-      call('agents', { action: 'msg', agent: 'b' }),
+      call('agents', { op: 'hire', role: 'r' }),
+      call('agents', { op: 'list' }),
+      call('agents', { op: 'dismiss', agent: 'a' }),
+      call('agents', { op: 'swarm', task: 't' }),
+      call('agents', { op: 'message', agent: 'b' }),
       call('agents', { action: 'send', agent: 'b', text: 'hi' }),
-      call('agents', { action: 'msg', event_id: 'e1', message: 'ok' }),
+      call('agents', { op: 'reply', eventId: 'e1', message: 'ok' }),
       call('shell', { command: 'ls' }),
     ];
 
@@ -86,7 +86,7 @@ describe('executionPathSignals — loops', () => {
 
   test('a clean trace triggers nothing', () => {
     const trace = [
-      call('memory', { action: 'search', query: 'auth' }),
+      call('memory', { op: 'search', query: 'auth' }),
       write('/src/auth.ts'),
       call('shell', { command: 'bun test packages/core' }),
       call('report', { status: 'completed', content: 'done' }),
@@ -99,8 +99,8 @@ describe('executionPathSignals — loops', () => {
 describe('executionPathSignals — redundancy', () => {
   test('argument key order does not change a call\'s identity', () => {
     const trace = [
-      call('fact', { action: 'remember', key: 'tz', value: 'UTC' }),
-      call('fact', { value: 'UTC', key: 'tz', action: 'remember' }),
+      call('fact', { op: 'remember', key: 'tz', value: 'UTC' }),
+      call('fact', { value: 'UTC', key: 'tz', op: 'remember' }),
     ];
 
     expect(executionPathSignals(trace).redundantCalls).toBe(1);
@@ -197,28 +197,28 @@ describe('executionPathSignals — backtracking', () => {
   // The `file` tool's paths arrive as a typed field.
   test('the file tool: a read of a path the turn wrote or edited is a backtrack', () => {
     expect(executionPathSignals([
-      call('file', { action: 'write', path: '/src/auth.ts', content: 'x' }),
-      call('file', { action: 'read', path: '/src/auth.ts' }),
+      call('file', { op: 'write', path: '/src/auth.ts', content: 'x' }),
+      call('file', { op: 'read', path: '/src/auth.ts' }),
     ]).backtrackCalls).toBe(1);
     expect(executionPathSignals([
-      call('file', { action: 'edit', path: '/src/auth.ts', edits: [{ old_text: 'a', new_text: 'b' }] }),
+      call('file', { op: 'edit', path: '/src/auth.ts', edits: [{ old_text: 'a', new_text: 'b' }] }),
       call('shell', { command: 'cat /src/auth.ts' }),
     ]).backtrackCalls).toBe(1);
     // The shell vocabulary and the file plane are one path set.
     expect(executionPathSignals([
       call('shell', { command: 'echo hi > /tmp/out.txt' }),
-      call('file', { action: 'read', path: '/tmp/out.txt' }),
+      call('file', { op: 'read', path: '/tmp/out.txt' }),
     ]).backtrackCalls).toBe(1);
   });
 
   test('the file tool: reading before writing, or reading another path, is ordinary work', () => {
     expect(executionPathSignals([
-      call('file', { action: 'read', path: '/src/auth.ts' }),
-      call('file', { action: 'write', path: '/src/auth.ts', content: 'x' }),
+      call('file', { op: 'read', path: '/src/auth.ts' }),
+      call('file', { op: 'write', path: '/src/auth.ts', content: 'x' }),
     ]).backtrackCalls).toBe(0);
     expect(executionPathSignals([
-      call('file', { action: 'write', path: '/src/auth.ts', content: 'x' }),
-      call('file', { action: 'read', path: '/src/other.ts' }),
+      call('file', { op: 'write', path: '/src/auth.ts', content: 'x' }),
+      call('file', { op: 'read', path: '/src/other.ts' }),
     ]).backtrackCalls).toBe(0);
   });
 });

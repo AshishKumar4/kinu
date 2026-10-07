@@ -347,7 +347,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     const store = eventStore();
 
     for (const id of ['t1', 't2']) emit(store, 'run-a', 'tool_call_end', {
-      name: 'file', toolCallId: id, args: { action: 'edit' }, outcome: { success: false, reason: 'not_found' }, result: 'no details',
+      name: 'file', toolCallId: id, args: { op: 'edit' }, outcome: { success: false, reason: 'not_found' }, result: 'no details',
     });
     emit(store, 'run-a', 'tool_call_end', {
       name: 'shell', toolCallId: 't3', outcome: { success: false, reason: null, execution: { exitCode: 1 } }, result: 'no details',
