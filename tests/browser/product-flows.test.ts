@@ -13,12 +13,12 @@ import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   slateOpensFromMyStuff, slateSharesWithNoBindings, slateShowsItsPreview, workspaceGetsFirstAnswer,
-  writtenFileShowsInFilesAndChanges,
-  type AgentReturnVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
+  writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
+  type AgentReturnVerdict, type ChangesStormVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
-import { FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE } from '../../scripts/flows-script';
+import { FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, STORM_FILES } from '../../scripts/flows-script';
 import { rowVerdicts } from '../../scripts/row-verdicts';
 
 interface FlowVerdicts {
@@ -28,6 +28,7 @@ interface FlowVerdicts {
   panel: PanelVerdict | null;
   stamped: StampedCardVerdict | null;
   writtenFile: WrittenFileVerdict | null;
+  storm: ChangesStormVerdict | null;
   slate: SlatePreviewVerdict | null;
   drive: DriveVerdict | null;
   driveOpens: DriveOpensVerdict | null;
@@ -36,7 +37,7 @@ interface FlowVerdicts {
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, panel: null, stamped: null, writtenFile: null, slate: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, panel: null, stamped: null, writtenFile: null, storm: null, slate: null, drive: null,
   driveOpens: null, slateOpens: null, slateShare: null,
 };
 
@@ -73,6 +74,7 @@ beforeAll(async () => {
     observed.panel = await attempt('panel', () => rightPanelKeepsItsState(target));
     observed.stamped = await attempt('stamped', () => eachPaneKeepsItsTranscript(target));
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
+    observed.storm = await attempt('changes-storm', () => changesStormStaysBounded(target));
     observed.slate = await attempt('slate-preview', () => slateShowsItsPreview(target));
     observed.drive = await attempt('drive', () => driveKeepsWhatIsDone(target));
     observed.driveOpens = await attempt('drive-opens', () => driveOpens(target));
@@ -261,5 +263,21 @@ describe('a slate with no bindings shares from its tile, and stops (#25)', () =>
 
   test('Stop sharing takes it off the Drive', () => {
     expect(verdictOf(observed.slateShare, 'slate-share').afterStop).not.toContain(DRIVE_SLATE.title);
+  });
+});
+
+// Three tabs on one workspace while a shell burst writes fifty files: each lists the burst, reading the change-set a
+// bounded number of times, not once per file, and the settled panes read nothing while another tab works.
+describe('a burst of writes under three open Changes panes', () => {
+  test('every pane lists the whole burst from a bounded number of reads and frames', () => {
+    const storm = verdictOf(observed.storm, 'changes-storm');
+
+    expect(storm.listed).toEqual([STORM_FILES, STORM_FILES, STORM_FILES]);
+
+    for (const reads of [...storm.burstReads, ...storm.burstFrames]) expect(reads).toBeLessThan(STORM_FILES / 5);
+  });
+
+  test('settled panes read nothing while another tab works', () => {
+    expect(verdictOf(observed.storm, 'changes-storm').idleReads).toEqual([0, 0]);
   });
 });

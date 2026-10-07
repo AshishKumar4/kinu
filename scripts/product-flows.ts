@@ -30,7 +30,7 @@ import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
 import { beatWorkspace, webHeaders, type PublicWebIdentity } from '../evals/src/session';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
-import { FLOW_SHELL_PROBE, FLOW_SLATE, SLATE_ASK, WRITE_FILE_ASK } from './flows-script';
+import { FLOW_SHELL_PROBE, FLOW_SLATE, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
   documentScriptFailures, explained, FAILED_APP_SCRIPT, recordScriptFailures, SCRIPT_FAILED, type ScriptFailure,
@@ -1432,6 +1432,71 @@ export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Pro
     await page.close();
 
     return { workspace, filesListed, changedPaths, afterReview };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+/** The burst's files the Changes tab lists. */
+const STORM_LISTED = `${CHANGED_PATHS}.filter((path) => path.includes(${JSON.stringify(`/${STORM_DIR}/`)})).length`;
+
+export interface ChangesStormVerdict {
+  readonly workspace: string;
+  /** How many of the burst's files each tab's Changes pane lists once it settles. */
+  readonly listed: readonly number[];
+  /** Each tab's change-set reads, and the read-moved frames it was sent, during the burst. */
+  readonly burstReads: readonly number[];
+  readonly burstFrames: readonly number[];
+  /** The first two tabs' change-set reads while the third opened its Files pane after the burst. */
+  readonly idleReads: readonly number[];
+}
+
+/**
+ * Three tabs hold one workspace's Changes pane open while one shell command writes a burst of files. Every tab ends
+ * up listing the whole burst, having read the change-set a bounded number of times, not once per file; and once the
+ * burst settles, the open panes read nothing more while another tab works.
+ */
+export async function changesStormStaysBounded(target: FlowTarget): Promise<ChangesStormVerdict> {
+  const workspace = await createFlowWorkspace(target, 'changes-storm');
+
+  try {
+    const path = `/workspace/${encodeURIComponent(workspace)}`;
+    const tabs = await Promise.all([0, 1, 2].map(async () => openWorkspacePage(target, path)));
+    const [sender, , worker] = tabs;
+
+    if (sender === undefined || worker === undefined) throw new Error('three tabs did not open');
+    await sendAndSettle(sender, STORM_SEED_ASK);
+
+    for (const page of tabs) {
+      await openInspector(page);
+      await until(page, 'the Changes tab the seed raised', stripHas('Changes'));
+      await page.evaluate(stripTab('Changes'));
+      await until(page, "the Changes tab's change-set", CHANGES_SETTLED);
+    }
+
+    const counters = await Promise.all(tabs.map(async (page) => countRpc(page)));
+
+    await sendAndSettle(sender, STORM_ASK);
+
+    for (const page of tabs) await until(page, 'the whole burst in the change-set', `${STORM_LISTED} === ${String(STORM_FILES)}`);
+    const burst = counters.map((counter) => counter.counts());
+
+    await worker.evaluate(stripTab('Files'));
+    await until(worker, "the Files tab's listing", FILES_SETTLED);
+    const after = counters.map((counter) => counter.counts());
+    const reads = (counts: RpcCounts) => counts.sent.getExecutorDiff ?? 0;
+
+    const listed = await Promise.all(tabs.map(async (page) => v.parse(v.number(), await page.evaluate(STORM_LISTED))));
+
+    await Promise.all(counters.map(async (counter) => counter.stop()));
+    await Promise.all(tabs.map(async (page) => page.close()));
+
+    return {
+      workspace, listed,
+      burstReads: burst.map(reads),
+      burstFrames: burst.map((counts) => counts.received.reads_changed ?? 0),
+      idleReads: after.slice(0, 2).map((counts, at) => reads(counts) - reads(burst[at] ?? counts)),
+    };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }
