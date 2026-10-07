@@ -196,13 +196,14 @@ describe('two real turns over the HTTP model seam', () => {
     await abortAllDurableObjects();
     const done = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).recoverOwedReplies(workspace);
 
-    // The answered reply's lease closes on its turn; the unanswered event is unbound, pending for the next drain.
-    expect(done.leases, JSON.stringify(done)).toEqual({
-      'ev-answered': { turnId: 'evt-answered', consumedAt: null },
-      'ev-unanswered': { turnId: null, consumedAt: null },
-    });
+    // The answered reply's lease closes on its own turn. The unanswered event is drained again by a turn of its own,
+    // the one request the model is asked, and that turn's close releases it.
+    expect(done.leases['ev-answered'], JSON.stringify(done)).toEqual({ turnId: 'evt-answered', consumedAt: null });
+    expect(done.leases['ev-unanswered']?.consumedAt).toBeNull();
+    expect(done.leases['ev-unanswered']?.turnId).toMatch(/^evt-/u);
+    expect(done.leases['ev-unanswered']?.turnId).not.toBe('evt-unanswered');
     expect(done.transition).toBe('done');
-    expect(done.asked.filter((words) => words.includes('The answered event'))).toEqual([]);
+    expect(done.asked.filter((words) => words.includes('event arrived while you were idle'))).toHaveLength(1);
   });
 
   it('a Changes-tab send the loop refuses to drive takes its card row with it', async () => {
