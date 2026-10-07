@@ -4,7 +4,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
 import { sha256Hex } from '../safety/argument-digest';
-import { encodeModelMessage, decodeModelMessageValues } from './message-codec';
+import { encodeModelMessage, decodeModelMessageValues, decodeOwnModelMessage } from './message-codec';
 import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObject, type JsonValue } from '../utils/json';
 import { freezeTree } from '../utils/freeze';
 import type { SessionPayloads, SessionPayloadReader, SessionPayload } from './payload';
@@ -288,9 +288,9 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   /** The stream has committed these native parts; they may include parts its final message omitted. */
   bindSource(message: ModelMessage, reference: MessageReference, native: JsonObject): void {
     this.actor.assertCurrent();
-    const recorded = decodeModelMessageValues([native])[0];
+    const recorded = decodeOwnModelMessage(native);
 
-    if (recorded === undefined || !carries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
+    if (!carries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
     this.cache(reference, recorded, 'output');
     this.sources.set(message, reference);
     this.sources.set(recorded, reference);
