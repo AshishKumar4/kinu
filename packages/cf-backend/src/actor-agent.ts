@@ -3096,25 +3096,21 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * A binding call's authority: one profile resolution gives both the mode it runs in and its tool reach, so a role
-   * that imposes Plan (a planner) holds the call to Plan whatever mode its caller asked for. The in-flight turn's
-   * profile (not the cached one, which outlives its turn) answers while one runs; else the role is resolved now over
-   * native, codemode and the given MCP tools, from the mode `requested`.
+   * A binding call's authority. Its mode is the caller's as the actor's role leaves it, resolved now from `requested`:
+   * a role that imposes Plan (a planner) holds every call to Plan, while a Build app keeps its own mode through another
+   * turn's Plan. Its reach is the in-flight turn's profile while one runs (not the cached one, which outlives its turn),
+   * else that same resolution over native, codemode and the given MCP tools.
    */
   private async slateAuthority(
     requested: WorkMode, providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = [],
   ): Promise<SlateAuthority> {
-    const operation = this.operationProfile();
-
-    if (operation) return { mode: requested === 'plan' ? 'plan' : operation.profile.workMode, reach: narrowToolSurface(operation.profile.allowedTools) };
-
     const { profile } = await this.actorProfile({
       actor: this.actorHandle(),
       workMode: requested,
       availableTools: [...actorActiveTools(this.actorToolDeps()), ...mcpToolKeys, ...codemodeCapabilitiesFor(providers)],
     });
 
-    return { mode: profile.workMode, reach: narrowToolSurface(profile.allowedTools) };
+    return { mode: profile.workMode, reach: narrowToolSurface((this.operationProfile()?.profile ?? profile).allowedTools) };
   }
 
   /**
