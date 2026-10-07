@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'close';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'close';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
@@ -364,6 +364,12 @@ export interface ClaimUnderRecovery {
   readonly settled: string | null;
   readonly heldWork: readonly OwedWorkRow[];
   readonly settledWork: readonly OwedWorkRow[];
+}
+
+/** An answer's page writing a file through `workspace`, in Auto, and again after the owner's next ask is a Plan one. */
+export interface AnswerPageModes {
+  readonly auto: string;
+  readonly plan: string;
 }
 
 /** A hired agent's answer with a `<slate-ui>` block, as a page's `workspace` call resolves it: under its own id the

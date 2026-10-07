@@ -30,6 +30,7 @@ import type {
   ClaimUnderRecovery,
   AgentHeldWork,
   AgentSlateUi,
+  AnswerPageModes,
   StrandedWork,
   EffectStatus,
   HeldClose,
@@ -173,7 +174,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'transitionState');
     Reflect.deleteProperty(this, 'strandedWork');
     Reflect.deleteProperty(this, 'answerSlates');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates']);
+    Reflect.deleteProperty(this, 'answerPageModes');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes']);
   }
 
   /** What the loop's driver gate answers once refused, as when another activation holds the lease. */
@@ -282,6 +284,32 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const ids = { answered: `${agent}/${answer}/card`, fromUser: `${agent}/${ask}/card`, asWorkspace: `${answer}/card` };
 
     return { answered: await call(ids.answered), fromUser: await call(ids.fromUser), asWorkspace: await call(ids.asWorkspace) };
+  }
+
+  /**
+   * An answer with a page, then the page's write through `workspace` as the owner's turns stand: in Auto, and again
+   * once the owner's next ask is a Plan one. The page's process is the same; its author's mode is read at the call.
+   */
+  async answerPageModes(): Promise<AnswerPageModes> {
+    const write = async () => {
+      const result = await this.slateBindingCallAs(ROOT_SLATE_CALLER, 'a-page/card', 'workspace', {
+        member: 'writeFile', args: ['/home/main/page-mode.txt', 'written by the page'], invocation: null,
+      });
+
+      return result.ok ? 'ok' : result.reason;
+    };
+
+    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, { id: 'u-page', origin: 'input', message: { role: 'user', content: 'Draw the card.' } });
+    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
+      id: 'a-page', origin: 'output', message: { role: 'assistant', content: 'Here:\n<slate-ui name="card">\n<p>card</p>\n</slate-ui>' },
+    });
+    const auto = await write();
+
+    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
+      id: 'u-plan', origin: 'input', message: { role: 'user', content: 'Plan it first.' }, metadata: { kinuMode: 'plan' },
+    });
+
+    return { auto, plan: await write() };
   }
 
   /** `done` once a transition closed; an open one answers that it resumed. */
@@ -691,7 +719,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   | 'createSubordinateAgent'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -946,7 +974,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'close'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'close'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1419,6 +1447,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       socket.close(1000, 'agent work probe complete');
     }
+  }
+
+  async answerPageModesIn(): Promise<AnswerPageModes> {
+    const { target } = await this.claimQueueWorkspace('page-modes');
+
+    return await target.answerPageModes();
   }
 
   /** A hired agent answers with a `<slate-ui>` block (the queue model echoes the ask); the workspace resolves its id. */

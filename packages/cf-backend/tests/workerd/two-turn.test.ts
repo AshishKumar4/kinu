@@ -200,6 +200,14 @@ describe('two real turns over the HTTP model seam', () => {
       .toEqual([{ kind: 'turn', phase: 'running', attempt: 1 }]);
   });
 
+  // An answer's page calls as its author as of each call: its write lands while the owner's turns are Auto, and is
+  // refused once the owner's next ask is a Plan one, with nothing restarted in between.
+  it("an answer's page calls in the mode its author's next turn runs in", async () => {
+    const modes = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('page-modes-driver')).answerPageModesIn();
+
+    expect(modes).toEqual({ auto: 'ok', plan: 'denied' });
+  });
+
   // A hired agent's answer is read from its own isolate. Under the agent's id its block is found, and its page's
   // workspace call is denied, since no binding here runs where that agent's stores are; a user message's id, or the
   // answer named as the workspace's, holds no block at all.
