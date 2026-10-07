@@ -85,9 +85,9 @@ named `KINU_*` reaches a measured run.
 
 Keep that in mind before blaming the environment for a result. A first run's
 one-step turns were blamed on a step ceiling, and there is none: a turn whose
-caller names no stop condition runs under `UNBOUNDED_STEPS`
-(`packages/core/src/chat.ts`). A one-step turn means the model chose to stop
-or a tool failed. The harness configured neither.
+caller names no stop condition runs until the model stops, under the AI SDK's
+`isLoopFinished` (`packages/core/src/chat.ts`). A one-step turn means the model
+chose to stop or a tool failed. The harness configured neither.
 
 The throwaway home goes through `bench/isolation.py`, the one rule both
 benchmark adapters share. It refuses an unset or relative home, anything at or

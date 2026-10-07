@@ -20,7 +20,6 @@ requirements:
       - packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep
       - packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordToolCall
       - packages/core/src/orchestrator/agent-orchestrator.ts#AgentOrchestrator.beginTurn
-      - packages/core/src/chat.ts#UNBOUNDED_STEPS
     remainingEvidence:
       - WP-F4 differential fixtures for the real hook counters and configured stop condition
   PR-AGENT-002:
