@@ -15,10 +15,6 @@ export type JsonValue = JsonPrimitive | JsonArray | JsonObject;
 
 const StringSchema = v.string();
 
-const NumberSchema = v.number();
-
-const BooleanSchema = v.boolean();
-
 /** Walks the value: a JSON-typed value can still hold `undefined` members. */
 export function isJsonObject(value: JsonValue): value is JsonObject {
   return !Array.isArray(value) && v.is(JsonObjectSchema, value);
@@ -44,16 +40,17 @@ export function jsonObjectElements(value: JsonValue | undefined): JsonObject[] |
   return objects.length === value.length ? objects : null;
 }
 
-export const JsonValueSchema: v.GenericSchema<JsonValue> = v.lazy(() => JsonValueOptions);
+/** One walk that allocates nothing for a valid value: a union recorded an issue for every option each node failed,
+ *  on every stored event and message read (the heap gate's churn, 2026-10-07). */
+export const JsonValueSchema = v.custom<JsonValue>(function json(input): boolean {
+  if (input === null || typeof input === 'string' || typeof input === 'boolean') return true;
 
-const JsonValueOptions: v.GenericSchema<JsonValue> = v.union([
-  StringSchema,
-  v.pipe(NumberSchema, v.finite()),
-  BooleanSchema,
-  v.null(),
-  v.array(JsonValueSchema),
-  v.record(StringSchema, JsonValueSchema),
-]);
+  if (typeof input === 'number') return Number.isFinite(input);
+
+  if (Array.isArray(input)) return input.every(json);
+
+  return typeof input === 'object' && Object.values(input).every(json);
+}, 'Invalid JSON value');
 
 export const JsonObjectSchema = v.record(StringSchema, JsonValueSchema);
 

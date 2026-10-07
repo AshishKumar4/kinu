@@ -18,14 +18,19 @@ export type NativeValue =
 
 export type StoredValue = JsonValue;
 
-const NativeValueSchema: v.GenericSchema<NativeValue> = v.lazy(() => NativeValueOptions);
+/** What the codec carries, confirmed by one walk that allocates nothing: a union schema here recorded an issue for
+ *  every option a node failed, on every write of every message (the heap gate's largest Kinu churn, 2026-10-07). */
+const NativeValueSchema = v.custom<NativeValue>(function native(input): boolean {
+  if (input === null || input === undefined || typeof input === 'string' || typeof input === 'boolean') return true;
 
-const NativeValueOptions: v.GenericSchema<NativeValue> = v.union([
-  v.string(), v.pipe(v.number(), v.finite()), v.boolean(), v.null(), v.undefined(),
-  v.instance(Uint8Array), v.instance(ArrayBuffer), v.instance(URL),
-  v.array(NativeValueSchema),
-  v.record(v.string(), NativeValueSchema),
-]);
+  if (typeof input === 'number') return Number.isFinite(input);
+
+  if (input instanceof Uint8Array || input instanceof ArrayBuffer || input instanceof URL) return true;
+
+  if (Array.isArray(input)) return input.every(native);
+
+  return typeof input === 'object' && Object.values(input).every(native);
+});
 
 /** `bytes` lets the decoder detect truncation; `buffer` restores an `ArrayBuffer` source type. */
 const BinaryEnvelopeSchema = v.object({
