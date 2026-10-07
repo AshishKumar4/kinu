@@ -1,6 +1,7 @@
 /**
- * A fresh NimbusProcess instance that never saw `startProcess` must materialize the process before serving; measured on
- * production 253b86c01 (~/kinu-logs/slate-cold/REPORT.md) as `404 x-slate-runner: unstarted`. Runs `slateRunnerSource` verbatim.
+ * A runner whose start fails answers so and retries on the next request; measured on production 253b86c01
+ * (~/kinu-logs/slate-cold/REPORT.md) as `404 x-slate-runner: unstarted`. Runs `slateRunnerSource` verbatim. A cold start
+ * over HTTP and RPC, once for requests that arrive together, is the workerd slate-durability journey's.
  */
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
@@ -9,7 +10,6 @@ import { present, scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 import { slateRunnerSource } from '../src/slates/resident';
-import { slateBatchStub } from '../src/slates/rpc-transport';
 
 /** Only `storage.sql` and `waitUntil` are read before `startProcess`. */
 interface RunnerCtx { readonly storage: { readonly sql: Record<string, never> }; waitUntil(task: Promise<void>): void }
@@ -30,16 +30,6 @@ interface RunnerInstance {
 }
 
 interface RunnerClass { new (ctx: RunnerCtx, env: RunnerEnv): RunnerInstance }
-
-// The authored fixture below counts its own constructions on a declared
-// global — the runner's start count, since a boot exists to produce exactly
-// one Slate. A `var` declaration, not an assertion, because the string source
-// under test writes through `globalThis`.
-declare global {
-  var __slateStarts: number | undefined;
-}
-
-const slateStarts = () => globalThis.__slateStarts ?? 0;
 
 /** Dynamic import: the runner module is generated at runtime. */
 async function loadRunner(dir: string, application: string): Promise<RunnerClass> {
@@ -89,87 +79,9 @@ function instanceOf(Runner: RunnerClass): RunnerInstance {
   return new Runner({ storage: { sql: {} }, waitUntil() {} }, env);
 }
 
-const PING_APP = [
-  'import { SlateObject } from "./server.js";',
-  'export class Slate extends SlateObject {',
-  '  constructor(ctx, env) { super(ctx, env); globalThis.__slateStarts = (globalThis.__slateStarts ?? 0) + 1; }',
-  '  async ping() { return { starts: globalThis.__slateStarts }; }',
-  '  async fetch(request) {',
-  '    if (new URL(request.url).pathname === "/ping") {',
-  '      return Response.json({ message: "pong" });',
-  '    }',
-  '    return new Response("Not found", { status: 404 });',
-  '  }',
-  '}',
-].join('\n');
-
 const get = (path: string) => new Request(`https://slate.invalid${path}`);
 
-describe('a re-created runner instance', () => {
-  test('starts its process on the first request and starts only once', async () => {
-    const Runner = await loadRunner(scratchDir('kinu-runner-cold'), PING_APP);
-    const runner = instanceOf(Runner);
-    const base = slateStarts();
-
-    // No startProcess call: an instance re-created behind an already-running process row.
-    const first = await runner.fetch(get('/ping'));
-
-    expect(first.status).toBe(200);
-    expect(first.headers.get('x-slate-runner')).toBeNull();
-    // SAFETY: `PING_APP` answers `Response.json({ message: 'pong' })` on /ping.
-    expect(await first.json<{ message: string }>()).toEqual({ message: 'pong' });
-    expect(slateStarts()).toBe(base + 1);
-
-    const second = await runner.fetch(get('/ping'));
-
-    expect(second.status).toBe(200);
-    expect(slateStarts()).toBe(base + 1);
-
-    const cold = instanceOf(Runner);
-    const answers = await Promise.all([cold.fetch(get('/ping')), cold.fetch(get('/ping'))]);
-
-    expect(answers.map((response) => response.status)).toEqual([200, 200]);
-    expect(slateStarts()).toBe(base + 2);
-  });
-
-  test('boots through the same memo whether spawn calls startProcess or a request does', async () => {
-    const Runner = await loadRunner(scratchDir('kinu-runner-idem'), PING_APP);
-    const runner = instanceOf(Runner);
-    const base = slateStarts();
-
-    expect((await runner.startProcess()).ok).toBe(true);
-    expect((await runner.startProcess()).ok).toBe(true);
-    expect((await runner.fetch(get('/ping'))).status).toBe(200);
-    expect(slateStarts()).toBe(base + 1);
-
-    const cold = instanceOf(Runner);
-
-    expect((await cold.fetch(get('/ping'))).status).toBe(200);
-    expect((await cold.startProcess()).ok).toBe(true);
-    expect(slateStarts()).toBe(base + 2);
-  });
-
-  test('the /__rpc batch path starts the process before it forwards', async () => {
-    const Runner = await loadRunner(scratchDir('kinu-runner-rpc'), PING_APP);
-    const runner = instanceOf(Runner);
-
-    interface PingSurface { ping(): Promise<{ starts: number }> }
-
-    const stub = slateBatchStub<PingSurface>(
-      { request: (request) => runner.fetch(request) }, 'inv-1',
-    );
-
-    try {
-      // capnweb HTTP batch against a cold instance: needs the memo and a rebuilt forwarder.
-      const before = slateStarts();
-
-      expect((await stub.ping()).starts).toBe(before + 1);
-      expect(slateStarts()).toBe(before + 1);
-    } finally {
-      stub[Symbol.dispose]();
-    }
-  });
-
+describe('a runner whose application fails to start', () => {
   test('a failed start answers 503 x-slate-runner:start-failed and the next request retries', async () => {
     const dir = scratchDir('kinu-runner-failed');
 
