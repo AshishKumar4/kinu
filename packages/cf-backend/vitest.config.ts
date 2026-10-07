@@ -347,6 +347,15 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         })],
 ['delete-all-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('delete-all-probe.ts'),
         durableObjects: { DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', useSQLite: true } } })],
+['device-user-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('device-user-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'ZGV2aWNlLXVzZXItcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
+        outboundService: async (request) => {
+          throw new Error('Unmatched test egress is disabled: ' + request.url);
+        },
+        durableObjects: {
+          DEVICE_USER_PROBE: { className: 'DeviceUserProbeDO', useSQLite: true },
+          OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          UserDO: { className: 'UserDO', useSQLite: true },
+        }, })],
 ['account-reset-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-reset-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
         outboundService: async (request) => {
           throw new Error('Unmatched test egress is disabled: ' + request.url);
@@ -499,6 +508,7 @@ const runnerOptions = {
           SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
           DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', scriptName: 'delete-all-probe', useSQLite: true },
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
+          DEVICE_USER_PROBE: { className: 'DeviceUserProbeDO', scriptName: 'device-user-probe', useSQLite: true },
           STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', scriptName: 'store-reset-probe', useSQLite: true },
           ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', scriptName: 'addressed-name-probe', useSQLite: true },
           AGENT_FACET_PROBE: { className: 'AgentFacetProbeRoot', scriptName: 'agent-facet-probe', useSQLite: true },
