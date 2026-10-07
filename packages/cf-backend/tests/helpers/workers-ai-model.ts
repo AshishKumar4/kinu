@@ -46,6 +46,46 @@ export function bindingModel(
   return { model, runs };
 }
 
+export interface SharedBinding {
+  readonly models: LanguageModel[];
+  /** The binding itself, for another of the deployment's callers that asks `run` for no raw response. */
+  readonly binding: WorkersAIRunBinding;
+  readonly runs: RecordedRun[];
+}
+
+/** Models for each affinity over ONE binding whose `run`, as workerd's `Ai.run` does, keeps its options on the binding
+ *  and rereads them after awaiting upstream: `upstream(run)` is that await, and a call made meanwhile overwrites them. */
+export function sharedBindingModels(
+  affinities: readonly string[],
+  answer: (run: RecordedRun) => ReadableStream<Uint8Array>,
+  upstream: (run: RecordedRun) => Promise<void>,
+): SharedBinding {
+  const runs: RecordedRun[] = [];
+  let kept: WorkersAIRunOptions | undefined;
+
+  const fake: WorkersAIRunBinding = {
+    async run(model, inputs, options) {
+      const recorded: RecordedRun = { model, inputs, options };
+
+      runs.push(recorded);
+      kept = options;
+      await upstream(recorded);
+      const body = answer(recorded);
+
+      // The shape follows whichever call's options were kept last; the content stays this call's.
+      return kept?.returnRawResponse === true ? eventStream(body) : body;
+    },
+  };
+
+  const binding: Ai = Object.create(fake);
+
+  const models = affinities.map((affinity) => createWorkersAIProvider(binding).createModel('@cf/moonshotai/kimi-k2.6', {
+    env: {}, sessionAffinity: affinity, getAuth: async () => null, hasCredential: async () => false,
+  }));
+
+  return { models, binding, runs };
+}
+
 export function eventStream(body: ReadableStream<Uint8Array>): Response {
   return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
 }
