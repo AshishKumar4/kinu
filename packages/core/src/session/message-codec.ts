@@ -9,6 +9,7 @@ import { isParsedJsonObject, type JsonObject, type JsonValue } from '../utils/js
 import * as v from 'valibot';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
+import { isFrozenTree } from '../utils/freeze';
 
 export type NativeValue =
   | string | number | boolean | null | undefined
@@ -120,12 +121,15 @@ function validated(message: NativeValue | ModelMessage, position: number): Effec
     : Effect.fail(new KinuError('bad_input', `message ${position} is not a model message the SDK accepts`));
 }
 
-/** Messages the SDK's schema has already confirmed. A turn encodes its whole history again at every step, and a message
- *  is never changed in place, so a confirmed one is not walked by the schema again. */
+/** Messages the SDK's schema has already confirmed. A turn encodes its whole history again at every step; a stored
+ *  message is frozen to its leaves (`freezeTree`) and cannot change, so it is walked by the schema once. Any other
+ *  message is its caller's to change, and is confirmed at every encode. */
 const confirmed = new WeakSet<ModelMessage>();
 
 function encoded(message: ModelMessage, position: number): Effect.Effect<StoredValue, KinuError> {
-  const checked = confirmed.has(message) ? Effect.void : Effect.map(validated(message, position), () => { confirmed.add(message); });
+  const checked = confirmed.has(message) ? Effect.void : Effect.map(validated(message, position), () => {
+    if (isFrozenTree({ value: message })) confirmed.add(message);
+  });
 
   return Effect.map(checked, () => encodeValue(v.parse(NativeValueSchema, message)));
 }
