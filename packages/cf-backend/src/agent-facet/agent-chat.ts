@@ -31,7 +31,8 @@ export class FacetChat {
 
   private readonly spend: FacetSpend;
 
-  private read: PreparedAgentTurn | null = null;
+  /** Whether an advisor reviews the turn running. */
+  private reviewsTurns = false;
 
   /** Whether the turn running answers the agent's hirer (a delegated task), not its owner. */
   private parentDriven = false;
@@ -87,9 +88,6 @@ export class FacetChat {
   private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
     const { actor, database, workspace, providers } = this.deps;
     const live: LiveTurn = { dynamic: prepared.dynamic };
-
-    this.read = prepared;
-
     const tools = facetTurnTools(workspace, prepared, actor, { id: turn.id, mode: turn.mode, live, capture: new HeadCapture(), database });
     const { sources: bundle } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id });
 
@@ -113,8 +111,9 @@ export class FacetChat {
     const prepared = await workspace.prepareChat({ turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven });
 
     database.prepare(lease.turnId, prepared);
+    this.reviewsTurns = prepared.reviewsTurns;
 
-    const assembled = await this.assemble(prepared, { id: lease.turnId, mode, runId: lease.runId }, request(item, mode), (profile, inputs) => {
+    const assembled = await this.assemble(prepared, { id: lease.turnId, mode, runId: lease.runId }, { userText: item.text, workMode: mode, explicitTier: metadataTier(item.metadata) }, (profile, inputs) => {
       actor.session.bindProfile(lease, profile, inputs);
     });
 
@@ -161,7 +160,7 @@ export class FacetChat {
       ...chatTurnParts(input),
       autoTitle: { mission: null },
       sleepTime: false,
-      ...(this.read?.reviewsTurns === true && { advisor: projectJsonValue({ value: session.advisorSnapshot(scoped, input.reachableTools) }) }),
+      ...(this.reviewsTurns && { advisor: projectJsonValue({ value: session.advisorSnapshot(scoped, input.reachableTools) }) }),
       ...(report !== null && {
         parentReport: {
           text: report.content,
@@ -252,10 +251,4 @@ export interface AgentOwed {
   readonly next: number | null;
   /** The turn its chat is running. */
   readonly turnId: string | null;
-}
-
-function request(item: ChatTurnInput, mode: WorkMode): TurnAssemblyRequest {
-  const explicitTier = metadataTier(item.metadata);
-
-  return { userText: item.text, workMode: mode, ...(explicitTier !== undefined && { explicitTier }) };
 }

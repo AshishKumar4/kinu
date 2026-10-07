@@ -21,7 +21,7 @@ import type {
   TurnContinuity, FiberCtx,
   LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding,
   BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
-  ActiveSkillSet, TurnSkillSurface, FactsStore,
+  ActiveSkillSet, FactsStore,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   DeferredApproval, DeferredApprovalAnswer,
@@ -55,11 +55,11 @@ import { ActorSession, type ActorTurnLease,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
-  resolveTurnSkills, steerSkillsBlock,
+  steerSkillsBlock,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
-  assembleActorTurn, runHeadInference, withCompactionTrigger, promptCacheKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type RunTurnSources,
+  assembleActorTurn, runHeadInference, withCompactionTrigger, promptCacheKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, subordinateTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
   terminalEffect,
@@ -1642,14 +1642,24 @@ export class LocalAgentSession {
   }
 
   private turnRequest(item: TurnAsked): TurnAssemblyRequest {
-    const explicitTier = metadataTier(item.metadata);
+    return { userText: item.text, workMode: this.turnWorkMode(item), explicitTier: metadataTier(item.metadata) };
+  }
 
-    return { userText: item.text, workMode: this.turnWorkMode(item), ...(explicitTier !== null && { explicitTier }) };
+  private turnModels(): TurnModelSources {
+    const resolver = this.modelResolver;
+
+    return {
+      catalog: this.modelCatalog,
+      normalize: (spec) => this.profiles().normalizeSpec(spec),
+      resolve: (spec) => (resolver ? resolver.resolveModel(spec, this.conversation()) : this.defaultModel('this static-model session')),
+      ...(resolver && {
+        routed: { credentialFor: (spec) => resolver.credentialFor(spec), countInputTokens: (spec, request) => resolver.countInputTokens(spec, request) },
+      }),
+    };
   }
 
   /** Where this session's turns are assembled from (core orchestrator/turn-assembly.ts). */
   private turnSources(item: TurnAsked, lease: Pick<ActorTurnLease, 'runId' | 'turnId'> | null): TurnAssemblySources {
-    const resolver = this.modelResolver;
     const turn = turnReasonForMetadata(item.metadata);
 
     return {
@@ -1658,14 +1668,7 @@ export class LocalAgentSession {
       executors: () => this.rt.executionRouter?.listExecutors() ?? [],
       config: this.config,
       skills: vfsTurnSkills(this.rt.ownFiles, this.config, this.instructionTrust),
-      models: {
-        catalog: this.modelCatalog,
-        normalize: (spec) => this.profiles().normalizeSpec(spec),
-        resolve: (spec) => (resolver ? resolver.resolveModel(spec, this.conversation()) : this.defaultModel('this static-model session')),
-        ...(resolver && {
-          routed: { credentialFor: (spec) => resolver.credentialFor(spec), countInputTokens: (spec, request) => resolver.countInputTokens(spec, request) },
-        }),
-      },
+      models: this.turnModels(),
       profileInputs: async () => {
         const inputs = await this.profiles().inputs();
         this.followAccountSwarms(inputs.envelope.catalog);
@@ -1688,7 +1691,6 @@ export class LocalAgentSession {
       agentsActions: (mode) => agentsActionsFor(this.agentsToolDeps(mode)),
       // A session with no roster substrate never advertises the temporary rung.
       temporaryAsk: () => this.teamDeps?.temporary !== undefined,
-      // A missing SOUL.md renders the default.
       // The workspace's SOUL.md as its agents left it; a missing one renders the default.
       soul: async () => soulIn(this.rt.space) ?? undefined,
       // Re-statted each turn; only files fitting the model window are read, each classified by owner approval.
@@ -2060,20 +2062,6 @@ export class LocalAgentSession {
 
   /** Skill bodies already in the turn's prompt, so a mid-turn steer adds only new ones. */
   private turnActiveSkillNames: readonly string[] = [];
-
-  private (
-    userText: string,
-    roleSkills: readonly string[] = [],
-  ): Promise<TurnSkillSurface> {
-    return resolveTurnSkills({
-      vfs: this.rt.ownFiles,
-      config: this.config,
-      userText,
-      roleSkills,
-      trust: this.instructionTrust,
-      limits: this.modelCatalog.window(),
-    });
-  }
 
   private get scaffoldControl(): ScaffoldControl {
     return {
@@ -2673,22 +2661,13 @@ export class LocalAgentSession {
   /** Where a run actor's turns are assembled from: its own stores, pins and lineage, this workspace's
    *  instruction files and skills. It delegates nothing, so it advertises no agents actions. */
   private runActorSources(actor: HostedActor, runId: string, compaction: CompactionExtension): RunTurnSources {
-    const resolver = this.modelResolver;
-
     return {
       rt: actor.runtime,
       backend: 'cli-local',
       executors: () => actor.runtime.executionRouter?.listExecutors() ?? [],
       config: actor.stores.config,
       skills: vfsTurnSkills(actor.runtime.storage.vfs, actor.stores.config, this.instructionTrust),
-      models: {
-        catalog: this.modelCatalog,
-        normalize: (spec) => this.profiles().normalizeSpec(spec),
-        resolve: (spec) => (resolver ? resolver.resolveModel(spec, this.conversation()) : this.defaultModel('this static-model session')),
-        ...(resolver && {
-          routed: { credentialFor: (spec) => resolver.credentialFor(spec), countInputTokens: (spec, request) => resolver.countInputTokens(spec, request) },
-        }),
-      },
+      models: this.turnModels(),
       profileInputs: () => this.profiles().inputs(),
       ancestors: () => ancestorPins(actor.handle.parentActorId, { actorId: this.rt.actor.actorId, pins: this.config }, (id) => {
         const parent = this.actorHost.describe(id);

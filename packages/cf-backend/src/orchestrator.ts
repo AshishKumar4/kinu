@@ -1675,22 +1675,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       async () => {
         await this.recoverAgent(actorId, []);
 
-        // Its chat takes up the turn it held; the ledger keeps a wake until it answers that it owes nothing.
-        if (isSubordinateOrigin(this.liveAgentOf(actorId).origin)) await this.wakeAgent(actorId, this.leaseAgentWake(actorId));
+        // Its chat takes up the turn it held; the wake is held a lap ahead until it answers that it owes nothing.
+        if (isSubordinateOrigin(this.liveAgentOf(actorId).origin)) {
+          const until = Date.now() + RECOVERY_BACKOFF_CEILING_MS;
+
+          new AgentWakes(this.boundSql).arm(actorId, until);
+          await this.wakeAgent(actorId, until);
+        }
 
         for (const turn of turns) open.close(turn);
       },
       { workspace: this.name, actor: actorId },
     ), { discard: true }));
-  }
-
-  /** A wake held a lap ahead while it is sent: a reset before the agent answers wakes it again then. */
-  private leaseAgentWake(actorId: string): number {
-    const until = Date.now() + RECOVERY_BACKOFF_CEILING_MS;
-
-    new AgentWakes(this.boundSql).arm(actorId, until);
-
-    return until;
   }
 
   private async wakeAgent(actorId: string, until: number): Promise<void> {

@@ -151,7 +151,8 @@ async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'c
 /** Effect-free: a measure between turns assembles too. */
 export async function assembleActorTurn(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<AssembledTurn> {
   const { models } = sources;
-  const { profileInputs, choices, roleSkills, drafted, served, limits } = await draftTurn(sources, request);
+  // The tier never depends on the tools, so the drafted model is the served one.
+  const { profileInputs, choices, roleSkills, drafted, served: spec, limits } = await draftTurn(sources, request);
 
   const { available: availableSkills, activeSkills } = await sources.skills(request.userText, roleSkills, limits);
 
@@ -182,8 +183,6 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const invocable = toolsForInvocation(workMode, withToolText(callable, artifacts.tools));
   const tools = withOperationProfile(taskPlan === null ? invocable : withTaskPlan(invocable, taskPlan), operation);
   const externalTools = allowed.has('eval') ? pick(external, allowed) : {};
-  // The tier never depends on the tools, so the drafted model is the served one.
-  const spec = served;
   const { pinned, invoked } = splitTurnSkills(activeSkills);
 
   const [window, agentsMd, soul, identity, memoryTail] = await Promise.all([
@@ -207,7 +206,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     ...(soul !== undefined && { soulOverride: soul }),
   };
 
-  const { provider } = parseModelSpec(spec);
+  const { provider, modelId } = parseModelSpec(spec);
   const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, provider);
 
   const chat: ActorExecutionInput['chat'] = {
@@ -217,8 +216,10 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     system: buildSystemPromptSync(sources.rt, prompt),
     attachments: { accepts: models.catalog.acceptedMedia(spec), vfs: sources.rt.storage.vfs, budget: sources.attachmentBudget },
     tools,
-    cache: { providerId: provider, modelId: parseModelSpec(spec).modelId, sessionKey: sources.cacheKey(), retention: sources.config.getCacheRetention() },
-    ...chatPorts(sources),
+    cache: { providerId: provider, modelId, sessionKey: sources.cacheKey(), retention: sources.config.getCacheRetention() },
+    ...(sources.budget !== undefined && { budget: sources.budget }),
+    ...(sources.operations !== undefined && { operations: sources.operations }),
+    ...(sources.observeStream !== undefined && { observeStream: sources.observeStream }),
     ...(providerOptions !== undefined && { providerOptions }),
     ...routedChat(models, spec, profile),
   };
@@ -235,14 +236,6 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
       scaffoldSpend: sources.scaffoldSpend,
     },
     profile, profileInputs, operation, externalTools, activeSkills: activeSkills ?? null, window,
-  };
-}
-
-function chatPorts(sources: TurnAssemblySources): Pick<ActorExecutionInput['chat'], 'budget' | 'operations' | 'observeStream'> {
-  return {
-    ...(sources.budget !== undefined && { budget: sources.budget }),
-    ...(sources.operations !== undefined && { operations: sources.operations }),
-    ...(sources.observeStream !== undefined && { observeStream: sources.observeStream }),
   };
 }
 

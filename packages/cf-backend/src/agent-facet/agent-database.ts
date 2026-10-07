@@ -148,14 +148,16 @@ export class AgentDatabase {
 
         for (const row of snapshot.config) upsertRow(this.storage, 'actor_config', row);
 
-        for (const row of snapshot.scaffold) {
-          this.storage.sql.exec("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND version != ? AND status = 'current'", row.actor_id ?? null, row.version ?? null);
-          upsertRow(this.storage, 'scaffold_versions', row);
-        }
+        for (const row of snapshot.scaffold) this.selectScaffold(row);
       });
     }
 
     this.snapshot = snapshot;
+  }
+
+  private selectScaffold(row: StoredRow): void {
+    this.storage.sql.exec("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND version != ? AND status = 'current'", row.actor_id ?? null, row.version ?? null);
+    upsertRow(this.storage, 'scaffold_versions', row);
   }
 
   current(): AgentSnapshot {
@@ -287,11 +289,7 @@ export class AgentDatabase {
   prepare(turnId: string, prepared: PreparedAgentTurn): void {
     this.priced = { model: prepared.sources.model, pricing: prepared.pricing };
     this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(turnId, ...args) };
-    this.storage.transactionSync(() => {
-      void this.sql`UPDATE scaffold_versions SET status = 'historical'
-        WHERE actor_id = ${this.reference().actorId} AND version != ${prepared.scaffold.version ?? null} AND status = 'current'`;
-      upsertRow(this.storage, 'scaffold_versions', prepared.scaffold);
-    });
+    this.storage.transactionSync(() => { this.selectScaffold(prepared.scaffold); });
   }
 
   async acquire(): Promise<HostedActor> {
