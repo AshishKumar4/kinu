@@ -25,7 +25,7 @@ Self-evolving agent framework: swarm tree-search exploration, mutable scaffoldin
 
 ## Vendored
 - `tools/oxlint/anti-slop`: upstream `dmmulroy/anti-slop` pinned in `upstream.json` with per-file digests; `drift.test.ts` names any divergence. Local strengthenings are declared deltas with a reason. Sync: clone upstream, merge `rules/` and tests, `ANTI_SLOP_UPSTREAM=<clone> node --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts --update`, `bun run test:anti-slop`. A sync is a strict improvement: every fixture rejected before is rejected after; an upstream weakening is declined as a delta.
-- `packages/agent-core/dist`: private upstream runtime, digest-pinned by its own `upstream.json` and `drift.test.ts`; never edit its bytes.
+- `packages/agent-core/dist`: private upstream runtime, digest-pinned by its own `upstream.json` and `drift.test.ts`; never edit its bytes. Its packages or source (~/agent-core, formally proved) may be used directly, and are preferred over a Kinu re-implementation (owner, 2026-10-07).
 
 ## Worktrees
 - Agents never edit the primary checkout. Every edit/write path is absolute under your worktree; an edit's section header carries the same absolute path the tag was read from. After the first edit, `git -C <worktree> status` must show it. Resolve the primary by `git worktree list` row one, never a literal path. A stray edit in the primary is reverted path-scoped; never a bare checkout or reset there.
