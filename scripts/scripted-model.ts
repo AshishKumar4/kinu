@@ -426,7 +426,8 @@ export function planTasksProbe(request: ScriptedRequest): ScriptedAnswer | null 
   if (last.includes(PLAN_TASKS_CHORE)) {
     return madeCall(request, 'tasks', PLAN_TASK_TITLES.chore) === undefined
       ? { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.chore] } } }
-      : { text: 'Noted.' };
+      // The words the rows read as a page-sent turn's end (live-app-rows' TURN_ANSWERED).
+      : { text: 'Done.' };
   }
 
   if (last.includes(PLAN_TASKS_PLAN)) {
