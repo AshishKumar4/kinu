@@ -430,9 +430,9 @@ type SharedPrefixCompactor = (
 ) => Promise<readonly ModelMessage[]>;
 
 /**
- * The swarm's half: the same ladder, entered once per branch point and priced for the children's model, so it compacts
- * only past its trigger; keyed by the branch point's durable id so re-entry replays byte-stably and siblings share one
- * cacheable prefix.
+ * The swarm's half: the same ladder, entered once per branch point and priced for the children's model. The caller
+ * owns the policy, so this always forces; keyed by the branch point's durable id so re-entry replays byte-stably and
+ * siblings share one cacheable prefix.
  */
 function sharedPrefixCompactor(extension: KinuExtension): SharedPrefixCompactor {
   return async (messages, basis) => {
@@ -444,7 +444,7 @@ function sharedPrefixCompactor(extension: KinuExtension): SharedPrefixCompactor 
       system: '',
       contextWindow: basis.contextWindow,
       model: basis.model,
-      trigger: 'auto',
+      trigger: 'force',
     });
 
     return compacted ?? messages;
