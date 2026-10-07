@@ -3,7 +3,7 @@ import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { decodeModelMessageValues, relayedAnswer, remoteContextTree } from '@kinu.run/core';
-import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
+import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
 import type { AdvisorRecoverySnapshot, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
@@ -57,7 +57,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   advise(review: AgentReview) { return this.answers.advise(review); }
   enqueueTurn(input: ProgrammaticTurn) { return this.answers.enqueueTurn(input); }
   executeTool(call: AgentToolCall) { return this.answers.executeTool(call); }
-  observe(lines: ReadableStream<Uint8Array>, call: ObservedCall) { return this.answers.observe(lines, call); }
+  observe(lines: ReadableStream<Uint8Array>) { return this.answers.observe(lines); }
   answerMetadata(turnId: string, narration: readonly string[]) { return this.answers.answerMetadata(turnId, narration); }
   reportModelCall(report: ModelCallReport) { return this.answers.reportModelCall(report); }
   reportModelOperation(event: ModelOperationEvent) { return this.answers.reportModelOperation(event); }
@@ -131,7 +131,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   advise(review: AgentReview) { return relayedAnswer(this.host().advise(review)); }
   enqueueTurn(input: ProgrammaticTurn) { return relayedAnswer(this.host().enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return relayedAnswer(this.host().executeTool(call)); }
-  observe(lines: ReadableStream<Uint8Array>, call: ObservedCall) { return relayedAnswer(this.host().observe(lines, call)); }
+  observe(lines: ReadableStream<Uint8Array>) { return relayedAnswer(this.host().observe(lines)); }
   answerMetadata(turnId: string, narration: readonly string[]) { return relayedAnswer(this.host().answerMetadata(turnId, narration)); }
   reportModelCall(report: ModelCallReport) { return relayedAnswer(this.host().reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return relayedAnswer(this.host().reportModelOperation(event)); }

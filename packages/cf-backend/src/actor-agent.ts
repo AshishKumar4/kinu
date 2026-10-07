@@ -4059,7 +4059,7 @@ export abstract class ActorAgent extends Agent<Env> {
       operations: this.modelOperations,
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       attachmentBudget: this.acc.context,
-      observeStream: (chunks, call) => this.chatTransport.observe(chunks, call),
+      observeStream: (chunks) => this.chatTransport.observe(chunks),
       extensions: () => this.extensions.list(),
       dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.dynamicContextSnapshot(profile, tools, memoryTail, activeSkills),
       operation: (profile, inputs) => captureOperationProfile({
