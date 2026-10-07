@@ -1,7 +1,7 @@
 // openWorkspaceCLI: the local resume path, reading a workspace's identity and SOUL.md.
 import { workspaceHome } from '../src/runtime';
 import { scratchDir } from '../../test-utils/src/scratch';
-import { spawnTest } from '@kinu.run/test-utils';
+import { spawnTest, workspaceDatabase } from '@kinu.run/test-utils';
 
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
@@ -19,7 +19,7 @@ const PURPOSE = 'Run the household and the lab.';
 /** Born once: every open case resumes the same workspace, as a second `kinu` process would. */
 const bornPath = await (async () => {
   const dbPath = join(scratchDir('open'), 'agent.db');
-  const made = new Database(dbPath);
+  const made = workspaceDatabase(dbPath);
   await createWorkspace(made, { name: 'jarvis', purpose: PURPOSE, llm: DUMMY_LLM, home: workspaceHome(made) });
   made.close();
 
@@ -28,7 +28,7 @@ const bornPath = await (async () => {
 
 describe('openWorkspaceCLI', () => {
   test('reads the soul out of the workspace filesystem, and its mission onto the identity row', async () => {
-    const db = new Database(bornPath);
+    const db = workspaceDatabase(bornPath);
 
     const { info } = await openWorkspaceCLI(db, bornPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
@@ -51,7 +51,7 @@ describe('openWorkspaceCLI', () => {
 
     const reader = holder.stdout.getReader();
     await reader.read();
-    const db = new Database(bornPath);
+    const db = workspaceDatabase(bornPath);
 
     expect((await openWorkspaceCLI(db, bornPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM })).info.purpose).toBe(PURPOSE);
     db.close();

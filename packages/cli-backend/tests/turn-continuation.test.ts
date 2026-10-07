@@ -7,7 +7,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { AwaitedList, present, scratchDir, scratchPath } from '@kinu.run/test-utils';
+import { AwaitedList, present, scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 import {
   appendMemoryNote, CHAT_SESSION_ID, DYNAMIC_CONTEXT_OPEN_TAG, initWorkspaceSchema, workspaceSkillPath, WORKSPACE_SKILLS_DIR,
   type LLMProviderConfig,
@@ -100,7 +100,7 @@ const isDelta = (message: PromptMessage): boolean => messageText(message).split(
 const WORKSPACE = scratchDir('turn-continuation-workspace');
 
 function workspaceDb() {
-  const db = new Database(scratchPath('turn-continuation', 'agent.db'));
+  const db = workspaceDatabase(scratchPath('turn-continuation', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   return { db, rt: createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM }) };
@@ -135,7 +135,7 @@ async function userEntry(rt: CLIRuntime, text: string): Promise<string> {
 
 describe('AN INTERRUPTED TURN CONTINUES — once', () => {
   test('the continuation seals the run it re-opened, so a third process re-opens nothing', async () => {
-    const db = new Database(scratchPath('turn-continuation', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('turn-continuation', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
@@ -173,7 +173,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
   });
 
   test('a turn re-opened after its process died is counted once as resumed, with the steps it kept', async () => {
-    const db = new Database(scratchPath('turn-continuation', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('turn-continuation', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     const logger = createRecordingLogger();
@@ -206,7 +206,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
   });
 
   test('a re-opened turn keeps the person\u2019s request after this turn\u2019s runtime context on every step', async () => {
-    const db = new Database(scratchPath('turn-continuation', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('turn-continuation', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     await rt.ownFiles.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
@@ -264,7 +264,7 @@ const parkedAfterCall = (lead: string, toolCallId: string): Step => (abortSignal
 async function resumed(cut: Step, finish: Step): Promise<{
   readonly db: Database; readonly stored: string | null; readonly streamed: readonly string[]; readonly continued: readonly PromptMessage[];
 }> {
-  const db = new Database(scratchPath('turn-continuation', 'agent.db'));
+  const db = workspaceDatabase(scratchPath('turn-continuation', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 

@@ -3,13 +3,12 @@
  * `cd` or `export` ends with its call. The workspace's own shell keeps no names; a directory's host shell keeps them.
  */
 import { expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolExecutionOptions } from 'ai';
 import { codemodeSurface, createBashShell, DEVICE_REQUEST_OPTION, DeviceRequestOwnership } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
-import { scratchDir } from '@kinu.run/test-utils';
+import { scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { createCLIRuntime, createHostShell } from '../src/runtime';
 
@@ -26,7 +25,7 @@ const evalDirectory = scratchDir('cli-shell-eval');
 writeFileSync(join(evalDirectory, 'package.json'), '{"name":"probe"}');
 
 const { execute } = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
-  ...codemodeSurface(createCLIRuntime(new Database(join(scratchDir('cli-shell-calls'), 'agent.db')), { llm: null, agentName: 'calls', cwd: evalDirectory }), {}),
+  ...codemodeSurface(createCLIRuntime(workspaceDatabase(join(scratchDir('cli-shell-calls'), 'agent.db')), { llm: null, agentName: 'calls', cwd: evalDirectory }), {}),
   craftedTools: () => [],
 });
 

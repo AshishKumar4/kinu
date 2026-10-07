@@ -3,9 +3,8 @@
  * never share one. The CLI's daemon and its chat boot the same file at once on a workspace's first open.
  */
 import { expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { generation } from '@nimbus-sh/fabric/generation.js';
 import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
@@ -14,8 +13,7 @@ test('two openers booting one workspace at once take different generations, and 
   const path = join(scratchDir('generation'), 'agent.db');
 
   const openers = [0, 1].map(() => {
-    const db = new Database(path, { create: true });
-    db.exec('PRAGMA journal_mode = WAL');
+    const db = workspaceDatabase(path, { create: true });
     const storage = inlineWorkspaceStorage(db);
     const context = workspaceGenerationStorage(storage.sql);
 

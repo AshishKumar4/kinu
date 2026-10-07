@@ -2,12 +2,11 @@
 // run by the next, it reads and writes workspace files. A crafted body is defined in the calling program's scope, so
 // it sees that program's `workspace` here as in the cf sandbox (`renderCraftedDefinitions`).
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import {
   createInlineExecutor, initWorkspaceSchema, selectInjectableCraftedTools, type JsonValue, type LLMProviderConfig,
 } from '@kinu.run/core';
 import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
-import { scratchPath, toolExecute, scratchDir } from '@kinu.run/test-utils';
+import { scratchPath, toolExecute, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { RECORDED_ATTEMPTS } from '../../core/tests/fixtures/crafted-file-attempts';
@@ -33,7 +32,7 @@ const DUMMY_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:
 
 /** Successive `eval` programs over a real CLI runtime's workspace and crafted-tool store. */
 function programs() {
-  const db = new Database(scratchPath('crafted-file-capability', 'agent.db'));
+  const db = workspaceDatabase(scratchPath('crafted-file-capability', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 

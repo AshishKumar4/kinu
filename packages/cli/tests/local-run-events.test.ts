@@ -1,9 +1,8 @@
-import { runToExit } from '@kinu.run/test-utils';
+import { runToExit, workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { mkdirSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
-import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { initRunEventTables, parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
 import { makeSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
@@ -14,7 +13,7 @@ const repoRoot = resolve(__dirname, '../../..');
 async function readLocal(expression: string): Promise<JsonValue> {
   const home = scratchDir('run-events');
   mkdirSync(join(home, 'jarvis'), { recursive: true });
-  const db = new Database(join(home, 'jarvis', 'agent.db'));
+  const db = workspaceDatabase(join(home, 'jarvis', 'agent.db'));
   const execRaw = (ddl: string) => { db.exec(ddl); };
 
   initRunEventTables(execRaw);

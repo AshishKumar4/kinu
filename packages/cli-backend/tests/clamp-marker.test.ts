@@ -1,13 +1,12 @@
 /** Local clamp marker: its advertised remedy, a ranged read of the named path, restores the bytes on any plane. */
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { ConversationSearchStore, buildBuiltinTools, DEFAULT_TOOL_RESULT_MAX_CHARS } from '@kinu.run/core';
 import { createCLIRuntime } from '../src/runtime';
-import { present, scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
+import { present, scratchDir, scratchPath, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 function localRuntime() {
-  const db = new Database(scratchPath('clamp-marker', 'agent.db'), { create: true });
+  const db = workspaceDatabase(scratchPath('clamp-marker', 'agent.db'), { create: true });
 
   return createCLIRuntime(db, {
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
