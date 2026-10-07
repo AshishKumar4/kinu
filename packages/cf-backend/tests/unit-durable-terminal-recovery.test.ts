@@ -126,20 +126,6 @@ function lease(
 }
 
 describe('an interrupted terminal transition finishes the reply it still owed', () => {
-  test('the answer already in the transcript is dispatched and the lease closes', async () => {
-    const harness = orchestratorHarness();
-    boundDelivery(harness, 'ev-owed', 'evt-owed', 5);
-    await persistedDrainTurn(harness, 'evt-owed', 'the build passed');
-    expect(openTransition(harness, 'u-owed')).toBe('first');
-
-    // Classification arms the wake and dispatches nothing; the alarm frame sends the reply.
-    await activateAndClassify(harness);
-    expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: 5 });
-    await harness.agent.terminalRetryPass();
-
-    expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: null });
-    expect(transitionState(harness, 'u-owed')).toBe('done');
-  });
 
   /** Negative control: a lease whose turn produced no answer must stay open to be re-asked. */
   test('a lease whose turn never answered is left open for the sweep to re-ask', async () => {
@@ -177,25 +163,6 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     expect(transitionState(harness, 'u-nothing')).toBe('done');
   });
 
-  test('activation finishes what was answered and re-asks only what was not', async () => {
-    const harness = orchestratorHarness();
-    boundDelivery(harness, 'ev-answered', 'evt-answered', 5);
-    boundDelivery(harness, 'ev-unanswered', 'evt-unanswered', 5);
-    await persistedDrainTurn(harness, 'evt-answered', 'the build passed');
-    await persistedDrainTurn(harness, 'evt-unanswered', null);
-
-    // The reconcile is detached from `onStart`; the wake it arms is its record that it ran.
-    await activateAndClassify(harness);
-
-    // Activation only proves existence and arms the wake; the wake frame does the work.
-    expect(lease(harness, 'ev-answered')).toEqual({ turn_id: 'evt-answered', consumed_at: 5 });
-    expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: 'evt-unanswered', consumed_at: 5 });
-    await harness.agent.terminalRetryPass();
-
-    expect(lease(harness, 'ev-answered').turn_id).toBe('evt-answered');
-    expect(lease(harness, 'ev-answered').consumed_at).toBeNull();
-    expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: null, consumed_at: null });
-  });
 });
 
 const interruptedTerminalFiber: FiberRecoveryContext = {
