@@ -1,7 +1,7 @@
 /** The agent bundle: `src/agent-facet/agent-facet.ts` alone, built apart from the Worker and served from assets (D9). */
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
-import { dirname, resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { buildSync, stop } from 'esbuild';
 import type { Plugin } from 'vite';
 import { unstable_readConfig } from 'wrangler';
@@ -16,12 +16,15 @@ export const workerCompatibility = {
 
 export const AGENT_BUNDLE_ENTRY = resolve(import.meta.dirname, 'src/agent-facet/agent-facet.ts');
 
-const AGENT_BUNDLE_OUTPUT = resolve(import.meta.dirname, 'public/_agent/agent.js');
+const AGENT_BUNDLE_OUTPUT = resolve(import.meta.dirname, 'public/_agent');
 
-/** The bundle and its source map, which names each package's share of a facet isolate's heap and churn. */
+/**
+ * The bundle as the module map a Worker Loader takes, `agent.js` its main module, and each module's source map. A
+ * dynamic import is its own chunk, so code an agent's turn never imports is never compiled in its isolate.
+ */
 export function buildAgentBundle(entry: string = AGENT_BUNDLE_ENTRY) {
   const result = buildSync({
-    entryPoints: [entry], outfile: 'agent.js', sourcemap: 'external',
+    entryPoints: { agent: entry }, outdir: '/', splitting: true, chunkNames: 'chunk-[hash]', sourcemap: 'external',
     bundle: true, write: false, format: 'esm', platform: 'neutral', target: 'es2022',
     mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'],
     minify: true, keepNames: true, charset: 'ascii', legalComments: 'none',
@@ -29,12 +32,13 @@ export function buildAgentBundle(entry: string = AGENT_BUNDLE_ENTRY) {
     external: ['cloudflare:*', 'node:*'],
   });
 
-  const text = result.outputFiles.find((file) => file.path.endsWith('.js'))?.text;
-  const map = result.outputFiles.find((file) => file.path.endsWith('.js.map'))?.text;
+  const ascii = (text: string): string => text.replace(/[^\0-\x7f]/g, (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  const modules = Object.fromEntries(result.outputFiles.filter((file) => file.path.endsWith('.js')).map((file) => [basename(file.path), ascii(file.text)]));
+  const maps = Object.fromEntries(result.outputFiles.filter((file) => file.path.endsWith('.js.map')).map((file) => [basename(file.path), file.text]));
 
-  if (text === undefined || map === undefined) throw new Error('the agent bundle build produced no output');
+  if (modules['agent.js'] === undefined) throw new Error('the agent bundle build produced no agent.js');
 
-  return { code: text.replace(/[^\0-\x7f]/g, (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`), map };
+  return { modules, maps };
 }
 
 /**
@@ -55,11 +59,12 @@ export function agentBundle(): Plugin {
     name: 'kinu:agent-bundle',
     async buildStart() {
       if (built) return;
-      mkdirSync(dirname(AGENT_BUNDLE_OUTPUT), { recursive: true });
+      mkdirSync(AGENT_BUNDLE_OUTPUT, { recursive: true });
       const bundle = buildAgentBundle();
-      writeWhole(AGENT_BUNDLE_OUTPUT, bundle.code);
-      writeWhole(`${AGENT_BUNDLE_OUTPUT}.map`, bundle.map);
-      writeWhole(resolve(dirname(AGENT_BUNDLE_OUTPUT), 'compatibility.json'), JSON.stringify(workerCompatibility));
+      writeWhole(resolve(AGENT_BUNDLE_OUTPUT, 'modules.json'), JSON.stringify(bundle.modules));
+
+      for (const [name, map] of Object.entries(bundle.maps)) writeWhole(resolve(AGENT_BUNDLE_OUTPUT, name), map);
+      writeWhole(resolve(AGENT_BUNDLE_OUTPUT, 'compatibility.json'), JSON.stringify(workerCompatibility));
       // buildSync leaves esbuild's service process running for the life of the process that ran the build.
       await stop();
       built = true;
