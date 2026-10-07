@@ -62,7 +62,7 @@ The main agent orchestrates and does most fixes and every conflict resolution it
 - No speculative machinery: no check, guard, cap, timeout, validation, retry or fallback for an imagined case. Find the cause or the platform limit and design for it. Every state field, type, check, seam and argument earns its place, or goes. A schema carries no redundant or derivable column or table.
 - Reuse a recorded measurement (platform catalog, decision logs, `kinu-logs`) before running a new probe.
 - A provider failure fails over at once along the user's fallback chain for that model or role, parking the refused model until its Retry-After; the last entry retries as the user set it (default 3), OMP style (7a0a9820c). The user sees the provider's own words and is never handed a fix command.
-- An architecture change the owner did not ask for goes to the owner before it lands.
+- An architecture change the owner did not ask for goes to the owner before it lands. Questions for the owner go through the harness's question tool, never a prose list.
 
 ## Docs
 - `no-ai-slop` standard, ASD-STE100, Zinsser order (simplicity, brevity, clarity, humanity); the reader wins over the letter of STE. Owner's first-person voice for user-facing prose. No AI-edited disclaimer line here (two generators write docs and print none).
