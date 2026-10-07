@@ -5,6 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
 import { expect, it } from 'vitest';
+import * as v from 'valibot';
 import { REGISTRY_ENTRY, REGISTRY_HOST, REGISTRY_MANIFEST, REGISTRY_PKG } from './npm-registry-fake';
 
 it('a slate survives eviction on its own URL', async () => {
@@ -145,6 +146,33 @@ it('a slate keeps answering its URL while a workspace process runs beside it', a
 
   expect(finished.exitCode).toBe(0);
   expect(await subject().drivePreview(boot.url)).toEqual({ status: 200, body: 'keeper-body' });
+});
+
+/** A call's answer as text: what it printed, or a refusal's whole outcome. */
+const AnswerTextSchema = v.union([v.string(), v.pipe(v.unknown(), v.transform((outcome) => JSON.stringify(outcome)))]);
+
+// Staging, 2026-10-02 (live sandbox hang): the agent's one durable shell queued an `echo` behind a `find`, and a `cd`
+// from one call steered every later one.
+it('the shell tool starts each unnamed call fresh at its cwd; a name keeps its directory and exports, past `exit 3`', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('shells'));
+  const home = '/home/main';
+
+  const [first, second, third, failed, named, other] = (await subject().shellCalls('durability-shells', 'durability-owner', [
+    { command: `mkdir -p ${home}/sub && cd ${home}/sub && export LEFT=1 && pwd` },
+    { command: 'pwd; echo "left=$LEFT"' },
+    { command: 'pwd', cwd: 'sub' },
+    { command: `cd ${home}/sub && export TOKEN=s3 && exit 3`, name: 'build' },
+    { command: 'pwd; echo "token=$TOKEN"', name: 'build' },
+    { command: 'pwd; echo "token=$TOKEN"', name: 'other' },
+  ])).map((answer) => v.parse(AnswerTextSchema, JSON.parse(answer)));
+
+  // The `cd` and `export` of the first call did not reach the second.
+  expect(first).toBe(`cwd: ${home}\n${home}/sub\n`);
+  expect(second).toBe(`cwd: ${home}\n${home}\nleft=\n`);
+  expect(third).toBe(`cwd: ${home}/sub\n${home}/sub\n`);
+  expect(failed).toContain('exit 3');
+  expect(named).toBe(`cwd: ${home}/sub\n${home}/sub\ntoken=s3\n`);
+  expect(other).toBe(`cwd: ${home}\n${home}\ntoken=\n`);
 });
 
 it('npm install streams a package off the registry into the hosted workspace', async () => {
