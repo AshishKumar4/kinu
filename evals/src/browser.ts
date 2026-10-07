@@ -13,6 +13,7 @@ import * as v from 'valibot';
 import { SLATE_UI_ATTRIBUTE } from '@kinu.run/core';
 
 import { declaredSettings } from '../../scripts/browser-declarations';
+import { withBrowser } from '../../scripts/live-app-harness';
 import { DOCUMENT_FAULTS, recordScriptFailures } from '../../scripts/script-failures';
 import { launchTestChrome, type TestChrome } from '../../scripts/test-chrome';
 import { webHeaders, type PublicWebIdentity, type WorkspaceWeb } from './session';
@@ -179,13 +180,8 @@ async function loaded(element: ElementHandle, what: string): Promise<SlateView> 
   return new SlateView(frame);
 }
 
-/** Launch Chrome, run `body` over the workspace's pages, and close it whatever `body` did. */
-export async function browsing<T>(web: WorkspaceWeb, body: (browser: WorkspaceBrowser) => Promise<T>): Promise<T> {
-  const chrome = await openBrowser();
-
-  try {
-    return await body(new WorkspaceBrowser(chrome.browser, web));
-  } finally {
-    await chrome.close();
-  }
+/** A browser row's Chrome (`withBrowser`, which also trusts a loopback dev server's preview zone), running `body`
+ *  over the workspace's pages. */
+export function browsing<T>(web: WorkspaceWeb, body: (browser: WorkspaceBrowser) => Promise<T>): Promise<T> {
+  return withBrowser((browser) => body(new WorkspaceBrowser(browser, web)));
 }
