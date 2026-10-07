@@ -1697,7 +1697,9 @@ export abstract class ActorAgent extends Agent<Env> {
             this.liveReadsMoved(['listWorkspaceAgents']);
             this.chatTransport.quiet();
             this.overviewChanged();
-            this.detachOwned(Effect.promise(() => this.restWhenIdle()));
+
+            // A close still held rests the actor as it ends.
+            if (!this.terminal.closing) this.detachOwned(Effect.promise(() => this.restWhenIdle()));
           },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
@@ -4041,6 +4043,7 @@ export abstract class ActorAgent extends Agent<Env> {
         routed: routedModelReads(providers),
       },
       profileInputs: async () => reads.profileInputs,
+      choices: reads.choices,
       toolset: (mode) => (mode === input.requestedWorkMode ? input.tools : this.actorToolsets(mode).turn),
       // MCP tools were admitted against the request's model in `readTurnInputs`.
       externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),
