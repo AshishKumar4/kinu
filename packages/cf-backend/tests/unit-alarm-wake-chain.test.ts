@@ -318,21 +318,24 @@ describe('the workspace keeps exactly one wake per job', () => {
       id: 'bgjob-search', kind: 'agents', workMode: 'build', now: Date.now() - 60_000, label: 'search: tokenize faster',
       input: JSON.stringify({ action: 'swarm', task, preset: 'ideate', branches: 1, depth: 1 }),
     });
-    await agent.activateActor();
-    await agent.terminalRetryPass();
-    const redriven = present(jobsOver(db).get('bgjob-search'), 'the re-driven job');
-    expect(redriven).toMatchObject({ status: 'running', resumeAttempts: 1 });
 
-    // The next wake's pass, a second after the instant the re-drive wrote.
-    const passAt = present(redriven.resumeAfter, "the re-drive's next-attempt instant") + 1_000;
-    setSystemTime(new Date(passAt));
-    await agent.terminalRetryPass();
+    try {
+      await agent.activateActor();
+      await agent.terminalRetryPass();
+      const redriven = present(jobsOver(db).get('bgjob-search'), 'the re-driven job');
+      expect(redriven).toMatchObject({ status: 'running', resumeAttempts: 1 });
 
-    // A wake armed at or before the pass fires at once, and its pass arms it again.
-    expect(armedWakes(db).filter((wake) => wake.time <= passAt)).toEqual([]);
+      // The next wake's pass, a second after the instant the re-drive wrote.
+      const passAt = present(redriven.resumeAfter, "the re-drive's next-attempt instant") + 1_000;
+      setSystemTime(new Date(passAt));
+      await agent.terminalRetryPass();
 
-    expect(await agent.cancelBackgroundJob('bgjob-search')).toEqual({ ok: true });
-    await joinHarnessFibers();
+      // A wake armed at or before the pass fires at once, and its pass arms it again.
+      expect(armedWakes(db).filter((wake) => wake.time <= passAt)).toEqual([]);
+    } finally {
+      expect(await agent.cancelBackgroundJob('bgjob-search')).toEqual({ ok: true });
+      await joinHarnessFibers();
+    }
   });
 
   test('a failed re-arm leaves the previous wake in place', async () => {
