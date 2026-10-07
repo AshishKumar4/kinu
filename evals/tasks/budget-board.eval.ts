@@ -1,13 +1,16 @@
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
+import { shows, sightEvidence, type Sight } from '../src/sight';
 import { defineEvalTask, type EvidenceCall } from '../src/task';
-import { matchesReference, SlateRefusal, type EvalVerifier, type Normalize, type Script, type SlateClient } from '../src/verifier';
+import { matchesReference, SLATE_CAUSE, SlateRefusal, type EvalCheckOutcome, type EvalVerifier, type Normalize, type Script, type SlateClient } from '../src/verifier';
 
 // Two slates that depend on each other: a ledger of team expenses, and a budget board that reads
-// the ledger through an app binding instead of keeping its own copy. Euros and an exchange-rate
-// file arrive, the ledger's listing is replaced by pages, then the board is asked a question. The
-// checker records every expense itself and answers each request with its own books below.
+// the ledger through an app binding instead of keeping its own copy. The board gets a page, checked
+// in the browser as its owner sees it: in the work surface and in the chat, its buttons pressed, one
+// of them asking the agent. Euros and an exchange-rate file arrive, the ledger's listing is replaced
+// by pages, then the board is asked a question. The checker records every expense itself and
+// answers each request, and computes each figure the page must show, with its own books below.
 
 const MISSION = "Northwind Studio's operations workspace. We track what each team spends against its monthly budget.";
 
@@ -16,6 +19,11 @@ const TEAMS = ['design', 'growth', 'platform', 'support'];
 const RATES_PATH = '/home/user/fx/rates.json';
 
 const QUESTION_MONTH = '2027-03';
+
+const NOTES = '/home/user/budget/notes';
+
+/** Recorded by the checker while the page is open, after the page was built: growth stays within budget. */
+const LATE_EXPENSE = { id: 'x-341', team: 'growth', amountCents: 1_234, category: 'software', dateIso: '2027-03-26' };
 
 type Expense = { id: string; team: string; amountCents: number; category: string; dateIso: string; currency?: string };
 
@@ -109,6 +117,8 @@ function usCents(expense: Expense, rate: number): number {
   return expense.currency === 'EUR' ? Math.round(expense.amountCents * rate) : expense.amountCents;
 }
 
+type StatusRow = { team: string; budgetCents: number; spentCents: number; remainingCents: number; over: boolean };
+
 class ReferenceBooks {
   rate = FIRST_RATE.EUR;
   readonly #expenses: Required<Expense>[] = [];
@@ -144,7 +154,7 @@ class ReferenceBooks {
     return { ok: true };
   }
 
-  status(month: string): { team: string; budgetCents: number; spentCents: number; remainingCents: number; over: boolean }[] {
+  status(month: string): StatusRow[] {
     return TEAMS.flatMap((team) => {
       const budgetCents = this.#budgets.get(JSON.stringify([team, month]));
 
@@ -153,6 +163,14 @@ class ReferenceBooks {
 
       return [{ team, budgetCents, spentCents, remainingCents: budgetCents - spentCents, over: spentCents > budgetCents }];
     });
+  }
+
+  /** The page's Cover: the team's budget for the month raised to its spending, rounded up to a whole hundred dollars. */
+  cover(team: string, month: string): void {
+    const row = this.status(month).find((each) => each.team === team);
+
+    if (row === undefined) throw new Error(`${team} has no budget in ${month} to cover`);
+    this.#budgets.set(JSON.stringify([team, month]), Math.ceil(row.spentCents / 10_000) * 10_000);
   }
 
   /** The contract's methods over these books, called the way the checker calls the slates. */
@@ -225,14 +243,15 @@ const readTheMonth: Script<Method> = async (books) => {
 
 // ── Checker helpers ──────────────────────────────────────────────────
 
-/** A turn's requests, or a new rate the checker wrote to the rates file between them. */
-type Step = readonly Script<Method>[] | { rate: number };
+/** A turn's requests, a new rate the checker wrote to the rates file between them, or a press of a team's Cover. */
+type Step = readonly Script<Method>[] | { rate: number } | { cover: string };
 
 async function booksAfter(history: readonly Step[]): Promise<ReferenceBooks> {
   const books = new ReferenceBooks();
 
   for (const step of history) {
     if ('rate' in step) books.rate = step.rate;
+    else if ('cover' in step) books.cover(step.cover, QUESTION_MONTH);
     else for (const script of step) await script(books.client());
   }
 
@@ -293,7 +312,57 @@ async function pagesMatch(verifier: EvalVerifier, history: readonly Step[]): Pro
 
 const RATE_2: Step = { rate: SECOND_RATE.EUR };
 
-const AFTER_TURN_2: readonly Step[] = [TURN_1, [spendEuros], RATE_2];
+const COVER_DESIGN: Step = { cover: 'design' };
+
+const spendLate: Script<Method> = async (books) => {
+  await books('record', LATE_EXPENSE);
+};
+
+/** The books once the page's turn is done: design covered from the page, and the checker's late expense. */
+const AFTER_PAGE: readonly Step[] = [TURN_1, COVER_DESIGN, [spendLate]];
+
+const AFTER_EUROS: readonly Step[] = [...AFTER_PAGE, [spendEuros], RATE_2];
+
+// ── The page ─────────────────────────────────────────────────────────
+
+const COVER = /\bcover\b/i;
+
+const ASK = /\bask\b/i;
+
+/**
+ * How a reading of the board's page differs from `rows`: each team with a budget shows its budget, spending and what
+ * remains in a part of the page that names it alone and fits across it, and has Cover and Ask Kinu buttons exactly
+ * when it is over budget. Nothing when the page shows the month.
+ */
+function misreadings(sight: Sight, rows: readonly StatusRow[]): string[] {
+  return rows.flatMap((row) => {
+    const regions = (sight.regions[row.team] ?? []).filter((region) => !region.clipped);
+    const amounts = [row.budgetCents, row.spentCents, row.remainingCents].map((cents) => cents / 100);
+    const pressable = (label: RegExp): boolean => regions.some((region) => region.controls.some((control) => label.test(control)));
+
+    return [
+      ...(regions.some((region) => amounts.every((amount) => shows(region.text, amount))) ? [] : [`${row.team} does not show ${amounts.join(', ')} in a part of its own`]),
+      ...(row.over && !(pressable(COVER) && pressable(ASK)) ? [`${row.team} is over budget and lacks a Cover or an Ask Kinu button`] : []),
+      ...(!row.over && (pressable(COVER) || pressable(ASK)) ? [`${row.team} is within budget and has a Cover or Ask Kinu button`] : []),
+    ];
+  });
+}
+
+/** The board's page in the work surface shows the month as the books after `history` do, with nothing failing in it. */
+async function pageShows(verifier: EvalVerifier, history: readonly Step[]): Promise<EvalCheckOutcome> {
+  const rows = (await booksAfter(history)).status(QUESTION_MONTH);
+
+  return verifier.browse(async (browser) => {
+    const board = await browser.workSurface('board');
+    const { sight, held } = await board.until(TEAMS, (seen) => misreadings(seen, rows).length === 0);
+    const faults = await board.faults();
+
+    return {
+      pass: held && faults.errors.length === 0 && faults.scripts.length === 0,
+      evidence: { misread: misreadings(sight, rows), faults, seen: sightEvidence(sight) },
+    };
+  });
+}
 
 // The planted amounts must stay clear of a half cent at both rates, or rounding would be a guess.
 for (const expense of EURO_EXPENSES) {
@@ -337,6 +406,84 @@ Leave both empty when you are done: I will enter the expenses and budgets myself
       await sameAsReference(verifier, 'board-reads-new-expenses-from-the-ledger', { history: [[recordFebruaryAndMarch, refuseBadExpenses, setBudgets]], script: spendMore, currency: false });
     },
   }, {
+    prompt: `I've entered our expenses and budgets. Give the board a page I can work from. It opens on the
+latest month that has a budget and shows, for each team with a budget that month, the budget, what
+the team spent and what is left, in dollars and cents. Each team that is over budget gets two
+buttons: "Cover", which raises that team's budget for the month to what it spent, rounded up to a
+whole hundred dollars, and "Ask Kinu", which sends you the team and the month. When an Ask Kinu
+request reaches you, write ${NOTES}/<team>-<month>.md (for example design-2027-03.md) saying
+how far over budget the team is, in dollars, and which of its expenses that month was the largest.`,
+    verify: async (verifier) => {
+      await verifier.check('the-page-shows-the-month', () => pageShows(verifier, [TURN_1]));
+
+      await verifier.check('ask-kinu-reaches-the-agent', async () => {
+        const note = `${NOTES}/design-${QUESTION_MONTH}.md`;
+        const books = await booksAfter([TURN_1]);
+        const over = -(books.status(QUESTION_MONTH).find((row) => row.team === 'design')?.remainingCents ?? 0) / 100;
+        const [largest] = books.listed({ team: 'design', month: QUESTION_MONTH }).sort((left, right) => right.amountCents - left.amountCents);
+        // Written before anyone asked, a note says nothing about the request reaching the agent.
+        const early = await verifier.readFile(note);
+
+        const reached = await verifier.browse(async (browser) => {
+          const board = await browser.workSurface('board');
+
+          await board.until(TEAMS, (seen) => (seen.regions.design ?? []).some((region) => region.controls.some((label) => ASK.test(label))));
+
+          return verifier.reach(() => board.press(TEAMS, { name: 'design', label: ASK.source }));
+        });
+
+        const written = await verifier.readFile(note);
+
+        return {
+          pass: early === '' && reached.runs.some((run) => run.cause === SLATE_CAUSE && run.tools.length > 0) && shows(written, over)
+            && largest !== undefined && (written.includes(largest.id) || shows(written, largest.amountCents / 100)),
+          evidence: { early: early.slice(0, 300), ...reached, expected: { over, largest: largest?.id }, note: written.slice(0, 600) },
+        };
+      });
+
+      await verifier.check('cover-raises-the-budget', async () => {
+        const rows = (await booksAfter([TURN_1])).status(QUESTION_MONTH);
+        const covered = (await booksAfter([TURN_1, COVER_DESIGN])).status(QUESTION_MONTH);
+
+        const page = await verifier.browse(async (browser) => {
+          const board = await browser.workSurface('board');
+
+          await board.until(TEAMS, (seen) => misreadings(seen, rows).length === 0);
+          const pressed = await board.press(TEAMS, { name: 'design', label: COVER.source });
+          const { sight, held } = await board.until(TEAMS, (seen) => misreadings(seen, covered).length === 0);
+
+          return { pressed, held, misread: misreadings(sight, covered), seen: sightEvidence(sight) };
+        });
+
+        const stored = await matchesReference({
+          slate: slates(verifier), reference: (await booksAfter([TURN_1, COVER_DESIGN])).client(), script: readTheMonth, normalize: normalizer(false),
+        });
+
+        return { pass: page.pressed && page.held && stored.pass, evidence: { page, stored: stored.evidence } };
+      });
+
+      await verifier.check('the-page-reads-new-expenses', async () => {
+        await slates(verifier)('record', LATE_EXPENSE);
+
+        return pageShows(verifier, AFTER_PAGE);
+      });
+
+      await verifier.check('the-chat-previews-the-board', async () => {
+        const rows = (await booksAfter(AFTER_PAGE)).status(QUESTION_MONTH);
+
+        return verifier.browse(async (browser) => {
+          const preview = await browser.chatPreview(await browser.open(), 'board');
+          const { sight, held } = await preview.until(TEAMS, (seen) => misreadings(seen, rows).length === 0);
+          const faults = await preview.faults();
+
+          return {
+            pass: held && faults.errors.length === 0 && faults.scripts.length === 0,
+            evidence: { misread: misreadings(sight, rows), faults, seen: sightEvidence(sight) },
+          };
+        });
+      });
+    },
+  }, {
     seed: [{ path: RATES_PATH, content: `${JSON.stringify(FIRST_RATE)}\n` }],
     prompt: `Some expenses are in euros now. record takes an optional currency, "USD" (the default) or "EUR";
 reject any other with "UNKNOWN_CURRENCY". amountCents stays in the expense's own currency, and entries
@@ -345,20 +492,20 @@ with the rate in ${RATES_PATH}, {"EUR": <US dollars per euro>}, rounding each co
 nearest cent, halves up. I change that file when the rate moves; the board uses whatever it says when
 asked.`,
     verify: async (verifier) => {
-      await sameAsReference(verifier, 'existing-expenses-are-us-dollars', { history: [TURN_1], script: listEverything, currency: true });
-      await sameAsReference(verifier, 'euro-expenses-convert-at-the-file-rate', { history: [TURN_1], script: spendEuros, currency: true });
+      await sameAsReference(verifier, 'existing-expenses-are-us-dollars', { history: AFTER_PAGE, script: listEverything, currency: true });
+      await sameAsReference(verifier, 'euro-expenses-convert-at-the-file-rate', { history: AFTER_PAGE, script: spendEuros, currency: true });
 
       await verifier.check('a-new-rate-applies-when-asked', async () => {
         await verifier.writeFile(RATES_PATH, `${JSON.stringify(SECOND_RATE)}\n`);
 
         return matchesReference({
-          slate: slates(verifier), reference: (await booksAfter(AFTER_TURN_2)).client(), script: readTheMonth, normalize: normalizer(true),
+          slate: slates(verifier), reference: (await booksAfter(AFTER_EUROS)).client(), script: readTheMonth, normalize: normalizer(true),
         });
       });
     },
     verifyAfterEviction: async (verifier) => {
-      await sameAsReference(verifier, 'expenses-survive-an-eviction', { history: AFTER_TURN_2, script: listEverything, currency: true });
-      await sameAsReference(verifier, 'the-board-converts-after-an-eviction', { history: AFTER_TURN_2, script: readTheMonth, currency: true });
+      await sameAsReference(verifier, 'expenses-survive-an-eviction', { history: AFTER_EUROS, script: listEverything, currency: true });
+      await sameAsReference(verifier, 'the-board-converts-after-an-eviction', { history: AFTER_EUROS, script: readTheMonth, currency: true });
     },
   }, {
     prompt: `The ledger is getting long. Replace entries with page({ team?, month?, cursor?, limit }) -> { entries,
@@ -366,7 +513,7 @@ next }: at most limit expenses, in the same order as before, and next, a cursor 
 return the following ones, or null on the last page. limit is 1 to 50; answer anything else with
 { ok: false, error: "BAD_LIMIT" }. The board has to keep working.`,
     verify: async (verifier) => {
-      await verifier.check('ledger-pages-through-every-expense', () => pagesMatch(verifier, AFTER_TURN_2));
+      await verifier.check('ledger-pages-through-every-expense', () => pagesMatch(verifier, AFTER_EUROS));
 
       await verifier.check('ledger-refuses-bad-limits-and-drops-entries', async () => {
         const ledger = verifier.slate('ledger', LEDGER_METHODS);
@@ -387,17 +534,18 @@ return the following ones, or null on the last page. limit is 1 to 50; answer an
         };
       });
 
-      await sameAsReference(verifier, 'board-still-reports-the-month', { history: AFTER_TURN_2, script: readTheMonth, currency: true });
+      await sameAsReference(verifier, 'board-still-reports-the-month', { history: AFTER_EUROS, script: readTheMonth, currency: true });
+      await verifier.check('the-page-still-shows-the-month', () => pageShows(verifier, AFTER_EUROS));
     },
     verifyAfterEviction: async (verifier) => {
-      await verifier.check('pages-survive-an-eviction', () => pagesMatch(verifier, AFTER_TURN_2));
-      await sameAsReference(verifier, 'board-survives-an-eviction', { history: AFTER_TURN_2, script: readTheMonth, currency: true });
+      await verifier.check('pages-survive-an-eviction', () => pagesMatch(verifier, AFTER_EUROS));
+      await sameAsReference(verifier, 'board-survives-an-eviction', { history: AFTER_EUROS, script: readTheMonth, currency: true });
     },
   }, {
     prompt: `Which teams are over budget for ${QUESTION_MONTH}? Reply with just their names, comma-separated, in alphabetical order, or none.`,
     verify: async (verifier) => {
       await verifier.check('names-the-teams-over-budget', async () => {
-        const books = await booksAfter(AFTER_TURN_2);
+        const books = await booksAfter(AFTER_EUROS);
         const expected = books.status(QUESTION_MONTH).filter((row) => row.over).map((row) => row.team).join(', ') || 'none';
         const team = `(?:${TEAMS.join('|')})`;
         const answer = verifier.bareAnswer(new RegExp(`^(${team}(?:\\s*,\\s*${team})*|none)$`, 'i'));
@@ -406,7 +554,7 @@ return the following ones, or null on the last page. limit is 1 to 50; answer an
         return { pass: named === expected, evidence: { answer, expected, replies: verifier.recentReplies() } };
       });
 
-      await sameAsReference(verifier, 'asking-changes-nothing', { history: AFTER_TURN_2, script: readTheMonth, currency: true });
+      await sameAsReference(verifier, 'asking-changes-nothing', { history: AFTER_EUROS, script: readTheMonth, currency: true });
     },
   }],
   evidence: async (call) => {
