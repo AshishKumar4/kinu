@@ -10,7 +10,7 @@ import { newWebSocketRpcSession } from 'capnweb';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { handleNimbusPreviewHostRequest } from '../../src/nimbus-route';
-import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
+import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
@@ -51,7 +51,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'runProgram');
     Reflect.deleteProperty(this, 'forgetActivation');
     Reflect.deleteProperty(this, 'pendingNimbusTasks');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks']);
+    Reflect.deleteProperty(this, 'runShell');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'runShell']);
   }
 
   async portReservations(): Promise<DurabilityReservation[]> {
@@ -89,6 +90,21 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return JSON.stringify(await execute({ code }, { toolCallId: 'slate-program', messages: [], context: undefined }) ?? null);
   }
 
+  /** One call of this workspace's production `shell` tool, as a turn makes it; the answer the model reads. */
+  async runShell(args: { command: string; cwd?: string; name?: string }): Promise<string> {
+    const conversations = { search: async () => [], scroll: async () => null, browse: async () => [] };
+    const execute = buildBuiltinTools({ rt: this.rt, conversations }).shell?.execute;
+
+    if (execute === undefined) throw new Error('No callable shell tool');
+
+    // A failed command throws, and a turn hands the model its message: that is its answer too.
+    try {
+      return JSON.stringify(await execute(args, { toolCallId: 'probe-shell', messages: [], context: undefined }) ?? null);
+    } catch (error) {
+      return JSON.stringify(renderThrownChain({ cause: error }));
+    }
+  }
+
   /**
    * What the next activation starts from when the platform evicts this one but keeps its facets: a new
    * `ctx` over the same storage and facets, so state kept per activation (Nimbus keys its own on `ctx`)
@@ -122,7 +138,7 @@ export { ObservedOrchestrator as OrchestratorAgent };
 /** `slateAs` is absent on purpose: `Rpc.Result` over its recursive `JsonValue` is TS2589; the probe
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks'>;
+  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'runShell'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -427,6 +443,18 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     socket.accept();
 
     return socket;
+  }
+
+  /** Each call of the workspace's `shell` tool in order, as the model read its answer. */
+  async shellCalls(workspace: string, owner: string, calls: Array<{ command: string; cwd?: string; name?: string }>): Promise<string[]> {
+    const target = await this.workspaceTarget(workspace);
+    const answers: string[] = [];
+
+    await this.claimWorkspace(target, workspace, owner);
+
+    for (const call of calls) answers.push(await target.runShell(call));
+
+    return answers;
   }
 
   async readWorkspaceFile(workspace: string, path: string): Promise<string | null> {

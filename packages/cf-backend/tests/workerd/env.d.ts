@@ -286,6 +286,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
     | { ok: false; error: string }
   >;
   reattachTerminal(workspace: string): Promise<{ frames: string[]; output: string }>;
+  shellCalls(workspace: string, owner: string, calls: Array<{ command: string; cwd?: string; name?: string }>): Promise<string[]>;
   refusedTerminalFrame(workspace: string, frame: string): Promise<{ code: number; reason: string }>;
 }
 
