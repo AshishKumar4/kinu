@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Browser, Page } from 'puppeteer';
+import { recordScriptFailures } from '../../scripts/script-failures';
 import { launchTestChrome, type TestChrome } from '../../scripts/test-chrome';
 import { SlateView } from './browser';
 import { shows, type Sight } from './sight';
@@ -136,5 +137,30 @@ describe('a control pressed as a person presses it', () => {
 
   test('two controls that would both do are no one control', async () => {
     expect(await pressed(ROWS, { name: 'design', label: null })).toBeNull();
+  });
+});
+
+describe('what failed in a page', () => {
+  test('an uncaught error, a rejection nothing handled and a script that never loaded, in a frame of the page', async () => {
+    const page = await browser.newPage();
+
+    try {
+      await recordScriptFailures(page);
+
+      const framed = '<p>drawn</p><script>throw new Error("the page broke")</script><script>Promise.reject(new Error("nobody waited"))</script>'
+        + '<script src="http://127.0.0.1:9/missing.js"></script>';
+
+      await page.goto(`data:text/html,${encodeURIComponent(`<iframe srcdoc="${framed.replaceAll('"', '&quot;')}"></iframe>`)}`, { waitUntil: 'load' });
+      const frame = page.frames().find((each) => each !== page.mainFrame());
+
+      if (frame === undefined) throw new Error('the page has no frame');
+      await frame.waitForFunction('(window.__scriptFailures ?? []).length > 0 && (window.__uncaughtErrors ?? []).length > 1', { timeout: 0 });
+      const faults = await new SlateView(frame).faults();
+
+      expect(faults.errors).toEqual(['Uncaught Error: the page broke', 'Uncaught (in promise) nobody waited']);
+      expect(faults.scripts).toEqual(['http://127.0.0.1:9/missing.js']);
+    } finally {
+      await page.close();
+    }
   });
 });
