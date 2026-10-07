@@ -1308,13 +1308,10 @@ window.WebSocket = new Proxy(RealWebSocket, {
   },
 });
 
-/** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo; `head_stream` and `head_activity` are a swarm head's live paint and landed step. */
+/** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, "head_stream", "head_activity"]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT]),
   reads: v.optional(v.array(v.string())),
-  headId: v.optional(v.string()),
-  kind: v.optional(v.string()),
-  delta: v.optional(v.string()),
   actorId: v.optional(v.string()),
   id: v.optional(v.string()),
   state: v.optional(v.string()),
