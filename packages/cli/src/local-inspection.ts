@@ -43,7 +43,6 @@ import {
   type GepaRunSummary,
   type HeadRunView,
   type JsonObject,
-  type JsonValue,
   type ResolvedTurnProfile,
   type EventVariant,
   type KinuEvent,
@@ -59,7 +58,8 @@ import {
   type ReasoningEffort,
   setModel,
   setReasoningEffort,
-  decodeJsonValue,
+  getRunTimeline,
+  JsonObjectSchema,
   parseJsonValue,
   listRecordObjectives,
   listRecordCells,
@@ -82,7 +82,7 @@ import {
   type MemorySearchResult,
 } from '@kinu.run/core';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
-import { classify, tolerateAsync } from '@kinu.run/core/obs';
+import { tolerateAsync } from '@kinu.run/core/obs';
 import {
   agentStateFiles, makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
   openWorkspaceCLI, resolverModelPlane, soulOf, workspaceMemory,
@@ -275,92 +275,22 @@ export function listLocalRunEvents(
   return readMainActorTable(name, 'run_events', [], (sql, actor) => new RunEventRecorder(sql, actor).read(runId, opts));
 }
 
-/** Local peer of core's `getRunTimeline`, sharing its ceiling; `limit` is user input bound to raw `LIMIT ?`. */
+/** Core's `getRunTimeline` over the local database, as the cloud answers it; only the default of 100 is this surface's. */
 export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
   return withLocalDb(name, (db) => localTimeline(db, limit));
 }
 
 function localTimeline(db: SqliteDb, limit: number): JsonObject[] {
-  const window = boundedInt(limit, 100, 1, RUN_TIMELINE_MAX);
-
-  // Every rail is actor-scoped; this reports the main actor.
   const actor = mainActor(db);
-  const rows: JsonObject[] = [];
 
-  if (tableExists(db, 'run_events')) {
-    const sql = makeSql(db);
-    const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
-    const latest = listRuns(recorder, null, 1).items[0];
+  if (actor === null || !tableExists(db, 'run_events')) return [];
+  const sql = makeSql(db);
+  const deps = { sql, actor, events: new RunEventRecorder(sql, actor), jobs: new BackgroundJobStore(sql, actor), currentRunId: null };
 
-    if (latest) {
-      rows.push(...recorder.read(latest.runId, { limit: window }).map((e) => ({
-        id: `${e.runId}:${e.eventIndex}`,
-        kind: `run:${e.type}`,
-        runId: e.runId,
-        payload: decodeJsonValue({ value: e }),
-        ts: Date.parse(e.timestamp) || 0,
-      })));
-    }
-  }
+  // Through JSON, as the cloud's spans cross its wire: an absent field is no key.
+  const spans = getRunTimeline(deps, { limit: boundedInt(limit, 100, 1, RUN_TIMELINE_MAX) });
 
-  if (tableExists(db, 'agent_log')) {
-    rows.push(...all<{
-      id: string; kind: string; turn_id: string | null; step_idx: number | null; payload: string; received_at: number;
-    }>(
-      db,
-      `SELECT id, kind, turn_id, step_idx, payload, received_at
-       FROM agent_log
-       ORDER BY received_at DESC
-       LIMIT ?`,
-      window,
-    ).map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      turnId: row.turn_id,
-      stepIdx: row.step_idx,
-      payload: parseJson(row.payload),
-      ts: row.received_at,
-    })));
-  }
-
-  if (actor && tableExists(db, 'evolution_events')) {
-    rows.push(...all<{ id: string; type: string; message: string; data: string | null; created_at: number }>(
-      db,
-      `SELECT id, type, message, data, created_at
-       FROM evolution_events
-       WHERE actor_id = ?
-       ORDER BY created_at DESC
-       LIMIT ?`,
-      actor.actorId, window,
-    ).map((row) => ({
-      id: row.id,
-      kind: `evolution:${row.type}`,
-      message: row.message,
-      data: parseJson(row.data),
-      ts: row.created_at,
-    })));
-  }
-
-  if (actor && tableExists(db, 'search_nodes')) {
-    rows.push(...all<{ id: string; action: string; value: number; status: string; created_at: number }>(
-      db,
-      `SELECT id, action, value, status, created_at
-       FROM search_nodes
-       WHERE actor_id = ?
-       ORDER BY created_at DESC
-       LIMIT ?`,
-      actor.actorId, window,
-    ).map((row) => ({
-      id: row.id,
-      kind: 'swarm',
-      label: row.action,
-      value: row.value,
-      status: row.status,
-      ts: row.created_at,
-    })));
-  }
-
-  return rows.sort((a, b) => timestampOf(b) - timestampOf(a)).slice(0, window);
+  return v.parse(v.array(JsonObjectSchema), parseJsonValue(JSON.stringify(spans)));
 }
 
 /** Every search, deliberately; core's projections answer one. */
@@ -849,20 +779,3 @@ const NOOP_ALARM: AlarmScheduler = {
   async scheduleAt() {},
 };
 
-function parseJson(value: string | null): JsonValue {
-  if (value == null) return null;
-
-  try {
-    return parseJsonValue(value);
-  } catch (error) {
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
-
-    return value;
-  }
-}
-
-function timestampOf(value: JsonObject): number {
-  const parsed = v.safeParse(v.number(), value.ts);
-
-  return parsed.success ? parsed.output : 0;
-}

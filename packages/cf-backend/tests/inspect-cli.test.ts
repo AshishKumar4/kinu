@@ -136,48 +136,43 @@ describe('kinu inspecting a populated cloud workspace', () => {
     expect((await kinu('events', 'cloudtest')).stdout).toContain('chat chat_ws');
   });
 
-  test('the timeline after a working turn shows its trigger, each call, the failed one, its tokens and its evolution', async () => {
+  test('kinu timeline answers one shape on both backends: the trigger, each call, the failed one, the tokens, the review', async () => {
     const SpanSchema = v.looseObject({
       ts: v.number(), kind: v.string(), label: v.string(), source: v.string(), rawType: v.optional(v.string()),
       detail: v.optional(v.string()), elapsedMs: v.optional(v.number()),
     });
 
-    const spans = v.parse(v.array(SpanSchema), JSON.parse((await kinu('timeline', 'cloudtest', '--json')).stdout));
-    const of = (rawType: string) => spans.filter((span) => span.rawType === rawType);
+    const spansOf = async (name: string) => v.parse(v.array(SpanSchema), JSON.parse((await kinu('timeline', name, '--json')).stdout));
+    const reviews = (spans: v.InferOutput<typeof SpanSchema>[]) => spans.filter((span) => span.source === 'evolution' && span.rawType === 'turn_complete');
 
-    expect(spans.map((span) => span.ts)).toEqual(spans.map((span) => span.ts).sort((a, b) => a - b));
-    expect(of('run_start')).toEqual([expect.objectContaining({ kind: 'trigger', detail: TASK })]);
-    expect(of('tool_call_end').map((span) => [span.kind, span.label])).toEqual([['tool-call', 'file'], ['tool-call', 'file failed']]);
-    expect(of('tool_call_end').every((span) => typeof span.elapsedMs === 'number')).toBe(true);
-    expect(of('tool_call_end')[1]?.detail).toContain('ENOENT');
-    expect(of('turn_end')[0]?.detail).toMatch(/^\d+ in \+ \d+ out tok$/u);
-    expect(of('run_end').map((span) => span.label)).toEqual(['Run ended (completed)']);
-    expect(of('turn_complete')).toEqual([expect.objectContaining({ kind: 'llm-turn', source: 'evolution', label: expect.stringContaining('2 tool calls') })]);
+    const expectTurn = (spans: v.InferOutput<typeof SpanSchema>[]): void => {
+      const of = (rawType: string) => spans.filter((span) => span.rawType === rawType);
+
+      expect(spans.map((span) => span.ts)).toEqual(spans.map((span) => span.ts).sort((a, b) => a - b));
+      expect(of('run_start')).toEqual([expect.objectContaining({ kind: 'trigger', detail: TASK })]);
+      expect(of('tool_call_end').map((span) => [span.kind, span.label])).toEqual([['tool-call', 'file'], ['tool-call', 'file failed']]);
+      expect(of('tool_call_end').every((span) => typeof span.elapsedMs === 'number')).toBe(true);
+      expect(of('tool_call_end')[1]?.detail).toContain('ENOENT');
+      expect(of('turn_end')[0]?.detail).toMatch(/^\d+ in \+ \d+ out tok$/u);
+      expect(of('run_end').map((span) => span.label)).toEqual(['Run ended (completed)']);
+    };
+
+    const reviewed = [expect.objectContaining({ kind: 'llm-turn', label: expect.stringMatching(/2 tool calls .* had errors/u) })];
+    const cloud = await spansOf('cloudtest');
+    const onMachine = await spansOf('localtest');
+
+    expectTurn(cloud);
+    expectTurn(onMachine);
+    // A task is reviewed as it ends; a user's turn is rated by their next message, so it is reviewed then.
+    expect(reviews(cloud)).toEqual(reviewed);
+    expect(reviews(onMachine)).toEqual([]);
+    await localTurn('localtest', 'Thanks.');
+    expect(reviews(await spansOf('localtest'))).toEqual(reviewed);
 
     const printed = await kinu('timeline', 'cloudtest');
 
     expect(printed.stdout).toContain('file failed');
     expect(printed.stdout).toContain('trigger');
-  });
-
-  // The local timeline lists its rows raw and newest first; the cloud's are core's spans, oldest first.
-  test('a local workspace\'s timeline carries the same turn, and its review once the user answers', async () => {
-    const RowSchema = v.looseObject({ kind: v.string(), ts: v.number(), payload: v.optional(v.unknown()), message: v.optional(v.string()) });
-    const CallSchema = v.looseObject({ name: v.string(), outcome: v.looseObject({ success: v.boolean() }) });
-    const timeline = async () => v.parse(v.array(RowSchema), JSON.parse((await kinu('timeline', 'localtest', '--json')).stdout));
-    const rows = await timeline();
-
-    expect(rows.map((row) => row.ts)).toEqual(rows.map((row) => row.ts).sort((a, b) => b - a));
-    expect(rows.filter((row) => row.kind === 'run:run_start').map((row) => v.parse(v.looseObject({ userMessage: v.string() }), row.payload).userMessage)).toEqual([TASK]);
-    // Newest first: the failed read, then the write.
-    expect(rows.filter((row) => row.kind === 'run:tool_call_end').map((row) => v.parse(CallSchema, row.payload)).map((call) => [call.name, call.outcome.success]))
-      .toEqual([['file', false], ['file', true]]);
-    // A user's turn is rated by their next message, so it is reviewed then, not as it ends.
-    expect(rows.filter((row) => row.kind.startsWith('evolution:'))).toEqual([]);
-    await localTurn('localtest', 'Thanks.');
-
-    expect((await timeline()).filter((row) => row.kind === 'evolution:turn_complete').map((row) => row.message))
-      .toEqual([expect.stringMatching(/2 tool calls .* had errors/u)]);
   });
 
   test('an event row reaches the CLI without the fields that stay inside the workspace', async () => {

@@ -18,7 +18,7 @@ const AGENT_DIR = agentDir(AGENT);
 
 const DB_PATH = join(AGENT_DIR, 'agent.db');
 
-/** Shipped schema, rows under the real main actor: `listLocalTimeline` reads `evolution_events` by `actor_id`. */
+/** Shipped schema, rows under the real main actor: the timeline reads `evolution_events` by `actor_id`, a span each. */
 function seed(rows: number, notes = false): void {
   rmSync(AGENT_DIR, { recursive: true, force: true });
   mkdirSync(AGENT_DIR, { recursive: true });
@@ -28,8 +28,6 @@ function seed(rows: number, notes = false): void {
   stampSchemaGenesis(db);
 
   for (let i = 0; i < rows; i++) {
-    db.run('INSERT INTO agent_log (actor_id, id, kind, trace_id, payload, received_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [actorId, `log-${i}`, 'reply_attempt', `trace-${i}`, '{}', 1000 + i]);
     db.run('INSERT INTO evolution_events (actor_id, id, type, message, created_at) VALUES (?, ?, ?, ?, ?)',
       [actorId, `ev-${i}`, 'note', `m${i}`, 1000 + i]);
 
@@ -54,8 +52,8 @@ describe('listLocalTimeline closes the operator flag before it reaches SQL', () 
   });
 
   test('an unparseable limit means unstated and takes this surface default of 100', () => {
-    // 80 + 80 rows merge to 160 spans, so a default of 100 is distinguishable from the cloud peer's 200.
-    seed(80);
+    // 160 spans, so a default of 100 is distinguishable from the cloud peer's 200.
+    seed(160);
     expect(listLocalTimeline(AGENT, Number.NaN).length).toBe(100);
     expect(listLocalTimeline(AGENT).length).toBe(100);
   });
@@ -67,7 +65,7 @@ describe('listLocalTimeline closes the operator flag before it reaches SQL', () 
   });
 
   test('an oversized limit clamps to the ceiling shared with the cloud peer', () => {
-    seed(300);
+    seed(RUN_TIMELINE_MAX + 50);
     expect(listLocalTimeline(AGENT, 1e9).length).toBe(RUN_TIMELINE_MAX);
   });
 
