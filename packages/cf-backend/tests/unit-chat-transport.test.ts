@@ -219,7 +219,7 @@ describe('ChatWireTransport', () => {
       { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
       { type: 'text-delta', id: 't', delta: 'the tools are' },
       { type: 'text-end', id: 't' }, { type: 'finish-step' }, { type: 'finish' },
-    ]), { index: 0 });
+    ]));
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'one more thing', assistantResponse: 'the tools are', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     landing.resolve('turn');
     expect(await admitted).toBe(true);
@@ -283,7 +283,7 @@ describe('ChatWireTransport', () => {
     await h.transport.deliver(turnStart('input-b', 'msg-b'));
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'second', assistantResponse: '', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.transport.deliver(turnStart('input-a', 'msg-a'));
-    await h.transport.observe(chunks([{ type: 'start' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }]));
 
     const streamed = h.broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response' && b.frame.done === false).map((b) => b.frame.id);
     expect(streamed).not.toContain('req-1');
@@ -377,7 +377,7 @@ describe('ChatWireTransport', () => {
       { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
       { type: 'text-delta', id: 't', delta: 'hel' }, { type: 'text-delta', id: 't', delta: 'lo' },
       { type: 'text-end', id: 't' }, { type: 'finish-step' }, { type: 'finish' },
-    ]), { index: 0 });
+    ]));
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hello', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
 
@@ -407,7 +407,7 @@ describe('ChatWireTransport', () => {
       },
     });
 
-    await h.transport.observe(broken, { index: 0 });
+    await h.transport.observe(broken);
 
     expect(h.responses().at(-1)).toMatchObject({ id: 'req-1', done: false, error: true, body: expect.stringContaining('the socket under the relay closed') });
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hello', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
@@ -431,7 +431,7 @@ describe('ChatWireTransport', () => {
       { type: 'text-delta', id: 't', delta: 'reading it' }, { type: 'text-end', id: 't' },
       { type: 'tool-input-delta', toolCallId: 'call_01a0c7e6c17f', inputTextDelta: '{"path":' },
       { type: 'text-start', id: 'u' }, { type: 'text-delta', id: 'u', delta: 'never relayed' },
-    ]), { index: 0 });
+    ]));
 
     const failed = h.responses().at(-1);
     expect(failed).toMatchObject({ id: 'req-1', done: false, error: true });
@@ -462,7 +462,7 @@ describe('ChatWireTransport', () => {
       { type: 'reasoning-start', id: 'r' }, { type: 'reasoning-delta', id: 'r', delta: 'weighing it' },
       { type: 'finish-step' }, { type: 'start-step' },
       { type: 'reasoning-delta', id: 'r', delta: 'and again' },
-    ]), { index: 0 });
+    ]));
 
     const failed = h.responses().at(-1);
     expect(failed).toMatchObject({ id: 'req-1', done: false, error: true });
@@ -489,12 +489,12 @@ describe('ChatWireTransport', () => {
       { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
       { type: 'text-delta', id: 't', delta: 'first half' }, { type: 'text-end', id: 't' },
       { type: 'finish-step' }, { type: 'finish' },
-    ]), { index: 0 });
+    ]));
     await h.transport.observe(chunks([
       { type: 'start', messageId: 'sdk-minted-2' }, { type: 'start-step' }, { type: 'text-start', id: 'u' },
       { type: 'text-delta', id: 'u', delta: ' and the rest' }, { type: 'text-end', id: 'u' },
       { type: 'finish-step' }, { type: 'finish' },
-    ]), { index: 1 });
+    ]));
 
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'first half and the rest', toolCalls: [], steps: 2, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
@@ -517,7 +517,7 @@ describe('ChatWireTransport', () => {
     const first = h.connection('c1');
     const { answered } = await h.open(first, 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]));
 
     const second = h.connection('c2');
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
@@ -539,13 +539,13 @@ describe('ChatWireTransport', () => {
     const h = openRequest();
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]));
 
     const tab = h.connection('c2');
     await h.transport.onConnect(tab);
     await h.transport.onMessage(tab, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
     await h.transport.onMessage(tab, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-1' }));
-    await h.transport.observe(chunks([{ type: 'text-delta', id: 't', delta: 'tial' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'text-delta', id: 't', delta: 'tial' }]));
 
     const heard = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)));
     const live = heard.filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.replay !== true).map((frame) => JSON.parse(frame.body ?? '{}').delta);
@@ -559,7 +559,7 @@ describe('ChatWireTransport', () => {
     const h = openRequest();
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, { type: 'reasoning-start', id: 'r' }, { type: 'reasoning-delta', id: 'r', delta: 'think' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'reasoning-start', id: 'r' }, { type: 'reasoning-delta', id: 'r', delta: 'think' }]));
 
     await h.transport.onConnect(h.connection('c2'));
     await h.transport.onMessage(h.connection('c2'), JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
@@ -567,7 +567,7 @@ describe('ChatWireTransport', () => {
 
     const redialled = h.connection('c2');
     await h.transport.onConnect(redialled);
-    await h.transport.observe(chunks([{ type: 'reasoning-delta', id: 'r', delta: 'ing' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'reasoning-delta', id: 'r', delta: 'ing' }]));
 
     const live = () => h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
       .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.replay !== true && frame.body !== undefined && frame.body !== '');
@@ -585,7 +585,7 @@ describe('ChatWireTransport', () => {
     const h = openRequest();
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE, { type: 'start-step' }, { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'tw' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE, { type: 'start-step' }, { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'tw' }]));
     h.recorded.push([{ type: 'text', text: 'one', state: 'done' }]);
 
     const joining = h.connection('c2');
@@ -603,7 +603,7 @@ describe('ChatWireTransport', () => {
     const h = openRequest();
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE]));
 
     const joining = h.connection('c2');
     await h.transport.onConnect(joining);
@@ -618,13 +618,13 @@ describe('ChatWireTransport', () => {
     const h = openRequest();
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE.slice(0, 3)]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE.slice(0, 3)]));
     h.recorded.push([{ type: 'text', text: 'one', state: 'done' }]);
 
     const joining = h.connection('c2');
     await h.transport.onConnect(joining);
     await h.transport.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
-    await h.transport.observe(chunks(STEP_ONE.slice(3)), { index: 0 });
+    await h.transport.observe(chunks(STEP_ONE.slice(3)));
 
     const heard = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
       .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.body !== undefined && frame.body !== '')
@@ -648,7 +648,7 @@ describe('ChatWireTransport', () => {
     const joining = h.connection('c2');
     await revived.onConnect(joining);
     await revived.deliver(turnStart('input-req-1', 'msg-1', [], 2));
-    await revived.observe(chunks([{ type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't2' }, { type: 'text-delta', id: 't2', delta: 'three' }]), { index: 0 });
+    await revived.observe(chunks([{ type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't2' }, { type: 'text-delta', id: 't2', delta: 'three' }]));
     const resuming = v.parse(FrameSchema, JSON.parse(h.connectionFrames('c2').find((text) => text.includes('cf_agent_stream_resuming')) ?? '{}'));
     await revived.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming.id }));
 
@@ -672,7 +672,7 @@ describe('ChatWireTransport', () => {
     const first = h.connection('c1');
     await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }]));
 
     const revived = h.afterEviction();
     const second = h.connection('c2');
@@ -687,7 +687,7 @@ describe('ChatWireTransport', () => {
     expect(resuming).toMatchObject({ turnId: 'input-req-1', probeId: 'p-1' });
 
     await revived.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming?.id }));
-    await revived.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }, { type: 'text-delta', id: 'text-0', delta: 'resumed' }]), { index: 0 });
+    await revived.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }, { type: 'text-delta', id: 'text-0', delta: 'resumed' }]));
 
     const bodies = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
       .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === resuming?.id && frame.body !== undefined && frame.body !== '')
@@ -727,7 +727,7 @@ describe('ChatWireTransport', () => {
     const first = h.connection('c1');
     await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }]));
 
     const second = h.connection('c2');
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
@@ -746,15 +746,15 @@ describe('ChatWireTransport', () => {
     const first = h.connection('c1');
     const { answered } = await h.open(first, 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, { type: 'reasoning-start', id: 'reasoning-0' }, { type: 'reasoning-delta', id: 'reasoning-0', delta: 'weigh' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'reasoning-start', id: 'reasoning-0' }, { type: 'reasoning-delta', id: 'reasoning-0', delta: 'weigh' }]));
 
     const second = h.connection('c2');
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
     await h.transport.onConnect(second);
     // The reasoning goes on before the joining tab's acknowledgement lands.
-    await h.transport.observe(chunks([{ type: 'reasoning-delta', id: 'reasoning-0', delta: 'ing it' }]), { index: 1 });
+    await h.transport.observe(chunks([{ type: 'reasoning-delta', id: 'reasoning-0', delta: 'ing it' }]));
     await h.transport.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
-    await h.transport.observe(chunks([{ type: 'reasoning-end', id: 'reasoning-0' }]), { index: 2 });
+    await h.transport.observe(chunks([{ type: 'reasoning-end', id: 'reasoning-0' }]));
 
     const opened = new Set<string>();
     const orphans: string[] = [];
@@ -787,7 +787,7 @@ describe('ChatWireTransport', () => {
     const first = h.connection('c1');
     const { answered } = await h.open(first, 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }]));
 
     const second = h.connection('c2');
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
@@ -809,7 +809,7 @@ describe('ChatWireTransport', () => {
     const conn = h.connection('c1');
     const { answered } = await h.open(conn, 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, { type: 'abort' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'abort' }]));
     await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 0, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
@@ -823,7 +823,7 @@ describe('ChatWireTransport', () => {
     const tab = failed.connection('c1');
     const failing = await failed.open(tab, 'req-2', 'hello');
     await failed.transport.deliver(turnStart('input-req-2', 'msg-2'));
-    await failed.transport.observe(chunks([{ type: 'start' }, { type: 'error', errorText: 'AI_APICallError (HTTP 400)' }]), { index: 0 });
+    await failed.transport.observe(chunks([{ type: 'start' }, { type: 'error', errorText: 'AI_APICallError (HTTP 400)' }]));
     await failed.transport.deliver({ type: 'error', message: 'the provider refused the request' });
     await failed.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 0, durationMs: 0, feedback: null, hadError: true, origin: 'user' } });
     await failed.land(failing.answered);
@@ -903,7 +903,7 @@ describe('a tab that reconnects mid-turn', () => {
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' },
-      ...Array.from({ length: 30 }, (_unused, index): UIMessageChunk => ({ type: 'text-delta', id: 't', delta: `w${String(index)} ` }))]), { index: 0 });
+      ...Array.from({ length: 30 }, (_unused, index): UIMessageChunk => ({ type: 'text-delta', id: 't', delta: `w${String(index)} ` }))]));
 
     const sdkTables = h.db.query<{ name: string }, []>(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND (name LIKE 'cf_agents_stream%' OR name = 'cf_agents_chat_progress' OR name LIKE 'cf_ai_chat_stream%')").all();
@@ -918,7 +918,7 @@ describe('a tab that reconnects mid-turn', () => {
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     const live = liveChunks();
-    const observed = h.transport.observe(live.stream, { index: 0 });
+    const observed = h.transport.observe(live.stream);
     const words = Array.from({ length: 25 }, (_unused, index) => `w${String(index)} `);
     // 13 deltas: ten reach a flush point, three sit in the cadence window when the tab comes back.
     await live.push({ type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
@@ -946,7 +946,7 @@ describe('a tab that reconnects mid-turn', () => {
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     const live = liveChunks();
-    const observed = h.transport.observe(live.stream, { index: 0 });
+    const observed = h.transport.observe(live.stream);
     await live.push({ type: 'start' }, { type: 'start-step' },
       { type: 'tool-input-start', toolCallId: 'call-1', toolName: 'write' },
       { type: 'tool-input-delta', toolCallId: 'call-1', inputTextDelta: '{"path":"a.t' });
@@ -970,7 +970,7 @@ describe('a tab that reconnects mid-turn', () => {
     const h = openRequest();
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]), { index: 0 });
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]));
 
     if (stopped) await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
     await h.transport.deliver(turnEnd('hello'));

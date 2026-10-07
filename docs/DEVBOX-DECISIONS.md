@@ -4309,6 +4309,106 @@ count is not a cost. A local workerd clock is not a cloud latency. A run is
 admitted only when every G gate passes; a refused run ranks nothing. The
 admission code that enforced this left the tree with D27's instruments.
 
+D77. The disk chain's deltas are a binary counter (2026-10-07, m1966b). A
+recovery mounted every layer the chain held, and a rest compacted only at
+eight deltas or a quarter of the base, so a box that ticked between rests
+recovered through up to nine squashfuse mounts, block-lower manifests and
+overlay lowers. Now each save takes in the newest layers no larger than
+what it has gathered, the way a binary counter carries, and publishes one
+layer cut from the boundary below them: n saves since the base are held in
+at most floor(log2 n) + 1 deltas, so L <= floor(log2 n) + 2 layers.
+
+- A merged layer is cumulative from its boundary. Its changes are the union
+  of the lists its layers answer for, each path written as it is now or
+  whited out if gone. Every delta carries that list
+  (`.devbox-delta/paths`) and leaves it on the disk; after a recovery the
+  list is read from the object. A delta from before D77 has none, so the
+  save that would take it in is a base.
+- The block digests of each boundary below a kept layer stay on the disk,
+  so an edited block in a large file still travels as a block when a merge
+  re-cuts it. A boundary without them sends its changed large files whole.
+- Nothing merges into a layer a mounted recovery reads: saves on it count
+  above those layers, and take them in once the copy is the workspace.
+- `COMPACT_LAYERS` is gone; the quarter-of-the-base compaction at a rest
+  stays. No change to `devbox-block-lower`: a merged layer is an ordinary
+  layer over the ones below it.
+- A delta no longer whites out a path under one that stopped being a
+  directory; the archive held such a parent as both a file and a directory.
+
+Measured off-tree (`research/d77-lsm-bench/`: the driver, results and
+table), Medium, run `dc20261007175712f13ab`, before (the chain as
+`integration/0965` holds it at `ff0b0a2f1`) and after (this design), n=5
+recoveries per row. Each row filled a workspace (12,000 small files, a
+1 GiB file, 256 MiB random fills to the size), saved a base, then 3 or
+63 saves of a line, a new 4 KiB file and a 4 KiB write into the large
+file; each recovery is a crashed container's cold one, timed from attach.
+Medians (min–max), ms:
+
+| size | saves | arm | layers | attach | first 4 KiB | tree walk | 64 MiB read | find loops |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| 0.25 GB | 3 | before | 4 | 1,564 (843–1,842) | 612 | 1,054 | 940 | 0 |
+| 0.25 GB | 3 | after | 3 | 1,223 (862–1,341) | 785 | 1,250 | 754 | 0 |
+| 0.25 GB | 63 | before | 64 | 5,110 (4,980–6,524) | 893 | 1,819 | 7,350 | 7 |
+| 0.25 GB | 63 | after | 7 | 1,413 (1,372–1,941) | 528 | 1,116 | 1,025 | 0 |
+| 2 GB | 3 | before | 4 | 1,202 (1,085–1,456) | 472 | 1,137 | 1,891 | 0 |
+| 2 GB | 3 | after | 3 | 1,414 (870–1,778) | 631 | 1,083 | 1,671 | 0 |
+| 2 GB | 63 | before | 64 | 5,774 (5,301–7,977) | 1,107 | 1,845 | 15,738 | 7 |
+| 2 GB | 63 | after | 7 | 1,586 (1,180–1,820) | 707 | 1,172 | 2,689 | 0 |
+| 10 GB | 3 | before | 4 | 1,621 (1,391–1,669) | 689 | 1,069 | 2,131 | 0 |
+| 10 GB | 3 | after | 3 | 1,510 (1,335–1,942) | 606 | 1,055 | 1,914 | 0 |
+| 10 GB | 63 | before | 64 | 6,388 (4,458–9,547) | 779 | 1,996 | 15,931 | 7 |
+| 10 GB | 63 | after | 7 | 1,920 (1,665–2,962) | 634 | 1,090 | 2,578 | 0 |
+
+- At three saves the two are the same within noise. At 63, attach is 3.3
+  to 3.6 times faster, a 64 MiB read of the large file 6 to 7 times, and
+  the 64-lower overlay made `find` report seven file-system loops on every
+  recovery (the same inode handed out twice); seven lowers made none.
+- What it costs: a save's median rose 7 to 21% (681 to 828 ms at 0.25 GB,
+  1,434 to 1,627 ms at 10 GB), and 63 saves moved 4.18 MB where they moved
+  1.56 MB, since a merge re-sends what its layers held.
+- 18 GB has no row: its base save ran out of disk on the Medium box's
+  20 GB (`mksquashfs`: no space left), before either arm differed.
+
+D78. The tools tarball is built on armada, and this machine builds no
+Devbox artifact with Docker (2026-10-07, m1966b). D66's golden installs
+the pinned tools tarball onto `cloudflare/debian-trixie`; D72 kept the
+Dockerfile's `tools` stage to build it, the last Devbox step that needed a
+local Docker engine. Now `bun scripts/devbox-tools.ts build` runs one
+armada map over an environment of `cloudflare/debian-trixie`:
+`tools-setup.sh` (root, once per environment) pins every Debian package to
+snapshot.debian.org's `20261002T000000Z`, with priority 1001 so the base's
+or the runner's newer packages are taken back to that day, installs Rust
+1.93.1 from four sha256-pinned components, and fetches squashfuse 0.1.103,
+bun 1.4.2, KasmVNC 1.5.0 and the Sandbox 1.0.0 shim's one layer by sha256;
+`tools-build.sh` (the user) compiles the block lower for musl and
+squashfuse's low-level driver, and packs as the stage did. The block
+lower's sources ride in the recipe's install text, so the environment's
+key covers them.
+
+- Measured: an armada task's output is kept up to 64 MiB and refused at
+  128 MiB, so the tarball comes back as 32 MiB parts from one map.
+- Reproducible: two environments of different keys built the same tarball,
+  `a3146b2f…`, 335,856,114 bytes (jobs `20261007173606-445ff1b2` and
+  `20261007175028-8ba62822`; armada's typed API returned it again,
+  `20261007180715-2240e16c`).
+- Against the Docker-built `d1639d06…`: the same 377 entries; `Packages`
+  and every deb byte-identical, bun and the shim byte-identical;
+  `devbox-block-lower` (static-pie, same size) and `devbox-squashfuse`
+  (now linked on trixie, the golden's own system, not Ubuntu 24.04) differ.
+- The Dockerfile is gone. `upstream.json` pins the two scripts and the
+  sources (release-config A8), and the KasmVNC pin test reads the setup
+  script. armada's SDK is a GitHub dev dependency, the first in Kinu;
+  install parity knows such a package by the `.bun-tag` bun writes.
+- On real Medium containers with it pinned (`devbox-container-tier.ts
+  --headless --tools`, run `dc20261007183233b9cfb`): the golden installs
+  it, and every contract passes but the desktop client's, which drives a
+  browser on the host: tools (each binary, squashfuse under an overlay,
+  KasmVNC answering RFB, a truncated tarball refused, a reinstall changing
+  nothing), exec, processes, kill, trust, the product chain's lost-snapshot
+  recovery, and the ten disk contracts.
+- Not done here: the Codex egress container still has its image, built
+  with `wrangler containers build -p` on the local engine.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

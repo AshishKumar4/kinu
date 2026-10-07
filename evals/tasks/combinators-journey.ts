@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
 import { basename, posix } from 'node:path';
 import * as v from 'valibot';
-import { unpackZip } from '@kinu.run/core';
+import { unpackZip, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { EvalTurn, SeedFile } from '../src/task';
 import { matchesReference, type EvalCheckOutcome, type EvalVerifier } from '../src/verifier';
 import { published } from './npm';
 import { aSwarmRan } from './swarm-runs';
 import { boardHolds } from './work-board';
 
-const DESK = '/home/user/combinators';
+const DESK = `${WORKSPACE_ROOT}/combinators`;
 
 const REPORT = `${DESK}/reports/vitest.json`;
 

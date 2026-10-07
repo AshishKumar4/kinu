@@ -13,7 +13,7 @@ import { oneOf } from './tool-schema';
 import { clampToolResult } from './clamp';
 import type { Storage } from '../types/primitives';
 import { actionFieldRefusal } from './field-names';
-import { imageModelOutput, type ImageCarrier } from './image-results';
+import { imageCarrier, imageModelOutput, type ImageCarrier } from './image-results';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
 
 /** Which fields each action reads; a field outside the called action's list is refused, naming the one meant. */
@@ -85,7 +85,7 @@ export function createWebTool(deps: WebToolDeps): ToolSet[string] {
 
         if (fullPage) return `Saved the whole page of ${shot.url} to ${path}.`;
 
-        return { output: `Screenshot of ${shot.url}, saved to ${path}.`, images: [{ mediaType: 'image/png', data: bytesToBase64(shot.bytes) }] };
+        return imageCarrier(`Screenshot of ${shot.url}, saved to ${path}.`, [{ mediaType: 'image/png', data: bytesToBase64(shot.bytes) }]);
       }
     }
   });

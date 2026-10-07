@@ -1,6 +1,6 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
-import { validateUIMessages, type UIMessage } from 'ai';
+import type { UIMessage } from 'ai';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor } from '../types/primitives';
@@ -8,7 +8,7 @@ import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json
 import { KinuError } from '../obs/error';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './payload';
-import { rowText, turnAuthor } from '../utils/ui-message';
+import { rowText, turnAuthor, UIMessageSchema } from '../utils/ui-message';
 import type { Page, PositionCursor, PositionPageRequest } from './page';
 import type { ContextSelection } from './context';
 import { isServerCompaction } from '../providers/server-compaction';
@@ -435,22 +435,12 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       if (entry.metadata !== null) message.metadata = await this.payloads.read(entry.metadata);
       this.actor.assertCurrent();
 
-      // An answer with nothing in it is a recorded turn the UI shows as empty; the SDK validator rejects only its part count.
-      if (projected.length === 0 && entry.role !== 'tool') {
-        const empty: UIMessage = { id: entry.id, role: entry.role, parts: [] };
+      // Drawn from this store's own rows, so the SDK's validator, which walked every part of every read, is not run.
+      const drawn = v.safeParse(UIMessageSchema, message);
 
-        if (message.metadata !== undefined) empty.metadata = message.metadata;
+      if (!drawn.success) throw new KinuError('io', 'conversation entry did not materialize');
 
-        return empty;
-      }
-
-      const validated = await validateUIMessages({ messages: [message] });
-      this.actor.assertCurrent();
-      const result = validated[0];
-
-      if (result === undefined) throw new KinuError('io', 'conversation entry did not materialize');
-
-      return result;
+      return drawn.output;
   }
 }
 

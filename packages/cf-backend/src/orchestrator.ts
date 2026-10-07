@@ -803,7 +803,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return this.agentTurns.execute(actorId, call);
       },
-      observe: async (lines, call) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines), call); },
+      observe: async (lines) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines)); },
       answerMetadata: (turnId, narration) => this.takeTurnSlates(actorId, turnId, async () => narration),
       reportModelCall: async (report) => { this.reportModelCall(report); },
       reportModelOperation: async (event) => { this.modelOperations(event); },

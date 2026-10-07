@@ -42,7 +42,7 @@ const RUN = v.parse(HarnessRunSchema, {
     events: [{ type: 'message', role: 'user', content: 'Build it.' }],
   },
   usage: { model: 'test/model' },
-  output: { metrics: { modelTurns: 1, toolCalls: 0, toolErrors: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
+  output: { metrics: { modelTurns: 1, toolCalls: 0, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
   errors: [],
 });
 

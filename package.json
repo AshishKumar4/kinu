@@ -165,6 +165,7 @@
     "@types/node": "^25.9.1",
     "@vitest/coverage-istanbul": "^4.1.11",
     "agents": "^0.26.0",
+    "armada": "github:AshishKumar4/armada#1d6e30c5cfb228f432fce450899888836df2a90a",
     "aws4fetch": "^1.0.20",
     "bun": "canary",
     "chess.js": "^1.4.0",
@@ -210,6 +211,7 @@
   "//overrides:basic-ftp": "basic-ftp is pinned here because puppeteer -> @puppeteer/browsers -> proxy-agent -> pac-proxy-agent -> get-uri declares `^5.3.1`, and every 5.x carries GHSA-c475-qrg2-pj4r (quadratic CPU in Client.list() parsing a hostile directory listing), fixed only in 6.2.1; the install scanner refuses it. The pin crosses get-uri's major: its ftp: path runs only for a PAC file served over FTP, which nothing here uses. Delete it once get-uri's range reaches 6.2.1.",
   "//overrides:sharp": "sharp is pinned because every Miniflare release holds it at 0.35.4: GHSA-wq5f-xc86-pv6w (librsvg CVE-2026-96889) is fixed in 0.35.5. Delete it once Miniflare depends on 0.35.5 or later.",
   "//overrides:shell-quote": "shell-quote resolves 1.8.4 under react-devtools-core (`^1.6.1`): GHSA-pqg4-j6r4-53mv, command injection in quote(), is fixed in 1.11.0. Delete it once the resolve lands 1.11.0 or later without it.",
+  "//overrides:@cloudflare/sandbox": "The sandbox's zod is pinned here because @cloudflare/sandbox 1.0.0 depends on exactly 4.5.4, so the resolve hoisted 4.5.4 and nested a 4.6.5 copy under every other dependent: core, cf-backend, cli-backend, the MCP client, core, server and sdk, the four Nimbus packages and the mossaic SDK. The Worker bundled each directory as its own zod, about 1.2 MB of module-scope data at load (worker-heap attribution, 2026-10-07). Delete it once the sandbox's dependency is a range.",
   "overrides": {
     "basic-ftp": "^6.2.1",
     "fast-uri": "^3.1.8",
@@ -220,6 +222,9 @@
       "undici": "7.29.1"
     },
     "sharp": "0.35.5",
-    "shell-quote": "^1.11.0"
+    "shell-quote": "^1.11.0",
+    "@cloudflare/sandbox": {
+      "zod": "4.6.5"
+    }
   }
 }

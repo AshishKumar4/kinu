@@ -219,6 +219,35 @@ describe('the decision model', () => {
       + '@cf/cloudflare/clef answered 403: Authentication error. Change it in Settings → Models.']);
   });
 
+  test("a Workers AI allocation spent over REST is the owner's to fix: said once, the turn unrated, no review failed", async () => {
+    const { rt, stores } = createTestRuntime();
+    const { refusals, said } = noticesOf(rt);
+    let asked = 0;
+
+    rt.decide = createDecisionPort({
+      run: restDecisionRun({
+        getAuth: async () => ({ baseURL: 'https://api.cloudflare.com/client/v4/accounts/a/ai/v1', headers: {} }),
+        fetch: asFetchFunction(async () => {
+          asked++;
+
+          return Response.json({ success: false, errors: [{ code: 3036, message: 'You have used up your daily free allocation of 10,000 neurons.' }] }, { status: 429 });
+        }),
+      }),
+      model: clef,
+      report: () => {},
+      refusals,
+    });
+
+    const engine = new EvolutionEngine(rt, stores.history);
+    await engine.reviewTurn(turn(), 'No, CSV.');
+    await engine.reviewTurn({ ...turn(), turnId: 'u-2' }, 'Still JSON.');
+
+    expect(asked).toBe(2);
+    expect(listTurnRatings(rt.storage.sql, rt.actor)).toEqual([]);
+    expect(said()).toEqual(['Your decision model is refusing requests. workers-ai/@cf/cloudflare/clef: '
+      + '@cf/cloudflare/clef answered 429: You have used up your daily free allocation of 10,000 neurons.. Change it in Settings → Models.']);
+  });
+
   test('an owner tier named `decision` is said as a tier, never as the decision model', () => {
     const { rt } = createTestRuntime();
     const { refusals, said } = noticesOf(rt);

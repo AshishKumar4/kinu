@@ -9,7 +9,7 @@
  */
 import type { Connection } from 'agents';
 import {
-  MessageType, StreamAccumulator,
+  MessageType,
   parseProtocolMessage, reconcileMessages, sanitizeMessage, sendIfOpen,
   type ChatProtocolEvent,
 } from 'agents/chat';
@@ -17,8 +17,8 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  isWorkMode, INTERRUPTED_TURN, JsonValueSchema,
-  type ChatTransport, type JsonObject, type ObservedCall, type PromptFile, type SendLanding, type SendState, type SessionEvent, type WorkMode,
+  isWorkMode, INTERRUPTED_TURN, JsonValueSchema, UIMessageSchema,
+  type ChatTransport, type JsonObject, type PromptFile, type SendLanding, type SendState, type SessionEvent, type WorkMode,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
@@ -51,9 +51,6 @@ export interface ChatRoom {
   onMessage(connection: ChatSocket, raw: string): Promise<boolean>;
 }
 
-const UIMessageSchema = v.custom<UIMessage>((value) =>
-  v.is(v.object({ id: v.string(), role: v.picklist(['user', 'assistant', 'system']), parts: v.array(v.unknown()) }), value));
-
 const ChatRequestBodySchema = v.object({
   messages: v.array(UIMessageSchema),
   trigger: v.optional(v.string()),
@@ -73,8 +70,8 @@ interface LiveStream {
   readonly turnId: string;
   /** Requests of the other messages a rerun carried, answered when it closes. */
   readonly carried: readonly string[];
-  /** Renewed per provider call against the turn's parts, so the answer stays one message under one id. */
-  accumulator: StreamAccumulator;
+  /** The answer's row id, on every provider call's `start`, so the answer stays one message. */
+  readonly messageId: string;
   readonly open: OpenParts;
   /** Every chunk this turn relayed, in order, with its step: the steps finished before it. Dropped with the turn. */
   readonly relayed: { readonly step: number; readonly type: string; readonly body: string }[];
@@ -267,7 +264,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
 
     // Before anything is replayed, the relay's first chunk opens the message live.
-    if (restated > 0 || live.relayed.length > 0) frames.push(frame({ body: JSON.stringify({ type: 'start', messageId: live.accumulator.messageId }), done: false }));
+    if (restated > 0 || live.relayed.length > 0) frames.push(frame({ body: JSON.stringify({ type: 'start', messageId: live.messageId }), done: false }));
 
     for (const [step, parts] of recorded.slice(0, restated).entries()) {
       frames.push(...(cuts.get(step) ?? []));
@@ -429,7 +426,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.releaseWaiters();
 
     const live: LiveStream = {
-      requestId, turnId: turn.turnId, carried, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), relayed: [],
+      requestId, turnId: turn.turnId, carried, messageId: turn.messageId, open: new OpenParts(), relayed: [],
       finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null,
     };
 
@@ -527,26 +524,16 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   }
 
   /** Held for a reconnecting tab and broadcast; a continuation renews from the turn's parts, keeping one answer id. */
-  async observe(stream: ReadableStream<UIMessageChunk>, call: ObservedCall): Promise<void> {
+  async observe(stream: ReadableStream<UIMessageChunk>): Promise<void> {
     const live = this.live;
 
     if (live === null) return;
-
-    if (call.index > 0) {
-      live.accumulator = new StreamAccumulator({
-        messageId: live.accumulator.messageId,
-        continuation: true,
-        existingParts: live.accumulator.parts,
-        ...(live.accumulator.metadata !== undefined && { existingMetadata: live.accumulator.metadata }),
-      });
-    }
 
     try {
       for await (const chunk of stream) {
         // The provider's own words: the sender's chat would keep them as its error, and the turn's classified
         // failure follows as the frame that ends it.
         if (chunk.type === 'error') continue;
-        live.accumulator.applyChunk(chunk);
 
         if (!live.open.admits(chunk)) {
           this.degradeRelay(live, toKinuError({
@@ -559,7 +546,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         }
 
         // The row id on every `start`: a missing or SDK-minted one draws the answer twice.
-        if (chunk.type === 'start') chunk.messageId = live.accumulator.messageId;
+        if (chunk.type === 'start') chunk.messageId = live.messageId;
 
         const body = JSON.stringify(chunk);
 

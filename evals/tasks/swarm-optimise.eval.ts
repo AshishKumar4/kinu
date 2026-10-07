@@ -1,3 +1,4 @@
+import { WORKSPACE_ROOT } from '@kinu.run/core';
 import * as v from 'valibot';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask, type SeedFile } from '../src/task';
@@ -13,14 +14,14 @@ import { aSwarmRan } from './swarm-runs';
 
 const MISSION = "Brightline's workspace. We run a weekly photo contest; a judge model picks the winners.";
 
-const GALLERY = '/home/user/gallery';
+const GALLERY = `${WORKSPACE_ROOT}/gallery`;
 
 const MODULE = `${GALLERY}/pick-winners.mjs`;
 
 const OBJECTIVE = `${GALLERY}/bench/objective.json`;
 
 /** Where the checker writes its bench: outside the gallery, so nothing of the checker's is the agent's to read. */
-const BENCH_DIR = '/home/user/.brightline-checks';
+const BENCH_DIR = `${WORKSPACE_ROOT}/.brightline-checks`;
 
 const ENTRIES = 64;
 

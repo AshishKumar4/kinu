@@ -607,6 +607,30 @@ describe('summaries', () => {
       .toEqual({ own: true, server: [], sent: compacted.slice(2) });
   });
 
+  test("with no window known, the request still opens at the provider's summary, whether or not a saved plan replays", async () => {
+    const messages: ModelMessage[] = [];
+
+    for (let i = 0; i < 8; i++) {
+      messages.push(user(`requirement ${i}: ${'detail '.repeat(1_000)}`));
+      messages.push(assistant([{ type: 'text', text: `noted ${i}` }]));
+    }
+
+    const compacted: ModelMessage[] = [
+      user('older ask'), assistant([{ type: 'text', text: 'older answer' }]),
+      user('the ask the provider compacted at'),
+      assistant([{ type: 'text', text: 'Summary of everything so far.', providerOptions: { anthropic: { type: 'compaction' } } }, { type: 'text', text: 'Continuing.' }]),
+      user('next ask'),
+    ];
+
+    const unplanned = rig();
+    const planned = rig();
+    await planned.transform(messages, { model: 'anthropic/claude-haiku-4-5' });
+    const unsized = { model: 'anthropic/claude-opus-4-7', contextWindow: null };
+
+    expect({ planned: planned.outcomes.map((o) => o.outcome), unplanned: await unplanned.transform(compacted, unsized), replayless: await planned.transform(compacted, unsized) })
+      .toEqual({ planned: ['planned'], unplanned: compacted.slice(2), replayless: compacted.slice(2) });
+  });
+
   // OpenAI's server-side compaction (developers.openai.com/api/docs/guides/compaction) leaves an encrypted item, which
   // @ai-sdk/openai keeps as a `custom` part; the request opens at the ask before it, as for Claude's summary.
   test('a GPT-5 model on OpenAI gets no better-compact summary, and the request opens at its latest compaction item', async () => {

@@ -5,6 +5,7 @@
  */
 
 import * as v from 'valibot';
+import { APICallError } from 'ai';
 import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
 import { asFetchFunction } from './fetch-shim';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
@@ -15,7 +16,8 @@ import { readJsonObjectText, type JsonObject } from '../utils/json';
 import type { ModelCallSink } from '../events/model-call';
 import type { Usage } from '../usage';
 import type { TierRefusals } from '../types/refusals';
-import { codeForStatus, OWNER_FIXABLE_REFUSALS, providerRefusalCode } from './util';
+import { OWNER_FIXABLE_REFUSALS, providerRefusalCode } from './util';
+import { spentAllowanceRefusal } from './middleware/retry';
 import { Effect } from 'effect';
 
 export const DEFAULT_DECISION_MODEL = 'workers-ai/@cf/cloudflare/clef';
@@ -159,7 +161,9 @@ export function restDecisionRun(opts: {
       missingCredentialMessage: 'Connect Cloudflare before the decision model can rate turns.',
     });
 
-    const res = await send(`${PLACEHOLDER}/../run/${modelId}`, {
+    const url = `${PLACEHOLDER}/../run/${modelId}`;
+
+    const res = await send(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -173,9 +177,14 @@ export function restDecisionRun(opts: {
     const detail = v.safeParse(ErrorBodySchema, answer);
     const message = detail.success ? detail.output.error?.message ?? detail.output.errors?.[0]?.message : undefined;
 
-    return settle(Effect.fail(new KinuError(
-      codeForStatus(res.status) ?? 'unavailable',
-      `${modelId} answered ${res.status}${message ? `: ${message}` : ''}`,
-    )));
+    // Read as the model stack reads a refusal: its status, headers and body kept, a spent allowance as budget.
+    const refused = new APICallError({
+      message: `${modelId} answered ${res.status}${message ? `: ${message}` : ''}`,
+      url, requestBodyValues: body, statusCode: res.status, responseHeaders: Object.fromEntries(res.headers), responseBody: text,
+    });
+
+    const refusal = spentAllowanceRefusal(refused) ?? refused;
+
+    return settle(Effect.fail(new KinuError(providerRefusalCode({ cause: refusal }) ?? 'unavailable', refused.message, { cause: refusal })));
   };
 }

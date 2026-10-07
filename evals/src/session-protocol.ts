@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { JsonValueSchema, READS_CHANGED_EVENT, parseJsonValue, type JsonValue } from '../../packages/core/src/index';
+import { JsonValueSchema, READS_CHANGED_EVENT, parseJsonValue, type JsonValue, type WorkMode } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
@@ -55,6 +55,8 @@ export const HEADER_WEBSOCKET = v.parse(
 export function encodeChatRequest(input: {
   readonly requestId: string;
   readonly text: string;
+  /** Plan confines the turn to the tools Plan permits, as the composer's Plan does; absent is Build. */
+  readonly mode?: WorkMode;
 }): string {
   return JSON.stringify({
     type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST,
@@ -62,7 +64,7 @@ export function encodeChatRequest(input: {
     init: {
       method: 'POST',
       body: JSON.stringify({
-        messages: [createUserUiMessage(input.requestId, input.text)],
+        messages: [createUserUiMessage(input.requestId, input.text, [], input.mode)],
         trigger: 'submit-message',
       }),
     },

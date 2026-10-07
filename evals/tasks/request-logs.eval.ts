@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import type { JsonValue } from '@kinu.run/core';
+import { WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask, type SeedFile } from '../src/task';
 import { matchesReference, type EvalVerifier, type Script, type SlateClient } from '../src/verifier';
@@ -11,7 +11,7 @@ import { Seeded } from './seeded';
 
 const MISSION = "The Tidewater Payments platform team's workspace. We keep the API gateway's request logs here and dig through them when something is slow.";
 
-const LOG_DIR = '/home/user/logs';
+const LOG_DIR = `${WORKSPACE_ROOT}/logs`;
 
 // ── The logs ─────────────────────────────────────────────────────────
 
