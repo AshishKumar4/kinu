@@ -1,6 +1,5 @@
 // developers.openai.com/siwc, ADR P1.
 import { authenticatedSend } from './authenticated-send';
-import { createOpenAI } from '@ai-sdk/openai';
 import { EventSourceParserStream, type EventSourceMessage } from '@ai-sdk/provider-utils';
 import type { JSONObject, LanguageModelV4CallOptions, LanguageModelV4Message } from '@ai-sdk/provider';
 import { APICallError, wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
@@ -15,6 +14,7 @@ import { StaleModelList, statelessResponses } from './util';
 import { JsonObjectSchema } from '../utils/json';
 import { streamedGenerate } from './middleware/stream-generate';
 import { heardFetch } from './middleware/attempt';
+import { lazyModel } from './wire-model';
 
 export const CHATGPT_BASE_URL = 'https://api.openai.com/v1';
 
@@ -372,9 +372,10 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         }));
       });
 
-      const provider = createOpenAI({ baseURL: CHATGPT_BASE_URL, apiKey: 'chatgpt-plan', fetch: customFetch });
+      const model = lazyModel('openai.responses', modelId, async () => (await import('@ai-sdk/openai'))
+        .createOpenAI({ baseURL: CHATGPT_BASE_URL, apiKey: 'chatgpt-plan', fetch: customFetch }).responses(modelId));
 
-      return wrapLanguageModel({ model: provider.responses(modelId), middleware: [statelessResponses(true), PLAN_REQUEST, streamedGenerate] });
+      return wrapLanguageModel({ model, middleware: [statelessResponses(true), PLAN_REQUEST, streamedGenerate] });
     },
   };
 }

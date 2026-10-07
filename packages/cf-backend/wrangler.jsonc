@@ -11,7 +11,10 @@
   // `experimental` is a dev-only umbrella flag that the deploy API rejects
   // (code 10021). If a specific experimental feature is needed, enable it
   // by its real flag name (e.g. `streaming_subrequests`).
-  "compatibility_flags": ["nodejs_compat"],
+  // `new_module_registry` compiles a module when it is first imported. The legacy registry compiled every uploaded module
+  // at load and copied its source into each isolate's heap, so an `import()` deferred evaluation only: 45.4 MB used after
+  // setup against 36.2 MB with the flag (worker-heap, armada 20261007153529-2df416df, 2026-10-07).
+  "compatibility_flags": ["nodejs_compat", "new_module_registry"],
   // Durable Objects allow up to 300,000 ms of CPU per invocation (DO limits docs); the 30 s default killed
   // in-workspace commands measured at 32 s of CPU (kinu-logs/nimbus-integration/REPORT.md, 2026-09-23).
   "limits": { "cpu_ms": 300000 },

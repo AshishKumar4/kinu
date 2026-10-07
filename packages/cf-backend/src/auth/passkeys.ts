@@ -2,7 +2,6 @@
  * WebAuthn for built-in sign-in, through SimpleWebAuthn. Each check answers the verified result, or the refusal
  * the route returns: the library throws on any response it does not accept, and that is refused with its reason.
  */
-import { verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
 import { Effect } from 'effect';
 import { json } from '@kinu.run/core';
 import { attempt, renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
@@ -46,7 +45,7 @@ const refused = (failure: KinuError): Response =>
 
 export function verifyNewPasskey(response: v.InferOutput<typeof AttestationSchema>, party: Party) {
   return settle(Effect.match(
-    attempt({ doing: 'verifying the new passkey', otherwise: 'denied' }, () => verifyRegistrationResponse({
+    attempt({ doing: 'verifying the new passkey', otherwise: 'denied' }, async () => (await import('@simplewebauthn/server')).verifyRegistrationResponse({
       response, expectedChallenge: answeredChallenge(response.response.clientDataJSON) ?? '',
       expectedOrigin: party.origin, expectedRPID: party.rpID, requireUserVerification: true,
     })),
@@ -62,7 +61,7 @@ export interface KnownPasskey {
 
 export function verifyPasskeyAnswer(response: v.InferOutput<typeof AssertionSchema>, passkey: KnownPasskey, party: Party) {
   return settle(Effect.match(
-    attempt({ doing: 'verifying the passkey', otherwise: 'denied' }, () => verifyAuthenticationResponse({
+    attempt({ doing: 'verifying the passkey', otherwise: 'denied' }, async () => (await import('@simplewebauthn/server')).verifyAuthenticationResponse({
       response, expectedChallenge: answeredChallenge(response.response.clientDataJSON) ?? '',
       expectedOrigin: party.origin, expectedRPID: party.rpID, requireUserVerification: true,
       credential: { id: passkey.credentialId, publicKey: fromBase64Url(passkey.publicKey), counter: passkey.counter },

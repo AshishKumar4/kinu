@@ -145,16 +145,16 @@ function agentAssets(entry = AGENT_BUNDLE_ENTRY) {
 
     if (path === '/_agent/compatibility.json') return Response.json(workerCompatibility);
 
-    if (path !== '/_agent/agent.js') return new Response('Not found', { status: 404 });
+    if (path !== '/_agent/modules.json') return new Response('Not found', { status: 404 });
 
     let bundle = agentBundles.get(entry);
 
     if (bundle === undefined) {
-      bundle = buildAgentBundle(entry);
+      bundle = JSON.stringify(buildAgentBundle(entry).modules);
       agentBundles.set(entry, bundle);
     }
 
-    return new Response(bundle, { headers: { 'content-type': 'text/javascript' } });
+    return new Response(bundle, { headers: { 'content-type': 'application/json' } });
   };
 }
 
