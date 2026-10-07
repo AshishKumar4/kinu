@@ -4,7 +4,7 @@ import { afterEach, describe, expect, jest, test } from 'bun:test';
 import { APICallError, generateText, jsonSchema, streamText, tool, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import {
-  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, createProviderRegistry, JsonObjectSchema, silenceBoundMs,
+  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, createProviderRegistry, generateReported, JsonObjectSchema, silenceBoundMs,
   type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { KinuError, createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
@@ -331,7 +331,7 @@ describe('what the plan route answers', () => {
     expect(await result.text).toBe('ok');
   });
 
-  test('a one-shot answer ChatGPT stops at its output limit reads as its stream does: the partial text, finished by length', async () => {
+  test('a one-shot answer ChatGPT stops at its output limit fails the completion that asked for it: billed, never complete', async () => {
     const api = openai(sse(
       { type: 'response.created', response: RESPONSE },
       { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },
@@ -340,9 +340,12 @@ describe('what the plan route answers', () => {
       { type: 'response.incomplete', response: { ...RESPONSE, status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [MESSAGE], usage: USAGE } },
     ));
 
-    const result = await generateText({ model: createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), prompt: 'hello', maxRetries: 0 });
+    const billed: string[] = [];
+    const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
+    const failed = await failureOf(generateReported({ model, prompt: 'hello', maxRetries: 0 }, { spend: { source: 'compaction', report: (report) => billed.push(report.source) } }));
 
-    expect({ finish: result.finishReason, text: result.text }).toEqual({ finish: 'length', text: 'ok' });
+    expect({ failure: failed === null ? null : kinuCause(failed)?.message, billed })
+      .toEqual({ failure: expect.stringContaining('max_output_tokens'), billed: ['compaction'] });
   });
 
   test.each(['content_filter'])('a one-shot answer ChatGPT stops short (%s) is a failure, not the partial text', async (reason) => {

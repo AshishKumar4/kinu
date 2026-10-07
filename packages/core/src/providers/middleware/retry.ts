@@ -634,6 +634,14 @@ function spentQuota(failures: readonly v.InferOutput<typeof QuotaFailureSchema>[
   return failures.some((failure) => failure.violations.some((violation) => violation.quotaValue === '0' || (violation.quotaId?.includes('PerDay') ?? false)));
 }
 
+/** The refusal no wait cures, a 429 saying the account's allowance is spent, as its budget failure; null for any other.
+ *  The one reading for the model stack and for a call beside it (`restDecisionRun`). */
+export function spentAllowanceRefusal(failure: APICallError): APICallError | null {
+  const spent = rateLimitOf(failure)?.spent ?? null;
+
+  return spent === null ? null : allowanceSpent(failure, spent);
+}
+
 function allowanceSpent(failure: APICallError, exhausted: ExhaustedAllowance): APICallError {
   const host = URL.parse(failure.url)?.host ?? failure.url;
 
