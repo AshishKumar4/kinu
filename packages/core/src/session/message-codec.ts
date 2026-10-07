@@ -120,8 +120,14 @@ function validated(message: NativeValue | ModelMessage, position: number): Effec
     : Effect.fail(new KinuError('bad_input', `message ${position} is not a model message the SDK accepts`));
 }
 
+/** Messages the SDK's schema has already confirmed. A turn encodes its whole history again at every step, and a message
+ *  is never changed in place, so a confirmed one is not walked by the schema again. */
+const confirmed = new WeakSet<ModelMessage>();
+
 function encoded(message: ModelMessage, position: number): Effect.Effect<StoredValue, KinuError> {
-  return Effect.map(validated(message, position), (valid) => encodeValue(v.parse(NativeValueSchema, valid)));
+  const checked = confirmed.has(message) ? Effect.void : Effect.map(validated(message, position), () => { confirmed.add(message); });
+
+  return Effect.map(checked, () => encodeValue(v.parse(NativeValueSchema, message)));
 }
 
 function decoded(value: StoredValue, position: number): Effect.Effect<ModelMessage, KinuError> {
