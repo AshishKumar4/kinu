@@ -221,9 +221,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
         id: `u-evt-${turn}`, origin: 'input', message: { role: 'user', content: `The ${turn} event arrived while you were idle.` },
         metadata: { kinuEvent: 'event_drain', drainTurnId: `evt-${turn}` },
       });
+
+      // Each answer follows its own drain turn, as the loop writes them.
+      if (turn === 'answered') {
+        await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, { id: 'a-evt-answered', origin: 'output', message: { role: 'assistant', content: 'the build passed' } });
+      }
     }
 
-    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, { id: 'a-evt-answered', origin: 'output', message: { role: 'assistant', content: 'the build passed' } });
     this.terminal.begin({ turnId: 'u-owed', messageId: 'a-1' });
   }
 
