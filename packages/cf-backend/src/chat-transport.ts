@@ -17,7 +17,7 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  isWorkMode, INTERRUPTED_TURN, JsonValueSchema, UIMessageSchema,
+  isWorkMode, INTERRUPTED_TURN, JsonValueSchema,
   type ChatTransport, type JsonObject, type PromptFile, type SendLanding, type SessionEvent, type WorkMode,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
@@ -49,6 +49,9 @@ export interface ChatRoom {
   onClose(connection: Pick<ChatSocket, 'id'>): void;
   onMessage(connection: ChatSocket, raw: string): Promise<boolean>;
 }
+
+const UIMessageSchema = v.custom<UIMessage>((value) =>
+  v.is(v.object({ id: v.string(), role: v.picklist(['user', 'assistant', 'system']), parts: v.array(v.unknown()) }), value));
 
 const ChatRequestBodySchema = v.object({
   messages: v.array(UIMessageSchema),
