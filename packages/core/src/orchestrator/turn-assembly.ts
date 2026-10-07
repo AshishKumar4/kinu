@@ -1,6 +1,7 @@
 // One turn assembly for every actor kind on every backend; a backend supplies only the sources.
 
 import type { LanguageModel, ToolSet } from 'ai';
+import { Effect } from 'effect';
 import type { ModelWindow } from '../context-window';
 import type { KinuExtension } from '../extension';
 import { readMemoryTail } from '../memory/note';
@@ -16,6 +17,7 @@ import { TierIdSchema, type TierId } from '../types/profile';
 import type { JsonObject } from '../utils/json';
 import * as v from 'valibot';
 import { reasoningEffortOptions } from '../providers/effort';
+import { KinuError, settleSync } from '../obs/index';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import { parseModelSpec, type CacheRetention } from '../providers/types';
 import type { ModelCallSpend, ModelOperationSink } from '../events/model-call';
@@ -353,24 +355,38 @@ export type LocalTurnSources = Omit<TurnAssemblySources,
   readonly models: Omit<TurnModelSources, 'catalog'>;
 };
 
-/** The bundle's sources, answered from it. */
+/**
+ * The bundle's sources, answered from it. It was read for one tier's models: a model it does not hold is refused,
+ * never answered with another model's window or with no media.
+ */
 export function turnSourcesFromBundle(bundle: TurnSourcesBundle, local: LocalTurnSources): Omit<TurnAssemblySources, 'toolset' | 'externalTools'> {
-  const read = (spec: string) => bundle.models[local.models.normalize(spec)];
-  const windowOf = (spec?: string): ModelWindow => (spec === undefined ? undefined : read(spec)?.window) ?? Object.values(bundle.models)[0]?.window ?? { contextWindow: null, modelOutputLimit: null };
+  const read = (spec = bundle.model) => bundle.models[local.models.normalize(spec)];
+  const unread = (spec = bundle.model) => new KinuError('missing', `The turn's sources were read for ${Object.keys(bundle.models).join(', ')}, not ${spec}.`);
+
+  const catalog: TurnModelSources['catalog'] = {
+    window(spec) {
+      const model = read(spec);
+
+      if (model !== undefined) return model.window;
+
+      return settleSync(Effect.fail(unread(spec)));
+    },
+    windowFor: async (spec) => catalog.window(spec),
+    warm: async () => {},
+    acceptedMedia(spec) {
+      const model = read(spec);
+
+      if (model !== undefined) return new Set(model.media);
+
+      return settleSync(Effect.fail(unread(spec)));
+    },
+  };
 
   return {
     ...local,
     backend: bundle.backend,
     executors: () => bundle.executors,
-    models: {
-      ...local.models,
-      catalog: {
-        window: windowOf,
-        windowFor: async (spec) => windowOf(spec),
-        warm: async () => {},
-        acceptedMedia: (spec) => new Set(spec === undefined ? [] : read(spec)?.media ?? []),
-      },
-    },
+    models: { ...local.models, catalog },
     profileInputs: async () => bundle.profileInputs,
     ancestors: () => bundle.ancestors.map((values): PinnedProfile => ({
       getRoleSelection: () => values.roleSelection,
