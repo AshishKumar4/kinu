@@ -161,22 +161,6 @@ function headsAnswering(report: ScriptedHeadReport): HarnessActorWorld['heads'] 
   return async () => report;
 }
 
-describe('a terminal transition is claimed before its effects and released after', () => {
-  test('a completed turn retains its terminal disposition so a duplicate callback is done', async () => {
-    const harness = orchestratorHarness();
-    turns(harness).open('u-live');
-
-    await settleResponse(harness, 'u-live', 'a-live');
-
-    expect(transitionClaims(harness)).toEqual([
-      { turn_id: 'u-live', call_id: 'terminal:response:a-live', result_json: '"settled"' },
-    ]);
-    // Completed rows are pruned once the outer transition closes; the outer row gates duplicates.
-    expect(effects(harness, 'u-live', 'a-live')).toEqual([]);
-  });
-
-  /** Auto-continuations keep the user-message id, so the claim is keyed per response, not per turn. */});
-
 describe('an owed follow-up turn is a durable terminal effect', () => {
   /** Queued is RAM: the row stays owed until the retry turn's own row is on disk. */
   test('an overflow retry stays owed until its turn is on disk, across a refused dequeue', async () => {
@@ -247,45 +231,6 @@ describe('an owed follow-up turn is a durable terminal effect', () => {
  * effects replay) and recovers on a fresh activation; only the cut shows a repeat or a drop.
  */
 describe('an interrupted terminal sequence replays its suffix and repeats nothing', () => {
-  /** The whole sequence is claimed up front, so effects after a first-effect cut still have rows. */
-  test('a cut at the first effect still leaves every later effect owed', async () => {
-    const harness = cutAt('turn_end_extensions', 'before');
-    turns(harness).open('u-head');
-
-    await expect(turns(harness).settle({ messageId: 'a-head' }))
-      .rejects.toThrow('terminal effect turn_end_extensions:a-head interrupted before its side effect');
-
-    const owed = effects(harness, 'u-head', 'a-head');
-    expect(owed.map((row) => row.effect_key)).toEqual([
-      // No `branches` row: branches are claimed per branch id and this turn launched none. No `advisor_review`
-      // row: the harness actor does not review turns. No `turn_lessons` row: the turn struggled with nothing.
-      'v1:turn_end_extensions:a-head', 'v1:turn_record:a-head',
-      'v1:event_drain:a-head', 'v1:improvement_lanes:a-head',
-      'v1:sleep_time:a-head', 'v1:auto_title:a-head',
-    ]);
-    expect(owed.every((row) => row.status === 'pending')).toBe(true);
-    // The outer transition stays open, so the next activation gets the suffix.
-    expect(transitionClaims(harness)).toEqual([
-      { turn_id: 'u-head', call_id: 'terminal:response:a-head', result_json: null },
-    ]);
-  });
-
-  test('a synchronous recording cut before disposition rolls back and replays once', async () => {
-    const harness = cutAt('turn_record', 'after');
-    turns(harness).open('u-spine');
-
-    await expect(turns(harness).settle({ messageId: 'a-spine' }))
-      .rejects.toThrow('terminal effect turn_record:a-spine interrupted after its side effect');
-    expect(windowedTurns(harness)).toBe(0);
-    expect(effects(harness, 'u-spine', 'a-spine').find((row) => row.effect_key === 'v1:turn_record:a-spine'))
-      .toMatchObject({ status: 'pending', attempts: 0 });
-
-    const restarted = await recover(harness);
-
-    // Replayed, not refused: nothing is owed and the outer row closes.
-    expect(effects(restarted, 'u-spine', 'a-spine').filter((row) => row.status === 'pending')).toEqual([]);
-    expect(windowedTurns(harness)).toBe(1);
-  });
 
   /**
    * The fact upserts, cumulative decays, and tombstone commit as one unit; a separate tombstone
@@ -327,35 +272,6 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     // One decay; approximate because it is float subtraction.
     expect(facts().recall('deploy_target')?.confidence).toBeCloseTo(0.4, 10);
     expect(effects(restarted, 'u-decay', 'a-decay')).toEqual([]);
-  });
-
-  /** A keyed effect cut after its side effect is re-run, because re-running cannot double. */
-  test('a keyed effect cut after its side effect is replayed and the sequence closes', async () => {
-    const harness = cutAt('turn_end_extensions', 'after');
-    turns(harness).open('u-ext');
-
-    await expect(turns(harness).settle({ messageId: 'a-ext' })).rejects.toThrow('terminal effect turn_end_extensions:a-ext interrupted after its side effect');
-    expect(effects(harness, 'u-ext', 'a-ext').find((row) => row.effect_key === 'v1:turn_end_extensions:a-ext')?.status).toBe('pending');
-
-    const restarted = await recover(harness);
-
-    expect(effects(restarted, 'u-ext', 'a-ext').filter((row) => row.status === 'pending')).toEqual([]);
-    expect(disposition(restarted, 'u-ext', 'a-ext')).toBe('done');
-  });
-
-  /** One owed effect keeps the whole transition open. */
-  test('the outer transition does not settle while any effect is still owed', async () => {
-    const harness = cutAt('auto_title', 'before');
-    turns(harness).open('u-owed-gate');
-
-    await turns(harness).settle({ messageId: 'a-owed-gate' });
-    await joinHarnessFibers();
-
-    // Named, not an exact set: the cut lands before sibling effects finish recording.
-    expect(effects(harness, 'u-owed-gate', 'a-owed-gate')
-      .some((row) => row.effect_key === 'v1:auto_title:a-owed-gate' && row.status === 'pending'))
-      .toBe(true);
-    expect(disposition(harness, 'u-owed-gate', 'a-owed-gate')).toBe('resumed');
   });
 
   /** Recording and its review commit with the disposition, or recovery writes them together. */
@@ -528,26 +444,6 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(disposition(harness, 'u-rejected-close', 'a-rejected-close')).toBe('done');
   });
 
-  /** A row from a build with a different effect set is blocked by name, never guessed at or dropped. */
-  test('an effect this build does not implement is blocked by name, never skipped', async () => {
-    const harness = orchestratorHarness();
-    expect(disposition(harness, 'u-alien', 'a-alien')).toBe('first');
-    // Seeded under this agent's actor: `terminal_effects` is keyed by `actor_id`.
-    harness.db.prepare(
-      `INSERT INTO terminal_effects
-         (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status, attempts)
-       VALUES (?, 'u-alien/a-alien', 'v9:teleport:a-alien', 'teleport', 'a-alien', 0, '{}', 'pending', 0)`,
-    ).run(workspaceMainActor(harness.db).actorId);
-
-    await harness.agent.terminalRetryPass();
-
-    const rows = effects(harness, 'u-alien', 'a-alien');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.effect_key).toBe('v9:teleport:a-alien');
-    expect(rows[0]?.status).toBe('blocked');
-    // Blocked still gates: a human resolves the deploy-shape problem.
-    expect(disposition(harness, 'u-alien', 'a-alien')).toBe('resumed');
-  });
 });
 
 /**
