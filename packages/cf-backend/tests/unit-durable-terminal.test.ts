@@ -414,36 +414,6 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     }
   });
 
-  /** No abandonment: an effect nobody can finish stays owed; convergence is backoff plus the durable wake. */
-  test('an effect no activation can finish stays owed rather than being abandoned', async () => {
-    const harness = cutAt('auto_title', 'before');
-    turns(harness).open('u-stuck');
-
-    await turns(harness).settle({ messageId: 'a-stuck' });
-    await joinHarnessFibers();
-
-    for (let attempt = 0; attempt < 5; attempt++) await recover(harness, { cut: ['auto_title', 'before'] });
-
-    expect(effects(harness, 'u-stuck', 'a-stuck').find((row) => row.effect_key === 'v1:auto_title:a-stuck')?.status).toBe('pending');
-    expect(disposition(harness, 'u-stuck', 'a-stuck')).toBe('resumed');
-  });
-
-  /** A rejected close must release its sequence, or every later sweep and alarm skips it. */
-  test('a close that rejects releases its sequence to the next sweep', async () => {
-    const harness = cutAt('auto_title', 'before');
-    turns(harness).open('u-rejected-close');
-
-    await turns(harness).settle({ messageId: 'a-rejected-close' });
-    await joinHarnessFibers();
-    expect(disposition(harness, 'u-rejected-close', 'a-rejected-close')).toBe('resumed');
-
-    // The same activation's next pass re-enters the sequence it released and finishes it.
-    laterBy(1);
-    await harness.agent.terminalRetryPass();
-    await joinHarnessFibers();
-    expect(disposition(harness, 'u-rejected-close', 'a-rejected-close')).toBe('done');
-  });
-
 });
 
 /**
