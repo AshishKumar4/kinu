@@ -21,6 +21,8 @@ describe('classifyTurnFailure', () => {
       'prompt is too long: 210000 tokens > 200000 maximum',
       'input is too long for requested model',
       'The request exceeds the maximum context window of this model',
+      // Gemini's own wording.
+      'The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).',
       'Bad Request: context window overflow',
       'Request too large for gpt-5',
     ]) {

@@ -25,7 +25,7 @@ const CONTEXT_LENGTH_PATTERNS: readonly RegExp[] = [
   /input is too long/i,
   /request too large/i,
   /payload too large/i,
-  /exceeds? the (?:maximum )?(?:token|context)/i,
+  /exceeds? the (?:maximum )?(?:number of )?(?:tokens?|context)/i,
 ];
 
 /** OpenAI's 429 for one request over the whole per-minute budget, which no wait cures: "Request too large for …". */
