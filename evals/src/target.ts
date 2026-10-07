@@ -4,6 +4,8 @@ import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary }
 import {
   openPublicSession, resolveWebIdentity, type KinuPublicSession, type PublicWebIdentity,
 } from './session';
+import type { SeedFile } from './task';
+import { answered, repliesTo, settle, TurnWatch } from './workspace-completion';
 
 type Env = Record<string, string | undefined>;
 
@@ -69,4 +71,28 @@ export function openWorkspace(target: EvalTarget, request: { subject: string; mi
     genesis: false,
     llm: { name: 'eval', baseURL: `${target.origin}${USER_AI_PROXY_PATH}`, headers: {}, model: request.model },
   });
+}
+
+/**
+ * One question put to a model in a fresh eval workspace of its own: `files` written into it, `prompt` sent, the
+ * workspace waited out, and its last reply, trimmed. The workspace is deleted whatever happened. The diagnosis and the
+ * judge ask through it.
+ */
+export async function askOnce(target: EvalTarget, request: {
+  subject: string; mission: string; model: string; files: readonly SeedFile[]; prompt: string;
+}): Promise<string> {
+  const session = await openWorkspace(target, request);
+
+  try {
+    for (const file of request.files) await session.writeFile(file.path, file.content);
+
+    const watch = new TurnWatch(session);
+
+    await answered(watch, session.prompt(request.prompt));
+    await settle(watch);
+
+    return repliesTo(await session.history(), request.prompt).at(-1)?.trim() ?? '';
+  } finally {
+    await session.teardown();
+  }
 }

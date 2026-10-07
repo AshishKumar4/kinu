@@ -7,9 +7,8 @@ import { DEFAULT_MODELS, EXERCISED_PATHS } from '../src/config';
 import { ORCHESTRATION_CAUSES, SIMPLE_CAUSES, parseDiagnosis, renderDiagnosis } from '../src/diagnosis';
 import { evidenceDirectories, evidenceDirectory, extractInsights, readTrialEvidence, resultsRow } from '../src/insights';
 import { redact } from '../src/redact';
-import { answered, repliesTo, settle, TurnWatch } from '../src/workspace-completion';
 import { parseResults, trials } from '../src/results';
-import { openWorkspace, resolveEvalTarget } from '../src/target';
+import { askOnce, resolveEvalTarget } from '../src/target';
 import { renderTrajectories } from '../src/trajectories';
 import { diffBetween } from './git';
 
@@ -92,40 +91,33 @@ const named = process.env.KINU_EVAL_REVIEW_MODEL?.trim() ?? '';
 
 const model = named === '' ? DEFAULT_MODELS[0] : named;
 
-const session = await openWorkspace(target, { subject: 'diagnose', mission: 'Explains why the evals of a Kinu deployment failed.', model });
-
-try {
-  await session.writeFile(`${REVIEW}/comparison.json`, redact(comparisonText));
-  await session.writeFile(`${REVIEW}/trajectories.md`, renderTrajectories(resultsText, 'failed'));
-  await session.writeFile(`${REVIEW}/facts.json`, JSON.stringify(reviews.map(({ id, insights }) => ({ id, ...insights })), null, 2));
-
-  for (const review of reviews) {
+const files = [
+  { path: `${REVIEW}/comparison.json`, content: redact(comparisonText) },
+  { path: `${REVIEW}/trajectories.md`, content: renderTrajectories(resultsText, 'failed') },
+  { path: `${REVIEW}/facts.json`, content: JSON.stringify(reviews.map(({ id, insights }) => ({ id, ...insights })), null, 2) },
+  ...reviews.flatMap((review) => {
     const root = `${REVIEW}/trials/${review.id}`;
-    await session.writeFile(`${root}/ledger.jsonl`, redact(review.evidence.ledger));
-    await session.writeFile(`${root}/timeline.jsonl`, redact(review.evidence.timeline));
-    await session.writeFile(`${root}/transcript.md`, redact(review.evidence.transcript));
-    await session.writeFile(`${root}/results.json`, redact(resultsRow(review.assertion)));
-  }
 
-  if (comparison.baseline !== null) {
-    const diff = diffBetween(comparison.baseline.productSha, comparison.candidate.productSha, { paths: EXERCISED_PATHS, names: false });
-    await session.writeFile(`${REVIEW}/product.diff`, redact(diff));
-  }
+    return [
+      { path: `${root}/ledger.jsonl`, content: redact(review.evidence.ledger) },
+      { path: `${root}/timeline.jsonl`, content: redact(review.evidence.timeline) },
+      { path: `${root}/transcript.md`, content: redact(review.evidence.transcript) },
+      { path: `${root}/results.json`, content: redact(resultsRow(review.assertion)) },
+    ];
+  }),
+  ...(comparison.baseline === null ? [] : [{
+    path: `${REVIEW}/product.diff`,
+    content: redact(diffBetween(comparison.baseline.productSha, comparison.candidate.productSha, { paths: EXERCISED_PATHS, names: false })),
+  }]),
+  ...readdirSync(TASKS).filter((name) => name.endsWith('.eval.ts')).map((file) => ({ path: `${REVIEW}/tasks/${file}`, content: readFileSync(join(TASKS, file), 'utf8') })),
+];
 
-  for (const file of readdirSync(TASKS).filter((name) => name.endsWith('.eval.ts'))) {
-    await session.writeFile(`${REVIEW}/tasks/${file}`, readFileSync(join(TASKS, file), 'utf8'));
-  }
+const reply = await askOnce(target, { subject: 'diagnose', mission: 'Explains why the evals of a Kinu deployment failed.', model, files, prompt: PROMPT });
 
-  const watch = new TurnWatch(session);
+const diagnosis = parseDiagnosis(reply, comparison.verdict, reviews);
 
-  await answered(watch, session.prompt(PROMPT));
-  await settle(watch);
-  const reply = repliesTo(await session.history(), PROMPT).at(-1)?.trim() ?? '';
-  const diagnosis = parseDiagnosis(reply, comparison.verdict, reviews);
-  const comment = renderDiagnosis(diagnosis, reviews, assertions);
-  mkdirSync(dirname(values.out), { recursive: true });
-  writeFileSync(values.out, comment);
-  process.stdout.write(`Wrote ${values.out}\n`);
-} finally {
-  await session.teardown();
-}
+mkdirSync(dirname(values.out), { recursive: true });
+
+writeFileSync(values.out, renderDiagnosis(diagnosis, reviews, assertions));
+
+process.stdout.write(`Wrote ${values.out}\n`);
