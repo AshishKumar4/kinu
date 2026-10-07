@@ -399,6 +399,8 @@ export interface HeapMeasurement {
   readonly longTurnGrowth: number;
   readonly longTurnAllocated: Allocations;
   readonly setupMakeup: HeapMakeup;
+  /** Live (collected) heap: after setup, and at the long turn's first and last steps. */
+  readonly live: { readonly setUp: number; readonly longTurnFirst: number; readonly longTurnLast: number };
   /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
   readonly wide: readonly string[];
 }
@@ -577,7 +579,7 @@ export async function measure(): Promise<HeapMeasurement> {
       await noRunners(0);
       await ask('/model?hires=0&nest=0');
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, setupMakeup, wide };
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
       inspector.close();
     }
@@ -617,6 +619,8 @@ async function main(args: readonly string[]): Promise<number> {
   console.log(`${GATE}: the ${String(LONG_TURN.steps)}-step turn allocated ${mb(measured.longTurnAllocated.total)}; most by`);
 
   for (const site of measured.longTurnAllocated.sites) console.log(`  ${mb(site.bytes).padStart(9)}  ${site.site}`);
+  console.log(`${GATE}: live heap ${mb(measured.live.setUp)} after setup, ${mb(measured.live.longTurnFirst)} at the long turn's first step, `
+    + `${mb(measured.live.longTurnLast)} at its last; it peaked at ${mb(measured.longTurnPeak)} used, garbage included`);
   console.log(`${GATE}: the live heap after setup, by kind`);
 
   for (const each of measured.setupMakeup.kinds) console.log(`  ${mb(each.bytes).padStart(9)}  ${String(each.count).padStart(7)}  ${each.kind}`);
