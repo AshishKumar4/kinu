@@ -104,8 +104,8 @@ const answeredTool = (run: RecordedGatewayRun): boolean => requestOf(run).messag
 
 test("an added agent's chat compacts, hires, starts a search, and keeps answering", async () => {
   const nodes: string[] = [];
+  const hiring: string[] = [];
   const asked = { hire: 0, node: nodes, report: 0, still: 0 };
-  let refused = 0;
 
   const gateway = stubAiBinding((run) => {
     const text = textOf(run);
@@ -139,14 +139,12 @@ test("an added agent's chat compacts, hires, starts a search, and keeps answerin
     }
 
     if (text.includes(HIRE_ASK) && !text.includes('hire_0')) {
-      // The first ask overruns the window: the fold runs, and the retried turn hires.
-      if (!text.includes(FOLDED)) {
-        refused += 1;
+      hiring.push(text);
 
-        return Response.json(TOO_LONG, { status: 400 });
-      }
-
-      return toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: HIRE_BRIEF } }, 'hire_0');
+      // The first ask overruns the window: the fold runs, and the one retry hires on the folded history.
+      return hiring.length === 1
+        ? Response.json(TOO_LONG, { status: 400 })
+        : toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: HIRE_BRIEF } }, 'hire_0');
     }
 
     return chatCompletion(run, answeredTool(run) ? 'Done.' : ANSWER);
@@ -172,7 +170,8 @@ test("an added agent's chat compacts, hires, starts a search, and keeps answerin
   await say(STILL);
   await driveUntil(workspace, 'the agent stopped answering', () => asked.still > 0);
 
-  expect(refused).toBe(1);
+  expect(hiring).toHaveLength(2);
+  expect(hiring[1]).toContain(FOLDED);
   expect(asked.hire).toBeGreaterThan(0);
   // The node starts with its task and the actor's own instructions, as every actor's turn is assembled.
   expect(asked.node[0]).toContain(SEARCH_TASK);
