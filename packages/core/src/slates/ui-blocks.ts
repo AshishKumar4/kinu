@@ -19,7 +19,11 @@ const NAME_ATTRIBUTE = /\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/;
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
-const FENCE = /^[ \t]*(`{3,}|~{3,})/;
+/** Any line that may open a fence opens one: reading too much as code only keeps a block from being drawn. */
+const FENCE_OPEN = /^[ \t]*(`{3,}(?=[^`]*$)|~{3,})/;
+
+/** Only a Markdown closing fence closes one: a marker alone on its line, indented at most three spaces. */
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 
 export interface SlateUiBlock {
   readonly name: string;
@@ -39,15 +43,12 @@ function blockName(attributes: string): string | null {
   return name !== undefined && NAME.test(name) ? name : null;
 }
 
-/** Whether the line toggles a fence: an open one closes on a marker of its own kind at least as long. */
+/** The fence open after this line: an open one closes on a closing fence of its own kind at least as long. */
 function fenceAfter(fence: string | null, line: string): string | null {
-  const marker = FENCE.exec(line)?.[1];
+  if (fence === null) return FENCE_OPEN.exec(line)?.[1] ?? null;
+  const marker = FENCE_CLOSE.exec(line)?.[1];
 
-  if (marker === undefined) return fence;
-
-  if (fence === null) return marker;
-
-  return marker[0] === fence[0] && marker.length >= fence.length ? null : fence;
+  return marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length ? null : fence;
 }
 
 /** The answer in order: prose, blocks, and at most one trailing open block. */
@@ -81,9 +82,9 @@ export function slateUiSegments(text: string): SlateUiSegment[] {
   return prose < text.length ? [...segments, { kind: 'text', text: text.slice(prose) }] : segments;
 }
 
-/** The block of an answer's text that an address names, the first of that name; refused when the answer holds none. */
-export function addressedBlock(text: string, address: EphemeralSlateAddress): SlateUiBlock {
-  const block = slateUiSegments(text).find((segment) => segment.kind === 'slate' && segment.name === address.name);
+/** The block of an answer's texts that an address names, the first of that name; refused when the answer holds none. */
+export function addressedBlock(texts: readonly string[], address: EphemeralSlateAddress): SlateUiBlock {
+  const block = texts.flatMap(slateUiSegments).find((segment) => segment.kind === 'slate' && segment.name === address.name);
 
   if (block?.kind !== 'slate') return settleSync(Effect.fail(new KinuError('missing', `Answer ${address.messageId} holds no slate-ui block named ${address.name}`)));
 

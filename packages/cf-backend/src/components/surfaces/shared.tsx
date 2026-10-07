@@ -117,10 +117,10 @@ export function SlateLink({ id }: { id: string }) {
 
 /** A `<slate-ui>` block of a stored answer, drawn by the same slate path a file slate is; where no slate can be drawn,
  *  its source, folded. */
-function SlateUiBlock({ messageId, name, html }: { messageId: string; name: string; html: string }) {
+function SlateUiBlock({ messageId, name, html, drawn }: { messageId: string; name: string; html: string; drawn: boolean }) {
   const inline = useContext(SlateInlineContext);
 
-  if (inline === null) {
+  if (inline === null || !drawn) {
     return (
       <details className="my-2">
         <summary className="p-meta p-text-3 cursor-pointer">{name}</summary>
@@ -132,22 +132,32 @@ function SlateUiBlock({ messageId, name, html }: { messageId: string; name: stri
   return <InlineSlate id={ephemeralSlateId({ messageId, name })} block={name} rpc={inline.rpc} display="inline" />;
 }
 
-function AnswerSegment({ segment, messageId, stored }: { segment: SlateUiSegment; messageId: string; stored: boolean }) {
-  if (segment.kind === "text" || (segment.kind === "open" && stored)) return <MarkdownContent content={segment.text} />;
+interface AnswerPlace {
+  readonly messageId: string;
+  /** Whether the answer is stored, so its blocks can be read back. */
+  readonly stored: boolean;
+  /** Whether this transcript is the one a block's id is resolved in; elsewhere a block shows its source. */
+  readonly drawn?: boolean;
+}
+
+function AnswerSegment({ segment, place }: { segment: SlateUiSegment; place: AnswerPlace }) {
+  const drawn = place.drawn === true;
+
+  if (segment.kind === "text" || (segment.kind === "open" && (place.stored || !drawn))) return <MarkdownContent content={segment.text} />;
 
   // Its page is read from the stored answer, so until the answer is stored it is a quiet line.
-  if (segment.kind === "open" || !stored) {
+  if (segment.kind === "open" || (drawn && !place.stored)) {
     return <div data-slate-ui-pending={segment.name} aria-label={`Drawing ${segment.name}`} className="my-2 h-8 rounded-md p-recessed animate-pulse" />;
   }
 
-  return <SlateUiBlock messageId={messageId} name={segment.name} html={segment.html} />;
+  return <SlateUiBlock messageId={place.messageId} name={segment.name} html={segment.html} drawn={drawn} />;
 }
 
 /** An answer's text with its `<slate-ui>` blocks drawn in place. */
-export function AnswerText({ text, messageId, stored }: { text: string; messageId: string; stored: boolean }) {
+export function AnswerText({ text, place }: { text: string; place: AnswerPlace }) {
   const segments = useMemo(() => slateUiSegments(text), [text]);
 
-  return <>{segments.map((segment, index) => <AnswerSegment key={index} segment={segment} messageId={messageId} stored={stored} />)}</>;
+  return <>{segments.map((segment, index) => <AnswerSegment key={index} segment={segment} place={place} />)}</>;
 }
 
 // Local mdast slice: importing `mdast` types for two plugins is heavier than the plugins.

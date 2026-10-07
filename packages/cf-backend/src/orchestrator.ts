@@ -4451,10 +4451,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.armDurableWake();
       },
       previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
-      // The root's own answers; the page runs with the root's authority in the mode its next turn runs in.
+      // The root's own answers, every text part as the chat draws it; the page runs with the root's authority in the mode
+      // its next turn runs in.
       messageBlock: async (address) => {
-        const answer = await this.chatTranscript.project(address.messageId);
-        const { html } = addressedBlock(answer?.role === 'assistant' ? answer.content : '', address);
+        const answer = await this.chatTranscript.message(address.messageId);
+        const texts = answer?.role === 'assistant' ? answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])) : [];
+        const { html } = addressedBlock(texts, address);
 
         return { html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
       },
