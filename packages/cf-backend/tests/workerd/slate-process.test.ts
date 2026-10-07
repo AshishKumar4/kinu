@@ -107,6 +107,29 @@ it('a private process gets an ephemeral facet: this.storage survives, this.sql d
   }
 });
 
+it('a slate with no class serves its page as written, the client mapped in ahead of it, and its bindings on the socket', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('page-only'));
+
+  await subject.start({
+    browser: '<!doctype html><html><head><title>Page</title></head><body><p>page-only-marker-5d21</p></body></html>',
+    project: { browser: 'index.html', slate: { title: 'Page' } },
+  });
+
+  try {
+    const page = await subject.route('/');
+
+    expect(page.status).toBe(200);
+    expect(page.body.indexOf('<script type="importmap">')).toBeGreaterThan(-1);
+    expect(page.body.indexOf('<script type="importmap">')).toBeLessThan(page.body.indexOf('page-only-marker-5d21'));
+    expect((await subject.route('/__kinu/slate.js')).status).toBe(200);
+    // The page's socket reaches each binding under its name, under the socket's own invocation.
+    expect(await subject.socket('ask', ['x'], 'PEER')).toEqual({ ok: true, value: '{"chain":["probe"],"args":["x"]}' });
+    expect(await subject.socket('greet', ['kinu'])).toMatchObject({ ok: false });
+  } finally {
+    await subject.stop();
+  }
+});
+
 it('a slate declaring a browser surface serves the shell, the client bundle, and the kinu:slate module', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('browser-surface'));
   // Single file: the generated entries split it, server keeps the class, client keeps the component.

@@ -185,6 +185,28 @@ export default function App() {
 
 Seed the options with \`await workspace.slates.<id>.seed([...])\` (a \`seed(options)\` method that stores them), reply with the \`slate://<id>\` line, and the user's click arrives as a \`slate\` event in your next step.
 
+## A slate in your answer
+
+For a view that needs no files of its own, write the page into your answer as a block, on lines of its own:
+
+\`\`\`html
+<slate-ui name="funnel">
+<!doctype html>
+<html><head><title>Checkout funnel</title></head>
+<body>
+  <p id="total"></p>
+  <button id="retry">Retry the import</button>
+  <script type="module">
+    import { workspace } from "kinu:slate";
+    document.getElementById("total").textContent = await workspace.readFile("/home/main/funnel.txt");
+    document.getElementById("retry").onclick = () => workspace.agent.send({ text: "Retry the import." });
+  </script>
+</body></html>
+</slate-ui>
+\`\`\`
+
+The chat draws it in place once your answer is stored. The block is HTML only, with the theme's tokens set on \`:root\` as for any slate. \`workspace\` is your reach as of each call: its own members (\`readFile\`, \`writeFile\`, ...) and \`workspace.memory\`, \`workspace.tasks\`, \`workspace.web\`, \`workspace.db\`; \`workspace.agent.send({ text, data? })\` reaches your inbox as a \`slate\` event. Give each block in an answer its own name. It has no storage, sql, versions or \`$share\`: a UI that needs those is a slate with files.
+
 ## Working with a slate
 
 In \`eval\`, \`workspace.slates.<id>\` is the same stub the client gets: \`await workspace.slates.whiteboard.addStroke(stroke)\` calls \`addStroke\` on the whiteboard slate and returns its result. Members named with \`$\` are the slate's lifecycle; no class method can take such a name.

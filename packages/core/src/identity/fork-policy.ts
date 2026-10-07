@@ -114,12 +114,12 @@ const FAMILIES = {
       'search_nodes', 'mcts_search_runs', 'alternate_takes', 'swarm_node_records',
     ],
   },
-  /** The source's slates, their versions and who they are shared with. */
+  /** The source's slates, their versions and who they are shared with, and which of its answers' pages hold a process. */
   slates: {
     policy: 'not-copied',
     tables: [
       'slates', 'slate_versions', 'slate_publications', 'slate_file_manifest', 'slate_state', 'slate_shares',
-      'slate_share_users', 'slate_live_shares', 'slate_live_share_users', 'slate_viewer_requests',
+      'slate_share_users', 'slate_live_shares', 'slate_live_share_users', 'slate_viewer_requests', 'ephemeral_slates',
     ],
   },
   /** The source's GitHub activity. */

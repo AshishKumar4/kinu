@@ -246,6 +246,8 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     slate_live_shares: EVERYWHERE,
     slate_live_share_users: EVERYWHERE,
     slate_viewer_requests: EVERYWHERE,
+    // The answers' pages that hold a process; shared schema, and only cf draws them.
+    ephemeral_slates: EVERYWHERE,
     // KINU-N028; the prompt builder reads it every turn.
     instruction_approvals: EVERYWHERE,
     plan_reviews: EVERYWHERE,

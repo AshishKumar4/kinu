@@ -10,7 +10,7 @@ import { EXPANDED_RESULT_LINES, FileDiffCard, fileEditDiffView } from './diff-ca
 import { StatusView } from './help-view';
 import { useTuiTheme, type TuiThemeColors } from './theme';
 import { useSceneWidth } from './tui-shell';
-import { linkFileReferences, type FileLinks } from '@kinu.run/core';
+import { linkFileReferences, slateUiSegments, type FileLinks } from '@kinu.run/core';
 
 
 export interface DisplayMessage {
@@ -155,6 +155,18 @@ function renderList(
 
 function resultMark(success: boolean | undefined): string {
   return success === false ? `${TUI_MARKS.failure} ` : `${TUI_MARKS.toolResult} `;
+}
+
+/** A `<slate-ui>` block is a page the web app draws; here its source stays folded to one line, or shows as a fence. */
+function foldSlateBlocks(content: string, expanded: boolean): string {
+  return slateUiSegments(content).map((segment) => {
+    if (segment.kind === 'text') return segment.text;
+    const source = segment.kind === 'slate' ? segment.html : segment.text;
+
+    if (expanded) return `\n\`\`\`html\n${source}\n\`\`\`\n`;
+
+    return `\n> ${TUI_MARKS.toolCall} slate-ui ${segment.name} · ${String(source.split('\n').length)} lines, drawn in the web app\n`;
+  }).join('');
 }
 
 /** Full ink, distinct from thinking and system notes. */
@@ -444,8 +456,12 @@ export function MessageList({ messages, toolDetailsExpanded = false, fileLinks =
         switch (message.role) {
           case 'user':
             return <UserMessage key={message.id} content={content} attachments={message.attachments} steered={message.steered} branched={message.branched} />;
-          case 'assistant':
-            return <AssistantMessage key={message.id} content={fileLinks === null ? content : linkFileReferences(content, fileLinks)} live={message.live} />;
+          case 'assistant': {
+            const folded = foldSlateBlocks(content, toolDetailsExpanded);
+
+            return <AssistantMessage key={message.id} content={fileLinks === null ? folded : linkFileReferences(folded, fileLinks)} live={message.live} />;
+          }
+
           case 'thinking':
             return <ThinkingMessage key={message.id} content={content} live={message.live} expanded={toolDetailsExpanded} />;
           case 'evolution':
