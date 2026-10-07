@@ -1,13 +1,14 @@
 /**
  * The CLI process a terminal-transition test kills: it SIGKILLs itself at a named durable instant
- * (`before-settle`, `inside-claim`, `inside-title`, `after-record`), so no teardown runs.
+ * (`before-settle`, `inside-claim`, `inside-title`, `after-record`, `inside-close`), so no teardown runs.
  * Run as `bun <this file> <dbPath> <mode>`; the stdout marker proves the kill point was reached.
  */
 import type { SqlExecutor, SqlValue, TerminalEffectFault } from '@kinu.run/core';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { LocalAgentSession } from '../src/local-session';
 import { openTerminalWorkspace, scriptedModel } from './terminal-workspace';
 
-const MODES = ['before-settle', 'inside-claim', 'inside-title', 'after-record'] as const;
+const MODES = ['before-settle', 'inside-claim', 'inside-title', 'after-record', 'inside-close'] as const;
 
 const [dbPath, rawMode] = process.argv.slice(2);
 
@@ -42,6 +43,14 @@ if (mode === 'inside-claim') {
 
   const storage: { sql: SqlExecutor } = rt.storage;
   storage.sql = cutting;
+}
+
+if (mode === 'inside-close') {
+  // Inside the close, once every effect has run: the outer claim's disposition is written, its rows not yet pruned.
+  setDiagnosticsSink({
+    event: (name) => { if (name === 'turn.terminal_effects_settled') die('inside-close'); },
+    failure: () => undefined,
+  });
 }
 
 const modelOptions = mode === 'inside-title'
