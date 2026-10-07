@@ -908,3 +908,33 @@ test('a permalink opens its own swarm or none, and a merge is drawn unscored wit
     await merge.page.close();
   });
 });
+
+/**
+ * What a run's own journal says reaches the swarm surface: a fan-in vertex is drawn as one, and only the nodes the
+ * engine spawned as fan-ins are; a run that reached nothing says so above its tree, in the words of the branch that failed.
+ */
+test('fan-in vertices are the nodes the engine fanned in, and a run that reached nothing names its branch\'s cause', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const swarm = await newPage();
+    await swarm.setViewport({ width: 1280, height: 900 });
+    await swarm.goto(`${origin}/gallery.html?frame=forkfanin`, { waitUntil: 'networkidle0' });
+    await swarm.waitForSelector('g.mcts-region[data-run="sw000"] g.mcts-node[data-node]');
+    await settled(swarm);
+    // The fixture's two vertices are the heads spawned as `fan-in over k parents`; every expansion is a sibling.
+    expect(await swarm.$$eval('g.mcts-region[data-run="sw000"] g.mcts-node[data-node]', (nodes) => nodes
+      .filter((node) => node.querySelector('rect.mcts-fan-in') !== null)
+      .map((node) => node.getAttribute('data-node') ?? '').sort((a, b) => a.localeCompare(b)))).toEqual(['sw004', 'sw009']);
+    await swarm.close();
+
+    const refused = await newPage();
+    await refused.setViewport({ width: 1280, height: 900 });
+    await refused.goto(`${origin}/gallery.html?frame=forkrefused`, { waitUntil: 'networkidle0' });
+    await refused.waitForSelector('[data-run-refusal]');
+
+    const note = await refused.$eval('[data-run-refusal]', (element) => ({ reason: element.getAttribute('data-run-refusal'), text: element.textContent ?? '' }));
+
+    expect(note.reason).toBe('failed');
+    expect(note.text).toContain('Every node failed to provision a home');
+    await refused.close();
+  });
+});
