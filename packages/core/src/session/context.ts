@@ -20,6 +20,15 @@ function entryOf(row: MemberRow): ContextEntry {
   return { entryId: row.entry_id, position: row.position, messageId: row.message_id };
 }
 
+/** How many leading entries a mutation kept as the head's own objects: those are unchanged, and need no lookup. */
+function keptPrefix(current: readonly ContextEntry[], next: readonly ContextEntry[]): number {
+  let kept = 0;
+
+  while (kept < current.length && kept < next.length && next[kept] === current[kept]) kept++;
+
+  return kept;
+}
+
 /**
  * A head this instance read or wrote. It serves while its revision is still the head, opened the same rows and holds
  * as many entries: positions are dense, so those fix the membership. A revision written again after a rolled-back
@@ -164,10 +173,16 @@ export class SessionContext {
       if (selected === null || (expected !== null && (selected.contextId !== expected.contextId || selected.revision !== expected.revision))) throw new KinuError('denied', 'context changed during preparation');
       const current = this.headEntries(selected);
       const next = mutate(current);
+      // A sealed step appends one entry to a head of hundreds: only what the mutation changed is checked.
+      const kept = keptPrefix(current, next);
       const ids = new Set<string>();
-      const prior = new Map(current.map(entry => [entry.entryId, entry]));
 
-      for (const [position, entry] of next.entries()) {
+      for (let position = 0; position < kept; position++) ids.add(next[position].entryId);
+      const prior = new Map(current.slice(kept).map(entry => [entry.entryId, entry]));
+
+      for (let position = kept; position < next.length; position++) {
+        const entry = next[position];
+
         if (entry.position !== position || ids.has(entry.entryId)) throw new KinuError('bad_input', 'context entries must have unique identities and dense positions');
 
         if (prior.get(entry.entryId)?.messageId !== entry.messageId) {
@@ -211,40 +226,47 @@ export class SessionContext {
       this.actor.assertCurrent();
       const head = this.head(contextId);
       const expected = head === null ? this.fork(null, contextId) : { contextId, revision: head };
-      const next = messages.map((message, position) => ({ messageId: message.messageId, entryId: String(position), position }));
+      const current = this.headEntries(expected);
 
-      return this.revise(expected, this.headEntries(expected), next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false });
+      const next = messages.map((message, position) => {
+        const same = current[position];
+
+        return same?.messageId === message.messageId && same.entryId === String(position) ? same : { messageId: message.messageId, entryId: String(position), position };
+      });
+
+      return this.revise(expected, current, next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false });
     });
   }
 
   private revise(expected: ContextSelection, current: readonly ContextEntry[], next: readonly ContextEntry[], origin: RevisionOrigin): ContextSelection {
-    const prior = new Map(current.map(entry => [entry.entryId, entry]));
+    const kept = keptPrefix(current, next);
+    const prior = new Map(current.slice(kept).map(entry => [entry.entryId, entry]));
     const retained = new Set<string>();
 
-    for (const entry of next) {
+    for (const entry of next.slice(kept)) {
       const old = prior.get(entry.entryId);
 
       if (old !== undefined && old.position === entry.position && old.messageId === entry.messageId) retained.add(entry.entryId);
     }
 
-    if (!origin.recordUnchanged && retained.size === current.length && current.length === next.length) return expected;
+    if (!origin.recordUnchanged && kept + retained.size === current.length && current.length === next.length) return expected;
     const revision = expected.revision + 1;
     const actorId = this.actor.actorId;
     void this.sql`INSERT INTO context_revisions(actor_id,context_id,revision,author,cause,turn_id,proposal_id,recorded_at)
       VALUES(${actorId},${expected.contextId},${revision},${origin.author},${origin.cause},${origin.turnId},${origin.proposalId},${Date.now()})`;
 
     // Release all changed live positions before inserting replacements: swaps cannot collide.
-    for (const entry of current) if (!retained.has(entry.entryId)) {
+    for (const entry of current.slice(kept)) if (!retained.has(entry.entryId)) {
       void this.sql`UPDATE context_memberships SET to_revision=${revision}
         WHERE actor_id=${actorId} AND context_id=${expected.contextId} AND entry_id=${entry.entryId} AND to_revision IS NULL`;
     }
 
-    for (const entry of next) if (!retained.has(entry.entryId)) {
+    for (const entry of next.slice(kept)) if (!retained.has(entry.entryId)) {
       void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
         VALUES(${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},${entry.messageId})`;
     }
 
-    this.heads.set(expected.contextId, { revision, opened: openedKey(next.filter(entry => !retained.has(entry.entryId))), entries: Object.freeze(next) });
+    this.heads.set(expected.contextId, { revision, opened: openedKey(next.slice(kept).filter(entry => !retained.has(entry.entryId))), entries: Object.freeze(next) });
 
     return { contextId: expected.contextId, revision };
   }

@@ -1,7 +1,6 @@
 // Workers AI provider, billed to the user's Cloudflare OAuth account, or to the deployment's through its binding.
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
-import { createWorkersAI, type WorkersAISettings } from 'workers-ai-provider';
+import type { WorkersAISettings } from 'workers-ai-provider';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { ModelCallDeps, ModelInfo, ModelProvider } from './types';
 
@@ -12,6 +11,7 @@ import { WORKERS_AI_PREFERRED_MODEL_IDS } from './workers-ai-catalog';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 import { toolCallIdMiddleware } from './middleware/tool-call-id';
 import { heardBinding, heardFetch } from './middleware/attempt';
+import { lazyModel } from './wire-model';
 
 /** `env.AI` as the provider takes it: `Ai` where workers-types are loaded. */
 type WorkersAIChatBinding = NonNullable<WorkersAISettings['binding']>;
@@ -35,7 +35,8 @@ export function createWorkersAIProvider(deploymentBinding?: WorkersAIChatBinding
     createModel(modelId, deps): LanguageModel {
       // Without replica pinning the prefix cache never hits.
       const model = deploymentBinding
-        ? createWorkersAI({ binding: heardBinding(deploymentBinding) }).chat(modelId, { sessionAffinity: deps.sessionAffinity })
+        ? lazyModel('workersai.chat', modelId, async () => (await import('workers-ai-provider'))
+          .createWorkersAI({ binding: heardBinding(deploymentBinding) }).chat(modelId, { sessionAffinity: deps.sessionAffinity }))
         : userAccountModel(modelId, deps);
 
       return wrapLanguageModel({ model, middleware: toolCallIdMiddleware() });
@@ -56,9 +57,9 @@ function userAccountModel(modelId: string, deps: ModelCallDeps): LanguageModelV4
     requestHeaders: { [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
   });
 
-  return createOpenAICompatible({
+  return lazyModel('workers-ai.chat', modelId, async () => (await import('@ai-sdk/openai-compatible')).createOpenAICompatible({
     name: 'workers-ai',
     baseURL: placeholder,
     fetch: heardFetch(customFetch),
-  }).chatModel(modelId);
+  }).chatModel(modelId));
 }

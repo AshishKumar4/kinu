@@ -1,5 +1,4 @@
 // Anthropic Messages API (auth: `x-api-key`, not Bearer); the key is resolved per call in customFetch.
-import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
 import type { CountableRequest, InputTokenCount } from './input-tokens';
 import type { ModelProvider, ModelInfo, ProviderDeps } from './types';
@@ -9,6 +8,7 @@ import { countAnthropicInputTokens } from './anthropic-count';
 import { warmAnthropicCache } from './anthropic-warm';
 import type { JsonObject } from '../utils/json';
 import { heardFetch } from './middleware/attempt';
+import { lazyModel } from './wire-model';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
 
@@ -51,9 +51,8 @@ export function createAnthropicProvider(): ModelProvider {
         missingCredentialError: 'Anthropic API key not configured',
       });
 
-      const provider = createAnthropic({ apiKey: 'placeholder', fetch: heardFetch(customFetch) });
-
-      return provider.languageModel(modelId);
+      return lazyModel('anthropic.messages', modelId, async () => (await import('@ai-sdk/anthropic'))
+        .createAnthropic({ apiKey: 'placeholder', fetch: heardFetch(customFetch) }).languageModel(modelId));
     },
     countInputTokens(modelId, deps: ProviderDeps, request: CountableRequest): Promise<InputTokenCount> {
       return countAnthropicInputTokens({

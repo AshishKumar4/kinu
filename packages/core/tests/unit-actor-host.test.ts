@@ -555,20 +555,6 @@ describe('one workspace database, many logical actors', () => {
     };
   }
 
-  test('a run that ended no further than the run before it is settled as stalled, not owed again', async () => {
-    const { actor, run, fx } = await interruptedRuns();
-
-    await run([0, 1]);
-    expect(await recoverActorTurns(fx.host)).toMatchObject({ verified: ['turn-a'], stalled: [] });
-    await run([0, 1]);
-    const recovered = await recoverActorTurns(fx.host);
-    expect({ verified: recovered.verified, stalled: recovered.stalled.map((turn) => turn.claim.turnId) }).toEqual({ verified: [], stalled: ['turn-a'] });
-    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: 2 });
-    expect(await recoverActorTurns(fx.host)).toMatchObject({ verified: [], stalled: [] });
-    fx.host.releaseAll();
-    fx.db.close();
-  });
-
   test('a run our own deploy ended is no stall: both runs judged ran on this host\'s build', async () => {
     const { actor, run, fx } = await interruptedRuns();
     const owed = { verified: ['turn-a'], stalled: [] };

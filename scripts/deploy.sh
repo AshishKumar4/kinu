@@ -925,6 +925,8 @@ fi
 # (packages/test-utils/src/eval-identity.ts): each deployment has its own.
 export KINU_EVAL_ORIGIN="${KINU_URL%/}"
 export KINU_ORIGIN="${KINU_URL%/}"
+# Production, the baseline .github/workflows/evals.yml runs every task on beside a staging build.
+EVAL_BASELINE_ORIGIN="https://kinu.run"
 
 # THE STATISTICS, on GitHub (L19). scripts/evals-dispatch.ts starts
 # .github/workflows/evals.yml for this build from the branch on GitHub that
@@ -945,11 +947,23 @@ dispatch_evals() {
   report dispatched "the evals of $KINU_SHA from $branch, every task ten times on staging against production" "$KINU_EVALS_URL"
 }
 
+# THE EVAL ACCOUNTS' PROVIDER KEYS (scripts/eval-provider-keys.ts), stored before any eval starts, on each deployment
+# one drives: this one and, for a staging build, production, the baseline evals.yml compares it with. The evals and the
+# soak run detached, on GitHub and after this deploy, and a key missing there is every trial's HTTP 401; this is their
+# one owner, awaited here. A key not stored is a red, its finding the provisioner's own, and no eval starts.
+provision_eval_keys() {
+  local origin
+  for origin in "$@"; do
+    env -u KINU_EVAL_MODELS bun "$KINU_ROOT/scripts/eval-provider-keys.ts" "$origin" \
+      || { step_red evals "the eval accounts' provider keys" "not all stored at $origin, so no eval was started: each of its trials would be refused HTTP 401"; return 1; }
+  done
+}
+
 # THE SOAK (L24): one trial of every eval task on the deployment, on the models the evals measure. Started once the
 # deployment serves and never awaited, so a real model's minutes are outside this deploy's 20-minute wall and its red
 # outside this deploy's verdict: the soak writes into this report's soak section and renders it again when it ends.
 start_soak() {
-  setsid nohup bash -c 'bun scripts/ladder.ts --deploy-phase=soak; bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak' \
+  setsid nohup bash -c 'bun scripts/ladder.ts --deploy-phase=soak; bun scripts/deploy-report.ts runner "$KINU_DEPLOY_REPORT" soak $?; bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak' \
     >"$KINU_DEPLOY_REPORT/soak.log" 2>&1 </dev/null &
   report dispatched "the eval soak, one trial of every task on $KINU_EVAL_ORIGIN; its reds re-render this report" "$KINU_DEPLOY_REPORT/soak.log"
 }
@@ -961,17 +975,26 @@ start_soak() {
 if [ "$KINU_SERVING" = "1" ]; then bun "$KINU_ROOT/evals/scripts/reviewer-sign-in.ts" "$KINU_EVAL_ORIGIN"; fi
 
 if [ "$KINU_PROMOTE" = "1" ]; then
-  if [ -z "$KINU_TIERS_WHY" ]; then start_soak; run_phase post-publish; else skip_phase post-publish "$KINU_TIERS_WHY"; fi
+  if [ -z "$KINU_TIERS_WHY" ]; then
+    if provision_eval_keys "$KINU_EVAL_ORIGIN"; then start_soak; fi
+    run_phase post-publish
+  else
+    skip_phase post-publish "$KINU_TIERS_WHY"
+  fi
   mark tiers
 else
   # Started first, so its hours run while the wave runs here. Without its run
   # this build has no verdict to be promoted on, so a failed dispatch is a red.
+  KINU_EVAL_KEYS=0
   if [ "$KINU_SERVING" = "1" ]; then
-    dispatch_evals \
-      || step_red evals "the evals" "evals.yml was not dispatched for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"
+    if provision_eval_keys "$KINU_EVAL_ORIGIN" "$EVAL_BASELINE_ORIGIN"; then
+      KINU_EVAL_KEYS=1
+      dispatch_evals \
+        || step_red evals "the evals" "evals.yml was not dispatched for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"
+    fi
   fi
   if [ -z "$KINU_TIERS_WHY" ]; then
-    start_soak
+    if [ "$KINU_EVAL_KEYS" = "1" ]; then start_soak; fi
     run_phase post-publish,source
   else
     skip_phase post-publish "$KINU_TIERS_WHY"

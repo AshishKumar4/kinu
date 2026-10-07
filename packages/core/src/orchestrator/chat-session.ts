@@ -507,8 +507,9 @@ export class ChatSession {
 
   /** Settling has no next step. A queued, unopened user turn or genesis offer counts: a message behind it rides its
    *  first step, so an offer is consumed only by a message that arrived before it. */
+  /** The one in-flight decision sends, Retry, Clear and Revert take: a Retry between its claim and its queue counts. */
   turnInFlight(): boolean {
-    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
+    return this.reopening || this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
   }
 
   /** Send; resolves where it landed (`'mid-turn'` or `'turn'`), never guessed at admission, and rejects if it did not land. */
@@ -660,7 +661,7 @@ export class ChatSession {
   /** Reruns the newest turn as its opener (a steer is not resent); `claim` runs before any await. */
   retry(claim: (turnId: string) => void): Promise<SendLanding> {
     return settleEffect(Effect.gen({ self: this }, function* () {
-      if (this.turnInFlight() || this.reopening) return yield* Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.'));
+      if (this.turnInFlight()) return yield* Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.'));
       const opener = this.transcript.reopenNewestTurn();
 
       if (opener === null) return yield* Effect.fail(new KinuError('bad_input', 'There is no message to retry.'));
@@ -671,14 +672,21 @@ export class ChatSession {
       this.landings.set(turnId, landing);
       claim(turnId);
 
-      const message = yield* Effect.promise(() => this.transcript.message(turnId)).pipe(Effect.ensuring(Effect.sync(() => { this.reopening = false; })));
-      const metadata = yield* Effect.promise(() => this.transcript.metadata(turnId));
+      // Held until the turn is queued, which then holds it: no tick between the two leaves the session idle.
+      yield* Effect.gen({ self: this }, function* () {
+        const message = yield* attemptInItsWords('unavailable', () => this.transcript.message(turnId));
+        const metadata = yield* attemptInItsWords('unavailable', () => this.transcript.metadata(turnId));
 
-      this.queue.push({
-        text: message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '',
-        kind: 'user', turnId, ...(metadata !== undefined && { metadata }),
-        settle: (failure) => { this.settleLandings([turnId], failure ?? 'turn'); },
-      });
+        this.queue.push({
+          text: message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '',
+          kind: 'user', turnId, ...(metadata !== undefined && { metadata }),
+          settle: (failure) => { this.settleLandings([turnId], failure ?? 'turn'); },
+        });
+      }).pipe(
+        // A read that failed queued nothing: its landing goes with it, so no caller waits on a turn that never runs.
+        Effect.tapError((failure) => Effect.sync(() => { this.settleLandings([turnId], failure); })),
+        Effect.ensuring(Effect.sync(() => { this.reopening = false; })),
+      );
       this.pump();
 
       return yield* attemptInItsWords('unavailable', () => landing.promise);

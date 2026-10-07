@@ -14,8 +14,9 @@ import { sha256Hex } from '../safety/argument-digest';
 import { verifyClaimedProgram, type ClaimOutcome, type ContextRevision, type StoredActorClaim } from './actor-claims';
 import { recordRecoverySettled, sameBuildOf } from './turn-recovery-events';
 import type { RunEventRecorder } from '../events/recorder';
+import type { ReportedTurn } from '../subordinates/turn-reports';
 
-type ClosedBy = 'stopped' | 'record_unreadable' | 'stalled' | 'unverified';
+type ClosedBy = 'stopped' | 'answered' | 'record_unreadable' | 'stalled' | 'unverified';
 
 /**
  * `continue`: owed and verified, or never claimed, so it consumed nothing. `active`: a live turn here opened while this
@@ -31,6 +32,8 @@ export interface InterruptedTurn {
   readonly stores: Pick<AgentStores, 'claims' | 'history'>;
   /** Where a Stop is recorded (`stop_requested`); none read, none found. */
   readonly runs: Pick<RunEventRecorder, 'stopRequested'> | null;
+  /** Whether the turn already gave its hirer the report that answers its assignment; absent where nothing is hired. */
+  readonly answered?: (turn: ReportedTurn) => boolean;
   readonly installedBuild: string | null;
   readonly workspace: string;
   readonly actor: string;
@@ -61,6 +64,9 @@ export function decideInterruptedTurn(turn: InterruptedTurn): Effect.Effect<Inte
 
     // The outcome the stopped turn would have settled its claim with.
     if (stopped) return settled('aborted', 'stopped');
+
+    // Its hirer holds the answer already: run again, it would answer a closed assignment a second time.
+    if (turn.answered?.(claim) === true) return settled('indeterminate', 'answered');
 
     const evidence = yield* consumedEvidence(stores, claim);
 

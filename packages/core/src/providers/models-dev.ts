@@ -7,7 +7,8 @@ import { positiveInteger, StaleModelList } from './util';
 import { nonEmptyString } from '../utils/json';
 import type { JsonValue } from '../utils/json';
 import { Effect } from 'effect';
-import { diagnostics, renderThrownChain, settle } from '../obs/index';
+import { diagnostics, flight, KinuError, renderThrownChain, settle } from '../obs/index';
+import type { Flight } from '../obs/effect';
 import { knownReasoningEfforts } from './reasoning-effort';
 import { sdkWire, type WireProtocol } from './wire-model';
 
@@ -121,8 +122,12 @@ const ModelsDevCatalogSchema = v.record(v.string(), ModelsDevProviderSchema);
 
 let cache: ModelsDevCache | null = null;
 
-/** The read in flight: listings that find the cache cold share it rather than each downloading the catalog. */
-let reading: { readonly fetchFn: typeof fetch; readonly read: Effect.Effect<Record<string, ModelsDevProvider>, CatalogUnread> } | null = null;
+/**
+ * The read in flight per fetch function: listings that find the cache cold share it rather than each downloading the
+ * catalog. A flight joins callers through a promise; a cached Effect's latch resumed another request's fiber in the
+ * reader's request context, which Workers cancels as hung (1101 on concurrent workspace creates).
+ */
+const reads = new WeakMap<typeof fetch, Flight<void, Record<string, ModelsDevProvider>, KinuError>>();
 
 export interface ModelsDevListOptions {
   /** models.dev is the provider's only list, so naming none of its models is a failure to show, not an empty menu. */
@@ -147,7 +152,7 @@ export async function listModelsDevProviderModels(
 
   return settle(Effect.gen(function* () {
     const data = yield* getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS).pipe(
-      Effect.catch((failed) => Effect.fail(stale({ reason: 'models.dev could not be read', cause: failed.cause }))),
+      Effect.catch((failed) => Effect.fail(stale({ reason: 'models.dev could not be read', cause: failed }))),
     );
 
     const models = data[providerId]?.models;
@@ -279,43 +284,43 @@ function concreteAPI(api: string | undefined): string | null {
   return api && !api.includes('${') ? api : null;
 }
 
-interface CatalogUnread { readonly cause: unknown }
-
-function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: number): Effect.Effect<Record<string, ModelsDevProvider>, CatalogUnread> {
-  return Effect.gen(function* () {
+function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: number): Effect.Effect<Record<string, ModelsDevProvider>, KinuError> {
+  return Effect.suspend(() => {
     const fetchImpl = fetchFn ?? fetch;
 
-    if (cache && cache.fetchFn === fetchImpl && Date.now() - cache.at < ttlMs) return cache.data;
+    if (cache && cache.fetchFn === fetchImpl && Date.now() - cache.at < ttlMs) return Effect.succeed(cache.data);
 
-    if (reading?.fetchFn !== fetchImpl) {
-      const read = yield* Effect.cached(readModelsDevCatalog(fetchImpl).pipe(Effect.ensuring(Effect.sync(() => {
-        if (reading?.read === read) reading = null;
-      }))));
+    let read = reads.get(fetchImpl);
 
-      reading = { fetchFn: fetchImpl, read };
+    if (read === undefined) {
+      read = flight(() => readModelsDevCatalog(fetchImpl));
+      reads.set(fetchImpl, read);
     }
 
-    const shared = reading;
-
-    return yield* shared.read;
+    return read();
   });
 }
 
-function readModelsDevCatalog(fetchImpl: typeof fetch): Effect.Effect<Record<string, ModelsDevProvider>, CatalogUnread> {
+function readModelsDevCatalog(fetchImpl: typeof fetch): Effect.Effect<Record<string, ModelsDevProvider>, KinuError> {
   return Effect.gen(function* () {
     const response = yield* Effect.tryPromise({
       try: () => fetchImpl(MODELS_DEV_URL, { headers: { accept: 'application/json' } }),
-      catch: (cause) => ({ cause }),
+      catch: (cause) => new KinuError('unavailable', 'models.dev could not be reached', { cause }),
     });
 
-    if (!response.ok) return yield* Effect.fail({ cause: new Error(`models.dev returned HTTP ${response.status}`) });
-    const json = yield* Effect.tryPromise({ try: () => response.json(), catch: (cause) => ({ cause }) });
+    if (!response.ok) return yield* Effect.fail(new KinuError('unavailable', `models.dev returned HTTP ${String(response.status)}`));
+
+    const json = yield* Effect.tryPromise({
+      try: () => response.json(),
+      catch: (cause) => new KinuError('unavailable', 'models.dev\'s catalog was cut off', { cause }),
+    });
+
     const body = v.safeParse(ModelsDevCatalogSchema, json);
 
     if (!body.success) {
       const issue = body.issues[0];
 
-      return yield* Effect.fail({ cause: new Error(`models.dev rejected ${v.getDotPath(issue) ?? 'catalog'}: ${issue.message}`) });
+      return yield* Effect.fail(new KinuError('bad_input', `models.dev rejected ${v.getDotPath(issue) ?? 'catalog'}: ${issue.message}`));
     }
 
     const data: Record<string, ModelsDevProvider> = body.output;
@@ -326,7 +331,7 @@ function readModelsDevCatalog(fetchImpl: typeof fetch): Effect.Effect<Record<str
 }
 
 function catalog(fetchFn: typeof fetch | undefined, ttlMs: number): Effect.Effect<Record<string, ModelsDevProvider>> {
-  return Effect.catch(getModelsDevCatalog(fetchFn, ttlMs), (failed) => Effect.die(failed.cause));
+  return Effect.catch(getModelsDevCatalog(fetchFn, ttlMs), (failed) => Effect.die(failed));
 }
 
 function providerInfoFromModelsDev(id: string, provider: ModelsDevProvider): ModelsDevProviderInfo {

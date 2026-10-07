@@ -1,10 +1,10 @@
 // OpenAI direct via API key; ChatGPT subscription credits use the `codex` provider.
-import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider } from './types';
 import { createAuthedFetch } from './util';
 import { listModelsDevProviderModels } from './models-dev';
 import { heardFetch } from './middleware/attempt';
+import { lazyModel } from './wire-model';
 
 export const OPENAI_CRED_KEY = 'openai.bearer';
 
@@ -41,9 +41,11 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
         missingCredentialError: 'OpenAI API key not configured',
       });
 
-      const provider = createOpenAI({ apiKey: 'placeholder', fetch: heardFetch(customFetch) });
+      return lazyModel(useResponses ? 'openai.responses' : 'openai.chat', modelId, async () => {
+        const provider = (await import('@ai-sdk/openai')).createOpenAI({ apiKey: 'placeholder', fetch: heardFetch(customFetch) });
 
-      return useResponses ? provider.responses(modelId) : provider.chat(modelId);
+        return useResponses ? provider.responses(modelId) : provider.chat(modelId);
+      });
     },
   };
 }

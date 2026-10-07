@@ -10,6 +10,7 @@ import { AgentTaskTreeSchema, readPlanTasks, TaskListStore, type AgentTaskTree }
 import { PlanReviewSchema, PlanReviewStore, type PlanReview } from '../plans/review';
 import { tableExists } from '../identity/schema';
 import type { SqlExecutor } from '../types/primitives';
+import type { InspectedWork } from './work-inspection';
 import type { ChangelogEntry } from '../evolution/changelog';
 import type { MemoryNote } from '../memory/note';
 import type { BackgroundJob } from '../types/jobs';
@@ -122,14 +123,19 @@ export function readWorkspaceWork(
 }
 
 /** Settled jobs count (the record is the content); a live turn with nothing renderable does not. */
-export function hasWorkspaceWork({ work, pending, jobs, changes, notes }: {
+export function hasWorkspaceWork({ work, pending, jobs, changes, notes, owed }: {
   work: WorkspaceWork | null;
   pending: readonly PendingAction[];
   jobs: readonly Pick<BackgroundJob, 'id'>[];
   changes: readonly ChangelogEntry[];
   notes: readonly MemoryNote[];
+  /** Turns and effects still owed, as Work → Now lists them (`inspectWork`). Only what is blocked is Work's on its
+   *  own: a turn or effect that runs or waits settles by itself, and every turn's own close owes effects for a moment,
+   *  which must not show Work after each turn. */
+  owed: readonly Pick<InspectedWork, 'phase'>[];
 }): boolean {
-  return (work?.plans.length ?? 0) > 0
+  return owed.some((row) => row.phase === 'blocked')
+    || (work?.plans.length ?? 0) > 0
     || (work?.tasks.some((row) => row.tasks.length > 0) ?? false)
     || pending.length > 0
     || jobs.length > 0

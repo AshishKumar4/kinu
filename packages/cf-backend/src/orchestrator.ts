@@ -45,7 +45,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
 import {
-  AgentOpenTurns, PROGRAMMATIC_MESSAGE_ID_PREFIX, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
+  AgentOpenTurns, AgentOwedWork, PROGRAMMATIC_MESSAGE_ID_PREFIX, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -404,7 +404,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly agentWakes = new AgentWakes(async (actorId) => {
     this.detachOwned(logged('subordinate.agent_wake_failed', { doing: "waking an agent's own isolate for what it owes", otherwise: 'io' },
       () => this.wakeAgent(actorId), { workspace: this.name, actor: actorId }));
-  }, () => { this.liveReadsMoved(['inspectWork']); });
+  });
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -780,9 +780,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         await session.hireAdvisor(advisor);
       },
-      owes: async (next) => {
+      owes: async (next, holds) => {
         // A retired agent's answer arms nothing: tearing it down ended its wake.
         if (!this.liveActor(actorId)) return await this.agentWakes.owes(actorId, null);
+        new AgentOwedWork(this.boundSql).held(actorId, holds);
         await this.agentWakes.owes(actorId, next);
 
         if (next === null) this.releaseIdleHosted(actorReferenceOf(this.liveAgentOf(actorId)));
@@ -934,7 +935,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (own) await this.agentTurns.beforeRetirement(record.actorId, retirement.destroy || retirement.interrupt);
         await host.retire(parent, retirement);
 
-        if (own) await this.agentWakes.owes(record.actorId, null);
+        if (own) {
+          await this.agentWakes.owes(record.actorId, null);
+          new AgentOwedWork(this.boundSql).held(record.actorId, false);
+        }
 
         if (own && retirement.destroy) this.dropAgentFacet(record.storageKey);
       },
@@ -1109,16 +1113,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
-    const factory = createCodemodeToolFactory({
-      launch: this.codemodeLaunch(turn.runtime.actor.actorId), rt: turn.runtime,
-      // The role's own list: this profile was resolved before the tools it would intersect existed.
-      reach: narrowToolSurface(effectiveRoleCatalog(turn.profile.inputs.envelope.catalog)[turn.profile.profile.role.id]?.allowedTools),
-      workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
-      // A thunk, so it reads the `report` deps declared below rather than a construction-time copy.
-      extraProviders: () => [createReportCodemodeProvider(() => report)],
-    });
-
-    const report: ReportToolDeps = {
+    // `report` belongs only to a parent-driven turn: an owner chat with this actor carries it neither natively nor in eval.
+    const report: ReportToolDeps | undefined = !turn.parentDriven ? undefined : {
       report: async (input) => {
         const relayed = await publishSubordinateReport({ mode: turn.input.mode, reports: turn.reports }, {
           status: input.status, content: input.content, origin: 'report_tool',
@@ -1131,6 +1127,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return { id: relayed.id, disposition: relayed.disposition };
       },
     };
+
+    const factory = createCodemodeToolFactory({
+      launch: this.codemodeLaunch(turn.runtime.actor.actorId), rt: turn.runtime,
+      // The role's own list: this profile was resolved before the tools it would intersect existed.
+      reach: narrowToolSurface(effectiveRoleCatalog(turn.profile.inputs.envelope.catalog)[turn.profile.profile.role.id]?.allowedTools),
+      workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
+      extraProviders: () => (report === undefined ? [] : [createReportCodemodeProvider(() => report)]),
+    });
 
     // Named: both the tool surface and the framing read these deps.
     const agents = this.hostedAgentsToolDeps(turn);
@@ -1154,10 +1158,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       facts: turn.actor.stores.facts,
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
+      ...(report !== undefined && { report }),
     };
 
-    // `report` belongs only to a parent-driven turn; an owner chat with this actor must not carry it.
-    if (turn.parentDriven) deps.report = report;
     const built = buildActorTools(deps);
     const tools = withHeadCaptureRecording(built.turn, turn.capture);
 
@@ -2918,11 +2921,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** What each agent with a wake armed answers of its own; one that cannot answer is left out, and its wake still runs. */
+  /**
+   * What each agent holding owed work answers of its own, the agents named by their own last answer of what they owe
+   * (`agent_owed_work`), not by their wakes: a parked effect is owed with no wake. One that cannot answer is left out.
+   */
   private async owingAgentsWork(): Promise<InspectedWork[]> {
     const reported: InspectedWork[] = [];
 
-    await Promise.all(this.agentWakes.owing().filter((actorId) => this.liveActor(actorId)).map((actorId) => settleLogged(
+    await Promise.all(new AgentOwedWork(this.boundSql).all().filter((actorId) => this.liveActor(actorId)).map((actorId) => settleLogged(
       'subordinate.agent_work_unread',
       { doing: "reading what an agent's own isolate still owes", otherwise: 'io' },
       async () => { reported.push(...await (await this.agentCalls(actorId)).owedWork(this.agentSnapshot(actorId))); },
@@ -4819,7 +4825,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       work: hasWorkspaceWork({
         work: workspaceWork, pending: pendingActions, jobs,
-        changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''),
+        changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''), owed: await this.inspectWork(),
       }),
       // Hidden with swarms off.
       explorations: await this.readAccountSwarms() && listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,

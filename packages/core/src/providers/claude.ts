@@ -1,5 +1,4 @@
 // Claude Pro/Max, sent as Claude Code's CLI per oh-my-pi (THIRD_PARTY_NOTICES.md).
-import { createAnthropic } from '@ai-sdk/anthropic';
 import { APICallError, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { listAnthropicModels, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_FAST_MODEL, ANTHROPIC_MAX_BREAKPOINTS } from './anthropic';
@@ -15,6 +14,7 @@ import { sha256Hex } from '../safety/argument-digest';
 import { JsonObjectSchema, JsonValueSchema, parseJsonObject, parseJsonValue } from '../utils/json';
 import { xxHash64 } from '../utils/xxhash64';
 import { heardFetch } from './middleware/attempt';
+import { lazyModel } from './wire-model';
 
 export const CLAUDE_CRED_KEY = 'claude.oauth';
 
@@ -528,9 +528,9 @@ export function createClaudeProvider(): ModelProvider {
             }))),
           };
 
-          const provider = createAnthropic({ apiKey: 'oauth-placeholder', fetch: heardFetch(asFetchFunction((_input, init) => settle(claudeCall(call, init ?? {})))) });
-
-          return provider.languageModel(modelId);
+          return lazyModel('anthropic.messages', modelId, async () => (await import('@ai-sdk/anthropic'))
+            .createAnthropic({ apiKey: 'oauth-placeholder', fetch: heardFetch(asFetchFunction((_input, init) => settle(claudeCall(call, init ?? {})))) })
+            .languageModel(modelId));
         }));
     },
   };

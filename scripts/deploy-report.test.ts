@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as v from 'valibot';
 import { childEnv, scratchDir } from '@kinu.run/test-utils';
 import { measurePromptUsage, type Assertion } from '../evals/src/results';
-import { previousSummary, renderReport, type ReportEntry, type ReportSummary } from './deploy-report';
+import { previousSummary, recordRunner, renderReport, type ReportEntry, type ReportSummary } from './deploy-report';
 
 const META = { environment: 'staging', mode: 'deploy', sha: 'bbbbbbbbbbbbbbbb', startedAt: '2026-09-30T20:00:00.000Z' };
 
@@ -127,6 +128,23 @@ finish
   });
 
   // What the deploy did not run, and what a fixer should act on that is no red, are in the file and are not reds.
+  test('a soak runner that crashed before reporting a red is the soak\'s red; one that exited on its reds adds none', () => {
+    const steps = (entries: readonly ReportEntry[], exit: number): string[] => {
+      const dir = scratchDir('deploy-report-runner');
+
+      writeFileSync(join(dir, 'entries.jsonl'), entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
+      recordRunner(dir, 'soak', exit);
+
+      return readFileSync(join(dir, 'entries.jsonl'), 'utf8').split('\n').filter(Boolean)
+        .map((line) => v.parse(v.looseObject({ kind: v.string(), what: v.string() }), JSON.parse(line)))
+        .flatMap((entry) => (entry.kind === 'step' ? [entry.what] : []));
+    };
+
+    expect(steps([], 1)).toEqual(['the soak runner']);
+    expect(steps([red('soak', 'bash scripts/eval-pass-tier.sh')], 1)).toEqual([]);
+    expect(steps([], 0)).toEqual([]);
+  });
+
   test('a skipped row and a notice are reported and are no red', () => {
     const { text, summary: rendered } = renderReport({
       dir: '/reports/this', meta: META, entries: [

@@ -2,7 +2,9 @@ export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 
-export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
+export { AgentOpenTurns, AgentOwedWork, type AgentOpenTurn } from './subordinates/open-turns';
+
+export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
