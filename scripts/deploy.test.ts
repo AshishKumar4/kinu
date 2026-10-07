@@ -86,13 +86,13 @@ function commandStub(name: string): string {
 command_line="${name} $*"
 command_line="\${command_line//$KINU_DEPLOY_ROOT\\//}"
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
-if [[ "$*" == *--ci-find=* ]] && [ "$KINU_CI_ABSENT" = "1" ]; then
-  echo 'no push-CI run exists for this SHA; push the branch holding it'
-  exit 47
+if [[ "$*" == *--ci-verdict=* ]] && [ "$KINU_CI_ABSENT" = "1" ]; then
+  echo 'CI refused: armada has no verdict for testsha'
+  exit 1
 fi
-if [[ "$*" == *--ci-await* ]] && [ "$KINU_CI_RED" = "1" ]; then
-  echo 'CI red — https://github.com/o/r/actions/runs/17'
-  exit 47
+if [[ "$*" == *--ci-verdict=* ]] && [ "$KINU_CI_RED" = "1" ]; then
+  echo 'CI RED bun run test:core'
+  exit 1
 fi
 # The deploy's report directory, as scripts/deploy-report.ts opens and names it.
 if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "open" ]; then
@@ -266,22 +266,23 @@ exit 87
 }
 
 describe("deploy gate", () => {
-  test('no push-CI run for the clean SHA refuses before any build or upload', () => {
-    const run = runDeploy({ ciAbsent: true });
+  // CI's verdict is armada's, stored for this exact revision when its push was proved (L25), and a deploy takes it
+  // before it runs anything else: a missing or red one builds, uploads and records nothing.
+  test.each([
+    ['no armada verdict', { ciAbsent: true }, 'armada has no verdict'],
+    ['a red armada verdict', { ciRed: true }, 'CI RED bun run test:core'],
+  ])('%s for the clean SHA refuses before any upload gate, build or record', (_, options, said) => {
+    const run = runDeploy(options);
 
-    expect(run.status).not.toBe(0);
-    expect(run.events.some((event) => event.startsWith('MUTATE '))).toBe(false);
-    expect(run.stdout).toContain('push-CI');
+    expect({ status: run.status, events: run.events, ci: run.ci, said: run.stdout.includes(said), refused: run.stdout.includes('armada has no green verdict for testsha') })
+      .toEqual({ status: 1, events: [phaseRun('preflight')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], said: true, refused: true });
   });
 
-  test('a red CI verdict finishes the remaining local gates but never verifies the revision', () => {
-    const run = runDeploy({ option: '--gates-only', ciRed: true });
+  test('a green armada verdict is read once, before the upload gates', () => {
+    const run = runDeploy({ option: '--gates-only' });
 
-    expect(run.status).toBe(1);
-    expect(run.events).toEqual([...STOPS, phaseRun('source')]);
-    expect(run.ci.filter((command) => command.includes('--ci-await'))).toHaveLength(1);
-    expect(run.events.some((event) => event.includes('promote.ts record'))).toBe(false);
-    expect(run.stdout).toContain('CI red');
+    expect({ events: run.events, ci: run.ci, marks: run.report.filter((entry) => entry.startsWith('mark ')).slice(0, 3) })
+      .toEqual({ events: [...STOPS, phaseRun('source')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], marks: ['mark preflight', 'mark ci', 'mark upload'] });
   });
   // AT THE DEPLOY BOUNDARY. deploy.sh runs each phase as one ladder call, which
   // runs that phase's gates through the ladder's wave (scripts/ladder.ts,
@@ -893,7 +894,7 @@ describe("one deploy path", () => {
   // whatever `x.ts` publishes.
   test("every automation file GitHub executes is in the denominator", () => {
     expect(automationFiles, "the enumerator stopped listing the workflows")
-      .toContain(".github/workflows/ci.yml");
+      .toContain(".github/workflows/evals.yml");
     expect(automationFiles, "the enumerator stopped listing the composite actions")
       .toContain(".github/actions/setup-lean/action.yml");
     expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(3);

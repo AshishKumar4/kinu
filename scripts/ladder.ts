@@ -59,11 +59,8 @@ import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE
 import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';
 import { resourceCostFile, withResourceCosts } from './gate-cost';
 import {
-  awaitCI, awaitUploadCI, checkCoverage, collectVerdicts, downloadVerdicts, findPushCI, readCIRun,
-  writeCIRun, writeVerdicts, type CIPart, type CIVerdict, type CIVerdictFile,
-  checkFileCoverage, parseRunnerTimings, readHostedCosts, readFileTimings, withRunnerCosts, type HostedCosts,
-  writeHostedCosts, readVerdicts,
-  requireCIGreen,
+  armadaVerdict, parseRunnerTimings, readHostedCosts, readFileTimings, withRunnerCosts, writeVerdicts,
+  type CIVerdict, type CIVerdictFile, type HostedCosts,
 } from './ci-verdicts';
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
@@ -103,11 +100,11 @@ export const HOOKS_DIR = '.githooks';
 export const TIERS = ['local', 'commit', 'push', 'ci', 'deploy', 'evals'] as const;
 
 /**
- * The deploy plan still names every required gate (L18, L23). The local machine preflight and account gate run
- * locally; CI proves its rows once on the clean full SHA, including the upload scan and an isolated hammer.
- * After upload, deployment tiers share one measured wave with the source rows CI cannot host. Every local and
- * imported red is reported, and no verified record is written until CI and the live rows are all green.
- * The hammer phase identifies its isolated CI part, not a local serial tail.
+ * The deploy plan still names every required gate (L18, L25). The local machine preflight and account gate run
+ * locally; CI proves its rows once on armada for the clean full SHA, including the upload scan and the six hammer
+ * runs, before anything is built. After upload, deployment tiers share one measured wave with the source rows CI
+ * cannot host. Every local and imported red is reported, and no verified record is written until CI and the live
+ * rows are all green. The hammer phase names CI's hammer runs, not a local serial tail.
  */
 export const DEPLOY_PHASES = ['preflight', 'upload', 'post-publish', 'source', 'hammer', 'soak'] as const;
 
@@ -2149,9 +2146,9 @@ export const LADDER: readonly Gate[] = [
       + 'purpose, so every gate beside it would be measured on a machine this one is '
       + 'deliberately starving: the five-suite UI batch is 198.5s solo against a 480s '
       + 'per-gate deadline, and a browser gate that times out under someone else\'s load '
-      + 'fails for a reason unrelated to the change under test. CI gives it a dedicated runner, '
-      + 'concurrent with its source shards and the staging deploy; its exact-SHA verdict is part '
-      + 'of what a promotion needs (L23).',
+      + 'fails for a reason unrelated to the change under test. CI on armada gives each of its six runs '
+      + 'a container of its own, beside the source rows; its exact-SHA verdict is part of what a '
+      + 'deploy and a promotion need (L25).',
     tier: 'ci',
     // 403.96 s measured 2026-09-30 (24 threads, 12 burners): six runs of 61.9 to
     // 77.5 s, each 3,624 pass and 0 fail. The 1-minute load was 8.4 at the start,
@@ -3008,38 +3005,15 @@ export function ciUnits(costs: HostedCosts = readHostedCosts()): { readonly gate
   });
 }
 
-/** Hosted wall, not workstation CPU/PSS, balances eight source runners. The upload scan and each hammer run have
- *  independent runners. No suite list lives in the workflow. */
-export function ciParts(costs: HostedCosts = readHostedCosts()): CIPart[] {
-  const units = ciUnits(costs);
-  const upload = units.filter((unit) => unit.gate.phase === 'preflight' || unit.gate.phase === 'upload');
-  const hammer = units.filter((unit) => unit.gate.phase === 'hammer');
-  const source = units.filter((unit) => !upload.includes(unit) && !hammer.includes(unit));
-  const parts: { name: string; runs: string[]; seconds: number }[] = Array.from({ length: 8 }, (_, index) => ({ name: 'source-' + String(index + 1), runs: [], seconds: 0 }));
-
-  for (const unit of [...source].sort((left, right) => right.seconds - left.seconds)) {
-    const part = parts.reduce((least, candidate) => candidate.seconds < least.seconds ? candidate : least);
-
-    part.runs.push(unit.gate.run);
-    part.seconds += unit.seconds;
-  }
-
-  return [
-    { name: 'upload', runs: upload.map((unit) => unit.gate.run) },
-    ...parts.map(({ name, runs }) => ({ name, runs })),
-    ...hammer.map((unit, index) => ({ name: 'hammer-' + String(index + 1), runs: [unit.gate.run] })),
-  ];
-}
-
-/** A row a task must report, with the files a split suite must time, as `checkFileCoverage` holds GitHub's to. */
+/** A row a task must report, with the files a split suite must time, which armada holds each task to. */
 type PlannedRow = string | { readonly name: string; readonly files: string[] };
 
 interface CIMatrix {
   readonly include: { readonly name: string; readonly row: string; readonly weight: number; readonly rows: PlannedRow[] }[];
 }
 
-/** The container runner's matrix (armada, `.armada.json`): one task per CI unit, the same units GitHub's parts pack,
- *  each weighed by its measured seconds so the longest start first, naming the row it must report. */
+/** CI's matrix on armada (`.armada.json`): one task per CI unit, each weighed by its measured seconds so the longest
+ *  start first, naming the row it must report. */
 function ciPlan(costs: HostedCosts): CIMatrix {
   const tracked = trackedTestFiles();
 
@@ -3560,56 +3534,17 @@ export function reportCIVerdicts(file: CIVerdictFile, url: string, report: strin
   return green;
 }
 
-function recordHostedMeasurements(path: string, runUrl: string | undefined): number {
-  if (runUrl === undefined) throw new Error('--ci-record-costs also names its hosted --ci-run-url');
-  const names = new Map([...LADDER, ...ciUnits().map((unit) => unit.gate)].map((gate) => [gate.run, gate.label]));
-  const costs = writeHostedCosts(readVerdicts(path), runUrl, names);
+/** The deploy's CI gate: the verdict armada stored for this exact revision, every row of it into the deploy's report.
+ *  No verdict is a refusal, never a local rerun. */
+function ciVerdict(asked: string, sha: string, report: string): number {
+  if (asked !== sha) throw new Error('the deployed revision is not HEAD');
+  const file = armadaVerdict(root, sha);
 
-  console.log('Recorded hosted row/file timings from ' + costs.runUrl + ' on ' + costs.sha);
+  if (file === null) throw new Error(`armada has no verdict for ${sha}; a push to integration/** or main proves it, or run \`bunx armada run ${sha}\``);
 
-  return 0;
-}
+  if (file.sha !== sha) throw new Error(`armada's verdict names ${file.sha}, not ${sha}`);
 
-/** CI planning, collection and the deploy's one Actions proof path. No artifact means refusal, never a local rerun. */
-function ciFind(find: string, sha: string, runFile: string): number {
-  if (find !== sha) throw new Error('the deployed revision is not HEAD');
-  const run = findPushCI(root, sha);
-
-  writeCIRun(runFile, run);
-  console.log('CI: ' + run.html_url + ' for ' + sha);
-
-  return 0;
-}
-
-function ciCollect(directory: string, sha: string, verdicts: string): number {
-  const file = collectVerdicts({ directory, sha, attempt: Number(process.env['GITHUB_RUN_ATTEMPT'] ?? '1'), parts: ciParts() });
-
-  checkFileCoverage(file, ciUnits().filter((unit) => unit.gate.ciShards !== undefined).map((unit) => ({ run: unit.gate.run, files: claims(unit.gate.run, trackedTestFiles()) })));
-  writeVerdicts(verdicts, file);
-
-  return file.rows.some((row) => row.exitCode !== 0) ? 1 : 0;
-}
-
-async function ciVerdicts(sha: string, request: { readonly runFile: string; readonly upload: boolean; readonly take: boolean; readonly report: string }, seen: { url: string }): Promise<number> {
-  const { upload, take, report } = request;
-  const run = readCIRun(request.runFile, sha);
-
-  seen.url = run.html_url;
-
-  if (upload) await awaitUploadCI(root, run);
-  const ended = take ? awaitCI(root, run) : run;
-  const part = upload ? 'upload' : 'all';
-  const file = downloadVerdicts(root, run, part, resolve(report, 'ci', part));
-  const expected = upload ? ciParts().find((candidate) => candidate.name === 'upload')?.runs ?? [] : ciUnits().map((unit) => unit.gate.run);
-
-  checkCoverage(file, sha, expected);
-  // The upload proof was already reported before publishing, and this machine's preflight is its own prerequisite.
-  const rows = file.rows.filter((row) => !take || LADDER.find((gate) => gate.run === row.run)?.phase !== 'upload');
-  const green = reportCIVerdicts({ ...file, rows }, seen.url, report);
-
-  if (take) requireCIGreen(ended);
-
-  return green ? 0 : 1;
+  return reportCIVerdicts(file, 'armada verdict ' + sha.slice(0, 12), report) ? 0 : 1;
 }
 
 /** A `--name=value` argument's value. */
@@ -3630,15 +3565,6 @@ function ciPlanCosts(): HostedCosts {
 
 async function ciCommand(): Promise<number | undefined> {
   const option = argumentValue;
-  const measurements = option('ci-record-costs');
-
-  if (measurements !== undefined) return recordHostedMeasurements(measurements, option('ci-run-url'));
-
-  if (process.argv.includes('--ci-matrix')) {
-    console.log(JSON.stringify({ include: ciParts().map((part) => ({ part: part.name })) }));
-
-    return 0;
-  }
 
   if (process.argv.includes('--ci-plan')) {
     console.log(JSON.stringify(ciPlan(ciPlanCosts())));
@@ -3646,29 +3572,19 @@ async function ciCommand(): Promise<number | undefined> {
     return 0;
   }
 
-  const find = option('ci-find');
-  const collect = option('ci-collect');
-  const upload = process.argv.includes('--ci-upload');
-  const take = process.argv.includes('--ci-await');
+  const asked = option('ci-verdict');
 
-  if (find === undefined && collect === undefined && !upload && !take) return undefined;
+  if (asked === undefined) return undefined;
   const report = process.env['KINU_DEPLOY_REPORT'] ?? '';
-  const seen = { url: '' };
 
   try {
-    const sha = fullRevision();
-
-    if (find !== undefined) return ciFind(find, sha, option('ci-run') ?? '');
-
-    if (collect !== undefined) return ciCollect(collect, sha, option('verdicts') ?? '');
-
-    return await ciVerdicts(sha, { runFile: option('ci-run') ?? '', upload, take, report }, seen);
+    return ciVerdict(asked, fullRevision(), report);
   } catch (cause) {
     const found = cause instanceof Error ? cause.message : String(cause);
 
     console.error('CI refused: ' + found);
 
-    if (report !== '') recordStep(report, { phase: 'ci', what: 'CI proof', finding: found + (seen.url === '' ? '' : ' — ' + seen.url) });
+    if (report !== '') recordStep(report, { phase: 'ci', what: 'CI proof', finding: found });
 
     return 1;
   }
@@ -3881,7 +3797,6 @@ if (import.meta.main) {
   const phaseGates = phaseRows === undefined ? tierRun(tier) : localDeployGates(phaseRows.map(({ gate }) => gate));
   const declared = selectedGate === undefined ? phaseGates : [selectedGate];
 
-  const ciPart = process.argv.find((argument) => argument.startsWith('--ci-part='))?.slice('--ci-part='.length);
   const verdictPath = process.argv.find((argument) => argument.startsWith('--verdicts='))?.slice('--verdicts='.length);
 
   if (verdictPath !== undefined && Bun.spawnSync(['git', 'status', '--porcelain'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim() !== '') {
@@ -3889,17 +3804,12 @@ if (import.meta.main) {
   }
 
   const costs = ciPlanCosts();
-  const part = ciPart === undefined ? undefined : ciParts(costs).find((candidate) => candidate.name === ciPart);
-
-  if (ciPart !== undefined && (tier !== 'ci' || part === undefined)) throw new Error('unknown CI part or a non-CI tier');
   // `--ci-row`: one CI unit, as the container runner runs them, each in its own task.
   const ciRow = process.argv.find((argument) => argument.startsWith('--ci-row='))?.slice('--ci-row='.length);
   const rowGate = ciRow === undefined ? undefined : ciUnits(costs).find((unit) => unit.gate.run === ciRow)?.gate;
 
   if (ciRow !== undefined && (tier !== 'ci' || rowGate === undefined)) throw new Error('unknown CI row or a non-CI tier: ' + ciRow);
-  let chosen = part === undefined ? declared : ciUnits(costs).map((unit) => unit.gate).filter((gate) => part.runs.includes(gate.run));
-
-  if (rowGate !== undefined) chosen = [rowGate];
+  const chosen = rowGate === undefined ? declared : [rowGate];
   const tracked = trackedTestFiles();
   const changedByRun = new Map<string, Gate>();
 
@@ -3915,7 +3825,7 @@ if (import.meta.main) {
 
   const sourceRow = rowGate !== undefined && !['preflight', 'upload'].includes(rowGate.phase ?? 'source');
 
-  if ((ciPart !== undefined && ciPart !== 'upload') || sourceRow) {
+  if (sourceRow) {
     // This runner's prerequisite, not another source verdict or another row in the collected proof.
     const ready = await runUnderDeadline({ argv: ['bun', 'scripts/preflight.ts'], cwd: root, seconds: GATE_DEADLINE_SECONDS, label: 'Runner preflight', stdio: 'inherit' });
 
@@ -3995,13 +3905,13 @@ if (import.meta.main) {
   // quiet one. A derived gate runs under exactly the environment its key
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
-  const caching = cacheEnabled({ changedFrom, ciPart, noCache: process.argv.includes('--no-cache') });
+  const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: process.argv.includes('--no-cache') });
   const tools = toolVersions(root, await pathNodeVersion());
   const store = storeAt(defaultStoreDirectory());
   const revision = fullRevision();
   const ciRows: CIVerdict[] = [];
 
-  if (verdictPath !== undefined) writeVerdicts(verdictPath, { sha: revision, part: ciPart ?? 'all', rows: [] });
+  if (verdictPath !== undefined) writeVerdicts(verdictPath, { sha: revision, part: 'all', rows: [] });
   const skipped: string[] = [];
   const uncached: string[] = [];
   const recorded: string[] = [];
@@ -4030,7 +3940,7 @@ if (import.meta.main) {
       // A reused CI verdict names the revision that proved it, and carries the file walls that proof measured.
       if (verdictPath !== undefined) {
         ciRows.push({ run: gate.run, exitCode: 0, seconds: plan.entry.seconds, output: '', timings: plan.entry.timings, cached: plan.entry.revision });
-        writeVerdicts(verdictPath, { sha: revision, part: ciPart ?? 'all', rows: ciRows });
+        writeVerdicts(verdictPath, { sha: revision, part: 'all', rows: ciRows });
       }
 
       console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
@@ -4052,18 +3962,18 @@ if (import.meta.main) {
   // in order with its output live, which is how `--gate` reads it.
   const concurrent = pending.length > 1 && !process.argv.includes('--serial');
   let stdio: 'inherit' | 'pipe' | 'tee' = 'inherit';
-  // A CI part or a single CI row reports each row's output and each file's seconds in its verdict file.
-  const verdictRows = ciPart !== undefined || rowGate !== undefined;
+  // A CI row reports its output and each file's seconds in its verdict file.
+  const verdictRows = rowGate !== undefined;
 
   if (concurrent) stdio = 'pipe';
   else if (deployPhase !== undefined || verdictRows) stdio = 'tee';
   const failed: string[] = [];
   // A tier stops launching at its first red: the fastest path to a finding. A deploy phase never does (L18).
-  const stopped = (): boolean => deployPhase === undefined && ciPart === undefined && failed.length > 0;
+  const stopped = (): boolean => deployPhase === undefined && failed.length > 0;
 
   // A red run ends here, naming every gate that failed: the reds of a wave are spread over its output.
   const finish = (): void => {
-    if (failed.length === 0 || (ciPart !== undefined && ciRows.length < gates.length)) return;
+    if (failed.length === 0) return;
     console.error(`\nladder ${name}: ${String(failed.length)} of ${String(gates.length)} gate(s) failed: ${failed.join(', ')}`);
     process.exit(1);
   };
@@ -4112,7 +4022,7 @@ if (import.meta.main) {
   };
 
   /** A CI row's file walls, which its recorded proof keeps for a later hit's coverage. */
-  const ciTimings = (path: string) => (ciPart === undefined ? undefined : readFileTimings(path));
+  const ciTimings = (path: string) => (verdictRows ? readFileTimings(path) : undefined);
 
   const runPending = async (entry: (typeof pending)[number]): Promise<void> => {
     const { index, gate, plan, closure, proofs } = entry;
@@ -4164,7 +4074,7 @@ if (import.meta.main) {
 
     if (verdictPath !== undefined) {
       ciRows.push({ run: gate.run, exitCode: outcome.exitCode, seconds, output: outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr, timings: readFileTimings(timingPath) });
-      writeVerdicts(verdictPath, { sha: revision, part: ciPart ?? 'all', rows: ciRows });
+      writeVerdicts(verdictPath, { sha: revision, part: 'all', rows: ciRows });
     }
 
     if (reportOutcome(gate, outcome)) {
