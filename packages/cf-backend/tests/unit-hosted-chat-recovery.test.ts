@@ -8,7 +8,7 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { actorConnectionTag, RECOVERY_BACKOFF_CEILING_MS, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { abandonHarnessFibers, asPane } from './helpers/agents-sdk';
 import {
-  actorOver, driveUntil, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, rosterOver, wakeForDelegatedTask,
+  actorOver, driveUntil, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, rosterOver, until, wakeForDelegatedTask,
   type StartedHarness,
 } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, type RecordedGatewayRun, type StubbedAiBinding } from './helpers/platform-gateway';
@@ -25,9 +25,10 @@ async function afterReset(db: StartedHarness['db'], gateway: StubbedAiBinding): 
   });
 }
 
-/** A lap later, when the agent's wake falls due: a facet sets no alarm, so the workspace's is the only thing that wakes it. */
-function lapLater(): void {
+/** A lap later the agent's wake falls due, and the workspace's alarm delivers it: a facet sets no alarm of its own. */
+async function lapLater(workspace: StartedHarness): Promise<void> {
   setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
+  await workspace.agent.alarm();
 }
 
 /** The owner's message, asked of the agent's model: the agent naming itself after it is not one. */
@@ -65,8 +66,8 @@ test("an owner's message to an agent survives the workspace resetting mid-turn, 
 
   const second = await afterReset(first.db, gateway);
 
-  lapLater();
-  await driveUntil(second, 'the agent never answered after the reset', () => answered);
+  await lapLater(second);
+  await until(() => answered, 'the agent never answered after the reset');
 
   expect(asked).toBe(2);
 });
@@ -98,10 +99,10 @@ test("the owner's Stop reaches an agent's turn that a reset workspace never saw 
 
   const second = await afterReset(first.db, gateway);
 
-  lapLater();
-  await driveUntil(second, 'the agent never took its turn up again', () => asked === 2);
+  await lapLater(second);
+  await until(() => asked === 2, 'the agent never took its turn up again');
   await asPane(pane, () => second.agent.cancelCurrentWork());
-  await driveUntil(second, "the owner's Stop never reached the agent's turn", () => stopped);
+  await until(() => stopped, "the owner's Stop never reached the agent's turn");
 });
 
 test("a delegated task whose turn cannot be prepared is answered to its hirer as blocked", async () => {
