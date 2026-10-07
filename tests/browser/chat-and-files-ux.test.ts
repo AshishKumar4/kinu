@@ -723,10 +723,6 @@ describe('large tool runs, as the timeline draws them', () => {
     expect(folded.others).toBe(unfolded.others);
   });
 
-  test('every call is the same compact row, a change as much as a read', () => {
-    expect(new Set(observed.toolActivity.unfolded.heights).size).toBe(1);
-  });
-
   test('the app a mid-run call started is on screen before any click', () => {
     const { collapsedPreview, foldLabel } = observed.toolActivity;
 

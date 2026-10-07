@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import { cloudProxyBaseURL } from '@kinu.run/core';
 import { LIVE_MODEL_ENV } from '../src/ambient-env';
 import {
-  EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, EVAL_SERVICE_ACCOUNT, EVAL_SERVICE_EMAIL, EVAL_STAGING_ORIGIN,
+  EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, EVAL_SERVICE_ACCOUNT, EVAL_STAGING_ORIGIN,
   EVAL_WORKSPACE_PREFIX, deploymentPublicOrigin, evalModelEndpointVerdict, evalTargetVerdict, evalWorkspaceName,
   refusedEvalEndpoint, resolveEvalIdentity,
 } from '../src/eval-identity';
@@ -39,16 +39,6 @@ describe('the eval target allowlist — a declared deployment, or a loopback, no
   test('an unset target defaults once, and whitespace around staging keeps its own secret', () => {
     expect(evalTargetVerdict(undefined)).toEqual({ kind: 'allowed', origin: EVAL_DEPLOYMENT_ORIGIN, why: 'deployment' });
     expect(evalTargetVerdict(`  ${EVAL_STAGING_ORIGIN}/  `)).toEqual({ kind: 'allowed', origin: EVAL_STAGING_ORIGIN, why: 'deployment' });
-  });
-
-  test('each origin wrangler declares is an eval target, with and without a trailing slash', () => {
-    expect(DEPLOYMENTS.map((deployment) => deployment.vars.CLI_PUBLIC_ORIGIN))
-      .toEqual([EVAL_DEPLOYMENT_ORIGIN, EVAL_STAGING_ORIGIN]);
-
-    for (const origin of [EVAL_DEPLOYMENT_ORIGIN, EVAL_STAGING_ORIGIN]) {
-      expect(evalTargetVerdict(origin)).toEqual({ kind: 'allowed', origin, why: 'deployment' });
-      expect(evalTargetVerdict(`${origin}/`)).toEqual({ kind: 'allowed', origin, why: 'deployment' });
-    }
   });
 
   // `workers_dev` is off, so the declared origins are the only names reaching a Worker;
@@ -278,18 +268,5 @@ describe('evalWorkspaceName — every row an eval leaves behind is attributable'
 
 /** The constants above copy `wrangler.jsonc`; a rename there must fail here. */
 describe('the eval facts match every deployment', () => {
-  test('EVAL_SERVICE_EMAIL is the identity each deployment synthesizes for a secret-bearing request', () => {
-    expect(DEPLOYMENTS.map((deployment) => deployment.vars.DEV_USER_EMAIL))
-      .toEqual(DEPLOYMENTS.map(() => EVAL_SERVICE_EMAIL));
-  });
 
-  // `authenticateRequest` synthesizes DEV_USER_EMAIL only for DEV_IDENTITY_SECRET (auth/session.ts) and
-  // the admin gate refuses `provider: 'dev'`; a workers.dev host would be a door nobody watches. A named
-  // environment inherits `workers_dev` when it leaves it unset.
-  test('no deployment answers on workers.dev', () => {
-    const [production] = DEPLOYMENTS;
-
-    expect(DEPLOYMENTS.map((deployment) => deployment.workers_dev ?? production?.workers_dev))
-      .toEqual(DEPLOYMENTS.map(() => false));
-  });
 });

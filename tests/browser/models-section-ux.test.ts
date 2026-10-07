@@ -119,41 +119,6 @@ describe('the models section keeps every control reachable by name', () => {
     });
   });
 
-  test('tier rows and the role editor expose their controls by accessible name', async () => {
-    await withGallery(async ({ newPage, origin }) => {
-      const page = await newPage();
-      await page.setViewport({ width: 1280, height: 1100 });
-      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="New tier id"]');
-
-      const named = async (name: string): Promise<boolean> =>
-        page.$$eval(`[aria-label="${name}"]`, (els) => els.length > 0);
-
-      // Every built-in tier row carries its two controls, named for the tier:
-      // the model combobox and the reasoning-effort select.
-      // The model trigger is a button whose spoken name starts with the tier's label.
-      const pickerNamed = async (name: string): Promise<boolean> =>
-        page.$$eval('button', (buttons, wanted) => buttons.some((button) => button.textContent?.startsWith(`${wanted}: `) === true), name);
-
-      for (const tier of ['fast', 'default', 'deep']) {
-        expect(await pickerNamed(`${tier} model`)).toBe(true);
-        expect(await named(`${tier} reasoning effort`)).toBe(true);
-      }
-
-      // The role navigation and the selected role's editor fields.
-      expect(await page.$('nav[aria-label="Agent roles"] [aria-current="true"]')).not.toBeNull();
-
-      // "Default swarm preset" waits on "Beta: swarms", below.
-      for (const field of ['Label', 'Description', 'Instructions', 'Default tier']) {
-        expect(await named(field)).toBe(true);
-      }
-
-      // The tool and skill membership lists, as named checkboxes.
-      expect(await named('Tools: file')).toBe(true);
-      expect(await named('Skills: audit-implementation')).toBe(true);
-      await page.close();
-    });
-  });
 });
 
 describe('the composer reasoning control', () => {

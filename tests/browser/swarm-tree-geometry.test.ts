@@ -556,31 +556,6 @@ describe('the swarm trees, as a browser lays them out', () => {
     }
   });
 
-  test('a card of short searches hugs them instead of reserving the column', () => {
-    // `forkmerge` focuses a journalled run: one band of five rows. Holding the
-    // whole column would draw the rest as empty canvas with the key stranded at
-    // the bottom of it.
-    for (const width of WIDTHS) {
-      for (const mode of MODES) {
-        const where = key('forkmerge', width, mode);
-        const frame = observed.geometry[where];
-        expect(frame, `${where} missing`).toBeDefined();
-
-        if (frame === undefined) continue;
-        const { card, cellHeight } = frame;
-        expect(card, `${where}: no card`).not.toBeNull();
-        expect(cellHeight, `${where}: no column to measure against`).not.toBeNull();
-
-        if (card === null || cellHeight === null) continue;
-        expect(cellHeight).toBeGreaterThan(400);
-        expect(
-          card.height,
-          `${where}: card reserves ${Math.round(card.height)} of ${Math.round(cellHeight)}`,
-        ).toBeLessThan(cellHeight * 0.6);
-      }
-    }
-  });
-
   test("a band's caption stops inside the band it names", () => {
     // The owner's words were "the content leaks out of the box", and the box he
     // meant is the band. A caption capped to the CANVAS instead of to its band

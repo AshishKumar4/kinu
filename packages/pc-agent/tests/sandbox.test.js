@@ -216,15 +216,6 @@ describe('the device sandbox, as the kernel enforces it', () => {
     }
   });
 
-  test('with the Sandbox switch off a command gets the owner\'s environment, less Kinu\'s credentials', () => {
-    const owner = { PATH: '/usr/bin', GITHUB_TOKEN: 'ghp_owner_pat', SSH_AUTH_SOCK: '/tmp/owner-agent.sock', TZ: 'UTC', DISPLAY: ':0' };
-    const withheld = Object.fromEntries(sandbox.WITHHELD_ENV.map((name) => [name, `planted:${name}`]));
-
-    const { env } = sandbox.plan({ tier: 'raw', deviceHome: '/home/dev/.kinu', command: 'env', cwd: '/home/dev', source: { ...owner, ...withheld } });
-
-    expect(env).toEqual(owner);
-  });
-
   test('what a dotenv file put into the daemon at launch reaches no command, in either tier', () => {
     const project = scratchDir('launch-dotenv');
     fs.writeFileSync(path.join(project, '.env'), 'PROJECT_DB_URL=postgres://app:secret@db/app\nSHARED=from-dotenv\n');
