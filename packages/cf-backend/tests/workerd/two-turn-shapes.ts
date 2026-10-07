@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
@@ -326,3 +326,24 @@ export const WakeDriveResultSchema = v.object({
 });
 
 export type WakeDriveResult = v.InferOutput<typeof WakeDriveResultSchema>;
+
+/** What the Changes-tab notes probe saw before the eviction. */
+export interface ChangeNotesPrepared {
+  readonly workspace: string;
+  /** Why the first send failed, in its own words; null if it did not. */
+  readonly refusal: string | null;
+  readonly kept: readonly string[];
+  readonly owedAfterRefusal: { readonly sends: number; readonly cards: number };
+  readonly sent: { readonly ok: boolean; readonly left: number };
+  readonly keptAfterSend: number;
+  readonly owed: { readonly sends: number; readonly cards: number };
+}
+
+/** What it saw once the notes' own turn ran on the fresh activation. */
+export interface ChangeNotesCompleted {
+  /** Each message the operator's side wrote, by its text, and whether it carries the notes' card. */
+  readonly users: readonly { readonly text: string; readonly card: boolean }[];
+  readonly cards: readonly { readonly role: string; readonly notes: readonly string[]; readonly author: string | null }[];
+  readonly kept: number;
+  readonly owed: { readonly sends: number; readonly cards: number };
+}
