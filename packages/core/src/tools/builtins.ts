@@ -17,6 +17,7 @@ import {
 import { TaskListStore } from './task-store';
 import { withClampedToolResult } from './clamp';
 import { withCheckedInput, withCheckedInputs } from './tool-schema';
+import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 import { codemodeInputSchema } from './sandbox-contract';
 import { dispatchReport, ReportBodySchema, ReportToolInputSchema } from './report-tool';
 import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
@@ -266,6 +267,8 @@ export interface ToolSurfaceDeps extends BuiltinToolDeps {
   codemodeTool?: unknown;
   /** Merged after the finish, never declared to the sandbox. */
   post?: ToolSet;
+  /** Claimed inside the Plan check, so a refused call claims nothing. */
+  effectClaims?: EffectClaimDeps;
   wrapFinished?: (finished: ToolSet) => ToolSet;
 }
 
@@ -295,14 +298,14 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
 
     if (buildFromSurface.success && 'eval' in surface) {
       // `eval` reaches only the namespaces the allowed tools reach.
-      const entry = { value: buildFromSurface.output(surface, narrowToolSurface(deps.allowed)) };
+      const entry = { value: buildFromSurface.output(toolsInWorkMode(deps.workMode ?? 'build', surface), narrowToolSurface(deps.allowed)) };
 
       if (isExecutableToolEntry(entry)) surface.eval = withCheckedInput('eval', entry.value);
     }
   }
 
   const finished = deps.post === undefined ? surface : { ...surface, ...withCheckedInputs(deps.post) };
-  const modeBound = toolsInWorkMode(deps.workMode ?? 'build', finished);
+  const modeBound = toolsInWorkMode(deps.workMode ?? 'build', deps.effectClaims === undefined ? finished : withEffectClaims(finished, deps.effectClaims));
 
   return deps.wrapFinished === undefined ? modeBound : deps.wrapFinished(modeBound);
 }

@@ -11,6 +11,21 @@ export const FLOW_PROBE = 'flow-probe.txt';
 /** The file the same turn's shell writes, so Changes is shown a write no file tool made. */
 export const FLOW_SHELL_PROBE = 'flow-shell-probe.txt';
 
+/** The storm row's asks: one file that raises the Changes tab, then a burst of files from one shell command. */
+export const STORM_SEED_ASK = 'Flow storm: write the seed file.';
+
+export const STORM_ASK = 'Flow storm: write the burst.';
+
+/** The burst's size, and the folder it lands in. */
+export const STORM_FILES = 50;
+
+export const STORM_DIR = 'storm';
+
+/** The live-memory row's ask, and the note its turn saves. */
+export const MEMORY_ASK = 'Flow memory: save the release note.';
+
+export const FLOW_MEMORY_NOTE = 'The release ships on Thursday.';
+
 /** The written-file row's one turn. */
 export const WRITE_FILE_ASK = `Use your file tool to write a new file named ${FLOW_PROBE} in the workspace, `
   + 'containing exactly the words browser flow probe. Then reply with one line: DONE.';
@@ -95,6 +110,23 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
     return request.called.includes('shell') || !request.available.includes('shell')
       ? { text: 'DONE' }
       : { toolCall: { name: 'shell', arguments: { runtime: 'workspace', command: `echo from the shell > ${workspacePath(FLOW_SHELL_PROBE, WORKSPACE_ROOT)}` } } };
+  }
+
+  const latest = request.userTexts.at(-1) ?? '';
+
+  if (latest.includes(MEMORY_ASK)) {
+    return request.turn.length > 0 ? { text: 'DONE' } : { toolCall: { name: 'memory', arguments: { action: 'save', content: FLOW_MEMORY_NOTE } } };
+  }
+
+  if (latest.includes(STORM_SEED_ASK) || latest.includes(STORM_ASK)) {
+    if (request.turn.length > 0) return { text: 'DONE' };
+
+    return latest.includes(STORM_SEED_ASK)
+      ? { toolCall: { name: 'file', arguments: { action: 'write', path: workspacePath('storm-seed.txt', WORKSPACE_ROOT), content: 'seed' } } }
+      : { toolCall: { name: 'shell', arguments: {
+        runtime: 'workspace',
+        command: `mkdir -p ${STORM_DIR} && for i in $(seq 1 ${String(STORM_FILES)}); do echo $i > ${STORM_DIR}/f$i.txt; done`,
+      } } };
   }
 
   if (asked(SLATE_ASK) && request.available.includes('file')) {

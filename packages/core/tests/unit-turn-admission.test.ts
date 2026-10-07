@@ -1,6 +1,6 @@
 // KINU-048: admission counts the assembled request, compacts once, recounts, and refuses before submission.
 import { describe, expect, test } from 'bun:test';
-import { tool, type ModelMessage } from 'ai';
+import { jsonSchema, tool, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import { assembleTurnMessages } from '../src/orchestrator/turn-context';
@@ -19,6 +19,7 @@ import { createCodexProvider } from '../src/providers/codex';
 import { createOpenAICompatProvider } from '../src/providers/openai-compat';
 import type { ModelCallDeps } from '../src/providers/types';
 import { asFetchFunction } from '../src/providers/fetch-shim';
+import { createProviderRegistry } from '../src/providers/registry';
 
 function bodyText(init: RequestInit | undefined): string {
   const body = v.safeParse(v.string(), init?.body);
@@ -440,7 +441,11 @@ describe('provider count support', () => {
       },
     ];
 
-    const tools = { look: tool({ description: 'look something up', inputSchema: z.object({ q: z.string() }) }) };
+    const tools = {
+      look: tool({ description: 'look something up', inputSchema: z.object({ q: z.string() }) }),
+      // A root union, which Anthropic refuses: both bodies carry it flattened.
+      pick: tool({ description: 'pick one', inputSchema: jsonSchema({ type: 'object', oneOf: [{ properties: { id: { type: 'string' } }, required: ['id'] }, { properties: { name: { type: 'string' } }, required: ['name'] }] }) }),
+    };
 
     let vendorBody: unknown;
     let countBody: unknown;
@@ -464,7 +469,9 @@ describe('provider count support', () => {
     };
 
     const provider = createAnthropicProvider();
-    const model = provider.createModel('claude-opus-4-7', vendorDeps);
+    const registry = createProviderRegistry();
+    registry.register(provider);
+    const model = registry.resolve('anthropic/claude-opus-4-7', vendorDeps);
     let refused: unknown;
 
     // One turn: its admission counts the request, then its call sends it; both go through runChat.

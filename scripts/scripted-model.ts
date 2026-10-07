@@ -19,7 +19,7 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { apiJson } from './live-app-harness';
 import {
   FALLBACK_ANSWER, SCRIPTED_MODELS_BODY, pacedStream, readScriptedRequest, scriptedBody,
-  type ScriptedAnswer, type ScriptedModel, type ScriptedPace, type ScriptedRequest,
+  type ScriptedAnswer, type ScriptedCall, type ScriptedModel, type ScriptedPace, type ScriptedRequest,
 } from './scripted-protocol';
 
 /** The account credential a scripted run's workspaces are served through. */
@@ -367,6 +367,78 @@ export function toldBackTurn(request: ScriptedRequest, heard: (request: Scripted
   return { text: TOLD_BACK_ANSWER };
 }
 
+/* ── The plan's own tasks ──────────────────────────────────────────────── */
+
+/** The handoff an approval enqueues names the approved plan; only a decision puts it in the conversation. */
+const APPROVAL_TEXT = /approved plan/i;
+
+/** The plan-tasks row's asks: a chore before any plan exists, then the plan itself, sent on a Plan turn. */
+export const PLAN_TASKS_CHORE = 'Plan tasks probe: note the old chore before any plan.';
+
+export const PLAN_TASKS_PLAN = 'Plan tasks probe: plan the guard fix.';
+
+/** What the plan-tasks row's turns add: a chore before the plan, then the approved plan's step, its subtask, and a
+ *  step added from a program. */
+export const PLAN_TASK_TITLES = {
+  chore: 'Sweep the old logs', step: 'Guard the segment read', sub: 'Cover the guest cart', programmed: 'Ship the guard fix',
+} as const;
+
+const PLAN_TASKS_MARKDOWN = ['# Guard the segment read', '', '1. Guard the read.', '2. Cover the guest cart.', '3. Ship it.'].join('\n');
+
+/** The ids a native `tasks` add answers with. */
+const TasksAddedSchema = v.pipe(v.string(), v.parseJson(), v.looseObject({ added: v.array(v.looseObject({ id: v.string() })) }));
+
+/** Whether the conversation already holds a call to `name` whose arguments name `named`. */
+function madeCall(request: ScriptedRequest, name: string, named = ''): ScriptedCall | undefined {
+  return request.calls.find((call) => call.name === name && call.arguments.includes(named));
+}
+
+/** The approved plan's build turn: the step, its subtask under the id the step was given, then a step from a program. */
+function planTasksBuild(request: ScriptedRequest): ScriptedAnswer {
+  const step = madeCall(request, 'tasks', PLAN_TASK_TITLES.step);
+
+  if (step === undefined) return { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.step] } } };
+
+  if (madeCall(request, 'tasks', PLAN_TASK_TITLES.sub) === undefined) {
+    const added = v.safeParse(TasksAddedSchema, step.result);
+    const parent = added.success ? added.output.added[0]?.id : undefined;
+
+    if (parent === undefined) return { text: `The step's id was not in its answer: ${step.result}` };
+
+    return { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.sub], parent } } };
+  }
+
+  if (madeCall(request, 'eval') === undefined) {
+    return { toolCall: { name: 'eval', arguments: { code: `// Add the last step\nawait tasks.add([${JSON.stringify(PLAN_TASK_TITLES.programmed)}]);\nreturn 'added';` } } };
+  }
+
+  return { text: 'Implemented the approved plan.' };
+}
+
+/**
+ * The plan-tasks row's turns, or null for any other request. Each step is keyed on what the conversation already
+ * holds, by the titles its calls name, so a request repeated within a turn never repeats a call.
+ */
+export function planTasksProbe(request: ScriptedRequest): ScriptedAnswer | null {
+  if (request.available.length === 0 || !request.userTexts.some((text) => text.includes('Plan tasks probe'))) return null;
+  const last = request.userTexts.at(-1) ?? '';
+
+  if (last.includes(PLAN_TASKS_CHORE)) {
+    return madeCall(request, 'tasks', PLAN_TASK_TITLES.chore) === undefined
+      ? { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.chore] } } }
+      // The words the rows read as a page-sent turn's end (live-app-rows' TURN_ANSWERED).
+      : { text: 'Done.' };
+  }
+
+  if (last.includes(PLAN_TASKS_PLAN)) {
+    if (madeCall(request, 'submit_plan') !== undefined || !request.available.includes('submit_plan')) return { text: 'The plan is ready for your review.' };
+
+    return { toolCall: { name: 'submit_plan', arguments: { edits: [{ start: 1, content: PLAN_TASKS_MARKDOWN }] } } };
+  }
+
+  return APPROVAL_TEXT.test(last) ? planTasksBuild(request) : null;
+}
+
 /* ── The plan walkthrough ──────────────────────────────────────────────── */
 
 /** The mission the walkthrough is driven with, sent on a Plan turn. */
@@ -439,8 +511,6 @@ const SLATE_WRITES: readonly ScriptedAnswer[] = [
     toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATE_ROOT}/server.ts`, content: SLATE_SERVER } },
   },
 ];
-
-const APPROVAL_TEXT = /approved plan/i;
 
 /**
  * The walkthrough the README's film records and the live-app tier asserts:

@@ -1,13 +1,12 @@
 // Generic OpenAI-compatible Chat Completions endpoint; one per `openai-compat.<name>`
 // credential, model spec `openai-compat:<name>/<modelId>`.
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { baseCredentialKey } from '../credentials/accounts';
 import type { DynamicProviderSource } from './registry';
 import type { AuthResolution, ModelInfo, ModelProvider } from './types';
-import { createAuthedFetch, positiveInteger } from './util';
-import { heardFetch } from './middleware/attempt';
+import { keyedEndpointModel } from './catalog';
+import { positiveInteger } from './util';
 
 const ModelListSchema = v.object({
   data: v.array(v.object({
@@ -74,25 +73,12 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
     },
 
     createModel(modelId, deps): LanguageModel {
-      // @ai-sdk needs a baseURL at construction; customFetch rewrites this
-      // placeholder from the credential on every call.
-      const placeholder = 'https://openai-compat.invalid';
-
-      const customFetch = createAuthedFetch(deps, {
-        provider: providerId,
-        credKey,
+      // The SDK needs a base URL at construction; the credential's own replaces this placeholder on every call.
+      return keyedEndpointModel({
+        providerId, credKey, modelId, deps, requireBaseURL: true,
+        endpoint: { baseURL: 'https://openai-compat.invalid', protocol: 'chat-completions', reasoning: false },
         missingCredentialError: `openai-compat credential ${credKey} not configured (baseURL required)`,
-        requireBaseURL: true,
-        mutate: ({ url, auth }) => auth.baseURL && url.startsWith(placeholder)
-          ? auth.baseURL.replace(/\/+$/, '') + url.slice(placeholder.length)
-          : url,
       });
-
-      return createOpenAICompatible({
-        name: providerId,
-        baseURL: placeholder,
-        fetch: heardFetch(customFetch),
-      }).chatModel(modelId);
     },
   };
 }

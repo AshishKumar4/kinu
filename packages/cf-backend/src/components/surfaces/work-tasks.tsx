@@ -44,6 +44,7 @@ function TaskRow({ task, depth, owner, onOpenOwner }: { task: AgentTask; depth: 
     <div
       className={`flex items-start gap-2 py-1 ${depth > 0 ? "ml-4 pl-3 border-l p-border" : ""}`}
       title={meta.label}
+      data-task-depth={depth}
     >
       <Icon
         size={13}

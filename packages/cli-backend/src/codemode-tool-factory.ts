@@ -16,7 +16,7 @@ import {
   decodeJsonValue, explainSandboxError, nativeToolFunctions,
   renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram, currentWorkMode, toolsInWorkMode, execCallArgs, readDeviceRequestChannel,
+  codemodeFunction, withCodemodeProgram, execCallArgs, readDeviceRequestChannel,
 } from '@kinu.run/core';
 import { tool } from 'ai';
 import { programBody } from './executor';
@@ -96,7 +96,8 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
 
-          const external = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), surface.external()), signal);
+          // `requireBuild` above refused Plan, so nothing here runs in it.
+          const external = nativeToolFunctions(surface.external(), signal);
           const native = nativeToolFunctions(surface.native, signal);
 
           // A crafted name shadows a native one, as in the CF prelude.
