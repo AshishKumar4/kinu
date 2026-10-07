@@ -4335,6 +4335,46 @@ at most floor(log2 n) + 1 deltas, so L <= floor(log2 n) + 2 layers.
 - A delta no longer whites out a path under one that stopped being a
   directory; the archive held such a parent as both a file and a directory.
 
+D78. The tools tarball is built on armada, and this machine builds no
+Devbox artifact with Docker (2026-10-07, m1966b). D66's golden installs
+the pinned tools tarball onto `cloudflare/debian-trixie`; D72 kept the
+Dockerfile's `tools` stage to build it, the last Devbox step that needed a
+local Docker engine. Now `bun scripts/devbox-tools.ts build` runs one
+armada map over an environment of `cloudflare/debian-trixie`:
+`tools-setup.sh` (root, once per environment) pins every Debian package to
+snapshot.debian.org's `20261002T000000Z`, with priority 1001 so the base's
+or the runner's newer packages are taken back to that day, installs Rust
+1.93.1 from four sha256-pinned components, and fetches squashfuse 0.1.103,
+bun 1.4.2, KasmVNC 1.5.0 and the Sandbox 1.0.0 shim's one layer by sha256;
+`tools-build.sh` (the user) compiles the block lower for musl and
+squashfuse's low-level driver, and packs as the stage did. The block
+lower's sources ride in the recipe's install text, so the environment's
+key covers them.
+
+- Measured: an armada task's output is kept up to 64 MiB and refused at
+  128 MiB, so the tarball comes back as 32 MiB parts from one map.
+- Reproducible: two environments of different keys built the same tarball,
+  `a3146b2f…`, 335,856,114 bytes (jobs `20261007173606-445ff1b2` and
+  `20261007175028-8ba62822`; armada's typed API returned it again,
+  `20261007180715-2240e16c`).
+- Against the Docker-built `d1639d06…`: the same 377 entries; `Packages`
+  and every deb byte-identical, bun and the shim byte-identical;
+  `devbox-block-lower` (static-pie, same size) and `devbox-squashfuse`
+  (now linked on trixie, the golden's own system, not Ubuntu 24.04) differ.
+- The Dockerfile is gone. `upstream.json` pins the two scripts and the
+  sources (release-config A8), and the KasmVNC pin test reads the setup
+  script. armada's SDK is a GitHub dev dependency, the first in Kinu;
+  install parity knows such a package by the `.bun-tag` bun writes.
+- On real Medium containers with it pinned (`devbox-container-tier.ts
+  --headless --tools`, run `dc20261007183233b9cfb`): the golden installs
+  it, and every contract passes but the desktop client's, which drives a
+  browser on the host: tools (each binary, squashfuse under an overlay,
+  KasmVNC answering RFB, a truncated tarball refused, a reinstall changing
+  nothing), exec, processes, kill, trust, the product chain's lost-snapshot
+  recovery, and the ten disk contracts.
+- Not done here: the Codex egress container still has its image, built
+  with `wrangler containers build -p` on the local engine.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

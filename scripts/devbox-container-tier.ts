@@ -227,9 +227,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  /** The container's contracts, the desktop through the product routes, and the product's own chain. */
-  const productContracts = async () => {
-    for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
+  /** The desktop's own client, framed by the product route, driven in a browser on this host. */
+  const desktopClient = async () => {
     await step('desktop-client', async () => {
       const nativeBox = names[1] ?? '';
       await shell('printf %s "<body style=margin:0><div style=width:100vw;height:100vh;background:#c00 onclick=\\\"this.style.background=\x27#00c\x27\\\"></div>" >/var/tmp/click.html; '
@@ -272,6 +271,15 @@ async function main(): Promise<void> {
         return 'the product desktop routes carried a click to the golden\'s Chromium; foreign sockets refused';
       });
     });
+  };
+
+  /** The container's contracts, the desktop through the product routes, and the product's own chain. */
+  const productContracts = async () => {
+    for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
+
+    // `--headless`: everything but the desktop's client, which drives a browser on this host.
+    if (!process.argv.includes('--headless')) await desktopClient();
+
     await step('disk-chain', async () => {
       await shell('set -e; cd /workspace; mkdir -p private gone/sub src empty node_modules/pkg; chmod 700 private; '
         + 'echo secret >private/key; echo gone >gone/sub/f; echo old >src/f; ln -s src/f link; '
