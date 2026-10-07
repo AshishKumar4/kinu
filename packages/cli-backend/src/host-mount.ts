@@ -153,7 +153,8 @@ export interface LocalFilePlane {
   readonly checkpoints: FileCheckpoints | undefined;
 }
 
-export type LocalPlane = MountedVfs & { readonly namespace: CompositeVFS };
+/** `composite`, not `namespace`: `withMountTable` reads a `namespace` member as the opener of a mounted namespace. */
+export type LocalPlane = MountedVfs & { readonly composite: CompositeVFS };
 
 /** The machine's files as its shell names them; only the folder is snapshotted. */
 export function localFilePlane(input: LocalFilePlane): LocalPlane {
@@ -185,7 +186,7 @@ export function localFilePlane(input: LocalFilePlane): LocalPlane {
 
   return {
     ...files,
-    namespace,
+    composite: namespace,
     unlink: (path) => settle(Effect.flatMap(removable(path, 'unlink'), (at) => Effect.promise(async () => files.unlink(at)))),
     removeRecursive: (path) => settle(Effect.flatMap(removable(path, 'rm'), (at) => Effect.promise(async () => files.removeRecursive(at)))),
     rename: (from, to) => settle(Effect.flatMap(Effect.all([removable(from, 'rename'), removable(to, 'rename')]), ([a, b]) => Effect.promise(async () => files.rename(a, b)))),

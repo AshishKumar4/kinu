@@ -248,8 +248,9 @@ that stopped the loop. Every other clean end is `completed`.
   provider-reported prompt tokens floored by the history estimate plus the
   system prompt. Rungs run cheapest first: superseded ephemeral context, then
   older images and files (moved to `<home>/attachments/<sha256>.<ext>`, priced
-  for the next request's model, the newest two images kept; the stub names the
-  file as `vfs://…`, and a `file` read of an image shows it again), skills,
+  for the model serving the request, a fallback once one takes over, the newest
+  two images kept; the stub names the file as `vfs://…`, and a `file` read of an
+  image shows it again), skills,
   superseded reads, error inputs, old tool output, reasoning, remaining tool
   output, assistant runs, and a prefix summary. The first rung is Kinu's
   (`relieveEphemeralPressure`): a superseded `<dynamic_context>` block is stale

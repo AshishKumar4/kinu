@@ -51,6 +51,8 @@ export interface TurnAssemblySources {
   readonly models: TurnModelSources;
   skills(userText: string, roleSkills: readonly string[], limits: ModelWindow): Promise<TurnSkillSurface>;
   profileInputs(): Promise<ProfileAuthorityInputs>;
+  /** The pins a caller read before its turn opened, so the turn reads them once; read here when absent. */
+  readonly choices?: ReturnType<typeof ownProfileChoices>;
   ancestors?(): readonly PinnedProfile[];
   toolset(workMode: WorkMode): ToolSet;
   /** MCP and extension tools, reachable only through `eval`. */
@@ -134,10 +136,10 @@ interface TurnDraft {
   readonly limits: ModelWindow;
 }
 
-async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'config' | 'ancestors' | 'models'>, request: TurnAssemblyRequest): Promise<TurnDraft> {
+async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'choices' | 'config' | 'ancestors' | 'models'>, request: TurnAssemblyRequest): Promise<TurnDraft> {
   const profileInputs = await sources.profileInputs();
   const ancestors = sources.ancestors?.() ?? [];
-  const choices = ownProfileChoices(sources.config, profileInputs, ancestors.length === 0 ? undefined : ancestors, request.explicitTier === undefined ? {} : { explicitTier: request.explicitTier });
+  const choices = sources.choices ?? ownProfileChoices(sources.config, profileInputs, ancestors.length === 0 ? undefined : ancestors, request.explicitTier === undefined ? {} : { explicitTier: request.explicitTier });
   const drafted = resolveAgentTurnProfile({ ...profileInputs, ...choices, workMode: request.workMode, availableTools: [], activeSkills: [] });
   const served = sources.models.normalize(request.model ?? drafted.tier.model);
 
@@ -211,6 +213,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
 
   const chat: ActorExecutionInput['chat'] = {
     model: models.resolve(spec),
+    modelSpec: spec,
     // Without `modelOutputLimit` the whole window reads as the answer's allowance.
     modelContext: { id: spec, contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit },
     system: buildSystemPromptSync(sources.rt, prompt),
@@ -245,7 +248,6 @@ function routedChat(models: TurnModelSources, spec: string, profile: ResolvedTur
   if (routed === undefined) return {};
 
   return {
-    modelSpec: spec,
     credentialOf: (fallback: string) => routed.credentialFor(fallback),
     countInputTokens: (counted: CountableRequest) => routed.countInputTokens(spec, counted),
     retries: profile.retries,

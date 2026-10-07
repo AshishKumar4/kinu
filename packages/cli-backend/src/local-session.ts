@@ -619,7 +619,6 @@ export class LocalAgentSession {
       logger: compactionDiagnostics,
       summarizer: () => this.ensureModelState(),
       spend: { report: (report) => this.modelCallSink(report) },
-      model: () => this.effectiveModelSpec(),
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions());
     this.rt.setTurnFileLedgerProvider?.(() => this.actorSession.orchestrator.acc.files);
@@ -838,6 +837,7 @@ export class LocalAgentSession {
 
     const changed = changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.getActiveRoleId() });
     this.chat.reviseContext({ counted: true });
+    await this.terminal.modelSettingsChanged();
 
     return changed;
   }
@@ -849,6 +849,7 @@ export class LocalAgentSession {
       onChanged: () => {
         this.rebuildToolSurface();
         this.chat.reviseContext({ counted: true });
+        this.tracked(() => this.terminal.modelSettingsChanged());
       },
     }, spec);
   }
@@ -862,7 +863,11 @@ export class LocalAgentSession {
   }
 
   setProviderAccount(provider: string, account: string | null): ReturnType<typeof setProviderAccount> {
-    return setProviderAccount(this.config, provider, account);
+    const set = setProviderAccount(this.config, provider, account);
+
+    this.tracked(() => this.terminal.modelSettingsChanged());
+
+    return set;
   }
 
   /** The stored setting, never the claimed tier's own effort. */
@@ -1424,8 +1429,6 @@ export class LocalAgentSession {
       });
     }
 
-    // A local session opens on the owner's command, the one moment here a parked refusal may answer differently.
-    await this.terminal.releaseParked();
     await this.recoverTerminalTransitions();
     // A session that ended is a client that left: its idle or closed-session run falls due now.
     this.tracked(async () => {
@@ -2617,7 +2620,6 @@ export class LocalAgentSession {
       logger: compactionDiagnostics,
       summarizer: () => this.ensureModelState(),
       spend: { report: (report) => this.modelCallSink(report) },
-      model: () => this.effectiveModelSpec(),
     });
 
     return {

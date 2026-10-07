@@ -13,11 +13,10 @@ export interface AttachmentDeps {
 
 const KEEP_RECENT_IMAGES = 2;
 
-export function kinuAttachments(deps: AttachmentDeps, model: () => string): AttachmentPolicy {
+/** Priced for the model serving the request; the key names it, so a plan saved under another model re-plans. */
+export function kinuAttachments(deps: AttachmentDeps, model: string): AttachmentPolicy {
   return {
-    get key() {
-      return `${model()}|recent:${KEEP_RECENT_IMAGES}`;
-    },
+    key: `${model}|recent:${KEEP_RECENT_IMAGES}`,
     keepRecentImages: KEEP_RECENT_IMAGES,
     list: (item) => carriedMedia(item).flatMap((media) => {
       const attachment = attachmentOf(media);
@@ -27,7 +26,7 @@ export function kinuAttachments(deps: AttachmentDeps, model: () => string): Atta
     estimateTokens: (attachment, item) => {
       const media = carriedMedia(item).find((carried) => carried.id === attachment.id);
 
-      return media === undefined ? undefined : mediaTokens(model(), attachment, media);
+      return media === undefined ? undefined : mediaTokens(model, attachment, media);
     },
     replace: (item, attachment, text) => withoutMedia(item, attachment.id, text),
     store: async (attachment, item) => {

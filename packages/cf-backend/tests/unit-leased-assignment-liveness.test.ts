@@ -4,13 +4,13 @@
  * matched: not pending (it holds a turn id), no claim, and the activation owed nothing, so the turn stalled until
  * something unrelated woke the workspace (HardenDurable P1; kinu-logs/onstart/DESIGN.md S2).
  */
-import { expect, test } from 'bun:test';
+import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import type { SQLQueryBindings } from 'bun:sqlite';
-import { admitSubordinateTask, EventLog } from '@kinu.run/core';
+import { admitSubordinateTask, EventLog, TERMINAL_EFFECT_RETRY_BASE_MS, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../core/tests/helpers';
 import {
-  agentSql, armedWakes, catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
+  agentSql, alarmDue, armedWakes, catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
   wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
@@ -68,7 +68,8 @@ async function hire(workspace: ReturnType<typeof gatewayWorkspace>, lifetime: Li
   return child.reference.actorId;
 }
 
-/** The next activation over the same rows, reached by one call, and everything it starts. */
+/** The next activation over the same rows, reached by one call, and everything it starts: its wake, and the alarm an
+ *  agent's due wake rides. */
 async function nextActivation(workspace: ReturnType<typeof gatewayWorkspace>, gateway: StubbedAiBinding, versionId?: string): Promise<void> {
   const next = await reactivateOrchestratorHarness(workspace.db, undefined, {
     world: { aiGateway: gateway, ...(versionId !== undefined && { versionId }) },
@@ -77,10 +78,14 @@ async function nextActivation(workspace: ReturnType<typeof gatewayWorkspace>, ga
 
   await next.agent.accountSpend();
   await next.agent.terminalRetryPass();
+
+  if (alarmDue(workspace.db)) await next.agent.alarm();
   await joinHarnessFibers();
 }
 
-const asked = (gateway: StubbedAiBinding): number => gateway.runs.filter((run) => openingOf(run).includes(BRIEF)).length;
+/** The assignment's turns the model was asked for; the agent naming itself after its brief is not one. */
+const asked = (gateway: StubbedAiBinding): number => gateway.runs
+  .filter((run) => openingOf(run).includes(BRIEF) && !JSON.stringify(requestOf(run).messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)).length;
 
 /**
  * A turn run to its end under a reset that lands after the answer's delivery and before the drain's own completion
@@ -242,35 +247,33 @@ test('a task hire whose answer settled its waiting hirer is not run again after 
   expect(asked(gateway) - first).toBe(0);
 });
 
-/** The relay's transaction rolled back by a reset: no report on the rail, the roster and the actor as before it, the lease open. */
-async function reportLostToReset(): Promise<{ asked: number; reports: number; leaseOpen: boolean }> {
+afterEach(() => { setSystemTime(); });
+
+// The report is the agent's own owed effect: a reset that rolls back the relay's commit leaves it owed in the agent's
+// ledger, and the agent's next wake delivers it. The relay's commit is aborted where it writes the report.
+test('a report a reset rolled back before it reached the parent reaches it once, and the turn does not run again', async () => {
   const gateway = answeringGateway('summarised');
   const workspace = gatewayWorkspace(gateway);
   const actorId = await hire(workspace, 'task');
-  // A task agent retires only after its report is held, so a reset that lost the report lost the retire too.
-  const rosterBefore = snapshot(workspace, ['actor_subordinates', 'workspace_actors']);
-
-  await runDelegatedTask(workspace, actorId, BRIEF);
 
   const reports = () => workspace.db.query(`SELECT 1 FROM agent_log WHERE variant = 'subordinate_report'
     AND dedupe_key = (SELECT 'subordinate_report:' || id FROM agent_log WHERE actor_id = ? AND variant = 'subordinate_task')`).all(actorId).length;
 
-  expect(reports()).toBe(1);
+  workspace.db.run(`CREATE TRIGGER reset_mid_relay BEFORE INSERT ON agent_log WHEN NEW.variant = 'subordinate_report'
+    BEGIN SELECT RAISE(ABORT, 'the workspace reset mid-relay'); END`);
+  await runDelegatedTask(workspace, actorId, BRIEF);
+  expect(reports()).toBe(0);
+  workspace.db.run('DROP TRIGGER reset_mid_relay');
 
-  workspace.db.query(`DELETE FROM agent_log WHERE variant = 'subordinate_report'`).run();
-  restore(workspace, rosterBefore);
-
-  workspace.db.query(`UPDATE agent_log SET turn_id = 'evt-dead-activation', consumed_at = ?
-    WHERE actor_id = ? AND variant = 'subordinate_task'`).run(Date.now() - 60_000, actorId);
-
+  // The reset takes the agent's isolate with it; its ledger is on disk.
+  workspace.agent.harnessResetAgentIsolate(workspace.agent.agentOf(actorId).storageKey);
+  abandonHarnessFibers();
+  setSystemTime(new Date(Date.now() + TERMINAL_EFFECT_RETRY_BASE_MS + 1));
   await nextActivation(workspace, gateway);
+  await until(() => reports() === 1, 'the owed report reached the parent');
 
   const leaseOpen = workspace.db.query(`SELECT 1 FROM agent_log WHERE actor_id = ? AND variant = 'subordinate_task'
     AND consumed_at IS NOT NULL`).all(actorId).length > 0;
 
-  return { asked: asked(gateway), reports: reports(), leaseOpen };
-}
-
-test('a turn cut off before its report reached the parent runs again, and the parent gets one report', async () => {
-  expect(await reportLostToReset()).toEqual({ asked: 2, reports: 1, leaseOpen: false });
+  expect({ asked: asked(gateway), reports: reports(), leaseOpen }).toEqual({ asked: 1, reports: 1, leaseOpen: false });
 });

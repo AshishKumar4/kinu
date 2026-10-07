@@ -71,9 +71,14 @@ const RequestSchema = v.looseObject({
 
 type SentRequest = v.InferOutput<typeof RequestSchema>;
 
+interface RecordingModel {
+  readonly model: LanguageModel;
+  readonly spec: string;
+}
+
 /** The live model, keeping every request body as the provider received it. */
-function recordingModel(model: string, sent: SentRequest[]): LanguageModel {
-  return createChatModel({
+function recordingModel(model: string, sent: SentRequest[]): RecordingModel {
+  return { spec: `${LLM.name}/${model}`, model: createChatModel({
     kind: 'openai-compat', name: LLM.name, baseURL: LLM.baseURL, headers: LLM.headers, modelId: model,
     // Every request this model makes is a chat completion with a JSON body.
     fetch: asFetchFunction(async (input, init) => {
@@ -81,7 +86,7 @@ function recordingModel(model: string, sent: SentRequest[]): LanguageModel {
 
       return fetch(input, init);
     }),
-  });
+  }) };
 }
 
 interface Continued {
@@ -92,13 +97,13 @@ interface Continued {
 }
 
 /** One turn through the product's loop on `history` plus `question`. */
-async function continueTurn(model: LanguageModel, history: readonly ModelMessage[], question: string, tools: ToolSet): Promise<Continued> {
+async function continueTurn({ model, spec }: RecordingModel, history: readonly ModelMessage[], question: string, tools: ToolSet): Promise<Continued> {
   let text = '';
   let produced: readonly ModelMessage[] = [];
   let failure: string | null = null;
 
   for await (const event of runChat({
-    model, system: SYSTEM, history: [...history, { role: 'user', content: question }], tools,
+    model, modelSpec: spec, system: SYSTEM, history: [...history, { role: 'user', content: question }], tools,
     // Each step hands over the turn's messages so far.
     persistStep: async (record) => { produced = record.messages; },
     onStep: (step) => { recordLiveModelSpend(step.usage); },
@@ -135,7 +140,7 @@ afterAll(() => {
 });
 
 /** The production compaction extension over this store, summarizing on `model`; forced, as overflow recovery is. */
-function productionFold(model: LanguageModel) {
+function productionFold({ model, spec }: RecordingModel) {
   const state = createCompactionStateStore(rt.storage.sql, rt.actor);
   const quiet = () => {};
 
@@ -148,10 +153,11 @@ function productionFold(model: LanguageModel) {
     archive: state.archive,
     summarize: createModelSummarizer(() => model, { source: 'compaction', report: liveModelCallSink(rt.storage.sql, rt.actor) }),
     ephemeral: { dropSuperseded: () => 0 },
+    attachments: { files: () => rt },
   });
 
   return async (messages: readonly ModelMessage[], sessionKey: string, contextWindow: number): Promise<ModelMessage[]> => {
-    const folded = await extension.transformContext?.({ sessionKey, messages, system: SYSTEM, contextWindow, trigger: 'force' });
+    const folded = await extension.transformContext?.({ sessionKey, messages, system: SYSTEM, contextWindow, model: spec, trigger: 'force' });
 
     if (folded === undefined) throw new Error(`the forced fold of ${sessionKey} changed nothing`);
 
@@ -260,7 +266,7 @@ describe('one same-provider conversation survives every transition', () => {
 
     if (pruned === undefined) throw new Error('the prune truncated nothing');
 
-    const transitions: ReadonlyArray<{ readonly name: string; readonly model: LanguageModel; readonly history: readonly ModelMessage[]; readonly code: string }> = [
+    const transitions: ReadonlyArray<{ readonly name: string; readonly model: RecordingModel; readonly history: readonly ModelMessage[]; readonly code: string }> = [
       { name: 'prune', model, history: pruned, code: CODES.south },
       { name: 'edit', model, history: [{ role: 'user', content: `Please ${ASK_NORTH.toLowerCase()}` }, ...conversation.slice(1)], code: CODES.north },
       // An intentional reset to the end of the first turn keeps only what it reset to.

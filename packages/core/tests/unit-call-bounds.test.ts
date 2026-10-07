@@ -35,6 +35,7 @@ test('the shared chat driver, given no stop condition, completes work beyond ten
   let answer = '';
 
   for await (const event of runChat({
+    modelSpec: 'test/model',
     model, system: 'Complete the work.', history: [{ role: 'user', content: 'go' }],
     tools: { advance: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }), execute: async () => ++executed }) },
   })) {

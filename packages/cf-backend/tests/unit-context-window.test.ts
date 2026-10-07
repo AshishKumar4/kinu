@@ -59,6 +59,7 @@ describe("admission on an unknown window", () => {
   async function admit(contextWindow: number | null): Promise<ModelMessage[] | Error> {
     try {
       return (await assembleTurnMessages({
+        model: 'test/model',
         system: "SYS",
         history: HISTORY,
         sessionKey: "k",

@@ -1,6 +1,7 @@
 import type { PinnedPreviewPort } from "../preview/preview-ports";
 import type { ForkNode, TabPresence } from "../protocol";
 import type { SlateSummary } from "../slates/rpc";
+import { ephemeralSlateAddress } from "../slates/ui-blocks";
 
 export const SLATE_PREFIX = "slate:";
 
@@ -30,7 +31,8 @@ export function surfaceHasContent(surface: SurfaceKind, content: SurfaceContent)
 	if (surface.startsWith(SLATE_PREFIX)) {
 		const id = surface.slice(SLATE_PREFIX.length);
 
-		return content.slates?.some((slate) => slate.id === id) ?? false;
+		// An answer's block is no file, so no listing holds it: the answer that names it is its content.
+		return ephemeralSlateAddress(id) !== null || (content.slates?.some((slate) => slate.id === id) ?? false);
 	}
 
 	return true;
