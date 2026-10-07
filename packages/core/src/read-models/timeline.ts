@@ -83,6 +83,7 @@ type DiagnosisOnlyEvent = Extract<RunEvent, { type:
   | 'approval_consumed'
   | 'execution_escalation'
   | 'budget_exhausted'
+  | 'stop_requested'
   | 'context_admitted'
   | 'context_overflow'
 }>;
@@ -103,6 +104,7 @@ const DIAGNOSIS_ONLY_EVENTS: ReadonlySet<string> = new Set<DiagnosisOnlyEvent['t
   'approval_consumed',
   'execution_escalation',
   'budget_exhausted',
+  'stop_requested',
   'context_admitted',
   'context_overflow',
 ]);

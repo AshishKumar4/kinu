@@ -60,6 +60,7 @@ import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
+import type { MessageBlock } from "./slates/sources";
 import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type WorkspaceHostSeams,
 } from "./actor-hosting";
@@ -69,6 +70,7 @@ import {
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
+import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubordinateReport, temporaryRunSettles, type ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
@@ -135,7 +137,7 @@ import {
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
-  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork,
+  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
   readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type AgentFigures, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -402,7 +404,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly agentWakes = new AgentWakes(async (actorId) => {
     this.detachOwned(logged('subordinate.agent_wake_failed', { doing: "waking an agent's own isolate for what it owes", otherwise: 'io' },
       () => this.wakeAgent(actorId), { workspace: this.name, actor: actorId }));
-  });
+  }, () => { this.liveReadsMoved(['inspectWork']); });
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -1169,7 +1171,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * hire/ask/send/list/dismiss vanish from the enum rather than refusing.
    */
   private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
-    const swarm = this.swarmDeps(turn.runtime, () => turn.model, () => this.agentStores(turn.actor.handle.actorId).workingContext());
+    // The hire's own ladder over its own files, as its turns compact in its isolate.
+    const compaction = hostedActorCompaction(turn.actor, {
+      logger: compactionDiagnostics,
+      summarizer: () => turn.model,
+      spend: { report: (report) => this.reportModelCall(report), operations: this.modelOperations },
+    });
+
+    const swarm = this.swarmDeps(turn.runtime, () => turn.model, () => this.agentStores(turn.actor.handle.actorId).workingContext(), compaction.extension.compactShared);
 
     const deps: AgentsToolDeps = {
       mode: turn.input.mode,
@@ -2877,13 +2886,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Every turn the workspace's actors and agents still owe and every effect the root's settled turns still owe, by the
-   * phase each store records. A turn no live session here runs or awaits is stranded: nothing else will settle it.
+   * phase each store records, with what each agent whose isolate still owes a wake answers of its own. A turn no live
+   * session here runs or awaits is stranded: nothing else will settle it.
    */
   @callable()
   async inspectWork(): Promise<readonly InspectedWork[]> {
     const host = this.actorHost();
     const rootActorId = this.actorHandle().actorId;
     const turns = host.resumable();
+    const actorName = (actorId: string) => actorId === rootActorId ? null : host.describe(actorId)?.name ?? actorId;
 
     const running = (turn: (typeof turns)[number]) => turn.record.actorId === rootActorId
       ? this._inFlight || this.actorSession.turnOpen
@@ -2893,15 +2904,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const agentTurns = new AgentOpenTurns(this.boundSql).all();
 
     return inspectWork({
-      turns: turns.map((turn) => turn.claim),
-      agentTurns,
+      claims: turns.map((turn) => ({ claim: turn.claim, actor: actorName(turn.record.actorId) })),
+      agentTurns: agentTurns.map((turn) => ({ turnId: turn.turnId, actor: actorName(turn.actorId) ?? turn.actorId })),
       executing: new Set([
         ...turns.filter(running).map((turn) => turn.claim.turnId),
         ...agentTurns.filter((turn) => this.agentTurns.holds(turn.turnId)).map((turn) => turn.turnId),
       ]),
-      effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)),
+      effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)).map((effect) => ({ effect, actor: null })),
+      reported: await this.owingAgentsWork(),
       now: Date.now(),
     });
+  }
+
+  /** What each agent with a wake armed answers of its own; one that cannot answer is left out, and its wake still runs. */
+  private async owingAgentsWork(): Promise<InspectedWork[]> {
+    const reported: InspectedWork[] = [];
+
+    await Promise.all(this.agentWakes.owing().filter((actorId) => this.liveActor(actorId)).map((actorId) => settleLogged(
+      'subordinate.agent_work_unread',
+      { doing: "reading what an agent's own isolate still owes", otherwise: 'io' },
+      async () => { reported.push(...await (await this.agentCalls(actorId)).owedWork(this.agentSnapshot(actorId))); },
+      { workspace: this.name, actor: actorId },
+    )));
+
+    return reported;
   }
 
   protected override onWorkCancelled({ abortedTools }: Omit<CancelWorkOutcome, 'ok'>): void {
@@ -4425,6 +4451,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.armDurableWake();
       },
       previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
+      messageBlock: (address) => this.answerBlock(address),
       sharesChanged: async () => {
         this.overviewChanged(true);
 
@@ -4433,6 +4460,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
 
     return this._slates;
+  }
+
+  /**
+   * The block an answer's page is read from, every text part as the chat draws it. The workspace's own answer runs
+   * with its authority in the mode its next turn runs in. A hired agent's is read from its own isolate and drawn with
+   * nothing bound: a binding run from here would not run where that agent's stores are.
+   */
+  private async answerBlock(address: EphemeralSlateAddress): Promise<MessageBlock> {
+    if (address.actorId !== null) {
+      const answer = this.liveActor(address.actorId)
+        ? await (await this.agentCalls(address.actorId)).answerTexts(this.agentSnapshot(address.actorId), address.messageId)
+        : null;
+
+      return { html: addressedBlock(answer?.texts ?? [], address).html, author: null };
+    }
+
+    const answer = await this.chatTranscript.message(address.messageId);
+    const texts = answer?.role === 'assistant' ? answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])) : [];
+
+    return { html: addressedBlock(texts, address).html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
   }
 
   async slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult> {

@@ -1461,7 +1461,6 @@ export abstract class ActorAgent extends Agent<Env> {
       logger: this.compactionLogger,
       summarizer: () => this.getModel(),
       spend: { report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-      model: () => this.effectiveModelSpec(),
     });
 
     return this._compaction;
@@ -2572,7 +2571,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.stores.config;
   }
 
-  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext: NonNullable<AgentsSwarmDeps['originContext']>, compactShared?: AgentsSwarmDeps['compactShared']): AgentsSwarmDeps {
+  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext: NonNullable<AgentsSwarmDeps['originContext']>, compactShared: NonNullable<AgentsSwarmDeps['compactShared']>): AgentsSwarmDeps {
     const seams = this.hostedSeams();
 
     return {

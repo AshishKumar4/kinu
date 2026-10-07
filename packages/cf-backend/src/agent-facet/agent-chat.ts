@@ -1,11 +1,11 @@
 /** A non-main agent's chat in its own isolate (D9). */
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
-  announcementOf, assembleActorTurn, chatTerminalEffects, chatTurnParts, declareTerminalRoster, planHandoffStillOwed, projectJsonValue,
+  announcementOf, assembleActorTurn, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork, planHandoffStillOwed, projectJsonValue,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type ChatTurnInput, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
-  type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
+  type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
   type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
@@ -261,6 +261,22 @@ export class FacetChat {
     this.telling = hold(attempt({ doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => told));
 
     return told;
+  }
+
+  /** Its own turns and effects still owed, folded as the workspace's read folds the root's. */
+  owedWork(): InspectedWork[] {
+    const { actor } = this.deps;
+    const { ledger } = this.terminal;
+    const name = actor.record.name;
+    const running = actor.session.turnClaim?.turnId;
+
+    return inspectWork({
+      claims: actor.stores.claims.unsettled().map((claim) => ({ claim, actor: name })),
+      agentTurns: [],
+      executing: new Set(running === undefined ? [] : [running]),
+      effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)).map((effect) => ({ effect, actor: name })),
+      now: Date.now(),
+    });
   }
 
   /** The stand-in lands first, as every actor's does: the model's name may be refused, and parks here. */

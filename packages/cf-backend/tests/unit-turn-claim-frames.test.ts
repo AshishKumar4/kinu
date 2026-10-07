@@ -65,10 +65,10 @@ async function evictedMidTurn(): Promise<ActorHarness<HarnessOrchestratorAgent>>
   return evicted;
 }
 
-/** The next activation over the same rows, its models on the platform gateway. */
-async function nextActivation(db: ActorHarness<HarnessOrchestratorAgent>['db']): Promise<ActorHarness<HarnessOrchestratorAgent>> {
+/** The next activation over the same rows, its models on the platform gateway, on `versionId`'s build if one is named. */
+async function nextActivation(db: ActorHarness<HarnessOrchestratorAgent>['db'], versionId?: string): Promise<ActorHarness<HarnessOrchestratorAgent>> {
   return await reactivateOrchestratorHarness(db, undefined, {
-    world: { aiGateway: answeringGateway('Done.') },
+    world: { aiGateway: answeringGateway('Done.'), ...(versionId !== undefined && { versionId }) },
     beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
   });
 }
@@ -122,7 +122,8 @@ test("a stranded claim the wake's recovery settles reaches every tab", async () 
   evicted.db.query('DELETE FROM pending_steers').run();
   new RunEventRecorder(makeSql(evicted.db), workspaceMainActor(evicted.db))
     .emit(claim.runId, { type: 'run_end', reason: 'error', error: 'the process died before the claim settled' });
-  const workspace = await nextActivation(evicted.db);
+  // Admitted by a host that stamped no build, recovered by one that does: nothing names the program it ran.
+  const workspace = await nextActivation(evicted.db, 'build-after-admission');
   const heard = claimsHeard(workspace.agent);
 
   await workspace.agent.terminalRetryPass();

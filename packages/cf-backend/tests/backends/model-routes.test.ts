@@ -219,6 +219,7 @@ describe('a gateway model on both backends', () => {
         const events: ChatEvent[] = [];
 
         for await (const event of runChat({
+          modelSpec: 'test/model',
           model, system: 'You read files.', history: [{ role: 'user', content: 'What does a.txt say?' }],
           tools: { look: tool({ description: 'Read a file.', inputSchema: z.object({ path: z.string() }), execute: async () => 'hello' }) },
           cache: { providerId: 'my-gateway', modelId: 'anthropic/claude-opus-5.5', sessionKey: 'kinu-test' },

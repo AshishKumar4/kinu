@@ -1,7 +1,7 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
-  CHAT_SESSION_ID, agentAffinityKey, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
+  CHAT_SESSION_ID, agentAffinityKey, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type ObservedCall, type ProviderEnv, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
@@ -183,6 +183,8 @@ function workspaceTools(
 
         return answer.output;
       },
+      // As the workspace's own tool renders it: an image reaches the model, and the transcript, as an image.
+      toModelOutput: imageModelOutput,
     });
 
     return [descriptor.name, descriptor.planAllowed ? permitInPlan(entry) : entry];
@@ -244,7 +246,6 @@ export function facetTurnSources(turn: {
     logger: compactionDiagnostics,
     summarizer: () => registry.resolveModel(prepared.sources.model, affinity),
     spend,
-    model: () => prepared.sources.model,
   });
 
   const sources = turnSourcesFromBundle(prepared.sources, {

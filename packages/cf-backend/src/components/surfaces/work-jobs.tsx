@@ -61,7 +61,7 @@ export function InspectedRow({ work, now }: { work: InspectedWork; now: number }
 
   return (
     <div className="flex items-start gap-2 py-1" data-inspected={work.kind} data-phase={work.phase}>
-      <span className="p-row-text">{work.label} <span className="p-text-3">· {notes.join(" · ")}</span></span>
+      <span className="p-row-text">{work.actor === null ? work.label : `${work.actor} · ${work.label}`} <span className="p-text-3">· {notes.join(" · ")}</span></span>
     </div>
   );
 }

@@ -67,9 +67,9 @@ async function hire(workspace: ReturnType<typeof gatewayWorkspace>, lifetime: Li
 
 /** The next activation over the same rows, reached by one call, and everything it starts: its wake, and the alarm an
  *  agent's due wake rides. */
-async function nextActivation(workspace: ReturnType<typeof gatewayWorkspace>, gateway: StubbedAiBinding): Promise<void> {
+async function nextActivation(workspace: ReturnType<typeof gatewayWorkspace>, gateway: StubbedAiBinding, versionId?: string): Promise<void> {
   const next = await reactivateOrchestratorHarness(workspace.db, undefined, {
-    world: { aiGateway: gateway },
+    world: { aiGateway: gateway, ...(versionId !== undefined && { versionId }) },
     beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
   });
 
@@ -144,7 +144,8 @@ test('a turn cut off after its report-tool answer, mid-turn, is not run again an
 
   abandonHarnessFibers();
   cut = false;
-  await nextActivation(workspace, gateway);
+  // Admitted by a host that stamped no build, recovered by one that does: nothing names the program it ran.
+  await nextActivation(workspace, gateway, 'build-after-admission');
 
   expect(asked(gateway) - first).toBe(0);
   // The hire's turn claim is in its own database.
