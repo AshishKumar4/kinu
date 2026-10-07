@@ -309,18 +309,18 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
     deps.archive.append(ctx.sessionKey, derived.range);
   }
 
-  async function heldFold(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
+  /** With no window nothing is priced: the session's saved plan replays as it was made, whichever model made it, over
+   *  the history since the provider's own summary; with no plan that replays, that history alone. */
+  async function heldFold(ctx: TransformContext, messages: ModelMessage[], bypassSummaries: boolean): Promise<ModelMessage[] | undefined> {
+    const cut = sameMessages(messages, ctx.messages) ? undefined : messages;
     const cached = ctx.messages.length === 0 ? null : await deps.ports.plans.load(ctx.sessionKey);
 
-    if (cached?.sessionId !== ctx.sessionKey) return undefined;
-    const compactor = serverCompactor(ctx.model);
-    const messages = compactor === null ? [...ctx.messages] : sinceServerSummary(ctx.messages, compactor);
+    if (cached?.sessionId !== ctx.sessionKey) return cut;
     const { spec } = ladderFor(ctx.model);
-    // With no window nothing is priced: the plan replays as it was made, whichever model made it.
     const planned = { ...spec, attachments: { ...spec.attachments, key: cached.attachmentPolicyKey ?? spec.attachments.key } };
-    const replayed = replayPlanSnapshot(kinuCodec.encode(messages), cached, planned, { allowRegrown: true, bypassSummaries: compactor !== null });
+    const replayed = replayPlanSnapshot(kinuCodec.encode(messages), cached, planned, { allowRegrown: true, bypassSummaries });
 
-    return replayed === null ? undefined : kinuCodec.decode(withArchiveManifest(replayed, renderArchiveManifest(deps.archive.list(ctx.sessionKey))), messages);
+    return replayed === null ? cut : kinuCodec.decode(withArchiveManifest(replayed, renderArchiveManifest(deps.archive.list(ctx.sessionKey))), messages);
   }
 
   return {
@@ -328,11 +328,11 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
 
     async transformContext(unsized: TransformContext): Promise<ModelMessage[] | undefined> {
       unsized.abortSignal?.throwIfAborted();
+      const compactor = serverCompactor(unsized.model);
+      const messages = compactor === null ? [...unsized.messages] : sinceServerSummary(unsized.messages, compactor);
       const ctx = sized(unsized, ladderFor(unsized.model));
 
-      if (ctx === null) return await heldFold(unsized);
-      const compactor = serverCompactor(ctx.model);
-      const messages = compactor === null ? [...ctx.messages] : sinceServerSummary(ctx.messages, compactor);
+      if (ctx === null) return await heldFold(unsized, messages, compactor !== null);
       const turns = kinuCodec.encode(messages);
 
       // Loaded before process (which may replace it) so the upgrade can thread the prior summary.
