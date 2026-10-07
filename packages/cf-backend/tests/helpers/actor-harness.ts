@@ -824,6 +824,7 @@ export function ledgerOver(db: Database): TerminalTransitions {
   return new TerminalTransitions({
     actor: workspaceMainActor(db), sql: sqlOver(db), effects: {}, now: () => Date.now(),
     scheduleRetry: async () => {}, transaction: (body) => body(), turnIsLive: () => false, settled: async () => {},
+    hold: (close) => close(),
   });
 }
 

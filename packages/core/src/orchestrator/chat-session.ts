@@ -218,7 +218,6 @@ export interface ChatSessionPorts {
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** Asked per call: the bodies close over stores built after this session. */
   terminal(): TerminalTransitions;
-  holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void;
   /** Asked per item at dequeue and before a drain binds rows; a refusal settles the item to its producer. */
   driverGate(): Refusal | null;
   /** Called at the turn's synchronous open; soonest-wins. A backend whose process is the wake arms nothing. */
@@ -1198,11 +1197,7 @@ export class ChatSession {
       this.settlingDepth += 1;
 
       try {
-        await this.ports.terminal().settle({
-          transition,
-          declare: () => owed,
-          hold: (claimed, close) => { this.ports.holdTerminalClose(claimed, close); },
-        });
+        await this.ports.terminal().settle({ transition, declare: () => owed });
       }
       finally { this.settlingDepth -= 1; }
 

@@ -4,11 +4,11 @@ import {
   assembleActorTurn, chatTerminalEffects, chatTurnParts, declareTerminalRoster, planHandoffStillOwed, projectJsonValue,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   type ActorTurnLease, type ChatTurnInput, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
-  type PreparedAgentTurn, type PreparedTurn, type TerminalTransition, type TerminalTurnFacts, type TerminalTurnParts,
+  type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
   type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
-import { attempt, diagnostics, hold, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentDatabase } from './agent-database';
 import { FacetSpend, facetTurnSources, facetTurnTools, type AgentWorkspace, type LiveTurn } from './agent-turn';
@@ -41,8 +41,6 @@ export class FacetChat {
 
   private terminalTransitions: TerminalTransitions | null = null;
 
-  private readonly closing = new Set<Promise<unknown>>();
-
   constructor(private readonly deps: FacetChatDeps) {
     const { actor, storage, workspace } = deps;
     const sql = actor.runtime.storage.sql;
@@ -72,7 +70,6 @@ export class FacetChat {
           { ending, assistantText, narration: await narration() },
         ),
         terminal: () => this.terminal,
-        holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
         driverGate: () => null,
         armTurnWake: (atMs) => workspace.armWake(atMs),
         taskList: () => actor.stores.taskList,
@@ -194,29 +191,17 @@ export class FacetChat {
       turnIsLive: (turnId) => this.session.pumping && this.session.currentTurnId === turnId,
       scheduleRetry: (atMs) => workspace.armWake(atMs),
       settled: async () => {},
+      // An eviction leaves the effects owed; the workspace's wake re-drives them.
+      hold: (close) => close(),
     });
 
     return this.terminalTransitions;
   }
 
-  /** An eviction leaves the effects owed; the workspace's wake re-drives them. */
-  private holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void {
-    // Removed only once added: a close that settles at once must not leave a settled promise behind for `idle` to spin on.
-    const closing: Promise<unknown> = hold(attempt({ doing: "closing an agent's settled turn", otherwise: 'io' }, close).pipe(
-      Effect.catch((failure) => Effect.promise(() => this.terminal.closeFailed(transition, { cause: failure }))),
-    )).then((exit) => {
-      this.closing.delete(closing);
-
-      return exit;
-    });
-
-    this.closing.add(closing);
-  }
-
   async idle(): Promise<void> {
-    while (this.session.pumpPromise !== null || this.closing.size > 0) {
+    while (this.session.pumpPromise !== null || this.terminal.closing) {
       await this.session.pumpPromise;
-      await Promise.allSettled(this.closing);
+      await this.terminal.idle();
     }
 
     await this.spend.settled();
@@ -227,7 +212,7 @@ export class FacetChat {
     return settle(attempt({ doing: "resuming what an agent's isolate owed", otherwise: 'unavailable' }, async () => {
       this.session.reclaimStrandedEventDeliveries();
       await this.terminal.releaseParked();
-      await this.terminal.replayOwedAndRearm((transition, close) => { this.holdTerminalClose(transition, close); });
+      await this.terminal.replayOwedAndRearm();
       await this.session.flushPendingDrains();
     }).pipe(
       Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('agent.wake_failed', failure); })),
@@ -238,7 +223,7 @@ export class FacetChat {
 
   /** A turn running or queued, or effects still closing, is looked at again a lap later. */
   private owed(): AgentOwed {
-    const busy = this.session.turnOwed || this.closing.size > 0 || this.terminal.hasIncomplete();
+    const busy = this.session.turnOwed || this.terminal.closing || this.terminal.hasIncomplete();
     const next = Math.min(this.terminal.nextRetryAt() ?? Infinity, busy ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : Infinity);
 
     return { next: Number.isFinite(next) ? next : null, turnId: this.session.pumping ? this.session.currentTurnId : null };

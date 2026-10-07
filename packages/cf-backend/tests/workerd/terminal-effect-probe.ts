@@ -157,6 +157,8 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
       transaction: (body) => this.ctx.storage.transactionSync(body),
       turnIsLive: () => false,
       settled: async () => {},
+      // Awaited by each call, unlike the Durable Object's fiber: the RPC keeps the object alive for the close.
+      hold: (close) => close(),
       // Arms before replaying: a one-shot alarm must not be consumed with the suffix uncarried.
       // Soonest wins: core arms again after the pass at a later instant, which would push the wake past a due row.
       scheduleRetry: async (atMs) => {
@@ -228,16 +230,9 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
         throw new TerminalEffectInterrupt(phase, name, scope);
       };
 
-    // Awaited, unlike the Durable Object's fiber: this RPC keeps the object alive for the close.
-    let closing: Promise<void> = Promise.resolve();
-
     try {
-      await this.transitions.settle({
-        transition: { turnId, messageId },
-        declare: () => this.owedEffects(messageId, answer),
-        hold: (_claimed, close) => { closing = close(); },
-      });
-      await closing;
+      await this.transitions.settle({ transition: { turnId, messageId }, declare: () => this.owedEffects(messageId, answer) });
+      await this.transitions.idle();
     } catch (err) {
       if (!(err instanceof TerminalEffectInterrupt)) throw err;
 
@@ -286,6 +281,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
     }
 
     await this.transitions.resumeAll();
+    await this.transitions.idle();
     await this.releaseWakeIfConverged();
   }
 
@@ -295,6 +291,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
     void this.sql`INSERT INTO probe_alarm_runs (at) VALUES (${Date.now()})`;
     this.clockSkewMs = 0;
     await this.transitions.resumeAll();
+    await this.transitions.idle();
     await this.releaseWakeIfConverged();
   }
 

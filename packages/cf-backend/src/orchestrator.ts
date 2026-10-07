@@ -4883,7 +4883,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const header = this.eventRecorder.latestRunHeader();
     // A settled turn's leftovers still closing are its work, not a durable leftover.
-    const working = this._inFlight || hostedBusy || this.terminalClosing;
+    const working = this._inFlight || hostedBusy || this.terminal.closing;
 
     return buildWorkspaceOverview({
       ...inputs,

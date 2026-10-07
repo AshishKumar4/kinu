@@ -191,7 +191,7 @@ import {
   terminalEffect, chatTerminalEffects,
   RunEndReasonSchema, WorkModeSchema,
   AdvisorRecoverySnapshotSchema,
-  type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
+  type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
 import { codemodeLauncher, type ProgramLaunch } from "./codemode-sandbox";
@@ -1272,6 +1272,11 @@ export abstract class ActorAgent extends Agent<Env> {
       turnIsLive: (turnId) => this.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
       settled: () => this.restWhenIdle(),
+      // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber.
+      hold: (close) => this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
+        ctx.stash({ lane: TERMINAL_LANE_FIBER });
+        await close();
+      }).finally(() => { this.overviewChanged(); }),
     });
 
     return this._terminalTransitions;
@@ -1348,7 +1353,7 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   protected async owedDeliveryWork(): Promise<void> {
     // Detached effects close in their own fiber: a title in its provider's backoff must not hold the wake's job.
-    await this.terminal.replayOwedAndRearm((transition, close) => { this.holdTerminalClose(transition, close); });
+    await this.terminal.replayOwedAndRearm();
   }
 
   protected owedWorkExists(): boolean {
@@ -1396,48 +1401,6 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   private installedBuildIdentity(): string | null {
     return this.env.CF_VERSION_METADATA?.id ?? null;
-  }
-
-  /**
-   * The terminal sequence this actor started most recently, resolved once its disposition is written.
-   * Retained because the close is detached; an unnamed detached chain could never be joined.
-   */
-  protected _terminalReported: Promise<Exit.Exit<void>> = Promise.resolve(Exit.void);
-  private _terminalReportedOwner: AsyncTaskOwner | null = null;
-
-  /** A settled turn's detached leftovers are still closing in this isolate. */
-  protected get terminalClosing(): boolean {
-    return this._terminalReportedOwner !== null;
-  }
-
-  /**
-   * Keep this isolate alive for a terminal close via a durable fiber, since a bare promise is not a
-   * wake; the fiber's run row hands leftovers to {@link classifyRecoveredFiber}. Order: hold, join, dispose.
-   */
-  protected holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void {
-    const prior = this._terminalReported;
-    const owner: AsyncTaskOwner = { promise: null };
-    this._terminalReportedOwner = owner;
-
-    const task = hold(Effect.ensuring(Effect.catchCause(Effect.gen({ self: this }, function* () {
-      // Chain closes so the latest owner retains every earlier close instead of overwriting a live fiber.
-      yield* (yield* Effect.promise(() => prior));
-      yield* Effect.promise(() => this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
-        ctx.stash({ lane: TERMINAL_LANE_FIBER });
-        await close();
-      }));
-    }), (failed) => Effect.promise(() => this.terminal.closeFailed(transition, { cause: Cause.squash(failed) }))), Effect.sync(() => {
-      // An eviction needs no cleanup; a rejection that leaves this isolate alive does (above).
-      if (this._terminalReportedOwner === owner) {
-        this._terminalReportedOwner = null;
-        this._terminalReported = Promise.resolve(Exit.void);
-      }
-
-      this.overviewChanged();
-    })));
-
-    owner.promise = task;
-    this._terminalReported = task;
   }
 
   /** Uses `effectiveModelSpec`: the stored spec can be null or an un-normalized alias. */
@@ -1734,7 +1697,6 @@ export abstract class ActorAgent extends Agent<Env> {
           taskList: () => this.stores.taskList,
           // A running job's settle wakes the session; a reminder fired behind it would race that wake.
           hasPendingAsyncWake: () => this.stores.jobs.listRunning(1).total > 0,
-          holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
           driverGate: () => this.driverGate(),
           stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
           // Prompt-cache warming belongs to the root actor (it owns the wake chain); hosted actors wire none.

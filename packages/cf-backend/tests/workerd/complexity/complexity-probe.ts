@@ -301,7 +301,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     const terminal = new TerminalTransitions({
       sql: this.executor, actor, effects: {}, now: () => Date.now(), transaction: (body) => this.ctx.storage.transactionSync(body),
-      turnIsLive: () => false, scheduleRetry: async () => {}, settled: async () => {},
+      turnIsLive: () => false, scheduleRetry: async () => {}, settled: async () => {}, hold: (close) => close(),
     });
 
     for (let index = 0; index < settled; index += 1) {

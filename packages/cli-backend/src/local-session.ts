@@ -63,7 +63,7 @@ import { ActorSession, type ActorTurnLease,
   branchesTerminalEffect, chatTerminalEffects, subordinateTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
   terminalEffect,
-  type TerminalTransition, type TerminalEffectTable, type TerminalEffectFault,
+  type TerminalEffectTable, type TerminalEffectFault,
   type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
   type ActorToolsetDeps,
@@ -583,7 +583,6 @@ export class LocalAgentSession {
         // A running job's settle wakes the session; a reminder would race it.
         hasPendingAsyncWake: () => this.jobs.listRunning(1).total > 0,
         terminal: () => this.terminal,
-        holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
         driverGate: () => this.driverGate?.() ?? null,
         // No durable wake: this process is the wake, and a crashed turn re-arms from the ledger on restart.
         armTurnWake: async () => {},
@@ -1448,7 +1447,7 @@ export class LocalAgentSession {
       return;
     }
 
-    await this.terminal.resumeAll((transition, close) => { this.holdTerminalClose(transition, close); });
+    await this.terminal.replayOwedAndRearm();
     // A replayed sequence can enqueue a turn; the advisor gate state travels in the row, not RAM.
     this.chat.pump();
   }
@@ -1878,6 +1877,8 @@ export class LocalAgentSession {
 
         return Promise.resolve();
       },
+      // `end()`/`settleBackgroundWork()` join it before the database closes (the DO's durable fiber equivalent).
+      hold: (close) => this.trackFiber('turn.terminal_close', close),
     });
 
     return this.terminalTransitions;
@@ -1957,19 +1958,6 @@ export class LocalAgentSession {
 
   /** Test-only clock skew past the retry backoff; zero in production. */
   protected terminalClockSkewMs = 0;
-
-  /** Keep the process alive for a terminal close; `end()`/`settleBackgroundWork()` join it before the
-   *  database closes (the DO's durable fiber equivalent). */
-  private holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void {
-    const closing = this.trackFiber('turn.terminal_close', async () => { await close(); });
-    this.tracked(async () => {
-      try {
-        await closing;
-      } catch (cause) {
-        await this.terminal.closeFailed(transition, { cause });
-      }
-    });
-  }
 
   /** Prompt names: the workspace, plus the subagent's own name. Never the slug, which is an address. */
   private promptIdentity(): PromptIdentity {
