@@ -38,7 +38,7 @@ import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
-import { checkCoverage, checkFileCoverage, pushRun, readFileTimings, requireCIGreen } from './ci-verdicts';
+import { checkCoverage, checkFileCoverage, pushRun, readFileTimings, readHostedCosts, requireCIGreen, withRunnerCosts } from './ci-verdicts';
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 
@@ -1208,6 +1208,18 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
     expect(live?.row.rssMb).toBe(2048);
     expect(live?.row.threads).toBe(1);
     expect(reportCIVerdicts({ sha, part: 'all', rows: [{ run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'https://github.com/o/r/actions/runs/17', '')).toBe(false);
+  });
+
+  // The container runner (armada, `.armada.json`) runs the same units one task each, weighed by what it measured.
+  test('the container runner\'s measurements weigh only the rows they name, over the hosted ones', () => {
+    const hosted = readHostedCosts();
+    const unit = ciUnits(hosted).find((each) => each.gate.phase !== 'hammer' && each.gate.ciShards === undefined);
+    const run = unit?.gate.run ?? '';
+    const measured = withRunnerCosts(hosted, { rows: { [run]: 1e6, 'a command no row runs': 5 }, files: { 'a.test.ts': 2 } }, new Map([[run, unit?.gate.label ?? '']]));
+    const weights = new Map(ciUnits(measured).map((each) => [each.gate.run, each.seconds]));
+
+    expect({ timed: weights.get(run), others: ciUnits(hosted).filter((each) => each.gate.run !== run).every((each) => weights.get(each.gate.run) === each.seconds), file: measured.files['a.test.ts'] })
+      .toEqual({ timed: 1e6, others: true, file: 2 });
   });
 
   test('all six contended runs have independent runners instead of a sequential hammer tail', () => {
