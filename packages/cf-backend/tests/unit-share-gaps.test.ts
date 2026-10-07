@@ -1,8 +1,8 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Share-gaps rules end to end through the edge route: rate bound, consent page, fork flag, and revoking either kind.
- * Same harness as `unit-slate-live-shares.test.ts`; the per-share daily spend bound pauses a running slate's
- * calls, so it is driven in workerd (`tests/workerd/slate-share.test.ts`).
+ * The per-share daily spend bound pauses a running slate's calls, so it is driven in workerd
+ * (`tests/workerd/slate-share.test.ts`).
  */
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
