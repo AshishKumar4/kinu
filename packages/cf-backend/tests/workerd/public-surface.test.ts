@@ -7,7 +7,7 @@
 import { env } from 'cloudflare:test';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath, pageSchema, positionPageSchema, type JsonValue,
+  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath, pageSchema, positionPageSchema, workspaceSlug, type JsonValue,
 } from '@kinu.run/core';
 import { describe, expect, it, vi } from 'vitest';
 import * as v from 'valibot';
@@ -417,6 +417,89 @@ describe('a hosted actor pane reads its own chat back from nothing', () => {
 
     expect((await env.PUBLIC_SURFACE.fetch(`${ORIGIN}${actorPath}/get-messages`)).status).toBe(404);
     await env.SURFACE_CONTROL.resetModelLog();
+  });
+});
+
+describe('what a page may call on its workspace', () => {
+  // A misplaced decorator once left the Work read uncallable from the page and made the egress recorder callable.
+  it('reads the overview and Work, and is refused the egress recorder and the scaffold runner', async () => {
+    const { rootPath } = await workspaceWithTwoChats('pool-page-callables');
+    const pane = await openPane(rootPath);
+    const answers: Record<string, string> = {};
+
+    const calls: ReadonlyArray<readonly [string, JsonValue[]]> = [
+      ['listWorkspaceWork', []], ['getWorkspaceGitHub', []], ['listWorkspaceAgents', []],
+      ['recordGitHubEgress', [[]]], ['runScaffoldOnce', ['probe task']],
+    ];
+
+    for (const [name, args] of calls) {
+      pane.send(rpcRequest(name, name, args));
+
+      try {
+        await pane.rpc(name, v.unknown());
+        answers[name] = 'answered';
+      } catch (error) {
+        answers[name] = String(error);
+      }
+    }
+
+    pane.close();
+    expect(answers).toEqual({
+      listWorkspaceWork: 'answered', getWorkspaceGitHub: 'answered', listWorkspaceAgents: 'answered',
+      recordGitHubEgress: expect.stringContaining('was refused'), runScaffoldOnce: expect.stringContaining('was refused'),
+    });
+  });
+});
+
+describe('a workspace created over REST with a role, a model and an effort', () => {
+  const StatusSchema = v.object({ status: v.looseObject({ roleId: v.string(), model: v.string(), reasoningEffort: v.nullish(v.string()) }) });
+
+  /** The create route's answer, refused or not, and what it said. */
+  const create = async (body: Record<string, string>): Promise<{ status: number; text: string }> => {
+    const response = await env.PUBLIC_SURFACE.fetch(`${ORIGIN}/api/user/workspaces`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+    return { status: response.status, text: await response.text() };
+  };
+
+  /** What the new workspace's own socket says it runs on, before any turn has run. */
+  const runsOn = async (name: string): Promise<{ roleId: string; model: string; effort: string | null; pinned: string | null }> => {
+    const pane = await openPane(`/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(name)}`);
+
+    pane.send(rpcRequest('status', 'getWorkspaceSnapshot', []));
+    const { status } = await pane.rpc('status', StatusSchema);
+    pane.send(rpcRequest('pinned', 'getStoredModelSpec', []));
+    const { spec } = await pane.rpc('pinned', v.object({ spec: v.nullable(v.string()) }));
+
+    pane.close();
+
+    return { roleId: status.roleId, model: status.model, effort: status.reasoningEffort ?? null, pinned: spec };
+  };
+
+  it('reaches the new workspace before its first turn, and a refused request leaves no workspace', async () => {
+    await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(FIXTURE_CREDENTIAL),
+    });
+
+    expect((await create({ name: 'pool-auditor', role: 'auditor', model: PINNED_MODEL, reasoningEffort: 'high' })).status).toBe(201);
+    expect(await runsOn('pool-auditor')).toEqual({ roleId: 'auditor', model: PINNED_MODEL, effort: 'high', pinned: PINNED_MODEL });
+
+    // One that names none, or the starting role, keeps the starting role and pins no model: it follows the account default.
+    expect((await create({ name: 'pool-plain', role: 'task' })).status).toBe(201);
+    expect(await runsOn('pool-plain')).toMatchObject({ roleId: 'task', pinned: null });
+
+    const unknownEffort = await create({ name: 'pool-ultra', reasoningEffort: 'ultra' });
+    const longName = await create({ name: 'a'.repeat(32) });
+
+    expect([unknownEffort.status, longName.status]).toEqual([400, 400]);
+    expect(longName.text).toContain('31');
+    expect((await create({ name: workspaceSlug(crypto.randomUUID()) })).status).toBe(201);
+
+    const roster = JSON.stringify(await publicJson('/api/user/workspaces', v.unknown()));
+
+    expect(roster).toContain('pool-auditor');
+    expect([roster.includes('pool-ultra'), roster.includes('a'.repeat(32))]).toEqual([false, false]);
   });
 });
 

@@ -118,8 +118,8 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
 
 /** The shipped root, sealed as the product seals it: the call `getAgentByName` makes on every stub, which it answers,
  *  and the inherited members it must refuse (`tests/helpers/rpc-denied.ts`), declared so a test can make each call. */
-interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded {
-  __unsafe_ensureInitialized(): Promise<void>;
+/** The inherited members every sealed object must refuse, each called with no arguments. */
+interface DeniedRpc {
   sql(): Promise<void>;
   destroy(): Promise<void>;
   setState(): Promise<void>;
@@ -131,6 +131,33 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded {
   schedule(): Promise<void>;
   runFiber(): Promise<void>;
   keepAlive(): Promise<void>;
+}
+
+/** The account object: its own internals, and two listed reads asked with no caller. */
+interface SealedUserDoRpc extends Rpc.DurableObjectBranded, DeniedRpc {
+  __unsafe_ensureInitialized(): Promise<void>;
+  sqlx(): Promise<void>;
+  readCredential(): Promise<void>;
+  writeCredential(): Promise<void>;
+  requireTier(): Promise<void>;
+  ensureInit(): Promise<void>;
+  createMcpOAuthProvider(): Promise<void>;
+  listWorkspaces(): Promise<void>;
+  listCredentials(): Promise<void>;
+}
+
+interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
+  __unsafe_ensureInitialized(): Promise<void>;
+  hostedWorkspace(): Promise<void>;
+  loadSoulText(): Promise<void>;
+  currentProfile(): Promise<void>;
+  startExecutorFileDownload(): Promise<void>;
+  abortExecutorFileDownload(): Promise<void>;
+  writeExecutorFileChunk(): Promise<void>;
+  readExecutorFileChunk(): Promise<void>;
+  abortExecutorFileWrite(): Promise<void>;
+  prepareTerminal(): Promise<void>;
+  openDeviceTerminal(): Promise<void>;
 }
 
 interface CodexEgressProbeRpc extends Rpc.DurableObjectBranded, HostileCalls {
@@ -389,6 +416,7 @@ declare global {
       AGENT_FACET_PROBE: DurableObjectNamespace<AgentFacetProbeRpc>;
       ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
       SEALED_ORCHESTRATOR: DurableObjectNamespace<SealedOrchestratorRpc>;
+      SEALED_USER_DO: DurableObjectNamespace<SealedUserDoRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
       LOADER: WorkerLoader;
       /** The production Worker entry hosted by `public-surface-probe`, WebSocket upgrades included. */
