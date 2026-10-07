@@ -12,14 +12,12 @@ import { openWorkspaceMainActor, WorkspaceActorDirectory } from './workspace-act
 import { KinuError } from '../obs/error';
 import { forkArtifactPath } from './fork-plan';
 import type { ForkSnapshotHead } from './fork-rows';
-import { FORK_FAMILIES, type ForkReset } from './fork-policy';
+import { FORK_WRITE_RESETS, type ForkReset } from './fork-policy';
 import {
   FORK_CONTEXT_REVISION, FORK_ROW_SECTIONS, FORK_SECTIONS, perSection,
   type ForkAppData, type ForkRows, type ForkRowSection, type ForkSectionTarget,
 } from './fork-sections';
 
-/** What the write empties before it stages, in the order that keeps every foreign key satisfied (fork-policy.ts). */
-const FORK_WRITE_RESETS: readonly ForkReset[] = Object.values(FORK_FAMILIES).flatMap((family) => family.resets ?? []);
 
 export interface ForkResult {
   forkPointMs: number;
@@ -95,8 +93,7 @@ export class ForkTargetWriter {
   }
 
   /**
-   * Empty what an abandoned attempt left, so a retry self-heals: every table the fork's families reset
-   * (fork-policy.ts), children first. `workspace_identity` stays: a hosted target's file namespace derives from it.
+   * Empty what an abandoned attempt left, so a retry self-heals: every table fork-policy.ts names, children first. `workspace_identity` stays: a hosted target's file namespace derives from it.
    */
   clearStagedRows(): void {
     const actorId = this.actorId;

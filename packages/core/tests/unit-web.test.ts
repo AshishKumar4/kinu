@@ -25,6 +25,7 @@ import {
   type WebSearchProvider,
   type QuickActionTransport,
 } from '../src/index';
+import { imageCarrier } from '../src/types/tool-images';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
 import { cutShareGrant, grantAdmits, slateCapabilityGraph } from '../src/slates/capability-graph';
 import { parseSlateProject } from '../src/slates/project';
@@ -776,7 +777,7 @@ describe('an eval that returns a native tool\'s image', () => {
   test('shows the model the image a nested screenshot carried, not its base64 as text, and keeps the failures', async () => {
     const failure = { success: false as const, tool: 'web', op: 'fetch', reason: 'denied' as const, error: 'blocked private/internal address: 10.0.0.1' };
     // `return await tools.web({ op: 'screenshot', … })`: the native tool's carrier, nested under the program's result.
-    const shot = { output: 'Screenshot of https://example.com/', images: [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }] };
+    const shot = imageCarrier('Screenshot of https://example.com/', [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }]);
     const program = { result: { shot }, logs: [], failures: [failure] };
     const evalTool = withClampedToolResult(tool({ inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => program }), { producer: 'eval', images: true });
     const output = await toolExecute<{ code: string }, JsonValue>(evalTool)({ code: '' });
@@ -788,6 +789,15 @@ describe('an eval that returns a native tool\'s image', () => {
       value: [{ type: 'text', text: expect.stringContaining('Screenshot of https://example.com/') }, { type: 'file', data: { type: 'data', data: 'iVBORw0KGgo=' }, mediaType: 'image/png' }],
     });
     expect(JSON.stringify(model)).not.toContain('"images"');
+  });
+
+  test("keeps every field of the program's own data that names `output` and `images`, beside a screenshot", async () => {
+    const row = { output: 'ok', images: [], id: 'row-1', status: 'failed' };
+    const shot = imageCarrier('Screenshot of https://example.com/', [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }]);
+    const evalTool = withClampedToolResult(tool({ inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => ({ result: { row, shot }, logs: [] }) }), { producer: 'eval', images: true });
+    const output = await toolExecute<{ code: string }, JsonValue>(evalTool)({ code: '' });
+
+    expect(output).toMatchObject({ output: { result: { row, shot: 'Screenshot of https://example.com/' } } });
   });
 });
 

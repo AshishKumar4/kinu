@@ -20,7 +20,7 @@ import {
 import type {
   TurnContinuity, FiberCtx,
   LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding,
-  BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
+  BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions, SendState,
   ActiveSkillSet, FactsStore,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
@@ -33,7 +33,7 @@ import type {
   WorkMode, SessionHistory,
 } from '@kinu.run/core';
 import { ActorSession, type ActorTurnLease,
-  recoverActorTurns,
+  recoverActorTurns, TurnReports,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type TaskListStore,
@@ -619,7 +619,6 @@ export class LocalAgentSession {
       logger: compactionDiagnostics,
       summarizer: () => this.ensureModelState(),
       spend: { report: (report) => this.modelCallSink(report) },
-      model: () => this.effectiveModelSpec(),
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions());
     this.rt.setTurnFileLedgerProvider?.(() => this.actorSession.orchestrator.acc.files);
@@ -1122,6 +1121,16 @@ export class LocalAgentSession {
     }));
   }
 
+  /** Where a send stands, from its durable facts. */
+  sendState(id: string): Promise<SendState> {
+    return this.chat.sendState(id);
+  }
+
+  /** Its state once settled or none; asked again after any break. */
+  awaitSend(id: string): Promise<SendState> {
+    return this.chat.awaitSend(id);
+  }
+
   /** Returns the dropped steer texts. */
   interrupt(): string[] {
     const dropped = this.chat.interrupt();
@@ -1375,6 +1384,7 @@ export class LocalAgentSession {
 
     const recovered = await recoverActorTurns({
       installedBuild: this.actorHost.installedBuild,
+      answered: (turn) => new TurnReports(this.rt.storage.sql).answered(turn),
       resumable: (limit) => this.actorHost.resumable(limit),
       acquire: async (reference) => reference.actorId === this.rt.actor.actorId
         ? { runtime: this.rt, stores: this.stores, session: this.actorSession }
@@ -2263,6 +2273,7 @@ export class LocalAgentSession {
       },
       directory,
       installedBuild: null,
+      answered: (turn) => new TurnReports(this.rt.storage.sql).answered(turn),
       // The seater's observer if any; `nodeSeats` tells the builder a head row seats a node.
       runtimeFor: (bound) => buildLocalActorRuntime(this.rt, bound, this.pendingWriteObserver(bound.reference.actorId), this.nodeSeats.has(bound.reference.actorId)),
       filesFor: (bound) => this.rt.filesForActor(bound.handle),
@@ -2619,7 +2630,6 @@ export class LocalAgentSession {
       logger: compactionDiagnostics,
       summarizer: () => this.ensureModelState(),
       spend: { report: (report) => this.modelCallSink(report) },
-      model: () => this.effectiveModelSpec(),
     });
 
     return {

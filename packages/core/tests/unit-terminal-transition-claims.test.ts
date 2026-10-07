@@ -28,7 +28,8 @@ function ledger(opts: { readonly cutBeforeRecord?: boolean } = {}) {
   /** One activation's transitions over the rows; a later activation is another instance over the same rows. */
   const activation = () => new TerminalTransitions({
     sql, actor, now: () => NOW,
-    effects: { turn_record: terminalEffect({ input: v.object({}), run: () => ({ status: 'completed' }) }) },
+    // No case here may reach an effect's body: each stops at the claim, or is cut before the side effect.
+    effects: { turn_record: terminalEffect({ input: v.object({}), run: () => { throw new Error('the effect ran'); } }) },
     fault: () => opts.cutBeforeRecord === true
       ? (phase, name, scope) => { if (phase === 'before') throw new TerminalEffectInterrupt(phase, name, scope); }
       : null,

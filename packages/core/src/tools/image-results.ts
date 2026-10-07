@@ -1,13 +1,12 @@
 /**
- * Images a tool hands the model. A tool output `{ output, images }`, an eval's with its `failures` beside them,
- * reaches the model as its text and one `file` part per image, which Anthropic Messages and
+ * Images a tool hands the model. A native tool's carrier (`types/tool-images.ts` imageCarrier), an eval's with its `failures` beside
+ * it, reaches the model as its text and one `file` part per image, which Anthropic Messages and
  * OpenAI Responses carry inside a tool result; `providers/tool-result-images.ts` carries them on Chat Completions.
  */
 import type { ToolResultOutput } from '@ai-sdk/provider-utils';
 import * as v from 'valibot';
 import { isJsonObject, JsonValueSchema, type JsonValue } from '../utils/json';
 import { ImageCarrierSchema, type ToolImage } from '../types/tool-images';
-
 
 const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+=*)$/u;
 

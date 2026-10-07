@@ -92,20 +92,25 @@ export function addressedBlock(texts: readonly string[], address: EphemeralSlate
 }
 
 export interface EphemeralSlateAddress {
+  /** The agent whose own chat holds the answer; null for the workspace's. */
+  readonly actorId: string | null;
   readonly messageId: string;
   readonly name: string;
 }
 
-/** A file slate's id is one directory name, so the one `/` here cannot be mistaken for one. */
+/** A file slate's id is one directory name, so the `/` here cannot be mistaken for one: `<message>/<name>` in the
+ *  workspace's chat, `<agent>/<message>/<name>` in an agent's. */
 export function ephemeralSlateId(address: EphemeralSlateAddress): string {
-  return `${address.messageId}/${address.name}`;
+  return [address.actorId, address.messageId, address.name].filter((part) => part !== null).join('/');
 }
 
 export function ephemeralSlateAddress(id: string): EphemeralSlateAddress | null {
-  const cut = id.indexOf('/');
+  const parts = id.split('/');
+  const name = parts.at(-1) ?? '';
 
-  if (cut <= 0 || cut !== id.lastIndexOf('/')) return null;
-  const name = id.slice(cut + 1);
+  if (parts.length < 2 || parts.length > 3 || parts.some((part) => part === '') || !NAME.test(name) || id.includes('\0')) return null;
 
-  return NAME.test(name) && !id.includes('\0') ? { messageId: id.slice(0, cut), name } : null;
+  return parts.length === 3
+    ? { actorId: parts[0] ?? '', messageId: parts[1] ?? '', name }
+    : { actorId: null, messageId: parts[0] ?? '', name };
 }

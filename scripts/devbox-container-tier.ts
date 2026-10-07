@@ -11,7 +11,7 @@ import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
-import { deleteR2Prefix } from './cloudflare-rest';
+import { deleteR2Prefix, wranglerSessionToken } from './cloudflare-rest';
 import { runWrangler, wranglerProvesAbsence, deleteContainerApps, containerAppIds, publishTeardown, runTeardownOnce, delay } from './fixtures/r2-bench/deploy-substrate';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import artifact from '../packages/devbox/block-lower/upstream.json';
@@ -32,14 +32,6 @@ const Exec = v.object({ exitCode: v.number(), stdout: v.string(), stderr: v.stri
 const Commit = v.looseObject({ kind: v.string(), reason: v.optional(v.string()), movedBytes: v.optional(v.number()) });
 
 const State = v.looseObject({ chain: v.nullable(v.looseObject({ rev: v.number(), base: v.looseObject({ key: v.string() }), deltas: v.array(v.unknown()) })), snapshot: v.nullable(v.looseObject({ id: v.string() })) });
-
-function authToken(): string {
-  const ran = spawnSync(join(REPO, 'node_modules/.bin/wrangler'), ['auth', 'token', '--json'], { encoding: 'utf8' });
-
-  if (ran.status !== 0) throw new Error(`the fixture has no Cloudflare authority: ${ran.stderr.slice(-300)}`);
-
-  return v.parse(v.object({ token: v.string() }), JSON.parse(ran.stdout)).token;
-}
 
 async function installTools(bucket: string, cached?: string): Promise<void> {
   const key = `devbox-tools/${artifact.tools.sha256}.tgz`;
@@ -120,7 +112,7 @@ async function main(): Promise<void> {
   const app = `${worker}-contractbox`;
   const scratch = recovering === undefined ? mkdtempSync(join(tmpdir(), 'kinu-devbox-contracts-')) : dirname(process.argv[recoveryArgument + 1] ?? '');
   process.env['WRANGLER_LOG_PATH'] = join(scratch, 'wrangler');
-  const token = authToken();
+  const token = wranglerSessionToken();
   // Only the throwaway application's REST cleanup uses this credential; never printed or persisted.
   process.env['KINU_CLOUDFLARE_API_TOKEN'] = token;
   const report = join(scratch, 'report.json');
@@ -235,6 +227,105 @@ async function main(): Promise<void> {
     return;
   }
 
+  /** The desktop's own client, framed by the product route, driven in a browser on this host. */
+  const desktopClient = async () => {
+    await step('desktop-client', async () => {
+      const nativeBox = names[1] ?? '';
+      await shell('printf %s "<body style=margin:0><div style=width:100vw;height:100vh;background:#c00 onclick=\\\"this.style.background=\x27#00c\x27\\\"></div>" >/var/tmp/click.html; '
+        + 'DISPLAY=:0 setsid x-www-browser --kiosk file:///var/tmp/click.html >/var/tmp/browser.log 2>&1 </dev/null & '
+        + 'until DISPLAY=:0 xdotool search --class chromium >/dev/null 2>&1; do sleep 0.1; done', nativeBox);
+
+      return withTestChrome(async browser => {
+        const page = await browser.newPage();
+        page.setDefaultTimeout(0);
+        await page.setExtraHTTPHeaders({ authorization: `Bearer ${identity}` });
+        await page.setViewport({ width: 1300, height: 820 });
+        await page.goto(`${origin}/view?box=${nativeBox}`);
+        const frame = await (await page.waitForSelector('iframe'))?.contentFrame();
+
+        if (frame == null) throw new Error('the desktop client did not frame');
+
+        const shows = async (blue: boolean) => (await frame.waitForFunction(wantBlue => {
+          const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
+
+          if (canvas === undefined || canvas.width < 640) return null;
+          const [r = 0, , b = 0] = canvas.getContext('2d')?.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data ?? [];
+          const rect = canvas.getBoundingClientRect();
+
+          return (wantBlue ? b > 150 && r < 80 : r > 150 && b < 80) && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        }, { polling: 'raf' }, blue)).jsonValue();
+
+        const red = await shows(false);
+
+        if (red === null || red === false) throw new Error('the desktop rendered no red page');
+        await page.mouse.click(red.x + 10, red.y + 10);
+        await shows(true);
+
+        const elsewhere = await frame.evaluate(() => new Promise<string>(resolve => {
+          document.addEventListener('securitypolicyviolation', event => { resolve(event.violatedDirective); }, { once: true });
+          new WebSocket('ws://elsewhere.example/websockify', ['binary']).addEventListener('open', () => { resolve('opened'); });
+        }));
+
+        requireEqual(elsewhere, 'connect-src');
+
+        return 'the product desktop routes carried a click to the golden\'s Chromium; foreign sockets refused';
+      });
+    });
+  };
+
+  /** The container's contracts, the desktop through the product routes, and the product's own chain. */
+  const productContracts = async () => {
+    for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
+
+    // `--headless`: everything but the desktop's client, which drives a browser on this host.
+    if (!process.argv.includes('--headless')) await desktopClient();
+
+    await step('disk-chain', async () => {
+      await shell('set -e; cd /workspace; mkdir -p private gone/sub src empty node_modules/pkg; chmod 700 private; '
+        + 'echo secret >private/key; echo gone >gone/sub/f; echo old >src/f; ln -s src/f link; '
+        + 'head -c 8388608 /dev/urandom >db.bin; echo excluded >node_modules/pkg/f; echo noise >build.log; touch -d 2020-01-01 src/f');
+      requireEqual((await call('/checkpoint?kind=tick', Commit, {})).kind, 'committed');
+      const base = (await call('/state', State)).chain?.base.key;
+
+      for (const command of [
+        "python3 -c \"import os; f=os.open('/workspace/db.bin',os.O_WRONLY); os.pwrite(f,b'A'*4096,100000); os.close(f)\"; echo first >>/workspace/src/f; rm -rf /workspace/gone",
+        'truncate -s 9437184 /workspace/db.bin; echo new >/workspace/new; rm /workspace/link; ln -s private /workspace/link',
+        "python3 -c \"import os; f=os.open('/workspace/db.bin',os.O_WRONLY); os.pwrite(f,b'B'*20,100100); os.close(f)\"; truncate -s 6291456 /workspace/db.bin",
+      ]) {
+        await shell(command);
+        await delay(2_000);
+        const saved = await call('/checkpoint?kind=tick', Commit, {});
+        requireEqual(saved.kind, 'committed');
+
+        if ((saved.movedBytes ?? Infinity) >= 256 * 1024) throw new Error('an in-place edit sent the whole file');
+        requireEqual((await call('/state', State)).chain?.base.key, base);
+      }
+
+      const digest = "cd /workspace; find . -xdev \\( -name node_modules -o -name '*.log' \\) -prune -o ! -path . -printf '%P %y %m %l\\n' | LC_ALL=C sort; "
+        + "find . -xdev \\( -name node_modules -o -name '*.log' \\) -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum";
+
+      const expected = await shell(digest);
+      requireEqual((await call('/stop', Commit, {})).kind, 'skipped');
+      await collectSnapshots(box);
+      requireEqual(await shell(digest), expected);
+      requireEqual(await shell('cat /workspace/node_modules/pkg/f'), 'excluded');
+      requireEqual((await call('/stop', Commit, {})).kind, 'skipped');
+      await collectSnapshots(box);
+      requireEqual((await call('/lose-snapshot', v.object({ ok: v.boolean() }), {})).ok, true);
+      requireEqual(await shell(digest), expected);
+      requireEqual(await shell('test ! -e /workspace/node_modules && test ! -e /workspace/build.log && echo excluded'), 'excluded');
+      await shell('echo recovered >>/workspace/src/f; rm /workspace/new; mkdir -p /workspace/later; echo later >/workspace/later/f');
+      await delay(2_000);
+      requireEqual((await call('/checkpoint?kind=tick', Commit, {})).kind, 'committed');
+      const later = await shell(digest);
+      await call('/stop', Commit, {});
+      await collectSnapshots(box);
+      requireEqual(await shell(digest), later);
+
+      return { base, recoveryExact: true, afterRecoveryExact: true, state: await call('/state', State) };
+    });
+  };
+
   try {
     runWrangler(REPO, ['r2', 'bucket', 'create', worker]);
     const toolsArgument = process.argv.indexOf('--tools');
@@ -297,94 +388,8 @@ async function main(): Promise<void> {
       });
 
     } else {
-
-    for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
-    await step('desktop-client', async () => {
-      const nativeBox = names[1] ?? '';
-      await shell('printf %s "<body style=margin:0><div style=width:100vw;height:100vh;background:#c00 onclick=\\\"this.style.background=\x27#00c\x27\\\"></div>" >/var/tmp/click.html; '
-        + 'DISPLAY=:0 setsid x-www-browser --kiosk file:///var/tmp/click.html >/var/tmp/browser.log 2>&1 </dev/null & '
-        + 'until DISPLAY=:0 xdotool search --class chromium >/dev/null 2>&1; do sleep 0.1; done', nativeBox);
-
-      return withTestChrome(async browser => {
-        const page = await browser.newPage();
-        page.setDefaultTimeout(0);
-        await page.setExtraHTTPHeaders({ authorization: `Bearer ${identity}` });
-        await page.setViewport({ width: 1300, height: 820 });
-        await page.goto(`${origin}/view?box=${nativeBox}`);
-        const frame = await (await page.waitForSelector('iframe'))?.contentFrame();
-
-        if (frame == null) throw new Error('the desktop client did not frame');
-
-        const shows = async (blue: boolean) => (await frame.waitForFunction(wantBlue => {
-          const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
-
-          if (canvas === undefined || canvas.width < 640) return null;
-          const [r = 0, , b = 0] = canvas.getContext('2d')?.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data ?? [];
-          const rect = canvas.getBoundingClientRect();
-
-          return (wantBlue ? b > 150 && r < 80 : r > 150 && b < 80) && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }, { polling: 'raf' }, blue)).jsonValue();
-
-        const red = await shows(false);
-
-        if (red === null || red === false) throw new Error('the desktop rendered no red page');
-        await page.mouse.click(red.x + 10, red.y + 10);
-        await shows(true);
-
-        const elsewhere = await frame.evaluate(() => new Promise<string>(resolve => {
-          document.addEventListener('securitypolicyviolation', event => { resolve(event.violatedDirective); }, { once: true });
-          new WebSocket('ws://elsewhere.example/websockify', ['binary']).addEventListener('open', () => { resolve('opened'); });
-        }));
-
-        requireEqual(elsewhere, 'connect-src');
-
-        return 'the product desktop routes carried a click to the golden\'s Chromium; foreign sockets refused';
-      });
-    });
-    await step('disk-chain', async () => {
-      await shell('set -e; cd /workspace; mkdir -p private gone/sub src empty node_modules/pkg; chmod 700 private; '
-        + 'echo secret >private/key; echo gone >gone/sub/f; echo old >src/f; ln -s src/f link; '
-        + 'head -c 8388608 /dev/urandom >db.bin; echo excluded >node_modules/pkg/f; echo noise >build.log; touch -d 2020-01-01 src/f');
-      requireEqual((await call('/checkpoint?kind=tick', Commit, {})).kind, 'committed');
-      const base = (await call('/state', State)).chain?.base.key;
-
-      for (const command of [
-        "python3 -c \"import os; f=os.open('/workspace/db.bin',os.O_WRONLY); os.pwrite(f,b'A'*4096,100000); os.close(f)\"; echo first >>/workspace/src/f; rm -rf /workspace/gone",
-        'truncate -s 9437184 /workspace/db.bin; echo new >/workspace/new; rm /workspace/link; ln -s private /workspace/link',
-        "python3 -c \"import os; f=os.open('/workspace/db.bin',os.O_WRONLY); os.pwrite(f,b'B'*20,100100); os.close(f)\"; truncate -s 6291456 /workspace/db.bin",
-      ]) {
-        await shell(command);
-        await delay(2_000);
-        const saved = await call('/checkpoint?kind=tick', Commit, {});
-        requireEqual(saved.kind, 'committed');
-
-        if ((saved.movedBytes ?? Infinity) >= 256 * 1024) throw new Error('an in-place edit sent the whole file');
-        requireEqual((await call('/state', State)).chain?.base.key, base);
-      }
-
-      const digest = "cd /workspace; find . -xdev \\( -name node_modules -o -name '*.log' \\) -prune -o ! -path . -printf '%P %y %m %l\\n' | LC_ALL=C sort; "
-        + "find . -xdev \\( -name node_modules -o -name '*.log' \\) -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum";
-
-      const expected = await shell(digest);
-      requireEqual((await call('/stop', Commit, {})).kind, 'skipped');
-      await collectSnapshots(box);
-      requireEqual(await shell(digest), expected);
-      requireEqual(await shell('cat /workspace/node_modules/pkg/f'), 'excluded');
-      requireEqual((await call('/stop', Commit, {})).kind, 'skipped');
-      await collectSnapshots(box);
-      requireEqual((await call('/lose-snapshot', v.object({ ok: v.boolean() }), {})).ok, true);
-      requireEqual(await shell(digest), expected);
-      requireEqual(await shell('test ! -e /workspace/node_modules && test ! -e /workspace/build.log && echo excluded'), 'excluded');
-      await shell('echo recovered >>/workspace/src/f; rm /workspace/new; mkdir -p /workspace/later; echo later >/workspace/later/f');
-      await delay(2_000);
-      requireEqual((await call('/checkpoint?kind=tick', Commit, {})).kind, 'committed');
-      const later = await shell(digest);
-      await call('/stop', Commit, {});
-      await collectSnapshots(box);
-      requireEqual(await shell(digest), later);
-
-      return { base, recoveryExact: true, afterRecoveryExact: true, state: await call('/state', State) };
-    });
+    // `--disk`: only the disk chain's contracts, with no desktop and so no browser on this host.
+    if (!process.argv.includes('--disk')) await productContracts();
 
     for (const kind of DISK_CONTRACTS) await step(`disk-${kind}`, () => call(`/disk-contract?kind=${kind}`, Json, {}, `${box}-disk`));
     }

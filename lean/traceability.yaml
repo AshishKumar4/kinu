@@ -947,7 +947,7 @@ requirements:
       - Kinu.Storage.BlockLayer.ready_implies_all_composed_mounted
       - Kinu.Storage.BlockLayer.copyup_is_file_local
     tsRefs:
-      - packages/devbox/src/disk-chain.ts#DELTA_SCRIPT
+      - packages/devbox/src/disk-delta.ts#DELTA_SCRIPT
       - packages/devbox/src/disk-chain.ts#diskChain
     remainingEvidence:
       - The index is built by DELTA_SCRIPT and read by the Rust block lower (packages/devbox/block-lower/src/index.rs), which tsRefs cannot cite

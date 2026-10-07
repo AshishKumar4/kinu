@@ -6,6 +6,8 @@ export const ChatHistoryEntrySchema = v.object({
   /** Its place in the chat: the rows above it number exactly this. */
   position: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   role: v.picklist(['user', 'assistant', 'system']),
+  /** The turn it belongs to, which a send's state names. */
+  turnId: v.nullable(v.string()),
   content: v.string(),
   createdAt: v.union([v.string(), v.number()]),
   /** Author and event markers must survive paging as well as live delivery. */

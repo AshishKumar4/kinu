@@ -114,7 +114,7 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
       };
     } });
 
-    for await (const event of runChat({ model, system: 'Use the available tools.', history: [{ role: 'user', content: 'Invoke the echo function.' }], tools,
+    for await (const event of runChat({ modelSpec: 'test/model', model, system: 'Use the available tools.', history: [{ role: 'user', content: 'Invoke the echo function.' }], tools,
       dynamicContext: { ledger: new DynamicContextLedger(), snapshot: () => ({
         craftedTools: craftedToolDeclarations(tools, { workMode: 'build', allowedTools: ['eval'] }),
       }) },

@@ -1,7 +1,7 @@
 /**
- * The row sections a fork streams, each declared once: the family it carries (fork-policy.ts), the source rows it
- * selects, their count, their weight on the wire and where they land. The source's stream and declared counts, the
- * receiver's dispatch and the commit's check are all derived from here.
+ * The row sections a fork streams, each declared once: the source rows it selects, their count, their weight on the
+ * wire and where they land. The source's stream and declared counts, the receiver's dispatch and the commit's check
+ * are all derived from here.
  */
 
 import * as v from 'valibot';
@@ -11,7 +11,6 @@ import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import type { SqlExecutor } from '../types/primitives';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { forkConversationEntryPartRows, forkConversationEntryRow, forkSessionMessageRow, type ForkConversationPlan } from './fork-plan';
-import type { ForkFamilyName } from './fork-policy';
 import {
   ForkAppRowSchema, ForkAppTableRowSchema, ForkConfigRowSchema, ForkContextMemberRowSchema, ForkConversationEntryPartRowSchema, ForkConversationEntryRowSchema,
   ForkCraftedToolRowSchema, ForkFactRowSchema, ForkLessonRowSchema, ForkSessionMessageRowSchema, ForkToolLessonRowSchema,
@@ -95,7 +94,6 @@ export interface ForkSectionTarget {
 }
 
 export interface ForkSection<Row> {
-  readonly family: ForkFamilyName;
   readonly rows: v.GenericSchema<Row>;
   /** The source's rows, one at a time so the sender holds a frame, never a section. */
   select(source: ForkSectionSource): Iterable<Row>;
@@ -104,7 +102,7 @@ export interface ForkSection<Row> {
   /** Payload bytes on the wire, which the frame budget bounds. */
   bytes(row: Row): number;
   stage(target: ForkSectionTarget, rows: readonly Row[]): void;
-  /** Empties what an abandoned attempt landed where the family's tables cannot name it (fork-policy.ts resets). */
+  /** Empties what an abandoned attempt landed where fork-policy.ts cannot name the tables. */
   reset?(target: ForkSectionTarget): void;
 }
 
@@ -213,7 +211,6 @@ export type ForkSections = { readonly [K in ForkRowSection]: ForkSection<ForkRow
 
 export const FORK_SECTIONS: ForkSections = {
   agentConfig: {
-    family: 'configuration',
     rows: ForkConfigRowSchema,
     select: configRows,
     bytes: (row) => utf8Bytes(row.key) + utf8Bytes(row.value),
@@ -224,7 +221,6 @@ export const FORK_SECTIONS: ForkSections = {
     },
   },
   craftedTools: {
-    family: 'craftedTools',
     rows: ForkCraftedToolRowSchema,
     select: craftedToolRows,
     bytes: (row) => utf8Bytes(row.name) + utf8Bytes(row.description) + utf8Bytes(row.code),
@@ -239,7 +235,6 @@ export const FORK_SECTIONS: ForkSections = {
     },
   },
   sessionMessages: {
-    family: 'modelMessages',
     rows: ForkSessionMessageRowSchema,
     select: function* ({ sql, actorId, plan, artifactDirectory }) {
       for (const messageId of plan.messageIds) yield forkSessionMessageRow(sql, actorId, messageId, artifactDirectory);
@@ -263,7 +258,6 @@ export const FORK_SECTIONS: ForkSections = {
     },
   },
   conversationEntries: {
-    family: 'chat',
     rows: ForkConversationEntryRowSchema,
     select: function* ({ sql, actorId, plan, artifactDirectory }) {
       for (const entryId of plan.entryIds) yield forkConversationEntryRow(sql, actorId, entryId, artifactDirectory);
@@ -286,7 +280,6 @@ export const FORK_SECTIONS: ForkSections = {
     },
   },
   conversationEntryParts: {
-    family: 'chat',
     rows: ForkConversationEntryPartRowSchema,
     select: function* ({ sql, actorId, plan }) {
       for (const entryId of plan.entryIds) yield* forkConversationEntryPartRows(sql, actorId, entryId);
@@ -308,7 +301,6 @@ export const FORK_SECTIONS: ForkSections = {
     },
   },
   lessons: {
-    family: 'lessons',
     rows: ForkLessonRowSchema,
     select: lessonRows,
     bytes: (row) => utf8Bytes(row.id) + utf8Bytes(row.turn_ids) + utf8Bytes(row.text) + utf8Bytes(row.source),
@@ -322,7 +314,6 @@ export const FORK_SECTIONS: ForkSections = {
     },
   },
   toolLessons: {
-    family: 'toolLessons',
     rows: ForkToolLessonRowSchema,
     select: ({ sql }) => actorRows(sql, (actorId, after) => {
       const found = sql<ForkToolLessonRow & { rowid: number }>`
@@ -344,7 +335,6 @@ export const FORK_SECTIONS: ForkSections = {
     },
   },
   facts: {
-    family: 'facts',
     rows: ForkFactRowSchema,
     select: ({ sql }) => actorRows(sql, (actorId, after) => {
       const found = sql<ForkFactRow & { rowid: number }>`
@@ -367,7 +357,6 @@ export const FORK_SECTIONS: ForkSections = {
     },
   },
   appTables: {
-    family: 'appData',
     rows: ForkAppTableRowSchema,
     select: ({ appData }) => appData.tables().map(({ declaration, createdAt }) => ({ declaration, created_at: createdAt })),
     bytes: (row) => utf8Bytes(row.declaration),
@@ -380,7 +369,6 @@ export const FORK_SECTIONS: ForkSections = {
     reset: ({ appData }) => { appData().clear(); },
   },
   appRows: {
-    family: 'appData',
     rows: ForkAppRowSchema,
     select: appRows,
     count: ({ appData }) => appTableNames(appData).reduce((total, name) => total + appData.count(name), 0),
@@ -400,7 +388,6 @@ export const FORK_SECTIONS: ForkSections = {
     },
   },
   contextMembers: {
-    family: 'workingContext',
     rows: ForkContextMemberRowSchema,
     select: ({ plan }) => plan.members,
     count: ({ plan }) => plan.members.length,

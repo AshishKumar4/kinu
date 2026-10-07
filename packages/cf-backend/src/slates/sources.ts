@@ -2,16 +2,20 @@ import { SlateId } from '@agent-core/core/slates';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { slateDirectory, type WorkspaceSlates } from '@kinu.run/core/slates';
 import {
-  addressedBlock, ephemeralBindings, ephemeralSlateAddress, parseSlateProject, sha256Hex, type EphemeralSlateAddress, type SlateProject,
+  addressedBlock, ephemeralBindings, ephemeralSlateAddress, ephemeralSlateId, parseSlateProject, sha256Hex, type EphemeralSlateAddress, type SlateProject,
 } from '@kinu.run/core';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import { ROOT_SLATE_CALLER, type SlateCaller } from './bindings';
 
-/** The block an ephemeral slate's id names, and the author whose authority its page runs with. */
+/** The block an ephemeral slate's id names, and the author whose authority its page runs with; null when no authority
+ *  can be lent to it here, and the page is drawn with nothing bound. */
 export interface MessageBlock {
   readonly html: string;
-  readonly author: SlateCaller;
+  readonly author: SlateCaller | null;
 }
+
+/** What an unbound page runs as: nothing it can call reaches anything, so the least mode. */
+const UNBOUND: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
 
 /**
  * Where a slate comes from: its directory, or a `<slate-ui>` block of a stored answer, which has no class and is its own
@@ -53,9 +57,11 @@ export class SlateSources {
     if (address === null) return { kind: 'files', project: await this.deps.project(cred, id), root: slateDirectory(new SlateId(id)) };
     const block = this.deps.host.messageBlock === undefined ? await noAnswers(address) : await this.deps.host.messageBlock(address);
 
+    const bindings = block.author === null ? {} : ephemeralBindings();
+
     return {
-      kind: 'message', root: `${EPHEMERAL_ROOT}/${address.messageId}/${address.name}`, html: block.html, author: block.author,
-      project: parseSlateProject({ name: address.name, browser: PAGE_ENTRY, slate: { title: address.name, bindings: ephemeralBindings() } }),
+      kind: 'message', root: `${EPHEMERAL_ROOT}/${ephemeralSlateId(address)}`, html: block.html, author: block.author ?? UNBOUND,
+      project: parseSlateProject({ name: address.name, browser: PAGE_ENTRY, slate: { title: address.name, bindings } }),
     };
   }
 

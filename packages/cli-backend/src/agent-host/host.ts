@@ -38,6 +38,7 @@ import {
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
   publishSubordinateReport,
+  TurnReports,
   type SubordinateReportLedger,
   mintSubordinateName,
   subordinateDescriptorSource,
@@ -202,6 +203,8 @@ interface HostEntry {
   relay: SubordinateReportLedger & {
     ownerDriven: boolean;
     mode: WorkMode;
+    /** The turn the ledger is this turn's; null before the child's first turn starts. */
+    turnId: string | null;
   } | null;
 }
 
@@ -478,6 +481,8 @@ export class LocalAgentHost {
       directory,
       // No build identity for the builtin loop: a `bun`-run checkout has no build stamp.
       installedBuild: null,
+      // What each hire's turn told its hirer, so a restart settles a turn its report already answered.
+      answered: (turn) => new TurnReports(sql).answered(turn),
       // Its own entry's port; a seated swarm node has none, and takes no input to be reviewed on.
       advisorPort: (bound) => this.byActor.get(bound.reference.actorId)?.temporary ?? null,
       // Every hirer here, the root included, is an entry of this process.
@@ -656,7 +661,7 @@ export class LocalAgentHost {
       children: new Map(),
       relay: input.parentKey === null
         ? null
-        : { ownerDriven: false, spoke: false, settled: false, mode: 'build' },
+        : { ownerDriven: false, spoke: false, settled: false, mode: 'build', turnId: null },
     };
 
     this.entries.set(input.key, entry);
@@ -961,6 +966,7 @@ export class LocalAgentHost {
     state.spoke = false;
     state.settled = false;
     state.mode = event.workMode;
+    state.turnId = event.turnId;
   }
 
   /**
@@ -1068,6 +1074,11 @@ export class LocalAgentHost {
           sequenceId: `${child.key}:report:${crypto.randomUUID()}`,
           handoff,
         }, report => this.relayToParent({ child, ...report }));
+
+        const turnId = child.relay?.turnId ?? null;
+
+        // Kept as it lands, so a restart knows this turn already answered.
+        if (child.relay && turnId !== null) new TurnReports(child.ws.rt.storage.sql).record({ actorId: child.actor.record.actorId, turnId }, child.relay);
 
         return { disposition: relayed.disposition, id: relayed.id };
       },

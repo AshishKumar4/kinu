@@ -118,6 +118,7 @@ describe('built-in input schemas per model, as the registry resolves it', () => 
     const results: Extract<ChatEvent, { type: 'tool-result' }>[] = [];
 
     for await (const event of runChat({
+      modelSpec: 'test/model',
       model: registry.resolve('probe/m', DEPS), system: 's', history: [{ role: 'user', content: 'go' }],
       tools: buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
     })) {

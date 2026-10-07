@@ -48,7 +48,7 @@ for (const withTail of [true, false]) {
       try {
         const result = await actor.session.execute(lease, {
           task: 'What does the file say?', loopVersion: await actor.runtime.identity.scaffold.version(),
-          chat: { model, system: 'Answer.', tools: {} }, extensions: [],
+          chat: { modelSpec: 'test/model', model, system: 'Answer.', tools: {} }, extensions: [],
           dynamic: () => ({ factsBlock: '' }),
           ...(withTail && { instructions: INSTRUCTIONS }),
         }, () => {});

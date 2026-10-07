@@ -16,6 +16,7 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import type { UserDO } from '../../src/user/user-do';
 import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 import { FIBER_RECOVERY_MAX_AGE_MS } from '../../src/fiber-recovery';
+import { hostedActorPlacement } from '../../src/actor-hosting';
 
 export * from '../../src/server';
 
@@ -91,6 +92,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
     return {
       incarnation: this.probeIncarnation,
       terminalRetry: this.probeState.storage.sql.exec(`SELECT 1 FROM cf_agents_jobs WHERE id = 'terminal-retry'`).toArray().length > 0,
+      agentWakes: this.probeState.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM cf_agents_jobs WHERE capability = 'kinu-agent-wakes'`).one().n,
       fibers: this.probeState.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM cf_agents_runs WHERE name LIKE 'bg:%'`).one().n,
       wakes: this.probeWakeCount,
       started: this.probeStarted,
@@ -282,10 +284,16 @@ export class HireOrchestrator extends ProductionOrchestrator {
     wire.interrupt();
   }
 
-  /** Every delegated turn ended and every task agent its answer retired: a hirer no longer waits on either. */
+  /** Every delegated turn ended and every task agent its answer retired: a hirer no longer waits on either. Each agent's
+   *  isolate answers idle once its effects closed and it told this workspace what it still owes. */
   async settled(): Promise<void> {
     await this.agentTurns.idle();
     await this.delegatedTurns.idle();
+
+    for (const actor of this.actorDirectoryStore().list()) {
+      if (actor.parentActorId !== null && hostedActorPlacement(actor).homeName !== null) await (await this.agentCalls(actor.actorId)).idle();
+    }
+
     await this.settleBackgroundTasks();
   }
 

@@ -132,9 +132,9 @@ The image inventory found squashfuse 0.1.103 and fuse-overlayfs 1.7.1.
 [rangefs](https://github.com/DCsunset/rangefs) and
 [concatfs](https://github.com/schlaile/concatfs) do not implement this indexed
 two-source format, so the lower is a custom Rust/fuser server:
-`packages/devbox/block-lower/`, built by its `Dockerfile` on top of the pinned
-upstream Sandbox image. `packages/cf-backend/wrangler.jsonc` pins the derived
-image by digest.
+`packages/devbox/block-lower/`, compiled into the devbox tools tarball on
+armada from `cloudflare/debian-trixie` by its `tools-setup.sh` and
+`tools-build.sh` (D78), and pinned by sha256 in its `upstream.json`.
 
 The lower rejects hostile paths, duplicate and out-of-range offsets, invalid
 pages and digests, mount and generation mismatches, and unsupported metadata.

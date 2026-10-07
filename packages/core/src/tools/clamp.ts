@@ -15,6 +15,7 @@ import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../contex
 import type { Storage } from '../types/primitives';
 import { assertJsonValue, JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
 import { imageModelOutput, takeImages } from './image-results';
+import { imageCarrier } from '../types/tool-images';
 import { diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import { successfulToolOutcome } from './outcome';
 
@@ -158,9 +159,9 @@ export function withClampedToolResult(
       if (taken === null || taken.images.length === 0) return result;
 
       // An eval's failures stay at the top level, where `successfulToolOutcome` reads the program's census.
-      return outcome.failures === undefined
-        ? { output: result ?? null, images: taken.images }
-        : { output: result ?? null, images: taken.images, failures: outcome.failures };
+      const carrier = imageCarrier(result ?? null, taken.images);
+
+      return outcome.failures === undefined ? carrier : { ...carrier, failures: outcome.failures };
     },
   };
 

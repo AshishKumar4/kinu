@@ -67,6 +67,7 @@ async function collect(model: LanguageModel, tools: ToolSet, extensions?: Extens
 
   const request = {
     model,
+    modelSpec: 'test/model',
     system: 'sys',
     history: [{ role: 'user', content: 'go' }] satisfies ModelMessage[],
     tools,

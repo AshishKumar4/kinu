@@ -72,10 +72,10 @@ describe('a steer before an unloaded gap', () => {
 
   test('a steer stays before an unloaded gap until its own assistant page arrives', async () => {
     const store: ChatHistoryEntry[] = Array.from({ length: 5000 }, (_, position) => ({
-      id: 'm' + String(position), position, role: 'assistant', content: 'reply ' + String(position), createdAt: 0,
+      id: 'm' + String(position), position, role: 'assistant', turnId: null, content: 'reply ' + String(position), createdAt: 0,
     }));
 
-    store[199] = { id: 'steer', position: 199, role: 'user', content: 'old redirect', createdAt: 0, metadata: { kinuSteer: true, kinuSteerAtStep: 1 } };
+    store[199] = { id: 'steer', position: 199, role: 'user', turnId: null, content: 'old redirect', createdAt: 0, metadata: { kinuSteer: true, kinuSteerAtStep: 1 } };
     const pane = mountThread(storeOf(() => store));
 
     const readAt = async (from: number): Promise<void> => {

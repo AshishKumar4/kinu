@@ -10,7 +10,7 @@ import { admitSubordinateTask, EventLog, TERMINAL_EFFECT_RETRY_BASE_MS, WORKSPAC
 import { AwaitedList } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../core/tests/helpers';
 import {
-  agentSql, armedWakes, catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
+  agentSql, alarmDue, armedWakes, catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
   wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
@@ -20,6 +20,9 @@ import {
 } from './helpers/platform-gateway';
 
 const BRIEF = 'Summarise the release notes.';
+
+/** The deployed build a production reset leaves running on both sides of it. */
+const BUILD = 'build-liveness';
 
 test('an assignment leased by a dead activation runs after the next activation, with nothing else arriving', async () => {
   const gateway = answeringGateway('summarised');
@@ -65,15 +68,18 @@ async function hire(workspace: ReturnType<typeof gatewayWorkspace>, lifetime: Li
   return child.reference.actorId;
 }
 
-/** The next activation over the same rows, reached by one call, and everything it starts. */
-async function nextActivation(workspace: ReturnType<typeof gatewayWorkspace>, gateway: StubbedAiBinding): Promise<void> {
+/** The next activation over the same rows, reached by one call, and everything it starts: its wake, and the alarm an
+ *  agent's due wake rides. */
+async function nextActivation(workspace: ReturnType<typeof gatewayWorkspace>, gateway: StubbedAiBinding, versionId?: string): Promise<void> {
   const next = await reactivateOrchestratorHarness(workspace.db, undefined, {
-    world: { aiGateway: gateway },
+    world: { aiGateway: gateway, ...(versionId !== undefined && { versionId }) },
     beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
   });
 
   await next.agent.accountSpend();
   await next.agent.terminalRetryPass();
+
+  if (alarmDue(workspace.db)) await next.agent.alarm();
   await joinHarnessFibers();
 }
 
@@ -132,7 +138,7 @@ test('a turn cut off after its report-tool answer, mid-turn, is not run again an
     return new Promise<Response>(() => {});
   });
 
-  const workspace = gatewayWorkspace(gateway);
+  const workspace = gatewayWorkspace(gateway, { versionId: BUILD });
   const actorId = await hire(workspace, 'task');
 
   await wakeForDelegatedTask(workspace, actorId, BRIEF);
@@ -141,7 +147,8 @@ test('a turn cut off after its report-tool answer, mid-turn, is not run again an
 
   abandonHarnessFibers();
   cut = false;
-  await nextActivation(workspace, gateway);
+  // The same build both times, as a reset in production: the program is verified, so the report is what ends it.
+  await nextActivation(workspace, gateway, BUILD);
 
   expect(asked(gateway) - first).toBe(0);
   // The hire's turn claim is in its own database.

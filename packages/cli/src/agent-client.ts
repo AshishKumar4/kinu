@@ -171,6 +171,27 @@ export async function readConversation(
   }
 }
 
+/** The answer turn `turnId` recorded, read from the newest page back; null when it recorded none (a Stop before any
+ *  output). */
+export async function recordedAnswer(
+  page: (request: PositionPageRequest) => Promise<Page<ChatHistoryEntry, PositionCursor>>,
+  turnId: string,
+): Promise<string | null> {
+  let request: PositionPageRequest = {};
+
+  for (;;) {
+    const read = await page(request);
+    const turn = read.items.filter((entry) => entry.turnId === turnId);
+    const answer = turn.filter((entry) => entry.role === 'assistant').at(-1);
+
+    if (answer !== undefined) return answer.content;
+
+    // A turn's own entries come before its answer: a page that holds them and no answer means it recorded none.
+    if (turn.length > 0 || read.status === 'end') return null;
+    request = { cursor: read.next };
+  }
+}
+
 /** -1 when the point cannot be located (the surface's view drifted from the store). */
 export function findForkPivot(
   rows: ReadonlyArray<{ role: string; content: string }>,

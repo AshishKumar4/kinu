@@ -25,7 +25,7 @@ test('a consumer throwing after a tool result still records the completed native
   }) }) });
 
   const consume = async () => {
-    for await (const event of runChat({ model, system: 'sys', history: [{ role: 'user', content: 'save the note' }],
+    for await (const event of runChat({ modelSpec: 'test/model', model, system: 'sys', history: [{ role: 'user', content: 'save the note' }],
       tools: { save: tool({ inputSchema: z.object({ note: z.string() }), execute: async () => ({ written: true }) }) },
       persistStep: async (record) => { records.push(record); },
       observeStream: async chunks => { for await (const part of chunks) void part; },
@@ -106,6 +106,7 @@ describe('a native step seals before its hook and ends on a recording failure', 
 
     try {
       for await (const event of runChat({
+        modelSpec: 'test/model',
         model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools, stopWhen: isStepCount(20),
         persistStep: async () => { throw new Error('SQLITE_FULL: database or disk is full'); },
       })) events.push(event);
@@ -131,6 +132,7 @@ describe('a native step seals before its hook and ends on a recording failure', 
 
     try {
       for await (const _ of runChat({
+        modelSpec: 'test/model',
         model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools, stopWhen: isStepCount(20),
         persistStep: async (record) => { persisted.push(record.messages.length); },
         onStep: async () => { throw thrown; },
@@ -186,6 +188,7 @@ test('each streamed step retains the breakdown of its own request', async () => 
 
   try {
     for await (const event of runChat({
+      modelSpec: 'test/model',
       model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
       tools, stopWhen: isStepCount(20), measureContext: true,
       observeStream: async (stream) => { for await (const part of stream) void part; },
@@ -209,6 +212,7 @@ test('each step record keeps the body its request sent, which a cache warm repla
 
   try {
     for await (const _ of runChat({
+      modelSpec: 'test/model',
       model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
       tools, stopWhen: isStepCount(20), persistStep: async (record) => { records.push(record); },
     })) { /* drain */ }

@@ -292,8 +292,8 @@ export class UserDO extends Agent<Env> {
     return this.credentials.selectCloudflareAccount(caller, accountId);
   }
 
-  startCodexDeviceFlow(caller: UserCaller): Promise<DeviceCodeStart> {
-    return this.credentials.startCodexDeviceFlow(caller);
+  startCodexDeviceFlow(caller: UserCaller, account?: string): Promise<DeviceCodeStart> {
+    return this.credentials.startCodexDeviceFlow(caller, account);
   }
 
   pollCodexDeviceFlow(caller: UserCaller): ReturnType<UserCredentials['pollCodexDeviceFlow']> {

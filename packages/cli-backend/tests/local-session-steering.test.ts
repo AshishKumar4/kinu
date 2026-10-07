@@ -483,7 +483,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const userTurn = session.enqueueTurn({
       origin: 'user',
       text: 'the operator said this',
-      files: [{ filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }],
+      sends: [{ id: 'steer-1', text: 'the operator said this', files: [{ filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }] }],
     });
 
     release();
@@ -719,7 +719,8 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     const { db, rt, session, events } = setup('unused', model);
 
     const turn = session.send('queued behind nothing', { id: crypto.randomUUID() });
-    await events.until((frames) => frames.some((e) => e.type === 'turn-start'));
+    // Parked at the model's step gate: the dead process writes nothing more.
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
     const pending = pendingSends(db);
     expect(pending).toHaveLength(1);
     expect(pending[0].text).toBe('queued behind nothing');

@@ -46,12 +46,13 @@ import {
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
-import { createMemoryVfs, present, readTranscriptRows, workspaceDatabase } from '@kinu.run/test-utils';
+import { createMemoryVfs, present, readTranscriptRows, spawnTest, workspaceDatabase } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
+import { hireDeathModel } from './hire-death-model';
 
 /** A roster row's lifetime is its actor's. */
 const ROSTER_LIFETIME = "(SELECT lifetime FROM workspace_actors WHERE actor_id = json_extract(actor_subordinates.actor_reference, '$.actorId')) AS lifetime";
@@ -1070,6 +1071,35 @@ describe('LocalAgentHost', () => {
     } finally {
       await host.close();
     }
+  });
+
+  test('a hire killed after its report answered is not run again by the next process, and its claim settles', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+
+    const child = spawnTest(['bun', new URL('./hire-death-probe.ts', import.meta.url).pathname, state, project],
+      { cwd: new URL('../../..', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe' });
+
+    const marker = (await new Response(child.stdout).text()).trim().split('\n').at(-1);
+
+    await child.exited;
+    expect(marker).toBe('KILLED after-report');
+
+    const { model, childCalls } = hireDeathModel();
+    const next = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+
+    await next.host.team('root');
+
+    const view = new Database(dbPath, { readonly: true });
+
+    const claims = view.query<{ settled: number }, []>(`SELECT outcome IS NOT NULL AS settled FROM actor_turn_claims
+      WHERE actor_id IN (SELECT actor_id FROM workspace_actors WHERE parent_actor_id IS NOT NULL)`).all();
+
+    view.close();
+    // Its report answered the assignment: the next process asks the hire nothing and closes the turn.
+    expect(childCalls()).toBe(0);
+    expect(claims).toEqual([{ settled: 1 }]);
+    await next.host.close();
   });
 
   /** Temporary rung end to end: a role-targeted `ask` births a real local actor, admits its task, and archives it in the same roster. */

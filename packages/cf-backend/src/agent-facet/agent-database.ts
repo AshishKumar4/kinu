@@ -13,13 +13,13 @@ import {
   type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes,
-  initPendingSendTables, initTerminalEffectTable, PendingSendStore, announcementOf, classifyRunEnd, closeTurnRun,
+  initPendingSendTables, initTerminalEffectTable, PendingSendStore, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentTurnActivity, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
+import type { AgentAnswerTexts, AgentTurnActivity, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
 import type { AgentWorkspace } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
@@ -124,11 +124,6 @@ export class AgentDatabase {
     });
     initPendingSendTables((ddl) => { storage.sql.exec(ddl); });
     initTerminalEffectTable((ddl) => { storage.sql.exec(ddl); });
-    storage.sql.exec(`CREATE TABLE IF NOT EXISTS agent_turn_reports (
-      turn_id TEXT PRIMARY KEY,
-      spoke   INTEGER NOT NULL,
-      settled INTEGER NOT NULL
-    )`);
   }
 
   /** Writes only when the workspace's rows changed, so a read of an unchanged agent writes nothing. */
@@ -210,6 +205,7 @@ export class AgentDatabase {
       directory,
       installedBuild: snapshot.installedBuild,
       workspace: snapshot.workspaceName,
+      answered: (turn) => new TurnReports(this.sql).answered(turn),
       runtimeFor: (bound) => this.runtime(bound, files),
       filesFor: async () => ({ vfs: files.agent(), artifactDirectory: snapshot.artifactDirectory }),
       loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent: null }),
@@ -328,6 +324,19 @@ export class AgentDatabase {
     return await getChatHistoryPage(this.readable().transcript, page);
   }
 
+  /** An answer's text parts and the mode its agent last ran in; null when the id names no answer of this agent's. */
+  async answerTexts(messageId: string): Promise<AgentAnswerTexts | null> {
+    const bound = this.actorHost().bindStores(this.reference());
+    const answer = await bound.stores.history.transcript(CHAT_SESSION_ID).message(messageId);
+
+    if (answer?.role !== 'assistant') return null;
+
+    return {
+      texts: answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])),
+      workMode: bound.stores.claims.latestTurn()?.workMode ?? 'plan',
+    };
+  }
+
   messageCount(): number {
     return this.readable().transcript.count();
   }
@@ -377,6 +386,8 @@ export class AgentDatabase {
     const recovered = await recoverActorTurns({
       installedBuild: host.installedBuild,
       workspace: this.current().workspaceName,
+      // Its hirer holds the report that answers the turn: recovery settles it rather than running it again.
+      answered: (turn) => new TurnReports(this.sql).answered(turn),
       resumable: (limit) => host.resumable(limit),
       acquire: async (reference) => {
         const actor = await host.acquire(reference);
@@ -426,15 +437,11 @@ export class AgentDatabase {
 
   /** What a turn has told its hirer, kept as its tools answered: only ever more. */
   recordReports(turnId: string, reports: SubordinateReportLedger): void {
-    if (!reports.spoke) return;
-    void this.sql`INSERT INTO agent_turn_reports (turn_id, spoke, settled) VALUES (${turnId}, 1, ${reports.settled ? 1 : 0})
-      ON CONFLICT(turn_id) DO UPDATE SET spoke = 1, settled = MAX(settled, excluded.settled)`;
+    new TurnReports(this.sql).record({ actorId: this.readable().actor.actorId, turnId }, reports);
   }
 
   reports(turnId: string): SubordinateReportLedger {
-    const row = this.sql<{ settled: number }>`SELECT settled FROM agent_turn_reports WHERE turn_id = ${turnId}`[0];
-
-    return row === undefined ? { spoke: false, settled: false } : { spoke: true, settled: row.settled === 1 };
+    return new TurnReports(this.sql).read({ actorId: this.readable().actor.actorId, turnId });
   }
 
   interrupt(turnId: string): void {

@@ -26,11 +26,13 @@ import {
   transformTurns,
   writeTranscript,
   COMPACTION_PRESETS,
+  type AttachmentPolicy,
   type BoundaryContextPlan,
   type BoundarySummaryJob,
   type BuildPlanInputs,
   type CodecOps,
   type CompactionProfile,
+  type Engine,
   type EnginePorts,
   type LadderSpec,
   type PlanSnapshot,
@@ -71,17 +73,24 @@ export interface CompactionExtensionDeps {
   profile?: CompactionProfile;
   /** Ledger-reset signal: reset on 'planned' and 'invalidated', keep on 'replayed'. */
   onOutcome?: (event: CompactionOutcomeEvent) => void;
-  model?: () => string;
-  attachments?: AttachmentDeps;
+  /** Where older images and files move to; each request's own model prices them. */
+  attachments: AttachmentDeps;
 }
 
-type SizedContext = TransformContext & { readonly contextWindow: number };
+/** One request's ladder: the model serving it prices its attachments and keys its plan. */
+interface Ladder {
+  readonly spec: LadderSpec & { readonly attachments: AttachmentPolicy };
+  readonly codec: CodecOps;
+  readonly engine: Engine;
+}
 
-function sized(ctx: TransformContext, codec: CodecOps): SizedContext | null {
-  const owned = ctx.trigger === 'user' ? measuredTokens(ctx, kinuCodec.encode([...ctx.messages]), 0, codec) : null;
+type SizedContext = TransformContext & { readonly contextWindow: number; readonly ladder: Ladder };
+
+function sized(ctx: TransformContext, ladder: Ladder): SizedContext | null {
+  const owned = ctx.trigger === 'user' ? measuredTokens(ctx, kinuCodec.encode([...ctx.messages]), 0, ladder.codec) : null;
   const contextWindow = ctx.contextWindow ?? owned;
 
-  return ctx.messages.length === 0 || contextWindow === null || contextWindow <= 0 ? null : { ...ctx, contextWindow };
+  return ctx.messages.length === 0 || contextWindow === null || contextWindow <= 0 ? null : { ...ctx, contextWindow, ladder };
 }
 
 interface ForceRebuildInputs {
@@ -108,17 +117,19 @@ export type CompactionExtension = KinuExtension & { readonly compactShared: Shar
 export function createCompactionExtension(deps: CompactionExtensionDeps): CompactionExtension {
   return {
     ...compactionExtension(deps),
-    compactShared: sharedPrefixCompactor(compactionExtension({ ...deps, ephemeral: NO_EPHEMERAL_PLANE, onOutcome: undefined, model: undefined })),
+    compactShared: sharedPrefixCompactor(compactionExtension({ ...deps, ephemeral: NO_EPHEMERAL_PLANE, onOutcome: undefined })),
   };
 }
 
 function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
   const profile = deps.profile ?? { ...COMPACTION_PRESETS.light, triggerPercent: COMPACTION_TRIGGER_PERCENT };
-  const { attachments, model } = deps;
-  const spec: LadderSpec = attachments === undefined || model === undefined ? kinuSpec : { ...kinuSpec, attachments: kinuAttachments(attachments, model) };
-  const codec = attachmentCodec(kinuCodec, spec.attachments);
-  const engine = createEngine(spec, deps.ports);
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
+
+  const ladderFor = (model: string): Ladder => {
+    const spec = { ...kinuSpec, attachments: kinuAttachments(deps.attachments, model) };
+
+    return { spec, codec: attachmentCodec(kinuCodec, spec.attachments), engine: createEngine(spec, deps.ports) };
+  };
 
   /** A cancelled turn cancels only its own calls; its abort is no summary failure. */
   const summarizerFor = (signal: AbortSignal | undefined, failure: AbortController | null): Summarizer => ({
@@ -158,7 +169,7 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
     sessionKey: ctx.sessionKey,
     contextLimit: ctx.contextWindow,
     triggerRatio: ctx.trigger === 'user'
-      ? (Math.max(0, ...turns.map((turn) => codec.estimateTurns([turn]))) + 1) / ctx.contextWindow
+      ? (Math.max(0, ...turns.map((turn) => ctx.ladder.codec.estimateTurns([turn]))) + 1) / ctx.contextWindow
       : profile.triggerPercent / 100,
     targetRatio: ctx.trigger === 'user' ? 0 : profile.targetPercent / 100,
     recentToolResultBudgetTokens: profile.recentToolTokens,
@@ -177,7 +188,7 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
    * woven prefix; needed because replay prices overhead as of plan build and never sees later blocks.
    */
   function relieveEphemeralPressure(ctx: SizedContext, turns: Turn[]): number {
-    const measured = measuredTokens(ctx, turns, 0, codec);
+    const measured = measuredTokens(ctx, turns, 0, ctx.ladder.codec);
     const triggerTokens = Math.floor(ctx.contextWindow * profile.triggerPercent / 100);
 
     if (ctx.trigger === 'auto' && measured < triggerTokens) return 0;
@@ -196,6 +207,7 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
   async function forceRebuild(
     { turns, ctx, prior, reportedTokens, summarize }: ForceRebuildInputs,
   ): Promise<ProcessResult> {
+    const { spec } = ctx.ladder;
     const inputs: BuildPlanInputs = { ...buildInputs(ctx, reportedTokens, turns), force: true, priorPlan: prior ?? undefined };
     let plan = await preparePlan(turns, inputs, spec, deps.ports.logger);
 
@@ -233,6 +245,7 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
     const prefixTurns = compactedTurnsForPlan(turns, plan);
 
     if (prefixTurns.length === 0) return null;
+    const { spec, codec } = ctx.ladder;
 
     const previous = prior?.prefixSummary?.startsWith(CONTEXT_CHECKPOINT_PREFIX)
       ? stripCheckpointPreamble(prior.prefixSummary)
@@ -296,15 +309,18 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
     deps.archive.append(ctx.sessionKey, derived.range);
   }
 
-  async function heldFold(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
+  /** With no window nothing is priced: the session's saved plan replays as it was made, whichever model made it, over
+   *  the history since the provider's own summary; with no plan that replays, that history alone. */
+  async function heldFold(ctx: TransformContext, messages: ModelMessage[], bypassSummaries: boolean): Promise<ModelMessage[] | undefined> {
+    const cut = sameMessages(messages, ctx.messages) ? undefined : messages;
     const cached = ctx.messages.length === 0 ? null : await deps.ports.plans.load(ctx.sessionKey);
 
-    if (cached?.sessionId !== ctx.sessionKey) return undefined;
-    const compactor = serverCompactor(ctx.model);
-    const messages = compactor === null ? [...ctx.messages] : sinceServerSummary(ctx.messages, compactor);
-    const replayed = replayPlanSnapshot(kinuCodec.encode(messages), cached, spec, { allowRegrown: true, bypassSummaries: compactor !== null });
+    if (cached?.sessionId !== ctx.sessionKey) return cut;
+    const { spec } = ladderFor(ctx.model);
+    const planned = { ...spec, attachments: { ...spec.attachments, key: cached.attachmentPolicyKey ?? spec.attachments.key } };
+    const replayed = replayPlanSnapshot(kinuCodec.encode(messages), cached, planned, { allowRegrown: true, bypassSummaries });
 
-    return replayed === null ? undefined : kinuCodec.decode(withArchiveManifest(replayed, renderArchiveManifest(deps.archive.list(ctx.sessionKey))), messages);
+    return replayed === null ? cut : kinuCodec.decode(withArchiveManifest(replayed, renderArchiveManifest(deps.archive.list(ctx.sessionKey))), messages);
   }
 
   return {
@@ -312,11 +328,11 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
 
     async transformContext(unsized: TransformContext): Promise<ModelMessage[] | undefined> {
       unsized.abortSignal?.throwIfAborted();
-      const ctx = sized(unsized, codec);
+      const compactor = serverCompactor(unsized.model);
+      const messages = compactor === null ? [...unsized.messages] : sinceServerSummary(unsized.messages, compactor);
+      const ctx = sized(unsized, ladderFor(unsized.model));
 
-      if (ctx === null) return await heldFold(unsized);
-      const compactor = serverCompactor(ctx.model);
-      const messages = compactor === null ? [...ctx.messages] : sinceServerSummary(ctx.messages, compactor);
+      if (ctx === null) return await heldFold(unsized, messages, compactor !== null);
       const turns = kinuCodec.encode(messages);
 
       // Loaded before process (which may replace it) so the upgrade can thread the prior summary.
@@ -340,12 +356,12 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
         return summaries;
       };
 
-      const reportedTokens = measuredTokens(ctx, turns, relieveEphemeralPressure(ctx, turns), codec);
+      const reportedTokens = measuredTokens(ctx, turns, relieveEphemeralPressure(ctx, turns), ctx.ladder.codec);
 
       const processed =
         ctx.trigger !== 'auto'
           ? await forceRebuild({ turns, ctx, prior, reportedTokens, summarize })
-          : await engine.process({
+          : await ctx.ladder.engine.process({
               bypassSummaries: compactor !== null,
               sessionKey: ctx.sessionKey,
               turns,
@@ -410,13 +426,13 @@ const NO_EPHEMERAL_PLANE: EphemeralContextPlane = { dropSuperseded: () => 0 };
 
 type SharedPrefixCompactor = (
   messages: readonly ModelMessage[],
-  basis: { readonly contextWindow: number; readonly key: string },
+  basis: { readonly model: string; readonly contextWindow: number; readonly key: string },
 ) => Promise<readonly ModelMessage[]>;
 
 /**
- * The swarm's half: the same ladder, entered once per branch point. The caller owns the policy, so this always
- * forces; keyed by the branch point's durable id so re-entry replays byte-stably and siblings share one cacheable
- * prefix.
+ * The swarm's half: the same ladder, entered once per branch point and priced for the children's model. The caller
+ * owns the policy, so this always forces; keyed by the branch point's durable id so re-entry replays byte-stably and
+ * siblings share one cacheable prefix.
  */
 function sharedPrefixCompactor(extension: KinuExtension): SharedPrefixCompactor {
   return async (messages, basis) => {
@@ -427,6 +443,7 @@ function sharedPrefixCompactor(extension: KinuExtension): SharedPrefixCompactor 
       messages: [...messages],
       system: '',
       contextWindow: basis.contextWindow,
+      model: basis.model,
       trigger: 'force',
     });
 

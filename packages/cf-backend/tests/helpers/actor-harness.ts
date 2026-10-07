@@ -191,10 +191,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return activationWorlds.get(this.ctx)?.jobClock ?? super.jobClock();
   }
 
-  /** Work the object detached, run to its end: a task agent's retirement follows its answer this way. */
-  async harnessSettleDetached(): Promise<void> {
+  /** Every agent's isolate at rest, as each answers for itself. */
+  async harnessAgentsIdle(): Promise<void> {
     await this.harnessAgentFacets.idle();
-    await this.settleBackgroundTasks();
   }
 
   harnessResetAgentIsolate(storageKey: string): void {
@@ -773,12 +772,12 @@ export async function driveUntil(
     // The alarm the object armed for due work, fired as production fires it.
     if (workspace.agent.harnessTimerDue()) await workspace.agent._kinuTimerTick();
 
-    if (adviceDue(workspace.db)) await workspace.agent.alarm();
+    if (alarmDue(workspace.db)) await workspace.agent.alarm();
     await nextTurn();
 
     if (holds()) return;
 
-    if (!workspace.agent.harnessWorkRemains() && !workspace.agent.harnessTimerDue() && !adviceDue(workspace.db) && !harnessFibersRunning()) {
+    if (!workspace.agent.harnessWorkRemains() && !workspace.agent.harnessTimerDue() && !alarmDue(workspace.db) && !harnessFibersRunning()) {
       throw new Error(failure);
     }
 
@@ -863,8 +862,8 @@ export async function runDelegatedTask(
 ): Promise<void> {
   await wakeForDelegatedTask(workspace, actorId, task);
   await joinHarnessFibers();
-  // The turn's answer is relayed as its agent's isolate settles it, so what the relay detached may still run.
-  await workspace.agent.harnessSettleDetached();
+  // The turn's answer is relayed as its agent's isolate settles it.
+  await workspace.agent.harnessAgentsIdle();
 }
 
 /** {@link runDelegatedTask} up to the wake's return: the turn it starts may still be running. */
@@ -1445,11 +1444,21 @@ export interface ActorHarness<T> {
 }
 
 /** An advisor answer's delivery job is due (`src/advice-jobs.ts`), as the alarm would run it. */
-export function adviceDue(db: Database, now = Date.now()): boolean {
+/** A due job only the alarm delivers: an advisor's answer, or an agent's wake. */
+export function alarmDue(db: Database, now = Date.now()): boolean {
   // The SDK creates its queue table on the first job operation; before it, nothing is due.
   if (db.query("SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'").get() === null) return false;
 
-  return db.query("SELECT 1 FROM cf_agents_jobs WHERE capability = 'kinu-advice' AND time <= ?").get(now) !== null;
+  return db.query("SELECT 1 FROM cf_agents_jobs WHERE capability IN ('kinu-advice', 'kinu-agent-wakes') AND time <= ?").get(now) !== null;
+}
+
+/** The agents whose wake the Lifecycle queue holds (`src/agent-wakes.ts`). */
+export function agentWakes(db: Database): string[] {
+  // The SDK creates its queue table on the first job operation; before it, nothing is armed.
+  if (db.query("SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'").get() === null) return [];
+
+  return db.query<{ payload: string }, []>("SELECT payload FROM cf_agents_jobs WHERE capability = 'kinu-agent-wakes' ORDER BY time").all()
+    .map((row) => v.parse(v.object({ actorId: v.string() }), JSON.parse(row.payload)).actorId);
 }
 
 /** Kinu's wakes as the Lifecycle queue holds them (`src/wake-jobs.ts`), soonest first. */
@@ -1519,9 +1528,10 @@ export interface HarnessActorWorld {
   /** The platform AI binding the gateway provider calls; a recording stub by default. */
   aiGateway?: StubbedAiBinding;
   turnExtensions?: readonly KinuExtension[];
-  /** The deployed build's version id at `env.CF_VERSION_METADATA`: a claim on the built-in program names it, and
-   *  recovery holds a claim with no build as unverifiable. Unset, the object runs on no named build. */
-  versionId?: string;
+  /** The deployed build's version id at `env.CF_VERSION_METADATA`: a claim on the built-in program names it. Unset,
+   *  the object runs on {@link HARNESS_BUILD}, as every deployed object runs on a named build; null runs it on none,
+   *  for a test about a host that stamps no build. */
+  versionId?: string | null;
   /** The `send_email` binding at `env.EMAIL`; unset, the workspace has no mail route. */
   email?: SendEmail;
   /** The Analytics Engine datasets the object's turns, tools and jobs write rows to (`helpers/analytics-engine.ts`). */
@@ -1567,6 +1577,9 @@ interface HarnessParentNamespace {
 }
 
 /** Env with refusing defaults; the world records live calls and `parent` binds the parent hop. */
+/** The build a harness object runs on unless its test names another, or none. */
+export const HARNESS_BUILD = 'harness-build';
+
 export function makeEnv(
   parent?: HarnessOrchestratorAgent,
   userPlane?: RecordedUserPlaneCalls,
@@ -1578,7 +1591,7 @@ export function makeEnv(
     LOADER: inProcessWorkerLoader(),
     // The platform gateway is the harness's model provider, over a recording AI binding.
     ...platformGatewayEnv(world?.aiGateway),
-    ...(world?.versionId !== undefined && { CF_VERSION_METADATA: { id: world.versionId, tag: '', timestamp: '' } }),
+    ...(world?.versionId !== null && { CF_VERSION_METADATA: { id: world?.versionId ?? HARNESS_BUILD, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
     ...world?.analytics,
     ...(world?.previewHostSuffix !== undefined && { PREVIEW_HOST_SUFFIX: world.previewHostSuffix }),

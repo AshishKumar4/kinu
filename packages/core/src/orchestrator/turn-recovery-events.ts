@@ -24,7 +24,7 @@ export function recordTurnResumed(input: {
 export function recordRecoverySettled(input: {
   readonly workspace: string;
   readonly actor: string;
-  readonly cause: 'record_unreadable' | 'stalled' | 'unverified';
+  readonly cause: 'stopped' | 'answered' | 'record_unreadable' | 'stalled' | 'unverified';
   readonly sameBuild: SameBuild;
 }): void {
   diagnostics.event('turn.recovery_settled', input);

@@ -46,6 +46,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
   });
 
   for await (const event of runChat({
+    modelSpec: 'test/model',
     model, system: 'Run the requested program.', history: [{ role: 'user', content: 'go' }],
     tools: { eval: tool }, extensions, stopWhen: isStepCount(2),
   })) events.push(event);

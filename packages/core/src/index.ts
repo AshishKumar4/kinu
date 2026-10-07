@@ -2,7 +2,9 @@ export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 
-export { AgentOpenTurns, AgentWakes, type AgentOpenTurn } from './subordinates/open-turns';
+export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
+
+export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
@@ -331,7 +333,7 @@ export {
 // Chat engine
 export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
-  type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
+  type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObserveStream,
 } from './chat';
 
 export { createFallbackCooldowns, type FallbackCooldowns } from './providers/fallback-cooldown';
@@ -682,6 +684,8 @@ export { createFileCodemodeProvider, createFileTool, serveFile, type FileDeps } 
 
 export { FILE } from './operations/file';
 
+export { imageModelOutput } from './tools/image-results';
+
 export {
   summarizeToolCall, describeToolCall, describeCommand,
   toolCallEffect, clip,
@@ -894,6 +898,8 @@ export {
   type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
   type LandedSteerRow, type PendingSendRow,
 } from './orchestrator/inbox';
+
+export { SendStateSchema, type SendState } from './orchestrator/send-state';
 
 export {
   buildTranscript, extendTranscript, sealTranscript, segmentBySteers,
@@ -1463,6 +1469,7 @@ export {
   scanText,
   countDetections,
   secretSightings,
+  redactSecrets,
   type SecretPattern,
   type SecretFinding,
   type SecretSighting,
@@ -1964,7 +1971,7 @@ export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, Position
 export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
 
 export {
-  restoredRows, rowText, transcriptRole,
+  restoredRows, rowText, transcriptRole, UIMessageSchema,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
@@ -2507,6 +2514,6 @@ export {
 } from './mcp/servers';
 
 export type {
-  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
+  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswerTexts, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';

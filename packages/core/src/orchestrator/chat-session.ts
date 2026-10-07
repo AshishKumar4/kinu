@@ -27,7 +27,7 @@ import { serverCompactor, SERVER_COMPACTION_MIN_TOKENS } from '../providers/serv
 import type { ToolOutcome } from '../tools/outcome';
 import { OVERFLOW_RETRY_EVENT } from '../turn-failure';
 import type {
-  BroadcastEvent, EnqueueTurnResult, ProgrammaticTurn, PromptFile,
+  BroadcastEvent, EnqueueTurnResult, OperatorSend, ProgrammaticTurn, PromptFile,
 } from '../types/backend-host';
 import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
@@ -57,6 +57,7 @@ import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tools/task-store';
 import { inheritedAsModelMessage } from '../heads/head-inference';
 import type { SerializedMessage } from '../types/heads';
+import { sendStateOf, type SendState } from './send-state';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
 
@@ -111,6 +112,8 @@ interface QueueItem {
   pendingSendId?: string;
   /** Retired with the rerun's row, so a restart cannot re-deliver them. */
   steerIds?: readonly string[];
+  /** The sends a rerun carries, each published under its own id when the turn first opens. */
+  sends?: readonly OperatorSend[];
   /** Placed at the queue front, behind only earlier reruns of the same settle. */
   rerun?: true;
   /** An offer: an operator message admitted ahead settles it 'yielded' unrun. */
@@ -402,26 +405,31 @@ export class ChatSession {
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     // The operator's immediate next turn, answered at admission: its settle is on this pump's stack.
     if (input.origin === 'user') {
+      const sends = input.sends ?? [];
+      const steerIds = sends.map((send) => send.id);
+      const files = sends.flatMap((send) => send.files ?? []);
+
       const item: QueueItem = {
         text: input.text,
         kind: 'user',
-        ...(input.files !== undefined && { files: input.files }),
+        ...(files.length > 0 && { files }),
         metadata: input.metadata,
         rerun: true,
-        // Keeps the first merged message's id; only a rerun with no steer ids mints one.
-        turnId: input.steerIds?.[0] ?? crypto.randomUUID(),
+        // Opened under its first send's id; only a rerun carrying none mints one.
+        turnId: steerIds[0] ?? crypto.randomUUID(),
         // Retired with this rerun's row in the same transaction.
-        steerIds: input.steerIds,
+        steerIds,
+        sends,
         settle: (failure) => {
-          this.settleLandings(input.steerIds ?? [], failure ?? 'turn');
+          this.settleLandings(steerIds, failure ?? 'turn');
         },
       };
 
       // Each merged id is bound to this turn before admission; `OR IGNORE` because rerun ids already carry theirs.
       const mode: WorkMode = workModeForTurnMetadata(input.metadata) === 'plan' ? 'plan' : 'build';
 
-      for (const steerId of item.steerIds ?? []) {
-        this.pendingSends.ensureReserved({ id: steerId, turnId: item.turnId ?? null, mode, text: input.text });
+      for (const send of sends) {
+        this.pendingSends.ensureReserved({ id: send.id, turnId: item.turnId ?? null, mode, text: send.text });
       }
 
       const front = this.queue.findIndex((queued) => queued.rerun !== true);
@@ -471,6 +479,7 @@ export class ChatSession {
   /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
   private settleItem(item: QueueItem, failure: KinuError | null, yielded?: boolean, abandoned?: string): void {
     item.settle(failure, yielded, abandoned);
+    this.wakeSendWaiters();
 
     if (item.idempotencyKey === undefined) return;
     const result = settledAnnouncement(failure, yielded, abandoned);
@@ -498,8 +507,9 @@ export class ChatSession {
 
   /** Settling has no next step. A queued, unopened user turn or genesis offer counts: a message behind it rides its
    *  first step, so an offer is consumed only by a message that arrived before it. */
+  /** The one in-flight decision sends, Retry, Clear and Revert take: a Retry between its claim and its queue counts. */
   turnInFlight(): boolean {
-    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
+    return this.reopening || this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
   }
 
   /** Send; resolves where it landed (`'mid-turn'` or `'turn'`), never guessed at admission, and rejects if it did not land. */
@@ -509,6 +519,39 @@ export class ChatSession {
     await this.admit(input, opts, landing);
 
     return landing.promise;
+  }
+
+  /** Where a send stands, from its durable facts ({@link sendStateOf}). */
+  sendState(id: string): Promise<SendState> {
+    return sendStateOf({ transcript: this.transcript, pendingSends: this.pendingSends, claims: this.actorSession.claims, runs: this.eventRecorder }, id);
+  }
+
+  /** Its state once settled or none. A change here wakes a fresh read; the wake is never the answer, so a client
+   *  that lost its connection asks again (`reacquire` is this call, repeated). */
+  async awaitSend(id: string): Promise<SendState> {
+    for (;;) {
+      const moved = Promise.withResolvers<void>();
+      const unobserve = this.actorSession.claims.observe(moved.resolve);
+
+      this.sendsMoved.add(moved.resolve);
+
+      try {
+        const state = await this.sendState(id);
+
+        if (state.status === 'settled' || state.status === 'none') return state;
+        await moved.promise;
+      } finally {
+        unobserve();
+        this.sendsMoved.delete(moved.resolve);
+      }
+    }
+  }
+
+  /** Woken whenever a turn ends or a send is handed back: what claim changes do not show. */
+  private readonly sendsMoved = new Set<() => void>();
+
+  private wakeSendWaiters(): void {
+    for (const wake of this.sendsMoved) wake();
   }
 
   /** An id already landed or reserved would send the same words twice. */
@@ -600,6 +643,7 @@ export class ChatSession {
     const ids = returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
     this.pendingSends.retire(ids);
     this.settleLandings(ids, new KinuError('cancelled', 'The turn was stopped before the agent read this message; it is back in the composer.'));
+    this.wakeSendWaiters();
 
     return returned.map((steer) => steer.text);
   }
@@ -617,7 +661,7 @@ export class ChatSession {
   /** Reruns the newest turn as its opener (a steer is not resent); `claim` runs before any await. */
   retry(claim: (turnId: string) => void): Promise<SendLanding> {
     return settleEffect(Effect.gen({ self: this }, function* () {
-      if (this.turnInFlight() || this.reopening) return yield* Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.'));
+      if (this.turnInFlight()) return yield* Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.'));
       const opener = this.transcript.reopenNewestTurn();
 
       if (opener === null) return yield* Effect.fail(new KinuError('bad_input', 'There is no message to retry.'));
@@ -628,14 +672,21 @@ export class ChatSession {
       this.landings.set(turnId, landing);
       claim(turnId);
 
-      const message = yield* Effect.promise(() => this.transcript.message(turnId)).pipe(Effect.ensuring(Effect.sync(() => { this.reopening = false; })));
-      const metadata = yield* Effect.promise(() => this.transcript.metadata(turnId));
+      // Held until the turn is queued, which then holds it: no tick between the two leaves the session idle.
+      yield* Effect.gen({ self: this }, function* () {
+        const message = yield* attemptInItsWords('unavailable', () => this.transcript.message(turnId));
+        const metadata = yield* attemptInItsWords('unavailable', () => this.transcript.metadata(turnId));
 
-      this.queue.push({
-        text: message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '',
-        kind: 'user', turnId, ...(metadata !== undefined && { metadata }),
-        settle: (failure) => { this.settleLandings([turnId], failure ?? 'turn'); },
-      });
+        this.queue.push({
+          text: message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '',
+          kind: 'user', turnId, ...(metadata !== undefined && { metadata }),
+          settle: (failure) => { this.settleLandings([turnId], failure ?? 'turn'); },
+        });
+      }).pipe(
+        // A read that failed queued nothing: its landing goes with it, so no caller waits on a turn that never runs.
+        Effect.tapError((failure) => Effect.sync(() => { this.settleLandings([turnId], failure); })),
+        Effect.ensuring(Effect.sync(() => { this.reopening = false; })),
+      );
       this.pump();
 
       return yield* attemptInItsWords('unavailable', () => landing.promise);
@@ -704,7 +755,7 @@ export class ChatSession {
         async (): Promise<CompactOutcome> => {
           const { measured, chat, sessionKey } = await this.measureNextRequest({ counted: true, trigger: 'user' });
 
-          if (serverCompactor(chat.modelSpec ?? chat.modelContext?.id) === null) return 'folded';
+          if (serverCompactor(chat.modelSpec) === null) return 'folded';
 
           if (measured === null || measured.tokens < SERVER_COMPACTION_MIN_TOKENS) return 'nothing';
           this.compactionState.armCompaction(sessionKey);
@@ -954,12 +1005,20 @@ export class ChatSession {
     this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
     const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
 
-    const opening = await this.transcript.prepareUser({ id: this.turnId, turnId: this.turnId, runId: this.runId, message: inputReference,
-      metadata: authoredTurnMetadata(item) });
+    const metadata = authoredTurnMetadata(item);
+
+    const opening = await this.transcript.prepareUser({ id: this.turnId, turnId: this.turnId, runId: this.runId, message: inputReference, metadata });
 
     this.openingRow = item.kind === 'programmatic' ? opening : null;
 
-    if (item.kind === 'user') this.transcript.appendUser(opening);
+    if (item.kind === 'user') {
+      // A rerun carrying several sends publishes each under its own id, over the one input they were joined into.
+      const entries = item.sends !== undefined && item.sends.length > 1
+        ? await this.transcript.prepareSteers({ rows: item.sends.map((send) => ({ ...send, atStep: 0, metadata })), reference: inputReference, turnId: this.turnId, runId: this.runId })
+        : [opening];
+
+      for (const entry of entries) this.transcript.appendUser(entry);
+    }
 
     this.emit({
       type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId,
@@ -996,6 +1055,9 @@ export class ChatSession {
     await this.ports.armTurnWake(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
 
     try {
+      // A run a dead process left goes on only if recovery says so; any other ends here as a Stop ends it.
+      if (item.continuation !== undefined) await this.actorSession.resumeOrClose(lease);
+
       await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, lease)));
 
       return null;
@@ -1063,7 +1125,7 @@ export class ChatSession {
     return settleExecutionContext({ state: this.compactionState, key: prepared.sessionKey, recorder: this.eventRecorder }, {
       runId: this.runId, failure, turnWasOverflowRetry: item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT,
       lastPromptTokens: this.actorSession.orchestrator.acc.lastPromptTokens, historyLength: prepared.historyLength,
-      contextWindow: prepared.contextWindow, model: chat.modelSpec ?? chat.modelContext?.id,
+      contextWindow: prepared.contextWindow, model: chat.modelSpec,
     });
   }
 
@@ -1444,7 +1506,7 @@ export class ChatSession {
     for (const row of rows) {
       if (row.turnId === null) {
         this.queue.push({
-          text: row.text, kind: 'user', turnId: crypto.randomUUID(),
+          text: row.text, kind: 'user', turnId: row.id,
           // Kept ahead of anything the new session admits.
           rerun: true,
           pendingSendId: row.id,
@@ -1466,12 +1528,15 @@ export class ChatSession {
     for (const group of dead.values()) {
       const mode: WorkMode = group.some((row) => row.mode === 'plan') ? 'plan' : 'build';
 
+      const sends = group.map((row) => ({ id: row.id, text: row.text, files: this.pendingSends.files(row.id) }));
+
       this.queue.push({
-        text: group.map((row) => row.text).join('\n\n'), kind: 'user', turnId: crypto.randomUUID(),
+        text: group.map((row) => row.text).join('\n\n'), kind: 'user', turnId: group[0]?.id,
         rerun: true,
-        steerIds: group.map((row) => row.id),
+        steerIds: sends.map((send) => send.id),
+        sends,
         metadata: { kinuMode: mode },
-        files: group.flatMap((row) => this.pendingSends.files(row.id)),
+        files: sends.flatMap((send) => send.files),
         settle: () => {},
       });
       queued += 1;

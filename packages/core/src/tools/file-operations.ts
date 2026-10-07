@@ -22,7 +22,7 @@ import { uncheckpointedSentence } from '../execution/exec-result';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
 import { rasterImage } from '../utils/raster-image';
 import { bytesToBase64 } from '../utils/base64';
-import type { ImageCarrier } from '../types/tool-images';
+import { imageCarrier, type ImageCarrier } from '../types/tool-images';
 import type { CodemodeProvider } from '../types/codemode';
 import { serve, type Served } from '../operations/operation';
 import { codemodeNamespace, nativeTool } from './operation-surfaces';
@@ -249,7 +249,7 @@ function fileOps(deps: FileDeps) {
 
     const output = `${referenceOf(path)}: ${image.mediaType} ${image.width}x${image.height}, ${bytes.byteLength} bytes`;
 
-    return { output, images: [{ mediaType: image.mediaType, data: bytesToBase64(bytes) }] };
+    return imageCarrier(output, [{ mediaType: image.mediaType, data: bytesToBase64(bytes) }]);
   };
 
   /** A text read reads every byte (the ledger keys on the whole-content fingerprint) but retains only this window and the running hash. */

@@ -12,7 +12,7 @@ import {
 } from '../src/index';
 import { statedRetryAfterMs } from '../src/providers/fallback-cooldown';
 import {
-  KinuError, createRecordingLogger, renderThrownChain, setDiagnosticsSink,
+  KinuError, createLineLogger, createRecordingLogger, renderThrownChain, setDiagnosticsSink,
 } from '../src/obs/index';
 
 interface CircularProviderError {
@@ -37,6 +37,7 @@ function inBandErrorModel(error: JsonValue | Error): LanguageModel {
 
 async function runToCompletion(model: LanguageModel): Promise<void> {
   for await (const _ of runChat({
+    modelSpec: 'test/model',
     model,
     system: 'sys',
     history: [{ role: 'user', content: 'go' }],
@@ -183,29 +184,34 @@ describe('describeProviderError', () => {
     expect(described).not.toContain('[object Object]');
   });
 
-  // KINU-043: the provider's own words stay on the diagnostics record, out of the message.
-  test('the boundary message carries facts, not the provider\'s prose', () => {
-    const logger = createRecordingLogger();
-    const restore = setDiagnosticsSink(logger);
+  // KINU-043: the provider's own words stay on the diagnostics record, out of the message; a key in them never leaves the process.
+  test('the boundary message carries facts, and no log line carries the key', () => {
+    const lines: string[] = [];
+    const restore = setDiagnosticsSink(createLineLogger((line) => { lines.push(line); }));
+    // Assembled at runtime: a declared key shape trips push protection.
+    const key = ['sk', 'proj', 'A1b2'.repeat(6)].join('-');
 
     try {
       const failure = toProviderError({
         doing: 'calling the model',
         provider: 'openai',
-        cause: { message: 'unauthorized: sk-proj-SECRET123 is invalid', code: 'invalid_api_key', status: 401 },
+        cause: { message: `unauthorized: ${key} is invalid; password="${'opaque'}-token-1234"`, code: 'invalid_api_key', status: 401 },
       });
 
       expect(failure.code).toBe('denied');
-      expect(failure.message).not.toContain('sk-proj-SECRET123');
+      expect(failure.message).not.toContain(key);
       expect(failure.message).not.toContain('unauthorized: sk-proj');
       expect(failure.message).toContain('401');
       expect(failure.message).toContain('invalid_api_key');
       expect(failure.message).toContain('openai');
 
-      const emitted = logger.emitted.find((r) => r.event === 'provider.request_failed');
-      expect(emitted?.fields.detail).toContain('sk-proj-SECRET123');
-      expect(emitted?.fields.status).toBe(401);
-      expect(emitted?.fields.providerCode).toBe('invalid_api_key');
+      const emitted = lines.find((line) => line.includes('provider.request_failed'));
+      expect(emitted).toBeDefined();
+      expect(lines.map((line) => JSON.parse(line))).toHaveLength(lines.length);
+      expect(lines.join('\n')).not.toContain(key);
+      expect(lines.join('\n')).not.toContain('opaque-token-1234');
+      expect(emitted).toContain('invalid_api_key');
+      expect(emitted).toContain('unauthorized');
     } finally {
       restore();
     }
@@ -293,6 +299,7 @@ describe('a Cloudflare AI refusal reaches the user in Cloudflare\'s words', () =
     // A chain entry takes its call with no retries.
     const thrown = await rejectionOf(async () => {
       for await (const _ of runChat({
+        modelSpec: 'test/model',
         model: model(waiting),
         system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {}, stopWhen: isStepCount(1), retries: 0,
       })) { /* drain */ }

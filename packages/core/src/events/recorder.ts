@@ -152,6 +152,7 @@ export const RunEventSchema = v.variant('type', [
     seam: v.picklist(['model_call', 'spawn']), label: v.string(), scope: v.string(),
     limit: v.object({ usd: v.optional(v.number()), tokens: v.optional(v.number()) }),
     spent: v.object({ tokens: v.number(), usd: v.number() }), note: v.string() }),
+  v.object({ ...BaseFields, type: v.literal('stop_requested') }),
   v.object({ ...BaseFields, type: v.literal('fiber_recovered'), fiberName: v.string(),
     fiberId: v.string(), snapshot: v.optional(v.unknown()) }),
   v.object({ ...BaseFields, type: v.literal('approval_consumed'), approvalId: v.string(),
@@ -651,6 +652,27 @@ export class RunEventRecorder {
     return this.sql<{ run_id: string }>`
       SELECT run_id FROM open_turns WHERE actor_id = ${this.actorId}
       ORDER BY opened_at DESC, rowid DESC LIMIT 1`[0]?.run_id ?? null;
+  }
+
+  /** Whether the owner's Stop reached `runId` (`stop_requested`). */
+  stopRequested(runId: string): boolean {
+    this.actor.assertCurrent();
+
+    return this.sql<{ x: number }>`
+      SELECT 1 AS x FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'stop_requested' satisfies RunEventType} LIMIT 1`.length > 0;
+  }
+
+  /** The reason `runId` ended for, from its `run_end`; null while it runs. */
+  endReason(runId: string): string | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_end' satisfies RunEventType} LIMIT 1`[0];
+
+    if (row === undefined) return null;
+    const end = parseStoredRunEvent(row.payload);
+
+    return end.type === 'run_end' ? end.reason ?? null : null;
   }
 
   /** The newest open turn with its completed steps and what they reported using. */

@@ -169,8 +169,11 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * whose recovery only drops it, left its fiber for `keepAliveWhile` (-4): 396, measured at d240dd3b8 against 400.
  * 393 once an absent SOUL.md is one lookup on the namespace, not three on the bundle plane, and a missing skills
  * root one, not the namespace's two (-3; the bun harness turn 314 -> 311, the same vfs tables CI counted).
+ * 381 once a pump going quiet while its close is held rests the actor once, at the close's end (-14), with the root's
+ * model_operation start and end as the CLI records them (+2); the agent_wakes read every owed-work check made (+3) and
+ * the second read of the root's four pins (+4) came and went with one assembly (402 at b787ee9e3).
  */
-const TURN_STATEMENTS = 393;
+const TURN_STATEMENTS = 381;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

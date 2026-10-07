@@ -98,6 +98,7 @@ describe('extension seam through runChat', () => {
     const events: ChatEvent[] = [];
 
     for await (const ev of runChat({
+      modelSpec: 'test/model',
       model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
@@ -126,6 +127,7 @@ describe('extension seam through runChat', () => {
     const texts: string[] = [];
 
     for await (const ev of runChat({
+      modelSpec: 'test/model',
       model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
@@ -201,6 +203,7 @@ describe('transformContext through runChat', () => {
     };
 
     for await (const _ of runChat({
+      modelSpec: 'test/model',
       model,
       system: 'sys',
       history: [
@@ -230,6 +233,7 @@ describe('transformContext through runChat', () => {
     const stepUsage: Array<Usage | undefined> = [];
 
     for await (const ev of runChat({
+      modelSpec: 'test/model',
       model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
@@ -270,6 +274,7 @@ describe('transformContext through runChat', () => {
       const { model } = promptCapturingModel();
 
       for await (const _ of runChat({
+        modelSpec: 'test/model',
         model,
         system: 'sys',
         history: [{ role: 'user', content: 'go' }],
@@ -288,6 +293,7 @@ describe('transformContext through runChat', () => {
     let doneText = '';
 
     for await (const ev of runChat({
+      modelSpec: 'test/model',
       model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
@@ -491,6 +497,7 @@ describe('ExtensionHost', () => {
       });
 
     const out = await host.runTransformContext({
+      model: 'test/model',
       sessionKey: 's', messages: [{ role: 'user', content: 'base' }],
       system: 'sys', contextWindow: 1000, trigger: 'auto',
     });
@@ -508,9 +515,9 @@ describe('ExtensionHost', () => {
     };
 
     const noop = new ExtensionHost().register({ name: 'p', transformContext: async () => undefined });
-    expect(await noop.runTransformContext({ ...ctx, messages: [...ctx.messages] })).toBeUndefined();
+    expect(await noop.runTransformContext({ model: 'test/model', ...ctx, messages: [...ctx.messages] })).toBeUndefined();
     const failing = new ExtensionHost().register({ name: 'f', transformContext: async () => { throw new Error('x'); } });
-    expect(await failing.runTransformContext({ ...ctx, messages: [...ctx.messages] })).toBeUndefined();
+    expect(await failing.runTransformContext({ model: 'test/model', ...ctx, messages: [...ctx.messages] })).toBeUndefined();
   });
 
   test('a hook that never settles stops holding the turn once the turn is cancelled', async () => {
@@ -526,6 +533,7 @@ describe('ExtensionHost', () => {
     const prepare = Promise.resolve(host.runPrepareStep({ stepNumber: 0, messages: [], abortSignal: controller.signal }));
 
     const transform = host.runTransformContext({
+      model: 'test/model',
       sessionKey: 's', messages: [], system: 'sys', contextWindow: 1000, trigger: 'auto', abortSignal: controller.signal,
     });
 

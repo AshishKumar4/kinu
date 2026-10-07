@@ -3,7 +3,7 @@
  * Shared by the CLI and web chat.
  */
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
-import { redactSecrets } from '../events/hub/visibility';
+import { redactSecrets } from '../safety/secret-patterns';
 import { NATIVE_ACTION_EFFECTS, type SlateMemberEffect } from '../slates/members';
 import * as v from 'valibot';
 

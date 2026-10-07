@@ -9,6 +9,7 @@ import { FileRefusalError } from '../src/types/file-edits';
 import { McpToolError } from '../src/tools/mcp-error';
 import type { JsonValue } from '../src/utils/json';
 import { imageModelOutput } from '../src/tools/image-results';
+import { imageCarrier } from '../src/types/tool-images';
 
 async function drive(results: readonly (Error | JsonValue)[], history: ModelMessage[] = []) {
   let step = 0;
@@ -35,7 +36,7 @@ async function drive(results: readonly (Error | JsonValue)[], history: ModelMess
 
   const events: ChatEvent[] = [];
 
-  for await (const event of runChat({ model, system: 'sys', tools: { probe },
+  for await (const event of runChat({ modelSpec: 'test/model', model, system: 'sys', tools: { probe },
     history: [...history, { role: 'user', content: 'go' }], measureContext: true })) events.push(event);
   const measured = events.flatMap(event => event.type === 'step-finish' ? [event.context] : []);
   const prompt = model.doStreamCalls.at(-1)?.prompt ?? [];
@@ -121,7 +122,7 @@ test('a re-drive sends the recorded failed, successful and image tool messages b
   const tools = {
     failed: tool({ inputSchema: z.object({}), execute: async (): Promise<JsonValue> => { throw new KinuError('missing', 'the note is absent'); } }),
     succeeded: tool({ inputSchema: z.object({}), execute: async () => ({ found: 7 }) }),
-    image: tool({ inputSchema: z.object({}), execute: async () => ({ output: 'the screenshot', images: [{ data: image, mediaType: 'image/png' }] }), toModelOutput: imageModelOutput }),
+    image: tool({ inputSchema: z.object({}), execute: async () => imageCarrier('the screenshot', [{ data: image, mediaType: 'image/png' }]), toModelOutput: imageModelOutput }),
   };
 
   const abort = new AbortController();
@@ -130,7 +131,7 @@ test('a re-drive sends the recorded failed, successful and image tool messages b
   let recorded: StepRecord | undefined;
 
   const interrupted = async () => {
-    for await (const event of runChat({ model, system: 'sys', history, tools, signal: abort.signal,
+    for await (const event of runChat({ modelSpec: 'test/model', model, system: 'sys', history, tools, signal: abort.signal,
       persistStep: async (record) => { if (record.step?.stepIndex === 1) recorded = record; },
     })) if (event.type === 'text-delta') abort.abort();
   };
@@ -142,7 +143,7 @@ test('a re-drive sends the recorded failed, successful and image tool messages b
 
   if (live === undefined) throw new Error('the turn never requested its next step');
 
-  for await (const _ of runChat({ model, system: 'sys', history: [...history, ...recorded.messages], tools }));
+  for await (const _ of runChat({ modelSpec: 'test/model', model, system: 'sys', history: [...history, ...recorded.messages], tools }));
   const resumed = model.doStreamCalls[2]?.prompt;
 
   if (resumed === undefined) throw new Error('the re-driven turn never requested its next step');

@@ -22,7 +22,7 @@ import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
-import { AnswerText, MarkdownContent, CodeBlock, SlateLink } from "@/components/surfaces/shared";
+import { AnswerText, MarkdownContent, CodeBlock, SlateLink, type AnswerChat } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { extractPreviewUrl } from "@kinu.run/core";
 import {
@@ -496,8 +496,8 @@ export const MessageView = memo(function MessageView({
   takesChip?: ReactNode;
   steers?: readonly PlacedSteer[];
   onOpenChangeNote?: (source: string, anchor: DiffAnchor | undefined) => void;
-  /** The workspace's own chat, where an answer's `<slate-ui>` blocks resolve; every other transcript shows their source. */
-  answerSlates?: boolean;
+  /** The chat an answer's `<slate-ui>` blocks resolve in; absent, a transcript shows their source. */
+  answerSlates?: AnswerChat | undefined;
 }) {
   const isUser = message.role === "user";
   const isLive = tail !== null;
@@ -593,7 +593,7 @@ export const MessageView = memo(function MessageView({
       return (
         <div key={key} {...(isTailPart ? { "data-live-indicator": "text" } : {})}
           className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
-          <AnswerText text={t} place={{ messageId: message.id, stored: tail === null, drawn: answerSlates }} />
+          <AnswerText text={t} place={{ messageId: message.id, stored: tail === null, chat: answerSlates }} />
         </div>
       );
     }

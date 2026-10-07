@@ -5,13 +5,13 @@
  * turn cannot even be prepared is answered to its hirer as blocked, never left looking done.
  */
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
-import { actorConnectionTag, RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
+import { actorConnectionTag, RECOVERY_BACKOFF_CEILING_MS, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { abandonHarnessFibers, asPane } from './helpers/agents-sdk';
 import {
-  actorOver, driveUntil, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, rosterOver, wakeForDelegatedTask,
+  actorOver, driveUntil, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, rosterOver, until, wakeForDelegatedTask,
   type StartedHarness,
 } from './helpers/actor-harness';
-import { chatCompletion, openingOf, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
+import { chatCompletion, openingOf, requestOf, stubAiBinding, type RecordedGatewayRun, type StubbedAiBinding } from './helpers/platform-gateway';
 
 afterEach(() => { setSystemTime(); });
 
@@ -25,12 +25,15 @@ async function afterReset(db: StartedHarness['db'], gateway: StubbedAiBinding): 
   });
 }
 
-/** The lap the agent's wake is due on, run: a facet sets no alarm, so this is the only thing that wakes it. */
+/** A lap later the agent's wake falls due, and the workspace's alarm delivers it: a facet sets no alarm of its own. */
 async function lapLater(workspace: StartedHarness): Promise<void> {
   setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
-  await workspace.agent.terminalRetryPass();
-  await workspace.agent.harnessSettleDetached();
+  await workspace.agent.alarm();
 }
+
+/** The owner's message, asked of the agent's model: the agent naming itself after it is not one. */
+const asksOf = (run: RecordedGatewayRun, ask: string): boolean => openingOf(run).includes(ask)
+  && !JSON.stringify(requestOf(run).messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT);
 
 async function addedAgent(workspace: StartedHarness): Promise<readonly string[]> {
   await workspace.agent.setSoul('# Purpose\n\nKeep the parser notes.');
@@ -45,7 +48,7 @@ test("an owner's message to an agent survives the workspace resetting mid-turn, 
   let answered = false;
 
   const gateway = stubAiBinding(async (run) => {
-    if (!openingOf(run).includes(ASK)) return chatCompletion(run, 'Noted.');
+    if (!asksOf(run, ASK)) return chatCompletion(run, 'Noted.');
     asked += 1;
 
     // The first isolate dies with this call open.
@@ -64,7 +67,7 @@ test("an owner's message to an agent survives the workspace resetting mid-turn, 
   const second = await afterReset(first.db, gateway);
 
   await lapLater(second);
-  await driveUntil(second, 'the agent never answered after the reset', () => answered);
+  await until(() => answered, 'the agent never answered after the reset');
 
   expect(asked).toBe(2);
 });
@@ -75,7 +78,7 @@ test("the owner's Stop reaches an agent's turn that a reset workspace never saw 
   let stopped = false;
 
   const gateway = stubAiBinding(async (run) => {
-    if (!openingOf(run).includes(ASK)) return chatCompletion(run, 'Noted.');
+    if (!asksOf(run, ASK)) return chatCompletion(run, 'Noted.');
     asked += 1;
 
     return await new Promise<Response>((_resolve, reject) => {
@@ -97,9 +100,9 @@ test("the owner's Stop reaches an agent's turn that a reset workspace never saw 
   const second = await afterReset(first.db, gateway);
 
   await lapLater(second);
-  await driveUntil(second, 'the agent never took its turn up again', () => asked === 2);
+  await until(() => asked === 2, 'the agent never took its turn up again');
   await asPane(pane, () => second.agent.cancelCurrentWork());
-  await driveUntil(second, "the owner's Stop never reached the agent's turn", () => stopped);
+  await until(() => stopped, "the owner's Stop never reached the agent's turn");
 });
 
 test("a delegated task whose turn cannot be prepared is answered to its hirer as blocked", async () => {

@@ -1,5 +1,7 @@
 import * as v from 'valibot';
-import { decodeModelMessageValues, JsonValueSchema, projectJsonValue, TOOL_CALLS_PENDING, type RunEvent } from '@kinu.run/core';
+import {
+  BUILTIN_TOOL_NAMES, decodeModelMessageValues, JsonValueSchema, projectJsonValue, SUBMIT_PLAN_TOOL, TOOL_CALLS_PENDING, type RunEvent,
+} from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
 import type { TranscriptEvent } from 'vitest-evals';
 import { redact, redactJson } from './redact';
@@ -12,6 +14,9 @@ const ArgumentsSchema = v.record(v.string(), JsonValueSchema);
 const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
 const ToolCallPartSchema = v.object({ type: v.literal('tool-call'), toolCallId: v.string(), input: v.unknown() });
+
+/** The native tools a turn can be offered; crafted tools run inside `eval`, so a call naming any other was invented. */
+const OFFERED_TOOLS: ReadonlySet<string> = new Set([...BUILTIN_TOOL_NAMES, SUBMIT_PLAN_TOOL]);
 
 /** A call the deployment recorded as failed: an error string, or a producer outcome that says so. */
 function failed(call: ToolCallEnd): boolean {
@@ -100,7 +105,7 @@ export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
 /** Model steps, tool calls, failed tool calls and waits on the model provider's rate limit, counted off the ledger. A
  *  `stall` wait is the provider failing to send anything, not the limit, and the run's own rows carry it. */
 export function measure(events: readonly RunEvent[]): EvalMetrics {
-  let modelTurns = 0, toolCalls = 0, toolErrors = 0, providerWaits = 0, providerWaitMs = 0;
+  let modelTurns = 0, toolCalls = 0, toolErrors = 0, badInputCalls = 0, unknownToolCalls = 0, providerWaits = 0, providerWaitMs = 0;
 
   for (const event of events) {
     if (event.type === 'step_finish') {
@@ -109,13 +114,17 @@ export function measure(events: readonly RunEvent[]): EvalMetrics {
       toolCalls += 1;
 
       if (failed(event)) toolErrors += 1;
+
+      if (event.outcome?.success === false && event.outcome.reason === 'bad_input') badInputCalls += 1;
+
+      if (!OFFERED_TOOLS.has(event.name)) unknownToolCalls += 1;
     } else if (event.type === 'provider_wait' && event.source !== 'stall') {
       providerWaits += 1;
       providerWaitMs += event.waitMs;
     }
   }
 
-  return { modelTurns, toolCalls, toolErrors, providerWaits, providerWaitMs };
+  return { modelTurns, toolCalls, toolErrors, badInputCalls, unknownToolCalls, providerWaits, providerWaitMs };
 }
 
 /**

@@ -55,7 +55,7 @@ import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
 import { diagnostics, renderThrownChain, toKinuError, type TurnTrace } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
-import { invalidToolCallRefusal } from './tools/tool-schema';
+import { invalidToolCallRefusal, withStableSchemas } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
 import { StepSpans, traceTools } from './turn-trace';
 
@@ -100,12 +100,7 @@ export type ChatEvent = (
 
 export type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
 
-/** Which provider call of a turn a relayed stream belongs to: a continuation or fallback is another SDK stream. */
-export interface ObservedCall {
-  readonly index: number;
-}
-
-export type ObserveStream = (chunks: ReadableStream<UIMessageChunk>, call: ObservedCall) => Promise<void>;
+export type ObserveStream = (chunks: ReadableStream<UIMessageChunk>) => Promise<void>;
 
 export interface ChatFallback {
   readonly spec: string;
@@ -140,7 +135,7 @@ export interface ChatOptions {
   attachments?: AttachmentPolicy;
   modelContext?: PromptModelContext;
   /** The turn model's spec, normalized as its fallbacks' are. */
-  modelSpec?: string;
+  modelSpec: string;
   /** A spec's stored credential; a 401 skips entries holding the refused one. */
   credentialOf?: (spec: string) => Promise<string | null>;
   retries?: number;
@@ -154,7 +149,7 @@ export interface ChatOptions {
   extensions?: ExtensionHost;
   /** Prompt-cache identity: provider id + stable conversation key. See prompting/cache-breakpoints.ts. */
   cache?: { providerId?: string; modelId?: string; sessionKey: string; retention?: CacheRetention };
-  /** A second reader of each call's stream as UIMessage chunks (the SDK tees it), once per call; {@link ObservedCall}. */
+  /** A second reader of each call's stream as UIMessage chunks (the SDK tees it), once per call. */
   observeStream?: ObserveStream;
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
   /** The subset of `tools` the model may call; the rest stay wired for execution. Absent, all are offered. */
@@ -665,7 +660,7 @@ async function admitRequest(opts: ChatOptions) {
   const extensions = opts.extensions;
 
   // Extension tools never shadow a caller tool of the same name.
-  const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
+  const tools = traceTools(opts.trace, withStableSchemas(extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools));
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
   const window = modelWindow(opts.modelContext);
   const { contextWindow } = window;
@@ -679,7 +674,7 @@ async function admitRequest(opts: ChatOptions) {
     extensions,
     sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
-    model: opts.modelSpec ?? opts.modelContext?.id,
+    model: opts.modelSpec,
     providerReportedTokens: opts.providerReportedTokens,
     trigger: opts.transformTrigger ?? 'auto',
     abortSignal: opts.signal,
@@ -687,7 +682,7 @@ async function admitRequest(opts: ChatOptions) {
   };
 
   const primary = {
-    spec: opts.modelSpec ?? opts.modelContext?.id ?? 'the turn model',
+    spec: opts.modelSpec,
     provider: opts.modelContext?.provider ?? opts.cache?.providerId,
   };
 
@@ -841,7 +836,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     stepSpans: StepSpans,
     responsePrefix: readonly ModelMessage[],
   ): AsyncGenerator<ChatEvent, CallOutcome> {
-    const callIndex = calls++;
+    calls += 1;
     const consumer = new AbortController();
     const signal = opts.signal === undefined ? consumer.signal : AbortSignal.any([opts.signal, consumer.signal]);
 
@@ -943,7 +938,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     suppressDeferredRejections(result, () => call.interrupted || signal.aborted);
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
-    const observed = opts.observeStream?.(withoutServerSummaries(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) })), { index: callIndex });
+    const observed = opts.observeStream?.(withoutServerSummaries(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) })));
 
     let drained = false;
 
@@ -1014,17 +1009,16 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     return { steps, produced: paired, finishReason: call.lastFinishReason, interrupted: cut, failure: null };
   };
 
-  /** A fallback gets its own provider's cache, replay and options; one compacting elsewhere, or not at all, is rebuilt. */
+  /** A fallback gets its own provider's cache, replay and options, and a request assembled for it: its window, its
+   *  compaction and its attachment prices. */
   const takeOver = async (next: ChatFallback): Promise<void> => {
     const bound = next.bind();
     const served = next.window.contextWindow;
-    const rebuild = serverCompactor(next.spec) !== serverCompactor(serving.model);
 
     serving = { ...assembly, model: next.spec, contextWindow: served };
-
-    if (rebuild) initialContextAvailable = false;
+    initialContextAvailable = false;
     const history = initialContext?.messages ?? assembly.history;
-    const messages = rebuild ? (await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined })).messages : turnMessages;
+    const { messages } = await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined });
 
     servingRoute = { providerId: bound.provider, modelId: parseModelSpec(next.spec).modelId, retention: turnRoute.retention };
     cache = attemptCachePlan(opts, servingRoute, messages, tools);

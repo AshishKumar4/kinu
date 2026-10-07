@@ -106,7 +106,7 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
     try {
       const result = await actor.session.execute(lease, {
         task: TASK, loopVersion: await actor.runtime.identity.scaffold.version(),
-        chat: { model, system: 'Plan.', tools }, extensions: [],
+        chat: { modelSpec: 'test/model', model, system: 'Plan.', tools }, extensions: [],
         dynamic: () => ({ factsBlock: '' }),
       }, () => {});
 

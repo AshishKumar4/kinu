@@ -7,7 +7,10 @@
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
-import { HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, hostedActorSocketPath, JsonValueSchema } from '@kinu.run/core';
+import {
+  HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
+  type SlateCallResult, type TerminalEffectName, type TerminalEffectPhase,
+} from '@kinu.run/core';
 import {
   createCompositeLogger,
   createConsoleLogger,
@@ -18,6 +21,7 @@ import {
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
+import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { SqlMeter, type OperationCost } from './sql-meter';
 import type {
@@ -28,6 +32,10 @@ import type {
   OwedRepliesRecovered,
   ClaimUnderRecovery,
   AgentHeldWork,
+  AgentSlateUi,
+  AnswerPageModes,
+  TerminalState,
+  AlienEffect,
   StrandedWork,
   EffectStatus,
   HeldClose,
@@ -170,7 +178,12 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'replyLeases');
     Reflect.deleteProperty(this, 'transitionState');
     Reflect.deleteProperty(this, 'strandedWork');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork']);
+    Reflect.deleteProperty(this, 'answerSlates');
+    Reflect.deleteProperty(this, 'answerPageModes');
+    Reflect.deleteProperty(this, 'cutTerminal');
+    Reflect.deleteProperty(this, 'terminalState');
+    Reflect.deleteProperty(this, 'alienEffect');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'terminalState', 'alienEffect']);
   }
 
   /** What the loop's driver gate answers once refused, as when another activation holds the lease. */
@@ -265,6 +278,87 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const { recovered } = await this.recoverStrandedTurn();
 
     return { stranded, recovered, after: await this.inspectWork() };
+  }
+
+  /** How the agent's last answer's block, its last ask and the answer named as the workspace's resolve, as a preview
+   *  and as a page's `workspace` call: `ok`, or the refusal's reason. */
+  async answerSlates(agent: string): Promise<AgentSlateUi> {
+    const reason = (result: SlateCallResult) => (result.ok ? 'ok' : result.reason);
+    // A page's own binding call resolves its source first, so a block that resolves is refused only for what is bound.
+    const call = async (id: string) => reason(await this.slateBindingCallAs(ROOT_SLATE_CALLER, id, 'workspace', { member: 'exists', args: ['/home'], invocation: null }));
+    const { items } = await this.agentStores(agent).historyPage({});
+    const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
+    const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
+    const ids = { answered: `${agent}/${answer}/card`, fromUser: `${agent}/${ask}/card`, asWorkspace: `${answer}/card` };
+
+    return { answered: await call(ids.answered), fromUser: await call(ids.fromUser), asWorkspace: await call(ids.asWorkspace) };
+  }
+
+  /** Set by a cut: this activation is to die at it, so it arms no retry of its own, as a dead isolate arms none. */
+  private dying = false;
+
+  protected override scheduleTerminalRetry(atMs: number, pace?: Parameters<ProductionOrchestrator['scheduleTerminalRetry']>[1]): Promise<void> {
+    return this.dying ? Promise.resolve() : super.scheduleTerminalRetry(atMs, pace);
+  }
+
+  /** The isolate stops once at `name`, `phase` its side effect, as an eviction would stop it there. */
+  async cutTerminal(name: TerminalEffectName, phase: TerminalEffectPhase): Promise<void> {
+    this.dying = true;
+    this.terminalEffectFault = (atPhase, atName, atScope) => {
+      if (atName !== name || atPhase !== phase) return;
+      this.terminalEffectFault = null;
+      throw new TerminalEffectInterrupt(atPhase, atName, atScope);
+    };
+  }
+
+  async terminalState(): Promise<TerminalState> {
+    const owed = this.unmetered("SELECT effect_name, status, attempts FROM terminal_effects WHERE status != 'completed' ORDER BY seq").toArray()
+      .map((row) => ({ name: textColumn(row.effect_name), status: textColumn(row.status), attempts: Number(row.attempts) }));
+
+    const open = Number(this.unmetered("SELECT COUNT(*) AS n FROM tool_effect_claims WHERE normalized_call_id LIKE 'terminal:response:%' AND result_json IS NULL").one().n);
+
+    const recorded = Number(this.unmetered('SELECT COUNT(*) AS n FROM completed_turns').one().n);
+
+    return { owed, open, recorded };
+  }
+
+  /** A row a build with another effect set left owed, then the recovery pass over it. */
+  async alienEffect(): Promise<AlienEffect> {
+    this.terminal.begin({ turnId: 'u-alien', messageId: 'a-alien' });
+    this.unmetered(`INSERT INTO terminal_effects (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status, attempts)
+      VALUES (?, ?, 'v9:teleport:a-alien', 'teleport', 'a-alien', 0, '{}', 'pending', 0)`,
+    this.actorHandle().actorId, this.terminal.sequenceId({ turnId: 'u-alien', messageId: 'a-alien' }));
+    await this.terminalRetryPass();
+
+    const row = this.unmetered("SELECT status FROM terminal_effects WHERE effect_key = 'v9:teleport:a-alien'").toArray()[0];
+
+    return { status: row === undefined ? 'gone' : textColumn(row.status), transition: this.terminal.begin({ turnId: 'u-alien', messageId: 'a-alien' }) };
+  }
+
+  /**
+   * An answer with a page, then the page's write through `workspace` as the owner's turns stand: in Auto, and again
+   * once the owner's next ask is a Plan one. The page's process is the same; its author's mode is read at the call.
+   */
+  async answerPageModes(): Promise<AnswerPageModes> {
+    const write = async () => {
+      const result = await this.slateBindingCallAs(ROOT_SLATE_CALLER, 'a-page/card', 'workspace', {
+        member: 'writeFile', args: ['/home/main/page-mode.txt', 'written by the page'], invocation: null,
+      });
+
+      return result.ok ? 'ok' : result.reason;
+    };
+
+    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, { id: 'u-page', origin: 'input', message: { role: 'user', content: 'Draw the card.' } });
+    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
+      id: 'a-page', origin: 'output', message: { role: 'assistant', content: 'Here:\n<slate-ui name="card">\n<p>card</p>\n</slate-ui>' },
+    });
+    const auto = await write();
+
+    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
+      id: 'u-plan', origin: 'input', message: { role: 'user', content: 'Plan it first.' }, metadata: { kinuMode: 'plan' },
+    });
+
+    return { auto, plan: await write() };
   }
 
   /** `done` once a transition closed; an open one answers that it resumed. */
@@ -674,7 +768,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   | 'createSubordinateAgent'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -703,14 +797,9 @@ function sleepTimeSettled(emitted: readonly { event: string }[]): number {
   return emitted.filter((e) => e.event === 'memory.facts_deferred' || e.event === 'memory.facts_compressed').length;
 }
 
-function owedEffectKeys(emitted: readonly RecordedLog[]): string[] {
-  return emitted
-    .filter((e) => e.event === 'turn.terminal_effects_owed')
-    .flatMap((e) => {
-      const owed = e.fields['owed'];
-
-      return v.is(v.string(), owed) ? owed.split(',').filter((key) => key.length > 0) : [];
-    });
+/** Each close that left an effect owed, as it said so. */
+function owedEffects(emitted: readonly RecordedLog[]): string[] {
+  return emitted.filter((e) => e.event === 'turn.terminal_effects_owed').map((e) => JSON.stringify(e.fields));
 }
 
 /** A close that never finishes hangs here, ended by the row's deadline, not a side clock. */
@@ -752,6 +841,9 @@ function createWorkspaceRecording(): WorkspaceRecording {
     until: (workspace, holds) => recording.until((emitted) => holds(own(emitted, workspace))),
   };
 }
+
+/** What the agent is asked; the queue model echoes it, so its answer holds a block named `card`. */
+const AGENT_SLATE_ASK = 'Show this:\n<slate-ui name="card">\n<!doctype html><p>agent-card-2f61</p>\n</slate-ui>';
 
 async function awaitWithLimit<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
   const expiry = Promise.withResolvers<never>();
@@ -856,7 +948,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         failures: recording.of('two-turn-workspace')
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
-        owedEffects: owedEffectKeys(recording.of('two-turn-workspace')),
+        owedEffects: owedEffects(recording.of('two-turn-workspace')),
         sleepTimeSettled: sleepTimeSettled(recording.of('two-turn-workspace')),
         catalogFallbacks: recording.of('two-turn-workspace').filter((e) => e.event === 'models_dev.catalog_fallback').length,
         catalogHits: (await this.probeLog()).catalogHits,
@@ -926,7 +1018,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'close'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1398,6 +1490,77 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     } finally {
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       socket.close(1000, 'agent work probe complete');
+    }
+  }
+
+  /** A real first turn whose isolate stops at its turn recording, `phase` the recording; the workspace to read after
+   *  the eviction, and what it stored then. */
+  async cutRecordingWorkspace(phase: TerminalEffectPhase): Promise<{ readonly workspace: string; readonly cut: TerminalState }> {
+    const { target, workspace } = await this.claimQueueWorkspace(phase === 'after' ? 'terminal-cut' : 'terminal-stuck');
+
+    await target.cutTerminal('turn_record', phase);
+
+    if (!(await target.beginGenesisTurn()).started) throw new Error('the terminal-cut probe genesis did not start');
+    await awaitSettled(target);
+
+    return { workspace, cut: await target.terminalState() };
+  }
+
+  /** After the eviction: the alarm's recovery pass on the fresh activation, then what it stored. With `cut`, that
+   *  activation dies at the same point too. */
+  async recoverRecording(workspace: string, cut?: { readonly name: TerminalEffectName; readonly phase: TerminalEffectPhase }): Promise<TerminalState> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    if (cut !== undefined) await target.cutTerminal(cut.name, cut.phase);
+    await target.recoveryPass();
+    await awaitSettled(target);
+
+    return await target.terminalState();
+  }
+
+  async alienEffectIn(): Promise<AlienEffect> {
+    const { target } = await this.claimQueueWorkspace('terminal-cut');
+
+    return await target.alienEffect();
+  }
+
+  async answerPageModesIn(): Promise<AnswerPageModes> {
+    const { target } = await this.claimQueueWorkspace('page-modes');
+
+    return await target.answerPageModes();
+  }
+
+  /** A hired agent answers with a `<slate-ui>` block (the queue model echoes the ask); the workspace resolves its id. */
+  async agentSlateUi(): Promise<AgentSlateUi> {
+    const { target, workspace } = await this.claimQueueWorkspace('agent-slate');
+    const created = v.parse(v.object({ name: v.string(), subordinate: v.object({ actorId: v.string() }) }), await target.createSubordinateAgent());
+
+    await awaitSettled(target);
+
+    const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`, {
+      headers: { Upgrade: 'websocket', [HOSTED_ACTOR_ID_HEADER]: created.subordinate.actorId },
+    }));
+
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error(`the hosted actor path answered ${String(response.status)}, not a socket`);
+    socket.accept();
+    const ended = Promise.withResolvers<void>();
+
+    socket.addEventListener('message', (event) => {
+      const frame = v.safeParse(v.looseObject({ type: v.string(), done: v.optional(v.boolean()) }),
+        v.is(v.string(), event.data) && event.data.startsWith('{') ? JSON.parse(event.data) : {});
+
+      if (frame.success && frame.output.type === 'cf_agent_use_chat_response' && frame.output.done === true) ended.resolve();
+    });
+
+    try {
+      socket.send(JSON.stringify({ type: 'rpc', id: 'agent-send', method: 'send', args: [AGENT_SLATE_ASK, 'agent-slate-1'] }));
+      await awaitWithLimit(ended.promise, 20000, 'agent slate probe: the agent never finished its answer');
+
+      return await target.answerSlates(created.subordinate.actorId);
+    } finally {
+      socket.close(1000, 'agent slate probe complete');
     }
   }
 
@@ -2159,7 +2322,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         failures: recording.of(drive.workspace)
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
-        owedEffects: owedEffectKeys(recording.of(drive.workspace)),
+        owedEffects: owedEffects(recording.of(drive.workspace)),
         sleepTimeSettled: sleepTimeSettled(recording.of(drive.workspace)),
         catalogFallbacks: recording.of(drive.workspace).filter((e) => e.event === 'models_dev.catalog_fallback').length,
         catalogHits: (await this.probeLog()).catalogHits,

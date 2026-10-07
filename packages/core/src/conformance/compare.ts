@@ -46,7 +46,6 @@ function declaredEntries(
     case 'tool': return Object.entries(manifest.tool);
     case 'agents-op': return Object.entries(manifest['agents-op']);
     case 'memory-op': return Object.entries(manifest['memory-op']);
-    case 'table': return Object.entries(manifest.table);
     case 'producer': return Object.entries(manifest.producer);
   }
 }

@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
   isSubordinateOrigin, drawnStep, WORKSPACE_ROOT,
 } from '@kinu.run/core';
-import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
@@ -1276,11 +1276,13 @@ export abstract class ActorAgent extends Agent<Env> {
       // has its own terminal claim.
       turnIsLive: (turnId) => this.chatLoop.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
-      settled: () => this.restWhenIdle(),
-      // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber.
+      settled: async () => {},
+      // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber. Rests
+      // once the close has left the held set, so of a close's end and a quiet pump, whichever comes last rests the actor.
       hold: (close) => this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
         ctx.stash({ lane: TERMINAL_LANE_FIBER });
         await close();
+        await this.restWhenIdle();
       }).finally(() => { this.overviewChanged(); }),
     });
 
@@ -1464,7 +1466,6 @@ export abstract class ActorAgent extends Agent<Env> {
       logger: this.compactionLogger,
       summarizer: () => this.getModel(),
       spend: { report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-      model: () => this.effectiveModelSpec(),
     });
 
     return this._compaction;
@@ -1702,7 +1703,9 @@ export abstract class ActorAgent extends Agent<Env> {
             this.liveReadsMoved(['listWorkspaceAgents']);
             this.chatTransport.quiet();
             this.overviewChanged();
-            this.detachOwned(Effect.promise(() => this.restWhenIdle()));
+
+            // A close still held rests the actor as it ends.
+            if (!this.terminal.closing) this.detachOwned(Effect.promise(() => this.restWhenIdle()));
           },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
@@ -1739,6 +1742,8 @@ export abstract class ActorAgent extends Agent<Env> {
         this.chatLoop.interrupt();
         this.stopSubtree(this.actorHandle().actorId);
       },
+      sendState: async (id) => this.chatLoop.sendState(id),
+      awaitSend: (id) => this.chatLoop.awaitSend(id),
     });
 
     return this._chatTransport;
@@ -2573,7 +2578,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.stores.config;
   }
 
-  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext: NonNullable<AgentsSwarmDeps['originContext']>, compactShared?: AgentsSwarmDeps['compactShared']): AgentsSwarmDeps {
+  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext: NonNullable<AgentsSwarmDeps['originContext']>, compactShared: NonNullable<AgentsSwarmDeps['compactShared']>): AgentsSwarmDeps {
     const seams = this.hostedSeams();
 
     return {
@@ -3413,6 +3418,28 @@ export abstract class ActorAgent extends Agent<Env> {
     }));
   }
 
+  /** Where a send stands in the chat this connection addresses, read from its durable facts: what a client asks after
+   *  any break, instead of inferring its fate from what the stream showed. */
+  @callable()
+  sendState(id: string): Promise<SendState> {
+    return settle(Effect.flatMap(this.addressedChat(), (chat) => Effect.promise(() => chat.sendState(id))));
+  }
+
+  /** Its state once settled or none; a client that lost its connection asks again. */
+  @callable()
+  awaitSend(id: string): Promise<SendState> {
+    return settle(Effect.flatMap(this.addressedChat(), (chat) => Effect.promise(() => chat.awaitSend(id))));
+  }
+
+  private addressedChat(): Effect.Effect<ChatWire, KinuError> {
+    const window = this.addressedActor();
+
+    if (window === null) return Effect.succeed(this.chatTransport.wire);
+    const wire = this.hostedChatWire(window);
+
+    return wire === null ? Effect.fail(new KinuError('missing', `${window} is not an agent of this workspace`)) : Effect.succeed(wire);
+  }
+
   /** Aborts the in-flight LLM request first so stop works even if the cancel frame is lost.
    * Foreground only: detached jobs are stopped via `cancelBackgroundJob`. */
   @callable()
@@ -4049,6 +4076,7 @@ export abstract class ActorAgent extends Agent<Env> {
         routed: routedModelReads(providers),
       },
       profileInputs: async () => reads.profileInputs,
+      choices: reads.choices,
       toolset: (mode) => (mode === input.requestedWorkMode ? input.tools : this.actorToolsets(mode).turn),
       // MCP tools were admitted against the request's model in `readTurnInputs`.
       externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),
@@ -4067,7 +4095,7 @@ export abstract class ActorAgent extends Agent<Env> {
       operations: this.modelOperations,
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       attachmentBudget: this.acc.context,
-      observeStream: (chunks, call) => this.chatTransport.observe(chunks, call),
+      observeStream: (chunks) => this.chatTransport.observe(chunks),
       extensions: () => this.extensions.list(),
       dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.dynamicContextSnapshot(profile, tools, memoryTail, activeSkills),
       operation: (profile, inputs) => captureOperationProfile({

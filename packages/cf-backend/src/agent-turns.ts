@@ -5,7 +5,7 @@ import { Effect } from 'effect';
 import {
   AgentOpenTurns, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
   BUILTIN_TOOL_NAMES, announcementOf,
-  type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type WorkMode,
+  type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type Executor,
 } from '@kinu.run/core';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
@@ -17,7 +17,7 @@ export interface AgentTurnsDeps {
   reference(actorId: string): ActorReference;
   run(reference: ActorReference, task: AgentTurnTask): Promise<AgentTurnEnd>;
   interrupt(reference: ActorReference, turnId: string | null): Promise<void>;
-  /** The agent's own chat answers for itself: whether it holds a turn, running or queued, and once it holds none. */
+  /** The agent's own chat answers for itself whether it holds a turn, running or queued; one at rest is not asked. */
   chatOwed(reference: ActorReference): Promise<boolean>;
   chatIdle(reference: ActorReference): Promise<void>;
   pricing(spec: string): ModelPricing | null;
@@ -29,11 +29,14 @@ export interface ChatTurnRequest {
   readonly mode: WorkMode;
   readonly userText: string;
   readonly parentDriven: boolean;
+  /** The tier the agent's chat runs the turn on, when the turn names one; its sources are read for that tier's models. */
+  readonly explicitTier?: TierId;
 }
 
 interface OpenTurn {
   readonly reference: ActorReference;
   readonly request: HostedTurnRequest;
+  readonly explicitTier?: TierId;
   prepared: PreparedHostedTurn | null;
   /** Over the turn's own tools, as its isolate resolves it. */
   profile: ResolvedTurnProfile | null;
@@ -244,6 +247,7 @@ export class AgentTurns {
     const turn: OpenTurn = {
       reference: this.deps.reference(actorId),
       request: { sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven },
+      ...(request.explicitTier !== undefined && { explicitTier: request.explicitTier }),
       prepared: null,
       profile: null,
     };
@@ -277,7 +281,10 @@ export class AgentTurns {
         wiredToolNames: () => Object.keys(prepared.tools).filter((name) => !BUILTIN_TOOL_NAMES.has(name)),
         codemodeCapabilities: () => [],
       },
-      { userText: input.task, workMode: mode, ...(input.model !== undefined && { model: input.model }) },
+      {
+        userText: input.task, workMode: mode,
+        ...(input.model !== undefined && { model: input.model }), ...(turn.explicitTier !== undefined && { explicitTier: turn.explicitTier }),
+      },
     );
 
     const brief = run?.brief?.(callableToolNames(mode, prepared.tools));

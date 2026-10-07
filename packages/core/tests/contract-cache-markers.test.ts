@@ -149,6 +149,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
 
     const model = createAnthropicProvider().createModel('claude-opus-4-7', deps);
     await drain({
+      modelSpec: 'test/model',
       model,
       system: 'You are Kinu.',
       history: [...HISTORY],
@@ -255,6 +256,7 @@ describe('one TTL per request, in the order Anthropic reads it', () => {
     const provider = route === 'claude' ? createClaudeProvider() : createAnthropicProvider();
 
     await drain({
+      modelSpec: 'test/model',
       model: provider.createModel('claude-opus-5-5', deps), system: 'You are Kinu.', history: GPT_THEN_CLAUDE,
       tools: chatTools(), cache: { providerId: route, modelId: 'claude-opus-5-5', sessionKey: 'kinu-test', retention },
     });
@@ -307,6 +309,7 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
     await expect(drain({
+      modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'kinu-agent:default' },
     })).rejects.toThrow();
@@ -324,6 +327,7 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
     await expect(drain({
+      modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'k', retention: 'long' },
     })).rejects.toThrow();
@@ -338,6 +342,7 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
     await expect(drain({
+      modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'k', retention: 'none' },
     })).rejects.toThrow();
@@ -356,6 +361,7 @@ describe('OpenRouter cache addressing on the wire', () => {
     const deps = makeDeps({ [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer sk-or' } } }, mock.fetch);
     const model = createOpenRouterProvider().createModel(modelId, deps);
     await expect(drain({
+      modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openrouter', modelId, sessionKey: 'kinu-or' },
     })).rejects.toThrow();
@@ -397,6 +403,7 @@ describe('openai-compat + no-op providers', () => {
 
     const model = createOpenAICompatProvider().createModel('llama-4', deps);
     await expect(drain({
+      modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openai-compat', modelId: 'llama-4', sessionKey: 'kinu-compat' },
     })).rejects.toThrow();
@@ -417,6 +424,7 @@ describe('openai-compat + no-op providers', () => {
     const model = createOpenAICompatProvider().createModel('llama-4', deps);
     // workers-ai resolves to the `none` strategy: affinity headers, not body fields.
     await expect(drain({
+      modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6', sessionKey: 'kinu-x' },
     })).rejects.toThrow();

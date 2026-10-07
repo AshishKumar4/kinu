@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#
+# A clean `git merge` skips pre-commit; this runs the same local tier on the merge it is about to write.
+exec "$(git rev-parse --show-toplevel)/.githooks/pre-commit"

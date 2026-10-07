@@ -495,7 +495,7 @@ function settleRunContext(deps: HeadInferenceDeps, turn: {
     lastPromptTokens: deps.actor.session.orchestrator.acc.lastPromptTokens,
     historyLength: turn.historyLength,
     contextWindow: turn.contextWindow,
-    model: chat.modelSpec ?? chat.modelContext?.id,
+    model: chat.modelSpec,
   });
 }
 

@@ -64,6 +64,7 @@ async function toolResults(input: JsonObject, seed: Record<string, string>) {
   const model = modelCalling(input);
 
   for await (const event of runChat({
+    modelSpec: 'test/model',
     model, system: 's', history: [{ role: 'user', content: 'go' }], tools: { file },
   })) {
     if (event.type === 'tool-result') results.push(event);

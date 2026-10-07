@@ -8,6 +8,10 @@ import * as v from 'valibot';
 import type { JsonObject } from './json';
 import type { ChatHistoryEntry } from '../types/chat';
 
+/** A UI message by its shape: what Kinu projects from its own rows is walked no deeper. */
+export const UIMessageSchema = v.custom<UIMessage>((value) =>
+  v.is(v.object({ id: v.string(), role: v.picklist(['user', 'assistant', 'system']), parts: v.array(v.unknown()) }), value));
+
 /** Row id = prefix + producer identity; the primary key is the idempotency mechanism. */
 export const PROGRAMMATIC_MESSAGE_ID_PREFIX = 'programmatic:';
 

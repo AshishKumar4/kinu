@@ -13,7 +13,6 @@ import { contextMount, localContextTree } from '../src/vfs/context-plane';
 import { withMountTable } from '../src/vfs/mounts';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { decodeModelMessageValues, encodeModelMessageValues } from '../src/session/message-codec';
-import { freezeTree } from '../src/utils/freeze';
 import { composePrepareStep, type StepContextPlane } from '../src/prompting/prepare-step';
 import type { StepPruneBudget } from '../src/prompting/step-prune';
 import { DynamicContextLedger } from '../src/prompting/volatile-context';
@@ -788,17 +787,4 @@ test('an edit emits its authoring and its activation, and a refused edit emits n
     type: 'context_edit', revision: 2, status: 'activated', turnId: 'turn-ev', effectiveAt: 'step',
   });
   ws.close();
-});
-
-test('a message its caller can still change is confirmed by the SDK schema at every encode; a frozen one, once', () => {
-  const mutable: ModelMessage = { role: 'user', content: 'ok' };
-
-  expect(encodeModelMessageValues([mutable])).toHaveLength(1);
-  Reflect.set(mutable, 'content', undefined);
-  expect(() => encodeModelMessageValues([mutable])).toThrow();
-
-  const stored: ModelMessage = { role: 'user', content: [{ type: 'text', text: 'ok' }] };
-
-  freezeTree({ value: stored });
-  expect(encodeModelMessageValues([stored, stored])).toHaveLength(2);
 });
