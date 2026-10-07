@@ -9,6 +9,20 @@ export const DEFAULT_MODELS: readonly [string, ...string[]] = [
   'opencode-go/muse-spark-1.3-contributor',
 ];
 
+/**
+ * The model that reads a run rather than being measured by it: the diagnosis, the trajectory review and the judge of
+ * what no check computes. GPT 6.1 Sol, the owner's choice (2026-10-07), through the `openrouter.bearer` key the eval
+ * accounts hold (`scripts/eval-provider-keys.ts`); staging's eval-service listed it on 2026-10-07.
+ */
+export const REVIEW_MODEL = 'openrouter/openai/gpt-6.1-sol';
+
+/** The reviewer a run's review asks: `KINU_EVAL_REVIEW_MODEL`, else {@link REVIEW_MODEL}. */
+export function reviewModel(env: Env): string {
+  const named = env.KINU_EVAL_REVIEW_MODEL?.trim() ?? '';
+
+  return named === '' ? REVIEW_MODEL : named;
+}
+
 /** The product as deployed, with no workspace setting changed. */
 export const DEFAULT_ARM = 'product';
 
