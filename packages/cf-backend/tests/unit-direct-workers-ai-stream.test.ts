@@ -5,7 +5,7 @@ import { describe, test, expect } from 'bun:test';
 import { APICallError, generateText, streamText, tool, jsonSchema, type ModelMessage, type TextStreamPart, type ToolSet } from 'ai';
 import { JsonObjectSchema, isPortableToolCallId, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
-import { bindingModel, DONE, eventStream, eventStreamOf, sse, type BindingAnswer } from './helpers/workers-ai-model';
+import { bindingModel, DONE, eventStream, eventStreamOf, sharedBindingModels, sse, type BindingAnswer, type RecordedRun } from './helpers/workers-ai-model';
 
 const MODEL = '@cf/moonshotai/kimi-k2.6';
 
@@ -183,34 +183,40 @@ describe('Workers AI binding — incremental streaming', () => {
     expect(upstream.cancelled()).toBe(true);
   });
 
-  test('two turns on one binding do not read each other frames, headers or shapes', async () => {
-    const alpha = manualStream();
-    const beta = manualStream();
+  // workerd's `Ai.run` keeps its options on the shared binding and rereads `returnRawResponse` after awaiting upstream,
+  // so whichever call entered last decides every overlapping call's return shape; the content stays each call's own.
+  test.each([
+    ['a raw-response call entered last, alpha answered first', false, ['kinu-alpha', 'kinu-beta', 'other']],
+    ['a raw-response call entered last, beta answered first', false, ['kinu-beta', 'other', 'kinu-alpha']],
+    ['a call wanting no raw response entered last, alpha answered first', true, ['kinu-alpha', 'other', 'kinu-beta']],
+    ['a call wanting no raw response entered last, beta answered first', true, ['other', 'kinu-beta', 'kinu-alpha']],
+  ] as const)('two turns on one binding keep their own frames and calls: %s', async (_case, otherLast, release) => {
+    const gates = new Map<string, ReturnType<typeof Promise.withResolvers<undefined>>>(release.map((key) => [key, Promise.withResolvers<undefined>()]));
+    const keyOf = (run: RecordedRun) => run.options?.extraHeaders?.['x-session-affinity'] ?? 'other';
 
-    // Different return shapes on purpose: `Ai.run` rereads `options.returnRawResponse` after awaiting upstream.
-    const answer = (run: { options?: { extraHeaders?: Record<string, string> } }): BindingAnswer =>
-      run.options?.extraHeaders?.['x-session-affinity'] === 'kinu-alpha' ? eventStream(alpha.stream) : beta.stream;
+    const answer = (run: RecordedRun) => new Response([
+      sse({ response: `${keyOf(run)} says` }),
+      sse({ tool_calls: [{ id: `call-${keyOf(run)}`, name: 'shell', arguments: { cmd: keyOf(run) } }] }),
+      DONE,
+    ].join('')).body ?? new ReadableStream();
 
-    const first = bindingModel(answer, { affinity: 'kinu-alpha' });
-    const second = bindingModel(answer, { affinity: 'kinu-beta' });
-    const alphaText = streamText({ model: first.model, prompt: PROMPT, maxRetries: 0 }).textStream.getReader();
-    const betaText = streamText({ model: second.model, prompt: PROMPT, maxRetries: 0 }).textStream.getReader();
+    const { models, binding, runs } = sharedBindingModels(['kinu-alpha', 'kinu-beta'], answer, async (run) => { await gates.get(keyOf(run))?.promise; });
+    const other = () => binding.run('@cf/baai/bge-m3', { text: ['x'] });
+    const otherCall = otherLast ? undefined : other();
+    const turns = new Map(models.map((model, at) => [at === 0 ? 'kinu-alpha' : 'kinu-beta', streamText({ model, prompt: PROMPT, tools: shellTool, maxRetries: 0 })]));
 
-    alpha.push(sse({ response: 'AXAXA' }));
-    beta.push(sse({ response: 'BXBXB' }));
-    expect((await alphaText.read()).value).toBe('AXAXA');
-    expect((await betaText.read()).value).toBe('BXBXB');
-    alpha.push(sse({ response: 'axaxa' }));
-    beta.push(sse({ response: 'bxbxb' }));
-    expect((await betaText.read()).value).toBe('bxbxb');
-    expect((await alphaText.read()).value).toBe('axaxa');
+    while (runs.length < (otherLast ? 2 : 3)) await Promise.resolve();
+    const lastCall = otherLast ? other() : otherCall;
 
-    alpha.close();
-    beta.close();
-    expect((await alphaText.read()).done).toBe(true);
-    expect((await betaText.read()).done).toBe(true);
-    expect([...first.runs, ...second.runs].map((run) => run.options?.extraHeaders?.['x-session-affinity']))
-      .toEqual(['kinu-alpha', 'kinu-beta']);
+    while (runs.length < 3) await Promise.resolve();
+
+    for (const key of release) gates.get(key)?.resolve(undefined);
+    await lastCall;
+
+    for (const [affinity, result] of turns) {
+      expect(await result.text).toBe(`${affinity} says`);
+      expect((await result.toolCalls).map((call) => call.input)).toEqual([{ cmd: affinity }]);
+    }
   });
 
   test('an aborted turn stops the provider work', async () => {
@@ -323,12 +329,31 @@ describe('Workers AI binding — usage and finish', () => {
     ['an event stream that carries nothing', (): BindingAnswer => eventStreamOf('')],
     ['a JSON body under an event-stream content type', (): BindingAnswer => eventStreamOf(JSON.stringify({ response: 'whole' }))],
     ['a body under some other content type', (): BindingAnswer => new Response('pong', { headers: { 'content-type': 'text/plain' } })],
-  ])('%s ends the step as an error, not as an empty success', async (_case, answer) => {
+  ])('%s fails the stream with an error part, never an empty success', async (_case, answer) => {
     const { model } = bindingModel(answer);
-    const result = streamText({ model, prompt: PROMPT, maxRetries: 0 });
+    const streamed = await parts(model);
 
-    await result.consumeStream();
-    expect(await result.finishReason).toBe('error');
+    // A consumer reads a failed step off an error part; a finish reason alone reads as a completed, empty step.
+    expect(streamed.filter((part) => part.type === 'error').map((part) => part.type === 'error' && APICallError.isInstance(part.error) && part.error.isRetryable)).toEqual([true]);
+    const finish = streamed.find((part) => part.type === 'finish');
+    expect(finish?.type === 'finish' && finish.finishReason).toBe('error');
+  });
+
+  test('OpenAI-shaped calls started together keep each argument stream until the response ends', async () => {
+    const call = (index: number, delta: JsonObject) => sse({ choices: [{ index: 0, delta: { tool_calls: [{ index, ...delta }] } }] });
+
+    const { model } = bindingModel(() => eventStreamOf([
+      call(0, { id: 'call_a', type: 'function', function: { name: 'shell', arguments: '' } }),
+      call(1, { id: 'call_b', type: 'function', function: { name: 'shell', arguments: '' } }),
+      call(0, { function: { arguments: '{"cmd":"ls"}' } }),
+      call(1, { function: { arguments: '{"cmd":"pwd"}' } }),
+      sse({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
+      DONE,
+    ].join('')));
+
+    const result = streamText({ model, prompt: PROMPT, tools: shellTool, maxRetries: 0 });
+
+    expect((await result.toolCalls).map((each) => each.input)).toEqual([{ cmd: 'ls' }, { cmd: 'pwd' }]);
   });
 
   test('a whole completion answering a streamed request arrives as one synthetic stream', async () => {

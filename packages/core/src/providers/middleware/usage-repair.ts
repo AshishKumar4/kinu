@@ -24,7 +24,9 @@ export function usageRepairMiddleware(): LanguageModelMiddleware {
 
       const repair = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
         transform(part, controller) {
-          const report = part.type === 'raw' ? v.safeParse(CachedReportSchema, part.rawValue) : null;
+          const raw = part.type === 'raw' ? part.rawValue : undefined;
+          // Only a usage report is parsed: a schema that fails records an issue, and most raw parts carry none.
+          const report = typeof raw === 'object' && raw !== null && 'usage' in raw ? v.safeParse(CachedReportSchema, raw) : null;
 
           if (report?.success === true) maxCached = Math.max(maxCached, report.output.usage.prompt_tokens_details.cached_tokens);
 

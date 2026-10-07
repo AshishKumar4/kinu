@@ -51,6 +51,17 @@ export class ProviderPacer {
     return cooldown === undefined || waitMs <= 0 ? null : { waitMs, untilMs: cooldown.untilMs, reason: cooldown.reason };
   }
 
+  /** Whether any lane under `route` is cooling: only then is a call's own lane worth looking up. */
+  coolingUnder(route: string): boolean {
+    const now = this.now();
+
+    for (const [lane, cooldown] of this.cooldowns) {
+      if (lane.startsWith(`${route}|`) && cooldown.untilMs > now) return true;
+    }
+
+    return false;
+  }
+
   /** Waits `ms` on this pacer's clock. */
   pause(ms: number, signal?: AbortSignal): Promise<void> {
     return this.sleep(ms, signal);

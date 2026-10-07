@@ -1,6 +1,6 @@
 // The user's own Cloudflare AI Gateway via their Workers AI OAuth credential (`ai-gateway` is the platform's).
 // Wire: POST {account}/ai/v1/{chat/completions|responses} with `cf-aig-gateway-id`; specs are `my-gateway/{author}/{model}`.
-import { wrapLanguageModel, type LanguageModel } from 'ai';
+import type { LanguageModel } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { type ModelProvider, type ModelInfo, type ProviderDeps } from './types';
 import { authCacheKey, cloneModelInfos, settleModelList, StaleModelList } from './util';
@@ -9,7 +9,6 @@ import { createWireModel, gatewayWire, OPENAI_AUTHOR } from './wire-model';
 import { asFetchFunction } from './fetch-shim';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from './cloudflare-oauth';
 import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
-import { usageRepairMiddleware } from './middleware/usage-repair';
 import { Effect } from 'effect';
 import { settle, toKinuError } from "../obs/index";
 import * as v from 'valibot';
@@ -117,10 +116,7 @@ export function createMyGatewayProvider(): ModelProvider {
         mapError: (res, resolved) => mapGatewayError(res, modelId, resolved.headers['cf-aig-gateway-id']),
       });
 
-      return wrapLanguageModel({
-        model: gatewayWireModel(MY_GATEWAY_PROVIDER_ID, modelId, { baseURL: placeholder, fetch: customFetch }),
-        middleware: usageRepairMiddleware(),
-      });
+      return gatewayWireModel(MY_GATEWAY_PROVIDER_ID, modelId, { baseURL: placeholder, fetch: customFetch });
     },
   };
 }

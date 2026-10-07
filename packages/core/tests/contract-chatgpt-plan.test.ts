@@ -331,7 +331,21 @@ describe('what the plan route answers', () => {
     expect(await result.text).toBe('ok');
   });
 
-  test.each(['max_output_tokens', 'content_filter'])('a one-shot answer ChatGPT stops short (%s) is a failure, not the partial text', async (reason) => {
+  test('a one-shot answer ChatGPT stops at its output limit reads as its stream does: the partial text, finished by length', async () => {
+    const api = openai(sse(
+      { type: 'response.created', response: RESPONSE },
+      { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },
+      { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: 'ok' },
+      { type: 'response.output_item.done', output_index: 0, item: { ...MESSAGE, status: 'incomplete' } },
+      { type: 'response.incomplete', response: { ...RESPONSE, status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [MESSAGE], usage: USAGE } },
+    ));
+
+    const result = await generateText({ model: createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), prompt: 'hello', maxRetries: 0 });
+
+    expect({ finish: result.finishReason, text: result.text }).toEqual({ finish: 'length', text: 'ok' });
+  });
+
+  test.each(['content_filter'])('a one-shot answer ChatGPT stops short (%s) is a failure, not the partial text', async (reason) => {
     const api = openai(sse(
       { type: 'response.created', response: RESPONSE },
       { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },

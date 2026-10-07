@@ -1,5 +1,5 @@
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f448e55b413 100644
+index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994ea507ca22 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -46,6 +46,24 @@ function apiCallErrorFromResponse(response, errorBody, context) {
@@ -100,7 +100,19 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f44
  			for (const [idx] of activeToolCalls) {
  				if (closedToolCalls.has(idx)) continue;
  				closeToolCall(idx, controller);
-@@ -862,20 +902,22 @@ function getMappedStream(response, salvageContext) {
+@@ -859,23 +899,34 @@ function getMappedStream(response, salvageContext) {
+ 				type: "text-end",
+ 				id: textId
+ 			});
++			if (!salvagedToolCalls && !receivedDone && !finishReason) controller.enqueue({
++				type: "error",
++				error: new APICallError({
++					message: receivedAnyData ? "Workers AI's stream ended before [DONE] or a finish reason" : "Workers AI answered with no stream events",
++					url: "workers-ai",
++					requestBodyValues: void 0,
++					isRetryable: true
++				})
++			});
  			const effectiveFinishReason = salvagedToolCalls ? {
  				unified: "tool-calls",
  				raw: "stop"
@@ -128,7 +140,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f44
  	/**
  	* Emit tool-input-end + tool-call for a tool call that is complete.
  	*/
-@@ -914,9 +956,9 @@ function getMappedStream(response, salvageContext) {
+@@ -914,13 +965,13 @@ function getMappedStream(response, salvageContext) {
  				if (lastActiveToolIndex != null) closeToolCall(lastActiveToolIndex, controller);
  				continue;
  			}
@@ -139,7 +151,12 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f44
  			const tcArgs = fn?.arguments ?? tc.arguments ?? null;
  			const tcId = tc.id;
  			if (!activeToolCalls.has(tcIndex)) {
-@@ -1201,10 +1243,10 @@ var WorkersAIChatLanguageModel = class {
+-				if (lastActiveToolIndex != null && lastActiveToolIndex !== tcIndex) closeToolCall(lastActiveToolIndex, controller);
++				if (tc.index == null && lastActiveToolIndex != null && lastActiveToolIndex !== tcIndex) closeToolCall(lastActiveToolIndex, controller);
+ 				const id = createAISDKToolCallId(tcId);
+ 				const toolName = tcName || "";
+ 				activeToolCalls.set(tcIndex, {
+@@ -1201,10 +1252,10 @@ var WorkersAIChatLanguageModel = class {
  	* option, then settings.
  	*/
  	buildRunInputs(args, messages, options) {
@@ -152,7 +169,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f44
  		const chatTemplateKwargs = "chat_template_kwargs" in perCall ? perCall.chat_template_kwargs : this.settings.chat_template_kwargs;
  		return {
  			max_tokens: args.max_tokens,
-@@ -1214,7 +1256,10 @@ var WorkersAIChatLanguageModel = class {
+@@ -1214,7 +1265,10 @@ var WorkersAIChatLanguageModel = class {
  			...args.tool_choice ? { tool_choice: args.tool_choice } : {},
  			top_p: args.top_p,
  			...args.response_format ? { response_format: args.response_format } : {},
@@ -164,7 +181,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f44
  			...reasoningEffort !== void 0 ? { reasoning_effort: reasoningEffort } : {},
  			...chatTemplateKwargs !== void 0 ? { chat_template_kwargs: chatTemplateKwargs } : {}
  		};
-@@ -1226,15 +1271,17 @@ var WorkersAIChatLanguageModel = class {
+@@ -1226,15 +1280,17 @@ var WorkersAIChatLanguageModel = class {
  	* here — they belong on the `inputs` object (see `buildRunInputs`), not on
  	* the `options` (3rd) arg of binding.run() or the REST query string.
  	*/
@@ -184,7 +201,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f44
  			...passthroughOptions
  		};
  	}
-@@ -1267,6 +1314,9 @@ var WorkersAIChatLanguageModel = class {
+@@ -1267,6 +1323,9 @@ var WorkersAIChatLanguageModel = class {
  			finishReason: salvaged ? {
  				unified: "tool-calls",
  				raw: "stop"
@@ -194,7 +211,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f44
  			} : mapWorkersAIFinishReason(outputRecord)
  		};
  	}
-@@ -1277,7 +1327,7 @@ var WorkersAIChatLanguageModel = class {
+@@ -1277,7 +1336,7 @@ var WorkersAIChatLanguageModel = class {
  			providerOptions: options.providerOptions,
  			reasoning: options.reasoning
  		});
@@ -203,7 +220,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f44
  		let output;
  		try {
  			output = await this.config.binding.run(args.model, inputs, {
-@@ -1290,7 +1340,10 @@ var WorkersAIChatLanguageModel = class {
+@@ -1290,7 +1349,10 @@ var WorkersAIChatLanguageModel = class {
  				requestBodyValues: inputs
  			});
  		}
@@ -215,7 +232,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f44
  		const outputRecord = output;
  		const { reasoningContent, text, toolCalls, finishReason } = this.extractContent(outputRecord, args, warnings);
  		return {
-@@ -1318,7 +1371,7 @@ var WorkersAIChatLanguageModel = class {
+@@ -1318,7 +1380,7 @@ var WorkersAIChatLanguageModel = class {
  			providerOptions: options.providerOptions,
  			reasoning: options.reasoning
  		});
@@ -224,7 +241,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..903d6ef1badc8f9d6a41ba9b693f0f44
  		let response;
  		try {
  			response = await this.config.binding.run(args.model, inputs, {
-@@ -1331,10 +1384,14 @@ var WorkersAIChatLanguageModel = class {
+@@ -1331,10 +1393,14 @@ var WorkersAIChatLanguageModel = class {
  				requestBodyValues: inputs
  			});
  		}

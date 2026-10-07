@@ -10,7 +10,6 @@ import { listModelsDevProviderModels } from './models-dev';
 import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
 import { WORKERS_AI_PREFERRED_MODEL_IDS } from './workers-ai-catalog';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
-import { usageRepairMiddleware } from './middleware/usage-repair';
 import { toolCallIdMiddleware } from './middleware/tool-call-id';
 
 /** `env.AI` as the provider takes it: `Ai` where workers-types are loaded. */
@@ -38,7 +37,7 @@ export function createWorkersAIProvider(deploymentBinding?: WorkersAIChatBinding
         ? createWorkersAI({ binding: deploymentBinding }).chat(modelId, { sessionAffinity: deps.sessionAffinity })
         : userAccountModel(modelId, deps);
 
-      return wrapLanguageModel({ model, middleware: [usageRepairMiddleware(), toolCallIdMiddleware()] });
+      return wrapLanguageModel({ model, middleware: toolCallIdMiddleware() });
     },
   };
 }

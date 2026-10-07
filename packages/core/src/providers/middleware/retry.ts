@@ -3,10 +3,7 @@
  * an opening error or a silent attempt is backed off, and a call with no retries left hands over to the fallback chain.
  * A stream is bounded by silence, never by duration: each provider event, keepalives included, resets the bound.
  */
-import type {
-  LanguageModelV4CallOptions, LanguageModelV4Content, LanguageModelV4GenerateResult, LanguageModelV4Reasoning, LanguageModelV4ResponseMetadata,
-  LanguageModelV4StreamPart, LanguageModelV4StreamResult, LanguageModelV4Text, SharedV4ProviderOptions, SharedV4Warning,
-} from '@ai-sdk/provider';
+import type { LanguageModelV4CallOptions, LanguageModelV4StreamPart, LanguageModelV4StreamResult, SharedV4ProviderOptions } from '@ai-sdk/provider';
 import { APICallError, type LanguageModelMiddleware } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -15,6 +12,8 @@ import { silenceBoundMs } from '../../platform-catalog';
 import { DEFAULT_PROVIDER_RETRIES } from '../../types/profile';
 import { fmtSpan } from '../../utils/format';
 import { retryAfterOf } from '../fallback-cooldown';
+import { inAttempt, type Attempt } from './attempt';
+import { generateFromStream } from './stream-generate';
 import { abortableSleep, providerPacer, type ProviderPacer } from '../pacing';
 import type { ProviderWaitInfo } from '../types';
 
@@ -28,12 +27,19 @@ const MAX_DELAY_MS = 60_000;
 /** OMP's `maxRetryDelayMs` (oh-my-pi ai/src/types.ts:499); a longer Retry-After means the account is spent. */
 const MAX_RETRY_DELAY_MS = 60_000;
 
+/** A lane known only by looking which credential the call bills (a sole named account stands in for `main`): looked up
+ *  only when a wait is declared, or when some lane under `route` is cooling, so a call costs no lookup otherwise. */
+export interface LaneLookup {
+  readonly route: string;
+  readonly billed: () => Promise<string>;
+}
+
 export interface RetryPolicy {
   /** Named in wait notices and refusals. */
   readonly provider: string;
   readonly modelId?: string;
-  /** Calls on one lane (a provider and the account it bills) share each declared wait. */
-  readonly lane: string;
+  /** Calls on one lane (a provider and the credential it bills) share each declared wait. */
+  readonly lane: string | LaneLookup;
   /** Called before each sleep, including joined cooldowns; a throw is reported and ignored. */
   readonly onWait?: (info: ProviderWaitInfo) => void;
   /** The provider streams every call on its wire (the ChatGPT plan): a generate is its stream collected, under the
@@ -91,13 +97,16 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
     },
     wrapGenerate: ({ doGenerate, doStream, params }) => settle(retrying(policy, params, policy.generateByStream === true
       ? async (last) => {
-        const opened = await openStream({ provider: policy.provider, opening: doStream(), last, keepRaw: false });
+        const opened = await openStream({ provider: policy.provider, start: doStream, last, keepRaw: false, caller: params.abortSignal });
 
-        return opened.kind === 'answer' ? await collected(opened.value) : opened;
+        if (opened.kind !== 'answer') return opened;
+        const [collected] = await Promise.allSettled([generateFromStream(opened.value)]);
+
+        return collected.status === 'fulfilled' ? { kind: 'answer', value: collected.value } : { kind: 'failed', error: collected.reason };
       }
       : async () => ({ kind: 'answer', value: await doGenerate() }))),
     wrapStream: ({ doStream, params }) => settle(retrying(policy, params, (last) => openStream({
-      provider: policy.provider, opening: doStream(), last, keepRaw: kinuOptions(params).raw,
+      provider: policy.provider, start: doStream, last, keepRaw: kinuOptions(params).raw, caller: params.abortSignal,
     }))),
   };
 }
@@ -109,6 +118,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
   const pacer = policy.pacer ?? providerPacer;
   const signal = params.abortSignal;
   const { retries } = kinuOptions(params);
+  const lane = new CallLane(policy.lane);
 
   const warn = policy.warn ?? ((message: string) => diagnostics.failure('provider.rate_limited', new KinuError('unavailable', message)));
 
@@ -136,21 +146,9 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
     const spendRetry = (spent: () => APICallError): Effect.Effect<void> => Effect.suspend(() => (++waits > retries ? Effect.die(spent()) : Effect.void));
 
     for (let attemptNumber = 1; ; attemptNumber++) {
-      // The lane's cooldown first, re-read after each wait: a sibling may extend it.
-      for (let cooling = pacer.cooling(policy.lane); cooling !== null; cooling = pacer.cooling(policy.lane)) {
-        if (signal?.aborted === true) return yield* Effect.die(signal.reason);
-        const { waitMs, untilMs, reason } = cooling;
+      const checked = yield* lane.toCheck(pacer);
 
-        if (waitMs > MAX_RETRY_DELAY_MS) return yield* Effect.die(waitTooLong({ provider: policy.provider, untilMs, nowMs: now(), reason }));
-
-        // Announce only cooldowns another call declared.
-        if (untilMs !== owned) {
-          if (retries === 0) return yield* Effect.die(handedOver({ provider: policy.provider, status: null, resetsInMs: waitMs }));
-          yield* reportWait(waitMs, 0, 'cooldown');
-        }
-
-        yield* Effect.promise(() => pacer.pause(waitMs, signal));
-      }
+      if (checked !== null) yield* cooledDown({ policy, pacer, lane: checked, owned, retries, now, signal, reportWait });
 
       const [opened] = yield* Effect.promise(() => Promise.allSettled([open(waits >= retries)]));
 
@@ -188,7 +186,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       if (limit.spent !== null) return yield* Effect.die(allowanceSpent(failure, limit.spent));
 
       if (retryAfter !== null && retryAfter > MAX_RETRY_DELAY_MS) {
-        pacer.declareWait(policy.lane, retryAfter, providerMessage(failure.responseBody ?? ''));
+        pacer.declareWait(yield* lane.billed(), retryAfter, providerMessage(failure.responseBody ?? ''));
 
         return yield* Effect.die(waitTooLong({
           provider: policy.provider, untilMs: now() + retryAfter, nowMs: now(), reason: providerMessage(failure.responseBody ?? ''), failure,
@@ -196,7 +194,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       }
 
       const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attemptNumber));
-      const declared = pacer.declareWait(policy.lane, waitMs);
+      const declared = pacer.declareWait(yield* lane.billed(), waitMs);
 
       yield* spendRetry(() => handedOver({ provider: policy.provider, status: limit.status, resetsInMs: retryAfter ?? waitMs }));
       owned = declared;
@@ -207,25 +205,89 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
   });
 }
 
+/** The call's lane, looked up at most once and only when a wait is in play. */
+class CallLane {
+  private known: string | null;
+  private readonly lookup: LaneLookup | null;
+
+  constructor(lane: string | LaneLookup) {
+    this.known = typeof lane === 'string' ? lane : null;
+    this.lookup = typeof lane === 'string' ? null : lane;
+  }
+
+  billed(): Effect.Effect<string> {
+    const { known, lookup } = this;
+
+    if (known !== null || lookup === null) return Effect.succeed(known ?? '');
+
+    return Effect.map(Effect.promise(lookup.billed), (billed) => {
+      this.known = billed;
+
+      return billed;
+    });
+  }
+
+  /** The lane to check before an attempt, or null while nothing under its route is cooling. */
+  toCheck(pacer: ProviderPacer): Effect.Effect<string | null> {
+    return this.known !== null || this.lookup === null || pacer.coolingUnder(this.lookup.route) ? this.billed() : Effect.succeed(null);
+  }
+}
+
+interface CooldownCheck {
+  readonly policy: RetryPolicy;
+  readonly pacer: ProviderPacer;
+  readonly lane: string;
+  /** The deadline this call declared itself, which it waits out without announcing. */
+  readonly owned: number | null;
+  readonly retries: number;
+  readonly now: () => number;
+  readonly signal: AbortSignal | undefined;
+  readonly reportWait: (waitMs: number, attempt: number, source: ProviderWaitInfo['source']) => Effect.Effect<void>;
+}
+
+/** The lane's cooldown waited out, re-read after each wait since a sibling may extend it; one past the longest wait, or
+ *  any for a call with no retries, ends the call instead. */
+function cooledDown(check: CooldownCheck): Effect.Effect<void> {
+  const { pacer, lane, policy, signal } = check;
+
+  return Effect.gen(function* () {
+    for (let cooling = pacer.cooling(lane); cooling !== null; cooling = pacer.cooling(lane)) {
+      if (signal?.aborted === true) return yield* Effect.die(signal.reason);
+      const { waitMs, untilMs, reason } = cooling;
+
+      if (waitMs > MAX_RETRY_DELAY_MS) return yield* Effect.die(waitTooLong({ provider: policy.provider, untilMs, nowMs: check.now(), reason }));
+
+      if (untilMs !== check.owned) {
+        if (check.retries === 0) return yield* Effect.die(handedOver({ provider: policy.provider, status: null, resetsInMs: waitMs }));
+        yield* check.reportWait(waitMs, 0, 'cooldown');
+      }
+
+      yield* Effect.promise(() => pacer.pause(waitMs, signal));
+    }
+  });
+}
+
 function backoffCeiling(attempt: number): number {
   return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32));
 }
 
 interface StreamAttempt {
   readonly provider: string;
-  readonly opening: PromiseLike<LanguageModelV4StreamResult>;
+  /** Called inside the attempt, so the transport below reports its bytes and takes the attempt's cancel. */
+  readonly start: () => PromiseLike<LanguageModelV4StreamResult>;
   readonly last: boolean;
   readonly keepRaw: boolean;
+  /** The caller's own cancel, which ends the attempt too. */
+  readonly caller: AbortSignal | undefined;
 }
 
 /** The first event decides: an error opens a backoff unless no retry is left; anything else is the answer, still read
- *  under the bound. Silence before it is a stall: an attempt silent before its answer is abandoned, and its stream
- *  cancelled if it ever arrives (a middleware cannot re-sign a call with an abort of its own). */
+ *  under the bound. Silence, on the wire as in the parts, past the bound abandons the attempt and aborts its request. */
 async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV4StreamResult>> {
   const started = Date.now();
-  const opening = Promise.resolve(attempt.opening);
   const silent = Promise.withResolvers<null>();
-  const bound = new SilenceBound(attempt.provider, async () => { silent.resolve(null); });
+  const bound = new SilenceBound(attempt.provider, attempt.caller, async () => { silent.resolve(null); });
+  const opening = Promise.resolve(inAttempt(bound.attempt, attempt.start));
   const opened = await Promise.race([opening, silent.promise]);
 
   if (opened === null) {
@@ -257,7 +319,7 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
     if (part.type === 'stream-start' || part.type === 'raw') continue;
 
     if (part.type === 'error' && !attempt.last) {
-      bound.stop();
+      bound.abandon();
       await abandoned(parts.cancel());
 
       return { kind: 'backoff' };
@@ -265,48 +327,6 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
 
     return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: null });
   }
-}
-
-type Block = LanguageModelV4Text | LanguageModelV4Reasoning;
-
-/** A stream read to its end as a generate's answer: its text and reasoning joined per block, its other content as it
- *  came, its usage and finish from the `finish` part. */
-async function collected(answer: LanguageModelV4StreamResult): Promise<Opened<LanguageModelV4GenerateResult>> {
-  const content: Array<LanguageModelV4Content | string> = [];
-  const blocks = new Map<string, Block>();
-  const parts = partsOf(answer.stream);
-  let warnings: SharedV4Warning[] = [];
-  let metadata: LanguageModelV4ResponseMetadata = {};
-
-  for (let part = await parts.read(); part !== 'end'; part = await parts.read()) {
-    if (part.type === 'error') return { kind: 'failed', error: part.error };
-
-    if (part.type === 'finish') {
-      const order = content.flatMap((entry) => (typeof entry === 'string' ? [blocks.get(entry)] : [entry]))
-        .flatMap((entry) => (entry === undefined ? [] : [entry]));
-
-      return { kind: 'answer', value: {
-        content: order, finishReason: part.finishReason, usage: part.usage, warnings,
-        ...(part.providerMetadata !== undefined && { providerMetadata: part.providerMetadata }),
-        ...(answer.request !== undefined && { request: answer.request }),
-        response: { ...answer.response, ...metadata },
-      } };
-    }
-
-    if (part.type === 'stream-start') warnings = part.warnings;
-    else if (part.type === 'response-metadata') metadata = { id: part.id, timestamp: part.timestamp, modelId: part.modelId };
-    else if (part.type === 'text-start' || part.type === 'reasoning-start') {
-      blocks.set(part.id, { type: part.type === 'text-start' ? 'text' : 'reasoning', text: '', ...(part.providerMetadata !== undefined && { providerMetadata: part.providerMetadata }) });
-      content.push(part.id);
-    } else if (part.type === 'text-delta' || part.type === 'reasoning-delta') {
-      const block = blocks.get(part.id);
-
-      if (block !== undefined) blocks.set(part.id, { ...block, text: block.text + part.delta });
-    } else if (part.type === 'tool-call' || part.type === 'tool-result' || part.type === 'file' || part.type === 'reasoning-file'
-      || part.type === 'source' || part.type === 'custom' || part.type === 'tool-approval-request') content.push(part);
-  }
-
-  return { kind: 'failed', error: new APICallError({ message: 'the stream ended without its finish', url: 'stream', requestBodyValues: undefined, isRetryable: true }) };
 }
 
 /** A stream's parts one at a time, then `end`. */
@@ -365,18 +385,19 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
     },
     pull: async (controller) => {
       for (;;) {
-        const next = await parts.read();
+        const [read] = await Promise.allSettled([parts.read()]);
 
         if (bound.fired) return;
-        bound.hear();
 
-        if (next === 'end') {
+        if (read.status === 'rejected' || read.value === 'end') {
           bound.stop();
 
-          return controller.close();
+          return read.status === 'rejected' ? controller.error(read.reason) : controller.close();
         }
 
-        if (shown(next)) return controller.enqueue(next);
+        bound.hear();
+
+        if (shown(read.value)) return controller.enqueue(read.value);
       }
     },
     cancel: () => {
@@ -389,19 +410,37 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
   return { kind: 'answer', value: { ...opened, stream } };
 }
 
-/** One timer per attempt, not one per event: each event only moves `heard`, and the timer, when it fires, waits again
- *  for what is left of the bound or declares the silence. */
+/** The attempt's watchdog: one timer at a time, armed for what is left of the catalog's silence bound since the last
+ *  event or wire chunk (a timer per event cost the heap gate's long turn 14 MB); silence past the bound aborts the
+ *  attempt's request and declares the stall. The
+ *  caller's cancel is forwarded by a listener the attempt removes when it ends, not joined with `AbortSignal.any`, whose
+ *  dependents a turn-long signal holds for the whole turn. */
 class SilenceBound {
   fired = false;
-  readonly failure: APICallError;
+  readonly attempt: Attempt;
+  private stopped = false;
   private heard = Date.now();
+  private stall: APICallError | undefined;
+  private readonly cut = new AbortController();
+  private readonly forward: () => void;
   private silenced: () => Promise<void>;
-  private timer: ReturnType<typeof setTimeout>;
+  private timer: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(provider: string, silenced: () => Promise<void>) {
+  constructor(private readonly provider: string, private readonly caller: AbortSignal | undefined, silenced: () => Promise<void>) {
     this.silenced = silenced;
-    this.failure = stalled(provider);
-    this.timer = this.arm(silenceBoundMs('provider.stream.idle_ms'));
+    this.attempt = { signal: this.cut.signal, heard: () => { this.hear(); } };
+    this.forward = () => { this.cut.abort(caller?.reason); };
+
+    if (caller?.aborted === true) this.forward();
+    else caller?.addEventListener('abort', this.forward, { once: true });
+    this.arm(silenceBoundMs('provider.stream.idle_ms'));
+  }
+
+  /** Built when first needed: an error's stack is not paid by every attempt that never stalls. */
+  get failure(): APICallError {
+    this.stall ??= stalled(this.provider);
+
+    return this.stall;
   }
 
   hear(): void {
@@ -413,22 +452,42 @@ class SilenceBound {
   }
 
   stop(): void {
+    this.stopped = true;
     clearTimeout(this.timer);
+    this.caller?.removeEventListener('abort', this.forward);
   }
 
-  private arm(ms: number): ReturnType<typeof setTimeout> {
-    return setTimeout(() => {
-      const left = this.heard + silenceBoundMs('provider.stream.idle_ms') - Date.now();
+  /** No longer wanted: its request is aborted. */
+  abandon(): void {
+    this.stop();
+    this.cut.abort(this.failure);
+  }
 
-      if (left > 0) {
-        this.timer = this.arm(left);
-
-        return;
-      }
-
-      this.fired = true;
-      detach(Effect.promise(() => this.silenced()));
+  private arm(ms: number): void {
+    this.timer = setTimeout(() => {
+      detach(Effect.promise(async () => {
+        if (this.expired()) await this.silenced();
+      }));
     }, ms);
+  }
+
+  /** Waits again for what is left of the bound, or, silent for all of it, aborts the request. */
+  private expired(): boolean {
+    const left = this.heard + silenceBoundMs('provider.stream.idle_ms') - Date.now();
+
+    if (this.stopped) return false;
+
+    if (left > 0) {
+      this.arm(left);
+
+      return false;
+    }
+
+    this.fired = true;
+    this.caller?.removeEventListener('abort', this.forward);
+    this.cut.abort(this.failure);
+
+    return true;
   }
 }
 
@@ -535,7 +594,8 @@ function exhaustedAllowance(body: string): ExhaustedAllowance | null {
 
   if (!envelope.success) return null;
   const { error, errors } = envelope.output;
-  const allocation = errors?.find((entry) => entry.code === WORKERS_AI_DAILY_ALLOCATION);
+  // Kinu's own error mapping (`errorResponse`) carries the code as text.
+  const allocation = errors?.find((entry) => String(entry.code) === String(WORKERS_AI_DAILY_ALLOCATION));
 
   if (allocation !== undefined) return { marker: String(WORKERS_AI_DAILY_ALLOCATION), message: allocation.message };
 
@@ -543,7 +603,7 @@ function exhaustedAllowance(body: string): ExhaustedAllowance | null {
   const anthropic = v.safeParse(AnthropicErrorDetailsSchema, error.details);
 
   const named = [error.code, error.type, anthropic.success ? anthropic.output.error_code : undefined, error.metadata?.provider_code]
-    .find((field) => field === WORKERS_AI_DAILY_ALLOCATION || v.is(ExhaustedAllowanceCodeSchema, field));
+    .find((field) => String(field) === String(WORKERS_AI_DAILY_ALLOCATION) || v.is(ExhaustedAllowanceCodeSchema, field));
 
   if (named !== undefined) return { marker: String(named), message: error.message };
   const details = v.safeParse(v.array(v.unknown()), error.details);

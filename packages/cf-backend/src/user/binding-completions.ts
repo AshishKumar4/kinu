@@ -10,7 +10,7 @@ import { toKinuError, tolerate } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 
-const ChunkSchema = v.looseObject({ choices: v.array(v.unknown()) });
+const ChunkSchema = v.looseObject({ choices: v.array(v.looseObject({ finish_reason: v.optional(v.nullable(v.string())) })) });
 
 const NativeOutputSchema = v.looseObject({
   response: v.optional(v.nullable(v.string())),
@@ -140,22 +140,34 @@ function openAIEvents(model: string): TransformStream<Uint8Array, Uint8Array> {
   const id = `chatcmpl-${crypto.randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   let buffer = '';
+  // Native content was translated, and no finish has reached the caller: the one finish is ours to send.
   let native = false;
+  let finished = false;
   let calls = 0;
 
   const chunk = (choices: JsonObject[], usage?: JsonObject): string =>
     `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices, ...(usage !== undefined && { usage }) })}\n\n`;
 
-  const finish = (): string => (native ? chunk([{ index: 0, delta: {}, finish_reason: calls > 0 ? 'tool_calls' : 'stop' }]) : '');
+  const finish = (): string => (native && !finished ? chunk([{ index: 0, delta: {}, finish_reason: calls > 0 ? 'tool_calls' : 'stop' }]) : '');
 
   const translated = (line: string): string | null => {
     const data = line.startsWith('data:') ? tolerate<unknown>(() => JSON.parse(line.slice('data:'.length)), 'malformed-input') : undefined;
-    const output = v.is(ChunkSchema, data) ? null : v.safeParse(NativeOutputSchema, data);
+    const openAI = v.safeParse(ChunkSchema, data);
 
-    if (output === null || !output.success || !isNative(output.output)) return null;
-    native = true;
+    if (openAI.success) {
+      finished ||= openAI.output.choices.some((choice) => choice.finish_reason != null);
+
+      return null;
+    }
+
+    const output = v.safeParse(NativeOutputSchema, data);
+
+    if (!output.success || !isNative(output.output)) return null;
     const text = output.output.response ?? '';
     const deltas = toolCalls(output.output, `call-${id}`, calls);
+
+    // A usage-only frame reports; it does not end, or begin, a native answer.
+    native ||= text !== '' || deltas.length > 0;
     calls += deltas.length;
 
     return [

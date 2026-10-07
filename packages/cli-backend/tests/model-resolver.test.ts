@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { generateText } from 'ai';
+import { generateText, streamText } from 'ai';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, KINU_USER_AGENT, credentialToHeaders, usageTotal,
 } from '@kinu.run/core';
@@ -18,6 +18,26 @@ import { LocalAgentSession } from '../src/local-session';
 const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
 describe('createLocalModelResolver', () => {
+  test('a cloud Workers AI model keeps the cached tokens a trailing duplicate usage report zeroed', async () => {
+    const usage = (cached: number) => `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],`
+      + `"usage":{"prompt_tokens":100,"completion_tokens":3,"total_tokens":103,"prompt_tokens_details":{"cached_tokens":${String(cached)}}}}\n\n`;
+
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(
+      `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"ok"}}]}\n\n${usage(96)}${usage(0)}data: [DONE]\n\n`,
+      { headers: { 'content-type': 'text/event-stream' } },
+    ) });
+
+    const resolver = createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_transport' } });
+
+    try {
+      const result = streamText({ model: resolver.resolveModel('workers-ai/@cf/test/relay', 'relay'), prompt: 'test', maxRetries: 0 });
+
+      expect((await result.usage).inputTokenDetails.cacheReadTokens).toBe(96);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test('a cloud model spends its retries once, on this machine; each relayed request carries none of Kinu\'s options', async () => {
     const received: boolean[] = [];
 
