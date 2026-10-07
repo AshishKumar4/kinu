@@ -28,6 +28,14 @@ function resultOf(answer: string): JsonValue {
 /** Reads member names only; `createDbCodemodeProvider` fixes them without touching a database. */
 function memberNames(): readonly string[] {
   const unused: AppDataStore = {
+    fork: {
+      tables: () => { throw new Error('not called'); },
+      page: () => { throw new Error('not called'); },
+      count: () => { throw new Error('not called'); },
+      create: () => { throw new Error('not called'); },
+      insert: () => { throw new Error('not called'); },
+      clear: () => { throw new Error('not called'); },
+    },
     createTable: () => { throw new Error('not called'); },
     dropTable: () => { throw new Error('not called'); },
     listTables: () => { throw new Error('not called'); },

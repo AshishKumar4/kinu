@@ -11,6 +11,7 @@ import { reassemble, sourceFrames } from './helpers/fork-stream';
 import {
   FORK_ROW_SECTIONS, type ForkChunksFrame, type ForkFrame, type ForkPageFrame, type ForkRowFrame,
 } from '../src/identity/fork-transfer';
+import { FORK_SECTIONS, perSection, type ForkRows, type ForkRowSection } from '../src/identity/fork-sections';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 
@@ -44,33 +45,12 @@ function framesFor(ws: TestWorkspace, frameBytes = 2048, untilMessageId = 'm3'):
   return sourceFrames(ws, untilMessageId, { artifactDirectory: SOURCE_ARTIFACTS, transferId: 'transfer', frameBytes });
 }
 
+/** A row frame's payload bytes, as the section it carries measures them for the frame budget. */
 function rowPayloadBytes(frame: ForkFrame): number {
-  const bytes = (value: string | null): number => (value === null ? 0 : Buffer.byteLength(value));
+  const measured = <K extends ForkRowSection>(kind: K, rows: readonly ForkRows[K][]): number => rows
+    .reduce((total, row) => total + FORK_SECTIONS[kind].bytes(row), 0);
 
-  switch (frame.kind) {
-    case 'agentConfig':
-      return frame.rows.reduce((total, row) => total + bytes(row.key) + bytes(row.value), 0);
-    case 'craftedTools':
-      return frame.rows.reduce((total, row) => total + bytes(row.name) + bytes(row.description)
-        + bytes(row.code), 0);
-    case 'sessionMessages':
-      return frame.rows.reduce((total, row) => total + bytes(row.message_id) + bytes(row.role)
-        + bytes(row.native_content_kind) + bytes(row.origin) + bytes(row.envelope_json)
-        + bytes(row.content_json) + bytes(row.content_path) + bytes(row.content_digest), 0);
-    case 'conversationEntries':
-      return frame.rows.reduce((total, row) => total + bytes(row.id) + bytes(row.role)
-        + bytes(row.turn_id) + bytes(row.run_id)
-        + bytes(row.metadata_json) + bytes(row.metadata_path) + bytes(row.metadata_digest), 0);
-    case 'conversationEntryParts':
-      return frame.rows.reduce((total, row) => total + bytes(row.entry_id) + bytes(row.message_id), 0);
-    case 'contextMembers':
-      return frame.rows.reduce((total, row) => total + bytes(row.entry_id) + bytes(row.message_id), 0);
-    case 'begin':
-    case 'chunks':
-    case 'page':
-    case 'commit':
-      return 0;
-  }
+  return isRowFrame(frame) ? measured(frame.kind, frame.rows) : 0;
 }
 
 describe('forkTransferFrames source streamer', () => {
@@ -118,12 +98,7 @@ describe('forkTransferFrames source streamer', () => {
     const carried = reassemble(frames);
 
     expect(begin.counts).toEqual({
-      agentConfig: carried.agentConfig.length,
-      craftedTools: carried.craftedTools.length,
-      sessionMessages: carried.sessionMessages.length,
-      conversationEntries: carried.conversationEntries.length,
-      conversationEntryParts: carried.conversationEntryParts.length,
-      contextMembers: carried.contextMembers.length,
+      ...perSection((kind) => carried[kind].length),
       // One import a name under the home or a payload, SOUL.md among them.
       files: new Set(frames.filter(isPageFrame).map((frame) => JSON.stringify(frame.target))).size,
     });

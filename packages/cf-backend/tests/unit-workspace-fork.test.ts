@@ -6,6 +6,7 @@ import {
 import type { UserCaller } from '@kinu.run/core';
 import { createTestWorkspace, createTestActor } from '../../core/tests/helpers';
 import { ForkConversation, SOURCE_ARTIFACTS } from '../../core/tests/helpers/fork-conversation';
+import { appDataOf } from '../../core/tests/helpers/fork-stream';
 
 const caller = { workspaceToken: 'source-token' } satisfies UserCaller;
 
@@ -18,6 +19,7 @@ async function source(): Promise<CloudForkSource> {
 
   return {
     sql: ws.sql, vfs: ws.forkSource, actor, untilMessageId: 'm1', artifactDirectory: SOURCE_ARTIFACTS,
+    appData: appDataOf(ws).fork,
   };
 }
 

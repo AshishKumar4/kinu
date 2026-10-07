@@ -236,7 +236,8 @@ A workspace holds the state. Agents are the actors that work inside it.
   message: the `forkAgent` callable runs `forkWorkspace`
   (`packages/core/src/identity/fork-driver.ts`) and the new workspace records
   `fork_lineage` (`source_workspace_id/name`). It carries the conversation up to
-  that message, crafted tools and settings, and the workspace files as they are
+  that message, crafted tools and settings, what the main agent learned (below),
+  and the workspace files as they are
   when the fork is made, which can hold work from after that message: SOUL.md,
   memory and the project tree, with directories, symlinks, modes and mtimes.
   That is what the Files tab shows, minus the scaffold, which the fork
@@ -255,12 +256,17 @@ A workspace holds the state. Agents are the actors that work inside it.
   What a fork takes is declared once per family of state in
   `packages/core/src/identity/fork-policy.ts`, and every table a workspace holds
   names its family there (`unit-fork-policy` fails otherwise): **as of the cut**
-  (the chat, the model messages it references, the cut's working context),
-  **current** (settings without the shell-approval authority, crafted tools),
+  (the chat, the model messages it references, the cut's working context, the
+  main agent's lessons: none taught after the cut, and one corroborated after it
+  still provisional), **current** (settings without the shell-approval
+  authority, crafted tools, and what keeps no history to cut at: tool lessons,
+  memory facts, the `db` tool's tables with the main agent's rows in them),
   **fresh** (identity, lineage, the scaffold, the memory index, rebuilt from the
   carried notes) or **not copied** (turns and runs, jobs and schedules,
-  approvals, what the source learned, exploration, slates, GitHub activity, the
-  `db` tool's tables). The row sections that carry a family
+  approvals, the struggles and ratings behind the lessons, exploration, slates,
+  GitHub activity, spend figures). A `db` table crosses through the tool's own
+  declaration and insert path, so the target writes its DDL; the write drops the
+  tables an abandoned attempt declared. The row sections that carry a family
   (`fork-sections.ts`) and the tables the write empties before a retry stages,
   children first, are derived from it. A frame can name only a path inside the
   target's own artifact directory or home; any other is refused on arrival.

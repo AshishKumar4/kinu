@@ -48,8 +48,14 @@ describe('the fork policy of a workspace\'s state', () => {
       expect([name, reset.filter((table) => !family.tables.includes(table))]).toEqual([name, []]);
     }
 
-    // Each carried section's rows land in its family's tables, so those are emptied before a retry stages again.
-    for (const kind of FORK_ROW_SECTIONS) expect([kind, FORK_FAMILIES[FORK_SECTIONS[kind].family].resets?.length ?? 0]).not.toEqual([kind, 0]);
+    // Each carried section's rows land in its family's tables, so those are emptied before a retry stages again: by the
+    // declaration, or by the section itself where the tables are not known until the source names them.
+    for (const kind of FORK_ROW_SECTIONS) {
+      const declared = FORK_SECTIONS[kind];
+      const resetSomehow = (FORK_FAMILIES[declared.family].resets?.length ?? 0) > 0 || FORK_ROW_SECTIONS.some((other) => FORK_SECTIONS[other].family === declared.family && FORK_SECTIONS[other].reset !== undefined);
+
+      expect([kind, resetSomehow]).toEqual([kind, true]);
+    }
   });
 
   // Run against the store's own foreign keys: a reset ordered parent first is refused by SQLite, not by this test.

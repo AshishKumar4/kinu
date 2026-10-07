@@ -24,19 +24,20 @@ import { forkArtifactPath, planForkConversation } from './fork-plan';
 import { ForkSnapshotHeadSchema } from './fork-rows';
 import {
   FORK_ROW_SECTIONS, FORK_SECTIONS, forkSectionCount, perSection,
-  type ForkRows, type ForkRowSection, type ForkSection, type ForkSectionSource,
+  type ForkAppData, type ForkRows, type ForkRowSection, type ForkSection, type ForkSectionSource,
 } from './fork-sections';
 import { ForkSectionCountsSchema, ForkTargetWriter, forkResultOf, type ForkResult, type ForkStagedCounts } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
 /** Fork transfer protocol version; a receiver refuses one it does not implement. Bump when an older
- *  receiver would misread the frame union. v5 carries no memory index: the target derives it from the notes. */
-export const FORK_TRANSFER_VERSION = 5;
+ *  receiver would misread the frame union. v5 carries no memory index: the target derives it from the notes. v6 carries
+ *  the main actor's lessons, tool lessons, facts and `db` tables. */
+export const FORK_TRANSFER_VERSION = 6;
 
 /** Payload bytes per frame: a quarter of `do.facet.rpc_bytes`, leaving headroom for clone metadata and envelope. */
 export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
 
-export { FORK_ROW_SECTIONS, type ForkRowSection } from './fork-sections';
+export { FORK_ROW_SECTIONS, type ForkAppData, type ForkRowSection } from './fork-sections';
 
 /** Fields every frame carries. `seq` is 0-based; `commit`'s `seq` is the number of frames before it. */
 const FRAME_ENVELOPE = {
@@ -89,6 +90,11 @@ const ForkFrameSchema = v.variant('kind', [
   rowFrameSchema('conversationEntries'),
   rowFrameSchema('conversationEntryParts'),
   rowFrameSchema('contextMembers'),
+  rowFrameSchema('lessons'),
+  rowFrameSchema('toolLessons'),
+  rowFrameSchema('facts'),
+  rowFrameSchema('appTables'),
+  rowFrameSchema('appRows'),
   /** Chunks a page names that the target lacked, stored ahead of that page. */
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('chunks'), target: ForkImportTargetSchema, chunks: v.array(ForkExportChunkSchema) }),
   /** One page of one import. */
@@ -207,6 +213,8 @@ export interface ForkTransferSource {
   untilMessageId: string;
   /** This actor's payload directory; references are made relative to it. */
   artifactDirectory: string;
+  /** The `db` tool's store as that actor reads it (`AppDataStore.fork`); the fork only reads it. */
+  appData: ForkAppData;
   transferId: string;
   /** Max payload bytes per frame. Production passes FORK_FRAME_BYTES. */
   frameBytes: number;
@@ -274,7 +282,10 @@ export async function* forkTransferFrames(
       ...carriedPayloads(pinned, plan.artifacts, source.artifactDirectory),
     ];
 
-    const sections: ForkSectionSource = { sql: source.sql, actorId, plan, artifactDirectory: source.artifactDirectory };
+    const sections: ForkSectionSource = {
+      sql: source.sql, actorId, plan, artifactDirectory: source.artifactDirectory, appData: source.appData,
+    };
+
     const counts: ForkSectionCounts = { ...perSection((kind) => forkSectionCount(kind, sections)), files: imports.length };
 
     const identity = source.sql<{ id: string; name: string }>`

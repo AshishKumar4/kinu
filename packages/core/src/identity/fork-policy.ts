@@ -56,6 +56,16 @@ const FAMILIES = {
   configuration: { policy: 'current', tables: ['actor_config'], resets: [actor('actor_config')] },
   /** The workspace's crafted tools, which the fork evolves on its own; their search index follows them. */
   craftedTools: { policy: 'current', tables: ['crafted_tools', 'crafted_tools_fts'], resets: [workspace('crafted_tools')] },
+  /** The main actor's lessons as they stood at the cut: none made after it, and one corroborated after it still
+   *  provisional. A lesson cites its turns by id, as values; the chat up to the cut carries those turns. */
+  lessons: { policy: 'as-of-cut', tables: ['lessons'], resets: [actor('lessons')] },
+  /** Today's value: a tool lesson is revised in place and keeps no earlier revision, so the fork takes the current one. */
+  toolLessons: { policy: 'current', tables: ['tool_lessons'], resets: [actor('tool_lessons')] },
+  /** Today's value: a memory fact is overwritten in place and keeps no earlier one, so the fork recalls what the source does. */
+  facts: { policy: 'current', tables: ['agent_facts'], resets: [actor('agent_facts')] },
+  /** Today's value: the `db` tool's tables and the main actor's rows in them, which keep no history. The tables are
+   *  named in their catalogue, so the store resets them itself (`appTables` in fork-sections.ts). */
+  appData: { policy: 'current', tables: ['agent_data_tables'] },
   /** Rebuilt from the carried notes by the target's first search. */
   memoryIndex: {
     policy: 'fresh',
@@ -87,13 +97,13 @@ const FAMILIES = {
     policy: 'not-copied',
     tables: ['deferred_approvals', 'deferred_approval_hits', 'instruction_approvals', 'device_consent_requests', 'plan_reviews'],
   },
-  /** What the source learned from its own turns. */
+  /** How the source learned from its own turns: the struggles, ratings and trials behind its lessons, not the lessons. */
   learning: {
     policy: 'not-copied',
     tables: [
-      'evolution_events', 'evolution_helpers', 'lessons', 'pattern_extractions', 'tool_lessons', 'turn_struggles',
+      'evolution_events', 'evolution_helpers', 'pattern_extractions', 'turn_struggles',
       'turn_ratings', 'gepa_runs', 'gepa_candidates', 'artifact_versions', 'artifact_trials', 'trial_turns',
-      'refinement_requests', 'refinement_lane_holds', 'imported_experience', 'agent_facts',
+      'refinement_requests', 'refinement_lane_holds', 'imported_experience',
     ],
   },
   /** Exploration heads, searches and swarms the source ran. */
@@ -114,8 +124,8 @@ const FAMILIES = {
   },
   /** The source's GitHub activity. */
   github: { policy: 'not-copied', tables: ['github_repos', 'github_nodes', 'github_items'] },
-  /** The `db` tool's catalogue and the figures read from it. */
-  agentData: { policy: 'not-copied', tables: ['agent_data_tables', 'agent_figures'] },
+  /** The source's own token and spend figures. */
+  figures: { policy: 'not-copied', tables: ['agent_figures'] },
 } as const satisfies Readonly<Record<string, ForkFamily>>;
 
 export type ForkFamilyName = keyof typeof FAMILIES;

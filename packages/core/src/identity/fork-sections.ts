@@ -9,13 +9,14 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import type { SqlExecutor } from '../types/primitives';
+import { parseJsonValue, type JsonValue } from '../utils/json';
 import { forkConversationEntryPartRows, forkConversationEntryRow, forkSessionMessageRow, type ForkConversationPlan } from './fork-plan';
 import type { ForkFamilyName } from './fork-policy';
 import {
-  ForkConfigRowSchema, ForkContextMemberRowSchema, ForkConversationEntryPartRowSchema, ForkConversationEntryRowSchema,
-  ForkCraftedToolRowSchema, ForkSessionMessageRowSchema,
-  type ForkConfigRow, type ForkContextMemberRow, type ForkConversationEntryPartRow, type ForkConversationEntryRow,
-  type ForkCraftedToolRow, type ForkSessionMessageRow,
+  ForkAppRowSchema, ForkAppTableRowSchema, ForkConfigRowSchema, ForkContextMemberRowSchema, ForkConversationEntryPartRowSchema, ForkConversationEntryRowSchema,
+  ForkCraftedToolRowSchema, ForkFactRowSchema, ForkLessonRowSchema, ForkSessionMessageRowSchema, ForkToolLessonRowSchema,
+  type ForkAppRow, type ForkAppTableRow, type ForkConfigRow, type ForkContextMemberRow, type ForkConversationEntryPartRow, type ForkConversationEntryRow,
+  type ForkCraftedToolRow, type ForkFactRow, type ForkLessonRow, type ForkSessionMessageRow, type ForkToolLessonRow,
 } from './fork-rows';
 import { openWorkspaceMainActor } from './workspace-actors';
 
@@ -30,6 +31,11 @@ export interface ForkRows {
   conversationEntries: ForkConversationEntryRow;
   conversationEntryParts: ForkConversationEntryPartRow;
   contextMembers: ForkContextMemberRow;
+  lessons: ForkLessonRow;
+  toolLessons: ForkToolLessonRow;
+  facts: ForkFactRow;
+  appTables: ForkAppTableRow;
+  appRows: ForkAppRow;
 }
 
 export type ForkRowSection = keyof ForkRows;
@@ -42,6 +48,11 @@ export const FORK_ROW_SECTIONS = [
   'conversationEntries',
   'conversationEntryParts',
   'contextMembers',
+  'lessons',
+  'toolLessons',
+  'facts',
+  'appTables',
+  'appRows',
 ] as const satisfies readonly ForkRowSection[];
 
 /** One value per section; the compiler holds it to every section. */
@@ -53,6 +64,11 @@ export function perSection<T>(make: (section: ForkRowSection) => T): Record<Fork
     conversationEntries: make('conversationEntries'),
     conversationEntryParts: make('conversationEntryParts'),
     contextMembers: make('contextMembers'),
+    lessons: make('lessons'),
+    toolLessons: make('toolLessons'),
+    facts: make('facts'),
+    appTables: make('appTables'),
+    appRows: make('appRows'),
   };
 }
 
@@ -62,6 +78,8 @@ export interface ForkSectionSource {
   readonly actorId: string;
   readonly plan: ForkConversationPlan;
   readonly artifactDirectory: string;
+  /** The `db` tool's store as the source's main actor reads it. */
+  readonly appData: ForkAppData;
 }
 
 /** Where a section's rows land on the target. */
@@ -72,6 +90,8 @@ export interface ForkSectionTarget {
   readonly artifactPath: (relative: string) => string;
   /** The fork's one working context, made on first use. */
   readonly context: () => string;
+  /** The `db` tool's store as the target's main actor writes it, opened on first use: the actor is born at `begin`. */
+  readonly appData: () => ForkAppData;
 }
 
 export interface ForkSection<Row> {
@@ -84,7 +104,30 @@ export interface ForkSection<Row> {
   /** Payload bytes on the wire, which the frame budget bounds. */
   bytes(row: Row): number;
   stage(target: ForkSectionTarget, rows: readonly Row[]): void;
+  /** Empties what an abandoned attempt landed where the family's tables cannot name it (fork-policy.ts resets). */
+  reset?(target: ForkSectionTarget): void;
 }
+
+/**
+ * The `db` tool's store as a fork reads and lands it, in the store's own codec and DDL (`AppDataStore.fork`). The
+ * platform's copy, not the agent's work: no work-mode gate, and no `db_op` evidence, which records what an agent did.
+ */
+export interface ForkAppData {
+  /** Every declared table, oldest first: its declaration's JSON text, and when it was declared. */
+  tables(): ReadonlyArray<{ readonly declaration: string; readonly createdAt: number }>;
+  /** Rows of `table` this store's actor may read, in insertion order after row `after` (null: from the first);
+   *  `next` is null at the end. */
+  page(table: string, after: number | null, limit: number): { readonly rows: Array<Record<string, JsonValue>>; readonly next: number | null };
+  count(table: string): number;
+  /** Declares a table from the JSON text `tables` gave, checked as `db.createTable` checks a declaration. */
+  create(declaration: string, createdAt: number): void;
+  insert(table: string, rows: ReadonlyArray<Record<string, JsonValue>>): void;
+  /** Drops every declared table and its catalogue row: what an abandoned fork attempt landed. */
+  clear(): void;
+}
+
+/** Rows of the `db` tool's tables per page read; a frame takes as many as fit its bytes. */
+const APP_ROWS_PAGE = 200;
 
 const utf8Bytes = (text: string | null): number => (text === null ? 0 : Buffer.byteLength(text, 'utf8'));
 
@@ -101,6 +144,55 @@ function* configRows({ sql }: ForkSectionSource): Iterable<ForkConfigRow> {
     rowid = row.rowid;
 
     if (!SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)) yield { key: row.key, value: row.value };
+  }
+}
+
+/** Rows of one actor-keyed table, one at a time by rowid, so a large table never sits whole in the sender. */
+function* actorRows<Row>(sql: SqlExecutor, read: (actorId: string, after: number) => { readonly rowid: number; readonly row: Row } | undefined): Iterable<Row> {
+  const actorId = openWorkspaceMainActor(sql).actorId;
+
+  for (let after = 0; ;) {
+    const next = read(actorId, after);
+
+    if (next === undefined) return;
+    after = next.rowid;
+    yield next.row;
+  }
+}
+
+/** The source's lessons as they stood at the cut: none made after it, and one corroborated after it still provisional. */
+function lessonRows({ sql, plan }: ForkSectionSource): Iterable<ForkLessonRow> {
+  const cut = plan.cut.recordedAt;
+
+  return actorRows(sql, (actorId, after) => {
+    const found = sql<ForkLessonRow & { rowid: number }>`
+      SELECT rowid, id, turn_ids, text, source, status, created_at, corroborated_at FROM lessons
+      WHERE actor_id = ${actorId} AND created_at <= ${cut} AND rowid > ${after} ORDER BY rowid LIMIT 1
+    `[0];
+
+    if (found === undefined) return undefined;
+    const later = found.corroborated_at !== null && found.corroborated_at > cut;
+    const row = v.parse(ForkLessonRowSchema, { ...found, ...(later && { status: 'provisional', corroborated_at: null }) });
+
+    return { rowid: found.rowid, row };
+  });
+}
+
+const DeclaredNameSchema = v.object({ name: v.string() });
+
+/** Each declared table's name, read from the declaration the store gives. */
+function appTableNames(appData: ForkAppData): string[] {
+  return appData.tables().map(({ declaration }) => v.parse(DeclaredNameSchema, parseJsonValue(declaration)).name);
+}
+
+/** The `db` tool's rows its main actor may read, every table in declaration order, a page at a time by rowid. */
+function* appRows({ appData }: ForkSectionSource): Iterable<ForkAppRow> {
+  for (const name of appTableNames(appData)) {
+    for (let page = appData.page(name, null, APP_ROWS_PAGE); ; page = appData.page(name, page.next, APP_ROWS_PAGE)) {
+      for (const row of page.rows) yield { table: name, row };
+
+      if (page.next === null) break;
+    }
   }
 }
 
@@ -212,6 +304,98 @@ export const FORK_SECTIONS: ForkSections = {
           VALUES (${actorId}, ${CHAT_SESSION_ID}, ${row.entry_id}, ${row.position}, ${row.message_id},
                   ${row.part_no}, ${row.text_start}, ${row.text_length})
         `;
+      }
+    },
+  },
+  lessons: {
+    family: 'lessons',
+    rows: ForkLessonRowSchema,
+    select: lessonRows,
+    bytes: (row) => utf8Bytes(row.id) + utf8Bytes(row.turn_ids) + utf8Bytes(row.text) + utf8Bytes(row.source),
+    stage: ({ sql, actorId }, rows) => {
+      for (const row of rows) {
+        void sql`
+          INSERT INTO lessons (actor_id, id, turn_ids, text, source, status, created_at, corroborated_at)
+          VALUES (${actorId}, ${row.id}, ${row.turn_ids}, ${row.text}, ${row.source}, ${row.status}, ${row.created_at}, ${row.corroborated_at})
+        `;
+      }
+    },
+  },
+  toolLessons: {
+    family: 'toolLessons',
+    rows: ForkToolLessonRowSchema,
+    select: ({ sql }) => actorRows(sql, (actorId, after) => {
+      const found = sql<ForkToolLessonRow & { rowid: number }>`
+        SELECT rowid, id, tool, text, revision, helpful, harmful, turn_ids, status, created_at, updated_at FROM tool_lessons
+        WHERE actor_id = ${actorId} AND rowid > ${after} ORDER BY rowid LIMIT 1
+      `[0];
+
+      return found === undefined ? undefined : { rowid: found.rowid, row: v.parse(ForkToolLessonRowSchema, found) };
+    }),
+    bytes: (row) => utf8Bytes(row.id) + utf8Bytes(row.tool) + utf8Bytes(row.text) + utf8Bytes(row.turn_ids),
+    stage: ({ sql, actorId }, rows) => {
+      for (const row of rows) {
+        void sql`
+          INSERT INTO tool_lessons (actor_id, id, tool, text, revision, helpful, harmful, turn_ids, status, created_at, updated_at)
+          VALUES (${actorId}, ${row.id}, ${row.tool}, ${row.text}, ${row.revision}, ${row.helpful}, ${row.harmful},
+                  ${row.turn_ids}, ${row.status}, ${row.created_at}, ${row.updated_at})
+        `;
+      }
+    },
+  },
+  facts: {
+    family: 'facts',
+    rows: ForkFactRowSchema,
+    select: ({ sql }) => actorRows(sql, (actorId, after) => {
+      const found = sql<ForkFactRow & { rowid: number }>`
+        SELECT rowid, key, value_json, confidence, source, last_observed_at FROM agent_facts
+        WHERE actor_id = ${actorId} AND rowid > ${after} ORDER BY rowid LIMIT 1
+      `[0];
+
+      return found === undefined ? undefined : { rowid: found.rowid, row: v.parse(ForkFactRowSchema, found) };
+    }),
+    bytes: (row) => utf8Bytes(row.key) + utf8Bytes(row.value_json) + utf8Bytes(row.source),
+    stage: ({ sql, actorId }, rows) => {
+      for (const row of rows) {
+        void sql`
+          INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
+          VALUES (${actorId}, ${row.key}, ${row.value_json}, ${row.confidence}, ${row.source}, ${row.last_observed_at})
+        `;
+      }
+
+      markStoreChanged(sql);
+    },
+  },
+  appTables: {
+    family: 'appData',
+    rows: ForkAppTableRowSchema,
+    select: ({ appData }) => appData.tables().map(({ declaration, createdAt }) => ({ declaration, created_at: createdAt })),
+    bytes: (row) => utf8Bytes(row.declaration),
+    stage: ({ appData }, rows) => {
+      const store = appData();
+
+      for (const row of rows) store.create(row.declaration, row.created_at);
+    },
+    // The declared tables are named in the catalogue, not in fork-policy.ts, so the store drops its own.
+    reset: ({ appData }) => { appData().clear(); },
+  },
+  appRows: {
+    family: 'appData',
+    rows: ForkAppRowSchema,
+    select: appRows,
+    count: ({ appData }) => appTableNames(appData).reduce((total, name) => total + appData.count(name), 0),
+    bytes: (row) => utf8Bytes(row.table) + utf8Bytes(JSON.stringify(row.row)),
+    stage: ({ appData }, rows) => {
+      const store = appData();
+
+      // Consecutive rows of one table land in one insert.
+      for (let at = 0; at < rows.length;) {
+        const table = rows[at]?.table ?? '';
+        let end = at;
+
+        while (end < rows.length && rows[end]?.table === table) end += 1;
+        store.insert(table, rows.slice(at, end).map(({ row }) => row));
+        at = end;
       }
     },
   },

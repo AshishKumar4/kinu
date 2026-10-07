@@ -13,7 +13,10 @@ import { KinuError } from '../obs/error';
 import { forkArtifactPath } from './fork-plan';
 import type { ForkSnapshotHead } from './fork-rows';
 import { FORK_FAMILIES, type ForkReset } from './fork-policy';
-import { FORK_CONTEXT_REVISION, FORK_SECTIONS, perSection, type ForkRows, type ForkRowSection, type ForkSectionTarget } from './fork-sections';
+import {
+  FORK_CONTEXT_REVISION, FORK_ROW_SECTIONS, FORK_SECTIONS, perSection,
+  type ForkAppData, type ForkRows, type ForkRowSection, type ForkSectionTarget,
+} from './fork-sections';
 
 /** What the write empties before it stages, in the order that keeps every foreign key satisfied (fork-policy.ts). */
 const FORK_WRITE_RESETS: readonly ForkReset[] = Object.values(FORK_FAMILIES).flatMap((family) => family.resets ?? []);
@@ -35,6 +38,9 @@ export interface ForkWriteTarget {
   /** Runs the publication atomically. Staging happens outside it: a host transaction is
      *  synchronous and the filesystem is not. */
   transaction?: (rows: () => void) => void;
+  /** The `db` tool's store as the target's main actor writes it (`AppDataStore.fork`), opened once `begin` has made
+   *  that actor. */
+  appData: () => ForkAppData;
 }
 
 /** How much a source declares it sends, and a writer has taken: each section's rows, and the files. Checked against
@@ -96,7 +102,9 @@ export class ForkTargetWriter {
     const actorId = this.actorId;
 
     for (const reset of FORK_WRITE_RESETS) emptied(this.target, reset, actorId);
+    const target = this.sectionTarget;
 
+    for (const kind of FORK_ROW_SECTIONS) FORK_SECTIONS[kind].reset?.(target);
     markStoreChanged(this.target);
   }
 
@@ -114,6 +122,7 @@ export class ForkTargetWriter {
       actorId,
       artifactPath: (relative) => this.artifactPath(relative),
       context: () => this.forkContext(actorId),
+      appData: this.opts.appData,
     };
   }
 
