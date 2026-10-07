@@ -2,7 +2,7 @@
 import { describe, test, expect } from 'bun:test';
 import { mapConnectionStatus, mcpCredentialTransport } from '../src/user/mcp';
 import {
-  validateMcpServerInput, parseAllowedTools, parseMcpHeaders,
+  validateMcpServerInput, parseMcpHeaders,
   isMcpToolKey, mcpToolKey, stepContextLimit,
   describeMcpTool, McpToolSurfaceCache, toolSurfaceTokens, omitEmptyOptionalArgs, type McpSurfaceBudget,
   type SerializableToolDescriptor,
@@ -431,25 +431,6 @@ describe('mcpToolKey', () => {
   test('never produces a builtin name', () => {
     expect(mcpToolKey('x', 'shell')).not.toBe('shell');
     expect(mcpToolKey('x', 'skills')).not.toBe('skills');
-  });
-});
-
-describe('parseAllowedTools', () => {
-  test('null/empty → null', () => {
-    expect(parseAllowedTools(null)).toBeNull();
-    expect(parseAllowedTools(undefined)).toBeNull();
-    expect(parseAllowedTools('')).toBeNull();
-  });
-  test('roundtrips a valid JSON array of strings', () => {
-    expect(parseAllowedTools('["a","b"]')).toEqual(['a', 'b']);
-  });
-  test('rejects non-string entries (returns null = allow all rather than crash)', () => {
-    expect(parseAllowedTools('[1,2]')).toBeNull();
-  });
-  test('rejects non-array shapes', () => {
-    expect(parseAllowedTools('"a"')).toBeNull();
-    expect(parseAllowedTools('{"a":1}')).toBeNull();
-    expect(parseAllowedTools('not-json')).toBeNull();
   });
 });
 

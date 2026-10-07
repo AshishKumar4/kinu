@@ -14,7 +14,7 @@ import {
 import { chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import { createWorkspaceBundle } from '../../core/tests/helpers';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
-import { joinHarnessFibers, resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
+import { joinHarnessFibers, recordedMcpToolCalls, resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 import { SlateId } from '@agent-core/core/slates';
 import { slateDirectory } from '@kinu.run/core/slates';
@@ -83,6 +83,37 @@ test('an MCP tool called through eval answers its data whole, fails on a protoco
     await expect(run(call(2))).rejects.toThrow('remote execution failed');
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
     await expect(run(call(3))).rejects.toThrow('not in the allowed_tools list');
+  } finally { user.close(); resetRecordedMcp(); }
+});
+
+test("a server whose stored allowlist is corrupt offers none of its tools, and a call to one never reaches it", async () => {
+  resetRecordedMcp();
+  const ownerUserId = '0123456789abcdef0123456789abcdef';
+  const workspace = 'corrupt-allowlist';
+  const user = createTestUserDO({ durableObjectId: ownerUserId });
+
+  try {
+    const capability = await provisionTestWorkspace(user, workspace);
+    const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId });
+    await actor.agent.installWorkspaceCapability(capability);
+    const owner = await testOwner();
+    await user.userDO.userMcp_list(owner);
+    // Written, but not a list of names: the owner set an allowlist, and nothing may read it as "allow all".
+    user.sql.exec(`INSERT INTO user_mcp_servers
+      (id, name, server_url, transport, headers, allowed_tools)
+      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, '[1,2]')`);
+    await user.userDO.userMcp_list(owner);
+    seedMcpTools('connection-id', [{ name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
+    seedMcpAnswer({ isError: false, content: [{ type: 'text', text: 'issue body' }] });
+    actor.agent.harnessDrivingUserMessage('Read the issue.', { kinuMode: 'build' });
+
+    const turn = await chatSessionTurns(actor.agent).prepare({ messages: [{ role: 'user', content: 'Read the issue.' }] });
+    const run = toolExecute<{ code: string }, JsonValue>(present(turn.tools.eval, 'eval'));
+
+    await expect(run({ code: 'return await tools["mcp_github_read_issue"]({});' })).rejects.toThrow();
+    expect(recordedMcpToolCalls()).toEqual([]);
+    expect((await user.userDO.userMcp_list(owner)).map((server) => ({ toolsCount: server.toolsCount, flagged: server.error !== null })))
+      .toEqual([{ toolsCount: 0, flagged: true }]);
   } finally { user.close(); resetRecordedMcp(); }
 });
 

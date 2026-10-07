@@ -2499,7 +2499,7 @@ export {
 export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';
 
 export {
-  validateMcpServerInput, validateMcpServerName, parseAllowedTools, parseMcpHeaders,
+  validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders,
   type McpServerInput, type McpTransport,
 } from './mcp/servers';
 

@@ -164,9 +164,20 @@ function jsonColumn<Schema extends v.GenericSchema>(raw: string | null | undefin
   return parsed.success ? parsed.output : null;
 }
 
-/** Null means "allow all". */
-export function parseAllowedTools(raw: string | null | undefined): string[] | null {
-  return jsonColumn(raw, StringArraySchema);
+/** A server's allowlist: null when none was set, or why its stored list cannot be read. */
+export type AllowedToolsRead = { readonly allowed: string[] | null } | { readonly failure: KinuError };
+
+/**
+ * Null means "no allowlist": the column was never written. A written column that does not read as a list of names is
+ * corrupt, and corrupt never widens to "allow all": it is a failure naming `server`, so its tools are refused.
+ */
+export function readAllowedTools(raw: string | null | undefined, server: string): AllowedToolsRead {
+  if (!raw) return { allowed: null };
+  const parsed = v.safeParse(StringArraySchema, tolerate(() => JSON.parse(raw), 'malformed-input'));
+
+  return parsed.success
+    ? { allowed: parsed.output }
+    : { failure: new KinuError('io', `The allowed tools list of MCP server ${server} is unreadable, so none of its tools are offered; set it again in Settings.`) };
 }
 
 /** Null means "no custom headers". */
