@@ -356,8 +356,8 @@ interface FrameLedger {
   /** Resolves once every one of `methods` has been answered and nothing the
    *  page asked is still unanswered. */
   quietAfter(...methods: readonly string[]): Promise<void>;
-  /** Whether nothing the page asked is still unanswered. */
-  quiet(): boolean;
+  /** Whether every named method has an answer and no current-document call is unanswered. */
+  quiet(...methods: readonly string[]): boolean;
   /** Resolves once a frame of `type` has arrived. */
   received(type: string): Promise<void>;
   /** Resolves once the workspace has closed a turn: its chat response's last
@@ -371,6 +371,7 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
   const cdp = await page.createCDPSession();
 
   await cdp.send('Network.enable');
+  await cdp.send('Page.enable');
 
   /** An ask is keyed by its socket and its id: ids restart per socket, so two sockets or two loads reuse them. */
   interface Ask { readonly socket: string; readonly method: string }
@@ -407,15 +408,35 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
 
   /** Each socket's path by CDP request id, and what the page sent over each since the restart. */
   const socketPaths = new Map<string, string>();
+  const retiredSockets = new Set<string>();
   const framesSent = new Map<string, number>();
   const requests = new Map<string, number>();
 
   const pathOf = (url: string | undefined): string => new URL(url ?? 'ws://unknown/').pathname;
   const tally = (into: Map<string, number>, key: string): void => { into.set(key, (into.get(key) ?? 0) + 1); };
 
+  // A reload can retire a socket without CDP's close event; its late frames still belong to the old document.
+  cdp.on('Page.frameNavigated', (event: { frame: { parentId?: string } }) => {
+    if (event.frame.parentId !== undefined) return;
+
+    for (const socket of socketPaths.keys()) retiredSockets.add(socket);
+
+    for (const [key, ask] of asked) {
+      if (!retiredSockets.has(ask.socket)) continue;
+
+      asked.delete(key);
+      answered.delete(key);
+    }
+
+    check();
+  });
   cdp.on('Network.webSocketCreated', (event: { requestId: string; url?: string }) => { socketPaths.set(event.requestId, pathOf(event.url)); });
   cdp.on('Network.requestWillBeSent', (event: { request?: { url?: string } }) => { tally(requests, pathOf(event.request?.url)); });
   cdp.on('Network.webSocketFrameSent', (event: { requestId: string; response?: { payloadData?: string } }) => {
+    if (retiredSockets.has(event.requestId)) return;
+
+    if (!socketPaths.has(event.requestId)) socketPaths.set(event.requestId, event.requestId);
+
     const sent = frame(event.response?.payloadData);
 
     tally(framesSent, socketPaths.get(event.requestId) ?? event.requestId);
@@ -425,6 +446,8 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
     }
   });
   cdp.on('Network.webSocketFrameReceived', (event: { requestId: string; response?: { payloadData?: string } }) => {
+    if (retiredSockets.has(event.requestId)) return;
+
     const received = frame(event.response?.payloadData);
 
     if (received === null) return;
@@ -438,6 +461,8 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
   });
   // A socket that closed will answer nothing more: its open asks are retired, as the page's own client rejects them.
   cdp.on('Network.webSocketClosed', (event: { requestId: string }) => {
+    retiredSockets.add(event.requestId);
+
     for (const [key, ask] of asked) if (ask.socket === event.requestId && !answered.has(key)) asked.delete(key);
 
     check();
@@ -461,10 +486,13 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
 
   liveLedgers.add(account);
 
+  const quiet = (...methods: readonly string[]): boolean =>
+    methods.every((method) => [...asked].some(([key, ask]) => ask.method === method && answered.has(key)))
+    && [...asked.keys()].every((key) => answered.has(key));
+
   return {
-    quietAfter: (...methods) => wait(() => methods.every((method) => [...asked].some(([key, ask]) => ask.method === method && answered.has(key)))
-      && [...asked.keys()].every((key) => answered.has(key))),
-    quiet: () => [...asked.keys()].every((key) => answered.has(key)),
+    quietAfter: (...methods) => wait(() => quiet(...methods)),
+    quiet,
     received: (type) => wait(() => arrived.has(type)),
     turnClosed: () => wait(() => closed),
     restart() {
@@ -488,7 +516,7 @@ export async function settledAfter(page: Page, ledger: FrameLedger, ...methods: 
   do {
     await ledger.quietAfter(...methods);
     await painted(page);
-  } while (!ledger.quiet());
+  } while (!ledger.quiet(...methods));
 }
 
 /** Two animation frames: whatever the last answer set in motion has painted. */
