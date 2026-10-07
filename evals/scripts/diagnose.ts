@@ -90,10 +90,13 @@ const assertions = trials(parseResults('results', resultsText));
 
 const failed = assertions.filter((assertion) => assertion.status === 'failed');
 
-const baselineAssertions = values.baseline === undefined ? [] : trials(parseResults('baseline', readFileSync(values.baseline, 'utf8')));
+const baselineText = values.baseline === undefined ? null : readFileSync(values.baseline, 'utf8');
 
-/** Each compared cohort's trials on both builds, the files the reviewer reads them in, and their line counts. */
-const changes = comparison.rows.filter((row) => row.reason === null).map((row, index) => {
+const baselineAssertions = baselineText === null ? [] : trials(parseResults('baseline', baselineText));
+
+/** Each compared cohort's trials on both builds, the files the reviewer reads them in, and their line counts. With no
+ *  baseline report there is nothing to compare the candidate's work with, so no change is asked about. */
+const changes = baselineText === null ? [] : comparison.rows.filter((row) => row.reason === null).map((row, index) => {
   const of = (side: readonly Assertion[]): Assertion[] => side.filter((assertion) => {
     const run = assertion.meta.harness.run;
 

@@ -2,7 +2,7 @@ import { basename } from 'node:path';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { redact } from './redact';
 import { parseResults, trials, type Assertion, type EvalFile, type HarnessRun } from './results';
-import { shifts, type Measure, type Shift, type Spread } from './shifts';
+import { MEASURE_NAMES, shifts, type Measure, type Shift, type Spread } from './shifts';
 import { HARNESS_ERRORS } from './task';
 
 export type EvalStats = {
@@ -754,13 +754,21 @@ function movedSection(rows: readonly EvalComparisonRow[], shared: Shared): strin
     return lines.length === 0 ? [] : [`- **${rowName(row, shared)}**: ${lines.join('; ')}`];
   });
 
-  const compared = rows.filter((row) => row.reason === null).length;
+  const compared = rows.flatMap((row) => row.reason === null ? [row] : []);
 
-  if (compared === 0) return [];
+  if (compared.length === 0) return [];
+
+  // A measure a side did not record for every trial was not compared, which is not the same as not having moved.
+  const unrecorded = compared.flatMap((row) => {
+    const missing = MEASURE_NAMES.filter((measure) => !row.shifts.some((shift) => shift.measure === measure));
+
+    return missing.length === 0 ? [] : [`${rowName(row, shared)}: ${missing.map((measure) => MEASURE_LABEL[measure].name).join(', ')}`];
+  });
 
   return ['### What else moved beyond noise', '',
-    ...moved.length > 0 ? moved : [`Nothing else moved beyond noise in the ${String(compared)} compared tasks: steps, calls, `
-      + 'tool errors, calls refused as bad input, calls to tools not offered, tokens, cost, wall time and every check\u2019s pass rate.'],
+    ...moved.length > 0 ? moved : [`Nothing else that was compared moved beyond noise in the ${String(compared.length)} compared tasks, `
+      + 'nor any check\u2019s pass rate.'],
+    ...unrecorded.length > 0 ? ['', `Not compared, as not recorded for every trial on both sides: ${unrecorded.join('; ')}.`] : [],
     '', '_Medians, the middle half in brackets; a two-sided Mann\u2013Whitney test for the measures and Fisher\u2019s exact test for '
       + 'the checks. Only the pass and reset rates decide the verdict._', ''];
 }
