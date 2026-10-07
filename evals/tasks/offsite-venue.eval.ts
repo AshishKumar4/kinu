@@ -89,10 +89,18 @@ date, the headcount and the total.`,
           const card = (await readAnswer(browser, 1, NAMES, offersTheVenuesThatFit)).find((reading) => reading.held);
 
           if (card === undefined) return { acted: false, runs: [] };
-          const reach = await verifier.reach(() => card.view.press(NAMES, { name: PICK.name, label: null }));
+          let faults = null;
 
-          // What the page said of the click: a send it could not make fails there, out of the agent's sight.
-          return { ...reach, faults: await card.view.faults() };
+          // What the page said as it was clicked, read before the agent's answer redraws the chat around the frame.
+          const reach = await verifier.reach(async () => {
+            const pressed = await card.view.press(NAMES, { name: PICK.name, label: null });
+
+            faults = await card.view.faults();
+
+            return pressed;
+          });
+
+          return { ...reach, faults };
         });
 
         const booking = await verifier.readFile(BOOKING_PATH);

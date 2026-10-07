@@ -429,9 +429,18 @@ how far over budget the team is, in dollars, and which of its expenses that mont
 
           await board.until(TEAMS, (seen) => (seen.regions.design ?? []).some((region) => region.controls.some((label) => ASK.test(label))));
 
-          const reach = await verifier.reach(() => board.press(TEAMS, { name: 'design', label: ASK.source }));
+          let faults = null;
 
-          return { ...reach, faults: await board.faults() };
+          // What the page said as it was clicked, read before the agent's answer redraws the workspace around the frame.
+          const reach = await verifier.reach(async () => {
+            const pressed = await board.press(TEAMS, { name: 'design', label: ASK.source });
+
+            faults = await board.faults();
+
+            return pressed;
+          });
+
+          return { ...reach, faults };
         });
 
         const written = await verifier.readFile(note);
