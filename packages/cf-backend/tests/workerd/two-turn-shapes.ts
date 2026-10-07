@@ -347,3 +347,11 @@ export interface ChangeNotesCompleted {
   readonly kept: number;
   readonly owed: { readonly sends: number; readonly cards: number };
 }
+
+/** What the alarm's recovery left after an eviction: each seeded event's lease, the reply's transition, and the
+ *  last thing each model request asked. */
+export interface OwedRepliesRecovered {
+  readonly leases: Record<string, { readonly turnId: string | null; readonly consumedAt: number | null }>;
+  readonly transition: string;
+  readonly asked: readonly string[];
+}

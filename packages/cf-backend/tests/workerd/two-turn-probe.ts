@@ -25,6 +25,7 @@ import type {
   CallRecord,
   ChangeNotesCompleted,
   ChangeNotesPrepared,
+  OwedRepliesRecovered,
   DriveOnceInput,
   DriveOnceResult,
   ExerciseResult,
@@ -217,7 +218,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
         VALUES (?, ?, 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook', 'authenticated', 'normal', 'full',
           '{"webhook_id":"w1","http_method":"POST","http_headers":{},"body":{"x":1},"delivery_id":"d1"}', 1, NULL, 5)`, actorId, `ev-${turn}`, `evt-${turn}`);
       await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
-        id: `u-evt-${turn}`, origin: 'input', message: { role: 'user', content: '1 event arrived while you were idle.' },
+        id: `u-evt-${turn}`, origin: 'input', message: { role: 'user', content: `The ${turn} event arrived while you were idle.` },
         metadata: { kinuEvent: 'event_drain', drainTurnId: `evt-${turn}` },
       });
     }
@@ -618,6 +619,11 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 type ExerciseTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'writeWorkspaceFile'>
   & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'settleState'>;
+
+/** A new workspace's logo is drawn by its own model; a count of what was asked leaves that call out. */
+function drawsLogoCall(call: HttpCall): boolean {
+  return call.users.some((message) => message.startsWith('Design the logo'));
+}
 
 /** The one note the Changes-tab journeys send, anchored to a line of a changed file. */
 const NOTE: ReviewAnnotation = {
@@ -1333,13 +1339,17 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /** After the eviction: the alarm's recovery pass on the fresh activation, then what it left. */
-  async recoverOwedReplies(workspace: string): Promise<{ readonly leases: Record<string, { readonly turnId: string | null; readonly consumedAt: number | null }>; readonly transition: string }> {
+  async recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
+    await this.httpReset();
     await target.recoveryPass();
     await awaitSettled(target);
 
-    return { leases: await target.replyLeases(), transition: await target.transitionState('u-owed') };
+    return {
+      leases: await target.replyLeases(), transition: await target.transitionState('u-owed'),
+      asked: (await this.httpCalls()).filter((call) => !drawsLogoCall(call)).map((call) => call.users.at(-1) ?? ''),
+    };
   }
 
   /** A send the loop refuses to drive takes its card row with it. */

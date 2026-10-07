@@ -188,19 +188,19 @@ describe('two real turns over the HTTP model seam', () => {
   });
 
   // A dead activation left two replies owed. After a real eviction, the alarm's recovery dispatches the answer that
-  // reached the transcript and closes its lease, closes the reply's open transition, and frees the unanswered event
-  // to be asked again.
+  // reached the transcript and closes its lease and the reply's open transition; the event that was never answered is
+  // asked again, and only it.
   it('after an eviction, recovery sends the reply that was answered and re-asks only the one that was not', async () => {
     const workspace = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).seedOwedReplyWorkspace();
 
     await abortAllDurableObjects();
     const done = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).recoverOwedReplies(workspace);
 
-    expect(done.leases).toEqual({
-      'ev-answered': { turnId: 'evt-answered', consumedAt: null },
-      'ev-unanswered': { turnId: null, consumedAt: null },
-    });
+    expect(done.leases['ev-answered']).toEqual({ turnId: 'evt-answered', consumedAt: null });
+    expect(done.leases['ev-unanswered']?.consumedAt).toBeNull();
     expect(done.transition).toBe('done');
+    expect(done.asked.some((words) => words.includes('The unanswered event'))).toBe(true);
+    expect(done.asked.filter((words) => words.includes('The answered event'))).toEqual([]);
   });
 
   it('a Changes-tab send the loop refuses to drive takes its card row with it', async () => {
