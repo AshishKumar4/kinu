@@ -4,6 +4,7 @@ import { describeProviderError, providerFailureFacts, toProviderError } from './
 import { abortCause } from '../utils/abort';
 import { Effect, Result } from 'effect';
 import { renderThrownChain, settle } from '../obs/index';
+import { callRetries } from './middleware/retry';
 import { streamTextReported } from './model-invocation';
 import { agentAffinityKey } from './workers-ai';
 import type { ModelCallSink } from '../events/model-call';
@@ -53,7 +54,9 @@ export function testModel(input: {
         const stream = streamTextReported({
           model,
           prompt: 'Reply with the word OK.',
+          // A test names each refusal once: the stack retries nothing for it.
           maxRetries: 0,
+          providerOptions: callRetries(0),
           ...(input.signal !== undefined && { abortSignal: input.signal }),
           onError: (event) => { streamed.push(event); },
         }, { spend, spec: input.spec }, (part) => {

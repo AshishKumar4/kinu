@@ -16,7 +16,7 @@ import {
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY, CODEX_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue, type KinuExtension, type Usage,
-  type ModelCallDeps, type AuthResolution,
+  type ModelCallDeps, type AuthResolution, type WorkersAIRunBinding,
 } from '../src/index';
 import { Database } from 'bun:sqlite';
 import { createMockFetch, testActorHandle, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
@@ -384,16 +384,20 @@ const CACHING_PROVIDERS: readonly ProviderCase[] = [
         baseURL: 'https://workers-ai.example/v1',
       },
     },
-    model: (deps) => createWorkersAIProvider({
-      async run(model, inputs, options) {
-        if (deps.fetch === undefined) throw new Error('the binding fixture needs its recording fetch');
+    model: (deps) => {
+      const binding: WorkersAIRunBinding = {
+        async run(model, inputs, options) {
+          if (deps.fetch === undefined) throw new Error('the binding fixture needs its recording fetch');
 
-        return deps.fetch('https://workers-ai.example/v1/chat/completions', {
-          method: 'POST', headers: options?.extraHeaders,
-          body: JSON.stringify({ model, ...inputs }),
-        });
-      },
-    }).createModel('@cf/moonshotai/kimi-k2.6', deps),
+          return deps.fetch('https://workers-ai.example/v1/chat/completions', {
+            method: 'POST', headers: options?.extraHeaders,
+            body: JSON.stringify({ model, ...inputs }),
+          });
+        },
+      };
+
+      return createWorkersAIProvider(binding).createModel('@cf/moonshotai/kimi-k2.6', deps);
+    },
   },
 ];
 

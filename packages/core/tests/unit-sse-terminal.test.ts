@@ -1,7 +1,8 @@
-/** `withSseTerminal`: end an SSE stream at `data: [DONE]` with the upstream reader cancelled. */
+/** An OpenAI-compatible stream ends at `data: [DONE]` with the upstream cancelled (`patches/@ai-sdk%2Fprovider-utils@5.0.53.patch`). */
 import { describe, test, expect } from 'bun:test';
-import { withSseTerminal } from '../src/providers/sse-terminal';
+import { streamText } from 'ai';
 import { asFetchFunction } from '../src/providers/fetch-shim';
+import { createOpenAICompatProvider, type ModelCallDeps } from '../src/index';
 
 const encoder = new TextEncoder();
 
@@ -9,244 +10,111 @@ function sseData(payload: string): string {
   return `data: ${payload}\n\n`;
 }
 
+function delta(content: string): string {
+  return sseData(JSON.stringify({ choices: [{ index: 0, delta: { content } }] }));
+}
+
+const FINISH = sseData('{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}');
+
 interface Scripted {
-  calls: string[];
+  cancels: number;
   stream: ReadableStream<Uint8Array>;
   enqueue: (text: string) => void;
   close: () => void;
 }
 
-/** An upstream the test owns: scripted bytes, then the case's lifecycle, with cancel calls counted. */
-function scripted(cancel?: () => Promise<void> | void): Scripted {
-  const calls: string[] = [];
+/** An upstream the test owns: scripted bytes, then the case's lifecycle, with cancels counted. */
+function scripted(): Scripted {
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
 
-  const stream = new ReadableStream<Uint8Array>({
-    start(c) {
-      controller = c;
-    },
-    cancel() {
-      calls.push('cancelled');
-
-      if (cancel !== undefined) return cancel();
-    },
-  });
-
-  return {
-    calls,
-    stream,
-    enqueue: (text: string) => {
+  const upstream: Scripted = {
+    cancels: 0,
+    stream: new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c;
+      },
+      cancel() {
+        upstream.cancels += 1;
+      },
+    }),
+    enqueue: (text) => {
       controller?.enqueue(encoder.encode(text));
     },
     close: () => {
       controller?.close();
     },
   };
+
+  return upstream;
 }
 
-function eventStream(upstream: Scripted): Response {
-  return new Response(upstream.stream, { headers: { 'content-type': 'text/event-stream' } });
+/** The provider production builds for a named endpoint, answered by the scripted upstream. */
+async function streamed(upstream: Scripted): Promise<{ text: string; finishReason: string }> {
+  const deps: ModelCallDeps = {
+    env: {},
+    sessionAffinity: 'kinu-test',
+    fetch: asFetchFunction(async () => new Response(upstream.stream, { headers: { 'content-type': 'text/event-stream' } })),
+    getAuth: async () => ({ headers: { Authorization: 'Bearer probe-fixture-key' }, baseURL: 'http://fake.invalid/v1' }),
+    hasCredential: async () => true,
+  };
+
+  const result = streamText({ model: createOpenAICompatProvider().createModel('probe', deps), prompt: 'hello', maxRetries: 0 });
+
+  return { text: await result.text, finishReason: await result.finishReason };
 }
 
-async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-
-  for (;;) {
-    const next = await reader.read();
-
-    if (next.done) break;
-
-    text += decoder.decode(next.value, { stream: true });
-  }
-
-  text += decoder.decode();
-  reader.releaseLock();
-
-  return text;
-}
-
-async function through(upstream: Scripted): Promise<Response> {
-  const fetchImpl = asFetchFunction(async () => eventStream(upstream));
-
-  return withSseTerminal(fetchImpl)('http://fake.invalid/v1/chat/completions');
-}
-
-describe('withSseTerminal', () => {
-  test('closes at [DONE] and cancels the open producer', async () => {
+describe('an OpenAI-compatible stream at [DONE]', () => {
+  test('ends there and cancels a producer that holds the connection open', async () => {
     const upstream = scripted();
 
-    upstream.enqueue(sseData('{"content":"hello"}'));
+    upstream.enqueue(delta('hello'));
+    upstream.enqueue(FINISH);
     upstream.enqueue(sseData('[DONE]'));
-    // The producer holds the connection open behind the terminator.
 
-    const response = await through(upstream);
-    const text = await drain(response.body ?? new ReadableStream<Uint8Array>());
-
-    expect(text).toBe(sseData('{"content":"hello"}') + sseData('[DONE]'));
-    expect(upstream.calls).toHaveLength(1);
+    expect(await streamed(upstream)).toEqual({ text: 'hello', finishReason: 'stop' });
+    expect(upstream.cancels).toBe(1);
   });
 
   test('detects a terminator split across chunks', async () => {
     const upstream = scripted();
 
-    upstream.enqueue(sseData('{"content":"hi"}'));
+    upstream.enqueue(delta('hi'));
     upstream.enqueue('data: [DO');
     upstream.enqueue('NE]\n\n');
 
-    const response = await through(upstream);
-    const text = await drain(response.body ?? new ReadableStream<Uint8Array>());
-
-    expect(text).toBe(sseData('{"content":"hi"}') + sseData('[DONE]'));
-    expect(upstream.calls).toHaveLength(1);
+    expect((await streamed(upstream)).text).toBe('hi');
+    expect(upstream.cancels).toBe(1);
   });
 
-  test('a content line containing the marker inside a larger message passes through', async () => {
+  test('a CRLF-framed terminator split across chunk boundaries still terminates', async () => {
     const upstream = scripted();
-    const body = 'data: {"content":"say [DONE] when ready"}\n\ndata: {"content":"done"}\n\n';
 
-    upstream.enqueue(body);
+    upstream.enqueue('data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}\r\n\r\ndata: [DO');
+    upstream.enqueue('NE]\r');
+    upstream.enqueue('\n\r\n');
+
+    expect((await streamed(upstream)).text).toBe('hi');
+    expect(upstream.cancels).toBe(1);
+  });
+
+  test('content that contains the marker inside a larger message passes through', async () => {
+    const upstream = scripted();
+
+    upstream.enqueue(delta('say [DONE] when ready'));
+    upstream.enqueue(FINISH);
     upstream.close();
 
-    const response = await through(upstream);
-    const text = await drain(response.body ?? new ReadableStream<Uint8Array>());
-
-    expect(text).toBe(body);
-    expect(upstream.calls).toHaveLength(0);
+    expect((await streamed(upstream)).text).toBe('say [DONE] when ready');
+    expect(upstream.cancels).toBe(0);
   });
 
   test('upstream close without a terminator closes cleanly', async () => {
     const upstream = scripted();
-    const body = sseData('{"content":"hi"}');
 
-    upstream.enqueue(body);
+    upstream.enqueue(delta('hi'));
     upstream.close();
 
-    const response = await through(upstream);
-    const text = await drain(response.body ?? new ReadableStream<Uint8Array>());
-
-    expect(text).toBe(body);
-    expect(upstream.calls).toHaveLength(0);
-  });
-
-  test('downstream cancel propagates upstream with the lock released', async () => {
-    const upstream = scripted();
-
-    upstream.enqueue(sseData('{"content":"hi"}'));
-
-    const response = await through(upstream);
-
-    await response.body?.cancel(new Error('stop'));
-
-    expect(upstream.calls).toHaveLength(1);
-
-    // The lock is released: acquiring a reader would throw while it is held.
-    const reader = upstream.stream.getReader();
-
-    reader.releaseLock();
-  });
-
-  test('a rejecting upstream cancel reaches the caller with the lock released', async () => {
-    const upstream = scripted(() => Promise.reject(new Error('boom')));
-
-    upstream.enqueue(sseData('{"content":"hi"}'));
-    upstream.enqueue(sseData('[DONE]'));
-
-    const response = await through(upstream);
-    let outcome: string;
-
-    try {
-      await drain(response.body ?? new ReadableStream<Uint8Array>());
-      outcome = 'resolved';
-    } catch (cause) {
-      outcome = cause instanceof Error ? cause.message : String(cause);
-    }
-
-    // The rejection reaches the consumer, and the lock is released either way.
-    expect(outcome).toBe('boom');
-    expect(upstream.calls).toHaveLength(1);
-
-    const reader = upstream.stream.getReader();
-
-    reader.releaseLock();
-  });
-
-  test('a CRLF-framed terminator still terminates', async () => {
-    const upstream = scripted();
-    const body = 'data: {"content":"hi"}\r\n\r\ndata: [DONE]\r\n\r\n';
-
-    upstream.enqueue(body);
-
-    const response = await through(upstream);
-    const text = await drain(response.body ?? new ReadableStream<Uint8Array>());
-
-    expect(text).toBe(body);
-    expect(upstream.calls).toHaveLength(1);
-  });
-
-  test('a terminator split across CRLF chunk boundaries terminates', async () => {
-    const upstream = scripted();
-
-    upstream.enqueue('data: {"content":"hi"}\r\n\r\ndata: [DO');
-    upstream.enqueue('NE]\r');
-    upstream.enqueue('\n\r\n');
-
-    const response = await through(upstream);
-    const text = await drain(response.body ?? new ReadableStream<Uint8Array>());
-
-    expect(text).toBe('data: {"content":"hi"}\r\n\r\ndata: [DONE]\r\n\r\n');
-    expect(upstream.calls).toHaveLength(1);
-  });
-
-  test('a single frame larger than the engine argument limit passes through', async () => {
-    const upstream = scripted();
-    // 300k in one chunk: spreading it into an argument list would blow the call stack.
-    const big = `data: {"content":"${'x'.repeat(300_000)}"}\n\n`;
-    const body = big + sseData('[DONE]');
-
-    upstream.enqueue(body);
-
-    const response = await through(upstream);
-    const text = await drain(response.body ?? new ReadableStream<Uint8Array>());
-
-    expect(text).toBe(body);
-    expect(upstream.calls).toHaveLength(1);
-  });
-
-  test('a failing upstream read rejects with the same cause and unlocks the body', async () => {
-    const upstream = new ReadableStream<Uint8Array>({
-      start(c) {
-        c.enqueue(encoder.encode(sseData('{"content":"hi"}')));
-        c.error(new Error('upstream broke'));
-      },
-    });
-
-    const fetchImpl = asFetchFunction(async () => new Response(
-      upstream,
-      { headers: { 'content-type': 'text/event-stream' } },
-    ));
-
-    const response = await withSseTerminal(fetchImpl)('http://fake.invalid/v1/chat/completions');
-
-    let outcome: string;
-
-    try {
-      await drain(response.body ?? new ReadableStream<Uint8Array>());
-      outcome = 'resolved';
-    } catch (cause) {
-      outcome = cause instanceof Error ? cause.message : String(cause);
-    }
-
-    // The same rejection reaches the consumer unwrapped, and the upstream body is unlocked.
-    expect(outcome).toBe('upstream broke');
-    expect(upstream.locked).toBe(false);
-  });
-  test('non-SSE bodies pass through untouched', async () => {
-    const fetchImpl = asFetchFunction(async () => Response.json({ data: [{ id: 'probe' }] }));
-    const wrapped = withSseTerminal(fetchImpl);
-    const json = await wrapped('http://fake.invalid/v1/models');
-
-    expect(await json.json()).toEqual({ data: [{ id: 'probe' }] });
+    expect((await streamed(upstream)).text).toBe('hi');
+    expect(upstream.cancels).toBe(0);
   });
 });

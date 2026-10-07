@@ -9,6 +9,7 @@ import { isParsedJsonObject, type JsonObject, type JsonValue } from '../utils/js
 import * as v from 'valibot';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
+import { isFrozenTree } from '../utils/freeze';
 
 export type NativeValue =
   | string | number | boolean | null | undefined
@@ -18,14 +19,19 @@ export type NativeValue =
 
 export type StoredValue = JsonValue;
 
-const NativeValueSchema: v.GenericSchema<NativeValue> = v.lazy(() => NativeValueOptions);
+/** What the codec carries, confirmed by one walk that allocates nothing: a union schema here recorded an issue for
+ *  every option a node failed, on every write of every message (the heap gate's largest Kinu churn, 2026-10-07). */
+const NativeValueSchema = v.custom<NativeValue>(function native(input): boolean {
+  if (input === null || input === undefined || typeof input === 'string' || typeof input === 'boolean') return true;
 
-const NativeValueOptions: v.GenericSchema<NativeValue> = v.union([
-  v.string(), v.pipe(v.number(), v.finite()), v.boolean(), v.null(), v.undefined(),
-  v.instance(Uint8Array), v.instance(ArrayBuffer), v.instance(URL),
-  v.array(NativeValueSchema),
-  v.record(v.string(), NativeValueSchema),
-]);
+  if (typeof input === 'number') return Number.isFinite(input);
+
+  if (input instanceof Uint8Array || input instanceof ArrayBuffer || input instanceof URL) return true;
+
+  if (Array.isArray(input)) return input.every(native);
+
+  return typeof input === 'object' && Object.values(input).every(native);
+});
 
 /** `bytes` lets the decoder detect truncation; `buffer` restores an `ArrayBuffer` source type. */
 const BinaryEnvelopeSchema = v.object({
@@ -115,8 +121,17 @@ function validated(message: NativeValue | ModelMessage, position: number): Effec
     : Effect.fail(new KinuError('bad_input', `message ${position} is not a model message the SDK accepts`));
 }
 
+/** Messages the SDK's schema has already confirmed. A turn encodes its whole history again at every step; a stored
+ *  message is frozen to its leaves (`freezeTree`) and cannot change, so it is walked by the schema once. Any other
+ *  message is its caller's to change, and is confirmed at every encode. */
+const confirmed = new WeakSet<ModelMessage>();
+
 function encoded(message: ModelMessage, position: number): Effect.Effect<StoredValue, KinuError> {
-  return Effect.map(validated(message, position), (valid) => encodeValue(v.parse(NativeValueSchema, valid)));
+  const checked = confirmed.has(message) ? Effect.void : Effect.map(validated(message, position), () => {
+    if (isFrozenTree({ value: message })) confirmed.add(message);
+  });
+
+  return Effect.map(checked, () => encodeValue(v.parse(NativeValueSchema, message)));
 }
 
 function decoded(value: StoredValue, position: number): Effect.Effect<ModelMessage, KinuError> {

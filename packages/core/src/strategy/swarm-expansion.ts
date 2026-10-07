@@ -11,7 +11,7 @@ import { extractJsonObject } from '../providers/structured';
 import { renderIssues } from '../utils/json';
 import { renderThrownChain, type Logger } from '../obs/index';
 import { settleSync } from '../obs/effect';
-import { estimateTokens } from '../llm';
+import { estimateTokens } from '../token-estimate';
 import { sha256Hex } from '../safety/argument-digest';
 import {
   BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, isTreeAdvance,

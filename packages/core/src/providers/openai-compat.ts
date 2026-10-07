@@ -7,7 +7,6 @@ import { baseCredentialKey } from '../credentials/accounts';
 import type { DynamicProviderSource } from './registry';
 import type { AuthResolution, ModelInfo, ModelProvider } from './types';
 import { createAuthedFetch, positiveInteger } from './util';
-import { withSseTerminal } from './sse-terminal';
 
 const ModelListSchema = v.object({
   data: v.array(v.object({
@@ -19,7 +18,7 @@ const ModelListSchema = v.object({
 
 const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
 
-export function openAICompatNameOf(key: string): string | null {
+function openAICompatNameOf(key: string): string | null {
   const base = baseCredentialKey(key);
 
   return base.startsWith(OPENAI_COMPAT_KEY_PREFIX) ? base.slice(OPENAI_COMPAT_KEY_PREFIX.length) : null;
@@ -80,7 +79,6 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
 
       const customFetch = createAuthedFetch(deps, {
         provider: providerId,
-        modelId,
         credKey,
         missingCredentialError: `openai-compat credential ${credKey} not configured (baseURL required)`,
         requireBaseURL: true,
@@ -92,7 +90,7 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
       return createOpenAICompatible({
         name: providerId,
         baseURL: placeholder,
-        fetch: withSseTerminal(customFetch),
+        fetch: customFetch,
       }).chatModel(modelId);
     },
   };

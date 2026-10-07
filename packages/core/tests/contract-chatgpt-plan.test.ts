@@ -8,7 +8,8 @@ import {
   type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { KinuError, createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
-import { PROVIDER_RETRIES_HEADER } from '../src/providers/rate-limit-retry';
+import { withModelStack } from '../src/providers/wire-model';
+import { callRetries } from '../src/providers/middleware/retry';
 
 interface Sent {
   readonly url: string;
@@ -207,9 +208,10 @@ describe('the request the preview accepts', () => {
       return new Response(new ReadableStream({ pull() {} }, { highWaterMark: 0 }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
     });
 
-    const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
-    // No transport retry, so the one silent attempt is the whole call.
-    const failure = failureOf(generateText({ model, prompt: 'hello', maxRetries: 0, headers: { [PROVIDER_RETRIES_HEADER]: '0' } }));
+    // As the registry resolves it: the one stack, which collects a generate from the plan's stream.
+    const model = withModelStack(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), { provider: 'chatgpt', lane: 'chatgpt@main', generateByStream: true });
+    // No retry, so the one silent attempt is the whole call.
+    const failure = failureOf(generateText({ model, prompt: 'hello', maxRetries: 0, providerOptions: callRetries(0) }));
 
     await opened.promise;
     jest.advanceTimersByTime(silenceBoundMs('provider.stream.idle_ms'));
@@ -252,7 +254,8 @@ describe('what the plan route answers', () => {
 
   test.each(['subscription_sharing_usage_unavailable', 'subscription_sharing_user_unavailable'])('%s backs off and asks again', async (code) => {
     const api = openai(refusal(503, code), answered());
-    const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
+    // As the registry resolves it: the one stack, which waits the refusal out.
+    const model = withModelStack(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), { provider: 'chatgpt', lane: 'chatgpt@main', sleep: async () => {} });
 
     expect((await generateText({ model, prompt: 'hello', maxRetries: 0 })).text).toBe('ok');
     expect(api.sent).toHaveLength(2);
@@ -328,7 +331,21 @@ describe('what the plan route answers', () => {
     expect(await result.text).toBe('ok');
   });
 
-  test.each(['max_output_tokens', 'content_filter'])('a one-shot answer ChatGPT stops short (%s) is a failure, not the partial text', async (reason) => {
+  test('a one-shot answer ChatGPT stops at its output limit reads as its stream does: the partial text, finished by length', async () => {
+    const api = openai(sse(
+      { type: 'response.created', response: RESPONSE },
+      { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },
+      { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: 'ok' },
+      { type: 'response.output_item.done', output_index: 0, item: { ...MESSAGE, status: 'incomplete' } },
+      { type: 'response.incomplete', response: { ...RESPONSE, status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [MESSAGE], usage: USAGE } },
+    ));
+
+    const result = await generateText({ model: createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), prompt: 'hello', maxRetries: 0 });
+
+    expect({ finish: result.finishReason, text: result.text }).toEqual({ finish: 'length', text: 'ok' });
+  });
+
+  test.each(['content_filter'])('a one-shot answer ChatGPT stops short (%s) is a failure, not the partial text', async (reason) => {
     const api = openai(sse(
       { type: 'response.created', response: RESPONSE },
       { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },

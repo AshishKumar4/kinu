@@ -46,7 +46,7 @@ import { renderToolResult, synthesizeToolFallback } from './utils/evidence-windo
 import * as v from 'valibot';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
 import { answeredPromptTokens, normalizeUsage, usageReported, type Usage } from './usage';
-import { PROVIDER_RETRIES_HEADER, PROVIDER_STREAM_HEADER } from './providers/rate-limit-retry';
+import { callRetries } from './providers/middleware/retry';
 import type { FallbackCooldowns } from './providers/fallback-cooldown';
 import { FallbackRoute, type CallFailure } from './providers/fallback-route';
 import { callAccountOf, type CallAccount } from './providers/quota';
@@ -867,7 +867,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const result = streamText({
       model: call.model(current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts)),
       instructions: attempt.system,
-      maxRetries: route.callRetries,
+      // The model's stack spends the call's retries; the SDK retries nothing on top.
+      maxRetries: 0,
       messages: await narrowedFor(request),
       tools: withToolSchemaDialect(attempt.tools, toolSchemaDialect(dialectSpec(current))),
       ...offeredTools,
@@ -875,7 +876,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
       experimental_repairToolCall: repairToolCall(),
       abortSignal: signal,
-      headers: { [PROVIDER_RETRIES_HEADER]: String(route.callRetries), [PROVIDER_STREAM_HEADER]: '1' },
       include: { requestBody: false },
       // The SDK default console.error dumped raw provider payloads; the rethrow below is the one place failures read.
       onError: ({ error }) => { call.streamError = error; },
@@ -883,7 +883,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       onToolExecutionEnd: ({ toolCall, toolExecutionMs }) => { call.settled(toolCall.toolCallId, toolExecutionMs); },
       // The only terminal handover: an aborted run never settles `result.steps`.
       onAbort: ({ steps }) => { call.aborted(steps); },
-      providerOptions: current.providerOptions,
+      providerOptions: { ...current.providerOptions, ...callRetries(route.callRetries) },
       // Shared step pipeline, as Think's beforeStep composes it. Also stamps the request start
       // (`ProviderCall.requestStarting`).
       prepareStep: ({ stepNumber, initialMessages, steps }) => {

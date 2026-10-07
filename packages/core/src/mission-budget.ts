@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives';
 import type { DecisionPort } from './providers/decision-model';
 import type { ActorHandle } from './identity/actor-handle';
-import { estimateTokens, estimateUsdCost } from './llm';
+import { estimateTokens, estimateUsdCost } from './token-estimate';
 import type { ModelPricing } from './providers/types';
 import type { JsonObject, JsonValue } from './utils/json';
 import { usageReported, usageTotal, type Usage } from './usage';

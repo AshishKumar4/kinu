@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { withModelStack } from '../src/providers/wire-model';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_CHAT_MODEL, MERGE_POLICY_JUDGE_MODEL,
@@ -177,9 +178,10 @@ describe('the binder is the whole of a backend\'s say', () => {
       bindMergeModel: (route) => bindRoute({
         normalize: (spec) => spec,
         // Named `openai`: that is the options namespace core's effort for an openai-compat spec writes.
-        resolve: (spec) => createChatModel({
+        // As the registry resolves it: the one stack, which spends the route's retries.
+        resolve: (spec) => withModelStack(createChatModel({
           kind: 'openai-compat', name: 'openai', baseURL: server.url.toString(), headers: {}, modelId: spec.slice('openai-compat/'.length),
-        }),
+        }), { provider: 'openai-compat', lane: spec }),
       }, route),
       reportModelCall: (report) => reports.push(report),
     });

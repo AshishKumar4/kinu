@@ -8,7 +8,7 @@ import type { AssistantContent, AssistantModelMessage, ModelMessage, ProviderMet
 import * as v from 'valibot';
 import type { JsonValue } from '../utils/json';
 import type { ProviderOptions } from './effort';
-import { CHARS_PER_TOKEN } from '../llm';
+import { CHARS_PER_TOKEN } from '../token-estimate';
 
 /** Where Kinu compacts, as a percentage of the context window: the ladder's trigger and the provider's. */
 export const COMPACTION_TRIGGER_PERCENT = 85;

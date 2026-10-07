@@ -133,7 +133,6 @@ describe('AgentProviderRegistry composition', () => {
           };
         }
 
-        // The adapter refuses a finished completion replayed as one stream frame.
         return new Response([
           'data: {"response":"direct binding"}\n\n',
           'data: {"response":"","usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}\n\n',

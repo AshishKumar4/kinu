@@ -82,7 +82,6 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
     createModel(modelId, deps): LanguageModel {
       const customFetch = createAuthedFetch(deps, {
         provider: 'openrouter',
-        modelId,
         credKey: OPENROUTER_CRED_KEY,
         missingCredentialError: 'OpenRouter API key not configured',
         mutate: ({ headers }) => {

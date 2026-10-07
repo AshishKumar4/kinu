@@ -1,14 +1,15 @@
 // A model stream that stops sending is a provider failure the fallback chain takes over; a slow stream that keeps
-// sending is never cut, however long it runs. Driven through the real transport and turn, on the catalog's bound.
+// sending is never cut, however long it runs. Driven through the model stack and the turn, on the catalog's bound.
 import { afterEach, describe, expect, jest, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  createChatModel, createFallbackCooldowns, PLATFORM_CATALOG, runChat, silenceBoundMs, type ChatEvent, type ChatFallback,
-  type PlatformFactId, type SilenceBoundId,
+  createChatModel, createFallbackCooldowns, createProviderRegistry, PLATFORM_CATALOG, runChat, silenceBoundMs, type ChatEvent,
+  type ChatFallback, type ModelCallDeps, type PlatformFactId, type SilenceBoundId,
 } from '../src/index';
-import { APICallError } from 'ai';
+import { APICallError, streamText } from 'ai';
 import { asFetchFunction } from '../src/providers/fetch-shim';
-import { PROVIDER_RETRIES_HEADER, PROVIDER_STREAM_HEADER, withRateLimitRetry } from '../src/providers/rate-limit-retry';
+import { callRetries } from '../src/providers/middleware/retry';
+import { withModelStack } from '../src/providers/wire-model';
 import type { ProviderWaitInfo } from '../src/providers/types';
 import { fmtSpan } from '../src/utils/format';
 
@@ -68,7 +69,17 @@ function turnOver(primary: ScriptedStream) {
     return new Response(new Blob([delta('from the fallback'), ...finish].map((chunk) => new Uint8Array(chunk))), sse);
   });
 
-  const model = (modelId: string) => createChatModel({ kind: 'openai-compat', name: 'stub', baseURL: 'https://stub.invalid/v1', headers: {}, modelId, fetch });
+  // As production resolves a model: the registry's stack, over a transport that reports its bytes.
+  const registry = createProviderRegistry();
+
+  registry.register({
+    id: 'stub', isAvailable: () => true, listModels: () => [],
+    createModel: (modelId, deps) => createChatModel({ kind: 'openai-compat', name: 'stub', baseURL: 'https://stub.invalid/v1', headers: {}, modelId, ...(deps.fetch !== undefined && { fetch: deps.fetch }) }),
+  });
+
+  const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false, fetch };
+  const model = (modelId: string) => registry.resolve(`stub/${modelId}`, deps);
+
   const fallback: ChatFallback = { spec: 'stub/fallback', accepts: new Set(), window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: model('fallback'), provider: 'stub' }) };
   const events: ChatEvent[] = [];
 
@@ -82,11 +93,39 @@ function turnOver(primary: ScriptedStream) {
   return { asked, events, done };
 }
 
-const streamedRequest = (wrapped: typeof globalThis.fetch, retries: number) => wrapped('https://stub.invalid/v1/chat/completions', {
-  method: 'POST', body: JSON.stringify({ model: 'm', stream: true }), headers: { [PROVIDER_RETRIES_HEADER]: String(retries), [PROVIDER_STREAM_HEADER]: '1' },
-});
+interface Streamed {
+  readonly text: string;
+  readonly errors: readonly unknown[];
+}
+
+/** One streamed call through the stack over `fetch`, its retries the caller's; what it said and what it failed with. */
+async function streamed(fetch: typeof globalThis.fetch, retries: number, onWait: (info: ProviderWaitInfo) => void): Promise<Streamed> {
+  const model = withModelStack(
+    createChatModel({ kind: 'openai-compat', name: 'stub', baseURL: 'https://stub.invalid/v1', headers: {}, modelId: 'm', fetch }),
+    { provider: 'stub', modelId: 'm', lane: 'stub/m', sleep: async () => {}, onWait },
+  );
+
+  const errors: unknown[] = [];
+  const result = streamText({ model, prompt: 'go', maxRetries: 3, providerOptions: callRetries(retries), onError: ({ error }) => { errors.push(error); } });
+  let text = '';
+
+  for await (const part of result.fullStream) {
+    if (part.type === 'text-delta') text += part.text;
+
+    if (part.type === 'error' && !errors.includes(part.error)) errors.push(part.error);
+  }
+
+  return { text, errors };
+}
 
 afterEach(() => { jest.useRealTimers(); });
+
+/** Fake time passes only once the work already scheduled has run, as real time does: the stack's continuations settle
+ *  before the clock moves past a bound. */
+async function advance(ms: number): Promise<void> {
+  for (let turn = 0; turn < 100; turn++) await Promise.resolve();
+  jest.advanceTimersByTime(ms);
+}
 
 /** Compiles only while `silenceBoundMs` admits the silence bound and refuses a duration, a total. */
 type Admits<Id extends PlatformFactId> = Id extends SilenceBoundId ? 'admitted' : 'refused';
@@ -106,7 +145,7 @@ describe('a provider stream that stops sending', () => {
 
     (await primary.next()).enqueue(roleOnly);
     await primary.next();
-    jest.advanceTimersByTime(IDLE_MS);
+    await advance(IDLE_MS);
     await turn.done;
 
     expect(turn.asked).toEqual(['primary', 'fallback']);
@@ -120,11 +159,33 @@ describe('a provider stream that stops sending', () => {
     const turn = turnOver(primary);
 
     await primary.next();
-    jest.advanceTimersByTime(IDLE_MS);
+    await advance(IDLE_MS);
     await turn.done;
 
     expect(turn.asked).toEqual(['primary', 'fallback']);
     expect(turn.events).toContainEqual(expect.objectContaining({ type: 'done', text: 'from the fallback' }));
+  });
+
+  test('keepalive comments while the model thinks keep its stream alive past the bound', async () => {
+    jest.useFakeTimers();
+    const primary = scriptedStream();
+    const turn = turnOver(primary);
+
+    // OpenRouter's wait for a first token: comments only, three bounds long, which no stream part carries.
+    for (let comment = 0; comment < 3; comment++) {
+      const controller = await primary.next();
+      await advance(IDLE_MS - 1);
+      controller.enqueue(encoder.encode(': OPENROUTER PROCESSING\n\n'));
+    }
+
+    (await primary.next()).enqueue(delta('thought it through'));
+
+    for (const chunk of finish) (await primary.next()).enqueue(chunk);
+    (await primary.next()).close();
+    await turn.done;
+
+    expect(turn.asked).toEqual(['primary']);
+    expect(turn.events).toContainEqual(expect.objectContaining({ type: 'done', text: 'thought it through' }));
   });
 
   test('a slow stream that keeps sending is never cut, however long it runs', async () => {
@@ -135,7 +196,7 @@ describe('a provider stream that stops sending', () => {
     // Ten gaps each just under the bound: the stream runs ten bounds long, and no silence reaches one.
     for (const word of ['one ', 'two ', 'three ', 'four ', 'five ', 'six ', 'seven ', 'eight ', 'nine ', 'ten']) {
       const controller = await primary.next();
-      jest.advanceTimersByTime(IDLE_MS - 1);
+      await advance(IDLE_MS - 1);
       controller.enqueue(delta(word));
     }
 
@@ -152,6 +213,7 @@ describe('a provider that sends nothing before its first byte', () => {
   /** A provider silent `silent` times, each request hanging until the transport cuts it, then answering. */
   function silentThenAnswering(silent: number) {
     let calls = 0;
+    let aborted = 0;
     const arrivals = Array.from({ length: silent + 1 }, () => Promise.withResolvers<void>());
     const waits: ProviderWaitInfo[] = [];
 
@@ -162,17 +224,19 @@ describe('a provider that sends nothing before its first byte', () => {
       if (calls > silent) return new Response(new Blob([delta('at last'), ...finish].map((chunk) => new Uint8Array(chunk))));
 
       return await new Promise<Response>((_, reject) => {
-        init?.signal?.addEventListener('abort', () => { reject(init.signal?.reason); }, { once: true });
+        init?.signal?.addEventListener('abort', () => {
+          aborted += 1;
+          reject(init.signal?.reason);
+        }, { once: true });
       });
     });
 
-    const wrapped = withRateLimitRetry(fetch, { provider: 'stub', sleep: async () => {}, onWait: (info) => { waits.push(info); } });
-    const call = (retries: number) => streamedRequest(wrapped, retries);
+    const call = (retries: number) => streamed(fetch, retries, (info) => { waits.push(info); });
 
     /** Settles once request `n` (1-based) reached the provider. */
     const reached = (n: number) => arrivals[n - 1]?.promise;
 
-    return { call, waits, calls: () => calls, reached };
+    return { call, waits, calls: () => calls, aborted: () => aborted, reached };
   }
 
   test('each silent attempt spends a retry and declares a wait before the transport asks again', async () => {
@@ -182,11 +246,13 @@ describe('a provider that sends nothing before its first byte', () => {
 
     for (const request of [1, 2]) {
       await provider.reached(request);
-      jest.advanceTimersByTime(IDLE_MS);
+      await advance(IDLE_MS);
     }
 
-    expect((await answered).status).toBe(200);
+    expect((await answered).text).toBe('at last');
     expect(provider.calls()).toBe(3);
+    // Each abandoned attempt's request is aborted, not left running beside the next.
+    expect(provider.aborted()).toBe(2);
     expect(provider.waits.map(({ source, attempt, provider: who }) => ({ source, attempt, who })))
       .toEqual([{ source: 'stall', attempt: 1, who: 'stub' }, { source: 'stall', attempt: 2, who: 'stub' }]);
   });
@@ -198,11 +264,11 @@ describe('a provider that sends nothing before its first byte', () => {
 
     for (const request of [1, 2]) {
       await provider.reached(request);
-      jest.advanceTimersByTime(IDLE_MS);
+      await advance(IDLE_MS);
     }
 
     const [settled] = await answered;
-    const failure = settled.status === 'rejected' ? settled.reason : null;
+    const failure = settled.status === 'fulfilled' ? settled.value.errors.at(-1) : null;
     expect(APICallError.isInstance(failure) && { message: failure.message, retryable: failure.isRetryable })
       .toEqual({ message: `stub sent nothing for ${fmtSpan(IDLE_MS)}`, retryable: false });
     expect(provider.calls()).toBe(2);
@@ -225,25 +291,24 @@ describe('a provider whose stream opens with its error', () => {
     let calls = 0;
     const waits: ProviderWaitInfo[] = [];
     const fetch = asFetchFunction(async () => (++calls <= errors ? erring() : answering()));
-    const wrapped = withRateLimitRetry(fetch, { provider: 'stub', sleep: async () => {}, onWait: (info) => { waits.push(info); } });
 
-    return { wrapped, waits, calls: () => calls };
+    return { call: (retries: number) => streamed(fetch, retries, (info) => { waits.push(info); }), waits, calls: () => calls };
   }
 
   test('the error spends a retry and the transport asks again, as it does for an HTTP refusal', async () => {
     const provider = erringThenAnswering(1);
-    const answered = await streamedRequest(provider.wrapped, 3);
+    const answered = await provider.call(3);
 
-    expect(await answered.text()).toContain('at last');
+    expect(answered.text).toBe('at last');
     expect(provider.calls()).toBe(2);
     expect(provider.waits.map(({ source, attempt }) => ({ source, attempt }))).toEqual([{ source: 'backoff', attempt: 1 }]);
   });
 
   test('past its retries the provider\'s own error reaches the caller', async () => {
     const provider = erringThenAnswering(5);
-    const answered = await streamedRequest(provider.wrapped, 1);
+    const answered = await provider.call(1);
 
-    expect(await answered.text()).toContain('Upstream error from Inception');
+    expect(String(answered.errors.at(-1))).toContain('Upstream error from Inception');
     expect(provider.calls()).toBe(2);
   });
 });

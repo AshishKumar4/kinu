@@ -74,8 +74,6 @@ export * from './gateway-binding-fetch';
 
 export * from './pacing';
 
-export * from './rate-limit-retry';
-
 export * from './usage-limits';
 
 export {
@@ -90,10 +88,6 @@ export * from './workers-ai-catalog';
 export * from './ai-gateway';
 
 export * from './cloudflare-ai-fetch';
-
-export * from './direct-workers-ai-fetch';
-
-export * from './stream-usage-repair';
 
 export * from './tool-call-id';
 

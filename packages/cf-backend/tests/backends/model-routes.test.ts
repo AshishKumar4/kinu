@@ -3,10 +3,10 @@ import { describe, expect, test } from 'bun:test';
 import { generateText, tool, type LanguageModel } from 'ai';
 import { z } from 'zod';
 import * as v from 'valibot';
-import { asFetchFunction, requestUrl, runChat, type AuthResolution, type ChatEvent, type JsonObject } from '@kinu.run/core';
+import { asFetchFunction, requestUrl, runChat, type AuthResolution, type ChatEvent, type JsonObject, type UserCaller } from '@kinu.run/core';
 import { createAgentProviderRegistry } from '../../src/providers/agent-registry';
 import { aiProxyRoutes } from '../../src/user/ai-proxy';
-import type { CliRoutesEnv } from '../../src/cli/routes';
+import { cliRoutes, type CliRoutesEnv } from '../../src/cli/routes';
 import { createLocalModelResolver } from '../../../cli-backend/src/model-resolver';
 import { NO_RELAY_MACHINE } from '../helpers/user-credentials';
 import { testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY } from '../helpers/user-do';
@@ -18,6 +18,11 @@ const ACCOUNT_AI = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123ab
 const ORIGIN = 'https://kinu.example.test';
 
 const CLI_TOKEN = `ptc_${'0'.repeat(32)}_abcdefghijklmnopqrstuvwxyz`;
+
+/** The owner's CLI bearer, as the worker verifies it. */
+async function signedIn(_caller: UserCaller, bearer: string) {
+  return { ok: bearer === CLI_TOKEN, tokenHash: 'h', user: { id: '0'.repeat(32), email: 'owner@example.test', displayName: 'Owner' } };
+}
 
 /** The owner's gateway on the hosted registry, and on the CLI through the worker's own signed-in proxy. */
 function gatewayRoutes(upstream: typeof fetch, menu: readonly string[]) {
@@ -34,7 +39,7 @@ function gatewayRoutes(upstream: typeof fetch, menu: readonly string[]) {
 
   const proxyEnv: CliRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => cliAccount({
-      verifyCliToken: async (_caller, bearer: string) => ({ ok: bearer === CLI_TOKEN, tokenHash: 'h', user: { id: '0'.repeat(32), email: 'owner@example.test', displayName: 'Owner' } }),
+      verifyCliToken: signedIn,
       getAuth: async (_caller, key: string) => await gatewayAuth(key),
     }) },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
@@ -228,6 +233,102 @@ describe('a gateway model on both backends', () => {
       ];
 
       expect({ answers, replayed, cached }).toMatchObject({ answers: ['a.txt says hello', 'a.txt says hello'], replayed: [call, call], cached: [true, true] });
+    } finally {
+      globalThis.fetch = workerFetch;
+    }
+  });
+});
+
+/** One event-loop turn, with no duration. */
+async function oneTurn(): Promise<void> {
+  const turn = Promise.withResolvers<void>();
+  setImmediate(turn.resolve);
+  await turn.promise;
+}
+
+describe('an account\'s model menu', () => {
+  // A credential named `openai-compat.groq` once added a `openai-compat:groq/<modelId>` row the picker sent as is.
+  // models.dev's catalog is about 1.5 MB of JSON, so the providers listing together on a cold cache share one read.
+  test('lists each key\'s own models from one catalog read, after a refused read, and the chosen one reaches its endpoint', async () => {
+    const ENDPOINT = 'https://groq.example.test/openai/v1';
+    const KEYS = ['anthropic.bearer', 'openai.bearer', 'openai-compat.groq'];
+    const sent: string[] = [];
+    let catalogReads = 0;
+
+    const upstream = asFetchFunction(async (input, init) => {
+      const url = requestUrl(input);
+
+      if (url === 'https://models.dev/api.json') {
+        catalogReads += 1;
+
+        // Long enough for every listing to reach models.dev if it would.
+        for (let turn = 0; turn < 20; turn += 1) await oneTurn();
+
+        if (catalogReads === 1) return new Response('busy', { status: 503 });
+
+        return Response.json({
+          anthropic: { id: 'anthropic', name: 'Anthropic', models: { 'claude-x': { id: 'claude-x', name: 'Claude X', tool_call: true } } },
+          openai: { id: 'openai', name: 'OpenAI', api: 'https://api.openai.com/v1', models: { 'gpt-x': { id: 'gpt-x', name: 'GPT X', tool_call: true } } },
+        });
+      }
+
+      if (url === `${ENDPOINT}/models`) return Response.json({ object: 'list', data: [{ id: 'llama-4-scout', object: 'model' }] });
+
+      if (url === `${ENDPOINT}/chat/completions`) {
+        sent.push(v.parse(v.object({ model: v.string() }), JSON.parse(await new Request(input, init).text())).model);
+
+        return Response.json({ id: 'c', object: 'chat.completion', created: 1, model: 'llama-4-scout',
+          choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'served' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+      }
+
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const keyed = async (key: string): Promise<AuthResolution | null> => {
+      if (key === 'openai-compat.groq') return { baseURL: ENDPOINT, headers: { authorization: 'Bearer gsk-test' } };
+
+      return KEYS.includes(key) ? { headers: { authorization: 'Bearer sk-test' } } : null;
+    };
+
+    const account = cliAccount({
+      verifyCliToken: signedIn,
+      getAuth: async (_caller, key: string) => await keyed(key),
+      listCredentials: async () => KEYS.map((key) => ({ key, kind: 'bearer' as const, createdAt: 0, updatedAt: 0 })),
+      ...NO_RELAY_MACHINE,
+    });
+
+    const env: CliRoutesEnv<string> = {
+      UserDO: { idFromName: (name) => name, get: () => account },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+      AUTH_KV: unreachableKv('AUTH_KV'),
+      ASSETS: unreachableAssets(),
+    };
+
+    const menu = async () => {
+      const answered = await serveFamily(cliRoutes)(new Request(`${ORIGIN}/api/cli/models`, { headers: { authorization: `Bearer ${CLI_TOKEN}` } }), env);
+      const body = v.parse(v.object({ models: v.array(v.object({ spec: v.string() })), failures: v.array(v.object({ provider: v.string() })) }), await answered?.json());
+
+      return { specs: body.models.map((model) => model.spec).sort(), failed: body.failures.map((failure) => failure.provider).sort() };
+    };
+
+    const workerFetch = globalThis.fetch;
+    globalThis.fetch = upstream;
+
+    try {
+      const refused = await menu();
+      const served = await menu();
+      const hosted = createAgentProviderRegistry({ env: {}, fetch: upstream, userDO: { caller: testOwner, stub: account } });
+      const answer = (await generateText({ model: hosted.resolveModel('openai-compat:groq/llama-4-scout', 'kinu-test'), prompt: 'hi' })).text;
+
+      expect({ refused, served, catalogReads, answer, sent }).toEqual({
+        // The refused read fails the listing that met it; the next ones read again, together.
+        refused: { specs: ['anthropic/claude-x', 'openai-compat:groq/llama-4-scout', 'openai/gpt-x'], failed: ['catalog'] },
+        served: { specs: ['anthropic/claude-x', 'openai-compat:groq/llama-4-scout', 'openai/gpt-x'], failed: [] },
+        catalogReads: 2,
+        answer: 'served',
+        sent: ['llama-4-scout'],
+      });
     } finally {
       globalThis.fetch = workerFetch;
     }
