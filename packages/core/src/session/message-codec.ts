@@ -1,5 +1,6 @@
-// Lossless codec for native model messages, validated by the SDK's `modelMessageSchema`.
-// Not `JSON.stringify`: it turns `Uint8Array`/`ArrayBuffer`/`URL` into different values, and a
+// Lossless codec for native model messages. A decoded message is confirmed by the SDK's `modelMessageSchema`: a row
+// outlives the code that wrote it, and a message crosses isolates as JSON. An encoded one is this isolate's own typed
+// value and is not walked again. Not `JSON.stringify`: it turns `Uint8Array`/`ArrayBuffer`/`URL` into different values, and a
 // context revision must round-trip exactly. The compaction `binaryReplacer` is preview-only.
 
 import { Effect } from 'effect';
@@ -9,7 +10,6 @@ import { isParsedJsonObject, type JsonObject, type JsonValue } from '../utils/js
 import * as v from 'valibot';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
-import { isFrozenTree } from '../utils/freeze';
 
 export type NativeValue =
   | string | number | boolean | null | undefined
@@ -112,8 +112,7 @@ function decodeValue(value: StoredValue, truncated: Truncation[]): NativeValue {
   }));
 }
 
-/** Runs on write and read: stored revisions are always valid requests; corrupt rows are named. */
-function validated(message: NativeValue | ModelMessage, position: number): Effect.Effect<ModelMessage, KinuError> {
+function validated(message: NativeValue, position: number): Effect.Effect<ModelMessage, KinuError> {
   const parsed = modelMessageSchema.safeParse(message);
 
   return parsed.success
@@ -121,17 +120,8 @@ function validated(message: NativeValue | ModelMessage, position: number): Effec
     : Effect.fail(new KinuError('bad_input', `message ${position} is not a model message the SDK accepts`));
 }
 
-/** Messages the SDK's schema has already confirmed. A turn encodes its whole history again at every step; a stored
- *  message is frozen to its leaves (`freezeTree`) and cannot change, so it is walked by the schema once. Any other
- *  message is its caller's to change, and is confirmed at every encode. */
-const confirmed = new WeakSet<ModelMessage>();
-
-function encoded(message: ModelMessage, position: number): Effect.Effect<StoredValue, KinuError> {
-  const checked = confirmed.has(message) ? Effect.void : Effect.map(validated(message, position), () => {
-    if (isFrozenTree({ value: message })) confirmed.add(message);
-  });
-
-  return Effect.map(checked, () => encodeValue(v.parse(NativeValueSchema, message)));
+function encoded(message: ModelMessage): StoredValue {
+  return encodeValue(v.parse(NativeValueSchema, message));
 }
 
 function decoded(value: StoredValue, position: number): Effect.Effect<ModelMessage, KinuError> {
@@ -145,13 +135,15 @@ function decoded(value: StoredValue, position: number): Effect.Effect<ModelMessa
 }
 
 export function encodeModelMessageValues(messages: readonly ModelMessage[]): JsonValue[] {
-  return settleSync(Effect.forEach(messages, encoded));
+  return messages.map(encoded);
 }
 
 export function encodeModelMessage(message: ModelMessage): JsonObject {
-  return settleSync(Effect.flatMap(encoded(message, 0), (value) => (isParsedJsonObject(value)
+  const value = encoded(message);
+
+  return settleSync(isParsedJsonObject(value)
     ? Effect.succeed(value)
-    : Effect.fail(new KinuError('bad_input', 'a native message did not encode to an object')))));
+    : Effect.fail(new KinuError('bad_input', 'a native message did not encode to an object')));
 }
 
 export function decodeModelMessageValues(values: readonly JsonValue[]): ModelMessage[] {
