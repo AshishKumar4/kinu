@@ -31,6 +31,23 @@ export function parseEvalAccount(name: string): EvalAccount | null {
   return slot <= EVAL_TRIAL_ACCOUNTS ? `trial-${slot}` : null;
 }
 
+/**
+ * The tables a trial account may hold rows in when its trial opens: its provider keys and what keeps them (the
+ * revision counters, grants a disconnect could not revoke), and the account's own bookkeeping (its profile, onboarding,
+ * schema version, token generation, and the agents SDK's state row, which the account never writes). A device-status
+ * watcher names the workspace that registered it, which the account keeps after the workspace is deleted until a
+ * device moves: no later trial opens a workspace of that name.
+ */
+const TRIAL_ACCOUNT_KEEPS: ReadonlySet<string> = new Set([
+  'user_credentials', 'user_credential_revisions', 'user_credentials_revision', 'user_unrevoked_grants',
+  'user_schema_meta', 'user_profile', 'user_onboarding', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
+]);
+
+/** Of an account's rows by table (`heldRows`), the ones a trial would inherit from the trial before it in its slot. */
+export function inheritedRows(held: Readonly<Record<string, number>>): Record<string, number> {
+  return Object.fromEntries(Object.entries(held).filter(([table, rows]) => rows > 0 && !TRIAL_ACCOUNT_KEEPS.has(table)));
+}
+
 // Cloud chat messages persist as one DO SQLite row (`do.sqlite.row_bytes`); file parts must fit whole under the
 // SDK's 1.8 MB row guard. 1 MiB raw is ~1.4 MB base64; unit-files.test.ts asserts it against the catalog.
 export const CLOUD_MAX_INLINE_ATTACHMENT_BYTES = 1024 * 1024;
