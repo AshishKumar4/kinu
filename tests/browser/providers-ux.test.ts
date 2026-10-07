@@ -97,9 +97,12 @@ describe('the providers list', () => {
         return page.$$eval('[role="option"]', (options) => options.map((option) => option.textContent?.trim() ?? ''));
       };
 
-      expect(await menu()).toContain('Llama 3.3 70B');
+      // Each option also carries its own Test control; the model is the name it starts with.
+      const offersLlama = (labels: readonly string[]) => labels.some((label) => label.startsWith('Llama 3.3 70B'));
+
+      expect(offersLlama(await menu())).toBe(true);
       await page.$$eval('[role="option"]', (options) => {
-        const llama = options.find((option) => option.textContent?.trim() === 'Llama 3.3 70B');
+        const llama = options.find((option) => option.textContent?.trim().startsWith('Llama 3.3 70B') === true);
 
         if (llama instanceof HTMLElement) llama.click();
       });
@@ -117,7 +120,7 @@ describe('the providers list', () => {
         if (confirm instanceof HTMLElement) confirm.click();
       });
       await page.waitForFunction(() => document.querySelector('[data-provider="Groq"] button[aria-label="Disconnect Groq"]') === null);
-      expect(await menu()).not.toContain('Llama 3.3 70B');
+      expect(offersLlama(await menu())).toBe(false);
       await page.close();
     });
   });
