@@ -261,10 +261,12 @@ export class EvalVerifier {
 
   /**
    * Do what a person does on a page to reach the agent (`act`, a click; false when the page offered no way to), then
-   * wait for the run a slate's message starts (`SLATE_CAUSE`) and for the workspace to settle after it, as a prompt's
-   * turn is waited out. Runs anything else started meanwhile are neither waited for nor counted. The slate runs it
-   * started: none when none began within the page's budget (`DRAW_MS`), as the page never delivered it. A page that
-   * sends the agent something unasked on load is not told apart from the click: the checks read what the run then did.
+   * wait for the run a slate's message starts (`SLATE_CAUSE`), up to the page's budget (`DRAW_MS`), and for the
+   * workspace to settle after it, as a prompt's turn is waited out. A workspace still busy when the message lands runs
+   * it once it is free, after the budget, which the settling waits out too (offline, 2026-10-07, one start in three came
+   * later than the budget). Runs anything else started are not counted. The slate runs it started: none when the page
+   * never delivered the message. A page that sends the agent something unasked on load is not told apart from the
+   * click: the checks read what the run then did.
    */
   async reach(act: () => Promise<boolean>): Promise<{ acted: boolean; runs: ReachedRun[] }> {
     const before = new Set((await this.#session.runEvents()).map((event) => event.runId));
@@ -275,10 +277,7 @@ export class EvalVerifier {
 
     if (!await act()) return { acted: false, runs: [] };
 
-    while (slateStarts(await this.#session.runEvents()).length === 0) {
-      if (Date.now() >= due) return { acted: true, runs: [] };
-      await sleep(1_000);
-    }
+    while (slateStarts(await this.#session.runEvents()).length === 0 && Date.now() < due) await sleep(1_000);
 
     await this.#settled();
     const events = await this.#session.runEvents();
