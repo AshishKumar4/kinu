@@ -176,17 +176,14 @@ export class SessionContext {
       // A sealed step appends one entry to a head of hundreds: only what the mutation changed is checked.
       const kept = keptPrefix(current, next);
       const ids = new Set<string>();
+
+      for (let position = 0; position < kept; position++) ids.add(next[position].entryId);
       const prior = new Map(current.slice(kept).map(entry => [entry.entryId, entry]));
 
       for (let position = kept; position < next.length; position++) {
         const entry = next[position];
 
-        const live = prior.has(entry.entryId) ? undefined : this.sql<{ position: number }>`SELECT position FROM context_memberships
-          WHERE actor_id=${this.actor.actorId} AND context_id=${selected.contextId} AND entry_id=${entry.entryId} AND to_revision IS NULL`[0];
-
-        if (entry.position !== position || ids.has(entry.entryId) || (live !== undefined && live.position < kept)) {
-          throw new KinuError('bad_input', 'context entries must have unique identities and dense positions');
-        }
+        if (entry.position !== position || ids.has(entry.entryId)) throw new KinuError('bad_input', 'context entries must have unique identities and dense positions');
 
         if (prior.get(entry.entryId)?.messageId !== entry.messageId) {
           const message = this.sql<{ origin: string }>`SELECT origin FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${entry.messageId}`[0];
