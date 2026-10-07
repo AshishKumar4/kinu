@@ -137,7 +137,6 @@
   "packages/core/src/heads/reconcile.ts#FORK_INTERRUPTED_REASON (unreached-export)",
   "packages/core/src/heads/reconcile.ts#FORK_INTERRUPTED_SIGNAL (unreached-export)",
   "packages/core/src/identity/archive.ts#writeWorkspaceArchive (unreached-export)",
-  "packages/core/src/identity/fork-transfer.ts#FORK_ROW_SECTIONS (unreached-export)",
   "packages/core/src/identity/fork-transfer.ts#FORK_STREAM_SEED (unreached-export)",
   "packages/core/src/identity/fork-transfer.ts#FORK_TRANSFER_VERSION (unreached-export)",
   "packages/core/src/identity/fork-transfer.ts#foldForkStream (unreached-export)",

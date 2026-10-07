@@ -33,12 +33,18 @@
   *             machines — rather than picking one. A silent pick is the
   *             original bug wearing a different hat, and it is red here even
   *             though it "works".
+ *
+ * THEN THE FLEET WITHOUT A MODEL, as the account and the workspace's CLI RPC
+ * see it: both machines listed live by name; beta's daemon stops, and a call
+ * named for alpha still lands on alpha alone while one named for beta runs on
+ * no machine rather than being stood in for.
  */
 import { afterAll, describe, test } from 'vitest';
+import * as v from 'valibot';
 
-import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
+import { infraBoundary, scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
-import type { DeviceAccount } from './device-session';
+import { listDevicesOverCliRoute, type DeviceAccount } from './device-session';
 import { FLEET_ALPHA as ALPHA, FLEET_BETA as BETA, NAMED_MACHINE_ASK, UNNAMED_MACHINE_ASK } from './asks';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
@@ -130,6 +136,19 @@ describe(SUITE, () => {
           const alphaLog = alpha.execLog();
           const betaLog = beta.execLog();
 
+          // ── the fleet without a model ───────────────────────────────
+          const listed = await listDevicesOverCliRoute(account);
+          const liveNow = (rows: typeof listed.rows, name: string) => rows?.some((row) => row.label === name && row.connected) === true;
+
+          // Beta's own end, which its daemon process reports: nothing here waits on a duration.
+          beta.stop();
+          const betaExit = await beta.exited;
+          const alphaBefore = alpha.execLog().length;
+          const stayed = await runOnMachine(account, session.workspace, 'hostname', ALPHA);
+          const left = await runOnMachine(account, session.workspace, 'hostname', BETA);
+          const alphaAfter = alpha.execLog().length;
+          const betaAfter = beta.execLog().length;
+
           return [
             {
               what: 'unnamed-call-asks',
@@ -166,6 +185,25 @@ describe(SUITE, () => {
                 : `${BETA} RAN THE COMMAND TOO — a call named for ${ALPHA} reached both machines: `
                   + JSON.stringify(betaLog),
             },
+            {
+              what: 'both-machines-listed',
+              reached: liveNow(listed.rows, ALPHA) && liveNow(listed.rows, BETA),
+              detail: `GET /api/cli/devices answered ${String(listed.status)}: ${listed.body}; `
+                + JSON.stringify(listed.rows?.map((row) => ({ label: row.label, connected: row.connected })) ?? null),
+            },
+            {
+              what: 'other-machine-survives-leave',
+              reached: stayed.stdout.includes(ALPHA) && alphaAfter === alphaBefore + 1,
+              detail: `${BETA}'s daemon exited ${String(betaExit)}; a call named for ${ALPHA} answered ${stayed.detail}; `
+                + `${ALPHA} recorded ${String(alphaAfter - alphaBefore)} call(s) across both named calls`,
+            },
+            {
+              what: 'gone-machine-not-stood-in-for',
+              // Its refusal may name the machine it could not reach; what matters is that no machine ran it.
+              reached: !left.stdout.includes(`${ALPHA}\n`) && alphaAfter === alphaBefore + 1 && betaAfter === betaLog.length,
+              detail: `a call named for the stopped ${BETA} answered ${left.detail}; ${BETA} recorded `
+                + `${String(betaAfter - betaLog.length)} more call(s)`,
+            },
           ] satisfies EvalSubgoal[];
         },
       }, observations);
@@ -180,6 +218,34 @@ describe(SUITE, () => {
     }
   });
 });
+
+const ExecAnswerSchema = v.object({ result: v.object({ error: v.optional(v.string()), stdout: v.optional(v.string()) }) });
+
+/** One command on the named machine through the workspace's CLI RPC, as `grantDeviceAccess` raises its card. */
+async function runOnMachine(
+  account: DeviceAccount, workspace: string, command: string, machine: string,
+): Promise<{ readonly stdout: string; readonly error: string | null; readonly detail: string }> {
+  const url = `${account.origin}/api/cli/workspaces/${encodeURIComponent(workspace)}/rpc`;
+
+  return infraBoundary(`POST ${url} (${command} on ${machine})`, async () => {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${account.cliToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'executeInExecutor', args: ['device', command, machine] }),
+    });
+
+    const text = await response.text();
+    const parsed = response.ok ? v.safeParse(ExecAnswerSchema, JSON.parse(text)) : null;
+
+    if (parsed === null || !parsed.success) {
+      return { stdout: '', error: `HTTP ${String(response.status)}`, detail: `${String(response.status)} ${text.slice(0, 240)}` };
+    }
+
+    const { stdout = '', error = null } = parsed.output.result;
+
+    return { stdout, error, detail: JSON.stringify(parsed.output.result).slice(0, 240) };
+  });
+}
 
 /** The durable answer to the last turn, which is what a person reads when they
  *  come back. Falls back to the streamed text only when the transcript has not

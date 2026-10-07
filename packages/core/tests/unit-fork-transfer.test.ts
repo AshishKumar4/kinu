@@ -7,22 +7,29 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import {
   readForkLineage, SOUL_PATH, createWorkspaceForkSink, workspaceSoul,
-  ForkTargetWriter, ForkTransferReceiver, forkTransferFrames, sealForkFrame,
+  ForkStagingState, ForkTransferReceiver, forkTransferFrames, sealForkFrame,
   FORK_TRANSFER_VERSION, FORK_STREAM_SEED, foldForkStream,
   type ForkFileSink, type ForkFileSource, type ForkFrameReply,
-  type ForkSectionCounts, type ForkFrame, type ForkWriteTarget, type UnsealedForkFrame,
+  type ForkSectionCounts, type ForkFrame, type ForkRowSection, type UnsealedForkFrame,
+  corroborateLessonsForTurn, createFactsStore, listLessons, recordLesson,
 } from '../src/index';
+import { perSection } from '../src/identity/fork-sections';
+import { applyStruggleLesson, listToolLessons } from '../src/evolution/struggles';
+import type { AppDataStore, AppTableSpec } from '../src/tools/db-codemode';
 import type { VfsExportChunk, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
 import {
   seedForkSource, SOURCE_ARTIFACTS, SPILLED_BYTES, TARGET_ARTIFACTS,
 } from './helpers/fork-conversation';
-import { deliver, reassemble, receiverFor as streamReceiverFor, sourceFrames, transfer, type ForkContent } from './helpers/fork-stream';
-import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
+import {
+  appDataOf, deliver, reassemble, receiverFor as streamReceiverFor, sourceFrames, transfer, writerFor,
+  type ForkContent, type ForkTargetOptions,
+} from './helpers/fork-stream';
+import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 
-const OWNER: ForkWriteTarget = {
+const OWNER: ForkTargetOptions = {
   workspaceId: 'FORK-ID', workspaceName: 'my-fork', artifactDirectory: TARGET_ARTIFACTS, now: 4242,
 };
 
@@ -30,6 +37,7 @@ const OWNER: ForkWriteTarget = {
 const EMPTY_COUNTS: ForkSectionCounts = {
   agentConfig: 0, craftedTools: 0,
   sessionMessages: 0, conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
+  lessons: 0, toolLessons: 0, facts: 0, appTables: 0, appRows: 0,
   files: 0,
 };
 
@@ -39,8 +47,7 @@ type FrameBody = UnsealedForkFrame extends infer Frame
     : never
   : never;
 
-type RowSections = Pick<ForkContent, 'agentConfig' | 'craftedTools' | 'sessionMessages'
-  | 'conversationEntries' | 'conversationEntryParts' | 'contextMembers'>;
+type RowSections = Pick<ForkContent, ForkRowSection>;
 
 /** A source workspace with a three-turn conversation, seeded through the production writers. */
 async function source(opts: { files?: Array<{ path: string; content: string }>; spill?: boolean } = {}) {
@@ -88,15 +95,7 @@ function framesFor(recorded: readonly ForkFrame[], opts: {
   push({
     kind: 'begin',
     head: begin.head,
-    counts: {
-      ...begin.counts,
-      agentConfig: rows.agentConfig.length,
-      craftedTools: rows.craftedTools.length,
-      sessionMessages: rows.sessionMessages.length,
-      conversationEntries: rows.conversationEntries.length,
-      conversationEntryParts: rows.conversationEntryParts.length,
-      contextMembers: rows.contextMembers.length,
-    },
+    counts: { ...begin.counts, ...perSection((kind) => rows[kind].length) },
   });
 
   const batches = <Row,>(all: readonly Row[]): Row[][] => {
@@ -119,6 +118,16 @@ function framesFor(recorded: readonly ForkFrame[], opts: {
   for (const batch of batches(rows.conversationEntryParts)) push({ kind: 'conversationEntryParts', rows: batch });
 
   for (const batch of batches(rows.contextMembers)) push({ kind: 'contextMembers', rows: batch });
+
+  for (const batch of batches(rows.lessons)) push({ kind: 'lessons', rows: batch });
+
+  for (const batch of batches(rows.toolLessons)) push({ kind: 'toolLessons', rows: batch });
+
+  for (const batch of batches(rows.facts)) push({ kind: 'facts', rows: batch });
+
+  for (const batch of batches(rows.appTables)) push({ kind: 'appTables', rows: batch });
+
+  for (const batch of batches(rows.appRows)) push({ kind: 'appRows', rows: batch });
 
   const chunks = new Map<string, Uint8Array>();
 
@@ -152,7 +161,7 @@ function framesFor(recorded: readonly ForkFrame[], opts: {
   return out;
 }
 
-function receiverFor(tgt: TestWorkspace, opts: Partial<ForkWriteTarget> = {}): ForkTransferReceiver {
+function receiverFor(tgt: TestWorkspace, opts: Partial<ForkTargetOptions> = {}): ForkTransferReceiver {
   return streamReceiverFor(tgt, { ...OWNER, ...opts });
 }
 
@@ -249,7 +258,7 @@ describe('fork transfer receiver', () => {
     const begin = frames[0];
 
     if (begin?.kind !== 'begin') throw new Error('expected a begin frame');
-    const writer = new ForkTargetWriter(tgt.sql, OWNER);
+    const writer = writerFor(tgt, OWNER);
     const receiver = new ForkTransferReceiver(writer, createWorkspaceForkSink(tgt.bundle));
     await drain(receiver, frames.slice(0, -1));
 
@@ -341,6 +350,36 @@ describe('fork transfer receiver', () => {
     }
   });
 
+  // A fork lands only in the target's own artifacts and home: a frame naming anywhere else is no frame of this protocol.
+  test("an import naming a path outside the target's artifacts or home is refused before it opens anything", async () => {
+    const src = await source({ spill: true });
+    const frames = framesFor(await sourceFrames(src, 'm2'));
+    const page = frames.find((frame) => frame.kind === 'page' && frame.target.in === 'artifacts');
+
+    if (page?.kind !== 'page') throw new Error('expected a page of a carried payload');
+
+    const elsewhere = [
+      { in: 'artifacts', path: '../other-workspace/artifacts/m1.json' },
+      { in: 'artifacts', path: 'm1/../../../other-workspace/m1.json' },
+      { in: 'artifacts', path: '/home/other-workspace/m1.json' },
+      { in: 'home', name: '..' },
+      { in: 'home', name: 'notes/../../other-workspace' },
+    ] as const;
+
+    for (const target of elsewhere) {
+      const tgt = fresh();
+      const receiver = receiverFor(tgt);
+
+      await drain(receiver, frames.slice(0, frames.indexOf(page)));
+      const before = new ForkStagingState(tgt.sql).read();
+
+      await expect(receiver.accept({ ...page, target })).rejects.toThrow(/not valid for protocol version/);
+      // Refused on arrival: the transfer stands where it stood, the target is not a fork, and nothing reached elsewhere.
+      expect([target, new ForkStagingState(tgt.sql).read(), isFork(tgt)]).toEqual([target, before, false]);
+      expect(await exists(tgt.vfs, '/home/other-workspace')).toBe(false);
+    }
+  });
+
   test('a page the target lacks chunks for is answered with them, taking nothing until they arrive', async () => {
     const src = await source({ files: [{ path: 'notes/a.md', content: 'alpha' }] });
     const tgt = fresh();
@@ -383,7 +422,7 @@ describe('fork transfer receiver', () => {
       },
     };
 
-    const receiver = new ForkTransferReceiver(new ForkTargetWriter(tgt.sql, OWNER), forgetful);
+    const receiver = new ForkTransferReceiver(writerFor(tgt, OWNER), forgetful);
 
     await expect(transfer(src, receiver, { untilMessageId: 'm3' })).rejects.toThrow(/wants the same 1 chunk\(s\) of .* it was just sent/);
     expect(sent.length).toBeLessThanOrEqual(2);
@@ -815,7 +854,7 @@ describe('a fork holds one frame, never a whole file', () => {
     const chat = await seedForkSource(src, { workspaceId: 'BIG', workspaceName: 'big', memory: [] });
     await chat.say({ id: 'm1', role: 'user', text: 'only' });
     const tgt = fresh();
-    const receiver = new ForkTransferReceiver(new ForkTargetWriter(tgt.sql, OWNER), sink);
+    const receiver = new ForkTransferReceiver(writerFor(tgt, OWNER), sink);
 
     let peakFrameBytes = 0;
     let published = false;
@@ -833,7 +872,7 @@ describe('a fork holds one frame, never a whole file', () => {
     let peakRetainedHeapDelta = 0;
 
     const stream = forkTransferFrames({
-      sql: src.sql, actor: chat.actor, vfs: plane, artifactDirectory: SOURCE_ARTIFACTS,
+      sql: src.sql, actor: chat.actor, vfs: plane, artifactDirectory: SOURCE_ARTIFACTS, appData: appDataOf(src).fork,
       untilMessageId: 'm1', transferId: 'tx-256m', frameBytes: FRAME,
     });
 
@@ -909,7 +948,7 @@ describe('a fork holds one frame, never a whole file', () => {
 describe('fork target writer', () => {
   test('a publication before any head is refused', async () => {
     const tgt = fresh();
-    const writer = new ForkTargetWriter(tgt.sql, OWNER);
+    const writer = writerFor(tgt, OWNER);
 
     await expect(writer.publish()).rejects.toThrow(/before the transfer declared its head/);
     expect(isFork(tgt)).toBe(false);
@@ -919,7 +958,7 @@ describe('fork target writer', () => {
     const tgt = fresh();
     void tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SOMEONE-ELSE'}, ${'other'}, ${1})`;
     new WorkspaceActorDirectory(tgt.sql, { workspaceId: 'SOMEONE-ELSE', ownerUserId: '' }).createMain({ name: 'other' });
-    const writer = new ForkTargetWriter(tgt.sql, OWNER);
+    const writer = writerFor(tgt, OWNER);
 
     expect(() => writer.begin({
       source: { workspaceId: 'S', workspaceName: 's' }, cut: { messageId: 'm1', createdAtMs: 1 },
@@ -935,5 +974,146 @@ describe('fork target writer', () => {
     expect(selected).toHaveLength(1);
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM context_memberships`[0]?.c).toBe(0);
     expect(tgt.sql<{ revision: number }>`SELECT revision FROM context_revisions`).toEqual([{ revision: 1 }]);
+  });
+});
+
+const LEDGER: AppTableSpec = {
+  name: 'ledger',
+  scope: 'actor',
+  columns: [
+    { name: 'key', type: 'text', primaryKey: true },
+    { name: 'amount', type: 'integer' },
+    { name: 'proof', type: 'blob' },
+    { name: 'detail', type: 'json' },
+  ],
+};
+
+/** More rows than one page of the store's export, so the copy resumes by rowid. */
+const LEDGER_ROWS = 450;
+
+describe('what a fork carries of what its source learned', () => {
+  test('lessons cross as they stood at the cut: none taught after it, and one confirmed after it still provisional', async () => {
+    const src = await source();
+    const tgt = fresh();
+    const actor = openWorkspaceMainActor(src.sql);
+
+    const cut = src.sql<{ recorded_at: number }>`
+      SELECT recorded_at FROM conversation_entries WHERE actor_id = ${actor.actorId} AND id = ${'m2'}`[0]?.recorded_at;
+
+    if (cut === undefined) throw new Error('expected the cut entry m2');
+    recordLesson(src.sql, actor, { turnIds: ['t-settled'], text: 'Confirmed before the cut.', source: 'turn_reflection', status: 'corroborated', now: cut - 2 });
+    recordLesson(src.sql, actor, { turnIds: ['t-later'], text: 'Taught before the cut, confirmed after.', source: 'turn_reflection', status: 'provisional', now: cut - 1 });
+    corroborateLessonsForTurn(src.sql, actor, 't-later', cut + 1);
+    recordLesson(src.sql, actor, { turnIds: ['t-after'], text: 'Taught after the cut.', source: 'turn_reflection', status: 'provisional', now: cut + 2 });
+
+    const { result } = await transfer(src, receiverFor(tgt), { untilMessageId: 'm2' });
+    expect(result).not.toBeNull();
+
+    const landed = listLessons(tgt.sql, openWorkspaceMainActor(tgt.sql))
+      .map(({ text, status, createdAt, corroboratedAt }) => ({ text, status, createdAt, corroboratedAt }))
+      .sort((left, right) => left.createdAt - right.createdAt);
+
+    expect(landed).toEqual([
+      { text: 'Confirmed before the cut.', status: 'corroborated', createdAt: cut - 2, corroboratedAt: cut - 2 },
+      { text: 'Taught before the cut, confirmed after.', status: 'provisional', createdAt: cut - 1, corroboratedAt: null },
+    ]);
+  });
+
+  test("tool lessons, facts and the db tool's tables cross as they stand, each row its new owner's", async () => {
+    const src = await source();
+    const tgt = fresh();
+    const actor = openWorkspaceMainActor(src.sql);
+
+    applyStruggleLesson(src.sql, actor, { turnId: 't-1', tool: 'bash', answer: { update: null, text: 'Quote the glob.' } });
+    // A revision after the cut still crosses: a tool lesson keeps no history to cut it at.
+    applyStruggleLesson(src.sql, actor, { turnId: 't-9', tool: 'bash', answer: { update: 'tl-t-1', text: 'Quote every glob.' } });
+    createFactsStore(src.sql, actor).upsert('editor', 'helix', { confidence: 0.9, source: 'user' });
+    createFactsStore(src.sql, actor).upsert('timezone', { zone: 'Europe/Lisbon' });
+
+    const parent = appDataOf(src);
+    parent.createTable(LEDGER);
+    parent.createTable({ name: 'shared', scope: 'workspace', columns: [{ name: 'note', type: 'text' }] });
+
+    parent.apply({
+      op: 'insert', table: 'ledger',
+      rows: Array.from({ length: LEDGER_ROWS }, (_, at) => ({
+        key: `k${String(at).padStart(3, '0')}`, amount: at, proof: at % 2 === 0 ? 'AAECf4D//g==' : null, detail: { at },
+      })),
+    });
+    parent.apply({ op: 'insert', table: 'shared', rows: [{ note: 'read by every agent' }] });
+
+    const { result } = await transfer(src, receiverFor(tgt), { untilMessageId: 'm2' });
+    expect(result).not.toBeNull();
+    const forkActor = openWorkspaceMainActor(tgt.sql);
+
+    expect(listToolLessons(tgt.sql, forkActor, ['bash'], 10)).toEqual(listToolLessons(src.sql, actor, ['bash'], 10));
+    expect(listToolLessons(tgt.sql, forkActor, ['bash'], 10).map((lesson) => lesson.text)).toEqual(['Quote every glob.']);
+    expect(createFactsStore(tgt.sql, forkActor).all()).toEqual(createFactsStore(src.sql, actor).all());
+
+    const fork = appDataOf(tgt);
+    const declared = (store: AppDataStore) => store.listTables().map(({ createdBy: _, ...table }) => table);
+
+    expect(declared(fork)).toEqual(declared(parent));
+    expect(fork.listTables().every((table) => table.createdBy === forkActor.actorId)).toBe(true);
+    // The target's main actor reads the actor-scope rows: they landed as its own, not the source actor's.
+    expect(fork.count('ledger')).toBe(LEDGER_ROWS);
+    expect(fork.select('ledger', { orderBy: [{ column: 'key' }], limit: LEDGER_ROWS })).toEqual(parent.select('ledger', { orderBy: [{ column: 'key' }], limit: LEDGER_ROWS }));
+    expect(fork.select('shared')).toEqual([{ note: 'read by every agent' }]);
+  });
+
+  test('a db row crosses whatever its table declares: a column named rowid, or an integer key at or below zero', async () => {
+    const src = await source();
+    const tgt = fresh();
+    const parent = appDataOf(src);
+    parent.createTable({ name: 'shadowed', scope: 'actor', columns: [{ name: 'rowid', type: 'integer' }, { name: 'note', type: 'text' }] });
+    // Past one page of the export, so the copy resumes after a row, and that row's own `rowid` repeats or is null.
+    parent.apply({
+      op: 'insert', table: 'shadowed',
+      rows: Array.from({ length: 250 }, (_, at) => ({ rowid: at % 2 === 0 ? null : 7, note: `n${String(at).padStart(3, '0')}` })),
+    });
+    parent.createTable({ name: 'keyed', scope: 'workspace', columns: [{ name: 'id', type: 'integer', primaryKey: true }, { name: 'note', type: 'text' }] });
+    parent.apply({ op: 'insert', table: 'keyed', rows: [{ id: -1, note: 'below' }, { id: 0, note: 'zero' }, { id: 1, note: 'above' }] });
+
+    const { result } = await transfer(src, receiverFor(tgt), { untilMessageId: 'm2' });
+    expect(result).not.toBeNull();
+
+    for (const [table, column] of [['shadowed', 'note'], ['keyed', 'id']] as const) {
+      const rows = (store: AppDataStore) => store.select(table, { orderBy: [{ column }], limit: 1000 });
+
+      expect(rows(appDataOf(tgt))).toEqual(rows(parent));
+    }
+  });
+
+  test('a target holding a physical table a declaration would land on refuses the transfer and adopts nothing', async () => {
+    const src = await source();
+    appDataOf(src).createTable({ name: 'secrets', scope: 'workspace', columns: [{ name: 'token', type: 'text' }] });
+    const tgt = fresh();
+    // A host table carrying the agent prefix; declaring over it would hand its rows to the fork's agents.
+    tgt.db.exec(`CREATE TABLE app_secrets (token TEXT)`);
+    tgt.db.exec(`INSERT INTO app_secrets (token) VALUES ('sk-live')`);
+
+    await expect(transfer(src, receiverFor(tgt), { untilMessageId: 'm2' })).rejects.toThrow(/outside the agent-data catalogue/);
+    expect(isFork(tgt)).toBe(false);
+    expect(appDataOf(tgt).listTables()).toEqual([]);
+    expect(tgt.sql<{ token: string }>`SELECT token FROM app_secrets`).toEqual([{ token: 'sk-live' }]);
+  });
+
+  test("a replacement transfer drops the db tool's tables an abandoned one declared", async () => {
+    const abandoned = await source();
+    appDataOf(abandoned).createTable({ name: 'stale', scope: 'actor', columns: [{ name: 'note', type: 'text' }] });
+    appDataOf(abandoned).apply({ op: 'insert', table: 'stale', rows: [{ note: 'from the abandoned transfer' }] });
+    const replacement = await source();
+    const tgt = fresh();
+    const first = framesFor(await sourceFrames(abandoned, 'm3'), { transferId: 'tx-first' });
+    const second = framesFor(await sourceFrames(replacement, 'm3'), { transferId: 'tx-second' });
+    const receiver = receiverFor(tgt);
+
+    await drain(receiver, first.slice(0, first.findIndex((frame) => frame.kind === 'appRows') + 1));
+    expect(appDataOf(tgt).listTables().map((table) => table.name)).toEqual(['stale']);
+
+    await drain(receiver, second);
+    expect(isFork(tgt)).toBe(true);
+    expect(appDataOf(tgt).listTables()).toEqual([]);
+    expect(tgt.sql<{ name: string }>`SELECT name FROM sqlite_master WHERE name LIKE ${'%stale%'}`).toEqual([]);
   });
 });

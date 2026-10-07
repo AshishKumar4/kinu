@@ -36,6 +36,7 @@ import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
   ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork,
+  HeldClose, HeldCloseRecovered,
 } from './two-turn-shapes';
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
@@ -108,6 +109,8 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   strandedWork(): Promise<StrandedWork>;
   seedOwedReplyWorkspace(): Promise<string>;
   recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered>;
+  heldCloseWorkspace(): Promise<HeldClose>;
+  recoverHeldClose(workspace: string): Promise<HeldCloseRecovered>;
   hostedActorTab(): Promise<{ name: string; snapshot: string; jobs: string; frames: number }>;
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
@@ -185,6 +188,12 @@ interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
   revoke(deviceId: string): Promise<{ ok: boolean; unstoppedCommands?: number }>;
   requests(): Promise<Array<{ requestId: string; turnId: string | null; outcome: string | null; claim: string | null }>>;
   unstoppedSince(deviceId: string): Promise<number | null>;
+  hostWorkspace(workspace: string, deviceId: string): Promise<void>;
+  startParkedTurn(workspace: string, text: string): Promise<void>;
+  releaseTurn(): Promise<void>;
+  runOnMachine(workspace: string, command: string): Promise<string>;
+  stopWork(workspace: string): Promise<Array<{ requestId?: string; outcome: string; detail?: string }>>;
+  pendingConsents(workspace: string): Promise<number>;
 }
 
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
@@ -317,6 +326,9 @@ type ProbeAnswer = { ok: true; value: unknown } | { ok: false; reason: string; e
 
 interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   start(): Promise<void>;
+  authorTriage(): Promise<void>;
+  operationAs(as: 'root' | 'plan' | 'hire', input: import('@kinu.run/core').JsonValue): Promise<ProbeAnswer>;
+  unnamedShareCall(share: string): Promise<ProbeAnswer>;
   previewAsHire(): Promise<{ preview: ProbeAnswer; removed: ProbeAnswer; left: boolean }>;
   share(approved?: readonly { binding: string; member: string }[]): Promise<ProbeAnswer>;
   liveShares(): Promise<ProbeAnswer>;

@@ -9,7 +9,6 @@ import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import type { VfsExportChunk, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { VfsExportPageSchema } from '../vfs/export-page';
-import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
 import { KinuError } from '../obs/error';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
@@ -21,53 +20,25 @@ import { renderIssues, type JsonObject } from '../utils/json';
 import { compareCodeUnits } from '../utils/text';
 import { openWorkspaceMainActor } from './workspace-actors';
 import { FORK_PIN_PREFIX, forkCarries, type ForkFileSource, type ForkPinnedFiles } from './fork';
+import { forkArtifactPath, planForkConversation } from './fork-plan';
+import { ForkSnapshotHeadSchema } from './fork-rows';
 import {
-  forkArtifactPath,
-  forkConversationCounts,
-  forkConversationEntryPartRows,
-  forkConversationEntryRow,
-  forkSessionMessageRow,
-  planForkConversation,
-  type ForkConversationPlan,
-} from './fork-plan';
-import {
-  ForkSnapshotHeadSchema,
-  ForkSessionMessageRowSchema,
-  ForkConversationEntryRowSchema,
-  ForkConversationEntryPartRowSchema,
-  ForkContextMemberRowSchema,
-  ForkCraftedToolRowSchema,
-  ForkConfigRowSchema,
-  type ForkConfigRow,
-  type ForkContextMemberRow,
-  type ForkConversationEntryPartRow,
-  type ForkConversationEntryRow,
-  type ForkCraftedToolRow,
-  type ForkSessionMessageRow,
-} from './fork-rows';
+  FORK_ROW_SECTIONS, FORK_SECTIONS, forkSectionCount, perSection,
+  type ForkAppData, type ForkRows, type ForkRowSection, type ForkSection, type ForkSectionSource,
+} from './fork-sections';
 import { ForkSectionCountsSchema, ForkTargetWriter, forkResultOf, type ForkResult, type ForkStagedCounts } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
 /** Fork transfer protocol version; a receiver refuses one it does not implement. Bump when an older
- *  receiver would misread the frame union. v5 carries no memory index: the target derives it from the notes. */
-export const FORK_TRANSFER_VERSION = 5;
+ *  receiver would misread the frame union. v5 carries no memory index: the target derives it from the notes. v6 carries
+ *  the main actor's lessons, tool lessons, facts and `db` tables. */
+export const FORK_TRANSFER_VERSION = 6;
 
 /** Payload bytes per frame: a quarter of `do.facet.rpc_bytes`, leaving headroom for clone metadata and envelope. */
 export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
 
-/** Row sections in crossing order, which is the canonical store's foreign-key order (no transaction spans frames). */
-export const FORK_ROW_SECTIONS = [
-  'agentConfig',
-  'craftedTools',
-  'sessionMessages',
-  'conversationEntries',
-  'conversationEntryParts',
-  'contextMembers',
-] as const;
+export { FORK_ROW_SECTIONS, type ForkAppData, type ForkRowSection } from './fork-sections';
 
-export type ForkRowSection = (typeof FORK_ROW_SECTIONS)[number];
-
-/** Per-section row counts, and the files (SOUL.md and each import), declared by the source and checked at `commit`. */
 /** Fields every frame carries. `seq` is 0-based; `commit`'s `seq` is the number of frames before it. */
 const FRAME_ENVELOPE = {
   version: v.literal(FORK_TRANSFER_VERSION),
@@ -76,6 +47,11 @@ const FRAME_ENVELOPE = {
   /** SHA-256 of this frame's canonical preimage, so a corrupt frame is refused on arrival. */
   digest: v.string(),
 } as const;
+
+/** One batch of one row section, its rows checked by the section's own schema. */
+function rowFrameSchema<K extends ForkRowSection>(kind: K) {
+  return v.object({ ...FRAME_ENVELOPE, kind: v.literal(kind), rows: v.array(FORK_SECTIONS[kind].rows) });
+}
 
 /** Relative, no empty, `.` or `..` segment: no frame names a path outside the tree. */
 const ForkTreePathSchema = v.pipe(
@@ -107,12 +83,18 @@ const ForkFrameSchema = v.variant('kind', [
     head: ForkSnapshotHeadSchema,
     counts: ForkSectionCountsSchema,
   }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('agentConfig'), rows: v.array(ForkConfigRowSchema) }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('craftedTools'), rows: v.array(ForkCraftedToolRowSchema) }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('sessionMessages'), rows: v.array(ForkSessionMessageRowSchema) }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntries'), rows: v.array(ForkConversationEntryRowSchema) }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntryParts'), rows: v.array(ForkConversationEntryPartRowSchema) }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('contextMembers'), rows: v.array(ForkContextMemberRowSchema) }),
+  // Named one by one so each frame's rows keep their own type; `rowSectionsOnTheWire` holds the list to the sections.
+  rowFrameSchema('agentConfig'),
+  rowFrameSchema('craftedTools'),
+  rowFrameSchema('sessionMessages'),
+  rowFrameSchema('conversationEntries'),
+  rowFrameSchema('conversationEntryParts'),
+  rowFrameSchema('contextMembers'),
+  rowFrameSchema('lessons'),
+  rowFrameSchema('toolLessons'),
+  rowFrameSchema('facts'),
+  rowFrameSchema('appTables'),
+  rowFrameSchema('appRows'),
   /** Chunks a page names that the target lacked, stored ahead of that page. */
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('chunks'), target: ForkImportTargetSchema, chunks: v.array(ForkExportChunkSchema) }),
   /** One page of one import. */
@@ -131,6 +113,11 @@ export type ForkChunksFrame = Extract<ForkFrame, { kind: 'chunks' }>;
 export type ForkPageFrame = Extract<ForkFrame, { kind: 'page' }>;
 
 export type ForkRowFrame = Extract<ForkFrame, { kind: ForkRowSection }>;
+
+// Every section has its frame on the wire.
+const rowSectionsOnTheWire: Exclude<ForkRowSection, ForkRowFrame['kind']> extends never ? true : never = true;
+
+void rowSectionsOnTheWire;
 
 export type ForkSectionCounts = ForkStagedCounts;
 
@@ -226,111 +213,14 @@ export interface ForkTransferSource {
   untilMessageId: string;
   /** This actor's payload directory; references are made relative to it. */
   artifactDirectory: string;
+  /** The `db` tool's store as that actor reads it (`AppDataStore.fork`); the fork only reads it. */
+  appData: ForkAppData;
   transferId: string;
   /** Max payload bytes per frame. Production passes FORK_FRAME_BYTES. */
   frameBytes: number;
 }
 
 type ForkFrameBody = UnsealedForkFrame;
-
-const utf8Bytes = (text: string): number => Buffer.byteLength(text, 'utf8');
-
-function configPayloadBytes(row: ForkConfigRow): number {
-  return utf8Bytes(row.key) + utf8Bytes(row.value);
-}
-
-function craftedToolPayloadBytes(row: ForkCraftedToolRow): number {
-  return utf8Bytes(row.name) + utf8Bytes(row.description) + utf8Bytes(row.code);
-}
-
-
-/** Message content is the one unbounded conversation field: inline `content_json` is a whole message's parts. */
-function sessionMessagePayloadBytes(row: ForkSessionMessageRow): number {
-  return utf8Bytes(row.message_id) + utf8Bytes(row.role)
-    + utf8Bytes(row.native_content_kind) + utf8Bytes(row.origin) + utf8Bytes(row.envelope_json)
-    + (row.content_json === null ? 0 : utf8Bytes(row.content_json))
-    + (row.content_path === null ? 0 : utf8Bytes(row.content_path))
-    + (row.content_digest === null ? 0 : utf8Bytes(row.content_digest));
-}
-
-function conversationEntryPayloadBytes(row: ForkConversationEntryRow): number {
-  return utf8Bytes(row.id)
-    + utf8Bytes(row.role)
-    + (row.turn_id === null ? 0 : utf8Bytes(row.turn_id))
-    + (row.run_id === null ? 0 : utf8Bytes(row.run_id))
-    + (row.metadata_json === null ? 0 : utf8Bytes(row.metadata_json))
-    + (row.metadata_path === null ? 0 : utf8Bytes(row.metadata_path))
-    + (row.metadata_digest === null ? 0 : utf8Bytes(row.metadata_digest));
-}
-
-function conversationEntryPartPayloadBytes(row: ForkConversationEntryPartRow): number {
-  return utf8Bytes(row.entry_id) + utf8Bytes(row.message_id);
-}
-
-function contextMemberPayloadBytes(row: ForkContextMemberRow): number {
-  return utf8Bytes(row.entry_id) + utf8Bytes(row.message_id);
-}
-
-async function* configRows(sql: SqlExecutor): AsyncGenerator<ForkConfigRow> {
-  const actor = openWorkspaceMainActor(sql);
-  let rowid = 0;
-
-  for (;;) {
-    const row = sql<ForkConfigRow & { rowid: number }>`
-      SELECT rowid, key, value FROM actor_config
-      WHERE actor_id = ${actor.actorId} AND rowid > ${rowid}
-      ORDER BY rowid ASC LIMIT 1
-    `[0];
-
-    if (row === undefined) return;
-    rowid = row.rowid;
-
-    if (SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)) continue;
-    yield { key: row.key, value: row.value };
-  }
-}
-
-async function* craftedToolRows(sql: SqlExecutor): AsyncGenerator<ForkCraftedToolRow> {
-  let rowid = 0;
-
-  for (;;) {
-    const row = sql<ForkCraftedToolRow & { rowid: number }>`
-      SELECT rowid, name, description, code, created_at, updated_at
-      FROM crafted_tools WHERE rowid > ${rowid} ORDER BY rowid ASC LIMIT 1
-    `[0];
-
-    if (row === undefined) return;
-    rowid = row.rowid;
-    yield {
-      name: row.name, description: row.description, code: row.code,
-      created_at: row.created_at, updated_at: row.updated_at,
-    };
-  }
-}
-
-
-/** Conversation sections, read one message or one entry's parts at a time to bound the sender. */
-async function* sessionMessageRows(
-  sql: SqlExecutor, actorId: string, plan: ForkConversationPlan, artifactDirectory: string,
-): AsyncGenerator<ForkSessionMessageRow> {
-  for (const messageId of plan.messageIds) yield forkSessionMessageRow(sql, actorId, messageId, artifactDirectory);
-}
-
-async function* conversationEntryRows(
-  sql: SqlExecutor, actorId: string, plan: ForkConversationPlan, artifactDirectory: string,
-): AsyncGenerator<ForkConversationEntryRow> {
-  for (const entryId of plan.entryIds) yield forkConversationEntryRow(sql, actorId, entryId, artifactDirectory);
-}
-
-async function* conversationEntryPartRows(
-  sql: SqlExecutor, actorId: string, plan: ForkConversationPlan,
-): AsyncGenerator<ForkConversationEntryPartRow> {
-  for (const entryId of plan.entryIds) yield* forkConversationEntryPartRows(sql, actorId, entryId);
-}
-
-async function* contextMemberRows(plan: ForkConversationPlan): AsyncGenerator<ForkContextMemberRow> {
-  for (const member of plan.members) yield member;
-}
 
 /** What the target answered the frame just yielded, passed back into the stream. */
 export interface ForkFrameReply {
@@ -392,15 +282,11 @@ export async function* forkTransferFrames(
       ...carriedPayloads(pinned, plan.artifacts, source.artifactDirectory),
     ];
 
-    const conversation = forkConversationCounts(source.sql, actorId, plan);
-
-    const counts: ForkSectionCounts = {
-      agentConfig: source.sql<{ key: string }>`SELECT key FROM actor_config WHERE actor_id = ${actorId}`
-        .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)).length,
-      craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
-      ...conversation,
-      files: imports.length,
+    const sections: ForkSectionSource = {
+      sql: source.sql, actorId, plan, artifactDirectory: source.artifactDirectory, appData: source.appData,
     };
+
+    const counts: ForkSectionCounts = { ...perSection((kind) => forkSectionCount(kind, sections)), files: imports.length };
 
     const identity = source.sql<{ id: string; name: string }>`
       SELECT id, name FROM workspace_identity LIMIT 1
@@ -433,16 +319,14 @@ export async function* forkTransferFrames(
 
     yield* send({ ...envelope(), kind: 'begin', head, counts });
 
-    const yieldRows = async function* <T extends ForkRowValue>(
-      kind: ForkRowSection,
-      rows: AsyncIterable<T>,
-      payloadBytes: (row: T) => number,
+    const yieldRows = async function* <K extends ForkRowSection>(
+      kind: K, declared: ForkSection<ForkRows[K]>,
     ): AsyncGenerator<ForkFrame, void, ForkFrameReply | undefined> {
-      let batch: T[] = [];
+      let batch: ForkRows[K][] = [];
       let bytes = 0;
 
-      for await (const row of rows) {
-        const rowBytes = payloadBytes(row);
+      for (const row of declared.select(sections)) {
+        const rowBytes = declared.bytes(row);
 
         // A single row may exceed the frame budget; send it alone rather than reject it.
         if (batch.length > 0 && bytes + rowBytes > source.frameBytes) {
@@ -458,36 +342,7 @@ export async function* forkTransferFrames(
       if (batch.length > 0) yield* send({ ...envelope(), kind, rows: batch });
     };
 
-    for (const section of FORK_ROW_SECTIONS) {
-      switch (section) {
-        case 'agentConfig':
-          yield* yieldRows(section, configRows(source.sql), configPayloadBytes);
-          break;
-        case 'craftedTools':
-          yield* yieldRows(section, craftedToolRows(source.sql), craftedToolPayloadBytes);
-          break;
-        case 'sessionMessages':
-          yield* yieldRows(
-            section,
-            sessionMessageRows(source.sql, actorId, plan, source.artifactDirectory),
-            sessionMessagePayloadBytes,
-          );
-          break;
-        case 'conversationEntries':
-          yield* yieldRows(
-            section,
-            conversationEntryRows(source.sql, actorId, plan, source.artifactDirectory),
-            conversationEntryPayloadBytes,
-          );
-          break;
-        case 'conversationEntryParts':
-          yield* yieldRows(section, conversationEntryPartRows(source.sql, actorId, plan), conversationEntryPartPayloadBytes);
-          break;
-        case 'contextMembers':
-          yield* yieldRows(section, contextMemberRows(plan), contextMemberPayloadBytes);
-          break;
-      }
-    }
+    for (const kind of FORK_ROW_SECTIONS) yield* yieldRows(kind, FORK_SECTIONS[kind]);
 
     /** The chunks a page wants, a frame of them at a time. */
     const chunkFrames = async function* (
@@ -665,12 +520,7 @@ export class ForkTransferReceiver {
       ));
     }
 
-    if (frame.kind === 'agentConfig') this.writer.stageAgentConfig(frame.rows);
-    else if (frame.kind === 'craftedTools') this.writer.stageCraftedTools(frame.rows);
-    else if (frame.kind === 'sessionMessages') this.writer.stageSessionMessages(frame.rows);
-    else if (frame.kind === 'conversationEntries') this.writer.stageConversationEntries(frame.rows);
-    else if (frame.kind === 'conversationEntryParts') this.writer.stageConversationEntryParts(frame.rows);
-    else this.writer.stageContextMembers(frame.rows);
+    this.writer.stage(frame.kind, frame.rows);
 
     return Effect.succeed(at);
   }
@@ -711,19 +561,10 @@ export class ForkTransferReceiver {
         return yield* Effect.die(new Error(`fork transfer committed while the import at ${JSON.stringify(staged.importing)} was incomplete`));
       }
 
-      const taken = staged.staged;
+      for (const section of [...FORK_ROW_SECTIONS, 'files'] as const) {
+        const want = staged.declared[section];
+        const got = staged.staged[section];
 
-      const shortfall = [
-        ['agentConfig', staged.declared.agentConfig, taken.agentConfig],
-        ['craftedTools', staged.declared.craftedTools, taken.craftedTools],
-        ['sessionMessages', staged.declared.sessionMessages, taken.sessionMessages],
-        ['conversationEntries', staged.declared.conversationEntries, taken.conversationEntries],
-        ['conversationEntryParts', staged.declared.conversationEntryParts, taken.conversationEntryParts],
-        ['contextMembers', staged.declared.contextMembers, taken.contextMembers],
-        ['files', staged.declared.files, taken.files],
-      ] as const;
-
-      for (const [section, want, got] of shortfall) {
         if (want !== got) {
           return yield* Effect.die(new Error(
             `fork transfer declared ${want} ${section} and staged ${got}; refusing to publish an incomplete fork`,

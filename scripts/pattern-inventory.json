@@ -407,6 +407,20 @@
       "decision": "lexical"
     },
     {
+      "file": "packages/core/src/tools/db-codemode.ts",
+      "kind": "hand-parser",
+      "owner": "decodedRow",
+      "sourceSha256": "a7131a6cd0293227423e799b82598811d5e28eb73748b84567093113675321cb",
+      "decision": "traversal"
+    },
+    {
+      "file": "packages/core/src/tools/db-codemode.ts",
+      "kind": "hand-parser",
+      "owner": "decodedRow",
+      "sourceSha256": "cea3edc5cfce593e414dfba693cccabfedac074b4aa8f67aa6290494983de2ce",
+      "decision": "traversal"
+    },
+    {
       "file": "packages/core/src/utils/markdown-frontmatter.ts",
       "kind": "hand-parser",
       "owner": "stripComment",

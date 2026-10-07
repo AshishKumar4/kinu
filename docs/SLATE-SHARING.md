@@ -297,9 +297,10 @@ local sharing; the CLI shares through a cloud workspace.
 - `packages/cf-backend/tests/unit-slate-sharing.test.ts`: undeclared binding
   and `agents` refusal (S1), revoke between calls (S6), a fork that admits with
   every requirement unsatisfied and carries nothing of the owner's (S8).
-- `packages/cf-backend/tests/unit-slate-live-shares.test.ts`: S1 problem
-  surfacing, the named-viewer grant and approval cases, S6 mid-flight revoke,
-  the credentialed-binding risk text.
+- `packages/cf-backend/tests/workerd/slate-share.test.ts`, over the real
+  SlateHost: S1 problem surfacing, the graph a share is granted across the app
+  hop and its cycle, the named-viewer grant and approval cases, Plan and hired
+  callers refused, S6 mid-flight revoke, the credentialed-binding risk text.
 - `packages/cf-backend/tests/unit-share-gaps.test.ts`: the S2 bounds (the
   per-viewer request counter, per viewer and on the exchange too; the per-share
   daily spend bound marking the share `paused`), the consent page and the

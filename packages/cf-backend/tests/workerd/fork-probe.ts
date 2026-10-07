@@ -10,7 +10,8 @@ import {
   FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver,
   foldForkStream, createWorkspaceForkSink, createWorkspaceForkSource, writeWorkspaceSoul, forkTransferFrames, initWorkspaceSchema, nimbusSessionFiles,
   readForkLineage, missionOf, SOUL_FILE, SOUL_PATH, SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
-  type ForkFrame, type ForkFrameReply, type ForkLineageRow, type ForkResult, type ForkStaging, type SqlExecutor, type SqlValue,
+  createAppDataStore, createFactsStore, recordLesson, RunEventRecorder, WORKSPACE_RUN_ID,
+  type ActorHandle, type AppDataStore, type ForkFrame, type ForkFrameReply, type ForkLineageRow, type ForkResult, type ForkStaging, type SqlExecutor, type SqlValue,
   WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
@@ -38,6 +39,9 @@ export const PROBE_SOUL_MISSION = summarizeSoul(SOUL_CONTENT);
 
 /** Several chunks of distinct bytes, so its import is a page and a run of chunk frames. */
 const PROOF_BYTES = 256 * 1024;
+
+/** Rows of the source's `db` table; few, because at this frame size each crosses in a frame of its own. */
+export const PROBE_LEDGER_ROWS = 3;
 
 /** A refusal is reported, not thrown: the production source catches it too (`deliverCloudFork`). */
 export interface ForkDeliveryReport {
@@ -120,6 +124,14 @@ abstract class ForkProbeDO extends DurableObject<Cloudflare.Env> {
     return this.opened;
   }
 
+  /** The `db` tool's store as `actor` uses it. */
+  protected appData(actor: ActorHandle): AppDataStore {
+    return createAppDataStore({
+      sql: this.sql, actor, transactionSync: (write) => this.ctx.storage.transactionSync(write),
+      events: () => new RunEventRecorder(this.sql, actor), runId: () => WORKSPACE_RUN_ID,
+    });
+  }
+
   protected async store(): Promise<SqliteVFS> {
     return (await this.session()).vfs;
   }
@@ -181,6 +193,13 @@ export class ForkSourceProbeDO extends ForkProbeDO {
     void this.sql`INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
       VALUES (${'probe_tool'}, ${'Counts what a fork carried.'},
               ${'export default () => 1;'}, ${1_760_000_000_001}, ${1_760_000_000_002})`;
+    // What the parent learned: the lesson taught after the cut stays behind; the fact and the table cross as they stand.
+    recordLesson(this.sql, actor, { turnIds: ['t-before'], text: 'Read before writing.', source: 'turn_reflection', status: 'corroborated', now: PROBE_CUT_RECORDED_AT - 1 });
+    recordLesson(this.sql, actor, { turnIds: ['t-after'], text: 'Taught after the cut.', source: 'turn_reflection', status: 'provisional', now: PROBE_CUT_RECORDED_AT + 1 });
+    createFactsStore(this.sql, actor).upsert('editor', 'helix', { source: 'user' });
+    const ledger = this.appData(actor);
+    ledger.createTable({ name: 'ledger', scope: 'actor', columns: [{ name: 'key', type: 'text', primaryKey: true }, { name: 'amount', type: 'integer' }] });
+    ledger.apply({ op: 'insert', table: 'ledger', rows: Array.from({ length: PROBE_LEDGER_ROWS }, (_, at) => ({ key: `k${at}`, amount: at })) });
 
     const files = nimbusSessionFiles({
       files: workspaceBoxFiles(() => this.store()),
@@ -253,6 +272,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
       actor: openWorkspaceMainActor(this.sql),
       vfs: createWorkspaceForkSource(this.fileHost),
       artifactDirectory: PROBE_ARTIFACTS,
+      appData: this.appData(openWorkspaceMainActor(this.sql)).fork,
       untilMessageId: PROBE_CUT_MESSAGE_ID,
       transferId,
       frameBytes: PROBE_FRAME_BYTES,
@@ -342,6 +362,10 @@ export interface ForkTargetState {
   contextMembers: number;
   configRows: number;
   craftedTools: number;
+  lessons: string[];
+  facts: string[];
+  /** Each declared table with the rows the target's main actor reads in it: only rows it owns, for an actor-scope one. */
+  tables: Array<{ name: string; rows: number }>;
   files: ProbeFile[];
 }
 
@@ -350,6 +374,10 @@ function identityWithMission(sql: SqlExecutor, soul: string | null): { id: strin
   const row = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`[0];
 
   return row === undefined ? null : { ...row, mission: missionOf(soul) };
+}
+
+function ledgerOf(store: AppDataStore): Array<{ name: string; rows: number }> {
+  return store.listTables().map(({ name }) => ({ name, rows: store.count(name) }));
 }
 
 export class ForkTargetProbeDO extends ForkProbeDO {
@@ -375,6 +403,7 @@ export class ForkTargetProbeDO extends ForkProbeDO {
         workspaceName: 'fork-target',
         artifactDirectory: PROBE_ARTIFACTS,
         transaction: (rows) => this.ctx.storage.transactionSync(rows),
+        appData: () => this.appData(openWorkspaceMainActor(this.sql)).fork,
       }),
       createWorkspaceForkSink(this.fileHost),
     );
@@ -411,6 +440,9 @@ export class ForkTargetProbeDO extends ForkProbeDO {
         SELECT COUNT(*) AS count FROM context_memberships WHERE to_revision IS NULL`),
       configRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM actor_config`),
       craftedTools: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`),
+      lessons: this.sql<{ text: string }>`SELECT text FROM lessons ORDER BY created_at`.map((row) => row.text),
+      facts: this.sql<{ key: string }>`SELECT key FROM agent_facts ORDER BY key`.map((row) => row.key),
+      tables: ledgerOf(this.appData(openWorkspaceMainActor(this.sql))),
       files: await this.files(),
     };
   }

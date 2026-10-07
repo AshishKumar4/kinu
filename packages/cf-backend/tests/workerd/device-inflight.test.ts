@@ -128,8 +128,8 @@ const account = (name: string) => env.DEVICE_USER_PROBE.get(env.DEVICE_USER_PROB
 
 const FrameSchema = v.object({ id: v.string(), method: v.string(), params: v.array(JsonValueSchema) });
 
-/** What the machine says of a command, or that it holds it until the test lets it finish. */
-type Answer = { readonly said: JsonValue } | { readonly hold: true };
+/** What the machine says of a command, that it failed, or that it holds it until the test lets it finish. */
+type Answer = { readonly said: JsonValue } | { readonly failed: string } | { readonly hold: true };
 
 interface Machine {
   readonly deviceId: string;
@@ -144,8 +144,11 @@ interface Machine {
   close(): void;
 }
 
-/** A paired machine with its daemon connected, and `workspace` bound to it; `answer` is its daemon. */
-async function machine(owner: string, workspace: string, answer: (frame: v.InferOutput<typeof FrameSchema>) => Answer): Promise<Machine> {
+/**
+ * A paired machine with its daemon connected, and `workspace` bound to it; `answer` is its daemon. `hosted` makes the
+ * workspace the production one, with its own identity, rather than an identity the account object holds for the test.
+ */
+async function machine(owner: string, workspace: string, answer: (frame: v.InferOutput<typeof FrameSchema>) => Answer, hosted = false): Promise<Machine> {
   const { deviceId, ticket } = await account(owner).pair('ashish@studio');
   const upgraded = await account(owner).fetch(`http://probe${DEVICE_CONNECT_PATH}?ticket=${encodeURIComponent(ticket)}`, { headers: { Upgrade: 'websocket' } });
   const socket = upgraded.webSocket;
@@ -173,6 +176,7 @@ async function machine(owner: string, workspace: string, answer: (frame: v.Infer
     const reply = answer(frame.output);
 
     if ('hold' in reply) held.push(frame.output.id);
+    else if ('failed' in reply) socket.send(JSON.stringify({ id: frame.output.id, error: { code: 'io', message: reply.failed } }));
     else socket.send(JSON.stringify({ id: frame.output.id, result: reply.said }));
   });
 
@@ -180,7 +184,7 @@ async function machine(owner: string, workspace: string, answer: (frame: v.Infer
     type: 'HELLO', protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES], os: 'linux', hostname: 'studio',
     agentRoot: '/home/ashish/.kinu/agents', sandbox: { capability: 'sandboxed', reason: null, gpu: [] },
   }));
-  await account(owner).bindWorkspace(workspace, deviceId);
+  await (hosted ? account(owner).hostWorkspace(workspace, deviceId) : account(owner).bindWorkspace(workspace, deviceId));
 
   return {
     deviceId,
@@ -307,5 +311,65 @@ describe('withdrawing a workspace\'s consent while its command runs', () => {
     expect(await account(owner).requests()).toEqual([]);
     // The account closed the machine's socket, so a late completion has nowhere to land.
     await at.dropped;
+  });
+});
+
+describe('stopping a turn that runs a command on the owner\'s machine', () => {
+  it('sends the machine a cancel, asks nobody, reports the machine\'s own verdict, and has nothing left to stop', async () => {
+    const owner = '0123456789abcdef0123456789abcd05';
+    const at = await machine(owner, 'ws-stop', holding('terminated'), true);
+
+    // Each case's own words: the fake's log outlives a case, so a shared marker would find the last one's call.
+    await account(owner).startParkedTurn('ws-stop', 'Build the project, then stop.');
+    const running = settling(account(owner).runOnMachine('ws-stop', 'bun run build'));
+
+    await at.asked('exec');
+    const [row] = await account(owner).requests();
+
+    // The command is stamped with the running turn, which is how Stop finds it.
+    expect(row?.turnId).not.toBeNull();
+    expect(await account(owner).stopWork('ws-stop')).toEqual([{ requestId: row?.requestId, outcome: 'terminated' }]);
+    expect(asked(at, DEVICE_CANCEL_METHOD)).toEqual([row?.requestId]);
+    expect(asked(at, DEVICE_EXEC_ACK_METHOD)).toContain(row?.requestId);
+    expect(await account(owner).pendingConsents('ws-stop')).toBe(0);
+    expect(await account(owner).requests()).toEqual([]);
+    expect(await account(owner).stopWork('ws-stop')).toEqual([]);
+    expect(asked(at, DEVICE_CANCEL_METHOD)).toEqual([row?.requestId]);
+    at.release();
+    await running;
+    await account(owner).releaseTurn();
+    at.close();
+  });
+
+  it('reports a stop nothing confirmed as failed, keeps the command for the next Stop, which confirms it', async () => {
+    const owner = '0123456789abcdef0123456789abcd06';
+    let killWorks = false;
+
+    // The machine cannot perform the kill at first, so nothing observed the work end.
+    const at = await machine(owner, 'ws-unconfirmed', (frame) => {
+      if (frame.method === DEVICE_CANCEL_METHOD && !killWorks) return { failed: 'the kernel refused the kill' };
+
+      return holding('terminated')(frame);
+    }, true);
+
+    await account(owner).startParkedTurn('ws-unconfirmed', 'Build the project; the kill may fail.');
+    const running = settling(account(owner).runOnMachine('ws-unconfirmed', 'bun run build'));
+
+    await at.asked('exec');
+    const [row] = await account(owner).requests();
+
+    expect(row?.turnId).not.toBeNull();
+    const [unconfirmed] = await account(owner).stopWork('ws-unconfirmed');
+
+    expect(unconfirmed).toMatchObject({ outcome: 'failed', detail: expect.stringContaining('refused the kill') });
+    // A failed stop returns its claim, so the row stays for the next sweep.
+    expect(await account(owner).requests()).toEqual([{ requestId: row?.requestId, turnId: row?.turnId, outcome: null, claim: null }]);
+    killWorks = true;
+    expect(await account(owner).stopWork('ws-unconfirmed')).toEqual([{ requestId: row?.requestId, outcome: 'terminated' }]);
+    expect(await account(owner).requests()).toEqual([]);
+    at.release();
+    await running;
+    await account(owner).releaseTurn();
+    at.close();
   });
 });

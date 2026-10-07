@@ -1,0 +1,24 @@
+diff --git a/dist/node/module-runner.js b/dist/node/module-runner.js
+index 16eb20c5ce44c84855af7438a2f0bfb2849c1bc7..def1971d33e4b17f35075682ef4ad10fc65660db 100644
+--- a/dist/node/module-runner.js
++++ b/dist/node/module-runner.js
+@@ -1256,7 +1256,18 @@ var ModuleRunner = class {
+ 			}),
+ 			[ssrImportMetaKey]: meta
+ 		};
+-		return this.debug?.("[module runner] executing", href), await this.evaluator.runInlinedModule(context, code, mod), exports;
++		this.debug?.("[module runner] executing", href);
++		let evaluatedCode = code;
++		const releaseSource = !this.hmrClient && this.options.sourcemapInterceptor === "prepareStackTrace";
++		if (releaseSource) {
++			const sourceMap = this.evaluatedModules.getModuleSourceMapById(moduleId);
++			const marker = `\n//# ${SOURCEMAPPING_URL}=data:application/json;base64,`;
++			const at = code.lastIndexOf(marker);
++			if (sourceMap && at >= 0) evaluatedCode = code.slice(0, at);
++		}
++		await this.evaluator.runInlinedModule(context, evaluatedCode, mod);
++		if (releaseSource) fetchResult.code = "";
++		return exports;
+ 	}
+ };
+ function exportAll(exports, sourceModule) {

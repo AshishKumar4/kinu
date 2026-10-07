@@ -98,7 +98,7 @@ export {
   type ForkFrame, type ForkBeginFrame, type ForkChunksFrame, type ForkPageFrame, type ForkRowFrame,
   type ForkRowSection, type ForkSectionCounts, type ForkFrameOutcome, type ForkFrameReply, type ForkImportTarget,
   type UnsealedForkFrame,
-  type ForkTransferSource,
+  type ForkTransferSource, type ForkAppData,
 } from './identity/fork-transfer';
 
 export type { ForkFileSink } from './identity/fork-sink';

@@ -39,6 +39,9 @@ it('a public share serves the slate, admits the granted member, refuses the rest
   expect(socket.probe).toBe('fixture-bytes');
   expect(socket.mutateError).toContain('does not grant');
 
+  // A call under a share must name the running invocation it rides.
+  expect(await probe.unnamedShareCall(created.share.id)).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('invocation') });
+
   const replay = await probe.replay(created.share.id);
   expect(replay).toMatchObject({ ok: false, reason: 'denied' });
   expect('error' in replay && replay.error).toContain('not running');
@@ -56,6 +59,66 @@ it('a public share serves the slate, admits the granted member, refuses the rest
   ]);
   expect(rows[1]?.calls).toEqual(rows[0]?.calls);
   expect(rows[2]?.calls).toEqual([]);
+});
+
+const GraphSchema = v.object({
+  slate: v.string(),
+  slates: v.array(v.string()),
+  bindings: v.array(v.looseObject({
+    slate: v.string(), name: v.string(), capability: v.unknown(), problem: v.optional(v.nullable(v.string())),
+    members: v.optional(v.array(v.object({ member: v.string(), effect: v.string(), risk: v.object({ public: v.string(), users: v.string() }) }))),
+  })),
+});
+
+const AnsweredSchema = v.object({ ok: v.literal(true), value: v.unknown() });
+
+const answer = (result: Awaited<ReturnType<Probe['operationAs']>>) => v.parse(AnsweredSchema, result).value;
+
+it('a share is granted what its graph reads, across the app hop and its cycle, and what its owner approved', async () => {
+  const probe = subject('triage');
+
+  await probe.start();
+  await probe.authorTriage();
+  const graph = v.parse(GraphSchema, answer(await probe.operationAs('root', { op: 'graph', id: 'issues' })));
+  const binding = (name: string) => graph.bindings.find((row) => `${row.slate}.${row.name}` === name);
+
+  // The hop into the digest is walked once: its way back names the slate and grants nothing more.
+  expect(graph.slates).toEqual(['issues', 'triage-digest']);
+  expect(binding('triage-digest.BACK')).toMatchObject({ capability: { kind: 'slate', id: 'issues' }, members: [] });
+  expect(binding('issues.GITHUB')?.members?.map((member) => [member.member, member.effect])).toEqual([['read_issue', 'read'], ['create_issue', 'mutate']]);
+  expect(binding('issues.GITHUB')?.members?.[1]?.risk.public).toContain('Anyone who opens this share can trigger it.');
+  expect(binding('issues.FILES')?.members?.map((member) => [member.member, member.effect])).toEqual([['readFile', 'read'], ['writeFile', 'mutate']]);
+
+  const ShareSchema = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });
+
+  const granted = async (visibility: 'public' | 'users', approved: Array<{ slate: string; binding: string; member: string }>) => v.parse(
+    ShareSchema, answer(await probe.operationAs('root', { op: 'share', id: 'issues', visibility, approved })),
+  ).share.grant.members.map((member) => `${member.binding}.${member.member}`).sort();
+
+  expect(await granted('public', [])).toEqual(['DIGEST_FILES.readFile', 'FILES.readFile', 'GITHUB.read_issue', 'NOTES.recall']);
+  expect(await granted('users', [{ slate: 'issues', binding: 'ASK', member: 'send' }])).toContain('ASK.send');
+
+  // A slate may not hold its calling agent, or its eval and hiring tools: each is a problem, and none is granted.
+  const overreach = v.parse(GraphSchema, answer(await probe.operationAs('root', { op: 'graph', id: 'overreach' })));
+
+  expect(overreach.bindings.map((row) => [row.name, Boolean(row.problem), row.members ?? []])).toEqual([
+    ['CONTROL', true, []], ['TOOLS', true, []], ['HIRE', true, []],
+  ]);
+  expect(v.parse(ShareSchema, answer(await probe.operationAs('root', { op: 'share', id: 'overreach', visibility: 'public', approved: [] })))
+    .share.grant.members).toEqual([]);
+});
+
+it('Plan mode may read a graph but not share, and a hired agent may do neither', async () => {
+  const probe = subject('triage-callers');
+
+  await probe.start();
+  await probe.authorTriage();
+  const share = { op: 'share', id: 'issues', visibility: 'public', approved: [] };
+
+  expect(await probe.operationAs('plan', { op: 'graph', id: 'issues' })).toMatchObject({ ok: true });
+  expect(await probe.operationAs('plan', share)).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await probe.operationAs('hire', share)).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await probe.operationAs('hire', { op: 'liveShares' })).toMatchObject({ ok: false, reason: 'denied' });
 });
 
 it('a hired agent previews a slate it made where slates live, then removes it as the main agent would', async () => {
