@@ -77,8 +77,8 @@ test('agent, ai and path-scoped bindings parse, and only the workspace namespace
     .toThrow('slate.bindings.X.tier');
 });
 
-test('the class contract is what a missing main names, and inline height is bounded', () => {
-  expect(() => parseSlateProject({ name: 'notes' })).toThrow('class Slate extends SlateObject');
+test('a slate needs no class, and inline height is bounded', () => {
+  expect(parseSlateProject({ name: 'notes', browser: 'index.html' }).main).toBeUndefined();
   expect(parseSlateProject({ main: 'server.ts' }).slate.inline).toEqual({ height: 320 });
   expect(parseSlateProject({ main: 'server.ts', slate: { inline: { height: 480 } } }).slate.inline).toEqual({ height: 480 });
 

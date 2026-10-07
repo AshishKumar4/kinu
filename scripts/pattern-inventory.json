@@ -407,6 +407,13 @@
       "decision": "lexical"
     },
     {
+      "file": "packages/core/src/slates/ui-blocks.ts",
+      "kind": "regex-literal",
+      "owner": "OPEN",
+      "sourceSha256": "ff77c5870972df94da23f04a517792aebff1d798864eb3a4c3b89272a4af6ae1",
+      "decision": "framing"
+    },
+    {
       "file": "packages/core/src/tools/db-codemode.ts",
       "kind": "hand-parser",
       "owner": "decodedRow",

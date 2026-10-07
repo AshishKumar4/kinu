@@ -134,7 +134,7 @@ import {
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
-  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork,
+  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock,
   readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -2886,13 +2886,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Every turn the workspace's actors and agents still owe and every effect the root's settled turns still owe, by the
-   * phase each store records. A turn no live session here runs or awaits is stranded: nothing else will settle it.
+   * phase each store records, with what each agent whose isolate still owes a wake answers of its own. A turn no live
+   * session here runs or awaits is stranded: nothing else will settle it.
    */
   @callable()
   async inspectWork(): Promise<readonly InspectedWork[]> {
     const host = this.actorHost();
     const rootActorId = this.actorHandle().actorId;
     const turns = host.resumable();
+    const actorName = (actorId: string) => actorId === rootActorId ? null : host.describe(actorId)?.name ?? actorId;
 
     const running = (turn: (typeof turns)[number]) => turn.record.actorId === rootActorId
       ? this._inFlight || this.actorSession.turnOpen
@@ -2902,15 +2904,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const agentTurns = new AgentOpenTurns(this.boundSql).all();
 
     return inspectWork({
-      turns: turns.map((turn) => turn.claim),
-      agentTurns,
+      claims: turns.map((turn) => ({ claim: turn.claim, actor: actorName(turn.record.actorId) })),
+      agentTurns: agentTurns.map((turn) => ({ turnId: turn.turnId, actor: actorName(turn.actorId) ?? turn.actorId })),
       executing: new Set([
         ...turns.filter(running).map((turn) => turn.claim.turnId),
         ...agentTurns.filter((turn) => this.agentTurns.holds(turn.turnId)).map((turn) => turn.turnId),
       ]),
-      effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)),
+      effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)).map((effect) => ({ effect, actor: null })),
+      reported: await this.owingAgentsWork(),
       now: Date.now(),
     });
+  }
+
+  /** What each agent with a wake armed answers of its own; one that cannot answer is left out, and its wake still runs. */
+  private async owingAgentsWork(): Promise<InspectedWork[]> {
+    const reported: InspectedWork[] = [];
+
+    await Promise.all(new AgentWakes(this.boundSql).owing().filter((actorId) => this.liveActor(actorId)).map((actorId) => settleLogged(
+      'subordinate.agent_work_unread',
+      { doing: "reading what an agent's own isolate still owes", otherwise: 'io' },
+      async () => { reported.push(...await (await this.agentCalls(actorId)).owedWork(this.agentSnapshot(actorId))); },
+      { workspace: this.name, actor: actorId },
+    )));
+
+    return reported;
   }
 
   protected override onWorkCancelled({ abortedTools }: Omit<CancelWorkOutcome, 'ok'>): void {
@@ -4434,6 +4451,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.armDurableWake();
       },
       previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
+      // The root's own answers, every text part as the chat draws it; the page runs with the root's authority in the mode
+      // its next turn runs in.
+      messageBlock: async (address) => {
+        const answer = await this.chatTranscript.message(address.messageId);
+        const texts = answer?.role === 'assistant' ? answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])) : [];
+        const { html } = addressedBlock(texts, address);
+
+        return { html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
+      },
       sharesChanged: async () => {
         this.overviewChanged(true);
 

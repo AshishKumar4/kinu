@@ -40,6 +40,7 @@ import { initFactsTable } from '../memory/facts';
 import { initTaskListTable } from '../tools/task-store';
 import { initArtifactTables, initTrialTables } from '../evolution/artifact-schema';
 import { initSlateStateTable } from '../slates/state';
+import { initEphemeralSlateTable } from '../slates/ephemeral';
 import { initExplorationRecordsTable } from '../strategy/records';
 import { initSwarmNodeRecords } from '../strategy/swarm-resume';
 import { initAgentDataTables } from '../tools/db-codemode';
@@ -118,6 +119,7 @@ function createWorkspaceTables(db: WorkspaceSchemaSql): void {
     id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, bytes BLOB NOT NULL
   )`);
   initSlateStateTable(execRaw);
+  initEphemeralSlateTable(execRaw);
   execRaw(`CREATE TABLE IF NOT EXISTS slate_file_manifest (
     slate_id    TEXT NOT NULL,
     path        TEXT NOT NULL,

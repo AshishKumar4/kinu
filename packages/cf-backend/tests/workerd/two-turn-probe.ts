@@ -7,7 +7,7 @@
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
-import { SLEEP_TIME_CADENCE, hostedActorSocketPath, JsonValueSchema } from '@kinu.run/core';
+import { HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, hostedActorSocketPath, JsonValueSchema } from '@kinu.run/core';
 import {
   createCompositeLogger,
   createConsoleLogger,
@@ -27,6 +27,7 @@ import type {
   ChangeNotesPrepared,
   OwedRepliesRecovered,
   ClaimUnderRecovery,
+  AgentHeldWork,
   StrandedWork,
   EffectStatus,
   HeldClose,
@@ -925,7 +926,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'close'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'close'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1369,6 +1370,35 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const hired = v.parse(v.object({ name: v.string() }), await target.createSubordinateAgent());
 
     return await target.strandedWork(hired.name);
+  }
+
+  /** A hired agent's own turn, held at the model in its isolate: the workspace's work read asks the agent, whose wake is armed. */
+  async agentHeldWork(): Promise<AgentHeldWork> {
+    const { target, workspace } = await this.claimQueueWorkspace('agent-work');
+    const created = v.parse(v.object({ name: v.string(), subordinate: v.object({ actorId: v.string() }) }), await target.createSubordinateAgent());
+
+    await awaitSettled(target);
+    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 1 }) });
+
+    // The edge names the addressed agent on its path's upgrade; the chat it sends lands in that agent's own isolate.
+    const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}/${hostedActorSocketPath(created.name)}`, {
+      headers: { Upgrade: 'websocket', [HOSTED_ACTOR_ID_HEADER]: created.subordinate.actorId },
+    }));
+
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error(`the hosted actor path answered ${String(response.status)}, not a socket`);
+    socket.accept();
+
+    try {
+      socket.send(JSON.stringify({ type: 'rpc', id: 'agent-send', method: 'send', args: ['Hold this turn at the model.', 'agent-held-1'] }));
+      await fetch('http://probe-control.invalid/queue/arrived');
+
+      return { agent: created.name, held: await target.inspectWork() };
+    } finally {
+      await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+      socket.close(1000, 'agent work probe complete');
+    }
   }
 
   /** Owed replies seeded in a workspace whose activation then dies; returns the workspace to read after the eviction. */
