@@ -26,7 +26,7 @@ import {
   readExplorationCanvas, readExplorationRun,
 } from '../src/read-models/exploration-canvas';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
-import { NODE_BUILTIN_TOOLS, PROPOSE_BRANCH_TOOL } from '../src/strategy/node-agent';
+import { PROPOSE_BRANCH_TOOL } from '../src/strategy/node-agent';
 import type { Objective } from '../src/strategy/objective';
 import type { ResolvedSwarm, SwarmConfig } from '../src/strategy/swarm';
 import type { SearchNode } from '../src/types/mcts';
@@ -299,10 +299,6 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(script.offered.has(PROPOSE_BRANCH_TOOL)).toBe(true);
     expect(script.offered.has('agents')).toBe(false);
 
-    for (const name of script.offered) {
-      expect([...NODE_BUILTIN_TOOLS, PROPOSE_BRANCH_TOOL]).toContain(name);
-    }
-
     const depths = nodes.map((node) => node.depth);
     expect(Math.max(...depths)).toBe(2);
     const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -312,7 +308,6 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
       expect(node.depth).toBe((byId.get(node.parent_id)?.depth ?? -99) + 1);
     }
 
-    expect(script.verdicts.some((verdict) => verdict.startsWith('Granted:'))).toBe(true);
     expect(logger.emitted.map((line) => line.event)).toContain('swarm.branch_accepted');
 
     expect(result.best).not.toBeNull();

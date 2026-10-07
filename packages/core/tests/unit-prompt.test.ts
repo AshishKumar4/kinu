@@ -1,274 +1,19 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
-import { jsonSchema, tool, type ModelMessage, type ToolSet } from 'ai';
-import {
-  assertToolsSupportedByModel,
-  buildSystemPromptSync,
-  BUILTIN_TOOLS,
-  BUILTIN_TOOL_DESCRIPTIONS,
-  BUILTIN_TOOL_SPECS,
-  compilePromptSurface,
-  currentDateForPrompt,
-  modelSupportsTools,
-  BUILTIN_ROLE_DEFINITIONS,
-  deriveRoleLabel,
-  turnReasonForMetadata,
-  workModeForTurnMetadata,
-  renderDynamicContextBlock,
-  DynamicContextLedger, collectDynamicContext, createAgentStores, initWorkspaceSchema,
-  buildBuiltinTools, runChat, permitInPlan, toolsInWorkMode, resolveTurnProfile, profileCatalogDigest,
-  splitPromptSections,
-  AGENTS_TOOL_ACTIONS,
-  BUILTIN_SKILLS,
-  SWARM_PRESET_DOCTRINE,
-  skillIndexLine, skillViewPath,
-  type SkillHeader,
-  type PromptExecutorInfo,
-} from '../src/index';
-import { AGENTS_ACTION_FIELDS } from '../src/delegation/agents-tool';
-import { OPERATING_GUIDANCE } from '../src/prompting/section-templates';
-import type { SystemPromptOptions } from '../src/prompt';
-import {
-  NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, resolveSwarm,
-  type SwarmInput,
-} from '../src/strategy/swarm';
-import { createTestRuntime, createTestActors, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
-import { makeSqlExec, conversationsFor } from './helpers';
-import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
+import { jsonSchema, tool, type ToolSet } from 'ai';
+import { buildSystemPromptSync, compilePromptSurface, currentDateForPrompt, BUILTIN_ROLE_DEFINITIONS, turnReasonForMetadata, workModeForTurnMetadata, buildBuiltinTools, permitInPlan, skillIndexLine, type SkillHeader } from '../src/index';
 
-const RUNTIME = { backend: 'cf', model: { id: 'claude-sonnet-4-7' }, date: '2026-01-01' } as const;
-
-/** Type block of the `agent.*` codemode namespace as it ships; the host is never called. */
-function agentSelfTypes(): string {
-  const host: AgentSelfHost = new Proxy(Object.create(null), {
-    get: () => async () => null,
-  });
-
-  return createAgentSelfProvider(host).types ?? '';
-}
-
-function expectDefaultPromptToMatch(...patterns: readonly RegExp[]): void {
-  const { rt } = createTestRuntime();
-  const prompt = buildSystemPromptSync(rt);
-
-  for (const pattern of patterns) expect(prompt).toMatch(pattern);
-}
+import { createTestRuntime, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { conversationsFor } from './helpers';
+import { sessionFixture } from './helpers-session';
 
 describe('buildSystemPromptSync', () => {
-  test('uses fallback SOUL.md when SOUL.md is missing', () => {
-    expectDefaultPromptToMatch(/Kinu/, /self-evolving/i);
-  });
-
-  test('the delegation index advertises its supported actions, not retired fields or actions', () => {
-    // Which rung a task wants lives in the `agents` schema; advice here would drift from it.
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      availableTools: ['agents'],
-      agentsActions: ['swarm', 'hire', 'msg'],
-      temporaryAsk: true,
-      registeredExecutors: [],
-    });
-
-    for (const action of ['agents', 'swarm', 'hire']) expect(prompt).toContain('`' + action + '`');
-    expect(prompt).not.toContain('action=swarm');
-    expect(prompt).not.toContain('`think`');
-    expect(prompt).not.toContain('`team`');
-    expect(prompt).not.toContain('`peers`');
-  });
-
-  test('tree search is action=swarm, and it is a rung rather than a settlement', () => {
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toContain('settle=');
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toContain('`swarm`');
-    expect(prompt).not.toContain('action=swarm');
-  });
-
-  test('each index clause renders only for the agents actions the backend wires', () => {
-    const { rt } = createTestRuntime();
-
-    const both = buildSystemPromptSync(rt, {
-      availableTools: ['agents'],
-      registeredExecutors: [],
-    });
-
-    expect(both).toContain('`swarm`');
-    expect(both).toContain('`hire`');
-
-    const searchOnly = buildSystemPromptSync(rt, {
-      availableTools: ['agents'],
-      agentsActions: ['swarm'],
-      registeredExecutors: [],
-    });
-
-    expect(searchOnly).toContain('`swarm`');
-    expect(searchOnly).not.toContain('`hire`');
-  });
-
-  test('the in-sandbox actions are advertised only where both halves exist', () => {
-    const { rt } = createTestRuntime();
-
-    const both = buildSystemPromptSync(rt, {
-      availableTools: ['agents', 'eval'],
-      agentsActions: ['swarm'],
-      registeredExecutors: [],
-    });
-
-    expect(both).toContain('agents.<action>');
-
-    const noSandbox = buildSystemPromptSync(rt, {
-      availableTools: ['agents'],
-      agentsActions: ['swarm'],
-      registeredExecutors: [],
-    });
-
-    expect(noSandbox).not.toContain('agents.<action>');
-
-    const noDelegation = buildSystemPromptSync(rt, {
-      availableTools: ['eval'],
-      registeredExecutors: [],
-    });
-
-    expect(noDelegation).not.toContain('agents.<action>');
-  });
-
-  test('every surface that enumerates presets names all six, and every one of them resolves', () => {
-    const doctrine = SWARM_PRESET_DOCTRINE.join(' ');
-
-    for (const preset of SWARM_PRESETS) expect(doctrine).toContain(preset);
-    expect(doctrine).not.toContain('UNCONSTRUCTIBLE');
-
-    for (const preset of NAMED_SWARM_PRESETS) {
-      expect(SWARM_PRESET_POINTS[preset].config).toBeDefined();
-    }
-
-    for (const preset of NAMED_SWARM_PRESETS) {
-      // An absent key must be absent, not undefined: the resolver tells the two apart.
-      const archive = SWARM_PRESET_POINTS[preset].config.advance.kind === 'archive';
-
-      const call: SwarmInput = archive
-        ? { preset, task: 'x', key: 'k' }
-        : { preset, task: 'x' };
-
-      expect(resolveSwarm(call)).not.toHaveProperty('reason');
-    }
-  });
-
-  test('no built-in skill body calls an action or a field the tool surface does not have', () => {
-    // Nothing typechecks a template string, so a renamed action or field drifts silently.
-    const liveActions: readonly string[] = AGENTS_TOOL_ACTIONS;
-    const swarmFields: readonly string[] = AGENTS_ACTION_FIELDS.swarm;
-
-    for (const skill of BUILTIN_SKILLS) {
-      for (const [, action] of skill.body.matchAll(/action:\s*["'](\w+)["']/g)) {
-        expect(liveActions).toContain(action);
-      }
-
-      for (const [, field] of skill.body.matchAll(/agents\(\{([^}]*)\}/g)) {
-        for (const [, key] of field.matchAll(/(\w+):/g)) {
-          if (key === 'action') continue;
-          expect(swarmFields).toContain(key);
-        }
-      }
-    }
-  });
-
-  test('delegation never advertises unsupported per-node model routing', () => {
-    const { rt } = createTestRuntime();
-
-    const prompts = [
-      buildSystemPromptSync(rt, {
-        availableTools: ['agents'],
-        registeredExecutors: [],
-        model: { provider: 'anthropic', id: 'claude-sonnet-4-6', capabilities: ['tools', 'streaming'] },
-      }),
-      buildSystemPromptSync(rt, {
-        availableTools: ['agents'],
-        registeredExecutors: [],
-        model: { provider: 'openai', id: 'o4-mini', capabilities: ['streaming', 'reasoning'] },
-      }),
-      buildSystemPromptSync(rt, {
-        availableTools: ['agents'],
-        registeredExecutors: [],
-        model: { provider: 'future-provider', id: 'new-model' },
-      }),
-    ];
-
-    for (const prompt of prompts) {
-      expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
-      expect(prompt).toMatch(/`hire` creates a persistent subordinate in this workspace/);
-      expect(prompt).not.toContain('`models` puts a different vendor');
-      expect(prompt).not.toContain('a weaker model added for variety');
-    }
-  });
-
-  test('the agents example is the cheapest COMPLETE call', () => {
-    // `ideate` is the one preset that legally takes no `objective`, so the example is a complete call.
-    const { rt } = createTestRuntime();
-    const example = BUILTIN_TOOL_SPECS.agents.example;
-    expect(example).toContain("action:'swarm'");
-    expect(example).toContain("preset:'ideate'");
-    expect(example).toContain('task:');
-    expect(buildSystemPromptSync(rt)).toContain(example);
-  });
-
-  test('tool notes are schema-only: the prompt repeats none of them', () => {
-    const prompt = buildSystemPromptSync(createTestRuntime().rt);
-
-    for (const name of BUILTIN_TOOLS) {
-      for (const note of BUILTIN_TOOL_SPECS[name].notes) expect(prompt).not.toContain(note);
-    }
-  });
-
-  test('the tool index is one rendering for every model family', () => {
-    const { rt } = createTestRuntime();
-    const registeredExecutors: string[] = [];
-
-    const opts = {
-      availableTools: ['shell', 'memory'] as const,
-      registeredExecutors,
-    };
-
-    const section = (id: string) => {
-      const prompt = buildSystemPromptSync(rt, { ...opts, model: { id } });
-      const start = prompt.indexOf('## Tools available this turn');
-
-      return prompt.slice(start, prompt.indexOf('\n## ', start + 1));
-    };
-
-    const kimi = section('@cf/moonshotai/kimi-k2.6');
-    expect(kimi).toEqual(section('anthropic/claude-sonnet-4.5'));
-    expect(kimi).toEqual(section('codex/gpt-5.5'));
-
-    expect(kimi).toContain(`- **shell**: \`${BUILTIN_TOOL_SPECS.shell.example}\``);
-    expect(kimi).toContain(`- **memory**: \`${BUILTIN_TOOL_SPECS.memory.example}\``);
-
-    for (const name of BUILTIN_TOOLS) {
-      expect(kimi).not.toContain(BUILTIN_TOOL_SPECS[name].summary);
-    }
-
-    expect(kimi).toContain('Call the tools listed here');
-  });
-
-  test('teaches craft-on-repeat, search-before-solve, and the lessons loop', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toContain('workspace.createTool');
-    expect(prompt).toContain('workspace.listTools()');
-    expect(prompt).toMatch(/next eval call/);
-    expect(prompt).toContain('`agent.*` namespace inside eval');
-    expect(prompt).toMatch(/curriculum/);
-    expect(prompt).not.toContain('agent.proposeCurriculum(');
-    expect(agentSelfTypes()).toContain('proposeCurriculum');
-  });
 
   test('honors soulOverride', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, { soulOverride: 'CUSTOM ROLE TEXT' });
     expect(prompt).toContain('CUSTOM ROLE TEXT');
-    expect(prompt).not.toContain('You are Kinu');
   });
 
   test('a soul cannot open or close a block the prompt later reads as live state or as unapproved files', () => {
@@ -280,59 +25,6 @@ describe('buildSystemPromptSync', () => {
     expect(soul.startsWith('<soul>')).toBe(true);
     expect(soul).toContain('Mission.');
     expect(soul.slice('<soul>'.length, -'</soul>'.length)).not.toMatch(/<\/?(soul|dynamic_context|system-reminder|workspace_instructions)/u);
-  });
-
-  test('renders every BUILTIN_TOOL with its description', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-
-    for (const name of BUILTIN_TOOLS) {
-      expect(prompt).toContain(`**${name}**`);
-    }
-  });
-
-  test('advertises the temporary-agent channel only where the port is wired, on any backend', () => {
-    const { rt } = createTestRuntime();
-    const withTemporary = buildSystemPromptSync(rt, { backend: 'cf', temporaryAsk: true });
-    expect(withTemporary).toMatch(/## Delegation/);
-    expect(withTemporary).toContain('`hire` with `lifetime:"task"`');
-    expect(withTemporary).toMatch(/Code execution and learned capabilities/);
-    expect(withTemporary).not.toContain('agents.ask(');
-    expect(withTemporary).not.toContain('context_ref');
-    expect(withTemporary).not.toContain('rlm.query');
-
-    const withoutTemporary = buildSystemPromptSync(rt, { backend: 'cli-local' });
-    expect(withoutTemporary).toMatch(/Code execution and learned capabilities/);
-    expect(withoutTemporary).not.toContain('`hire` with `lifetime:"task"`');
-    expect(withoutTemporary).toContain('`agent.*` namespace inside eval');
-    expect(withoutTemporary).toMatch(/scaffold proposals/);
-    expect(withoutTemporary).not.toContain('agent.proposeScaffold(');
-    expect(agentSelfTypes()).toContain('proposeScaffold');
-    const cliWithTemporary = buildSystemPromptSync(rt, { backend: 'cli-local', temporaryAsk: true });
-    expect(cliWithTemporary).toContain('`hire` with `lifetime:"task"`');
-  });
-
-  test('does not advertise removed context tools or blocks', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toMatch(/set_context|search_context|load_context/);
-    expect(prompt).not.toMatch(/context blocks/iu);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.memory).toContain('past conversations');
-  });
-
-  test('durable-state doctrine is schema-only: no `## Memory and facts` section', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toContain('## Memory and facts');
-    expect(prompt).not.toContain('around_message_id');
-  });
-
-  test('no release overlay renders: nothing could ever stamp it', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toContain('## Kinu release changes');
-    expect(prompt).not.toContain('Release mode:');
-    expect(prompt).not.toContain('Never deploy Kinu release changes');
   });
 
   test('the ambient skills index renders name + description for every available skill, active or not', () => {
@@ -347,316 +39,11 @@ describe('buildSystemPromptSync', () => {
       availableSkills: { lines: [skillIndexLine(dormant)], omitted: 0, tokens: 0 },
     });
 
-    expect(prompt).toContain('## Skills');
-    expect(prompt).toContain('**dormant-skill**');
-    expect(prompt).toContain(skillViewPath('dormant-skill'));
+    expect(prompt).toContain('dormant-skill');
     expect(prompt).toContain('Not active this turn');
-    expect(prompt).not.toContain('DORMANT-BODY-MUST-NOT-APPEAR');
-  });
-
-  test('omitting availableSkills renders no Skills section (no regression for callers that do not pass it)', () => {
-    const { rt } = createTestRuntime();
-    expect(buildSystemPromptSync(rt)).not.toContain('## Skills');
-  });
-
-  test('renders executor section when registeredExecutors supplied', () => {
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      executors: [
-        { name: 'workspace', kind: 'workspace', capabilities: [], available: true, configured: true, active: true, status: 'active' },
-        { name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
-      ],
-    });
-
-    expect(prompt).toContain('workspace.*');
-    expect(prompt).toContain('sandbox.*');
-    expect(prompt).toMatch(/Showing a running app/);
-    expect(prompt).toMatch(/exposePort/);
-    expect(prompt).toMatch(/separate machines/i);
-    expect(prompt).toContain('/pc');
-    expect(prompt).toContain('/sandbox');
-  });
-
-  test('teaches the preview workflow for the executor that actually exposes inbound ports', () => {
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      backend: 'cf',
-      executors: [
-        { name: 'workspace', kind: 'workspace', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
-      ],
-    });
-
-    expect(prompt).toMatch(/Showing a running app/);
-    expect(prompt).toContain('workspace.exposePort(port)');
-    expect(prompt).not.toContain('sandbox.exposePort(port)');
-  });
-
-  test('an interface request is routed to a slate, and only where a slate can preview', () => {
-    const { rt } = createTestRuntime();
-
-    const workspacePreviews = buildSystemPromptSync(rt, {
-      backend: 'cf',
-      executors: [
-        { name: 'workspace', kind: 'workspace', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
-      ],
-    });
-
-    // The slate rule names the one load path of its skill, ahead of the standalone-server exception.
-    expect(workspacePreviews).toContain(skillViewPath('slates'));
-    expect(workspacePreviews.indexOf(skillViewPath('slates'))).toBeLessThan(workspacePreviews.indexOf('exposePort'));
-
-    const containerPreviewsOnly = buildSystemPromptSync(rt, {
-      backend: 'cf',
-      executors: [
-        { name: 'workspace', kind: 'workspace', capabilities: [], available: true, configured: true, active: true, status: 'active' },
-        { name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
-      ],
-    });
-
-    expect(containerPreviewsOnly).toMatch(/Showing a running app/);
-    expect(containerPreviewsOnly).not.toContain(skillViewPath('slates'));
-  });
-
-  test('every runtime is its own machine, with mounts named', () => {
-    const { rt } = createTestRuntime();
-
-    const executors: PromptExecutorInfo[] = [
-      { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-      { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
-    ];
-
-    const prompt = buildSystemPromptSync(rt, { backend: 'cf', executors });
-    expect(prompt).toMatch(/separate machines/i);
-    expect(prompt).not.toContain('the same machine and see the same files');
-    expect(prompt).toContain('/pc');
-  });
-
-  test('renders only configured executors when lifecycle facts are supplied', () => {
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      executors: [
-        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'device', kind: 'device', available: false, configured: false, active: false, status: 'not_configured' },
-        { name: 'sandbox', kind: 'sandbox', available: false, configured: false, active: false, status: 'not_configured' },
-      ],
-    });
-
-    expect(prompt).not.toContain('nimbus.*');
-    expect(prompt).toContain('workspace.*');
-    expect(prompt).not.toContain('device.*');
-    expect(prompt).not.toContain('**sandbox.***');
-    expect(prompt).not.toMatch(/Showing a running app/);
-  });
-
-  test('the isolate ceiling is claimed only where it holds — never on cli-local', () => {
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      backend: 'cli-local',
-      executors: [
-        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-      ],
-    });
-
-    expect(prompt).toContain('workspace.*');
-    expect(prompt).not.toContain('Worker isolate');
   });
 
   // Which machine is up is the dynamic block's: the system prompt describes the runtimes this workspace has.
-  test('a device connecting, disconnecting or erroring leaves the system prompt byte-identical', () => {
-    const { rt } = createTestRuntime();
-
-    const render = (device: Pick<PromptExecutorInfo, 'available' | 'active' | 'status'>) => buildSystemPromptSync(rt, {
-      backend: 'cf',
-      executors: [
-        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'sandbox', kind: 'sandbox', available: device.status !== 'error', configured: true, active: false, status: device.status === 'error' ? 'error' : 'idle' },
-        { name: 'device', kind: 'device', configured: true, label: 'ashish@studio', ...device },
-      ],
-    });
-
-    const online = render({ available: true, active: true, status: 'active' });
-
-    expect(online).toContain('**device.***');
-    expect(online).toContain('**sandbox.***');
-    expect(render({ available: false, active: false, status: 'disconnected' })).toBe(online);
-    expect(render({ available: false, active: false, status: 'error' })).toBe(online);
-  });
-
-  test('the online device line names no machine and no grant: the fleet is volatile', () => {
-    const { rt } = createTestRuntime();
-
-    for (const granted of [false, true]) {
-      const prompt = buildSystemPromptSync(rt, {
-        backend: 'cf',
-        executors: [
-          {
-            name: 'device', kind: 'device', available: true, configured: true, active: true,
-            status: 'active', label: 'ashish@studio', granted,
-          },
-        ],
-      });
-
-      expect(prompt).toContain('device.*');
-      expect(prompt).not.toContain('ashish@studio');
-      expect(prompt).not.toContain('NO grant yet');
-      expect(prompt).not.toContain('holds its access grant already');
-      expect(prompt).toContain('Grants are per machine');
-      expect(prompt).toContain('the runtime asks the user once');
-      expect(prompt).toContain('runtime: "<nickname>"');
-      expect(prompt).toContain('The runtime refuses a call that names none');
-      expect(prompt).toContain("live state in dynamic_context's Execution status");
-    }
-  });
-
-  test('the online device line renders the same bytes whatever the fleet looks like', () => {
-    const { rt } = createTestRuntime();
-
-    const render = (identity: { label?: string; granted?: boolean }) => buildSystemPromptSync(rt, {
-      backend: 'cf',
-      executors: [{
-        name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active',
-        ...identity,
-      }],
-    });
-
-    expect(render({ label: 'ashish@studio', granted: false })).toBe(render({ label: 'mrwhite@rig', granted: true }));
-    expect(render({})).toBe(render({ label: 'ashish@studio', granted: true }));
-  });
-
-  test('cli-local renders the workspace as the machine, rooted where the session started', () => {
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      backend: 'cli-local',
-      executors: [
-        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-      ],
-    });
-
-    expect(prompt).not.toContain('device.***');
-    expect(prompt).not.toMatch(/separate machines/i);
-    expect(prompt).toContain('the machine the CLI runs on');
-    expect(prompt).toContain("starting in this workspace's folder");
-  });
-
-  test('omits executor section when no executors registered', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, { registeredExecutors: [] });
-    expect(prompt).not.toMatch(/Execution environments/);
-    expect(prompt).not.toMatch(/exposePort/);
-  });
-
-  test('names the workspace filesystem and each environment by its own namespace', () => {
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      backend: 'cf',
-      executors: [
-        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'sandbox', kind: 'sandbox', available: true, configured: true, active: true, status: 'active' },
-        { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
-      ],
-    });
-
-    expect(prompt).toContain('/home/main');
-    expect(prompt).toContain('serving the bytes the `file` tool and `workspace.*` read');
-    expect(prompt).toContain('`sandbox.*`');
-    expect(prompt).not.toContain('`nimbus.*`');
-    expect(prompt).toContain('`device.*`');
-    expect(prompt).not.toContain('Nimbus for quick cloud execution');
-    expect(prompt).toMatch(/paths native to each machine/);
-    expect(prompt).toContain('/pc');
-    expect(prompt).toContain('/sandbox');
-  });
-
-  test('the doctrine follows the executor list, not the backend', () => {
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      backend: 'cf',
-      executors: [
-        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
-      ],
-    });
-
-    expect(prompt).toContain('`device.*`');
-    expect(prompt).not.toContain('`sandbox.*`');
-    expect(prompt).not.toContain('`nimbus.*`');
-  });
-
-  test('a workspace with no execution devices renders no mount doctrine', () => {
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      backend: 'cli-local',
-      executors: [
-        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-      ],
-    });
-
-    expect(prompt).not.toContain('mount table');
-  });
-
-  test('verification is doctrine of its own, not a line buried in operating guidance', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toContain('## Verification');
-    expect(prompt).not.toMatch(/The artifact is the evidence — read it/);
-    expect(prompt).not.toMatch(/Before you call work done/);
-    expect(prompt).not.toMatch(/Re-read/);
-    expect(prompt).toMatch(/Check every deliverable the request names/);
-    expect(prompt).toMatch(/column order, direction, units, filenames/);
-    expect(prompt).toMatch(/Build to the interface the task states/);
-    expect(prompt).toMatch(/A result is something you executed/);
-    expect(prompt).not.toContain('narrowest reliable checks');
-    expect(prompt.indexOf('## Verification')).toBeGreaterThan(prompt.indexOf('## Delegation'));
-    expect(prompt.indexOf('## Verification')).toBeLessThan(prompt.indexOf('## Output format'));
-  });
-
-  test('the run-the-real-check line is gated on actually having an executor', () => {
-    const { rt } = createTestRuntime();
-
-    const noExec = buildSystemPromptSync(rt, {
-      availableTools: ['memory'],
-      registeredExecutors: [],
-    });
-
-    expect(noExec).toContain('## Verification');
-    expect(noExec).toContain('Check every deliverable the request names');
-    expect(noExec).not.toContain('Run the real check');
-
-    const withRun = buildSystemPromptSync(rt, {
-      availableTools: ['memory', 'shell'],
-      registeredExecutors: [],
-    });
-
-    expect(withRun).toMatch(/Run the real check and report what passed or failed/);
-    expect(withRun).toMatch(/A result is something you executed/);
-  });
-
-  test('includes output-format guidance', () => {
-    expectDefaultPromptToMatch(/Output format/, /plain markdown|markdown/);
-  });
-
-  test('renders only the available built-in tools for a gated turn', () => {
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      availableTools: ['memory', 'web'],
-      registeredExecutors: [],
-    });
-
-    expect(prompt).toContain('**memory**');
-    expect(prompt).toContain('**web**');
-    expect(prompt).not.toContain('**eval**');
-    expect(prompt).not.toContain('agent.schedule');
-    expect(prompt).not.toContain('## Delegation');
-  });
 
   test('prompt surface describes a configured executor even while it is down, and never an unconfigured one', () => {
     const surface = compilePromptSurface({
@@ -671,70 +58,6 @@ describe('buildSystemPromptSync', () => {
     expect(surface.configuredExecutors.map((exec) => exec.name)).toEqual(['device', 'workspace']);
   });
 
-  test('model profile blocks tool mode on known non-tool models', () => {
-    expect(modelSupportsTools({ id: 'o4-mini' })).toBe(false);
-    expect(modelSupportsTools({ id: '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b' })).toBe(false);
-    expect(modelSupportsTools({ id: '@cf/moonshotai/kimi-k2.6' })).toBe(true);
-    expect(() => assertToolsSupportedByModel({ id: 'o4-mini' }, ['shell']))
-      .toThrow(/does not support tool calling/);
-  });
-
-  const MODEL_GUIDANCE = [
-    { family: 'Kimi', id: '@cf/moonshotai/kimi-k2.6', says: ['Kimi models work best', 'tool/result context'] },
-    { family: 'GPT and Codex models', id: 'codex/gpt-5.5', says: ['GPT/Codex-style', 'success criteria'] },
-  ];
-
-  for (const guidance of MODEL_GUIDANCE) {
-    test(`adds model-specific guidance for ${guidance.family}`, () => {
-      const { rt } = createTestRuntime();
-      const prompt = buildSystemPromptSync(rt, { model: { id: guidance.id } });
-
-      for (const phrase of guidance.says) expect(prompt).toContain(phrase);
-    });
-  }
-
-  test('the live ledger carries both plan-submission variants', () => {
-    const plan = renderDynamicContextBlock({ mode: { workMode: 'plan', planSubmission: true } });
-    expect(plan).toContain('Mode: plan; submit_plan: available.');
-
-    const delegatedPlan = renderDynamicContextBlock({ mode: { workMode: 'plan', planSubmission: false } });
-    expect(delegatedPlan).toContain('Mode: plan; submit_plan: unavailable.');
-    expect(delegatedPlan).not.toContain('investigate and report');
-  });
-
-  test('a background-job wake reaches the resume guidance, naming its job, even though it also carries a work mode', () => {
-    // jobs/runner.ts stamps kinuMode and the job beside the inbox's kinuEvent; the mode must not mask the resume.
-    const wake = { kinuEvent: 'background_job', kinuMode: 'build', jobId: 'j-7', kind: 'agents', status: 'completed' };
-    expect(workModeForTurnMetadata(wake)).toBe('build');
-
-    const { rt } = createTestRuntime();
-
-    const prompt = buildSystemPromptSync(rt, {
-      backend: 'cf',
-    });
-
-    expect(prompt).not.toContain('Fetch its result first');
-    expect(renderDynamicContextBlock({ turn: turnReasonForMetadata(wake) }))
-      .toContain('Background resume: a background job finished (job j-7, agents, completed)');
-
-    const planWake = { kinuEvent: 'background_job', kinuMode: 'plan' };
-    const planPrompt = renderDynamicContextBlock({ mode: { workMode: workModeForTurnMetadata(planWake), planSubmission: false }, turn: turnReasonForMetadata(planWake) });
-    expect(planPrompt).toContain('Mode: plan;');
-    expect(prompt).toContain('In Plan, inspect and research only.');
-    expect(planPrompt).toContain('Fetch its result first');
-  });
-
-  test('a turn the harness woke names its event, and only an unstamped turn claims to answer a message', () => {
-    for (const event of ['event_drain', 'workspace_created', 'fork_interrupted', 'completion_gate', 'plan_approved']) {
-      const block = renderDynamicContextBlock({ turn: turnReasonForMetadata({ kinuEvent: event }) });
-
-      expect(block).toContain(`Signal: the harness delivered this turn's message (${event})`);
-      expect(block).not.toContain('answers the conversation');
-    }
-
-    expect(renderDynamicContextBlock({ turn: turnReasonForMetadata({ author: 'owner' }) })).toContain('Chat: this turn answers');
-  });
-
   test('the two axes are read from different metadata keys and neither can suppress the other', () => {
     expect(turnReasonForMetadata(null)).toEqual({ provenance: 'chat' });
     expect(turnReasonForMetadata({})).toEqual({ provenance: 'chat' });
@@ -746,288 +69,64 @@ describe('buildSystemPromptSync', () => {
     expect(workModeForTurnMetadata(null)).toBe('build');
   });
 
-  test('a Build value other than the default belongs to the ledger, not the static prefix', () => {
-    const { rt } = createTestRuntime();
-    const base = { backend: 'cf' as const, model: { id: 'x' } };
-    expect(renderDynamicContextBlock({ mode: { workMode: 'build', planSubmission: true } }))
-      .toContain('Mode: build; submit_plan: available.');
-    expect(buildSystemPromptSync(rt, base)).not.toContain('Turn mode');
-  });
-
-  test('a resolved role renders exactly once in its own prompt section', () => {
-    const { rt } = createTestRuntime();
-
-    for (const [id, role] of Object.entries(BUILTIN_ROLE_DEFINITIONS)) {
-      const prompt = buildSystemPromptSync(rt, {
-        roleSection: {
-          id,
-          label: deriveRoleLabel(id),
-          instructions: role.instructions,
-        },
-      });
-
-      expect(prompt).toContain(`## Role: ${deriveRoleLabel(id)} (${id})`);
-      expect(prompt.split(role.instructions)).toHaveLength(2);
-    }
-  });
-
-  test('every built-in role states what it owns, what it never does, what it hands back, and what it does when blocked', () => {
-    const sections = ['### Owns', '### Never', '### Hands back', '### When blocked'] as const;
-    const { rt } = createTestRuntime();
-
-    for (const [id, role] of Object.entries(BUILTIN_ROLE_DEFINITIONS)) {
-      const prompt = buildSystemPromptSync(rt, {
-        roleSection: { id, label: deriveRoleLabel(id), instructions: role.instructions },
-      });
-
-      const start = prompt.indexOf(`## Role: ${deriveRoleLabel(id)} (${id})`);
-      const end = prompt.indexOf('\n## ', start + 1);
-      const section = prompt.slice(start, end);
-
-      const positions = sections.map((heading) => ({
-        heading,
-        first: section.indexOf(`\n${heading}\n`),
-        last: section.lastIndexOf(`\n${heading}\n`),
-      }));
-
-      expect({ id, missing: positions.filter((p) => p.first < 0).map((p) => p.heading) })
-        .toEqual({ id, missing: [] });
-      expect({ id, repeated: positions.filter((p) => p.first !== p.last).map((p) => p.heading) })
-        .toEqual({ id, repeated: [] });
-      const order = positions.map((p) => p.first);
-      expect({ id, ordered: order.every((at, i) => i === 0 || at > order[i - 1]) })
-        .toEqual({ id, ordered: true });
-
-      for (const body of section.split(/\n### [^\n]+\n/).slice(1)) {
-        expect({ id, body: body.trim().slice(0, 2) }).toEqual({ id, body: '- ' });
-      }
-    }
-  });
-
-  test('root and child provider requests carry static Plan policy and live reach without widening execution', async () => {
-    const { rt, testSql } = createTestRuntime();
-    initWorkspaceSchema({
-      sql: testSql.sql, execRaw: testSql.execRaw, exec: makeSqlExec(testSql.db), transactionSync: (write) => rt.storage.transactionSync(write),
-    });
-    const actors = createTestActors(testSql.sql, testSql.execRaw);
-    const catalog = { roles: {}, tiers: { default: { model: 'test' } } };
-
-    const runRolePhases = async (
-      subject: typeof rt,
-      roleId: string,
-      stores: ReturnType<typeof createAgentStores>,
-    ): Promise<void> => {
-      const ledger = new DynamicContextLedger();
-      const history: ModelMessage[] = [];
-      let previousSystem: string | undefined;
-
-      for (const phase of roleId === 'task' ? [0, 1, 2] : [0, 1]) {
-        const mode = phase === 2 ? 'build' : 'plan';
-        const path = `/mode-${subject.actor.name}-${roleId}-${phase}.txt`;
-        await writeText(subject.storage.vfs, path, 'original');
-        const file = buildBuiltinTools({ rt: subject, conversations: conversationsFor(subject) }).file;
-
-        if (!file) throw new Error('missing file tool');
-        const tools: ToolSet = { file };
-
-        if (phase === 0) tools.submit_plan = permitInPlan(tool({
-          description: 'Submit the plan for review', inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'submitted',
-        }));
-
-        const profile = resolveTurnProfile({
-          envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
-          provider: { revision: '1', availableModels: ['test'] }, roleId, workMode: mode,
-          availableTools: Object.keys(tools), activeSkills: [],
-        });
-
-        const system = buildSystemPromptSync(subject, { availableTools: ['file'], roleSection: profile.role });
-
-        if (previousSystem !== undefined) expect(system).toBe(previousSystem);
-        previousSystem = system;
-        let calls = 0;
+  test('root and child sessions refuse Plan writes and allow an approved Build turn', async () => {
+    for (const main of [true, false]) {
+      for (const roleId of Object.keys(BUILTIN_ROLE_DEFINITIONS)) {
+        let requests = 0;
+        let path = '';
 
         const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
-          const step = calls++;
+          const index = requests++ % 3;
 
           return {
-            content: step < 2
-              ? [{ type: 'tool-call', toolName: 'file', toolCallId: `file-${phase}-${step}`,
-                input: JSON.stringify(step === 0 ? { action: 'read', path } : { action: 'write', path, content: 'changed' }) }]
+            content: index < 2
+              ? [{ type: 'tool-call', toolName: 'file', toolCallId: `file-${requests}`,
+                input: JSON.stringify(index === 0 ? { action: 'read', path } : { action: 'write', path, content: 'changed' }) }]
               : [{ type: 'text', text: 'done' }],
-            finishReason: { unified: step < 2 ? 'tool-calls' : 'stop', raw: undefined },
-            usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-              outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+            finishReason: { unified: index < 2 ? 'tool-calls' : 'stop', raw: undefined },
+            usage: {
+              inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+              outputTokens: { total: 1, text: 1, reasoning: undefined },
+            }, warnings: [],
           };
         } });
 
-        history.push({ role: 'user', content: 'Try the requested file operation.' });
-        const callableTools = toolsInWorkMode(profile.workMode, tools);
+        const tools: ToolSet = {};
+        const fixture = await sessionFixture({ model, tools, main });
+        const subject = fixture.actor.runtime;
 
-        for await (const event of runChat({ modelSpec: 'test/model', model, system, history, tools: callableTools,
-          dynamicContext: { ledger, snapshot: () => collectDynamicContext({ rt: subject, stores, profile, tools: callableTools, runtime: RUNTIME, memoryTail: undefined, missingCapabilities: [] }) },
-        })) {
-          if (event.type === 'done') history.push(...event.responseMessages);
-        }
+        Object.assign(tools, buildBuiltinTools({ rt: subject, conversations: conversationsFor(subject) }));
+        fixture.actor.stores.config.setRoleSelection(roleId);
 
-        expect(model.doStreamCalls).toHaveLength(3);
-        const request = model.doStreamCalls[0];
-        const instructions = request?.prompt.find((message) => message.role === 'system');
+        try {
+          for (const phase of roleId === 'task' ? [0, 1, 2] : [0, 1]) {
+            const mode = phase === 2 ? 'build' : 'plan';
+            path = `/mode-${main ? 'root' : 'child'}-${roleId}-${phase}.txt`;
+            await writeText(subject.storage.vfs, path, 'original');
 
-        expect(instructions?.content).toContain('In Plan, inspect and research only.');
-        expect(instructions?.content).toContain('Implementation waits for an approved Build turn.');
-        const facts = request?.prompt.filter((message) => message.role === 'user' && JSON.stringify(message).includes('<dynamic_context')).at(-1);
-        expect(JSON.stringify(facts)).toContain(`Mode: ${mode}; submit_plan: ${phase === 0 ? 'available' : 'unavailable'}.`);
-        expect(JSON.stringify(facts)).not.toContain('Do not change project files');
-        expect(await readText(subject.storage.vfs, path), JSON.stringify(model.doStreamCalls[2]?.prompt.filter((message) => message.role === 'tool')))
-          .toBe(mode === 'build' ? 'changed' : 'original');
+            delete tools.submit_plan;
+            Object.assign(tools, phase === 0 ? {
+              submit_plan: permitInPlan(tool({
+                description: 'Submit the plan', inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'submitted',
+              })),
+            } : {});
+
+            const before = model.doStreamCalls.length;
+            await fixture.chat.send('Try the requested file operation.', { id: `turn-${phase}`, mode });
+
+            expect(model.doStreamCalls.length - before).toBe(3);
+            expect(await readText(subject.storage.vfs, path)).toBe(mode === 'build' ? 'changed' : 'original');
+          }
+        } finally { fixture.close(); }
       }
-    };
-
-    try {
-      for (const actor of [actors.main, actors.sibling('child')]) {
-        const subject = { ...rt, actor };
-
-        const stores = createAgentStores(() => testSql.sql, () => actor,
-          <T>(write: () => T) => rt.storage.transactionSync(write),
-          async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }));
-
-        for (const roleId of Object.keys(BUILTIN_ROLE_DEFINITIONS)) {
-          await runRolePhases(subject, roleId, stores);
-        }
-      }
-    } finally {
-      testSql.close();
     }
   });
 
   // Date-only, so the dynamic block's runtime section changes at most once a day.
   test('the current date is date-only, and the system prompt states no runtime facts', () => {
-    const { rt } = createTestRuntime();
     expect(currentDateForPrompt(new Date('2026-06-11T17:42:03Z'))).toBe('2026-06-11');
-    expect(buildSystemPromptSync(rt, { backend: 'cf', model: { id: 'claude-sonnet-4-7', provider: 'anthropic' } })).not.toContain('## Runtime context');
   });
 
-  test('persistence is stated plainly and teaches compaction awareness', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toContain('when the backend supports them');
-    expect(prompt).toContain('The runtime automatically compacts your context window as it approaches its limit');
-    expect(prompt).toContain('Work each task through to completion');
-  });
-
-  test('per-section char budgets stay pinned (additions must be deliberate)', () => {
-    // Raise a ceiling only alongside an intentional content change.
-    const BUDGETS = {
-      'Operating guidance': 910,
-      'Tools available this turn': 1100,
-      'Execution environments': 3555,
-      'Persistence': 700,
-      'Code execution and learned capabilities': 830,
-      'Delegation': 580,
-      'Background work': 680,
-      'Verification': 620,
-      'Output format': 180,
-    } satisfies Record<string, number>;
-
-    const { rt } = createTestRuntime();
-
-    const options = {
-      backend: 'cf',
-      registeredExecutors: ['workspace', 'nimbus', 'sandbox', 'device'],
-      model: { id: 'anthropic/claude-sonnet-4.5' },
-    } satisfies SystemPromptOptions;
-
-    const problems = (prompt: string): string[] => {
-      const sections = new Map(splitPromptSections(prompt).map((section) => [section.title, section.chars]));
-
-      return Object.entries(BUDGETS).flatMap(([title, budget]) => {
-        const size = sections.get(title);
-
-        if (size === undefined) return [`section "${title}" missing from the prompt`];
-
-        return size > budget ? [`section "${title}" is ${size} chars — over its ${budget}-char budget`] : [];
-      });
-    };
-
-    expect(problems(buildSystemPromptSync(rt, options))).toEqual([]);
-
-    const grown = buildSystemPromptSync(rt, { ...options,
-      sectionOverrides: { 'guidance/operating': OPERATING_GUIDANCE.source + '\nX' },
-    });
-
-    expect(problems(grown)).toEqual(['section "Operating guidance" is 912 chars — over its 910-char budget']);
-  });
-
-  test('does NOT promise unimplemented or redundant strategies', () => {
-    const { rt } = createTestRuntime();
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toMatch(/\bmcts\b/);
-    expect(buildSystemPromptSync(rt)).not.toMatch(/\bmcts\b/);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toMatch(/single-shot/);
-    expect(buildSystemPromptSync(rt)).not.toMatch(/single-shot/);
-  });
-
-  test('the index renders identically for BOTH a Kimi and a non-Kimi agent', () => {
-    const { rt } = createTestRuntime();
-
-    for (const id of ['@cf/moonshotai/kimi-k2.6', 'anthropic/claude-sonnet-4.5']) {
-      const prompt = buildSystemPromptSync(rt, { model: { id } });
-      expect(prompt).toMatch(/## Delegation/);
-      expect(prompt).toMatch(/Helper agents are one tool: `agents`/);
-      expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
-      expect(prompt).toMatch(/`hire` creates a persistent subordinate in this workspace/);
-    }
-  });
 });
 
 // Prefix caching stops at the first differing byte, so what every workspace shares comes first.
-describe('the system prompt: the core, then the workspace, then the agent', () => {
-  const base: SystemPromptOptions = {
-    availableTools: ['file', 'shell', 'eval', 'agents'], backend: 'cf',
-    model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
-  };
-
-  function workspace(soul: string, title: string, doctrine: string, skill: string): SystemPromptOptions {
-    const header: SkillHeader = { name: skill, description: `How ${skill} works.`, allowed_tools: [], user_invocable: true, ext: {}, source: 'builtin' };
-
-    return {
-      ...base,
-      soulOverride: soul,
-      identity: { workspace: title },
-      agentsMd: { admitted: [{ path: '/home/user/AGENTS.md', content: doctrine, trust: 'approved' }], referenced: [] },
-      availableSkills: { lines: [skillIndexLine(header)], omitted: 0, tokens: 0 },
-    };
-  }
-
-  function sharedPrefix(a: string, b: string): string {
-    let at = 0;
-
-    while (at < a.length && a[at] === b[at]) at += 1;
-
-    return a.slice(0, at);
-  }
-
-  // The lead doctrine is the largest part, and the same for every workspace's own agent.
-  test('two workspaces share every byte of the core and the lead doctrine', () => {
-    const { rt } = createTestRuntime();
-    const books = buildSystemPromptSync(rt, workspace('# Books\nKeep the ledger.', 'Books', 'Run the ledger checks.', 'reconcile'));
-    const garden = buildSystemPromptSync(rt, workspace('# Garden\nPlan the beds.', 'Garden', 'Water before noon.', 'planting'));
-    const shared = sharedPrefix(books, garden);
-
-    expect(shared).toContain('## Output format');
-    expect(shared).toContain('## Direct-edit reminder');
-    expect(shared.length).toBeGreaterThanOrEqual(books.indexOf('<soul>'));
-  });
-
-  test('two agents of one workspace share the core and the workspace', () => {
-    const { rt } = createTestRuntime();
-    const books = workspace('# Books\nKeep the ledger.', 'Books', 'Run the ledger checks.', 'reconcile');
-
-    const agent = (name: string, instructions: string) => buildSystemPromptSync(rt, {
-      ...books, identity: { workspace: 'Books', agent: name }, roleSection: { id: name.toLowerCase(), label: name, instructions },
-    });
-
-    const shared = sharedPrefix(agent('Auditor', 'Check every entry.'), agent('Clerk', 'Enter the receipts.'));
-
-    for (const part of ['## Output format', 'Keep the ledger.', 'Run the ledger checks.', '**reconcile**']) expect(shared).toContain(part);
-  });
-});

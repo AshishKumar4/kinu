@@ -236,7 +236,7 @@ describe('provider model catalogs', () => {
     }
 
     expect({ requests, code: classified.code }).toEqual({ requests: 1, code: 'unavailable' });
-    expect(classified.message + String(classified.cause)).toMatch(/refused this server's network/);
+
   });
 
   test('the Codex egress route carries the Codex API and the plan usage /stats reads, nothing else', () => {

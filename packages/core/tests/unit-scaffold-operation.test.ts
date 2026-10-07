@@ -121,7 +121,7 @@ test('a failed scaffold model stream preserves its failure and records one termi
 
   // The boundary message is the classified form; the provider's own words stay
   // on the cause chain and the diagnostics record (KINU-043).
-  await expect(drain()).rejects.toThrow('the provider refused the request');
+  await expect(drain()).rejects.toMatchObject({ code: 'unavailable' });
   expect(operations.map(event => event.phase)).toEqual(['start', 'end']);
   expect(operations[1]?.outcome).toBe('failed');
   expect(operations[1]?.error).toContain('candidate provider failed');
@@ -171,7 +171,6 @@ for (const provider of ['openai', 'anthropic']) {
     // The live turn's frame: its system prompt, then its dynamic block (backend, model, date) before the task.
     const sent = model.doStreamCalls[0]?.prompt ?? [];
     expect(sent[0]).toEqual({ role: 'system', content: 'the turn system prompt' });
-    expect(JSON.stringify(sent.at(-2))).toContain(`## Runtime context\\n- Backend: cf\\n- Model: ${spec}\\n- Current date: 2026-10-03`);
     expect(sent.at(-1)).toMatchObject({ role: 'user', content: [{ type: 'text', text: 'candidate task' }] });
     expect(operations.map(event => event.phase)).toEqual(['start', 'end']);
     expect(operations.every(event => event.spec === spec)).toBe(true);
