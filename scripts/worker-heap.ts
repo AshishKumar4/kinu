@@ -186,9 +186,49 @@ const HeapUsageReplySchema = v.object({ result: v.object({ usedSize: v.number() 
 const SnapshotChunkSchema = v.object({ method: v.literal('HeapProfiler.addHeapSnapshotChunk'), params: v.object({ chunk: v.string() }) });
 
 const SnapshotSchema = v.object({
-  snapshot: v.object({ meta: v.object({ node_fields: v.array(v.string()) }) }),
+  snapshot: v.object({ meta: v.object({ node_fields: v.array(v.string()), node_types: v.looseTuple([v.array(v.string())]) }) }),
   nodes: v.array(v.number()),
+  strings: v.array(v.string()),
 });
+
+type Snapshot = v.InferOutput<typeof SnapshotSchema>;
+
+/** What a live heap is made of: bytes by kind (an object's constructor, compiled code, strings), and its largest strings. */
+interface HeapMakeup {
+  readonly kinds: readonly { readonly kind: string; readonly bytes: number; readonly count: number }[];
+  readonly strings: readonly { readonly bytes: number; readonly head: string }[];
+}
+
+function kindOf(type: string, name: string): string {
+  if (type.includes('string')) return '(strings)';
+
+  return type === 'object' || type === 'closure' ? `${type} ${name.slice(0, 40)}` : `(${type})`;
+}
+
+function heapMakeup(snapshot: Snapshot): HeapMakeup {
+  const fields = snapshot.snapshot.meta.node_fields;
+  const types = snapshot.snapshot.meta.node_types[0];
+  const [typeAt, nameAt, sizeAt] = ['type', 'name', 'self_size'].map((field) => fields.indexOf(field));
+  const kinds = new Map<string, { bytes: number; count: number }>();
+  const strings: { bytes: number; head: string }[] = [];
+
+  for (let at = 0; at < snapshot.nodes.length; at += fields.length) {
+    const type = types[snapshot.nodes[at + (typeAt ?? 0)] ?? 0] ?? '?';
+    const name = snapshot.strings[snapshot.nodes[at + (nameAt ?? 0)] ?? 0] ?? '';
+    const bytes = snapshot.nodes[at + (sizeAt ?? 0)] ?? 0;
+    const isString = type.includes('string');
+    const kind = kindOf(type, name);
+    const held = kinds.get(kind) ?? { bytes: 0, count: 0 };
+    kinds.set(kind, { bytes: held.bytes + bytes, count: held.count + 1 });
+
+    if (isString && bytes > 200_000) strings.push({ bytes, head: name.slice(0, 60).replaceAll(/\s+/g, ' ') });
+  }
+
+  return {
+    kinds: [...kinds].map(([kind, held]) => ({ kind, ...held })).sort((a, b) => b.bytes - a.bytes).slice(0, 15),
+    strings: strings.sort((a, b) => b.bytes - a.bytes).slice(0, 5),
+  };
+}
 
 /** One inspector session on the product isolate. */
 interface ProfileNode {
@@ -241,6 +281,7 @@ function allocationSites(head: ProfileNode): Allocations {
 async function inspect(port: number): Promise<{
   readonly usedHeap: () => Promise<number>;
   readonly liveHeap: () => Promise<number>;
+  readonly makeup: () => Promise<HeapMakeup>;
   readonly sampleAllocations: () => Promise<void>;
   readonly allocations: () => Promise<Allocations>;
   readonly close: () => void;
@@ -274,6 +315,16 @@ async function inspect(port: number): Promise<{
   });
   await opened.promise;
 
+  /** A snapshot collects first, so its node sizes add up to what is live. */
+  const snapshotNow = async (): Promise<Snapshot> => {
+    chunks = [];
+    await send('HeapProfiler.takeHeapSnapshot');
+    const snapshot = v.parse(SnapshotSchema, JSON.parse(chunks.join('')));
+    chunks = [];
+
+    return snapshot;
+  };
+
   /** The raw reply, which each caller parses for the field it asked for. */
   const send = (method: string, params?: Readonly<Record<string, number | boolean>>): Promise<string> => {
     next += 1;
@@ -288,11 +339,9 @@ async function inspect(port: number): Promise<{
     // Uncollected: what the isolate holds at this instant, garbage included.
     usedHeap: async () => v.parse(HeapUsageReplySchema, JSON.parse(await send('Runtime.getHeapUsage'))).result.usedSize,
     // A snapshot collects first, so its node sizes add up to what is live.
+    makeup: async () => heapMakeup(await snapshotNow()),
     liveHeap: async () => {
-      chunks = [];
-      await send('HeapProfiler.takeHeapSnapshot');
-      const snapshot = v.parse(SnapshotSchema, JSON.parse(chunks.join('')));
-      chunks = [];
+      const snapshot = await snapshotNow();
       const fields = snapshot.snapshot.meta.node_fields;
       const size = fields.indexOf('self_size');
       let live = 0;
@@ -349,6 +398,7 @@ export interface HeapMeasurement {
   /** What {@link LONG_TURN} holds live at its last model call beyond its first. */
   readonly longTurnGrowth: number;
   readonly longTurnAllocated: Allocations;
+  readonly setupMakeup: HeapMakeup;
   /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
   readonly wide: readonly string[];
 }
@@ -424,6 +474,7 @@ export async function measure(): Promise<HeapMeasurement> {
     try {
       const afterSetup = await inspector.usedHeap();
       const setUp = await inspector.liveHeap();
+      const setupMakeup = await inspector.makeup();
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
 
       for (let turn = 0; turn < STEP.turns; turn++) await ask(`/turn?workspace=heap&text=turn-${String(turn)}`);
@@ -526,7 +577,7 @@ export async function measure(): Promise<HeapMeasurement> {
       await noRunners(0);
       await ask('/model?hires=0&nest=0');
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, wide };
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, setupMakeup, wide };
     } finally {
       inspector.close();
     }
@@ -566,6 +617,11 @@ async function main(args: readonly string[]): Promise<number> {
   console.log(`${GATE}: the ${String(LONG_TURN.steps)}-step turn allocated ${mb(measured.longTurnAllocated.total)}; most by`);
 
   for (const site of measured.longTurnAllocated.sites) console.log(`  ${mb(site.bytes).padStart(9)}  ${site.site}`);
+  console.log(`${GATE}: the live heap after setup, by kind`);
+
+  for (const each of measured.setupMakeup.kinds) console.log(`  ${mb(each.bytes).padStart(9)}  ${String(each.count).padStart(7)}  ${each.kind}`);
+
+  for (const each of measured.setupMakeup.strings) console.log(`  ${mb(each.bytes).padStart(9)}  one string: ${JSON.stringify(each.head)}`);
   const findings: string[] = [];
 
   if (wide.length > 0) findings.push(`${wide.join(', ')} carry characters outside ASCII, which V8 keeps two bytes each`);
