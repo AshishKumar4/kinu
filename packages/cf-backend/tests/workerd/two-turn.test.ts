@@ -158,6 +158,60 @@ describe('two real turns over the HTTP model seam', () => {
     expect(done.runEnds).toEqual([{ runId: expect.any(String), reason: 'completed' }]);
   });
 
+  // Notes sent from the Changes tab while a turn holds the queue: they move with their reservation or not at all,
+  // survive an eviction before their own turn, arrive once with their card, and leave nothing owed.
+  it('Changes-tab notes wait for a turn of their own, through a refused reservation and an eviction, and arrive once with their card', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-driver'));
+    const prepared = await root.prepareChangeNotes();
+
+    expect(prepared.refusal).toContain('reservation refused');
+    expect([prepared.kept, prepared.owedAfterRefusal.cards]).toEqual([['clamp'], 0]);
+    expect([prepared.sent, prepared.keptAfterSend, prepared.owed.cards]).toEqual([{ ok: true, left: 0 }, 0, 1]);
+
+    await abortAllDurableObjects();
+    const done = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-driver')).completeChangeNotes(prepared.workspace);
+
+    expect(done.cards).toEqual([{ role: 'user', notes: ['clamp'], author: 'operator' }]);
+    // The typed message that waited beside the notes reran as its own row; the card stayed on its own.
+    expect(done.users.filter((user) => user.text === 'check staging' || user.card)
+      .map((user) => (user.card ? user.text.startsWith('# Notes on the changes') : user.text))).toEqual(['check staging', true]);
+    expect([done.kept, done.owed]).toEqual([0, { sends: 0, cards: 0 }]);
+  });
+
+  // Alarm recovery runs while the root's turn is held and again while it settles: the claim stays its foreground
+  // owner's throughout, so it is never sealed as indeterminate under a live owner.
+  it('the alarm\'s recovery leaves a held turn\'s claim with its owner, and a settling one settles with its own outcome', async () => {
+    const { held, settled } = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('claims-driver')).claimUnderRecovery();
+
+    expect(held).toBeNull();
+    expect([settled === null, settled === 'missing', settled === 'indeterminate']).toEqual([false, false, false]);
+  });
+
+  // A dead activation left two replies owed. After a real eviction, the alarm's recovery dispatches the answer that
+  // reached the transcript and closes its lease and the reply's open transition; the event that was never answered is
+  // freed to be asked again, and the answered one is never asked again.
+  it('after an eviction, recovery sends the reply that was answered and re-asks only the one that was not', async () => {
+    const workspace = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).seedOwedReplyWorkspace();
+
+    await abortAllDurableObjects();
+    const done = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).recoverOwedReplies(workspace);
+
+    // The answered reply's lease closes on its own turn. The unanswered event is drained again by a turn of its own,
+    // the one request the model is asked, and that turn's close releases it.
+    expect(done.leases['ev-answered'], JSON.stringify(done)).toEqual({ turnId: 'evt-answered', consumedAt: null });
+    expect(done.leases['ev-unanswered']?.consumedAt).toBeNull();
+    expect(done.leases['ev-unanswered']?.turnId).toMatch(/^evt-/u);
+    expect(done.leases['ev-unanswered']?.turnId).not.toBe('evt-unanswered');
+    expect(done.transition).toBe('done');
+    expect(done.asked.filter((words) => words.includes('event arrived while you were idle'))).toHaveLength(1);
+  });
+
+  it('a Changes-tab send the loop refuses to drive takes its card row with it', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-refused-driver'));
+
+    expect(await root.refusedChangeNotes()).toEqual({ sent: true, owed: { sends: 0, cards: 0 } });
+  });
+
   it('splices a mid-turn attachment into the next model call as a file part', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('attach-queue-driver'));
 

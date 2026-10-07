@@ -10,10 +10,10 @@ import { createGatewayBindingFetch, parseGatewayTarget, type GatewayTarget } fro
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from './workers-ai';
 import { listModelsDevProviderModels } from './models-dev';
 import { mapModelList } from './util';
-import { withRateLimitRetry } from './rate-limit-retry';
 import {
   WORKERS_AI_PREFERRED_MODEL_IDS,
 } from './workers-ai-catalog';
+import { heardFetch } from './middleware/attempt';
 
 const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
 
@@ -66,11 +66,7 @@ export function createAIGatewayProvider(): ModelProvider {
           name: AI_GATEWAY_PROVIDER_ID,
           // Never fetched: the transport parses the URL into the binding's {gateway, provider, endpoint}.
           baseURL: String(deps.env.AI_GATEWAY_URL),
-          fetch: withRateLimitRetry(createGatewayBindingFetch(resolved), {
-            provider: AI_GATEWAY_PROVIDER_ID,
-            modelId,
-            ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
-          }),
+          fetch: heardFetch(createGatewayBindingFetch(resolved)),
         }).chatModel(modelId)));
     },
   };

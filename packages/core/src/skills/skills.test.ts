@@ -9,7 +9,7 @@ import { exists, readText, type VFS, type VfsDirent, writeText } from '@nimbus-s
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../context-window';
-import { estimateTokens } from '../llm';
+import { estimateTokens } from '../token-estimate';
 import {
   parseSkillFile,
   discoverSkills, BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, refusedSkillFiles,

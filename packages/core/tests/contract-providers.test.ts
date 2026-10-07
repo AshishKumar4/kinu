@@ -1,6 +1,7 @@
 // Provider contract: each provider's URL, auth scheme and special headers, via a mocked fetch. The SDK's
 // request body is its own detail, so only what the provider controls is asserted.
 import { describe, test, expect } from 'bun:test';
+import { withModelStack } from '../src/providers/wire-model';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { normalizeCodexResponsesRequest } from '../src/providers/codex';
 import { generateText } from 'ai';
@@ -83,7 +84,7 @@ describe('OpenAI provider contract', () => {
     expect(mock.requests.length).toBe(0);
   });
 
-  test('routes model requests through the patient rate-limit fetch', async () => {
+  test('a resolved model waits out a rate limit in the one stack', async () => {
     let calls = 0;
 
     const fetchImpl = asFetchFunction(async () => {
@@ -98,7 +99,7 @@ describe('OpenAI provider contract', () => {
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } },
     }, fetchImpl);
 
-    const model = createOpenAIProvider().createModel('gpt-5.5', deps);
+    const model = withModelStack(createOpenAIProvider().createModel('gpt-5.5', deps), { provider: 'openai', lane: 'openai@main' });
 
     await generateText({ model, prompt: 'hello', maxOutputTokens: 16, maxRetries: 0 });
 

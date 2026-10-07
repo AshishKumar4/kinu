@@ -459,8 +459,8 @@ function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsToolAct
 }
 
 /**
- * Ledgers that can owe work with no instant and nothing else to watch it. A running background job is not one: its
- * `bg:` fiber holds the object while it runs and re-drives it after a death, and a deferred one is timed (`nextOwedAt`).
+ * Ledgers that can owe work with no instant and nothing else to watch it. A live background job has its `bg:` fiber;
+ * activation arms one ledger recovery pass even if that row expired, and a deferred job is timed (`nextOwedAt`).
  */
 export interface UntimedArms {
   readonly openDrainLease?: boolean;

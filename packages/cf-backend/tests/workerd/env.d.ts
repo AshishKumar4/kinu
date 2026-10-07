@@ -35,7 +35,7 @@ import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
-  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult,
+  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered,
 } from './two-turn-shapes';
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
@@ -101,6 +101,12 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: Array<{ id: string; role: string }>; sleepTimeSettled: number }>;
   twinSends(): Promise<{ http: HttpCall[]; transcript: Array<{ id: string; role: string }>; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }>;
   evalAbort(): Promise<{ receipt: string | null; alive: boolean }>;
+  prepareChangeNotes(): Promise<ChangeNotesPrepared>;
+  completeChangeNotes(workspace: string): Promise<ChangeNotesCompleted>;
+  refusedChangeNotes(): Promise<{ readonly sent: boolean; readonly owed: { readonly sends: number; readonly cards: number } }>;
+  claimUnderRecovery(): Promise<{ readonly held: string | null; readonly settled: string | null }>;
+  seedOwedReplyWorkspace(): Promise<string>;
+  recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered>;
   hostedActorTab(): Promise<{ name: string; snapshot: string; jobs: string; frames: number }>;
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
@@ -190,6 +196,8 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
+  modelSaw(workspace: string, texts: readonly string[]): Promise<void>;
+  restartAlarm(workspace: string, exclude: string): Promise<import('./hire-shapes').JobWatchState>;
   callerObserved(): Promise<void>;
   openHire(workspace: string, prompt: string): Promise<void>;
   reenter(workspace: string): Promise<void>;
@@ -206,7 +214,8 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   outrunJobWindow(workspace: string): Promise<void>;
   openJobGate(workspace: string): Promise<void>;
   redeliverJobWake(workspace: string, jobId: string): Promise<void>;
-  loseJobFiber(workspace: string, jobId: string): Promise<number>;
+  ageJobFiber(workspace: string, jobId: string): Promise<number>;
+  jobWatchState(workspace: string): Promise<import('./hire-shapes').JobWatchState>;
   jobRows(workspace: string): Promise<import('./hire-shapes').JobRow[]>;
 }
 

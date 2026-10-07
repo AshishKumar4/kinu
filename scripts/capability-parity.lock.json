@@ -1,3 +1,4 @@
 [
+  "movable packages/cf-backend/src/user/binding-completions.ts",
   "movable packages/cf-backend/src/user/roster.ts"
 ]

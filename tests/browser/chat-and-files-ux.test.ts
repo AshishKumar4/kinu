@@ -2935,6 +2935,53 @@ describe('WorkTab draws a section only when it has something to show', () => {
   });
 });
 
+/** The live indicators the page draws, by kind, and which of Stop and Recover the composer offers. */
+function liveState(page: Page): Promise<{ indicators: (string | null)[]; stop: boolean; recover: boolean }> {
+  return page.evaluate(() => ({
+    indicators: [...document.querySelectorAll('[data-live-indicator]')].map((each) => each.getAttribute('data-live-indicator')),
+    stop: document.querySelector('[data-composer-root] button[aria-label="Stop this turn"]') !== null,
+    recover: document.querySelector('[data-composer-root] button[aria-label="Recover this turn"]') !== null,
+  }));
+}
+
+/** Has the workspace's server say its root claim is now `claim`. */
+async function claimIs(page: Page, claim: Record<string, string | number>): Promise<void> {
+  await page.evaluate((detail) => { window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail })); }, { type: 'turn_claim', claim });
+}
+
+/**
+ * The root's claim decides what the page offers. Admitted, the page paints one live indicator and offers Stop. A
+ * claim whose isolate died never settles on its own: the page paints no indicator, offers recovery rather than a
+ * Stop that would never land, and recovery settles it.
+ */
+describe('the live indicator follows the root claim', () => {
+  test('an admitted turn paints one indicator with Stop; a stranded one paints none and offers recovery, which settles it', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-composer-root] textarea');
+      expect(await liveState(page)).toEqual({ indicators: [], stop: false, recover: false });
+
+      await claimIs(page, { kind: 'admitted', turnId: 'turn-live', claimedAt: 1 });
+      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
+      const live = await liveState(page);
+
+      expect([live.indicators.length, live.stop, live.recover]).toEqual([1, true, false]);
+
+      await claimIs(page, { kind: 'stranded', turnId: 'turn-live', claimedAt: 1 });
+      await page.waitForSelector('[data-composer-root] button[aria-label="Recover this turn"]');
+      expect(await liveState(page)).toEqual({ indicators: [], stop: false, recover: true });
+
+      await page.click('[data-composer-root] button[aria-label="Recover this turn"]');
+      await page.waitForFunction(() => document.querySelector('[data-composer-root] button[aria-label="Recover this turn"]') === null);
+      expect(await page.evaluate(() => document.documentElement.dataset.galleryRecoveries)).toBe('1');
+      expect(await liveState(page)).toEqual({ indicators: [], stop: false, recover: false });
+      await page.close();
+    });
+  });
+});
+
 /** What the running job's card prints, a line per row, with the name it goes by above it. */
 function latestOutput(page: Page): Promise<{ name: string; lines: string[] }> {
   return page.$eval('[aria-label="Latest output"]', (output) => ({

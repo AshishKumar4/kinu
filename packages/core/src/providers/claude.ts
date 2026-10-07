@@ -6,7 +6,6 @@ import { listAnthropicModels, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_FAST_MODEL, ANT
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 
 import { quotaWindowText, withCallAccount } from './quota';
-import { transportControls, withRateLimitRetry, type TransportControls } from './rate-limit-retry';
 import { authenticatedSend } from './authenticated-send';
 import type { AuthResolution, ModelProvider, ProviderDeps } from './types';
 import { accountOf } from '../credentials/accounts';
@@ -15,6 +14,7 @@ import { diagnostics, KinuError, settle, settleSync, tolerate } from '../obs/ind
 import { sha256Hex } from '../safety/argument-digest';
 import { JsonObjectSchema, JsonValueSchema, parseJsonObject, parseJsonValue } from '../utils/json';
 import { xxHash64 } from '../utils/xxhash64';
+import { heardFetch } from './middleware/attempt';
 
 export const CLAUDE_CRED_KEY = 'claude.oauth';
 
@@ -383,7 +383,8 @@ interface ClaudeCall {
 interface SdkRequest {
   readonly body: SdkBody;
   readonly betas: readonly string[];
-  readonly controls: TransportControls;
+  /** The SDK call's cancel; the request is rebuilt, so nothing else of it is kept. */
+  readonly signal: AbortSignal | null;
 }
 
 function deadLogin(call: ClaudeCall, reason: string): Response {
@@ -442,21 +443,13 @@ function sendClaudeCode(call: ClaudeCall, request: SdkRequest, auth: AuthResolut
     const betas = claudeCodeBetas(body, request.betas);
     const headers = claudeCodeHeaders({ authorization: yield* authorizationOf(auth), version, betas, sessionId: call.sessionId });
     const paid = auth.credentialKey ?? CLAUDE_CRED_KEY;
-
-    const retrying = withRateLimitRetry(call.refusingSpentUsage(paid), {
-      provider: 'claude',
-      modelId: call.modelId,
-      lane: paid,
-      ...(call.deps.onProviderWait !== undefined && { onWait: call.deps.onProviderWait }),
-    });
-
     const attestedBody = yield* attested(claudeCodeBody(body, version, call.sessionId));
 
-    const sent = yield* Effect.promise(() => retrying(CLAUDE_MESSAGES_URL, {
+    const sent = yield* Effect.promise(() => call.refusingSpentUsage(paid)(CLAUDE_MESSAGES_URL, {
       method: 'POST',
-      headers: { ...headers, ...request.controls.headers },
+      headers,
       body: attestedBody,
-      signal: request.controls.signal,
+      signal: request.signal,
     }));
 
     return withCallAccount(sent, 'claude', paid);
@@ -492,7 +485,7 @@ function claudeCall(call: ClaudeCall, init: RequestInit): Effect.Effect<Response
     const request: SdkRequest = {
       body,
       betas: (copyHeaders(init.headers).get('anthropic-beta') ?? '').split(','),
-      controls: transportControls(init),
+      signal: init.signal ?? null,
     };
 
     const answer = yield* Effect.promise(() => call.authenticated(call, request, login));
@@ -535,7 +528,7 @@ export function createClaudeProvider(): ModelProvider {
             }))),
           };
 
-          const provider = createAnthropic({ apiKey: 'oauth-placeholder', fetch: asFetchFunction((_input, init) => settle(claudeCall(call, init ?? {}))) });
+          const provider = createAnthropic({ apiKey: 'oauth-placeholder', fetch: heardFetch(asFetchFunction((_input, init) => settle(claudeCall(call, init ?? {})))) });
 
           return provider.languageModel(modelId);
         }));

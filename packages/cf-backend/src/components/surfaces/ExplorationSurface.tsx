@@ -201,7 +201,14 @@ function ForkRunRow(
  * Non-zero counts only: a tally of zeroes would claim idle nodes exist. Shared by run
  * and level so the two cannot disagree.
  */
-function nodeTally(counted: Pick<RunLiveness, "running" | "reported" | "failed" | "total">): string {
+type NodeCounts = Pick<RunLiveness, "running" | "reported" | "failed" | "total">;
+
+/** The counts behind a tally, for a reader of the page. */
+function countMarks(counted: NodeCounts) {
+  return { "data-running": counted.running, "data-reported": counted.reported, "data-failed": counted.failed, "data-total": counted.total };
+}
+
+function nodeTally(counted: NodeCounts): string {
   const parts: string[] = [];
 
   if (counted.running > 0) parts.push(`${counted.running} running`);
@@ -372,7 +379,7 @@ function RunObjective({ task }: { task: string }) {
  */
 export function RunLivenessPanel({ live, running }: { live: RunLiveness; running: boolean }) {
   return (
-    <div data-run-liveness className="shrink-0 border-b p-border px-3 py-2">
+    <div data-run-liveness {...countMarks(live)} className="shrink-0 border-b p-border px-3 py-2">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 p-meta tabular-nums">
         <span className="p-text-2">{nodeTally(live)}</span>
         <span className="p-text-3">
@@ -391,7 +398,7 @@ export function RunLivenessPanel({ live, running }: { live: RunLiveness; running
 
 function RunLevelRow({ level }: { level: RunLevel }) {
   return (
-    <div className="flex items-baseline gap-2 p-meta tabular-nums">
+    <div data-run-level={level.depth} {...countMarks(level)} className="flex items-baseline gap-2 p-meta tabular-nums">
       <span className="w-12 shrink-0 p-text-3">level {level.depth}</span>
       <span className="min-w-0 p-text-2">{nodeTally(level)}</span>
     </div>

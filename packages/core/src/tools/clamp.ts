@@ -9,7 +9,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 
 import { nanoid } from '../utils/nanoid';
-import { admissionBytes } from '../llm';
+import { admissionBytes } from '../token-estimate';
 import { headEnd, tailStart } from '../utils/text';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import type { Storage } from '../types/primitives';

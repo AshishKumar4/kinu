@@ -4,7 +4,7 @@
  * refused and one resend. A revoked login reads as no login (`usableLogin`), so there is no third outcome to classify.
  * Each vendor keeps its words: it maps `absent` and `refused` to its own response.
  */
-import type { AuthRequest, AuthResolution } from './types';
+import { refusedLogin, type AuthRequest, type AuthResolution } from './types';
 
 export type AuthenticatedAnswer =
   | { readonly kind: 'absent' }
@@ -26,7 +26,8 @@ export async function authenticatedSend(input: {
   if (first.status !== 401) return { kind: 'answered', response: first, auth };
   const renewed = await input.getAuth(input.key, { rejected: auth.headers });
 
-  if (renewed === null) return { kind: 'refused', reason: 'the login was refused and could not be renewed', response: first };
+  // A key with nothing to renew answers with itself: asking again with it would only be refused again.
+  if (renewed === null || refusedLogin(renewed.headers, auth.headers)) return { kind: 'refused', reason: 'the login was refused and could not be renewed', response: first };
   const second = await input.send(renewed);
 
   return second.status === 401

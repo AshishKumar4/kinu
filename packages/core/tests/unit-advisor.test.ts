@@ -5,7 +5,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../src/context-window';
-import { CHARS_PER_TOKEN } from '../src/llm';
+import { CHARS_PER_TOKEN } from '../src/token-estimate';
 import { advisorWorkspaceGuidance, renderInstructionOmission } from '../src/prompting/agents-md';
 import type { AdvisorWorkspace } from '../src/prompting/agents-md';
 import {

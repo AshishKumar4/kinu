@@ -908,3 +908,143 @@ test('a permalink opens its own swarm or none, and a merge is drawn unscored wit
     await merge.page.close();
   });
 });
+
+/**
+ * What a run's own journal says reaches the swarm surface: a fan-in vertex is drawn as one, and only the nodes the
+ * engine spawned as fan-ins are; a run that reached nothing says so above its tree, in the words of the branch that failed.
+ */
+test('fan-in vertices are the nodes the engine fanned in, and a run that reached nothing names its branch\'s cause', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const swarm = await newPage();
+    await swarm.setViewport({ width: 1280, height: 900 });
+    await swarm.goto(`${origin}/gallery.html?frame=forkfanin`, { waitUntil: 'networkidle0' });
+    await swarm.waitForSelector('g.mcts-region[data-run="sw000"] g.mcts-node[data-node]');
+    await settled(swarm);
+    // The fixture's two vertices are the heads spawned as `fan-in over k parents`; every expansion is a sibling.
+    expect(await swarm.$$eval('g.mcts-region[data-run="sw000"] g.mcts-node[data-node]', (nodes) => nodes
+      .filter((node) => node.querySelector('rect.mcts-fan-in') !== null)
+      .map((node) => node.getAttribute('data-node') ?? '').sort((a, b) => a.localeCompare(b)))).toEqual(['sw004', 'sw009']);
+    await swarm.close();
+
+    const refused = await newPage();
+    await refused.setViewport({ width: 1280, height: 900 });
+    await refused.goto(`${origin}/gallery.html?frame=forkrefused`, { waitUntil: 'networkidle0' });
+    await refused.waitForSelector('[data-run-refusal]');
+
+    const note = await refused.$eval('[data-run-refusal]', (element) => ({ reason: element.getAttribute('data-run-refusal'), text: element.textContent ?? '' }));
+
+    expect(note.reason).toBe('failed');
+    expect(note.text).toContain('Every node failed to provision a home');
+    await refused.close();
+  });
+});
+
+/** The swarm configuration a frame's focused run resolved: its kind, its text, and the axes it names. */
+async function resolutionOf(newPage: Gallery['newPage'], origin: string, frame: string) {
+  const page = await newPage();
+
+  await page.setViewport({ width: 1920, height: 1100 });
+  await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('details[data-swarm-config]');
+  // The disclosure ships shut; what it holds is the subject here, not the press that opens it.
+  await page.$eval('details[data-swarm-config]', (details) => { if (details instanceof HTMLDetailsElement) details.open = true; });
+  await page.waitForSelector('[data-swarm-resolution]');
+
+  const seen = await page.$eval('[data-swarm-resolution]', (body) => ({
+    kind: body.getAttribute('data-swarm-resolution'),
+    text: body.textContent ?? '',
+    axes: [...body.querySelectorAll('dt')].map((term) => term.textContent),
+  }));
+
+  await page.close();
+
+  return seen;
+}
+
+/** The liveness counts the panel and each level row carry: depth (null for the panel), running, reported, stopped, total. */
+function livenessCounts(page: Page): Promise<(number | null)[][]> {
+  return page.$$eval('[data-run-liveness], [data-run-level]', (rows) => rows.map((row) => [
+    row.hasAttribute('data-run-level') ? Number(row.getAttribute('data-run-level')) : null,
+    ...['data-running', 'data-reported', 'data-failed', 'data-total'].map((name) => Number(row.getAttribute(name))),
+  ]));
+}
+
+/**
+ * What a run resolved and how its nodes stand, as the swarm surface shows them. A named preset shows its six axes and
+ * the settle they derive: a scored search settles on its best, an unscored one merges. A composition shows only its
+ * label. Liveness counts each node by its own journal word at its own level: errored and aborted count as stopped,
+ * and words that settle nothing, out of budget or interrupted, count toward no bucket and never as running.
+ */
+test('a run shows the preset or composition it resolved, and counts each node by its own word at its own level', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const prove = await resolutionOf(newPage, origin, 'forkpreset');
+    expect(prove.kind).toBe('preset');
+    expect(prove.axes).toEqual(['unit', 'context', 'expand', 'score', 'advance', 'carry']);
+    expect(prove.text).toContain('settle best');
+
+    const ideate = await resolutionOf(newPage, origin, 'forkrefused');
+    expect([ideate.kind, ideate.text.includes('settle merge')]).toEqual(['preset', true]);
+
+    const composed = await resolutionOf(newPage, origin, 'forkfanin');
+    expect([composed.kind, composed.axes]).toEqual(['custom', []]);
+
+    const page = await newPage();
+    await page.setViewport({ width: 1920, height: 1100 });
+    await page.goto(`${origin}/gallery.html?frame=forkrunning`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-run-liveness]');
+    expect(await livenessCounts(page)).toEqual([[null, 5, 2, 2, 11], [1, 2, 2, 1, 5], [2, 3, 0, 1, 6]]);
+    await page.close();
+  });
+});
+
+/** The step a running head is still writing, as the open transcript shows it; empty when there is none. */
+const arrivingStep = (page: Page): Promise<string> => page.evaluate(() => document.querySelector('[data-node-pending-step]')?.textContent ?? '');
+
+/** Has the workspace's server send `frames` on the open socket, in order. */
+async function headFrames(page: Page, frames: Record<string, string>[]): Promise<void> {
+  await page.evaluate((all) => {
+    for (const detail of all) window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail }));
+  }, frames);
+}
+
+/**
+ * A head's step paints as it arrives, from the provider's own deltas: its thinking first, then its prose, each
+ * verbatim and in order, and never another head's. Once the step lands in the journal the paint goes, so the step is
+ * never shown twice, and the head's next step starts clean.
+ */
+test('a running head paints its arriving step, only its own, until the step lands', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1920, height: 1100 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('button[title="Swarms"]');
+    await page.click('button[title="Swarms"]');
+    await page.waitForSelector('[data-run-node="lv003"]');
+    // The node list may sit in a panel this layout keeps folded; the row is what opens the head, not its geometry.
+    await page.$eval('[data-run-node="lv003"]', (row) => { if (row instanceof HTMLElement) row.click(); });
+    await page.waitForFunction(() => document.body.textContent?.includes('the guard may have moved rather than gone') === true);
+    expect(await arrivingStep(page)).toBe('');
+
+    await headFrames(page, [{ type: 'head_stream', headId: 'lv003', kind: 'reasoning', delta: 'Weighing the two readers.' }]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]')?.textContent?.includes('Weighing the two readers.') === true);
+
+    await headFrames(page, [
+      { type: 'head_stream', headId: 'lv004', kind: 'text', delta: 'Another head entirely.' },
+      { type: 'head_stream', headId: 'lv003', kind: 'text', delta: 'Two readers' },
+      { type: 'head_stream', headId: 'lv003', kind: 'text', delta: ' skip the guard.' },
+    ]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]')?.textContent?.includes('Two readers skip the guard.') === true);
+    const painted = await arrivingStep(page);
+
+    expect(painted).toContain('Weighing the two readers.');
+    expect(painted).not.toContain('Another head entirely.');
+
+    await headFrames(page, [{ type: 'head_activity', headId: 'lv003' }]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]') === null);
+
+    await headFrames(page, [{ type: 'head_stream', headId: 'lv003', kind: 'text', delta: 'Next step.' }]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]') !== null);
+    expect(await arrivingStep(page)).toBe('Next step.');
+    await page.close();
+  });
+});

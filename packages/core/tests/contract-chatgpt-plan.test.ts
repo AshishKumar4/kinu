@@ -4,11 +4,12 @@ import { afterEach, describe, expect, jest, test } from 'bun:test';
 import { APICallError, generateText, jsonSchema, streamText, tool, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import {
-  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, silenceBoundMs,
+  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, createProviderRegistry, JsonObjectSchema, silenceBoundMs,
   type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { KinuError, createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
-import { PROVIDER_RETRIES_HEADER } from '../src/providers/rate-limit-retry';
+import { withModelStack } from '../src/providers/wire-model';
+import { callRetries } from '../src/providers/middleware/retry';
 
 interface Sent {
   readonly url: string;
@@ -207,9 +208,10 @@ describe('the request the preview accepts', () => {
       return new Response(new ReadableStream({ pull() {} }, { highWaterMark: 0 }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
     });
 
-    const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
-    // No transport retry, so the one silent attempt is the whole call.
-    const failure = failureOf(generateText({ model, prompt: 'hello', maxRetries: 0, headers: { [PROVIDER_RETRIES_HEADER]: '0' } }));
+    // As the registry resolves it: the one stack, which collects a generate from the plan's stream.
+    const model = withModelStack(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), { provider: 'chatgpt', lane: 'chatgpt@main', generateByStream: true });
+    // No retry, so the one silent attempt is the whole call.
+    const failure = failureOf(generateText({ model, prompt: 'hello', maxRetries: 0, providerOptions: callRetries(0) }));
 
     await opened.promise;
     jest.advanceTimersByTime(silenceBoundMs('provider.stream.idle_ms'));
@@ -252,7 +254,8 @@ describe('what the plan route answers', () => {
 
   test.each(['subscription_sharing_usage_unavailable', 'subscription_sharing_user_unavailable'])('%s backs off and asks again', async (code) => {
     const api = openai(refusal(503, code), answered());
-    const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
+    // As the registry resolves it: the one stack, which waits the refusal out.
+    const model = withModelStack(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), { provider: 'chatgpt', lane: 'chatgpt@main', sleep: async () => {} });
 
     expect((await generateText({ model, prompt: 'hello', maxRetries: 0 })).text).toBe('ok');
     expect(api.sent).toHaveLength(2);
@@ -328,7 +331,21 @@ describe('what the plan route answers', () => {
     expect(await result.text).toBe('ok');
   });
 
-  test.each(['max_output_tokens', 'content_filter'])('a one-shot answer ChatGPT stops short (%s) is a failure, not the partial text', async (reason) => {
+  test('a one-shot answer ChatGPT stops at its output limit reads as its stream does: the partial text, finished by length', async () => {
+    const api = openai(sse(
+      { type: 'response.created', response: RESPONSE },
+      { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },
+      { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: 'ok' },
+      { type: 'response.output_item.done', output_index: 0, item: { ...MESSAGE, status: 'incomplete' } },
+      { type: 'response.incomplete', response: { ...RESPONSE, status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [MESSAGE], usage: USAGE } },
+    ));
+
+    const result = await generateText({ model: createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), prompt: 'hello', maxRetries: 0 });
+
+    expect({ finish: result.finishReason, text: result.text }).toEqual({ finish: 'length', text: 'ok' });
+  });
+
+  test.each(['content_filter'])('a one-shot answer ChatGPT stops short (%s) is a failure, not the partial text', async (reason) => {
     const api = openai(sse(
       { type: 'response.created', response: RESPONSE },
       { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },
@@ -443,5 +460,48 @@ describe('on the web, through the machine that signed in', () => {
     expect(api.sent.map(({ url, authorization, body }) => ({ url, authorization, store: body?.store, stream: body?.stream }))).toEqual([
       { url: 'https://api.openai.com/v1/responses', authorization: 'Bearer at-1', store: false, stream: true },
     ]);
+  });
+});
+
+describe('a stream after its sign-in was renewed', () => {
+  test('keepalives on the renewed request reach the silence bound', async () => {
+    jest.useFakeTimers();
+    const encoder = new TextEncoder();
+    let pulls = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
+
+    const body = new ReadableStream<Uint8Array>({ pull(controller) { pulls.resolve(controller); } }, { highWaterMark: 0 });
+
+    const next = async (): Promise<ReadableStreamDefaultController<Uint8Array>> => {
+      const controller = await pulls.promise;
+
+      pulls = Promise.withResolvers();
+
+      return controller;
+    };
+
+    const api = openai(refusal(401, 'token_expired'), () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const { deps, asked } = signedIn(api.fetch);
+    const registry = createProviderRegistry();
+
+    registry.register(createChatGptProvider());
+    const result = streamText({ model: registry.resolve('chatgpt/gpt-6.1-sol', deps), prompt: 'hello', maxRetries: 0 });
+    const IDLE_MS = silenceBoundMs('provider.stream.idle_ms');
+
+    // The model thinks for three bounds, sending only keepalive comments, then answers.
+    for (let comment = 0; comment < 3; comment++) {
+      const controller = await next();
+
+      for (let turn = 0; turn < 100; turn++) await Promise.resolve();
+      jest.advanceTimersByTime(IDLE_MS - 1);
+      controller.enqueue(encoder.encode(': keepalive\n\n'));
+    }
+
+    const answer = await answered().text();
+
+    (await next()).enqueue(encoder.encode(answer));
+    (await next()).close();
+
+    expect({ text: await result.text, renewed: asked.some((request) => request?.rejected !== undefined), sent: api.sent.length })
+      .toEqual({ text: 'ok', renewed: true, sent: 2 });
   });
 });

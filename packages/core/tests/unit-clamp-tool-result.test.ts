@@ -13,7 +13,7 @@ import {
   DEFAULT_TOOL_RESULT_MAX_CHARS,
   TOOL_OUTPUT_DIR,
 } from '../src/tools/clamp';
-import { estimateTokens } from '../src/llm';
+import { estimateTokens } from '../src/token-estimate';
 import { TurnContextBudget } from '../src/context-budget';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime, conversationsFor } from './helpers';
@@ -367,11 +367,7 @@ describe('withClampedToolResults (external/MCP tool surfaces)', () => {
 describe('the JSON boundary refuses what JSON cannot carry', () => {
   test('decodeJsonValue rejects non-finite numbers', () => {
     // Infinity would serialize as null, silently corrupting the result.
-    expect(() => decodeJsonValue({ value: Number.POSITIVE_INFINITY })).toThrow(
-      'Invalid finite: Received Infinity',
-    );
-    expect(() => decodeJsonValue({ value: Number.NaN })).toThrow(
-      'Invalid type: Expected (string | number | boolean | null | Array | Object) but received NaN',
-    );
+    expect(() => decodeJsonValue({ value: Number.POSITIVE_INFINITY })).toThrow('Invalid JSON value: Received Infinity');
+    expect(() => decodeJsonValue({ value: Number.NaN })).toThrow('Invalid JSON value: Received NaN');
   });
 });

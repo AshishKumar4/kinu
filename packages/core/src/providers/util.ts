@@ -2,7 +2,7 @@ import type { LanguageModelV4Message } from '@ai-sdk/provider';
 import { StreamProviderError, type LanguageModelMiddleware } from 'ai';
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
-import { withRateLimitRetry } from './rate-limit-retry';
+import { authenticatedSend } from './authenticated-send';
 import { withCallAccount } from './quota';
 import { evidenceWindow } from '../utils/evidence-window';
 import { Effect } from 'effect';
@@ -15,10 +15,8 @@ import {
 
 export interface AuthedFetchOptions {
   credKey: string;
-  /** Named in rate-limit wait notices. */
+  /** Named on the call's account. */
   provider: string;
-  /** Absent for the count-endpoint wrapper. */
-  modelId?: string;
   /** 401 JSON body `error` text when no credential is configured. */
   missingCredentialError: string;
   /** Reject (401) when the credential lacks a baseURL (openai-compat). */
@@ -27,38 +25,33 @@ export interface AuthedFetchOptions {
   mutate?: (ctx: { url: string; headers: Headers; auth: AuthResolution }) => string | void;
 }
 
-/** Auth is re-resolved per request so credential changes apply live. */
-export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions): typeof globalThis.fetch {
-  const waitListener = deps.onProviderWait;
+/** The SDK's placeholder credentials, which the login replaces. */
+const PLACEHOLDER_AUTH = ['authorization', 'x-api-key'];
 
-  const retrying = (lane: string): typeof globalThis.fetch => withRateLimitRetry(deps.fetch ?? fetch, {
-    provider: opts.provider,
-    lane,
-    ...(opts.modelId !== undefined && { modelId: opts.modelId }),
-    ...(waitListener !== undefined && { onWait: waitListener }),
-  });
+/** A keyed login's transport: auth read per request so credential changes apply live, one renewal on a 401
+ *  (`authenticatedSend`), and the call's account named on the answer. */
+export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions): typeof globalThis.fetch {
+  const missing = (): Response => new Response(JSON.stringify({ error: opts.missingCredentialError }), { status: 401, headers: { 'Content-Type': 'application/json' } });
 
   return asFetchFunction(async (input, init) => {
-    const resolved = await deps.getAuth(opts.credKey);
-
-    if (!resolved || (opts.requireBaseURL && !resolved.baseURL)) {
-      return new Response(
-        JSON.stringify({ error: opts.missingCredentialError }),
-        { status: 401, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    const auth = resolved;
-
-    const headers = copyHeaders(init?.headers);
-
-    for (const [name, value] of Object.entries(auth.headers)) headers.set(name, value);
     const url = input instanceof Request ? input.url : input.toString();
-    const rewritten = opts.mutate?.({ url, headers, auth });
 
-    const paid = auth.credentialKey ?? opts.credKey;
+    const send = (auth: AuthResolution): Promise<Response> => {
+      if (opts.requireBaseURL === true && !auth.baseURL) return Promise.resolve(missing());
+      const headers = copyHeaders(init?.headers);
 
-    return withCallAccount(await retrying(paid)(rewritten ?? input, { ...init, headers }), opts.provider, paid);
+      for (const name of PLACEHOLDER_AUTH) headers.delete(name);
+
+      for (const [name, value] of Object.entries(auth.headers)) headers.set(name, value);
+
+      return (deps.fetch ?? fetch)(opts.mutate?.({ url, headers, auth }) ?? input, { ...init, headers });
+    };
+
+    const answer = await authenticatedSend({ key: opts.credKey, getAuth: deps.getAuth, send });
+
+    if (answer.kind === 'absent') return missing();
+
+    return withCallAccount(answer.response, opts.provider, answer.kind === 'answered' ? answer.auth.credentialKey ?? opts.credKey : opts.credKey);
   });
 }
 

@@ -207,7 +207,7 @@ flowchart TB
     subgraph Run["runChat (core/src/chat.ts), both backends"]
         Asm["assembleTurnMessages: attachment sanitize · onTurnStart<br/>· awaited transformContext (compaction) · admission"]
         Step["composePrepareStep per step: extensions · step-prune<br/>· dynamic context · cache breakpoints"]
-        Model["streamText → provider · stream-usage-repair"]
+        Model["streamText → provider · usage-repair middleware"]
         Tools["tool calls → emitToolCall / emitToolResult"]
     end
 
@@ -285,9 +285,9 @@ freezes earlier blocks to preserve cache breakpoints; `dropSuperseded`, the
 compaction first rung, is the only unfreezer. Step pruning (`step-prune.ts`)
 shrinks old tool outputs near `stepContextLimit`, the resolved model window less
 `outputReserveTokens`. `cache-breakpoints.ts` places Anthropic `cache_control`
-and OpenAI `prompt_cache_key`. `stream-usage-repair`
-(`packages/core/src/providers/stream-usage-repair.ts`) fixes Cloudflare AI SSE
-zeroing `cached_tokens` in its duplicate final chunk.
+and OpenAI `prompt_cache_key`. The usage-repair middleware
+(`packages/core/src/providers/middleware/usage-repair.ts`) restores the
+`cached_tokens` Cloudflare AI zeroes or drops in its duplicate final usage report.
 [EXTENSIONS.md](./EXTENSIONS.md) has the per-turn hook contract.
 
 ## Message flow (cloud)

@@ -85,6 +85,9 @@ const wgslClientOnly = {
  */
 const devStateDir = process.env.KINU_DEV_STATE_DIR;
 
+/** Set by the live-app harness for boots that must run without a Cloudflare account (a CI or armada container). */
+const offline = process.env.KINU_DEV_OFFLINE === "on";
+
 const previewPort = devPreviewPort(__dirname);
 
 export default defineConfig(({ command }) => ({
@@ -103,6 +106,11 @@ export default defineConfig(({ command }) => ({
       // A harness boot opens no Workers inspector. The plugin's default takes 9229, or the next port it finds free
       // before it binds, so two boots at once both take 9229 and one dies with EADDRINUSE (2026-09-24).
       inspectorPort: process.env.KINU_DEV_INSPECTOR === "off" ? false : undefined,
+      // An offline harness boot reaches no Cloudflare account: no binding proxied remotely (the `ai` binding's proxy
+      // never finishes "Establishing remote connection" without one) and no container image pulled from the managed
+      // registry (`dev.enable_containers` below). Its turns run on the scripted model; a developer's `bun run dev`
+      // keeps the plugin's defaults.
+      remoteBindings: offline ? false : undefined,
       // `vite dev` serves its own preview zone (vite-preview-zone.ts); a build keeps the deployed zone. A harness
       // boot binds the Drive's JWT_SECRET here, as a var: wrangler reads secrets from packages/cf-backend/.dev.vars
       // alone when the checkout has one, and a .dev.vars JWT_SECRET still overrides this.
@@ -111,7 +119,12 @@ export default defineConfig(({ command }) => ({
           const vars = { ...worker.vars, PREVIEW_HOST_SUFFIX: DEV_PREVIEW_SUFFIX, PREVIEW_HOST_PORT: String(previewPort) };
           const jwtSecret = process.env.KINU_DEV_JWT_SECRET;
 
-          return { vars: jwtSecret === undefined ? vars : { ...vars, JWT_SECRET: jwtSecret } };
+          return {
+            vars: jwtSecret === undefined ? vars : { ...vars, JWT_SECRET: jwtSecret },
+            // Offline, Workers AI and Vectorize are unbound rather than left to hang on a remote that is never reached:
+            // memory falls back to its full-text index (runtime.ts), and the turns run on the scripted model.
+            ...(offline && { dev: { ...worker.dev, enable_containers: false }, ai: undefined, vectorize: [] }),
+          };
         }
         : undefined,
     }),

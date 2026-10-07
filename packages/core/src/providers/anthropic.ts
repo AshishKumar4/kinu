@@ -8,6 +8,7 @@ import { listModelsDevProviderModels } from './models-dev';
 import { countAnthropicInputTokens } from './anthropic-count';
 import { warmAnthropicCache } from './anthropic-warm';
 import type { JsonObject } from '../utils/json';
+import { heardFetch } from './middleware/attempt';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
 
@@ -46,12 +47,11 @@ export function createAnthropicProvider(): ModelProvider {
     createModel(modelId, deps): LanguageModel {
       const customFetch = createAuthedFetch(deps, {
         provider: 'anthropic',
-        modelId,
         credKey: ANTHROPIC_CRED_KEY,
         missingCredentialError: 'Anthropic API key not configured',
       });
 
-      const provider = createAnthropic({ apiKey: 'placeholder', fetch: customFetch });
+      const provider = createAnthropic({ apiKey: 'placeholder', fetch: heardFetch(customFetch) });
 
       return provider.languageModel(modelId);
     },

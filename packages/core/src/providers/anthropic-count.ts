@@ -302,7 +302,6 @@ export async function countAnthropicInputTokens(input: {
 
     const authedFetch = createAuthedFetch(input.deps, {
       provider: input.providerId,
-      modelId: input.modelId,
       credKey: input.credKey,
       missingCredentialError: input.missingCredentialError,
     });

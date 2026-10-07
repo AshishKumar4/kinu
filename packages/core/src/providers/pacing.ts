@@ -43,24 +43,28 @@ export class ProviderPacer {
     this.sleep = opts.sleep ?? abortableSleep;
   }
 
-  /** Waits out the host's cooldown, re-read after each sleep as a sibling may extend it. `onCooldown` gets the
-   *  deadline so a caller can skip announcing its own. */
-  admit(
-    host: string,
-    signal?: AbortSignal,
-    opts?: { onCooldown?: (waitMs: number, untilMs: number, reason: string | undefined) => void },
-  ): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      for (;;) {
-        if (signal?.aborted) return yield* Effect.die(abortCause(signal));
-        const cooldown = this.cooldowns.get(host);
-        const cooling = (cooldown?.untilMs ?? 0) - this.now();
+  /** The lane's cooldown still to wait, or null: what a caller decides on before it waits. */
+  cooling(host: string): { readonly waitMs: number; readonly untilMs: number; readonly reason: string | undefined } | null {
+    const cooldown = this.cooldowns.get(host);
+    const waitMs = (cooldown?.untilMs ?? 0) - this.now();
 
-        if (cooldown === undefined || cooling <= 0) return;
-        opts?.onCooldown?.(cooling, cooldown.untilMs, cooldown.reason);
-        yield* Effect.promise(() => this.sleep(cooling, signal));
-      }
-    }));
+    return cooldown === undefined || waitMs <= 0 ? null : { waitMs, untilMs: cooldown.untilMs, reason: cooldown.reason };
+  }
+
+  /** Whether any lane under `route` is cooling: only then is a call's own lane worth looking up. */
+  coolingUnder(route: string): boolean {
+    const now = this.now();
+
+    for (const [lane, cooldown] of this.cooldowns) {
+      if (lane.startsWith(`${route}|`) && cooldown.untilMs > now) return true;
+    }
+
+    return false;
+  }
+
+  /** Waits `ms` on this pacer's clock. */
+  pause(ms: number, signal?: AbortSignal): Promise<void> {
+    return this.sleep(ms, signal);
   }
 
   /** Record a cooldown of `ms`; its deadline, null if a later one holds. */
