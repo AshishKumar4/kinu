@@ -4335,6 +4335,40 @@ at most floor(log2 n) + 1 deltas, so L <= floor(log2 n) + 2 layers.
 - A delta no longer whites out a path under one that stopped being a
   directory; the archive held such a parent as both a file and a directory.
 
+Measured off-tree (`research/d77-lsm-bench/`: the driver, results and
+table), Medium, run `dc20261007175712f13ab`, before (the chain as at
+`integration/0965` `ff0b0a2f1`'s parent) and after (this design), n=5
+recoveries per row. Each row filled a workspace (12,000 small files, a
+1 GiB file, 256 MiB random fills to the size), saved a base, then 3 or
+63 saves of a line, a new 4 KiB file and a 4 KiB write into the large
+file; each recovery is a crashed container's cold one, timed from attach.
+Medians (min–max), ms:
+
+| size | saves | arm | layers | attach | first 4 KiB | tree walk | 64 MiB read | find loops |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| 0.25 GB | 3 | before | 4 | 1,564 (843–1,842) | 612 | 1,054 | 940 | 0 |
+| 0.25 GB | 3 | after | 3 | 1,223 (862–1,341) | 785 | 1,250 | 754 | 0 |
+| 0.25 GB | 63 | before | 64 | 5,110 (4,980–6,524) | 893 | 1,819 | 7,350 | 7 |
+| 0.25 GB | 63 | after | 7 | 1,413 (1,372–1,941) | 528 | 1,116 | 1,025 | 0 |
+| 2 GB | 3 | before | 4 | 1,202 (1,085–1,456) | 472 | 1,137 | 1,891 | 0 |
+| 2 GB | 3 | after | 3 | 1,414 (870–1,778) | 631 | 1,083 | 1,671 | 0 |
+| 2 GB | 63 | before | 64 | 5,774 (5,301–7,977) | 1,107 | 1,845 | 15,738 | 7 |
+| 2 GB | 63 | after | 7 | 1,586 (1,180–1,820) | 707 | 1,172 | 2,689 | 0 |
+| 10 GB | 3 | before | 4 | 1,621 (1,391–1,669) | 689 | 1,069 | 2,131 | 0 |
+| 10 GB | 3 | after | 3 | 1,510 (1,335–1,942) | 606 | 1,055 | 1,914 | 0 |
+| 10 GB | 63 | before | 64 | 6,388 (4,458–9,547) | 779 | 1,996 | 15,931 | 7 |
+| 10 GB | 63 | after | 7 | 1,920 (1,665–2,962) | 634 | 1,090 | 2,578 | 0 |
+
+- At three saves the two are the same within noise. At 63, attach is 3.3
+  to 3.6 times faster, a 64 MiB read of the large file 6 to 7 times, and
+  the 64-lower overlay made `find` report seven file-system loops on every
+  recovery (the same inode handed out twice); seven lowers made none.
+- What it costs: a save's median rose 7 to 21% (681 to 828 ms at 0.25 GB,
+  1,434 to 1,627 ms at 10 GB), and 63 saves moved 4.18 MB where they moved
+  1.56 MB, since a merge re-sends what its layers held.
+- 18 GB has no row: its base save ran out of disk on the Medium box's
+  20 GB (`mksquashfs`: no space left), before either arm differed.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
