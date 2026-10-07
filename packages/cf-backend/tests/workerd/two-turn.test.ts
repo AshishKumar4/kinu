@@ -178,6 +178,15 @@ describe('two real turns over the HTTP model seam', () => {
     expect([done.kept, done.owed]).toEqual([0, { sends: 0, cards: 0 }]);
   });
 
+  // Alarm recovery runs while the root's turn is held and again while it settles: the claim stays its foreground
+  // owner's throughout, so it is never sealed as indeterminate under a live owner.
+  it('the alarm\'s recovery leaves a held turn\'s claim with its owner, and a settling one settles with its own outcome', async () => {
+    const { held, settled } = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('claims-driver')).claimUnderRecovery();
+
+    expect(held).toBeNull();
+    expect([settled === null, settled === 'missing', settled === 'indeterminate']).toEqual([false, false, false]);
+  });
+
   it('a Changes-tab send the loop refuses to drive takes its card row with it', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-refused-driver'));
 

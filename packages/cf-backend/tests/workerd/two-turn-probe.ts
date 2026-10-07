@@ -156,7 +156,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'refuseDriving');
     Reflect.deleteProperty(this, 'refuseReservations');
     Reflect.deleteProperty(this, 'owedSends');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends']);
+    Reflect.deleteProperty(this, 'latestClaimOutcome');
+    Reflect.deleteProperty(this, 'recoveryPass');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass']);
   }
 
   /** What the loop's driver gate answers once refused, as when another activation holds the lease. */
@@ -182,6 +184,20 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const count = (where: string): number => Number(this.unmetered(`SELECT COUNT(*) AS n FROM pending_steers WHERE ${where}`).one().n);
 
     return { sends: count('1'), cards: count('metadata_json IS NOT NULL') };
+  }
+
+  /** The newest turn claim's outcome: null while its foreground owner holds it; `missing` with no claim at all. */
+  async latestClaimOutcome(): Promise<string | null> {
+    const row = this.unmetered('SELECT outcome FROM actor_turn_claims ORDER BY claimed_at DESC LIMIT 1').toArray()[0];
+
+    if (row === undefined) return 'missing';
+
+    return row.outcome === null ? null : textColumn(row.outcome);
+  }
+
+  /** The alarm's recovery pass, run now. */
+  async recoveryPass(): Promise<void> {
+    await this.terminalRetryPass();
   }
 
   /** The closed-tab sleep-time wake, run now: the tab closed past its grace, then a timer tick. */
@@ -576,7 +592,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
-  & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -828,7 +844,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1243,6 +1259,27 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       kept: (await target.getChangeNotes('workspace')).length,
       owed: await target.owedSends(),
     };
+  }
+
+  /**
+   * The root's turn claim under the alarm's real recovery pass: once while the genesis turn is held, and again while
+   * its response settles. Each time the claim stays its foreground owner's, so it settles with its own outcome.
+   */
+  async claimUnderRecovery(): Promise<{ readonly held: string | null; readonly settled: string | null }> {
+    const { target } = await this.claimQueueWorkspace('claims');
+
+    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 1 }) });
+
+    if (!(await target.beginGenesisTurn()).started) throw new Error('claims probe genesis did not start');
+    await fetch('http://probe-control.invalid/queue/arrived');
+    await target.recoveryPass();
+    const held = await target.latestClaimOutcome();
+
+    await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+    await Promise.all([target.recoveryPass(), awaitSettled(target)]);
+    await awaitSettled(target);
+
+    return { held, settled: await target.latestClaimOutcome() };
   }
 
   /** A send the loop refuses to drive takes its card row with it. */
