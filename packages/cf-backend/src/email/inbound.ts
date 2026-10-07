@@ -3,7 +3,6 @@
  * (`+tag` and case ignored). Attachment bytes never leave this layer.
  */
 
-import PostalMime from 'postal-mime';
 import { normalizeEmailAddress, type EmailAttachmentMeta } from '@kinu.run/core';
 
 /** Mirrors identity/naming.ts slugs (`scout-a1b2c3`). */
@@ -112,7 +111,7 @@ function attachmentSize(content: ArrayBuffer | Uint8Array | string): number {
 }
 
 export async function parseInboundMime(raw: ArrayBuffer): Promise<ParsedInboundEmail> {
-  const parsed = await PostalMime.parse(raw);
+  const parsed = await (await import('postal-mime')).default.parse(raw);
 
   const text = inboundBody(parsed.text, parsed.html);
 
