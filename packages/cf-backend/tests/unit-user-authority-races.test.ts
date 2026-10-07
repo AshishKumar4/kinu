@@ -345,6 +345,20 @@ describe('a device-code sign-in the owner superseded', () => {
       .toMatchObject({ connected: false, error: expect.stringContaining('No device flow in progress') });
     harness.close();
   });
+
+  // The eval reviewer runs on two of the owner's logins, the second its fallback: each is its own sign-in.
+  test('a named account seals its own login and leaves the main one as it was', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    codexProvider({ userCode: () => 'AAAA-BBBB' });
+    await harness.userDO.startCodexDeviceFlow(owner, 'second');
+
+    expect(await harness.userDO.pollCodexDeviceFlow(owner)).toMatchObject({ connected: true });
+    expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual(['codex.oauth@second']);
+    expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(false);
+    await expect(harness.userDO.startCodexDeviceFlow(owner, 'Not An Account')).rejects.toThrow('not an account name');
+    harness.close();
+  });
 });
 
 describe('one browser approval mints one CLI token', () => {

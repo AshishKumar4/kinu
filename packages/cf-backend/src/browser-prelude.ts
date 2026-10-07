@@ -3,12 +3,14 @@
  * JSON call to the host can. `connectBrowser` dials `codemode-egress.ts`'s gate, which checks the session's owner.
  * `pageTools` and `callPageTool` keep one WebMCP session per page, whose tool set follows the page's reports.
  */
-import slateVendor from 'virtual:kinu-slate-vendor';
 import { BROWSER_GATE_HOST } from './codemode-egress';
 
 export const BROWSER_CLIENT_MODULE = 'kinu-puppeteer.js';
 
-export const BROWSER_CLIENT_SOURCE = slateVendor.puppeteer;
+/** The 296 KB client, compiled only when a program that may drive a browser is launched. */
+export async function browserClientSource(): Promise<string> {
+  return (await import('virtual:kinu-slate-vendor')).default.puppeteer;
+}
 
 export const BROWSER_PRELUDE = String.raw`
     // A failure is handed to the host member of the same name, which records it in the program's census and answers

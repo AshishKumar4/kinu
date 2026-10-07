@@ -954,6 +954,12 @@ start_soak() {
   report dispatched "the eval soak, one trial of every task on $KINU_EVAL_ORIGIN; its reds re-render this report" "$KINU_DEPLOY_REPORT/soak.log"
 }
 
+# THE REVIEWER'S LOGINS (evals/scripts/reviewer-sign-in.ts): the eval reviewer's own ChatGPT logins on this deployment, asked
+# of the owner here, in the foreground, and only for a login the deployment does not hold, so only after a reset wiped
+# it. The soak's provisioning runs detached and cannot ask. A login not approved is a notice in the report, never a red:
+# the reviewer explains a run, and the build is not what it measures.
+if [ "$KINU_SERVING" = "1" ]; then bun "$KINU_ROOT/evals/scripts/reviewer-sign-in.ts" "$KINU_EVAL_ORIGIN"; fi
+
 if [ "$KINU_PROMOTE" = "1" ]; then
   if [ -z "$KINU_TIERS_WHY" ]; then start_soak; run_phase post-publish; else skip_phase post-publish "$KINU_TIERS_WHY"; fi
   mark tiers

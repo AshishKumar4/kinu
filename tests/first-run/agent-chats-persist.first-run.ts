@@ -51,7 +51,7 @@ import {
 } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 import { webHeaders, type PublicSessionPlan } from '../../evals/src/session';
-import { openBrowser, signedInPage } from './browser';
+import { openBrowser, signedInPage } from '../../evals/src/browser';
 import type { TestChrome } from '../../scripts/test-chrome';
 
 const SUITE = 'First-run · agent-chats-persist';

@@ -21,7 +21,7 @@ import { basename, join } from 'node:path';
 import * as v from 'valibot';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, inheritedRows, type EvalAccount } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
-import { DEFAULT_TRIALS, evalMatrix } from '../evals/src/config';
+import { DEFAULT_TRIALS, evalMatrix, REVIEW_KEYED_MODEL } from '../evals/src/config';
 import { WORKSPACE_LEASE_MS } from '../evals/src/session';
 import { trialAccounts, trialAccountsAt } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
@@ -44,7 +44,7 @@ export interface Provisioning {
   /** The deployment's DEV_IDENTITY_SECRET, and the variable it came from, for a finding that names it. */
   readonly identity: string | undefined;
   readonly identityEnv: string;
-  /** The models the eval pass runs. */
+  /** The models the eval pass runs: those it measures and the one that reviews it. */
   readonly models: readonly string[];
   /** The trial accounts the eval runs act as here (`evals/src/slot.ts`), each given the keys eval-service is. */
   readonly trialAccounts?: readonly EvalAccount[];
@@ -241,6 +241,8 @@ if (import.meta.main) {
   const origin = new URL(asked).origin;
   const identityEnv = evalWebIdentityEnv(origin);
   const matrix = evalMatrix(process.env, ARMS.map((arm) => arm.id));
+  // The models a pass runs: those it measures, and the one that reviews it.
+  const models = [...matrix.models, REVIEW_KEYED_MODEL];
   const identity = process.env[identityEnv]?.trim();
   const taskFiles = trackedFiles().filter(isEvalTask).map((file) => basename(file));
 
@@ -251,7 +253,7 @@ if (import.meta.main) {
   if (accounts?.kind === 'shared') console.log(`eval-provider-keys: ${accounts.why}`);
 
   const { stored, findings, trials, notes } = await provisionEvalProviderKeys({
-    origin, keysPath: EVAL_PROVIDER_KEYS, identity, identityEnv, models: matrix.models,
+    origin, keysPath: EVAL_PROVIDER_KEYS, identity, identityEnv, models,
     trialAccounts: accounts?.kind === 'trial' ? trialAccounts(taskFiles, { ...matrix, trials: Math.max(matrix.trials, DEFAULT_TRIALS) }) : undefined,
   });
 
@@ -271,6 +273,6 @@ if (import.meta.main) {
   }
 
   console.log(`eval-provider-keys: stored ${stored.length === 0 ? 'no key, eval-service holding every one' : stored.join(', ')} at ${origin}`
-    + `${findings.length === 0 ? `; it lists every eval model: ${matrix.models.join(', ')}` : ''}`);
+    + `${findings.length === 0 ? `; it lists every eval model: ${models.join(', ')}` : ''}`);
   process.exit(findings.length === 0 ? 0 : 1);
 }

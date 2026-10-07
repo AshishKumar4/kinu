@@ -71,3 +71,18 @@ test("a provider's declared stall is not a 429 wait", () => {
 
   expect(measure([wait('backoff', 30_000), wait('stall', 2_000)])).toMatchObject({ providerWaits: 1, providerWaitMs: 30_000 });
 });
+
+// A tool description that misleads moves these two before the pass rate: calls the tool refused as bad input, and calls
+// to a tool the product never offered.
+test('of the failed calls, those refused as bad input and those to an invented tool are counted apart', () => {
+  const call = (name: string, outcome: Extract<RunEvent, { type: 'tool_call_end' }>['outcome']): RunEvent => ({
+    type: 'tool_call_end', runId: 'run', eventIndex: 1, timestamp: '2026-10-07T00:00:00.000Z', name, toolCallId: name, outcome,
+  });
+
+  expect(measure([
+    call('file', { success: false, reason: 'bad_input' }),
+    call('shell', { success: false, reason: 'unavailable' }),
+    call('read_file', { success: false, reason: null }),
+    call('file', { success: true }),
+  ])).toMatchObject({ toolCalls: 4, toolErrors: 3, badInputCalls: 1, unknownToolCalls: 1 });
+});
