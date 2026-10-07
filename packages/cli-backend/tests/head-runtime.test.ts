@@ -393,8 +393,10 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     });
 
     expect(mergeOptions?.maxOutputTokens).toBeUndefined();
+    // The call's retries ride beside the effort for the model stack, which this bare test model is not inside.
     expect(mergeOptions?.providerOptions).toEqual({
       openai: { reasoningEffort: MERGE_POLICY_BINDING.effort },
+      kinu: { retries: expect.any(Number) },
     });
   });
 

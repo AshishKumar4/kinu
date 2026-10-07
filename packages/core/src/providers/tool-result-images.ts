@@ -68,21 +68,21 @@ function chatToolResults(prompt: readonly LanguageModelV4Message[], moveImages: 
       continue;
     }
 
-    out.push({
-      ...message,
-      content: message.content.map((part) => {
-        if (part.type !== 'tool-result' || part.output.type !== 'content') return part;
-        const images = part.output.value.filter(isImage);
+    const content = message.content.map((part): typeof part => {
+      if (part.type !== 'tool-result' || part.output.type !== 'content') return part;
+      const images = part.output.value.filter(isImage);
 
-        if (images.length === 0) return part;
+      if (images.length === 0) return part;
 
-        if (moveImages) pending.push(...images);
-        const texts = part.output.value.flatMap((item) => (item.type === 'text' ? [item.text] : []));
-        const note = moveImages ? ATTACHED : images.map(() => OMITTED).join('\n');
+      if (moveImages) pending.push(...images);
+      const texts = part.output.value.flatMap((item) => (item.type === 'text' ? [item.text] : []));
+      const note = moveImages ? ATTACHED : images.map(() => OMITTED).join('\n');
 
-        return { ...part, output: { type: 'text', value: [...texts, note].join('\n') } };
-      }),
+      return { ...part, output: { type: 'text', value: [...texts, note].join('\n') } };
     });
+
+    // An unchanged message stays the same object, so a provider's per-message conversion is reused across steps.
+    out.push(content.every((part, index) => part === message.content[index]) ? message : { ...message, content });
   }
 
   flush();
@@ -91,7 +91,7 @@ function chatToolResults(prompt: readonly LanguageModelV4Message[], moveImages: 
 }
 
 /** `accepts` undefined: the caller does not know the model's media, so only an image-carrying API sends one. */
-function toolImages(accepts: ReadonlySet<ModelInputModality> | undefined): LanguageModelMiddleware {
+export function toolImages(accepts: ReadonlySet<ModelInputModality> | undefined): LanguageModelMiddleware {
   return {
     specificationVersion: 'v4',
     transformParams: async ({ params, model }) => {

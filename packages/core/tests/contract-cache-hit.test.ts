@@ -2,7 +2,7 @@
  *  models each provider's cache: a request reads only when its addressed prefix continues a stored one byte for byte. */
 
 import { describe, test, expect } from 'bun:test';
-import { isStepCount, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { isStepCount, streamText, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import * as v from 'valibot';
 import {
@@ -16,9 +16,10 @@ import {
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY, CODEX_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue, type KinuExtension, type Usage,
-  type ModelCallDeps, type AuthResolution,
+  type ModelCallDeps, type AuthResolution, type WorkersAIRunBinding,
 } from '../src/index';
 import { Database } from 'bun:sqlite';
+import { freezeTree } from '../src/utils/freeze';
 import { createMockFetch, testActorHandle, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql } from './helpers';
 
@@ -384,16 +385,20 @@ const CACHING_PROVIDERS: readonly ProviderCase[] = [
         baseURL: 'https://workers-ai.example/v1',
       },
     },
-    model: (deps) => createWorkersAIProvider({
-      async run(model, inputs, options) {
-        if (deps.fetch === undefined) throw new Error('the binding fixture needs its recording fetch');
+    model: (deps) => {
+      const binding: WorkersAIRunBinding = {
+        async run(model, inputs, options) {
+          if (deps.fetch === undefined) throw new Error('the binding fixture needs its recording fetch');
 
-        return deps.fetch('https://workers-ai.example/v1/chat/completions', {
-          method: 'POST', headers: options?.extraHeaders,
-          body: JSON.stringify({ model, ...inputs }),
-        });
-      },
-    }).createModel('@cf/moonshotai/kimi-k2.6', deps),
+          return deps.fetch('https://workers-ai.example/v1/chat/completions', {
+            method: 'POST', headers: options?.extraHeaders,
+            body: JSON.stringify({ model, ...inputs }),
+          });
+        },
+      };
+
+      return createWorkersAIProvider(binding).createModel('@cf/moonshotai/kimi-k2.6', deps);
+    },
   },
 ];
 
@@ -629,6 +634,52 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
 
     console.log(`cache-hit gate, per provider:\n${lines.join('\n')}`);
     console.log(`blind spots:\n${BLIND_SPOTS.map((s) => `- ${s}`).join('\n')}`);
+  });
+
+  test('a message edited between two calls goes out as edited; a frozen one is reused, never stale', async () => {
+    const entry = CACHING_PROVIDERS.find((each) => each.label === 'openai-compat');
+
+    if (entry === undefined) throw new Error('the openai-compat case is listed');
+    const sent: string[] = [];
+
+    const mock = createMockFetch([{
+      match: () => true,
+      respond: (req) => {
+        sent.push(JSON.stringify(viewOf(entry, req)));
+
+        return { status: 200, headers: { 'content-type': 'text/event-stream' }, body: sseFor(entry, 0, SILENT_USAGE) };
+      },
+    }]);
+
+    const model = entry.model(makeDeps(entry.credentials, mock.fetch));
+    const mutable: ModelMessage = { role: 'user', content: 'the first words' };
+    const frozen: ModelMessage = Object.freeze({ role: 'user', content: 'a settled question' });
+
+    await streamText({ model, messages: [frozen, mutable] }).consumeStream();
+    mutable.content = 'the second words';
+    await streamText({ model, messages: [frozen, mutable] }).consumeStream();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toContain('the first words');
+    expect(sent[1]).toContain('the second words');
+    expect(sent[1]).not.toContain('the first words');
+    expect(sent[1]).toContain('a settled question');
+
+    // A frozen tool input whose value comes from a function is data that can still change: it converts every time.
+    let current = 'before';
+    const input = Object.freeze({ toJSON: () => ({ value: current }) });
+    const called: ModelMessage = { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'probe', input }] };
+    const answered: ModelMessage = { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'probe', output: { type: 'text', value: 'done' } }] };
+    freezeTree({ value: called });
+    freezeTree({ value: answered });
+
+    await streamText({ model, messages: [frozen, called, answered] }).consumeStream();
+    current = 'after';
+    await streamText({ model, messages: [frozen, called, answered] }).consumeStream();
+
+    expect(sent[2]).toContain('before');
+    expect(sent[3]).toContain('after');
+    expect(sent[3]).not.toContain('before');
   });
 
   test('an Anthropic turn arms a warm whose request reads the prefix the turn cached', async () => {

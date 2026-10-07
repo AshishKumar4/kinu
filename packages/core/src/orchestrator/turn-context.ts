@@ -17,7 +17,7 @@ import type { CountableRequest, InputTokenCount } from '../providers/input-token
 import type { CompactionTrigger, ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
 import { ADMISSION_REFUSAL_MARK } from '../turn-failure';
-import { estimateTokens } from '../llm';
+import { estimateTokens } from '../token-estimate';
 
 export interface TurnContextInput {
   system: string;

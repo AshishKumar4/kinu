@@ -5,9 +5,9 @@ import { userCredentialSource } from './helpers/user-credentials';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { OAuthTokenError, refreshCloudflareCredential } from '@kinu.run/core';
-import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObject, type AuthRequest } from '@kinu.run/core';
+import { asFetchFunction, reasoningEffortOptions, type AuthRequest } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createDirectWorkersAIFetch } from '@kinu.run/core';
+import { bindingModel } from './helpers/workers-ai-model';
 import { requestUrl } from '@kinu.run/core';
 
 import { present } from '@kinu.run/test-utils';
@@ -33,24 +33,12 @@ function chatCompletionResponse(): Response {
 }
 
 test('configured effort reaches the native Workers AI binding through its SDK transport', async () => {
-  const inputs: JsonObject[] = [];
-
-  const binding = { async run(_model: string, input: JsonObject) {
-    inputs.push(input);
-
-    return chatCompletionResponse();
-  } };
-
-  // SAFETY: this constructed fixture provides Ai.run, and the adapter calls no other member of the binding.
-  const fetch = createDirectWorkersAIFetch(binding);
-
-  const model = createChatModel({ kind: 'openai-compat', name: 'workers-ai',
-    modelId: '@cf/moonshotai/kimi-k2.6', baseURL: 'https://fixture.invalid/v1', headers: {}, fetch });
+  const { model, runs } = bindingModel(() => chatCompletionResponse());
 
   await generateText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('high', 'workers-ai') });
-  expect(inputs[0]?.reasoning_effort).toBe('high');
-  expect(inputs[0]?.reasoningEffort).toBeUndefined();
-  expect(inputs[0]?.providerOptions).toBeUndefined();
+  expect(runs[0]?.inputs.reasoning_effort).toBe('high');
+  expect(runs[0]?.inputs.reasoningEffort).toBeUndefined();
+  expect(runs[0]?.inputs.providerOptions).toBeUndefined();
 });
 
 describe('Workers AI credential refresh', () => {
@@ -174,9 +162,12 @@ describe('Workers AI credential refresh', () => {
   test('a 401 that SURVIVES the refresh says what to do, not the word "Unauthorized"', async () => {
     // Cloudflare answers a rejected credential with plain-text `Unauthorized`, and `workers-ai.ts` supplies no
     // `mapError`, so the owner must get the actionable sentence instead of the raw body.
+    // Each read rotates the token, as a forced refresh does; Cloudflare refuses every one.
+    let issued = 0;
+
     const stub = userCredentialSource({
       getAuthHeaders: async (key: string) => (
-        key === 'cloudflare.oauth' ? { authorization: 'Bearer cf-dead' } : null
+        key === 'cloudflare.oauth' ? { authorization: `Bearer cf-dead-${String(++issued)}` } : null
       ),
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
       getCredentialBaseURL: async (key: string) => (key === 'cloudflare.oauth' ? ACCOUNT_BASE_URL : null),

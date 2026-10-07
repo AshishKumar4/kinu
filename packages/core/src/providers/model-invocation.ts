@@ -13,7 +13,6 @@ import {
 import type { Embedder } from '../memory/vector-store';
 import { normalizeUsage, type Usage } from '../usage';
 import { callAccountOf } from './quota';
-import { PROVIDER_STREAM_HEADER } from './rate-limit-retry';
 
 export type GenerateRequest = Parameters<typeof generateText>[0];
 
@@ -72,7 +71,7 @@ export async function* streamTextReported(
   let result;
 
   try {
-    result = streamText({ ...request, headers: { ...request.headers, [PROVIDER_STREAM_HEADER]: '1' } });
+    result = streamText(request);
 
     if (onPart === undefined) {
       for await (const chunk of result.textStream) yield chunk;

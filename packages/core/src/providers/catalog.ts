@@ -102,7 +102,6 @@ function createCatalogProvider(providerId: string): ModelProvider {
 
         const customFetch = createAuthedFetch(deps, {
           provider: providerId,
-          modelId,
           credKey,
           missingCredentialError: `No API key for ${providerId} (cred key: ${credKey})`,
           mutate: ({ url, auth, headers }) => {

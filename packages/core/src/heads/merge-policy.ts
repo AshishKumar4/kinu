@@ -50,7 +50,7 @@ export function headMergeLLM(deps: HeadMergePolicyDeps): MergeLLMFn {
       const { model, providerOptions } = deps.bindMergeModel(serving);
       const request: GenerateRequest = { model, prompt: `${prompt}\n\n${jsonObjectOnlyInstruction()}`, ...routeRetryOptions(serving) };
 
-      if (providerOptions !== undefined) request.providerOptions = providerOptions;
+      if (providerOptions !== undefined) request.providerOptions = { ...request.providerOptions, ...providerOptions };
       const spend = { source: HEAD_MERGE_SOURCE, report: deps.reportModelCall, operations: deps.operations } as const;
 
       return (await generateReported(request, { spend, spec: serving.model }, 'generate_json')).text;

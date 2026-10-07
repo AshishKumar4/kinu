@@ -7,7 +7,7 @@
 import { env } from 'cloudflare:test';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath, pageSchema, type JsonValue,
+  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath, pageSchema, positionPageSchema, workspaceSlug, type JsonValue,
 } from '@kinu.run/core';
 import { describe, expect, it, vi } from 'vitest';
 import * as v from 'valibot';
@@ -88,6 +88,10 @@ interface Pane {
   responseIds(): string[];
   transcriptsCarrying(text: string): number;
   rpc<T>(id: string, schema: v.GenericSchema<T>): Promise<T>;
+  /** Every frame heard, parsed, in arrival order. */
+  heard(): v.InferOutput<typeof FrameSchema>[];
+  /** Resolves once a frame `holds` has been heard. */
+  until(holds: (frame: v.InferOutput<typeof FrameSchema>) => boolean): Promise<void>;
   close(): void;
 }
 
@@ -103,6 +107,7 @@ async function openPane(path: string): Promise<Pane> {
   socket.accept();
 
   const frames: string[] = [];
+  const watchers: { readonly holds: (frame: v.InferOutput<typeof FrameSchema>) => boolean; readonly resolve: () => void }[] = [];
   const rpcs = new Map<string, PromiseWithResolvers<unknown>>();
   const turns = new Map<string, PromiseWithResolvers<void>>();
 
@@ -120,6 +125,13 @@ async function openPane(path: string): Promise<Pane> {
     const raw = v.is(v.string(), event.data) ? event.data : '';
     frames.push(raw);
     const frame = v.safeParse(FrameSchema, raw.startsWith('{') ? JSON.parse(raw) : {});
+
+    if (frame.success) {
+      for (const watcher of watchers.splice(0)) {
+        if (watcher.holds(frame.output)) watcher.resolve();
+        else watchers.push(watcher);
+      }
+    }
 
     if (!frame.success || frame.output.id === undefined) return;
 
@@ -162,6 +174,13 @@ async function openPane(path: string): Promise<Pane> {
       .flatMap((frame) => frame.id === undefined ? [] : [frame.id]),
     transcriptsCarrying: (text) => frames
       .filter((raw) => raw.includes(`"${CHAT_MESSAGE_TYPES.CHAT_MESSAGES}"`) && raw.includes(text)).length,
+    heard: parsed,
+    until: async (holds) => {
+      if (parsed().some(holds)) return;
+      const { promise, resolve } = Promise.withResolvers<void>();
+      watchers.push({ holds, resolve });
+      await promise;
+    },
     close: () => { socket.close(); },
   };
 }
@@ -398,6 +417,214 @@ describe('a hosted actor pane reads its own chat back from nothing', () => {
 
     expect((await env.PUBLIC_SURFACE.fetch(`${ORIGIN}${actorPath}/get-messages`)).status).toBe(404);
     await env.SURFACE_CONTROL.resetModelLog();
+  });
+});
+
+describe('what a page may call on its workspace', () => {
+  // A misplaced decorator once left the Work read uncallable from the page and made the egress recorder callable.
+  it('reads the overview and Work, and is refused the egress recorder and the scaffold runner', async () => {
+    const { rootPath } = await workspaceWithTwoChats('pool-page-callables');
+    const pane = await openPane(rootPath);
+    const answers: Record<string, string> = {};
+
+    const calls: ReadonlyArray<readonly [string, JsonValue[]]> = [
+      ['listWorkspaceWork', []], ['getWorkspaceGitHub', []], ['listWorkspaceAgents', []],
+      ['recordGitHubEgress', [[]]], ['runScaffoldOnce', ['probe task']],
+    ];
+
+    for (const [name, args] of calls) {
+      pane.send(rpcRequest(name, name, args));
+
+      try {
+        await pane.rpc(name, v.unknown());
+        answers[name] = 'answered';
+      } catch (error) {
+        answers[name] = String(error);
+      }
+    }
+
+    pane.close();
+    expect(answers).toEqual({
+      listWorkspaceWork: 'answered', getWorkspaceGitHub: 'answered', listWorkspaceAgents: 'answered',
+      recordGitHubEgress: expect.stringContaining('was refused'), runScaffoldOnce: expect.stringContaining('was refused'),
+    });
+  });
+});
+
+describe('a workspace created over REST with a role, a model and an effort', () => {
+  const StatusSchema = v.object({ status: v.looseObject({ roleId: v.string(), model: v.string(), reasoningEffort: v.nullish(v.string()) }) });
+
+  /** The create route's answer, refused or not, and what it said. */
+  const create = async (body: Record<string, string>): Promise<{ status: number; text: string }> => {
+    const response = await env.PUBLIC_SURFACE.fetch(`${ORIGIN}/api/user/workspaces`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+    return { status: response.status, text: await response.text() };
+  };
+
+  /** What the new workspace's own socket says it runs on, before any turn has run. */
+  const runsOn = async (name: string): Promise<{ roleId: string; model: string; effort: string | null; pinned: string | null }> => {
+    const pane = await openPane(`/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(name)}`);
+
+    pane.send(rpcRequest('status', 'getWorkspaceSnapshot', []));
+    const { status } = await pane.rpc('status', StatusSchema);
+    pane.send(rpcRequest('pinned', 'getStoredModelSpec', []));
+    const { spec } = await pane.rpc('pinned', v.object({ spec: v.nullable(v.string()) }));
+
+    pane.close();
+
+    return { roleId: status.roleId, model: status.model, effort: status.reasoningEffort ?? null, pinned: spec };
+  };
+
+  it('reaches the new workspace before its first turn, and a refused request leaves no workspace', async () => {
+    await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(FIXTURE_CREDENTIAL),
+    });
+
+    expect((await create({ name: 'pool-auditor', role: 'auditor', model: PINNED_MODEL, reasoningEffort: 'high' })).status).toBe(201);
+    expect(await runsOn('pool-auditor')).toEqual({ roleId: 'auditor', model: PINNED_MODEL, effort: 'high', pinned: PINNED_MODEL });
+
+    // One that names none, or the starting role, keeps the starting role and pins no model: it follows the account default.
+    expect((await create({ name: 'pool-plain', role: 'task' })).status).toBe(201);
+    expect(await runsOn('pool-plain')).toMatchObject({ roleId: 'task', pinned: null });
+
+    const unknownEffort = await create({ name: 'pool-ultra', reasoningEffort: 'ultra' });
+    const longName = await create({ name: 'a'.repeat(32) });
+
+    expect([unknownEffort.status, longName.status]).toEqual([400, 400]);
+    expect(longName.text).toContain('31');
+    expect((await create({ name: workspaceSlug(crypto.randomUUID()) })).status).toBe(201);
+
+    const roster = JSON.stringify(await publicJson('/api/user/workspaces', v.unknown()));
+
+    expect(roster).toContain('pool-auditor');
+    expect([roster.includes('pool-ultra'), roster.includes('a'.repeat(32))]).toEqual([false, false]);
+  });
+});
+
+describe('a chat longer than one page', () => {
+  const PageSchema = positionPageSchema(ChatHistoryEntrySchema);
+
+  /** Every id, oldest first, by `limit` at a time from the newest, and the pages it took. */
+  const walk = async (pane: Pane, id: string, limit: number, actor?: string): Promise<{ ids: string[]; pages: number }> => {
+    const ids: string[] = [];
+    let cursor: { before: number } | undefined;
+
+    for (let pages = 1; ; pages += 1) {
+      pane.send(rpcRequest(`${id}-${String(pages)}`, 'getChatHistoryPage', [{ ...(actor !== undefined && { actor }), limit, ...(cursor !== undefined && { cursor }) }]));
+      const page = await pane.rpc(`${id}-${String(pages)}`, PageSchema);
+      ids.unshift(...page.items.map((entry) => entry.id));
+
+      if (page.status === 'end') return { ids, pages };
+      cursor = page.next;
+    }
+  };
+
+  it('is read page by page to its first word, each word once, for the workspace and for each actor apart', async () => {
+    const { rootPath, actorName, actorPath } = await workspaceWithTwoChats('pool-paged-chat');
+    const window = await openPane(actorPath);
+
+    for (const marker of ['actor-second-word', 'actor-third-word']) {
+      window.send(chatRequest(marker, marker));
+      await window.settled(marker);
+    }
+
+    window.send(rpcRequest('own', 'getActorSnapshot', [actorName]));
+    const { actorId } = await window.rpc('own', v.object({ actorId: v.string() }));
+    window.send(rpcRequest('whole', 'getChatHistoryPage', [{ actor: actorId, limit: 40 }]));
+    const whole = (await window.rpc('whole', PageSchema)).items.map((entry) => entry.id);
+    const paged = await walk(window, 'walk', 2, actorId);
+
+    window.close();
+    expect(whole.length).toBeGreaterThanOrEqual(6);
+    expect(paged.ids).toEqual(whole);
+    expect(paged.pages).toBe(Math.ceil(whole.length / 2));
+
+    // The workspace's own pager walks its own chat the same way, and none of the actor's words.
+    const root = await openPane(rootPath);
+    root.send(rpcRequest('root-whole', 'getChatHistoryPage', [{ limit: 40 }]));
+    const rootWhole = (await root.rpc('root-whole', PageSchema)).items.map((entry) => entry.id);
+
+    expect((await walk(root, 'root-walk', 1)).ids).toEqual(rootWhole);
+    expect(rootWhole.some((id) => whole.includes(id))).toBe(false);
+
+    // An actor that never spoke is an empty chat, whose walk ends at once.
+    root.send(rpcRequest('quiet', 'createSubordinateAgent', []));
+    const quietName = (await root.rpc('quiet', CreatedActorSchema)).name;
+    root.send(rpcRequest('quiet-id', 'listSubordinates', []));
+    const quiet = (await root.rpc('quiet-id', v.array(v.object({ name: v.string(), actorId: v.nullable(v.string()) })))).find((row) => row.name === quietName);
+    root.send(rpcRequest('quiet-page', 'getChatHistoryPage', [{ actor: quiet?.actorId ?? '', limit: 10 }]));
+
+    expect(await root.rpc('quiet-page', PageSchema)).toMatchObject({ status: 'end', items: [] });
+    root.close();
+    await env.SURFACE_CONTROL.resetModelLog();
+  });
+});
+
+describe('a pane that joins a room while its turn is in a tool call', () => {
+  const ChunkSchema = v.looseObject({ type: v.string(), toolCallId: v.optional(v.string()) });
+
+  /** The tool-call chunks `stream` carried to `pane`, in order. */
+  const callChunks = (pane: Pane, stream: string): string[] => pane.heard().flatMap((frame) => {
+    if (frame.type !== CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE || frame.id !== stream || frame.body === undefined || frame.body === '') return [];
+    const chunk = v.safeParse(ChunkSchema, JSON.parse(frame.body));
+
+    return chunk.success && chunk.output.toolCallId !== undefined ? [chunk.output.type] : [];
+  });
+
+  /** The room at `path` runs a `-TOOL` turn parked after its call; a second pane joins, resumes, and hears it end. */
+  const joinMidCall = async (path: string, marker: string): Promise<{ chunks: string[]; ends: number }> => {
+    const sender = await openPane(path);
+
+    await env.SURFACE_CONTROL.holdParityModel('partial');
+
+    try {
+      sender.send(chatRequest(marker, `${marker}-TOOL`));
+      await env.SURFACE_CONTROL.parityParked();
+      const joiner = await openPane(path);
+
+      joiner.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_REQUEST }));
+      await joiner.until((frame) => frame.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING);
+      const stream = joiner.heard().find((frame) => frame.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING)?.id ?? '';
+
+      joiner.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: stream }));
+      await env.SURFACE_CONTROL.releaseParityModel();
+      await joiner.until((frame) => frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE && frame.id === stream && frame.done === true);
+      await sender.settled(marker);
+      const ends = joiner.heard().filter((frame) => frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE && frame.id === stream && frame.done === true).length;
+
+      joiner.close();
+      sender.close();
+
+      return { chunks: callChunks(joiner, stream), ends };
+    } finally {
+      await env.SURFACE_CONTROL.releaseParityModel();
+      await env.SURFACE_CONTROL.resetModelLog();
+    }
+  };
+
+  it('is told the call and hears the turn end once, in the workspace\'s room and in a hosted actor\'s alike', async () => {
+    const { rootPath, actorPath } = await workspaceWithTwoChats('pool-join-mid-call');
+    // The workspace's model, which its hosted actors answer on too.
+    const root = await openPane(rootPath);
+
+    root.send(rpcRequest('parity', 'setModel', ['openai-compat/probe-parity']));
+    await root.rpc('parity', SetModelSchema);
+    root.close();
+
+    for (const [path, marker] of [[rootPath, 'root-joined'], [actorPath, 'actor-joined']] as const) {
+      const joined = await joinMidCall(path, marker);
+
+      // The call's input, whether or not it was streamed in parts, then its one outcome, then the turn's one end.
+      const outcomes = joined.chunks.filter((chunk) => chunk.startsWith('tool-output-'));
+
+      expect(joined.chunks.filter((chunk) => chunk === 'tool-input-available')).toHaveLength(1);
+      expect(outcomes).toHaveLength(1);
+      expect(joined.chunks.at(-1)).toMatch(/^tool-output-(available|error)$/u);
+      expect(joined.chunks.indexOf('tool-input-available')).toBeLessThan(joined.chunks.length - 1);
+      expect(joined.ends).toBe(1);
+    }
   });
 });
 

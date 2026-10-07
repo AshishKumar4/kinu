@@ -1,9 +1,10 @@
 // models.dev catalog widening: a catalog provider with a stored `<id>.bearer` key resolves via
 // openai-compat, while bespoke static providers stay authoritative for their ids.
-import { describe, test, expect } from 'bun:test';
+import { afterEach, describe, test, expect, jest } from 'bun:test';
 import { generateText, jsonSchema, streamText, tool } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
+  asFetchFunction,
   createProviderRegistry,
   createModelsDevCatalogSource,
   catalogCredKey,
@@ -11,7 +12,8 @@ import {
   listModelsDevProviders,
   modelsDevCompatBaseURL,
   reasoningEffortOptions,
-  type ModelCallDeps, type AuthResolution, type ModelProvider,
+  silenceBoundMs,
+  type ModelCallDeps, type AuthResolution, type JsonObject, type ModelProvider,
 } from '../src/index';
 import { describeProviderError } from '../src/providers/util';
 import { getModelsDevModelEndpoint } from '../src/providers/models-dev';
@@ -110,9 +112,10 @@ describe('models.dev provider metadata', () => {
       },
     } } }]);
 
-    for (const model of ['messages', 'generated']) {
+    // An Anthropic SDK row speaks Messages at its provider's endpoint, as OpenCode Zen serves Claude at `/zen/v1/messages`.
+    for (const [model, protocol] of [['messages', 'messages'], ['generated', 'chat-completions']] as const) {
       expect(await getModelsDevModelEndpoint('mixed', model, { fetch: mock.fetch })).toEqual({
-        baseURL: 'https://mixed.test/v1', protocol: 'chat-completions', reasoning: false,
+        baseURL: 'https://mixed.test/v1', protocol, reasoning: false,
       });
     }
   });
@@ -214,19 +217,25 @@ describe('registry with dynamic catalog source', () => {
     return registry;
   }
 
-  test('a model SDK override selects Responses while its sibling stays on Chat Completions', async () => {
-    // models.dev: opencode's Muse entries override the SDK with @ai-sdk/openai, whose default is Responses.
+  test('a model SDK override selects Responses or Messages while its sibling stays on Chat Completions', async () => {
+    // models.dev: opencode's Muse entries override the SDK with @ai-sdk/openai, whose default is Responses, and zenmux's
+    // Claude rows with @ai-sdk/anthropic and an Anthropic endpoint (`zenmux/anthropic/claude-opus-4.7`, 2026-10-06).
     const mock = createMockFetch([
       { match: 'models.dev/api.json', respond: { status: 200, body: {
         mixed: {
           id: 'mixed', npm: '@ai-sdk/openai-compatible', api: 'https://mixed.test/v1',
           models: {
             response: { id: 'response', tool_call: true, provider: { npm: '@ai-sdk/openai', api: 'https://responses.test/v1' } },
+            claude: { id: 'claude', tool_call: true, provider: { npm: '@ai-sdk/anthropic', api: 'https://anthropic.test/v1' } },
             chat: { id: 'chat', tool_call: true },
           },
         },
       } } },
       { match: 'responses.test', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
+      { match: 'anthropic.test', respond: { status: 200, body: {
+        id: 'msg_1', type: 'message', role: 'assistant', model: 'claude', stop_reason: 'end_turn', stop_sequence: null,
+        content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 },
+      } } },
       { match: 'mixed.test', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
 
@@ -235,19 +244,22 @@ describe('registry with dynamic catalog source', () => {
     const responseModel = registry.resolve('mixed/response', deps);
 
     await call(responseModel);
+    await call(registry.resolve('mixed/claude', deps));
     await call(registry.resolve('mixed/chat', deps));
     deps.getAuth = async () => ({ headers: { Authorization: 'Bearer rotated-key' }, baseURL: 'https://responses.test/custom' });
     await call(responseModel);
 
     const requests = mock.requests.filter((request) => !request.url.includes('models.dev'));
     expect(requests.map((request) => request.url)).toEqual([
-      'https://responses.test/v1/responses', 'https://mixed.test/v1/chat/completions', 'https://responses.test/custom/responses',
+      'https://responses.test/v1/responses', 'https://anthropic.test/v1/messages', 'https://mixed.test/v1/chat/completions',
+      'https://responses.test/custom/responses',
     ]);
     expect(requests.map((request) => request.headers.authorization)).toEqual([
-      'Bearer first-key', 'Bearer first-key', 'Bearer rotated-key',
+      'Bearer first-key', 'Bearer first-key', 'Bearer first-key', 'Bearer rotated-key',
     ]);
     expect(JSON.parse(requests[0]?.body ?? '{}')).toMatchObject({ model: 'response', input: expect.any(Array) });
-    expect(JSON.parse(requests[1]?.body ?? '{}')).toMatchObject({ model: 'chat', messages: expect.any(Array) });
+    expect(JSON.parse(requests[1]?.body ?? '{}')).toMatchObject({ model: 'claude', max_tokens: expect.any(Number) });
+    expect(JSON.parse(requests[2]?.body ?? '{}')).toMatchObject({ model: 'chat', messages: expect.any(Array) });
   });
 
   test('provider SDK defaults select Responses and an explicit model override selects Chat Completions', async () => {
@@ -433,5 +445,61 @@ describe('registry with dynamic catalog source', () => {
     }
 
     expect(detail).toContain('models.dev');
+  });
+});
+
+describe('a catalog model whose models.dev read lands inside its first call', () => {
+  afterEach(() => { jest.useRealTimers(); });
+
+  test('the inference stream, not the catalog read, reports keepalives to the silence bound', async () => {
+    jest.useFakeTimers();
+    const encoder = new TextEncoder();
+    let pulls = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
+    const body = new ReadableStream<Uint8Array>({ pull(controller) { pulls.resolve(controller); } }, { highWaterMark: 0 });
+
+    const next = async (): Promise<ReadableStreamDefaultController<Uint8Array>> => {
+      const controller = await pulls.promise;
+
+      pulls = Promise.withResolvers();
+
+      return controller;
+    };
+
+    const asked: string[] = [];
+
+    // A fetch of its own: the catalog cache is cold, so the model resolves its endpoint inside the attempt.
+    const fetchFn = asFetchFunction(async (input) => {
+      const url = input instanceof Request ? input.url : input.toString();
+
+      asked.push(url.includes('models.dev') ? 'models.dev' : 'inference');
+
+      return url.includes('models.dev')
+        ? Response.json({ thinking: { id: 'thinking', npm: '@ai-sdk/openai-compatible', api: 'https://thinking.test/v1', models: { m: { id: 'm', tool_call: true } } } })
+        : new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+    });
+
+    const registry = createProviderRegistry();
+
+    registry.registerDynamic(createModelsDevCatalogSource());
+    const deps = makeDeps({ 'thinking.bearer': { headers: { Authorization: 'Bearer key' } } }, fetchFn);
+    const result = streamText({ model: registry.resolve('thinking/m', deps), prompt: 'hello', maxRetries: 0 });
+    const IDLE_MS = silenceBoundMs('provider.stream.idle_ms');
+
+    for (let comment = 0; comment < 3; comment++) {
+      const controller = await next();
+
+      for (let turn = 0; turn < 100; turn++) await Promise.resolve();
+      jest.advanceTimersByTime(IDLE_MS - 1);
+      controller.enqueue(encoder.encode(': OPENROUTER PROCESSING\n\n'));
+    }
+
+    const frame = (event: JsonObject) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+
+    (await next()).enqueue(frame({ choices: [{ delta: { content: 'thought it through' } }] }));
+    (await next()).enqueue(frame({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } }));
+    (await next()).enqueue(encoder.encode('data: [DONE]\n\n'));
+    (await next()).close();
+
+    expect({ text: await result.text, asked }).toEqual({ text: 'thought it through', asked: ['models.dev', 'inference'] });
   });
 });

@@ -117,6 +117,17 @@ export interface WorkersAIBinding {
   };
 }
 
+export interface WorkersAIRunOptions {
+  signal?: AbortSignal;
+  extraHeaders?: Record<string, string>;
+  returnRawResponse?: boolean;
+}
+
+/** Structural `env.AI.run`. The answer's shape depends on binding state a concurrent call also writes, so every arm is reachable. */
+export interface WorkersAIRunBinding {
+  run(model: string, inputs: JsonObject, options?: WorkersAIRunOptions): Promise<Response | ReadableStream<Uint8Array> | JsonObject>;
+}
+
 /** Structurally compatible with wrangler-generated `Env` types. */
 export interface ProviderEnv {
   AI?: WorkersAIBinding;
@@ -171,6 +182,12 @@ export interface ModelProvider {
   listModels(deps: ProviderDeps): Promise<ModelInfo[]> | ModelInfo[];
 
   createModel(modelId: string, deps: ModelCallDeps): LanguageModel;
+
+  /** Where a model's waits are shared, beside its account; the provider by default. */
+  laneOf?(modelId: string): string;
+
+  /** Its wire streams every call, a generate included, so the stack collects a generate from the stream. */
+  readonly streamsGenerate?: boolean;
 
   /** Pre-request token count via the provider's documented endpoint; absent means none.
    *  Report `unsupported` rather than drop an unrepresentable part. */

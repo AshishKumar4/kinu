@@ -1,0 +1,259 @@
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994ea507ca22 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -46,6 +46,24 @@ function apiCallErrorFromResponse(response, errorBody, context) {
+ 		responseBody: errorBody
+ 	});
+ }
++/**
++* The binding is asked for its raw response so a refusal keeps its HTTP status, Retry-After and body, as on
++* REST. `Ai.run` keeps its options on the shared binding and rereads `returnRawResponse` after awaiting the
++* upstream, so a concurrent caller's options can still hand back a stream or a parsed object.
++*/
++async function bindingResponse(output, context) {
++	if (!(output instanceof Response)) return output;
++	if (!output.ok) throw apiCallErrorFromResponse(output, await output.text(), {
++		url: `workers-ai:binding/run/${context.model}`,
++		requestBodyValues: context.requestBodyValues
++	});
++	const contentType = output.headers.get("content-type") ?? "";
++	return output.body && !contentType.includes("json") ? output.body : await output.json();
++}
++async function bindingAnswer(output, context) {
++	const answer = await bindingResponse(output, context);
++	return answer instanceof ReadableStream ? await new Response(answer).json() : answer;
++}
+ //#endregion
+ //#region src/utils.ts
+ /**
+@@ -555,7 +573,7 @@ function mapWorkersAIUsage(output) {
+ 			cacheRead: cachedTokens,
+ 			cacheWrite: void 0
+ 		},
+-		raw: { total: promptTokens + completionTokens }
++		raw: output.usage ?? { total: promptTokens + completionTokens }
+ 	};
+ }
+ //#endregion
+@@ -653,7 +671,7 @@ function isNullFinalizationChunk(tc) {
+ * 1. Native format:  { response: "chunk", tool_calls: [...] }
+ * 2. OpenAI format:  { choices: [{ delta: { content: "chunk" } }] }
+ */
+-function getMappedStream(response, salvageContext) {
++function getMappedStream(response, salvageContext, includeRawChunks = false) {
+ 	const rawStream = response instanceof ReadableStream ? response : response.body;
+ 	if (!rawStream) throw new Error("No readable stream available for SSE parsing.");
+ 	const knownToolNames = getToolNames(salvageContext?.tools);
+@@ -679,21 +697,37 @@ function getMappedStream(response, salvageContext) {
+ 	let finishReason = null;
+ 	let receivedDone = false;
+ 	let receivedAnyData = false;
++	let finished = false;
+ 	const activeToolCalls = /* @__PURE__ */ new Map();
+ 	const closedToolCalls = /* @__PURE__ */ new Set();
+ 	let lastActiveToolIndex = null;
+ 	return rawStream.pipeThrough(new SSEDecoder()).pipeThrough(new TransformStream({
+ 		transform(data, controller) {
+-			if (!data || data === "[DONE]") {
+-				if (data === "[DONE]") receivedDone = true;
++			if (!data || finished) return;
++			if (data === "[DONE]") {
++				receivedDone = true;
++				finish(controller);
++				controller.terminate();
+ 				return;
+ 			}
+ 			receivedAnyData = true;
+ 			let chunk;
+ 			try {
+ 				chunk = JSON.parse(data);
+-			} catch {
+-				console.warn("[workers-ai-provider] failed to parse SSE event:", data);
++			} catch {}
++			if (includeRawChunks) controller.enqueue({
++				type: "raw",
++				rawValue: chunk ?? data
++			});
++			if (chunk === null || typeof chunk !== "object" || Array.isArray(chunk)) {
++				finishReason = {
++					unified: "error",
++					raw: void 0
++				};
++				controller.enqueue({
++					type: "error",
++					error: new Error(`Workers AI streamed an event that is not a JSON object: ${data}`)
++				});
+ 				return;
+ 			}
+ 			if (chunk.usage) usage = mapWorkersAIUsage(chunk);
+@@ -792,6 +826,12 @@ function getMappedStream(response, salvageContext) {
+ 			}
+ 		},
+ 		flush(controller) {
++			finish(controller);
++		}
++	}));
++	function finish(controller) {
++			if (finished) return;
++			finished = true;
+ 			for (const [idx] of activeToolCalls) {
+ 				if (closedToolCalls.has(idx)) continue;
+ 				closeToolCall(idx, controller);
+@@ -859,23 +899,34 @@ function getMappedStream(response, salvageContext) {
+ 				type: "text-end",
+ 				id: textId
+ 			});
++			if (!salvagedToolCalls && !receivedDone && !finishReason) controller.enqueue({
++				type: "error",
++				error: new APICallError({
++					message: receivedAnyData ? "Workers AI's stream ended before [DONE] or a finish reason" : "Workers AI answered with no stream events",
++					url: "workers-ai",
++					requestBodyValues: void 0,
++					isRetryable: true
++				})
++			});
+ 			const effectiveFinishReason = salvagedToolCalls ? {
+ 				unified: "tool-calls",
+ 				raw: "stop"
+-			} : !receivedDone && receivedAnyData && !finishReason ? {
++			} : !receivedDone && !finishReason ? {
+ 				unified: "error",
+ 				raw: "stream-truncated"
+-			} : finishReason ?? {
++			} : finishReason ?? (activeToolCalls.size > 0 ? {
++				unified: "tool-calls",
++				raw: void 0
++			} : {
+ 				unified: "stop",
+ 				raw: "stop"
+-			};
++			});
+ 			controller.enqueue({
+ 				finishReason: effectiveFinishReason,
+ 				type: "finish",
+ 				usage
+ 			});
+-		}
+-	}));
++	}
+ 	/**
+ 	* Emit tool-input-end + tool-call for a tool call that is complete.
+ 	*/
+@@ -914,13 +965,13 @@ function getMappedStream(response, salvageContext) {
+ 				if (lastActiveToolIndex != null) closeToolCall(lastActiveToolIndex, controller);
+ 				continue;
+ 			}
+-			const tcIndex = tc.index ?? 0;
+ 			const fn = tc.function;
+ 			const tcName = fn?.name ?? tc.name ?? null;
++			const tcIndex = tc.index ?? (tcName ? activeToolCalls.size : lastActiveToolIndex ?? 0);
+ 			const tcArgs = fn?.arguments ?? tc.arguments ?? null;
+ 			const tcId = tc.id;
+ 			if (!activeToolCalls.has(tcIndex)) {
+-				if (lastActiveToolIndex != null && lastActiveToolIndex !== tcIndex) closeToolCall(lastActiveToolIndex, controller);
++				if (tc.index == null && lastActiveToolIndex != null && lastActiveToolIndex !== tcIndex) closeToolCall(lastActiveToolIndex, controller);
+ 				const id = createAISDKToolCallId(tcId);
+ 				const toolName = tcName || "";
+ 				activeToolCalls.set(tcIndex, {
+@@ -1201,10 +1252,10 @@ var WorkersAIChatLanguageModel = class {
+ 	* option, then settings.
+ 	*/
+ 	buildRunInputs(args, messages, options) {
+-		const rawPerCall = options?.providerOptions?.["workers-ai"];
++		const rawPerCall = options?.providerOptions?.["workers-ai"] ?? options?.providerOptions?.workersAi;
+ 		const perCall = rawPerCall !== null && typeof rawPerCall === "object" && !Array.isArray(rawPerCall) ? rawPerCall : {};
+ 		const unifiedReasoningEffort = mapUnifiedReasoningEffort(options?.reasoning);
+-		const reasoningEffort = "reasoning_effort" in perCall ? perCall.reasoning_effort : unifiedReasoningEffort !== void 0 ? unifiedReasoningEffort : this.settings.reasoning_effort;
++		const reasoningEffort = "reasoning_effort" in perCall ? perCall.reasoning_effort : "reasoningEffort" in perCall ? perCall.reasoningEffort : unifiedReasoningEffort !== void 0 ? unifiedReasoningEffort : this.settings.reasoning_effort;
+ 		const chatTemplateKwargs = "chat_template_kwargs" in perCall ? perCall.chat_template_kwargs : this.settings.chat_template_kwargs;
+ 		return {
+ 			max_tokens: args.max_tokens,
+@@ -1214,7 +1265,10 @@ var WorkersAIChatLanguageModel = class {
+ 			...args.tool_choice ? { tool_choice: args.tool_choice } : {},
+ 			top_p: args.top_p,
+ 			...args.response_format ? { response_format: args.response_format } : {},
+-			...options?.stream ? { stream: true } : {},
++			...options?.stream ? {
++				stream: true,
++				stream_options: { include_usage: true }
++			} : {},
+ 			...reasoningEffort !== void 0 ? { reasoning_effort: reasoningEffort } : {},
+ 			...chatTemplateKwargs !== void 0 ? { chat_template_kwargs: chatTemplateKwargs } : {}
+ 		};
+@@ -1226,15 +1280,17 @@ var WorkersAIChatLanguageModel = class {
+ 	* here — they belong on the `inputs` object (see `buildRunInputs`), not on
+ 	* the `options` (3rd) arg of binding.run() or the REST query string.
+ 	*/
+-	getRunOptions() {
++	getRunOptions(callHeaders) {
+ 		const { gateway, safePrompt: _safePrompt, sessionAffinity, extraHeaders, reasoning_effort: _reasoningEffort, chat_template_kwargs: _chatTemplateKwargs, ...passthroughOptions } = this.settings;
+ 		const mergedHeaders = {
+ 			...extraHeaders && typeof extraHeaders === "object" ? extraHeaders : {},
+-			...sessionAffinity ? { "x-session-affinity": sessionAffinity } : {}
++			...sessionAffinity ? { "x-session-affinity": sessionAffinity } : {},
++			...Object.fromEntries(Object.entries(callHeaders ?? {}).filter(([, value]) => value !== void 0))
+ 		};
+ 		return {
+ 			gateway: this.config.gateway ?? gateway,
+ 			...Object.keys(mergedHeaders).length > 0 ? { extraHeaders: mergedHeaders } : {},
++			...this.config.isBinding ? { returnRawResponse: true } : {},
+ 			...passthroughOptions
+ 		};
+ 	}
+@@ -1267,6 +1323,9 @@ var WorkersAIChatLanguageModel = class {
+ 			finishReason: salvaged ? {
+ 				unified: "tool-calls",
+ 				raw: "stop"
++			} : toolCalls.length > 0 && (choices?.[0]?.finish_reason ?? outputRecord.finish_reason) == null ? {
++				unified: "tool-calls",
++				raw: void 0
+ 			} : mapWorkersAIFinishReason(outputRecord)
+ 		};
+ 	}
+@@ -1277,7 +1336,7 @@ var WorkersAIChatLanguageModel = class {
+ 			providerOptions: options.providerOptions,
+ 			reasoning: options.reasoning
+ 		});
+-		const runOptions = this.getRunOptions();
++		const runOptions = this.getRunOptions(options.headers);
+ 		let output;
+ 		try {
+ 			output = await this.config.binding.run(args.model, inputs, {
+@@ -1290,7 +1349,10 @@ var WorkersAIChatLanguageModel = class {
+ 				requestBodyValues: inputs
+ 			});
+ 		}
+-		if (output instanceof ReadableStream) throw new Error("Unexpected streaming response from non-streaming request. Check that `stream: true` was not passed.");
++		output = await bindingAnswer(output, {
++			model: args.model,
++			requestBodyValues: inputs
++		});
+ 		const outputRecord = output;
+ 		const { reasoningContent, text, toolCalls, finishReason } = this.extractContent(outputRecord, args, warnings);
+ 		return {
+@@ -1318,7 +1380,7 @@ var WorkersAIChatLanguageModel = class {
+ 			providerOptions: options.providerOptions,
+ 			reasoning: options.reasoning
+ 		});
+-		const runOptions = this.getRunOptions();
++		const runOptions = this.getRunOptions(options.headers);
+ 		let response;
+ 		try {
+ 			response = await this.config.binding.run(args.model, inputs, {
+@@ -1331,10 +1393,14 @@ var WorkersAIChatLanguageModel = class {
+ 				requestBodyValues: inputs
+ 			});
+ 		}
++		response = await bindingResponse(response, {
++			model: args.model,
++			requestBodyValues: inputs
++		});
+ 		if (response instanceof ReadableStream) return { stream: prependStreamStart(getMappedStream(response, {
+ 			tools: args.tools,
+ 			toolChoice: args.tool_choice
+-		}), warnings) };
++		}, options.includeRawChunks), warnings) };
+ 		const outputRecord = response;
+ 		const { reasoningContent, text, toolCalls, finishReason } = this.extractContent(outputRecord, args, warnings);
+ 		let textId = null;

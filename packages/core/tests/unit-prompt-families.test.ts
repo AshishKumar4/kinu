@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { buildSystemPromptSync, type SystemPromptOptions } from '../src/prompt';
-import { estimateTokens } from '../src/llm';
+import { estimateTokens } from '../src/token-estimate';
 import { BUILTIN_ROLE_DEFINITIONS } from '../src/profiles/catalog';
 import { resolvePromptModelProfile, type PromptModelContext, type PromptModelFamily } from '../src/prompting/model-profile';
 import { LEAD_BRIEF, OPERATING_GUIDANCE, PROMPT_SECTIONS, promptFamilyDelta } from '../src/prompting/section-templates';

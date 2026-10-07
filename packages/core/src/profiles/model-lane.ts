@@ -7,7 +7,7 @@ import { credentialOrUnknown, FallbackRoute, type CallFailure } from '../provide
 import { reasoningEffortOptions, type ProviderOptions, type ReasoningEffort } from '../providers/effort';
 import { generateReported, type GenerateRequest } from '../providers/model-invocation';
 import type { ModelCallSpend } from '../events/model-call';
-import { PROVIDER_RETRIES_HEADER } from '../providers/rate-limit-retry';
+import { callRetries } from '../providers/middleware/retry';
 import { formatModelSpec, parseModelSpec } from '../providers/types';
 import { describeProviderError, OWNER_FIXABLE_REFUSALS, providerRefusalCode, toProviderError } from '../providers/util';
 import type { LLM } from '../types/primitives';
@@ -67,15 +67,15 @@ function asCalled(spec: string, credentialOf: RouteCallComponents['credentialOf'
   }));
 }
 
-/** The route's retry allowance, at the SDK and at the transport. */
+/** The route's retry allowance, spent by the model's stack; the SDK retries nothing on top. */
 export function routeRetryOptions(call: Pick<ModelRouteResolution, 'retries'>) {
-  return { maxRetries: call.retries, headers: { [PROVIDER_RETRIES_HEADER]: String(call.retries) } };
+  return { maxRetries: 0, providerOptions: callRetries(call.retries) };
 }
 
 export function routedCallOptions(call: Pick<ModelRouteResolution, 'reasoningEffort' | 'retries'>, spec: string) {
-  const providerOptions = reasoningEffortOptions(call.reasoningEffort, parseModelSpec(spec).provider);
+  const effort = reasoningEffortOptions(call.reasoningEffort, parseModelSpec(spec).provider);
 
-  return { ...routeRetryOptions(call), ...(providerOptions !== undefined && { providerOptions }) };
+  return { maxRetries: 0, providerOptions: { ...effort, ...callRetries(call.retries) } };
 }
 
 /** One routed call as an {@link LLM}, billed under the route's source once it completes. */
@@ -86,7 +86,7 @@ export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, s
       const { model, providerOptions } = bind(route);
       const request: GenerateRequest = { model, prompt, ...routeRetryOptions(route) };
 
-      if (providerOptions !== undefined) request.providerOptions = providerOptions;
+      if (providerOptions !== undefined) request.providerOptions = { ...request.providerOptions, ...providerOptions };
 
       if (system !== undefined) request.system = system;
 

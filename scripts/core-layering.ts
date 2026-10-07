@@ -42,7 +42,7 @@ export const LAYERS: ReadonlyMap<string, 0 | 1 | 2> = new Map<string, 0 | 1 | 2>
   ['tools', 1], ['craft', 1], ['web', 1],
   // Root files, by name: the six primitives and their accounting are platform,
   // the loop's assembly is harness. A root file absent here is harness.
-  ['platform-catalog.ts', 0], ['usage.ts', 0], ['llm.ts', 0], ['config.ts', 0], ['cloud-wire.ts', 0],
+  ['platform-catalog.ts', 0], ['usage.ts', 0], ['llm.ts', 0], ['token-estimate.ts', 0], ['config.ts', 0], ['cloud-wire.ts', 0],
   ['context-budget.ts', 0], ['context-meter.ts', 0], ['context-window.ts', 0], ['turn-failure.ts', 0],
   ['mission-budget.ts', 0],
 ]);

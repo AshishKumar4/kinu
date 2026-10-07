@@ -870,8 +870,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await awaitSleepTimeSettled(recording, workspace, 21);
     await awaitSettled(target);
 
-    // A lost binding call is retried by its owed effect inside the window: a fixture fault, never a cost.
-    const lost = recording.of(workspace).filter((event) => event.event === 'workers_ai.direct_call_failed');
+    // A lost binding call fails the sleep-time pass, retried by its owed effect inside the window: a fixture fault, never a cost.
+    const lost = recording.of(workspace).filter((event) => event.event === 'memory.fact_compression_failed');
 
     if (lost.length > 0) throw new Error(`long cost: the AI binding lost ${String(lost.length)} call(s): ${lost[0]?.cause ?? ''}`);
 

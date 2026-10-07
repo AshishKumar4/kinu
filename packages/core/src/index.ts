@@ -396,11 +396,10 @@ export {
   type OverflowRecoveryDecision,
 } from './turn-failure';
 
-export {
-  createVercelAILLM, createChatModel, estimateTokens,
-  // Surfaces import this instead of retyping the number.
-  CHARS_PER_TOKEN,
-} from './llm';
+export { createVercelAILLM, createChatModel } from './llm';
+
+// Surfaces import this instead of retyping the number.
+export { CHARS_PER_TOKEN, estimateTokens } from './token-estimate';
 
 export type { LLMProviderConfig, ChatModelConfig } from './llm';
 
@@ -2235,7 +2234,9 @@ export {
 
 export { createWorkersAIProvider } from './providers/workers-ai-provider';
 
-export { createWireModel } from './providers/wire-model';
+export { createWireModel, deferredModel, sdkWire, withModelStack, type WireProtocol } from './providers/wire-model';
+
+export { callRetries } from './providers/middleware/retry';
 
 export {
   type AnyToolPart,

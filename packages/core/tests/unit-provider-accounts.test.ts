@@ -1,13 +1,17 @@
 // Accounts: `<base>@<name>` keys, the bare key is `main`, and every call spends one account.
 import { describe, expect, test } from 'bun:test';
+import { generateText } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
   accountCredentialKey,
   ANTHROPIC_BASE_URL,
   asFetchFunction,
   catalogProviderOfKey,
+  callRetries,
   createAnthropicProvider,
+  createChatModel,
   createCodexProvider,
+  createNamedEndpointSource,
   createOpenAICompatProvider,
   createProviderRegistry,
   quotaWindowText,
@@ -16,7 +20,6 @@ import {
   formatModelSpec,
   isModelInferenceCredentialKey,
   isProxyDeniedCredentialKey,
-  openAICompatNameOf,
   parseModelSpec,
   providerProxyBaseURL,
   storedAccounts,
@@ -107,7 +110,8 @@ describe('account credential keys', () => {
     expect(await providerProxyBaseURL('anthropic.bearer@work', { fetch })).toBe(ANTHROPIC_BASE_URL);
     expect(catalogProviderOfKey('groq.bearer@work')).toBe('groq');
     expect(catalogProviderOfKey('github@work')).toBeNull();
-    expect(openAICompatNameOf('openai-compat.box@work')).toBe('box');
+    expect(await createNamedEndpointSource().listIds({ env: {}, getAuth: async () => null, hasCredential: async () => true, listCredentialKeys: async () => ['openai-compat.box@work'] }))
+      .toEqual(['openai-compat:box']);
   });
 });
 
@@ -161,6 +165,39 @@ describe('which account a call spends', () => {
     expect(await registryWith(['alpha.bearer', 'alpha.bearer@work'], () => 'work').spend('alpha/m')).toBe('alpha.bearer@work');
     expect(await registryWith(['alpha.bearer', 'alpha.bearer@work']).spend('alpha/m')).toBe('alpha.bearer');
     expect(await registryWith(['alpha.bearer@work']).spend('alpha/m')).toBe('alpha.bearer@work');
+  });
+
+  test('two spellings of one stored login share the Retry-After its provider declared', async () => {
+    const KEYED = 'lanes.bearer';
+    let sent = 0;
+
+    const fetch = asFetchFunction(async () => {
+      sent += 1;
+
+      return new Response('limited', { status: 429, headers: { 'retry-after': '30' } });
+    });
+
+    const registry = createProviderRegistry();
+
+    registry.register({
+      id: 'lanes', credentialKey: KEYED, isAvailable: () => true, listModels: () => [],
+      createModel: (modelId) => createChatModel({ kind: 'openai-compat', name: 'lanes', baseURL: 'https://lanes.invalid/v1', headers: {}, modelId, fetch }),
+    });
+
+    // Only `work` is stored, so `lanes/m` bills it as surely as `lanes@work/m` does.
+    const stored = [accountCredentialKey(KEYED, 'work')];
+
+    const deps: ModelCallDeps = {
+      env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null,
+      hasCredential: async (key) => stored.includes(key), listCredentialKeys: async () => [...stored],
+    };
+
+    const call = (spec: string) => Promise.allSettled([generateText({ model: registry.resolve(spec, deps), prompt: 'hi', maxRetries: 0, providerOptions: callRetries(0) })]);
+
+    await call('lanes/m');
+    const [parked] = await call('lanes@work/m');
+
+    expect({ sent, parked: parked.status === 'rejected' && String(parked.reason).includes('rate-limiting this account') }).toEqual({ sent: 1, parked: true });
   });
 
   test('the spec\'s own account wins over the caller\'s choice', async () => {

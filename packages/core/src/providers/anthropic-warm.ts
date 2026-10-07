@@ -28,7 +28,6 @@ export async function warmAnthropicCache(input: {
 }): Promise<{ usage: Usage; account?: CallAccount | undefined }> {
   const authedFetch = createAuthedFetch(input.deps, {
     provider: input.providerId,
-    modelId: input.modelId,
     credKey: input.credKey,
     missingCredentialError: input.missingCredentialError,
   });
