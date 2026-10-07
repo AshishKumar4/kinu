@@ -50,7 +50,7 @@ export const JsonValueSchema = v.custom<JsonValue>(function json(input): boolean
   if (Array.isArray(input)) return input.every(json);
 
   return typeof input === 'object' && Object.values(input).every(json);
-}, 'Invalid JSON value');
+}, (issue) => `Invalid JSON value: Received ${issue.received}`);
 
 export const JsonObjectSchema = v.record(StringSchema, JsonValueSchema);
 
