@@ -11,7 +11,6 @@ import { extractJsonObject } from '../providers/structured';
 import { renderIssues } from '../utils/json';
 import { renderThrownChain, type Logger } from '../obs/index';
 import { settleSync } from '../obs/effect';
-import { estimateTokens } from '../token-estimate';
 import { sha256Hex } from '../safety/argument-digest';
 import {
   BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, isTreeAdvance,
@@ -229,9 +228,6 @@ export function branchPrompt(input: {
   });
 }
 
-/** Window share at which the *Inherited context* compaction ladder may run; a caching judgement. */
-const CONTEXT_COMPACTION_THRESHOLD = 0.85;
-
 /** The model's identifier for the window lookup; an empty spec resolves to the default window. */
 export function modelSpecOf(model: LanguageModel): string {
   const asSpec = v.safeParse(v.string(), model);
@@ -257,10 +253,9 @@ export interface SharedPrefixBasis {
 }
 
 /**
- * The *Inherited context* barrier: the one prefix every child of this parent inherits.
- * Verbatim below the threshold so siblings share a cacheable prefix; above it, compacted
- * once and cached on the parent so siblings compare on an identical view. With no ladder
- * the prefix is handed over whole and the absence is reported.
+ * The *Inherited context* barrier: the one prefix every child of this parent inherits. The ladder prices it for the
+ * children's model and compacts it only past its trigger, once, cached on the parent so siblings compare on an
+ * identical, cacheable view. With no ladder the prefix is handed over whole and the absence is reported.
  */
 export async function sharedPrefix(input: {
   readonly target: SharedPrefixTarget;
@@ -274,41 +269,27 @@ export async function sharedPrefix(input: {
 
   if (parent.compacted) return parent.compacted;
 
-  if (parent.transcript.length === 0) return parent.transcript;
-
-  const chars = parent.transcript.reduce(
-    (total, message) => total + JSON.stringify(message.content).length, 0,
-  );
-
   const { model, window } = input.target;
 
-  if (window === null) return parent.transcript;
-  const room = window * CONTEXT_COMPACTION_THRESHOLD;
-
-  if (estimateTokens(chars) < room) return parent.transcript;
+  if (parent.transcript.length === 0 || window === null) return parent.transcript;
 
   if (!input.compactShared) {
-    input.log.event('swarm.compaction_absent', {
-      preset: input.preset, node: parent.id, depth: parent.depth,
-      estimated_tokens: estimateTokens(chars), threshold: Math.round(room),
-    });
+    input.log.event('swarm.compaction_absent', { preset: input.preset, node: parent.id, depth: parent.depth });
 
     return parent.transcript;
   }
 
-  // Keyed by the branch point's durable id so a re-entered search replays byte-stably;
-      // the window is the one the threshold measured against.
-  const shared = await input.compactShared(parent.transcript, {
-    model,
-    contextWindow: window,
-    key: `swarm:${parent.id}`,
-  });
+  // Keyed by the branch point's durable id so a re-entered search replays byte-stably.
+  const shared = await input.compactShared(parent.transcript, { model, contextWindow: window, key: `swarm:${parent.id}` });
 
   parent.compacted = shared;
-  input.log.event('swarm.context_compacted', {
-    preset: input.preset, node: parent.id, depth: parent.depth,
-    before: parent.transcript.length, after: shared.length,
-  });
+
+  if (shared !== parent.transcript) {
+    input.log.event('swarm.context_compacted', {
+      preset: input.preset, node: parent.id, depth: parent.depth,
+      before: parent.transcript.length, after: shared.length,
+    });
+  }
 
   return shared;
 }

@@ -1,7 +1,7 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * `runSwarmAction` is the only production constructor of `SwarmRunDeps`, so a fork parent past the
- * compaction threshold must arrive compacted through it. The compactor is a spy: this pins wiring only.
+ * `runSwarmAction` is the only production constructor of `SwarmRunDeps`, so a fork parent the compactor folds must
+ * arrive compacted through it. The compactor is a spy: this pins wiring only.
  */
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
@@ -123,7 +123,8 @@ describe('compactShared wiring through runSwarmAction', () => {
       // Without the barrier's compactor the grandchild request is refused at admission.
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), {
         originContext: async () => origin,
-        compactShared: async () => [{ role: 'user' as const, content: MARKER }],
+        // As the ladder does, it compacts only a prefix past its trigger: the bulk, never the short origin.
+        compactShared: async (messages) => (JSON.stringify(messages).includes(BULK.slice(0, 64)) ? [{ role: 'user' as const, content: MARKER }] : messages),
       }),
     });
 
