@@ -1,11 +1,12 @@
 /**
  * The once-only lifecycle of one settled response: claim, run what it owes ({@link TerminalEffectLedger}),
  * close when nothing is owed, hand an interrupted one to the next activation. Backend-neutral; a backend
- * supplies only effect implementations and the wake.
+ * supplies only effect implementations, the wake and what keeps it alive for a close.
  */
 import { claimToolEffect, settleToolEffect, type ToolEffectKey } from '../tools/effect-claim';
 import { argumentDigest } from '../safety/argument-digest';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { attempt, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import {
@@ -47,6 +48,8 @@ export interface TerminalTransitionDeps {
   readonly scheduleRetry: (atMs: number) => Promise<void>;
   /** Called once a transition closes with nothing left to retry, so the host can let its arms go. */
   readonly settled: () => Promise<void>;
+  /** Keeps the host alive while a settled turn's detached effects close (a durable fiber on CF); settles with `close`. */
+  readonly hold: (close: () => Promise<void>) => Promise<void>;
 }
 
 /** Owns the ordering: claim before the first effect, disposition before release, close only on an empty owed set, prune after close. */
@@ -56,6 +59,9 @@ export class TerminalTransitions {
 
   /** Guards against a duplicate callback re-entering pending effects within one process. */
   private readonly inFlight = new Set<string>();
+
+  /** Held closes not yet settled. */
+  private readonly closes = new Set<Promise<unknown>>();
 
   constructor(private readonly deps: TerminalTransitionDeps) {
     this.ledger = new TerminalEffectLedger(deps);
@@ -120,16 +126,14 @@ export class TerminalTransitions {
 
   /**
    * Every ordering here is a correctness constraint. A resumed response does not re-declare: its roster is
-   * frozen at what the first attempt claimed. `hold` keeps the runtime alive for the close (per backend).
+   * frozen at what the first attempt claimed. The close is held, so detached effects never hold the caller.
    */
   async settle(input: {
     readonly transition: TerminalTransition;
     /** Called once, before any durable write; used only on a first attempt. */
     readonly declare: () => readonly OwedEffect[];
-    /** The backend decides what stays alive for the thunk. */
-    readonly hold: (transition: TerminalTransition, close: () => Promise<void>) => void;
   }): Promise<void> {
-    const { transition, declare, hold } = input;
+    const { transition, declare } = input;
     // Built first: a throw here must not leave an open claim with no rows, which recovery reads as finished.
     const owed = declare();
 
@@ -163,12 +167,35 @@ export class TerminalTransitions {
       throw err;
     }
 
-    hold(transition, async () => {
+    this.hold(transition, async () => {
       await run.reported;
       this.end(transition);
 
       if (this.nextRetryAt() === null) await this.deps.settled();
     });
+  }
+
+  /** Whether a settled turn's detached effects are still closing here. */
+  get closing(): boolean {
+    return this.closes.size > 0;
+  }
+
+  async idle(): Promise<void> {
+    while (this.closes.size > 0) await Promise.all(this.closes);
+  }
+
+  /** A close, or the carrier the host held it in, that fails leaves the transition to the wake. */
+  private hold(transition: TerminalTransition, close: () => Promise<void>): void {
+    const held: Promise<unknown> = hold(attempt({ doing: "closing a settled turn's effects", otherwise: 'io' }, () => this.deps.hold(async () => {
+      await close();
+      // Inside the carrier, so what the host does once it ends reads it done.
+      this.closes.delete(held);
+    })).pipe(
+      Effect.catch((failure) => Effect.promise(() => this.closeFailed(transition, { cause: failure }))),
+      Effect.ensuring(Effect.sync(() => { this.closes.delete(held); })),
+    ));
+
+    this.closes.add(held);
   }
 
   nextRetryAt(): number | null {
@@ -240,13 +267,18 @@ export class TerminalTransitions {
     return this.toRecover().length > 0;
   }
 
-  /** Every input comes off its row; {@link end} closes only if nothing is still owed. */
-  async resume(transition: TerminalTransition): Promise<void> {
-    await this.ledger.replayOwed(this.sequenceId(transition), this.inFlight);
-    this.end(transition);
+  /** Every input comes off its row; {@link end} closes only if nothing is still owed. Held, so no detached effect
+   *  holds the wake's job. */
+  private async resume(transition: TerminalTransition): Promise<void> {
+    const run = await this.ledger.drive(this.sequenceId(transition), this.inFlight);
+
+    this.hold(transition, async () => {
+      await run.reported;
+      this.end(transition);
+    });
   }
 
-  /** Reads the roster from storage. Never throws: one unrecoverable response must not stop the next. */
+  /** Never throws. */
   async resumeAll(): Promise<void> {
     for (const transition of this.incomplete()) {
       if (this.ledger.waitingOnOwner(this.sequenceId(transition))) continue;
@@ -292,7 +324,7 @@ export class TerminalTransitions {
   }
 
   /** Released and re-armed: the rejection may be the ledger's final wake failing. */
-  async closeFailed(transition: TerminalTransition, failure: { readonly cause: unknown }): Promise<void> {
+  private async closeFailed(transition: TerminalTransition, failure: { readonly cause: unknown }): Promise<void> {
     this.leave(transition);
     diagnostics.failure('turn.terminal_transition_close_failed', toKinuError({
       doing: "recording that a settled turn's effects had all reported", cause: failure.cause, otherwise: 'io',

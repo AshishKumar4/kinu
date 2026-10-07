@@ -258,7 +258,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
     if (this._backgroundTasks.size > 0) busy.push(`${String(this._backgroundTasks.size)} detached task(s)`);
 
-    if (this.terminalClosing) busy.push('a terminal close');
+    if (this.terminal.closing) busy.push('a terminal close');
 
     if (this._drainTimerTasks.size > 0) busy.push(`${String(this._drainTimerTasks.size)} debounced event drain(s)`);
 

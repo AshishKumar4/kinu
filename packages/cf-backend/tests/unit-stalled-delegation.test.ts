@@ -129,6 +129,8 @@ test('a delegated turn our own deploys restarted twice runs again, and its hirer
 
   const third = await afterReset(first.db, gateway, 'build-deployed-twice');
 
-  expect(await drainEndsOrThirdRun(third, runs)).toBe('ran again');
+  // The agent's own chat takes the turn up again on its activation, as a CLI hire's does after a restart.
+  await third.agent.terminalRetryPass();
+  await runs.until((seen) => seen.length === 3);
   expect(eventsOver(first.db).query({ variant: 'subordinate_report' })).toEqual([]);
 });

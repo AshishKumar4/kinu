@@ -183,7 +183,6 @@ test('settled turns under an owner-fixable refusal leave one row per effect and 
   const calls = { n: 0 };
   const refused = wrapped(answering(402, NO_FUNDS, calls));
   const wakes: number[] = [];
-  const closes: Promise<void>[] = [];
 
   const effects: TerminalEffectTable = {
     sleep_time: terminalEffect({ input: v.object({}), run: refused }),
@@ -196,6 +195,7 @@ test('settled turns under an owner-fixable refusal leave one row per effect and 
     transaction: <T>(body: () => T): T => db.transaction(body)(),
     turnIsLive: () => false,
     settled: async () => {},
+    hold: (close) => close(),
   });
 
   const settle = async (turnId: string, name: 'sleep_time' | 'auto_title') => {
@@ -204,11 +204,11 @@ test('settled turns under an owner-fixable refusal leave one row per effect and 
     await transitions.settle({
       transition: { turnId, messageId: `${turnId}-answer` },
       declare: () => [owed],
-      hold: (_transition, close) => { closes.push(close()); },
     });
-    await Promise.all(closes);
+    await transitions.idle();
     // The wake the settle armed.
     await transitions.replayOwedAndRearm();
+    await transitions.idle();
   };
 
   await settle('genesis', 'auto_title');
@@ -282,6 +282,7 @@ test.each([
     transaction: <T>(body: () => T): T => db.transaction(body)(),
     turnIsLive: () => false,
     settled: async () => {},
+    hold: (close) => close(),
   });
 
   const titled = () => sql<{ status: string; next_attempt_at: number }>`

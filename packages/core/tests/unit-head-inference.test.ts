@@ -2,7 +2,8 @@
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import { Effect } from 'effect';
-import { seedTranscriptEntry, createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import type { ActorSession } from '../src/orchestrator/actor-session';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { ResolvedProvider } from '../src/types/primitives';
@@ -10,7 +11,7 @@ import type { JsonValue } from '../src/utils/json';
 import { actorJobsFor, createTestWorkspace, conversationsFor } from './helpers';
 import { buildHeadToolSet } from '../src/heads/head-tools';
 import { jsonSchema, tool, type LanguageModel, type ModelMessage } from 'ai';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { fixtureCompaction, hostedSeatsOver } from './helpers-actor-host';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
@@ -25,6 +26,7 @@ import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/utils/evidence-window';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { getRunEvents } from '../src/read-models/runs';
+import { profileCatalogDigest } from '../src/profiles/catalog';
 
 /** One text step, finishReason 'stop', so the head ends in a single step. */
 function fakeHeadModel(answer: string, opts?: { throwError?: string; usage?: { inputTokens: number; outputTokens: number } }): LanguageModel {
@@ -71,12 +73,11 @@ const deps = async (
   over?: Partial<HeadInferenceDeps>,
 ): Promise<HeadInferenceDeps> => {
   const { rt, testSql } = createTestRuntime();
-  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'swarm');
+  const seat = await hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('head-under-test', 'swarm');
 
   return {
-    actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
-    model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, ...over,
-    workspaceLayout: over?.workspaceLayout ?? 'shared-workspace',
+    actor: seat.actor, runId: seat.runId, sources: seat.sources, compaction: fixtureCompaction(),
+    tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, ...over,
   };
 };
 
@@ -138,15 +139,36 @@ describe('runHeadInference — report assembly', () => {
     const base = await deps(fakeHeadModel('done'));
     const served: string[] = [];
 
-    const profile: HeadInferenceDeps['profile'] = async (request) => {
-      const resolved = await base.profile(request);
-      served.push(resolved.profile.tier.model);
+    const sources: HeadInferenceDeps['sources'] = {
+      ...base.sources,
+      profileInputs: async () => {
+        const inputs = await base.sources.profileInputs();
+        const tester = inputs.envelope.catalog.roles.tester;
 
-      return { ...resolved, profile: { ...resolved.profile, tier: { ...resolved.profile.tier, replaced: 'anthropic/claude-retired' } } };
+        if (tester === undefined) throw new Error('the fixture must declare its tester role');
+
+        const catalog = {
+          ...inputs.envelope.catalog,
+          roles: { ...inputs.envelope.catalog.roles, tester: { ...tester, tier: 'deep' } },
+          tiers: { ...inputs.envelope.catalog.tiers, deep: { model: 'anthropic/claude-retired' } },
+        };
+
+        return {
+          envelope: { ...inputs.envelope, catalog, digest: profileCatalogDigest(catalog) },
+          provider: { ...inputs.provider, availableModels: [...inputs.provider.availableModels, 'anthropic/claude-current'] },
+        };
+      },
+      models: { ...base.sources.models, resolve: (spec) => {
+        served.push(spec);
+
+        return base.sources.models.resolve(spec);
+      } },
     };
 
-    await runHeadInference(headInput(), { ...base, profile });
+    const report = await runHeadInference(headInput(), { ...base, sources });
 
+    expect(report.status).toBe('completed');
+    expect(served).toEqual(['fake/test-model']);
     expect(getRunEvents(base.actor.stores.eventRecorder, base.runId).filter((event) => event.type === 'model_fallback')).toMatchObject([
       { type: 'model_fallback', from: 'anthropic/claude-retired', to: served[0], reason: 'its provider no longer lists it' },
     ]);
@@ -396,27 +418,23 @@ describe('durable delegated turn opening', () => {
     }
   });
 
+  // A hire's delegated turn opens on its session (orchestrator/chat-session.ts), as every hire's does now.
   test('an explicitly empty working revision is authoritative, not a new birth', async () => {
     const { rt, testSql } = createTestRuntime();
     const first = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'agent');
     await first.actor.session.restoreHistory([]);
-    const restored = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'agent');
+    const { session } = (await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'agent')).actor;
 
     try {
-      await restored.actor.session.restoreWorkingHistory();
+      await session.restoreWorkingHistory();
+      const lease = session.beginTurn({ runId: 'run-empty', turnId: 'assignment-a' }, 'build', Date.now());
 
-      const report = await runHeadInference(headInput(), {
-        ...restored, model: fakeHeadModel('Child answer.'), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-        workspaceLayout: 'shared-workspace',
-        framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: 'New assignment.' }] },
-        delegation: { assignmentId: 'assignment-a', birthContext: [{ role: 'user', content: 'Do not resurrect this birth prefix.' }] },
+      await session.openDelegatedTurn(lease, {
+        messages: [{ role: 'user', content: 'New assignment.' }],
+        birthContext: async () => [{ role: 'user', content: 'Do not resurrect this birth prefix.' }],
       });
 
-      expect(report.status).toBe('completed');
-      expect(restored.actor.session.history).toEqual([
-        { role: 'user', content: 'New assignment.' },
-        { role: 'assistant', content: [{ type: 'text', text: 'Child answer.' }] },
-      ]);
+      expect(session.history).toEqual([{ role: 'user', content: 'New assignment.' }]);
     } finally {
       testSql.close();
     }
@@ -433,46 +451,36 @@ describe('durable delegated turn opening', () => {
     ]);
   });
 
+  /** A hire's delegated turn opened on its session, as its chat opens one (orchestrator/chat-session.ts). */
+  async function openDelegated(
+    session: ActorSession, turnId: string, text: string, birth: string,
+  ): Promise<void> {
+    const lease = session.beginTurn({ runId: `run-${turnId}`, turnId }, 'build', Date.now());
+
+    try {
+      await session.openDelegatedTurn(lease, { messages: [{ role: 'user', content: text }], birthContext: async () => [{ role: 'user', content: birth }] });
+    } finally {
+      session.finishTurn(lease);
+    }
+  }
+
+  const textsOf = (history: readonly ModelMessage[]): string[] => history.flatMap((message) => typeof message.content === 'string' ? [message.content] : []);
+
   for (const cold of [false, true]) {
     test(`a claim re-drive keeps its assignment once; a distinct equal-text assignment appends, cold=${cold}`, async () => {
       const { rt, testSql } = createTestRuntime();
-      const requests: ScriptedTurnOptions[] = [];
-
-      const model = scriptedTurnModel({ doGenerate: (request) => {
-        requests.push(request);
-
-        return {
-          content: [{ type: 'text', text: 'Prior child answer.' }],
-          finishReason: { unified: 'stop', raw: undefined },
-          usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-            outputTokens: { total: 1, text: 1, reasoning: undefined } },
-          warnings: [],
-        };
-      } });
-
-      let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'agent');
-
-      const run = async (assignmentId: string) => runHeadInference(headInput(), {
-        ...seat, model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-        workspaceLayout: 'shared-workspace',
-        framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: 'Check this ledger.' }] },
-        delegation: { assignmentId, birthContext: [{ role: 'user', content: 'Frozen birth prefix.' }] },
-      });
+      const seat = () => hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'agent');
+      let { session } = (await seat()).actor;
 
       try {
-        expect((await run('assignment-a')).status).toBe('completed');
+        await openDelegated(session, 'assignment-a', 'Check this ledger.', 'Frozen birth prefix.');
 
-        if (cold) seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'agent');
-        expect((await run('assignment-a')).status).toBe('completed');
-        expect((await run('assignment-b')).status).toBe('completed');
+        if (cold) ({ session } = (await seat()).actor);
+        await openDelegated(session, 'assignment-a', 'Check this ledger.', 'Frozen birth prefix.');
+        expect(textsOf(session.history)).toEqual(['Frozen birth prefix.', 'Check this ledger.']);
 
-        const texts = (request: ScriptedTurnOptions | undefined) => request?.prompt.flatMap((message) => message.role === 'system'
-          ? [] : message.content.flatMap((part) => part.type === 'text' ? [part.text] : [])) ?? [];
-
-        expect(texts(requests[1]).filter((text) => text === 'Check this ledger.')).toHaveLength(1);
-        expect(texts(requests[1])).toContain('Prior child answer.');
-        expect(texts(requests[2]).filter((text) => text === 'Check this ledger.')).toHaveLength(2);
-        expect(texts(requests[2]).filter((text) => text === 'Frozen birth prefix.')).toHaveLength(1);
+        await openDelegated(session, 'assignment-b', 'Check this ledger.', 'Frozen birth prefix.');
+        expect(textsOf(session.history)).toEqual(['Frozen birth prefix.', 'Check this ledger.', 'Check this ledger.']);
       } finally {
         testSql.close();
       }
@@ -481,33 +489,18 @@ describe('durable delegated turn opening', () => {
 
   test('a staged replacement survives delegation opening and cold restore without resurrecting the birth seed', async () => {
     const { rt, testSql } = createTestRuntime();
-    let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'agent');
-    const model = fakeHeadModel('Child answer.');
-
-    const run = (assignmentId: string, edit: boolean) => runHeadInference(headInput(), {
-      ...seat, model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-      workspaceLayout: 'shared-workspace',
-      framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: assignmentId }] },
-      delegation: { assignmentId, birthContext: [{ role: 'user', content: 'Original birth prefix.' }] },
-      profile: async (input) => {
-        if (edit) await seat.actor.session.restoreHistory([{ role: 'user', content: 'Edited working prefix.' }]);
-
-        return seat.profile(input);
-      },
-    });
+    const seat = () => hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'agent');
+    let { session } = (await seat()).actor;
 
     try {
-      expect((await run('assignment-a', false)).status).toBe('completed');
-      expect((await run('assignment-b', true)).status).toBe('completed');
-      seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'agent');
-      expect((await run('assignment-c', false)).status).toBe('completed');
-      expect(seat.actor.session.history).toEqual([
-        { role: 'user', content: 'Edited working prefix.' },
-        { role: 'user', content: 'assignment-b' },
-        { role: 'assistant', content: [{ type: 'text', text: 'Child answer.' }] },
-        { role: 'user', content: 'assignment-c' },
-        { role: 'assistant', content: [{ type: 'text', text: 'Child answer.' }] },
-      ]);
+      await openDelegated(session, 'assignment-a', 'assignment-a', 'Original birth prefix.');
+      await session.restoreHistory([{ role: 'user', content: 'Edited working prefix.' }]);
+      await openDelegated(session, 'assignment-b', 'assignment-b', 'Original birth prefix.');
+      ({ session } = (await seat()).actor);
+      await session.restoreWorkingHistory();
+      await openDelegated(session, 'assignment-c', 'assignment-c', 'Original birth prefix.');
+
+      expect(textsOf(session.history)).toEqual(['Edited working prefix.', 'assignment-b', 'assignment-c']);
     } finally {
       testSql.close();
     }

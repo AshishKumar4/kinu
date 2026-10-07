@@ -7,18 +7,16 @@
 
 import type { ConversationRecall } from '../memory/conversation-search';
 import { REAL_CLOCK, type Clock } from '../types/clock';
-import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { tool, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { oneOf } from '../tools/tool-schema';
 import { HEAD_BUILTIN_TOOLS, OWNER_STOPPED } from '../heads/types';
 import { stoppedByOwner } from './live-workers';
-import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
+import { HeadCapture, withHeadCaptureRecording } from '../heads/head-inference';
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
-import type { HeadInferenceDeps } from '../heads/head-inference';
+import type { RunInference } from '../heads/head-inference';
 import type { HostedActor } from '../state/actor-host';
-import type { ModelWindow } from '../context-window';
-import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
-import type { DynamicContext } from '../prompting/volatile-context';
+import type { RunTurnSources } from '../orchestrator/turn-assembly';
 import { buildToolSurface, type ReportToolDeps } from '../tools/builtins';
 import { permitInPlan } from '../execution/work-mode';
 import type { BackgroundJobRunner } from '../jobs/runner';
@@ -131,7 +129,7 @@ export interface NodeAgentDeps {
    * single actor here would share one claim ledger across a wave.
    */
   hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
-  model: LanguageModel;
+  /** Absent, a node runs on its own profile's tier. */
   modelSpec?: string;
   /** A transcript is a read model over the node's journal (*The journal read model*). */
   journal: HeadJournal;
@@ -164,17 +162,11 @@ export type NodeCodemode = (actor: HostedActor) => (finished: ToolSet, reach: To
 /** One node's own actor and its per-turn seams; returned by {@link NodeAgentDeps.hostNode} because each is per actor. */
 export interface HostedNodeSeat {
   readonly actor: HostedActor;
-  readonly infer?: typeof runHeadInference;
+  readonly infer: (input: HeadInput, inference: RunInference) => Promise<HeadReport>;
   /** The activation's run id; every turn this node admits is claimed under it. */
   readonly runId: string;
-  /** Same role and tier narrowing an actor's chat turn resolves. */
-  readonly profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
-    => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
-  /** This node's own live per-step block (its jobs, tasks, approvals). */
-  readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
+  readonly sources: RunTurnSources;
   readonly conversations: ConversationRecall;
-  /** The window a turn on `spec` is admitted against, from the backend's catalog; null is the caller's own model. */
-  readonly windowOf: (spec: string | null) => Promise<ModelWindow>;
   readonly jobs: StepLoopJobSeat;
 }
 
@@ -184,15 +176,11 @@ export interface NodeLoopDeps {
    * `actor.runtime` and claimed turns on `actor.session`.
    */
   actor: HostedActor;
-  infer?: typeof runHeadInference;
+  infer: HostedNodeSeat['infer'];
   runId: string;
-  profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
-    => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
-  dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
+  sources: RunTurnSources;
   conversations: ConversationRecall;
   jobs: StepLoopJobSeat;
-  model: LanguageModel;
-  window: ModelWindow;
   logger: Logger;
   signal?: AbortSignal;
   clock: Clock;
@@ -443,32 +431,20 @@ async function runNodeLoop(
     mode: spec.headInput.mode,
   });
 
-  const inference: HeadInferenceDeps = {
+  const inference: RunInference = {
     actor: deps.actor,
     runId: deps.runId,
-    profile: deps.profile,
-    dynamic: deps.dynamic,
+    sources: deps.sources,
     clock: deps.clock,
-    model: deps.model,
-    window: deps.window,
     tools,
-    // Must match what `isolationDisclosure` tells the node.
-    workspaceLayout: spec.isolation === 'private-home' ? 'private-scratch' : 'shared-workspace',
+    brief: (callable) => nodeSystemPrompt({ base: spec.base, isolation: spec.isolation, home: spec.home, toolNames: callable }),
+    opening: spec.messages,
     capture,
     isAborted: () => deps.signal?.aborted ?? false,
     abortReason: () => {
       if (stoppedByOwner(deps.signal)) return OWNER_STOPPED;
 
       return deps.signal?.aborted ? 'the search was aborted' : null;
-    },
-    framing: {
-      system: nodeSystemPrompt({
-        base: spec.base,
-        isolation: spec.isolation,
-        home: spec.home,
-        toolNames: Object.keys(tools),
-      }),
-      messages: spec.messages,
     },
     reportMessages: (messages) => { scratch.produced = messages; },
     // A reported node is finished; an unreported one waits while a job runs or a wake is queued.
@@ -485,7 +461,7 @@ async function runNodeLoop(
   if (deps.signal !== undefined) inference.signal = deps.signal;
 
   try {
-    const report = await (deps.infer ?? runHeadInference)(spec.headInput, inference);
+    const report = await deps.infer(spec.headInput, inference);
 
     return {
       report,
@@ -559,7 +535,7 @@ export function runNodeAgent(
         // The loop runs as the node: only the backend can build the node's credentialed runtime.
         const rt = deps.runtimeForWorkspace ? await deps.runtimeForWorkspace(home, input) : seat.actor.runtime;
 
-        return await runNodeLoop(spec, { ...nodeLoopDeps(input, deps, seat, rt), window: await seat.windowOf(deps.modelSpec ?? null) });
+        return await runNodeLoop(spec, nodeLoopDeps(input, deps, seat, rt));
       },
       catch: (cause) => toKinuError({ doing: `run node ${input.nodeId} of this search`, cause, otherwise: 'unavailable' }),
     }).pipe(Effect.catch((failure): Effect.Effect<NodeLoopResult, KinuError> => {
@@ -636,16 +612,15 @@ function unreportedNode(
 }
 
 /** In-isolate seams: the search's own journal and arbiter, called directly. */
-function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNodeSeat, rt: AgentRuntime): Omit<NodeLoopDeps, 'window'> {
-  const loop: Omit<NodeLoopDeps, 'window'> = {
+function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNodeSeat, rt: AgentRuntime): NodeLoopDeps {
+  const loop: NodeLoopDeps = {
     // Same actor, with the rebuilt runtime when the provisioner made one.
     actor: rt === seat.actor.runtime ? seat.actor : { ...seat.actor, runtime: rt },
     runId: seat.runId,
-    profile: seat.profile,
-    dynamic: seat.dynamic,
+    sources: rt === seat.actor.runtime ? seat.sources : { ...seat.sources, rt },
+    infer: seat.infer,
     conversations: seat.conversations,
     jobs: seat.jobs,
-    model: deps.model,
     logger: deps.logger,
     // Real time unless the run handed a clock (D19).
     clock: deps.clock ?? REAL_CLOCK,
@@ -655,7 +630,6 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
 
   if (deps.signal !== undefined) loop.signal = deps.signal;
 
-  if (seat.infer !== undefined) loop.infer = seat.infer;
   const publish = deps.publishHeadStream;
 
   if (publish !== undefined) {

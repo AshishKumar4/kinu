@@ -12,7 +12,7 @@ import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { swarmSeats } from './helpers-actor-host';
 import { MissionGovernor } from '../src/mission-budget';
 import {
   createAgentsCodemodeProvider, type AgentsToolDeps,
@@ -259,7 +259,7 @@ async function run(input: {
   const startedAt = Date.now();
 
   const result = await runSwarm(
-    { reportModelCall: unobservedSpend, rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: () => model, mode: 'build', logger, },
+    { reportModelCall: unobservedSpend, rt, ...swarmSeats({ rt, db }, () => model), mode: 'build', logger, },
     resolved(input.depth, input.branches),
   );
 
@@ -519,7 +519,7 @@ describe('the mission ledger a search charges', () => {
 
     const deps: AgentsToolDeps = {
       mode: 'build', swarms: true,
-      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: () => model, ...unobservedSearchSeams() },
+      swarm: { rt, ...swarmSeats({ rt, db }, () => model), ...unobservedSearchSeams() },
       budget: governor,
     };
 

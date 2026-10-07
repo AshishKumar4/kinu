@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { createTestRuntime, scriptedAdvisorPort, scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModel } from 'ai';
 import { jsonSchema, tool } from 'ai';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { hostedSeatsOver, runningOn } from './helpers-actor-host';
 import { runHeadInference, HeadCapture } from '../src/heads/head-inference';
 import type { HeadInput } from '../src/heads/types';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
@@ -112,9 +112,7 @@ describe('a headless actor runs the step clock only', () => {
         const asked = requests.length;
 
         const report = await runHeadInference(headInput(), {
-          actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
-          model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-          workspaceLayout: 'shared-workspace',
+          ...runningOn(seat, model), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
         });
 
         // The run ended on its own answer: the advisor was hired, and nothing waited on it.
@@ -156,11 +154,10 @@ describe('a headless actor runs the step clock only', () => {
     const seat = await seats.seat('node', 'swarm');
 
     const report = await runHeadInference(headInput(), {
-      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
-      model: scriptedTurnModel({ doGenerate: async () => ({
+      ...runningOn(seat, scriptedTurnModel({ doGenerate: async () => ({
         content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
-      }) }),
-      tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, workspaceLayout: 'shared-workspace',
+      }) })),
+      tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
     });
 
     expect(report.status).toBe('completed');
@@ -181,10 +178,9 @@ describe('a headless actor runs the step clock only', () => {
     const capture = new HeadCapture();
 
     const report = await runHeadInference(headInput(), {
-      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
-      model: probingHead(1),
+      ...runningOn(seat, probingHead(1)),
       tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async (): Promise<{ ok: boolean }> => { throw new Error('probe exploded'); } }) },
-      capture, clock: REAL_CLOCK, isAborted: () => false, workspaceLayout: 'shared-workspace',
+      capture, clock: REAL_CLOCK, isAborted: () => false,
     });
 
     expect(report.status).toBe('completed');
@@ -207,7 +203,7 @@ describe('a headless actor runs the step clock only', () => {
     const root = await seats.host.acquire(actorReferenceOf(rt.actor));
     root.session.orchestrator.recordTurn(turn, 'conversation');
     root.session.orchestrator.observeUserTurn('the probe kept failing and you never changed its arguments', 'conversation');
-    await root.session.orchestrator.settleEvolution();
+    await root.session.orchestrator.settleTracked();
     expect(windowRows(rt.storage.sql, actor.actorId)).toBe(0);
     expect(windowRows(rt.storage.sql, root.handle.actorId)).toBe(1);
     expect(listTurnRatings(rt.storage.sql, root.handle).map((row) => [row.score, row.source])).toEqual([[1.5, 'model']]);
@@ -226,14 +222,13 @@ describe('a headless actor runs the step clock only', () => {
     const failing = CONSECUTIVE_FAILURES_BEFORE_STEER;
 
     const report = await runHeadInference(headInput(), {
-      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
-      model: probingHead(failing + 1),
+      ...runningOn(seat, probingHead(failing + 1)),
       tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async ({ n }) => {
         if (n < failing) throw new Error(`probe ${String(n)} exploded`);
 
         return { ok: true };
       } }) },
-      capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, workspaceLayout: 'shared-workspace',
+      capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
     });
 
     expect(report.status).toBe('completed');

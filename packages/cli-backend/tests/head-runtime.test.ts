@@ -25,7 +25,7 @@ import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
-import { ConversationSearchStore, openLocalActor } from '@kinu.run/core';
+import { ConversationSearchStore, openLocalActor, resolveAgentTurnProfile } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 
 // A head owns no store: its rows are actor-keyed in the parent's one database.
@@ -94,6 +94,7 @@ function headDeps(
   model: LanguageModel,
   over?: Partial<Omit<CLIHeadRuntimeDeps, 'parentRuntime'>> & { readonly parentRuntime?: LocalParent },
   probe?: RouteProbe,
+  resolve: (spec: string) => LanguageModel = () => model,
 ): CLIHeadRuntimeDeps {
   const governor = makeGovernor();
   const journal = makeJournal();
@@ -102,9 +103,9 @@ function headDeps(
   const writes = new Map<string, WriteObserver>();
 
   return {
-    model: () => model, parentRuntime: parent,
+    parentRuntime: parent,
     // The genuine host: heads acquired from it run the production session, stores and claimed loop.
-    hostHead: headSeatFactory(parent, localTestActorHost(parent, parent.db, [], writes), 'fixture-run', writes),
+    hostHead: headSeatFactory(parent, localTestActorHost(parent, parent.db, [], writes), 'fixture-run', { writes, model: resolve }),
     profile: async () => mergePolicyProfile(),
     bindMergeModel: (route) => {
       probe?.asked.push({ spec: route.model, effort: route.reasoningEffort });
@@ -116,7 +117,6 @@ function headDeps(
     },
     reportModelCall: () => {},
     webSearch: stubWeb, codemodeExtras: () => [],
-    resolveModel: () => model,
     governor: () => governor, journal: () => journal, ...over,
   };
 }
@@ -931,12 +931,15 @@ describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
     });
   }
 
-  test('each head resolves its OWN spec; a head that named none inherits the session model', async () => {
+  test('each head resolves its OWN spec; a head that named none runs on its own profile tier', async () => {
     const seen: string[] = [];
+    const parent = makeParent();
+    const inputs = await parent.profiles?.inputs();
 
-    const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen), {
-      resolveModel: (spec: string) => labelledModel(spec, seen),
-    }));
+    if (inputs === undefined) throw new Error('the fixture parent carries no profile authority');
+    const tier = resolveAgentTurnProfile({ ...inputs, activeRoleId: 'task', workMode: 'build', availableTools: [], activeSkills: [] }).tier.model;
+
+    const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen), { parentRuntime: parent }, undefined, (spec) => labelledModel(spec, seen)));
 
     for (const input of [
       aHeadInput({ id: 'h-a', model: 'vendor-a/big' }),
@@ -946,18 +949,20 @@ describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
       await (await runtime.spawnHead(input)).run();
     }
 
-    expect(seen).toEqual(['vendor-a/big', 'vendor-b/big', 'session']);
+    expect(seen).toEqual(['vendor-a/big', 'vendor-b/big', tier]);
   });
 
   test('a head whose model will not resolve fails, and never runs on the session model', async () => {
     const seen: string[] = [];
 
-    const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen), {
-      resolveModel: (spec: string) => { throw new Error(`Unknown provider in model spec "${spec}"`); },
+    const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen), undefined, undefined, (spec) => {
+      throw new Error(`Unknown provider in model spec "${spec}"`);
     }));
 
-    await expect((await runtime.spawnHead(aHeadInput({ id: 'h-a', model: 'Qwen/Qwen3-8B' }))).run())
-      .rejects.toThrow('Unknown provider in model spec "Qwen/Qwen3-8B"');
+    const report = await (await runtime.spawnHead(aHeadInput({ id: 'h-a', model: 'Qwen/Qwen3-8B' }))).run();
+
+    expect(report).toMatchObject({ status: 'errored' });
+    expect(report.errorMessage).toContain('Unknown provider in model spec "Qwen/Qwen3-8B"');
     expect(seen).toEqual([]);
   });
 });

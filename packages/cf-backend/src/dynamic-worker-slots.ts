@@ -81,9 +81,15 @@ export class AgentIsolateSlots {
 
 export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) => Promise<A>) => Effect.Effect<A, KinuError>): AgentFacetCalls {
   return {
-    deliver: (...args) => settle(through((isolate) => isolate.deliver(...args))),
-    holds: (...args) => settle(through((isolate) => isolate.holds(...args))),
-    openTurn: (...args) => settle(through((isolate) => isolate.openTurn(...args))),
+    run: (...args) => settle(through((isolate) => isolate.run(...args))),
+    enqueue: (...args) => settle(through((isolate) => isolate.enqueue(...args))),
+    send: (...args) => settle(through((isolate) => isolate.send(...args))),
+    admit: (...args) => settle(through((isolate) => isolate.admit(...args))),
+    retry: (...args) => settle(through((isolate) => isolate.retry(...args))),
+    interruptChat: (...args) => settle(through((isolate) => isolate.interruptChat(...args))),
+    wake: (...args) => settle(through((isolate) => isolate.wake(...args))),
+    owed: (...args) => settle(through((isolate) => isolate.owed(...args))),
+    idle: (...args) => settle(through((isolate) => isolate.idle(...args))),
     history: (...args) => settle(through((isolate) => isolate.history(...args))),
     historyPage: (...args) => settle(through((isolate) => isolate.historyPage(...args))),
     messageCount: (...args) => settle(through((isolate) => isolate.messageCount(...args))),
@@ -99,7 +105,6 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     scrollConversation: (...args) => settle(through((isolate) => isolate.scrollConversation(...args))),
     browseConversations: (...args) => settle(through((isolate) => isolate.browseConversations(...args))),
     admitted: (...args) => settle(through((isolate) => isolate.admitted(...args))),
-    reopen: (...args) => settle(through((isolate) => isolate.reopen(...args))),
     interrupt: (...args) => settle(through((isolate) => isolate.interrupt(...args))),
     recover: (...args) => settle(through((isolate) => isolate.recover(...args))),
     archivePage: (...args) => settle(through((isolate) => isolate.archivePage(...args))),

@@ -8,7 +8,7 @@ import type { ModelMessage } from 'ai';
 import { scriptedTurnModel, toolExecute, unobservedSearchSeams } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { createTestRuntime } from './helpers';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { swarmSeats } from './helpers-actor-host';
 import {
   createAgentsTool,
   type AgentRuntime,
@@ -76,7 +76,7 @@ function swarmDeps(
   // The fake model's catalog window, which the shared prefix's threshold measures against.
   const windowOf = async () => ({ contextWindow: 128_000, modelOutputLimit: null });
 
-  return { rt: world.rt, hostNode: hostedSeatsOver(world).hostNode, model: () => model, windowOf, ...unobservedSearchSeams(), ...overrides };
+  return { rt: world.rt, ...swarmSeats(world, () => model), windowOf, ...unobservedSearchSeams(), ...overrides };
 }
 
 function agentsTool(deps: AgentsToolDeps) {

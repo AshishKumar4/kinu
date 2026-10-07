@@ -11,6 +11,11 @@ import type { ChatHistoryEntry } from '../types/chat';
 /** Row id = prefix + producer identity; the primary key is the idempotency mechanism. */
 export const PROGRAMMATIC_MESSAGE_ID_PREFIX = 'programmatic:';
 
+/** The producer identity a programmatic turn is named for (an assignment row's id); any other turn id as it is. */
+export function announcementOf(turnId: string): string {
+  return turnId.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? turnId.slice(PROGRAMMATIC_MESSAGE_ID_PREFIX.length) : turnId;
+}
+
 /** Who wrote a turn's words, stamped at enqueue. Defaults to harness, so a new event kind never renders as the operator's. */
 export const TURN_AUTHOR_METADATA_KEY = 'kinuAuthor';
 

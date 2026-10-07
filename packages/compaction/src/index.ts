@@ -7,6 +7,13 @@ export { kinuCodec, kinuConventions, kinuSpec, type ToolPairHandle } from './cod
 export { type AttachmentDeps } from './attachments';
 
 export {
+  createActorCompaction,
+  hostedActorCompaction,
+  compactionDiagnostics,
+  type ActorCompactionDeps,
+} from './actor';
+
+export {
   createCompactionExtension,
   type CompactionExtension,
   type CompactionExtensionDeps,

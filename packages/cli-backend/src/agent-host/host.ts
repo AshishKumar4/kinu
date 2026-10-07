@@ -1531,8 +1531,9 @@ export class LocalAgentHost {
           idempotencyKey: task.sequenceId,
         });
 
-        // The turn did not happen; throw so the row's lease stays open and the next pass re-pends it.
-        if (admitted.status !== 'queued') {
+        // The turn did not happen; throw so the row's lease stays open and the next pass re-pends it. A turn that opened
+        // and failed did happen: its ending is answered as an errored turn's is.
+        if (admitted.status !== 'queued' && admitted.status !== 'failed') {
           throw new KinuError('unavailable', `the local turn queue answered "${admitted.status}"`);
         }
 

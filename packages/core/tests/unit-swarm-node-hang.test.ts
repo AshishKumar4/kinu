@@ -271,8 +271,7 @@ function nodeFixture(over?: { readonly runtimeForWorkspace?: NodeAgentDeps['runt
   const deps: NodeAgentDeps = {
     reportModelCall: unobservedSpend,
     // The node's own actor, per node id: a shared handle would give a wave one claim ledger and loop pointer.
-    hostNode: hostedSeatsOver({ rt, db }).hostNode,
-    model: RAISING_MODEL,
+    hostNode: hostedSeatsOver({ rt, db, model: () => RAISING_MODEL }).hostNode,
     journal,
     logger: createRecordingLogger(),
   };
@@ -345,7 +344,7 @@ async function runWith(
   const logger = createRecordingLogger();
 
   const result = await runSwarm(
-    { reportModelCall: unobservedSpend, rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: () => model, mode: 'build', logger, clock },
+    { reportModelCall: unobservedSpend, rt, hostNode: hostedSeatsOver({ rt, db, model: () => model }).hostNode, model: () => model, mode: 'build', logger, clock },
     call,
   );
 

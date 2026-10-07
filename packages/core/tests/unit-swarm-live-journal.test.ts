@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { swarmSeats } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { runSwarm, type SwarmRunDeps } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
@@ -100,8 +100,7 @@ async function run(announce?: AnnounceHeadActivity) {
     reportModelCall: unobservedSpend,
     rt,
     // A real seat per node over this runtime's database; the journal is read back through `rt.actor`.
-    hostNode: hostedSeatsOver({ rt, db }).hostNode,
-    model: () => reportingNode(),
+    ...swarmSeats({ rt, db }, () => reportingNode()),
     mode: 'build',
     logger: createRecordingLogger(),
   };

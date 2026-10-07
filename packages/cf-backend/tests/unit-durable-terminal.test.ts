@@ -47,6 +47,8 @@ async function recover(harness: Harness, world?: HarnessActorWorld): Promise<Har
   laterBy(1);
   const restarted = await reactivateOrchestratorHarness(harness.db, undefined, world === undefined ? undefined : { world });
   await restarted.agent.terminalRetryPass();
+  // A replayed detached effect closes in its own fiber, not inside the wake's job.
+  await joinHarnessFibers();
 
   return restarted;
 }
@@ -320,6 +322,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     laterBy(1);
     const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { sleepTimeAnswer: ['a-decay', decayOne] });
     await restarted.agent.terminalRetryPass();
+    await joinHarnessFibers();
 
     // One decay; approximate because it is float subtraction.
     expect(facts().recall('deploy_target')?.confidence).toBeCloseTo(0.4, 10);
@@ -521,6 +524,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     // The same activation's next pass re-enters the sequence it released and finishes it.
     laterBy(1);
     await harness.agent.terminalRetryPass();
+    await joinHarnessFibers();
     expect(disposition(harness, 'u-rejected-close', 'a-rejected-close')).toBe('done');
   });
 

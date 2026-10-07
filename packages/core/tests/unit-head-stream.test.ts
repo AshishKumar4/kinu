@@ -15,7 +15,7 @@ import { LiveHeadJournal } from '../src/heads/live-journal';
 import { initHeadsTables } from '../src/heads/schema';
 import type { HeadInput, HeadStep } from '../src/heads/types';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { fixtureCompaction, hostedSeatsOver } from './helpers-actor-host';
 
 interface Frame { readonly kind: HeadStreamKind; readonly delta: string }
 
@@ -101,12 +101,12 @@ function headInput(): HeadInput {
 /** A head's deps over a real hosted actor, so the frames come from a claimed turn on its `ActorSession`. */
 async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Promise<HeadInferenceDeps> {
   const { rt, testSql } = createTestRuntime();
-  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-stream', 'swarm');
+  const seat = await hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('head-stream', 'swarm');
 
   return {
     ...seat,
-    model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-    workspaceLayout: 'shared-workspace', ...over,
+    compaction: fixtureCompaction(), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
+    ...over,
   };
 }
 
@@ -129,9 +129,18 @@ describe('a head is admitted against its model\'s window as the catalog reports 
       }),
     });
 
-    const report = await runHeadInference(input, await deps(model, {
-      window: { contextWindow: 1_048_576, modelOutputLimit: null },
-    }));
+    const base = await deps(model);
+
+    const catalog = {
+      ...base.sources.models.catalog,
+      window: () => ({ contextWindow: 1_048_576, modelOutputLimit: null }),
+      windowFor: async () => ({ contextWindow: 1_048_576, modelOutputLimit: null }),
+    };
+
+    const report = await runHeadInference(input, {
+      ...base,
+      sources: { ...base.sources, models: { ...base.sources.models, catalog } },
+    });
 
     expect([report.status, report.errorMessage]).toEqual(['completed', undefined]);
   });

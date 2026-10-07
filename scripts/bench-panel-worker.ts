@@ -162,16 +162,15 @@ async function main(): Promise<void> {
     // capture and hands it down, which is what makes `HeadReport.fileChanges`
     // report the files THIS head changed rather than the empty list a seam that
     // dropped it produced.
-    hostHead: (head, writes) => seating.hostHead(head, writes),
-    model: () => benchChatModel(analyst),
-    parentRuntime: rt,
-    resolveModel: (spec: string) => {
-      const cfg = byIndex.get(spec);
+    // Each member's turn is assembled as every actor's is; only its models are the bench's: a fork's own
+    // spec is its panel member, and a head that named none runs on the analyst.
+    hostHead: async (head, writes) => {
+      const seat = await seating.hostHead(head, writes);
+      const member = (spec: string) => benchChatModel(byIndex.get(spec) ?? analyst);
 
-      if (!cfg) throw new Error(`panel worker: no provider for fork spec "${spec}"`);
-
-      return benchChatModel(cfg);
+      return { ...seat, sources: { ...seat.sources, models: { ...seat.sources.models, normalize: (spec) => spec, resolve: member } } };
     },
+    parentRuntime: rt,
     // The analyst synthesises the panel, through the same routed policy both
     // backends use rather than a second merge path this instrument maintains.
     profile: async () => analystProfile(),

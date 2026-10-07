@@ -40,7 +40,7 @@ export function startActorTurn(input: ActorTurnInput): AsyncIterable<ChatEvent> 
       ...control,
       llmStream: createScaffoldLLMStream({
         model: chat.model, tools: () => chat.tools,
-        streamOptions: { providerOptions: chat.providerOptions, ...input.scaffoldStreamOptions },
+        streamOptions: { providerOptions: chat.providerOptions, ...(chat.budget !== undefined && { budget: chat.budget }), ...input.scaffoldStreamOptions },
         ...control, spend: input.scaffoldSpend,
       }),
       callTool: createScaffoldCallTool(() => chat.tools, undefined, chat.signal, input.assertActive),

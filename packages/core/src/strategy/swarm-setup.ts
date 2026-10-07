@@ -810,7 +810,6 @@ export function seedResumedSearch(input: {
 export function buildNodeDeps(input: {
   /** Per node, never per run: see {@link NodeAgentDeps.hostNode}. */
   readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
-  readonly model: LanguageModel;
   readonly modelSpec?: string;
   readonly journal: HeadJournal;
   readonly logger: Logger;
@@ -827,7 +826,7 @@ export function buildNodeDeps(input: {
   const deps = input;
 
   const nodeDeps: NodeAgentDeps = {
-    hostNode: deps.hostNode, model: deps.model, journal: deps.journal, logger: deps.logger,
+    hostNode: deps.hostNode, journal: deps.journal, logger: deps.logger,
     reportModelCall: deps.reportModelCall,
   };
 

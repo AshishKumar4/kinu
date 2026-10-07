@@ -15,7 +15,7 @@ import { usageTotal } from '../src/usage';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { fixtureCompaction, hostedSeatsOver } from './helpers-actor-host';
 
 function steppingModel(perStep: { input: number; output: number; stopAfter?: number }): LanguageModel {
   let step = 0;
@@ -64,21 +64,20 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
 }
 
 /** The mission ledger is a separate database so the counting seam sees only the governor's statements. */
-async function hostedHead() {
+async function hostedHead(model: LanguageModel) {
   const { rt, testSql } = createTestRuntime();
 
-  return hostedSeatsOver({ rt, db: testSql.db }).seat('head-mission', 'swarm');
+  return hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('head-mission', 'swarm');
 }
 
 async function runHead(mission: MissionScope | null, opts: { stopAfter?: number } = {}) {
   const capture = new HeadCapture();
 
   const deps: Parameters<typeof runHeadInference>[1] = {
-    ...await hostedHead(),
-    model: steppingModel({ input: 1_000, output: 200, ...opts }),
+    ...await hostedHead(steppingModel({ input: 1_000, output: 200, ...opts })),
+    compaction: fixtureCompaction(),
     tools: buildHeadAccumulatorTools(capture),
     capture,
-    workspaceLayout: 'shared-workspace',
     clock: REAL_CLOCK, isAborted: () => false,
   };
 
@@ -245,5 +244,51 @@ describe('a declared budget reaches the head mid-flight', () => {
     await runHead(localMissionScope(governor, ['inner']), { stopAfter: 3 });
     expect(governor.snapshot('outer')[0].spent.tokens).toBe(1_200 * 4);
     ledger.db.close();
+  });
+});
+
+describe("a run's last step is charged before the run settles", () => {
+  /** A port whose debits wait on `answer`: a guard answers at once, a charge when released. */
+  function deferredPort() {
+    const answer = Promise.withResolvers<void>();
+    let debits = 0;
+
+    const port: MissionBudgetPort = {
+      guard: async () => null,
+      debit: async () => {
+        debits++;
+        await answer.promise;
+      },
+    };
+
+    return { port, answer, debits: () => debits };
+  }
+
+  test('a one-step head returns only once its last charge lands', async () => {
+    const { port, answer, debits } = deferredPort();
+    let returned = false;
+
+    const running = runHead({ labels: ['mission:last'], port }, { stopAfter: 0 }).then((ran) => {
+      returned = true;
+
+      return ran;
+    });
+
+    while (debits() === 0) await Promise.resolve().then(() => new Promise((resolve) => { setImmediate(resolve); }));
+    expect(returned).toBe(false);
+
+    answer.resolve();
+    expect((await running).report.status).toBe('completed');
+  });
+
+  test('a last charge that fails fails the run, rather than settling it uncharged', async () => {
+    const { port, answer } = deferredPort();
+
+    answer.reject(new Error('the mission ledger refused the write'));
+
+    const { report } = await runHead({ labels: ['mission:last'], port }, { stopAfter: 0 });
+
+    expect(report.status).toBe('errored');
+    expect(report.errorMessage).toContain('the mission ledger refused the write');
   });
 });

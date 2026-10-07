@@ -156,7 +156,6 @@ export class OrchestratorAgent extends ProductionOrchestrator {
       modelSpec: `openai-compat/${HIRE_CHILD_MODEL}`,
     }, {
       hostNode: hostNodeSeat.bind(undefined, seams),
-      model: seams.resolveModel(`openai-compat/${HIRE_CHILD_MODEL}`),
       journal: this.headJournal, logger: diagnostics,
       reportModelCall: (report) => { this.reportModelCall(report); },
       provisionHome: async () => home,
@@ -236,7 +235,6 @@ export class OrchestratorAgent extends ProductionOrchestrator {
       modelSpec: `openai-compat/${HIRE_CHILD_MODEL}`,
     }, {
       hostNode: hostNodeSeat.bind(undefined, seams),
-      model: seams.resolveModel(`openai-compat/${HIRE_CHILD_MODEL}`),
       journal: this.headJournal, logger: diagnostics,
       reportModelCall: (report) => { this.reportModelCall(report); },
       provisionHome: async () => home,
