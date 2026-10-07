@@ -1,9 +1,21 @@
 /** `?frame=characters`: every chat mascot's colour, in every state its eyes carry, at the sizes the app draws them. */
 import type { AgentActivity } from "@kinu.run/core";
-import { ChatMascot, mascotSeed } from "@/components/Marks";
+import { ChatMascot, MASCOT_COLOURS, mascotColour, mascotSeed } from "@/components/Marks";
 
-/** One seed per colour the hash lands on in practice: chats named as a workspace names them. */
-const SEEDS = Array.from({ length: 12 }, (_, index) => mascotSeed("gallery", `chat-${String(index)}`));
+/** The first chat, named as a workspace names them, to land on each colour. */
+function seedPerColour(): string[] {
+  const seeds = new Map<number, string>();
+
+  for (let index = 0; seeds.size < MASCOT_COLOURS; index += 1) {
+    const seed = mascotSeed("gallery", `chat-${String(index)}`);
+
+    if (!seeds.has(mascotColour(seed))) seeds.set(mascotColour(seed), seed);
+  }
+
+  return [...seeds.entries()].sort(([a], [b]) => a - b).map(([, seed]) => seed);
+}
+
+const SEEDS = seedPerColour();
 
 const STATES = ["idle", "working", "waiting", "failed", "done"] as const satisfies readonly AgentActivity[];
 
