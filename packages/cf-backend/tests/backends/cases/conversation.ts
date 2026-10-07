@@ -54,7 +54,7 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
     covers: ['sendState', 'awaitSend'],
     async run({ surface }) {
       await surface.send('Name the release.', 'q-1');
-      const settled = { status: 'settled', turnId: 'q-1', outcome: 'completed' } as const;
+      const settled = { status: 'settled', turnId: 'q-1', landed: 'turn', outcome: 'completed' } as const;
 
       expect(await surface.awaitSend('q-1')).toEqual(settled);
       expect(await surface.sendState('q-1')).toEqual(settled);

@@ -260,8 +260,8 @@ export type PublicTurn = AgentSendResult;
 export interface PublicTurnRecorder {
   /** Feed one response frame. */
   apply(frame: PublicResponseFrame): void;
-  /** End a turn its socket dropped: the answer the workspace recorded, and whether the turn ended in error. */
-  finish(answer: string, hadError: boolean): void;
+  /** End a turn its socket dropped: the answer its turn recorded, if any, and whether the turn ended in error. */
+  finish(answer: string | null, hadError: boolean): void;
   /** The send's settled result, or null while it is still open. */
   settled(): PublicTurn | null;
 }
@@ -302,7 +302,7 @@ export function recordPublicTurn(): PublicTurnRecorder {
       }
     },
     finish(answer, hadError) {
-      stream.finish(answer);
+      if (answer !== null) stream.finish(answer);
       stream.settle(hadError);
     },
     settled: () => settled,

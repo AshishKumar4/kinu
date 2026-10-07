@@ -69,6 +69,7 @@ export interface ConversationProjection {
   readonly id: string;
   readonly position: number;
   readonly role: ConversationEntry['role'];
+  readonly turnId: string | null;
   readonly content: string;
   readonly recordedAt: number;
   readonly toolCalls: readonly string[];
@@ -215,12 +216,12 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   private async projectEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>): Promise<ConversationProjection> {
     if (!this.payloads.readsFiles && ((entry.metadata !== null && entry.metadata.path !== null)
       || [...new Set(entry.parts.map((part) => part.messageId))].some((messageId) => this.messages.spilled(messageId)))) {
-      return { id: entry.id, position: entry.position, role: entry.role, content: '', recordedAt: entry.recordedAt, toolCalls: [], unavailable: true };
+      return { id: entry.id, position: entry.position, role: entry.role, turnId: entry.turnId, content: '', recordedAt: entry.recordedAt, toolCalls: [], unavailable: true };
     }
 
     const parts = await this.parts(entry.parts, cache);
     const toolCalls = parts.flatMap((part) => part.type === 'tool-call' ? [v.parse(v.string(), part.toolName)] : []);
-    const projection: ConversationProjection = { id: entry.id, position: entry.position, role: entry.role, content: rowText({ role: entry.role, parts }), recordedAt: entry.recordedAt, toolCalls };
+    const projection: ConversationProjection = { id: entry.id, position: entry.position, role: entry.role, turnId: entry.turnId, content: rowText({ role: entry.role, parts }), recordedAt: entry.recordedAt, toolCalls };
 
     if (entry.metadata !== null) projection.metadata = v.parse(JsonObjectSchema, await this.payloads.read(entry.metadata));
     this.actor.assertCurrent();

@@ -14,7 +14,6 @@ export class CloudTurnStream {
   private steps = 0;
   private readonly toolCalls: AgentTurnResult['toolCalls'] = [];
   private readonly toolById = new Map<string, AgentTurnResult['toolCalls'][number]>();
-  private readonly began: { readonly text: number; readonly calls: number }[] = [{ text: 0, calls: 0 }];
 
   /** Turn-start owed only if the server answers with a stream; null once announced. */
   private deferredStart: string | null;
@@ -43,8 +42,6 @@ export class CloudTurnStream {
     }
 
     this.decode(chunk.type, chunk.fields);
-
-    if (chunk.type === 'finish-step') this.began[this.steps] = { text: this.text.length, calls: this.toolCalls.length };
   }
 
   /** The answer as the workspace recorded it, once the stream that was showing it is gone: what was not shown follows. */
@@ -75,30 +72,8 @@ export class CloudTurnStream {
     this.resolve({ landed: 'turn', ...result });
   }
 
-  private cut(step: number): void {
-    const mark = this.began[step];
-
-    if (mark === undefined) return;
-    this.text = this.text.slice(0, mark.text);
-
-    for (const call of this.toolCalls.splice(mark.calls)) {
-      for (const [id, held] of this.toolById) if (held === call) this.toolById.delete(id);
-    }
-
-    this.steps = step;
-    this.began.length = step + 1;
-  }
-
   private decode(type: string, chunk: JsonObject): void {
     switch (type) {
-      case 'data-kinu-step-cut': {
-        const data = v.parse(v.object({ stepIndex: v.number() }), chunk.data);
-        this.cut(data.stepIndex - 1);
-        this.emit({ type: 'step-cut', stepIndex: data.stepIndex });
-
-        return;
-      }
-
       case 'text-delta': {
         const delta = jsonString(chunk.delta, '');
 

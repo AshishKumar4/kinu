@@ -1122,7 +1122,7 @@ export class LocalAgentSession {
   }
 
   /** Where a send stands, from its durable facts. */
-  sendState(id: string): SendState {
+  sendState(id: string): Promise<SendState> {
     return this.chat.sendState(id);
   }
 

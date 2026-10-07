@@ -479,6 +479,7 @@ export class ChatSession {
   /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
   private settleItem(item: QueueItem, failure: KinuError | null, yielded?: boolean, abandoned?: string): void {
     item.settle(failure, yielded, abandoned);
+    this.wakeSendWaiters();
 
     if (item.idempotencyKey === undefined) return;
     const result = settledAnnouncement(failure, yielded, abandoned);
@@ -520,8 +521,8 @@ export class ChatSession {
   }
 
   /** Where a send stands, from its durable facts ({@link sendStateOf}). */
-  sendState(id: string): SendState {
-    return sendStateOf({ transcript: this.transcript, pendingSends: this.pendingSends, claims: this.actorSession.claims }, id);
+  sendState(id: string): Promise<SendState> {
+    return sendStateOf({ transcript: this.transcript, pendingSends: this.pendingSends, claims: this.actorSession.claims, runs: this.eventRecorder }, id);
   }
 
   /** Its state once settled or none. A change here wakes a fresh read; the wake is never the answer, so a client
@@ -534,7 +535,7 @@ export class ChatSession {
       this.sendsMoved.add(moved.resolve);
 
       try {
-        const state = this.sendState(id);
+        const state = await this.sendState(id);
 
         if (state.status === 'settled' || state.status === 'none') return state;
         await moved.promise;
@@ -545,8 +546,12 @@ export class ChatSession {
     }
   }
 
-  /** Woken whenever a send lands, is handed back or fails before its turn: what claim changes do not show. */
+  /** Woken whenever a turn ends or a send is handed back: what claim changes do not show. */
   private readonly sendsMoved = new Set<() => void>();
+
+  private wakeSendWaiters(): void {
+    for (const wake of this.sendsMoved) wake();
+  }
 
   /** An id already landed or reserved would send the same words twice. */
   private refuseUnusableId(id: string): void {
@@ -619,8 +624,6 @@ export class ChatSession {
   }
 
   private settleLandings(ids: readonly string[], fate: SendLanding | KinuError): void {
-    for (const wake of this.sendsMoved) wake();
-
     for (const id of ids) {
       const landing = this.landings.get(id);
 
@@ -639,6 +642,7 @@ export class ChatSession {
     const ids = returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
     this.pendingSends.retire(ids);
     this.settleLandings(ids, new KinuError('cancelled', 'The turn was stopped before the agent read this message; it is back in the composer.'));
+    this.wakeSendWaiters();
 
     return returned.map((steer) => steer.text);
   }

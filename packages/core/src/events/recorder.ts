@@ -662,6 +662,19 @@ export class RunEventRecorder {
       SELECT 1 AS x FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'stop_requested' satisfies RunEventType} LIMIT 1`.length > 0;
   }
 
+  /** The reason `runId` ended for, from its `run_end`; null while it runs. */
+  endReason(runId: string): string | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_end' satisfies RunEventType} LIMIT 1`[0];
+
+    if (row === undefined) return null;
+    const end = parseStoredRunEvent(row.payload);
+
+    return end.type === 'run_end' ? end.reason ?? null : null;
+  }
+
   /** The newest open turn with its completed steps and what they reported using. */
   openTurn(): {
     readonly runId: string;

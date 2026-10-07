@@ -723,11 +723,19 @@ const ABSORBING_END: RunEvent = {
   timestamp: '9999-01-01T00:00:00.000Z', reason: 'completed',
 };
 
+/** The run that absorbed a dropped steer, named by its turn, and a later one still open when the session asks. */
+const TURN_RUN_EVENTS: RunEvent[] = [
+  { type: 'run_start', runId: 'absorbing', eventIndex: 0, timestamp: '2000-01-01T00:00:00.000Z', agentId: 'root', turn: { turnId: 'the-running-turn', messageId: 'answer-0', kind: 'user', text: 'Deploy.' } },
+  ABSORBING_END,
+  { type: 'run_start', runId: 'later', eventIndex: 0, timestamp: '2000-01-02T00:00:00.000Z', agentId: 'root' },
+];
+
 /**
- * A turn whose socket drops after its first step: connection 1 takes the request, streams step 1 and closes; the redial
- * is asked `awaitSend` for it and answers `state`, and the transcript holds its answer. The absorbing run is closed.
+ * A turn whose socket drops after its first step: connection 1 takes the request, streams step 1 and closes; a redial
+ * is asked `awaitSend` for it and answers `state`, after dropping the first ask too when `dropAsk`. The conversation
+ * holds its turn's answer, then a later turn's.
  */
-async function turnAfterDrop(state: (requestId: string) => JsonValue) {
+async function turnAfterDrop(state: (requestId: string) => JsonValue, dropAsk = false) {
   let upgrades = 0;
   let requestId = '';
   const asked: JsonValue[] = [];
@@ -745,16 +753,9 @@ async function turnAfterDrop(state: (requestId: string) => JsonValue) {
 
       const path = new URL(request.url).pathname;
 
-      if (path.endsWith('/get-messages')) {
-        return Response.json([
-          { id: requestId, role: 'user', parts: [{ type: 'text', text: 'Write note.txt.' }] },
-          { id: 'answer', role: 'assistant', parts: [{ type: 'text', text: 'Wrote note.txt.' }] },
-        ]);
-      }
+      if (path.endsWith('/runs')) return Response.json({ status: 'end', items: [{ runId: 'absorbing' }, { runId: 'later' }] });
 
-      if (path.endsWith('/runs')) return Response.json({ status: 'end', items: [{ runId: 'absorbing' }] });
-
-      if (path.endsWith('/events')) return Response.json([ABSORBING_START, ABSORBING_END]);
+      if (path.endsWith('/events')) return Response.json(TURN_RUN_EVENTS);
 
       return new Response('Not found', { status: 404 });
     },
@@ -770,8 +771,24 @@ async function turnAfterDrop(state: (requestId: string) => JsonValue) {
         }
 
         const rpc = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
+
+        if (rpc.method === 'getChatHistoryPage') {
+          const items = [
+            { id: requestId, turnId: requestId, role: 'user', content: 'Write note.txt.' },
+            { id: 'answer', turnId: requestId, role: 'assistant', content: 'Wrote note.txt.' },
+            { id: 'later', turnId: 'later', role: 'user', content: 'And now?' },
+            { id: 'later-answer', turnId: 'later', role: 'assistant', content: 'Not this one.' },
+          ].map((entry, position) => ({ ...entry, position, createdAt: position }));
+
+          socket.send(rpcReplyFrame({ requestId: rpc.id, result: { status: 'end', items } }));
+
+          return;
+        }
+
         asked.push([rpc.method, ...v.parse(v.array(JsonValueSchema), rpc.args)]);
-        socket.send(rpcReplyFrame({ requestId: rpc.id, result: state(requestId) }));
+
+        if (dropAsk && asked.length === 1) socket.close(1012, 'dropped while asked');
+        else socket.send(rpcReplyFrame({ requestId: rpc.id, result: state(requestId) }));
       },
     },
   });
@@ -789,8 +806,8 @@ async function turnAfterDrop(state: (requestId: string) => JsonValue) {
   } finally { await session.teardown(); await server.stop(true); }
 }
 
-test('a turn its socket dropped is asked how it ended, and ends on the answer its transcript recorded', async () => {
-  const { settled, asked, upgrades } = await turnAfterDrop((turnId) => ({ status: 'settled', turnId, outcome: 'completed' }));
+test("a turn its socket dropped is asked how it ended, and ends on the answer its own turn recorded", async () => {
+  const { settled, asked, upgrades } = await turnAfterDrop((turnId) => ({ status: 'settled', turnId, landed: 'turn', outcome: 'completed' }));
 
   if (settled.status === 'rejected' || settled.value.landed !== 'turn') throw new Error('expected the turn itself to land');
   const turn = settled.value;
@@ -800,15 +817,22 @@ test('a turn its socket dropped is asked how it ended, and ends on the answer it
   expect({ asked, upgrades }).toEqual({ asked: ['["awaitSend","the-send"]'], upgrades: 2 });
 });
 
+test('a socket that drops while the session asks is asked again on the next', async () => {
+  const { settled, asked, upgrades } = await turnAfterDrop((turnId) => ({ status: 'settled', turnId, landed: 'turn', outcome: 'completed' }), true);
+
+  expect(settled).toMatchObject({ status: 'fulfilled', value: { landed: 'turn', text: 'Wrote note.txt.' } });
+  expect({ asked, upgrades }).toEqual({ asked: ['["awaitSend","the-send"]', '["awaitSend","the-send"]'], upgrades: 3 });
+});
+
 test('a dropped turn the workspace records as failed ends failed', async () => {
-  const { settled } = await turnAfterDrop((turnId) => ({ status: 'settled', turnId, outcome: 'error' }));
+  const { settled } = await turnAfterDrop((turnId) => ({ status: 'settled', turnId, landed: 'turn', outcome: 'error' }));
 
   if (settled.status === 'rejected' || settled.value.landed !== 'turn') throw new Error('expected the turn itself to land');
   expect(settled.value.hadError).toBe(true);
 });
 
-test('a dropped send another turn read lands mid-turn, answered by the run open when it was sent', async () => {
-  const { settled } = await turnAfterDrop(() => ({ status: 'settled', turnId: 'the-running-turn', outcome: 'completed' }));
+test('a dropped send the running turn read lands mid-turn, answered by that turn\'s run', async () => {
+  const { settled } = await turnAfterDrop(() => ({ status: 'settled', turnId: 'the-running-turn', landed: 'mid-turn', outcome: 'completed' }));
 
   expect(settled).toEqual({ status: 'fulfilled', value: { landed: 'mid-turn', absorbedBy: 'absorbing' } });
 });

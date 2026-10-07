@@ -49,6 +49,7 @@ import {
   createUserUiMessage,
   findForkPivot,
   readConversation,
+  recordedAnswer,
   promptFiles,
   promptText,
   type AgentChangelogView,
@@ -256,6 +257,12 @@ const SocketFrameSchema = v.objectWithRest({
 
 type SocketFrame = v.InferOutput<typeof SocketFrameSchema>;
 
+/** A send's settled state, and the answer its own turn recorded; none for a splice or a turn that recorded none. */
+interface SendEnd {
+  readonly state: SendState;
+  readonly answer: string | null;
+}
+
 const BranchStatusEventSchema = v.variant('status', [
   v.object({
     type: v.literal('branch_status'), status: v.literal('running'), branchId: v.string(), task: v.string(),
@@ -322,6 +329,8 @@ export class CloudAgentClient implements AgentClient {
   /** A socket that dies after close() must not reconnect. */
   private closed = false;
   private readonly activeTurns = new Map<string, CloudTurnStream>();
+  /** Turns whose connection dropped, asked of the workspace instead of read off their stream. */
+  private readonly reacquiring = new Set<string>();
   private readonly pendingRpcs = new Map<string, { resolve: (value: JsonValue) => void; reject: (err: Error) => void }>();
   /** Kept visible until the actor confirms its durable cancellation sweep. */
   private readonly stoppingTurnIds = new Set<string>();
@@ -1015,7 +1024,8 @@ export class CloudAgentClient implements AgentClient {
     const { id } = payload;
     const active = this.activeTurns.get(id);
 
-    if (!active) return;
+    // A turn being asked how it ended is not read off its stream.
+    if (!active || this.reacquiring.has(id)) return;
 
     if (payload.error) {
       if (this.stoppingTurnIds.has(id)) return;
@@ -1065,65 +1075,66 @@ export class CloudAgentClient implements AgentClient {
 
   /**
    * A dropped connection ends no turn and is not chased by its stream: each turn's end is asked of the workspace's
-   * durable record (`awaitSend`), again on every new connection, and its answer read from the transcript. The SDK's
-   * resume stream restates a turn from its first chunk for `useChat` to replace its message; a terminal cannot unprint,
-   * so following it would need a chunk cursor of its own.
+   * durable record (`awaitSend`), again on every new connection, and its answer read from the turn the record names.
+   * The SDK's resume stream restates a turn from its first chunk for `useChat` to replace its message; a terminal cannot
+   * unprint, so following it would need a chunk cursor of its own. A turn being asked stays within Stop's reach.
    */
   private async reacquireInFlightTurns(): Promise<void> {
-    const turns = [...this.activeTurns];
+    const turns = [...this.activeTurns].filter(([id]) => !this.reacquiring.has(id));
 
-    this.activeTurns.clear();
+    for (const [id] of turns) this.reacquiring.add(id);
     await Promise.allSettled(turns.map(([id, turn]) => this.reacquire(id, turn)));
   }
 
   private async reacquire(id: string, turn: CloudTurnStream): Promise<void> {
-    for (;;) {
-      if (this.closed) return turn.settle(true);
-      const [opened] = await Promise.allSettled([this.ensureOpen()]);
+    const [ended] = await Promise.allSettled([this.endOf(id)]);
 
-      if (opened.status === 'rejected') {
-        this.emit({ type: 'error', message: `Could not reconnect to learn how this turn ended (${renderThrownChain({ cause: opened.reason })}). Its answer, if any, is in the workspace transcript.` });
+    this.reacquiring.delete(id);
 
-        return turn.settle(true);
-      }
+    // A Stop or a close settled it meanwhile.
+    if (this.activeTurns.get(id) !== turn) return;
+    this.activeTurns.delete(id);
 
-      const [asked] = await Promise.allSettled([this.callRpc('awaitSend', [id])]);
+    if (ended.status === 'rejected') {
+      this.emit({ type: 'error', message: `Could not learn how this turn ended (${renderThrownChain({ cause: ended.reason })}). Its answer, if any, is in the workspace transcript.` });
 
-      if (asked.status === 'fulfilled') return await this.settleFrom(id, turn, v.parse(SendStateSchema, asked.value));
-
-      // The connection held, so the workspace refused the question: asking again would be refused again.
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.emit({ type: 'error', message: renderThrownChain({ cause: asked.reason }) });
-
-        return turn.settle(true);
-      }
+      return turn.settle(true);
     }
-  }
 
-  private async settleFrom(id: string, turn: CloudTurnStream, state: SendState): Promise<void> {
+    const { state, answer } = ended.value;
+
     if (state.status !== 'settled') {
       this.emit({ type: 'error', message: 'No turn took this message: it was handed back or refused before one read it.' });
 
       return turn.settle(true);
     }
 
-    if (state.turnId !== id) return turn.landedMidTurn();
-    // Its answer is the first one after its own entry: an actor's turns commit one at a time.
-    const [page] = await Promise.allSettled([this.historyPage({})]);
-    const entries = page.status === 'fulfilled' ? page.value.items : [];
-    const sent = entries.findIndex((entry) => entry.id === id);
-    const answer = sent === -1 ? undefined : entries.slice(sent + 1).find((entry) => entry.role === 'assistant');
+    if (state.landed === 'mid-turn') return turn.landedMidTurn();
 
-    if (answer === undefined) this.emit({ type: 'error', message: 'Could not read the answer this turn recorded; it is in the workspace transcript.' });
-    else turn.finish(answer.content);
+    if (answer !== null) turn.finish(answer);
 
-    if (state.outcome === 'error' || state.outcome === 'incomplete' || state.outcome === 'indeterminate') {
-      this.emit({ type: 'error', message: `The turn ended ${state.outcome} while the connection was down.` });
+    if (state.outcome === 'completed' || state.outcome === 'aborted') return turn.settle();
+    this.emit({ type: 'error', message: `The turn ended ${state.outcome} while the connection was down.` });
+    turn.settle(true);
+  }
 
-      return turn.settle(true);
+  private async endOf(id: string): Promise<SendEnd> {
+    const state = v.parse(SendStateSchema, await this.askAwaitSend(id));
+    const turnId = state.status === 'settled' && state.landed === 'turn' ? state.turnId : null;
+
+    return { state, answer: turnId === null ? null : await recordedAnswer((request) => this.historyPage(request), turnId) };
+  }
+
+  /** Asked again on each new connection while connections drop. On one that held, a rejection is the workspace's
+   *  refusal, and asking again would be refused again. */
+  private async askAwaitSend(id: string): Promise<JsonValue> {
+    for (;;) {
+      await this.ensureOpen();
+      const asking = this.callRpc('awaitSend', [id]);
+      const [asked] = await Promise.allSettled([asking]);
+
+      if (asked.status === 'fulfilled' || this.ws?.readyState === WebSocket.OPEN) return asking;
     }
-
-    turn.settle();
   }
 }
 

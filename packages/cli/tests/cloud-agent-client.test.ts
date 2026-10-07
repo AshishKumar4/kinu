@@ -22,7 +22,7 @@ interface MockAgentServer {
   /** What `getExecutors` answers, as the workspace's router lists them. */
   executors: JsonObject[];
   /** The DO chat projection rows. */
-  chatMessages: Array<{ id: string; role: string; content: string; createdAt: number; metadata?: JsonObject }>;
+  chatMessages: Array<{ id: string; role: string; turnId?: string; content: string; createdAt: number; metadata?: JsonObject }>;
   socket(): ServerWebSocket<unknown>;
   reply(frame: JsonObject): void;
   close(): Promise<void>;
@@ -109,7 +109,7 @@ function startMockAgentServer(options: ({
           const cursor = v.parse(v.optional(v.object({ cursor: v.optional(v.object({ before: v.number() })) })), args[0]);
           const end = cursor?.cursor?.before ?? chatMessages.length;
           const start = Math.max(0, end - 2);
-          const items = chatMessages.slice(start, end).map((message, offset) => ({ ...message, position: start + offset }));
+          const items = chatMessages.slice(start, end).map((message, offset) => ({ turnId: null, ...message, position: start + offset }));
 
           return Response.json({
             result: start === 0 ? { status: 'end', items } : { status: 'more', items, next: { before: start } },
@@ -290,7 +290,7 @@ describe('CloudAgentClient protocol', () => {
       const history = await client.history();
       expect(history.map((message) => message.id)).toEqual(['event-1', 'user-2', 'assistant-3']);
       expect(history[0]?.metadata).toEqual(metadata);
-      expect(restoredRows([v.parse(ChatHistoryEntrySchema, { ...row, position: 0 })])[0]?.metadata).toEqual(history[0]?.metadata);
+      expect(restoredRows([v.parse(ChatHistoryEntrySchema, { ...row, position: 0, turnId: null })])[0]?.metadata).toEqual(history[0]?.metadata);
     } finally {
       await client.close();
     }
@@ -833,7 +833,7 @@ describe('CloudAgentClient protocol', () => {
     const result = await turn;
     expect(result.landed === 'turn' ? result.hadError : undefined).toBe(true);
     expect(events.find((event) => event.type === 'error')?.message)
-      .toContain('Could not reconnect to learn how this turn ended');
+      .toContain('Could not learn how this turn ended');
     expect(events.filter((event) => event.type === 'turn-end')).toHaveLength(1);
     await client.close();
   });
@@ -1031,12 +1031,17 @@ describe('CloudAgentClient — a dropped socket asks the workspace how its turn 
 
     const asked = await askedAfterDrop(mock);
 
+    // The stream's end reaches the new socket too, unasked for: it says nothing of the answer this socket missed.
+    mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: request.id, body: '', done: true });
     expect({ args: asked.args, ended: events.some((e) => e.type === 'turn-end') }).toEqual({ args: [request.id], ended: false });
+    // Its answer is the one its own turn recorded, two pages back behind a later turn's.
     mock.chatMessages.push(
-      { id: request.id, role: 'user', content: 'summarize the incident', createdAt: 1 },
-      { id: 'answer-1', role: 'assistant', content: 'the cause was a stale lease.', createdAt: 2 },
+      { id: request.id, role: 'user', turnId: request.id, content: 'summarize the incident', createdAt: 1 },
+      { id: 'answer-1', role: 'assistant', turnId: request.id, content: 'the cause was a stale lease.', createdAt: 2 },
+      { id: 'later', role: 'user', turnId: 'later', content: 'and the fix?', createdAt: 3 },
+      { id: 'answer-2', role: 'assistant', turnId: 'later', content: 'renew the lease.', createdAt: 4 },
     );
-    answer(mock, asked, { status: 'settled', turnId: request.id, outcome: 'completed' });
+    answer(mock, asked, { status: 'settled', turnId: request.id, landed: 'turn', outcome: 'completed' });
 
     await expect(turn).resolves.toMatchObject({ text: 'the cause was a stale lease.', hadError: false });
     expect(events.flatMap((e) => (e.type === 'text-delta' ? [e.delta] : [])).join('')).toBe('the cause was a stale lease.');
@@ -1055,11 +1060,59 @@ describe('CloudAgentClient — a dropped socket asks the workspace how its turn 
     mock.socket().close();
     const again = await askedAfterDrop(mock, 2);
 
-    mock.chatMessages.push({ id: request.id, role: 'user', content: 'long migration', createdAt: 1 }, { id: 'answer-1', role: 'assistant', content: 'migrated.', createdAt: 2 });
-    answer(mock, again, { status: 'settled', turnId: request.id, outcome: 'completed' });
+    mock.chatMessages.push({ id: request.id, role: 'user', turnId: request.id, content: 'long migration', createdAt: 1 }, { id: 'answer-1', role: 'assistant', turnId: request.id, content: 'migrated.', createdAt: 2 });
+    answer(mock, again, { status: 'settled', turnId: request.id, landed: 'turn', outcome: 'completed' });
 
     await expect(turn).resolves.toMatchObject({ text: 'migrated.', hadError: false });
     expect(chatRequests(mock)).toHaveLength(1);
+    await client.close();
+  });
+
+  test('a message carried into a rerun ends with the rerun\'s answer; a turn that recorded none adds nothing', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const carried = client.send('and this too');
+
+    await firstChatRequest(mock);
+    mock.chatMessages.push(
+      { id: 'first-send', role: 'user', turnId: 'first-send', content: 'one more thing', createdAt: 1 },
+      { id: 'answer-1', role: 'assistant', turnId: 'first-send', content: 'both done.', createdAt: 2 },
+      { id: 'stopped', role: 'user', turnId: 'stopped', content: 'abandon it', createdAt: 3 },
+      { id: 'later', role: 'user', turnId: 'later', content: 'next', createdAt: 4 },
+      { id: 'answer-2', role: 'assistant', turnId: 'later', content: 'not the stopped turn\'s answer', createdAt: 5 },
+    );
+    answer(mock, await askedAfterDrop(mock), { status: 'settled', turnId: 'first-send', landed: 'turn', outcome: 'completed' });
+    await expect(carried).resolves.toMatchObject({ landed: 'turn', text: 'both done.', hadError: false });
+
+    const stopped = client.send('abandon it');
+    await waitFor(() => chatRequests(mock)[1], 'second chat request');
+    mock.socket().close();
+    const asked = await waitFor(() => mock.frames.filter((f) => f.type === 'rpc' && f.method === 'awaitSend')[1], 'awaitSend #2');
+
+    answer(mock, asked, { status: 'settled', turnId: 'stopped', landed: 'turn', outcome: 'aborted' });
+    await expect(stopped).resolves.toMatchObject({ landed: 'turn', text: '', hadError: false });
+    await client.close();
+  });
+
+  test('a turn being asked stays within Stop\'s reach, and ends once', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+    const turn = client.send('rebuild the index');
+
+    await firstChatRequest(mock);
+    const asked = await askedAfterDrop(mock);
+
+    client.stop();
+    const cancel = await waitFor(() => mock.frames.find((f) => f.type === 'rpc' && f.method === 'cancelCurrentWork'), 'cancelCurrentWork');
+
+    answer(mock, cancel, { cancelled: true });
+    await expect(turn).resolves.toMatchObject({ landed: 'turn', hadError: false });
+    // The answer to the ask comes after the Stop ended the turn: it ends nothing more. A read behind it on the wire.
+    answer(mock, asked, { status: 'none' });
+    await client.history();
+    expect({ ends: events.filter((e) => e.type === 'turn-end').length, errors: events.filter((e) => e.type === 'error') }).toEqual({ ends: 1, errors: [] });
     await client.close();
   });
 
@@ -1078,7 +1131,7 @@ describe('CloudAgentClient — a dropped socket asks the workspace how its turn 
     await client.close();
   });
 
-  test('a message another turn took resolves as landed mid-turn; a turn that ended in error says so', async () => {
+  test('a message another turn read at a step resolves as landed mid-turn; a turn that ended in error says so', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
     const events: AgentClientEvent[] = [];
@@ -1086,7 +1139,7 @@ describe('CloudAgentClient — a dropped socket asks the workspace how its turn 
     const steer = client.send('also check the cache');
 
     await firstChatRequest(mock);
-    answer(mock, await askedAfterDrop(mock), { status: 'settled', turnId: 'another-turn', outcome: 'completed' });
+    answer(mock, await askedAfterDrop(mock), { status: 'settled', turnId: 'another-turn', landed: 'mid-turn', outcome: 'completed' });
     await expect(steer).resolves.toEqual({ landed: 'mid-turn' });
 
     const failed = client.send('try again');
@@ -1095,7 +1148,7 @@ describe('CloudAgentClient — a dropped socket asks the workspace how its turn 
     mock.socket().close();
     const asked = await waitFor(() => mock.frames.filter((f) => f.type === 'rpc' && f.method === 'awaitSend')[1], 'awaitSend #2');
 
-    answer(mock, asked, { status: 'settled', turnId: v.parse(v.string(), request.id), outcome: 'error' });
+    answer(mock, asked, { status: 'settled', turnId: v.parse(v.string(), request.id), landed: 'turn', outcome: 'error' });
     await expect(failed).resolves.toMatchObject({ hadError: true });
     expect(events.some((e) => e.type === 'error' && e.message.includes('ended error'))).toBe(true);
     await client.close();
