@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { carriesCauseCode, KinuError, toKinuError } from '../obs/error';
-import { detach, diagnostics } from '../obs/log';
+import { detach, diagnostics, logged } from '../obs/log';
 import { settle, settleSync, tolerate } from '../obs/effect';
 import { nanoid } from '../utils/nanoid';
 import { every, REAL_CLOCK, type Clock } from '../types/clock';
@@ -27,6 +27,22 @@ export interface DeviceRpcOptions {
   requestId?: string;
   onTerminal?: () => void;
   onOutput?: (output: DeviceExecOutput) => void;
+}
+
+/** What a device call hands the tunnel for its output: nothing unless someone watches, and a loss is logged, never thrown. */
+export function watchedOutput(opts: { readonly onOutput?: (output: DeviceExecOutput) => void | Promise<void> } | undefined): Pick<DeviceRpcOptions, 'onOutput'> {
+  const onOutput = opts?.onOutput;
+
+  if (onOutput === undefined) return {};
+
+  // The delivery settles on its own: a lost one is logged and never reaches the tunnel's frame handler.
+  return {
+    onOutput: (output: DeviceExecOutput) => {
+      detach(logged('device.output_unsent', {
+        doing: "handing a running command's output to its workspace", otherwise: 'unavailable',
+      }, async () => { await onOutput(output); }));
+    },
+  };
 }
 
 interface Pending {

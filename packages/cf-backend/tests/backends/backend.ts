@@ -150,8 +150,8 @@ function turnGate() {
 
 /** The cf Durable Object, in process over bun:sqlite, owned by a real UserDO whose one device is the
  *  real daemon with Sandbox off, so a checkpoint call crosses the hub and its consent gate. */
-async function cloudflare(): Promise<SharedBackend> {
-  const daemon = pcAgentDaemon();
+async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
+  const daemon = pcAgentDaemon(opens.gitBin === undefined ? {} : { gitBin: opens.gitBin });
   const device = await deviceHarness('ashish@studio', async (frame) => await daemon.answer(frame) ?? null);
   await device.userDO.setDeviceTier(await testOwner(), device.deviceId, 'raw');
   device.consentDecision = 'always';
@@ -272,7 +272,7 @@ function bornWorkspace(): Promise<string> {
 }
 
 /** The CLI session over a copy of the born workspace, opened as `kinu` opens one, with its checkpoint store under scratch. */
-async function cli(): Promise<SharedBackend> {
+async function cli(opens: BackendOpening): Promise<SharedBackend> {
   const dbPath = scratchPath('shared-backend', 'agent.db');
   const original = await bornWorkspace();
   copyFileSync(original, dbPath);
@@ -280,7 +280,9 @@ async function cli(): Promise<SharedBackend> {
   cpSync(join(dirname(original), 'home'), join(dirname(dbPath), 'home'), { recursive: true });
   const db = workspaceDatabase(dbPath);
   const { rt } = await openWorkspaceCLI(db, dbPath, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
-  const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
+  const machine = opens.gitBin === undefined ? {} : { gitBin: opens.gitBin };
+  const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store'), ...machine });
+
   rt.checkpoints = checkpoints;
   const gate = turnGate();
   const modelResolver = scriptedResolver(gate.model);
@@ -377,6 +379,11 @@ async function cli(): Promise<SharedBackend> {
   };
 }
 
-export function openBackend(name: BackendName): Promise<SharedBackend> {
-  return name === 'cf' ? cloudflare() : cli();
+/** What a case needs of the machine its backend runs on; a `gitBin` that does not exist is a machine without git. */
+export interface BackendOpening {
+  readonly gitBin?: string;
+}
+
+export function openBackend(name: BackendName, opens: BackendOpening = {}): Promise<SharedBackend> {
+  return name === 'cf' ? cloudflare(opens) : cli(opens);
 }
