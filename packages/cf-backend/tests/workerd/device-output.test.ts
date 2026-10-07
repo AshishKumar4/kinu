@@ -19,8 +19,10 @@ const DEVICE_EXEC_OUTPUT = 'EXEC_OUT';
 
 const chunk = (stream: 'stdout' | 'stderr', text: string) => ({ stream, data: btoa(text) });
 
-/** The machine's end, as the daemon answers: a frame per window for a hub that asked, then the result. */
-async function connectDevice(hub: string): Promise<void> {
+/** The machine's end, as the daemon answers: a frame per window for a hub that asked, then the result. An older
+ *  daemon sends no output; the asks are what each exec frame said about output. */
+async function connectDevice(hub: string, daemon: 'current' | 'older' = 'current'): Promise<Array<boolean | undefined>> {
+  const asked: Array<boolean | undefined> = [];
   const object = env.DEVICE_OUTPUT_HUB_PROBE.get(env.DEVICE_OUTPUT_HUB_PROBE.idFromName(hub));
   const response = await object.fetch('https://hub/', { headers: { Upgrade: 'websocket' } });
 
@@ -36,14 +38,17 @@ async function connectDevice(hub: string): Promise<void> {
 
     if (!frame.success || frame.output.method !== 'exec') return;
     const request = frame.output.id;
+    asked.push(frame.output.output);
 
-    if (frame.output.output === true) {
+    if (frame.output.output === true && daemon === 'current') {
       device.send(JSON.stringify({ type: DEVICE_EXEC_OUTPUT, request, chunks: [chunk('stdout', 'building\n')], dropped: 0 }));
       device.send(JSON.stringify({ type: DEVICE_EXEC_OUTPUT, request, chunks: [chunk('stderr', 'warn\n'), chunk('stdout', 'built\n')], dropped: 7 }));
     }
 
     device.send(JSON.stringify({ id: request, result: BUILT }));
   });
+
+  return asked;
 }
 
 describe("a device command's output, over DO RPC", () => {
@@ -57,6 +62,30 @@ describe("a device command's output, over DO RPC", () => {
         { chunks: [chunk('stdout', 'building\n')], dropped: 0 },
         { chunks: [chunk('stderr', 'warn\n'), chunk('stdout', 'built\n')], dropped: 7 },
       ],
+      unsent: 0,
     });
+  });
+
+  it('answers from an older daemon, which sends no output', async () => {
+    await connectDevice('hub-older', 'older');
+    const workspace = env.DEVICE_OUTPUT_WORKSPACE_PROBE.get(env.DEVICE_OUTPUT_WORKSPACE_PROBE.idFromName('workspace-older'));
+
+    expect(await workspace.watch('hub-older')).toEqual({ answer: BUILT, heard: [], unsent: 0 });
+  });
+
+  it('asks for none when nothing watches the call', async () => {
+    const asked = await connectDevice('hub-unwatched');
+    const workspace = env.DEVICE_OUTPUT_WORKSPACE_PROBE.get(env.DEVICE_OUTPUT_WORKSPACE_PROBE.idFromName('workspace-unwatched'));
+
+    expect(await workspace.watch('hub-unwatched', 'none')).toEqual({ answer: BUILT, heard: [], unsent: 0 });
+    expect(asked).toEqual([undefined]);
+  });
+
+  it('keeps the answer when the workspace cannot take the output, and logs each loss', async () => {
+    const asked = await connectDevice('hub-reset');
+    const workspace = env.DEVICE_OUTPUT_WORKSPACE_PROBE.get(env.DEVICE_OUTPUT_WORKSPACE_PROBE.idFromName('workspace-reset'));
+
+    expect(await workspace.watch('hub-reset', 'reset')).toEqual({ answer: BUILT, heard: [], unsent: 2 });
+    expect(asked).toEqual([true]);
   });
 });
