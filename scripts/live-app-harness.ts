@@ -292,6 +292,10 @@ function liveAppEnv() {
   // handed through process env never binds (sweep-0924d, 2026-09-24).
   env.KINU_DEV_JWT_SECRET = randomBytes(32).toString('base64');
 
+  // A container with no .dev.vars holds no credential key, and every signed-in route answers 503 without one. Such a
+  // boot keeps nothing past its own state, so it gets one of its own, as the deployment's prompt would mint it.
+  env.CREDENTIAL_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
+
   return env;
 }
 
@@ -392,6 +396,8 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
         KINU_DEV_PREVIEW_PORT: String(previewPort),
         // And no Workers inspector, whose default port every boot would race for (vite.config.ts).
         KINU_DEV_INSPECTOR: 'off',
+        // And nothing that needs a Cloudflare account: no remote binding, no managed container image (vite.config.ts).
+        KINU_DEV_OFFLINE: 'on',
       },
       // setsid, so vite leads its own process group: teardown can signal the
       // workerd children with it rather than orphaning them to systemd

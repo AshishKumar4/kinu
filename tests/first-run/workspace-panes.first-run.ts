@@ -43,6 +43,9 @@ const RunsSchema = v.looseObject({ items: v.array(v.looseObject({ runId: v.strin
 
 const TriggersSchema = v.object({ triggers: v.array(v.unknown()) });
 
+/** Which gated right-pane tabs the workspace has content for, as the strip reads it. */
+const PresenceSchema = v.object({ work: v.boolean(), explorations: v.boolean() });
+
 /** One RPC as its pane calls it, parsed as the pane parses it. */
 async function read<S extends v.GenericSchema>(
   socket: PublicSocket, schema: S, method: string, args: readonly JsonValue[],
@@ -81,9 +84,19 @@ describe(SUITE, () => {
 
           // The pane's first read is the review boundary the turn is diffed against.
           const baseline = await read(socket, DiffSchema, 'getExecutorDiff', [WORKSPACE_EXECUTOR]);
+          const fresh = await read(socket, PresenceSchema, 'getWorkspaceTabPresence', []);
           await session.prompt(ASK);
 
           const changed = await read(socket, DiffSchema, 'getExecutorDiff', [WORKSPACE_EXECUTOR]);
+          const worked = await read(socket, PresenceSchema, 'getWorkspaceTabPresence', []);
+
+          // A fresh workspace offers neither Work nor Swarms; the turn's write is work, and no search ran.
+          subgoals.push({
+            what: 'tabs-follow-content',
+            reached: fresh.value?.work === false && fresh.value.explorations === false
+              && worked.value?.work === true && worked.value.explorations === false,
+            detail: `fresh: ${fresh.detail}; after the turn: ${worked.detail}`,
+          });
 
           subgoals.push({
             what: 'diff-shows-the-write',
