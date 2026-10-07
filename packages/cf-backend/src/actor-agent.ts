@@ -61,7 +61,7 @@ import {
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory, type ScaffoldCandidateBinding,
   createJsonJudge, type ScaffoldControl,
   refinementPass, type RefinementDeps,
-  type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
+  type CompletedTurn, type TurnContinuity,
   type AdvisorRecoverySnapshot,
   buildActorTools, buildBuiltinTools,
   buildMcpToolSet, McpToolSurfaceCache,
@@ -4068,9 +4068,6 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       tools: composed.tools,
       activeTools: composed.activeTools,
-      // No step cap: the loop is bounded by the budget governor and the caller's cancel
-      // (see core chat.ts, UNBOUNDED_STEPS).
-      stopWhen: UNBOUNDED_STEPS,
       cache: {
         providerId: composed.promptModel.provider,
         modelId: composed.promptModel.id,

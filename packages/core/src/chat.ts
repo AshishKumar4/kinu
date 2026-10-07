@@ -4,6 +4,7 @@ import { withToolResultImages } from './providers/tool-result-images';
 import {
   APICallError,
   InvalidResponseDataError,
+  isLoopFinished,
   NoOutputGeneratedError,
   streamText,
   wrapLanguageModel,
@@ -160,7 +161,7 @@ export interface ChatOptions {
   activeTools?: readonly string[];
   /** A label whose cumulative cap is spent declines the next request. */
   budget?: MissionGovernor;
-  /** An extra stop reason; there is no step cap to combine with (see UNBOUNDED_STEPS). */
+  /** An extra stop reason. Absent, no step cap: `streamText`'s own default is `isStepCount(1)`. */
   stopWhen?: StopCondition<ToolSet>;
   /** Each finished step, raw and as its own recorded messages, awaited, since the sink may be another DO the next request
    *  waits for; a throw rejects the turn. */
@@ -172,12 +173,6 @@ export interface ChatOptions {
   operations?: ModelOperationSink;
   trace?: TurnTrace;
 }
-
-/**
- * Never stop: there is no per-turn step bound. The SDK defaults to `stepCountIs(1)`, so an omitted `stopWhen` would
- * end every turn after one step.
- */
-export const UNBOUNDED_STEPS: StopCondition<ToolSet> = () => false;
 
 /** Prefixes recorded in durable failure prose by the removed silence watchdog; the classifier below reads them. */
 const RATE_LIMITED_TURN_PREFIX = 'Turn ended by provider rate limiting:';
@@ -866,7 +861,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       messages: await narrowedFor(request),
       tools: attempt.tools,
       ...offeredTools,
-      stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.stepFailure !== null],
+      stopWhen: [opts.stopWhen ?? isLoopFinished(), () => call.stepFailure !== null],
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
       experimental_repairToolCall: repairToolCall(),
       abortSignal: signal,

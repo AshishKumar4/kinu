@@ -201,8 +201,6 @@ export {
 
 export { DEFAULT_CONFIG } from './config';
 
-export { UNBOUNDED_STEPS } from './chat';
-
 export {
   createAgentConfigStore, initAgentConfigTable,
   canonicalConversationId,

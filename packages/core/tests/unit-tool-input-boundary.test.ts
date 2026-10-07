@@ -4,7 +4,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { createMemoryVfs, createTestRuntime, toolExecute } from '@kinu.run/test-utils';
-import { runChat, UNBOUNDED_STEPS, type ChatEvent } from '../src/index';
+import { runChat, type ChatEvent } from '../src/index';
 import { createFileTool } from '../src/tools/file-tool';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
@@ -64,7 +64,7 @@ async function toolResults(input: JsonObject, seed: Record<string, string>) {
   const model = modelCalling(input);
 
   for await (const event of runChat({
-    model, system: 's', history: [{ role: 'user', content: 'go' }], tools: { file }, stopWhen: UNBOUNDED_STEPS,
+    model, system: 's', history: [{ role: 'user', content: 'go' }], tools: { file },
   })) {
     if (event.type === 'tool-result') results.push(event);
   }

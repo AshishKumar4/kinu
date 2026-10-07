@@ -226,9 +226,9 @@ flowchart TB
 | Settle | `emitTurnEnd`, then the terminal effects ledger claims every owed effect before any runs and replays what a crash left owed | `packages/core/src/orchestrator/terminal-effects.ts` |
 
 No turn carries a step cap. `runChat` hands `stopWhen` to `streamText` and
-defaults it to `UNBOUNDED_STEPS`; `ActorAgent.prepareTurn` passes
-`UNBOUNDED_STEPS` explicitly. The budget governor and the caller's cancel bound
-a turn.
+defaults it to the SDK's `isLoopFinished()`, which never fires; a caller's
+condition only adds a stop reason. The budget governor and the caller's cancel
+bound a turn.
 
 A finished run is classified, not guessed. Backends pass facts to
 `classifyRunEnd` (`packages/core/src/orchestrator/turn-lifecycle.ts`) and get a

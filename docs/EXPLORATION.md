@@ -335,8 +335,8 @@ Implemented by `strategy/node-agent.ts`, `heads/head-inference.ts`, `chat.ts`,
 ## What bounds a node
 
 A swarm node has no step cap and no wall clock (owner ruling,
-2026-08-21). `runChat` has no cap: its default stop condition, `UNBOUNDED_STEPS`
-in `chat.ts`, never fires, and a caller's condition only adds a stop reason.
+2026-08-21). `runChat` has no cap: its default stop condition, the SDK's
+`isLoopFinished()`, never fires, and a caller's condition only adds a stop reason.
 The arbiter owns swarm node depth. A head with no split depth left still
 finishes its own work, but its tool surface no longer offers a split.
 
@@ -359,7 +359,7 @@ Nothing pre-empts a step. One step held 91% CPU for 26 minutes, and
 date, so it is an anecdote, not a result. This limit is open: no measurement
 yet sets a bound on one step's request.
 
-Implemented by `runNodeAgent`, `runNodeLoop`, and `UNBOUNDED_STEPS`.
+Implemented by `runNodeAgent`, `runNodeLoop`, and `runChat`'s default `stopWhen`.
 `packages/core/tests/unit-swarm-node-envelope.test.ts` holds the contract: a
 node whose one step takes 26 minutes still finishes.
 
