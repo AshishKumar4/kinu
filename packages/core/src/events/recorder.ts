@@ -639,13 +639,14 @@ export class RunEventRecorder {
     });
   }
 
-  /** How many steps the run finished, counted without reading them. */
-  finishedStepCount(runId: string): number {
+  /** How many steps the newest open turn's run finished, counted in one statement without reading them. */
+  openRunStepCount(): number {
     this.actor.assertCurrent();
 
     return this.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM run_events
-      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'step_finish' satisfies RunEventType}`[0]?.n ?? 0;
+      WHERE actor_id = ${this.actorId} AND type = ${'step_finish' satisfies RunEventType} AND run_id = (
+        SELECT run_id FROM open_turns WHERE actor_id = ${this.actorId} ORDER BY opened_at DESC, rowid DESC LIMIT 1)`[0]?.n ?? 0;
   }
 
   /** Sealed-step output in run order. */

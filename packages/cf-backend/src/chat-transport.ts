@@ -550,8 +550,9 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         // The row id on every `start`: a missing or SDK-minted one draws the answer twice.
         if (chunk.type === 'start') chunk.messageId = live.messageId;
 
-        // A replay restates every recorded step from the ledger; of those it reads only their cut markers here.
-        if (chunk.type === 'start-step') {
+        // A replay restates every recorded step from the ledger; of those it reads only their cut markers here. The
+        // ledger is asked only once an earlier step's chunks are held.
+        if (chunk.type === 'start-step' && live.relayed.some((entry) => entry.step < live.finished && entry.type !== 'data-kinu-step-cut')) {
           const restated = Math.min(this.wire.recordedSteps(), live.finished);
           live.relayed = live.relayed.filter((entry) => entry.step >= restated || entry.type === 'data-kinu-step-cut');
         }
