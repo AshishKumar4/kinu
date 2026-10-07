@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..0e31dfdb80a8e218a90b345f0226bd7bf996cce0 100644
+index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..e02395c841da1b99eb06d03613a3ec38e930e63c 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -136,9 +136,50 @@ function convertToolContentPart(part) {
+@@ -136,9 +136,56 @@ function convertToolContentPart(part) {
  	if (part.type === "custom") throw new UnsupportedFunctionalityError({ functionality: "custom tool content parts" });
  	return convertToOpenAICompatibleContentPart(part);
  }
@@ -13,10 +13,16 @@ index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..0e31dfdb80a8e218a90b345f0226bd7b
 +*/
 +const convertedChatMessages = /* @__PURE__ */ new WeakMap();
 +const frozenPromptTrees = /* @__PURE__ */ new WeakSet();
++/** Plain data frozen to its leaves: a getter could answer differently on each read, and a class instance carries state
++* freezing does not reach. */
 +function isFrozenPromptTree(value) {
 +	if (typeof value !== "object" || value === null || frozenPromptTrees.has(value)) return true;
-+	if (!Object.isFrozen(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer || value instanceof URL) return false;
-+	for (const item of Object.values(value)) if (!isFrozenPromptTree(item)) return false;
++	const prototype = Object.getPrototypeOf(value);
++	if (!Object.isFrozen(value) || prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) return false;
++	for (const key of Reflect.ownKeys(value)) {
++		const field = Object.getOwnPropertyDescriptor(value, key);
++		if (field === void 0 || !("value" in field) || !isFrozenPromptTree(field.value)) return false;
++	}
 +	frozenPromptTrees.add(value);
 +	return true;
 +}
@@ -27,7 +33,8 @@ index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..0e31dfdb80a8e218a90b345f0226bd7b
 +}
  function convertToOpenAICompatibleChatMessages(prompt, { providerOptionsKey = "google", supportsMultiPartToolContent = false } = {}) {
 +	const key = `${providerOptionsKey}\u0000${supportsMultiPartToolContent}`;
-+	const messages = [];
+ 	const messages = [];
+-	for (const { role, content, ...message } of prompt) {
 +	for (const entry of prompt) {
 +		if (!isFrozenPromptTree(entry)) {
 +			messages.push(...convertOneChatMessage(entry, providerOptionsKey, supportsMultiPartToolContent));
@@ -48,13 +55,12 @@ index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..0e31dfdb80a8e218a90b345f0226bd7b
 +	return messages;
 +}
 +function convertOneChatMessage({ role, content, ...message }, providerOptionsKey, supportsMultiPartToolContent) {
- 	const messages = [];
--	for (const { role, content, ...message } of prompt) {
++	const messages = [];
 +	{
  		const metadata = getOpenAIMetadata({ ...message });
  		switch (role) {
  			case "system":
-@@ -820,7 +861,7 @@ const chunkBaseSchema = z.looseObject({
+@@ -820,7 +867,7 @@ const chunkBaseSchema = z.looseObject({
  			})).nullish()
  		}).nullish(),
  		finish_reason: z.string().nullish()

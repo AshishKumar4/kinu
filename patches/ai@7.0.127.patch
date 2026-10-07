@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..0a4c3aa229be4f45d5b5255b71449d29bf62a152 100644
+index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..c93920d98fc26871ef080dd87efd60bb4bfc4dad 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -1342,11 +1342,7 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
@@ -38,7 +38,7 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..0a4c3aa229be4f45d5b5255b71449d29
  		} else combinedMessages.push(message);
  	}
  	const toolCallIds = /* @__PURE__ */ new Set();
-@@ -1379,6 +1383,61 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
+@@ -1379,6 +1383,66 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
  	return combinedMessages.filter((message) => message.role !== "tool" || message.content.length > 0);
  }
  /**
@@ -57,11 +57,16 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..0a4c3aa229be4f45d5b5255b71449d29
 +	"tool-approval-request",
 +	"tool-approval-response"
 +]);
-+/** Frozen to its leaves; byte views and URLs cannot be frozen, so a tree holding one is not. */
++/** Plain data frozen to its leaves: a getter could answer differently on each read, and a class instance (a byte view,
++* a URL) carries state freezing does not reach. */
 +function isFrozenTree(value) {
 +	if (typeof value !== "object" || value === null || frozenTrees.has(value)) return true;
-+	if (!Object.isFrozen(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer || value instanceof URL) return false;
-+	for (const item of Object.values(value)) if (!isFrozenTree(item)) return false;
++	const prototype = Object.getPrototypeOf(value);
++	if (!Object.isFrozen(value) || prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) return false;
++	for (const key of Reflect.ownKeys(value)) {
++		const field = Object.getOwnPropertyDescriptor(value, key);
++		if (field === void 0 || !("value" in field) || !isFrozenTree(field.value)) return false;
++	}
 +	frozenTrees.add(value);
 +	return true;
 +}
@@ -100,7 +105,7 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..0a4c3aa229be4f45d5b5255b71449d29
  * Convert a ModelMessage to a LanguageModelV4Message.
  *
  * @param message - The ModelMessage to convert.
-@@ -8034,10 +8093,27 @@ const originalGenerateCallId$8 = createIdGenerator$1({
+@@ -8034,10 +8098,27 @@ const originalGenerateCallId$8 = createIdGenerator$1({
  *
  * @returns A stream of model call parts together with request and response metadata when available.
  */
@@ -130,7 +135,7 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..0a4c3aa229be4f45d5b5255b71449d29
  		instructions,
  		system,
  		prompt,
-@@ -8054,7 +8130,7 @@ async function streamLanguageModelCall({ model, tools, toolOrder, output, toolCh
+@@ -8054,7 +8135,7 @@ async function streamLanguageModelCall({ model, tools, toolOrder, output, toolCh
  		abortSignal,
  		provider: resolvedModel.provider.split(".")[0]
  	});
@@ -139,7 +144,7 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..0a4c3aa229be4f45d5b5255b71449d29
  		tools,
  		toolOrder,
  		toolsContext,
-@@ -9555,7 +9631,10 @@ var DefaultStreamTextResult = class {
+@@ -9555,7 +9636,10 @@ var DefaultStreamTextResult = class {
  								callbacks: [onStepStart, telemetryDispatcher.onStepStart]
  							});
  						},
