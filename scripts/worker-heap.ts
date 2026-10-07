@@ -35,8 +35,9 @@ export const GATE = 'worker-heap';
 /** Measured 2026-10-07: 45.4 MB used on b0de8580f, where 15 dependents each bundled their own zod; 35.7-36.5 MB over 3
  *  runs on lane/memory-gap 9875bab49 with one; 26.4-26.5 MB on 871e789f1, where a module compiles when first imported
  *  (`new_module_registry`) and the slate vendor waits for a slate; 25.5-25.6 MB on a21347229, where a provider SDK
- *  loads with its first model. Plus 4 MB of room for the product to grow. */
-export const HEAP_AFTER_SETUP_BOUND_BYTES = 29_500_000;
+ *  loads with its first model; 24.4 MB on a9680b282, where core declares no import-time effects and passkeys and mail
+ *  load their libraries per route. Plus 4 MB of room for the product to grow. */
+export const HEAP_AFTER_SETUP_BOUND_BYTES = 28_500_000;
 
 /** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
