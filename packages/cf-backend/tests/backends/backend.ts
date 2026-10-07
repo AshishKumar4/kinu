@@ -55,7 +55,7 @@ type SameCall =
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
   | 'listRefinements' | 'showRefinement' | 'decideRefinement'
-  | 'revertConversation' | 'clearConversation' | 'runOptimization' | 'branchTurn';
+  | 'revertConversation' | 'clearConversation' | 'runOptimization' | 'branchTurn' | 'sendState' | 'awaitSend';
 
 /** The cf signature, answered asynchronously: the CLI's synchronous answers are awaited the same way. */
 type Answer<K extends SameCall> = OrchestratorAgent[K] extends (...args: infer A) => infer R
@@ -226,6 +226,8 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
       clearConversation: () => agent.clearConversation(),
       runOptimization: (target) => agent.runOptimization(target),
       send: (text, id) => sentTurn(agent, text, id ?? crypto.randomUUID()),
+      sendState: (id) => agent.sendState(id),
+      awaitSend: (id) => agent.awaitSend(id),
       branchTurn: (text) => agent.branchTurn(text),
     },
   };
@@ -374,6 +376,8 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       clearConversation: async () => { await session.clearConversation(); },
       runOptimization: (target) => session.runOptimization(target),
       send: async (text, id) => { await session.send(text, { id: id ?? crypto.randomUUID() }); },
+      sendState: async (id) => session.sendState(id),
+      awaitSend: (id) => session.awaitSend(id),
       branchTurn: async (text) => session.branchTurn(text),
     },
   };

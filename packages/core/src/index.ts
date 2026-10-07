@@ -4,6 +4,8 @@ export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateI
 
 export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
 
+export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
+
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
 export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
@@ -888,6 +890,8 @@ export {
   type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
   type LandedSteerRow, type PendingSendRow,
 } from './orchestrator/inbox';
+
+export { SendStateSchema, type SendState } from './orchestrator/send-state';
 
 export {
   buildTranscript, extendTranscript, sealTranscript, segmentBySteers,

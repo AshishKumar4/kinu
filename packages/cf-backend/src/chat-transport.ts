@@ -18,7 +18,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
   isWorkMode, INTERRUPTED_TURN, JsonValueSchema, UIMessageSchema,
-  type ChatTransport, type JsonObject, type PromptFile, type SendLanding, type SessionEvent, type WorkMode,
+  type ChatTransport, type JsonObject, type PromptFile, type SendLanding, type SendState, type SessionEvent, type WorkMode,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
@@ -40,6 +40,9 @@ export interface ChatWire {
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
   retry(claim: (turnId: string) => void): Promise<SendLanding>;
   interrupt(): void;
+  /** Where a send stands, from its durable facts; `awaitSend` once it is settled or none. */
+  sendState(id: string): Promise<SendState>;
+  awaitSend(id: string): Promise<SendState>;
 }
 
 export interface ChatRoom {
@@ -182,7 +185,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   private readonly requests = new Map<string, string>();
   private live: LiveStream | null = null;
 
-  constructor(private readonly wire: ChatWire) {}
+  constructor(readonly wire: ChatWire) {}
 
   /** The connect frame is the pane's only seed, so a socket opening mid-turn gets the current window. */
   async onConnect(connection: ChatSocket): Promise<void> {

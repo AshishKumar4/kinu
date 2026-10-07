@@ -572,7 +572,6 @@ export class Inbox implements AgentInbox {
     opts: { readonly idempotent: boolean },
   ): Promise<SendOutcome> {
     const [first] = group;
-    const files = group.flatMap((signal) => signal.user.files ?? []);
     // Plan is narrower: merging never widens what a message was typed under.
     const mode: WorkMode = group.some((signal) => signal.user.mode === 'plan') ? 'plan' : 'build';
 
@@ -583,11 +582,10 @@ export class Inbox implements AgentInbox {
         ...(group.some((signal) => signal.user.mode !== undefined) && { kinuMode: mode }),
       },
       origin: 'user',
-      steerIds: group.map((signal) => signal.user.id),
+      sends: group.map((signal) => ({ id: signal.user.id, text: signal.text, ...(signal.user.files !== undefined && { files: signal.user.files }) })),
       ...(opts.idempotent && {
         idempotencyKey: `steer-rerun:${this.steers.turnId?.() ?? 'live'}:${mode}:${first.user.id}`,
       }),
-      ...(files.length > 0 && { files }),
     };
 
     try {

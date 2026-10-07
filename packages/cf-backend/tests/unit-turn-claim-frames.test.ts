@@ -58,8 +58,8 @@ function claimsHeard(agent: HarnessOrchestratorAgent): TurnClaimState[] {
 }
 
 /** A workspace whose process died inside a turn: its claim admitted, its run open, its model call never answered. */
-async function evictedMidTurn(): Promise<ActorHarness<HarnessOrchestratorAgent>> {
-  const evicted = orchestratorHarness();
+async function evictedMidTurn(versionId?: string | null): Promise<ActorHarness<HarnessOrchestratorAgent>> {
+  const evicted = orchestratorHarness(undefined, versionId === undefined ? undefined : { versionId });
   await chatSessionTurns(evicted.agent).prepare({ messages: [{ role: 'user', content: 'Say done.' }] });
 
   return evicted;
@@ -111,7 +111,7 @@ test('a turn an eviction stranded is heard running again when the wake re-opens 
 });
 
 test("a stranded claim the wake's recovery settles reaches every tab", async () => {
-  const evicted = await evictedMidTurn();
+  const evicted = await evictedMidTurn(null);
 
   const claim = new ActorClaimStore(makeSql(evicted.db), workspaceMainActor(evicted.db), (write) => write(), historyOver(evicted))
     .unsettled(1)[0];

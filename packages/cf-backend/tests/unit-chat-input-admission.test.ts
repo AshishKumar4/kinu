@@ -18,8 +18,9 @@ function claims(harness: Harness): ActorClaimStore {
   return new ActorClaimStore(makeSql(harness.db), workspaceMainActor(harness.db), transactionSync, historyOver(harness));
 }
 
+/** An opening turn admitted on a host that stamps no build. */
 async function opening(): Promise<Harness> {
-  const harness = orchestratorHarness();
+  const harness = orchestratorHarness(undefined, { versionId: null });
   await chatSessionTurns(harness.agent).prepare({ messages: [GENESIS] });
 
   return harness;

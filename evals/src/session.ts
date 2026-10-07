@@ -89,8 +89,8 @@
  * by the SHIPPED `CloudTurnStream` (cli/src/cloud-turn-stream.ts), the same
  * accumulator `kinu chat --cloud` renders from. Only the ENVELOPE parse is
  * local, and it is deliberately narrower than the client's: this session reads
- * response frames, RPC replies and the two stream-resume frames, and ignores the
- * rest. One decoder for the expensive half, so a chunk type the product learns
+ * response frames, RPC replies and the stream-resume announcement, and ignores
+ * the rest. One decoder for the expensive half, so a chunk type the product learns
  * cannot mean two things.
  */
 import * as v from 'valibot';
@@ -100,18 +100,18 @@ import type { ActorLedger } from './results';
 
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
-  RunEventSchema, STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
-  type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
+  RunEventSchema, SendStateSchema, STEER_STEP_METADATA_KEY, ChatHistoryEntrySchema, positionPageSchema, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
+  type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PositionPageRequest, type RunEvent, type SendState,
   type SubordinateInspectionRequest, type WorkMode, type WorkspaceSpend,
   QualityDaySchema, type QualityDay, ProfileCatalogEnvelopeSchema, betaSwarms, type ProfileCatalog,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate, detach } from '../../packages/core/src/obs/index';
-import { TurnStreams } from '../../packages/cli/src/cloud-turn-stream';
 import {
   decodeFrame, encodeChatRequest, encodeRpcRequest, HEADER_WEBSOCKET, HeardStreams, recordPublicTurn,
   type PublicResponseFrame, type PublicSendResult, type PublicTurn, type PublicTurnRecorder, type SocketPayload,
 } from './session-protocol';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
+import { recordedAnswer } from '../../packages/cli/src/agent-client';
 import {
   absorbingRunId, compareRunEventOrder, DeploymentAnswer, evalAccount, evalNameSlug, evalTargetVerdict,
   evalWebIdentityEnv, evalWorkspaceName, INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend,
@@ -605,6 +605,9 @@ const ViewedFileSchema = v.object({
 /** One file as the Files tab shows it. */
 export type PublicViewedFile = v.InferOutput<typeof ViewedFileSchema>;
 
+/** One page of the conversation as `getChatHistoryPage` answers it: each entry names its turn. */
+const HistoryPageSchema = positionPageSchema(ChatHistoryEntrySchema);
+
 /** The SDK's message rows as `get-messages` serves them. Narrowed to what a
  *  trajectory asserts on — who spoke, and the text they said — because the parts
  *  array also carries tool and reasoning parts this projection does not read. */
@@ -630,6 +633,15 @@ export interface PublicMessage {
    *  turn the model read it. Absent on every other row. */
   readonly landedAtStep?: number;
 }
+
+interface OpenTurn {
+  readonly recorder: PublicTurnRecorder;
+  readonly resolve: (turn: PublicTurn) => void;
+  readonly reject: (error: Error) => void;
+}
+
+/** How a send the DO answered `mid-turn` names its absorbing run in the run events. */
+type Absorber = (events: readonly RunEvent[]) => string | null;
 
 /** A turn in flight: the id the DO knows it by, and the promise it settles. A
  *  submission rather than a bare promise, because a mid-turn steer has to be
@@ -893,23 +905,15 @@ export class KinuPublicSession {
 
   private opening: Promise<void> | null = null;
 
-  private readonly turns = new Map<string, {
-    readonly recorder: PublicTurnRecorder;
-    readonly resolve: (turn: PublicTurn) => void;
-    readonly reject: (error: Error) => void;
-    /** When it was sent: the run open at this instant is the turn's own, read back after a redial. */
-    readonly sentAt: string;
-  }>();
-
-  private readonly streams = new TurnStreams();
+  private readonly turns = new Map<string, OpenTurn>();
 
   /** Callers waiting on one response chunk of a request: settled by the
    *  first frame body the predicate accepts, then dropped. */
   private readonly chunkWatchers = new Map<string, Array<{ readonly accept: (body: string) => boolean; readonly resolve: () => void }>>();
-  /** Done-frame arrival instants for sends the DO answered `mid-turn` — the
-   *  landing instant the absorbing run is named at, in the run events' own
-   *  clock domain. Outlives the `turns` entry, which is deleted at settle. */
-  private readonly midTurnLandings = new Map<string, string>();
+  /** For each send the DO answered `mid-turn`, how its absorbing run is named: live, by the done frame's arrival in the
+   *  run events' own clock domain; after a drop, by the turn its state names. Outlives the `turns` entry, which is
+   *  deleted at settle. */
+  private readonly absorbers = new Map<string, Absorber>();
   /** One follower per run, however many sends it absorbed: each waiter on the run's end awaits the same stream.
    *  A follower per waiter was nineteen SSE streams on one run of a trial on 2026-09-24, and the object died under
    *  their reads. */
@@ -1092,7 +1096,7 @@ export class KinuPublicSession {
 
       const reason = `the workspace socket closed (code ${String(event.code)}${event.reason ? `, ${event.reason}` : ''})`;
 
-      this.survive(reason).catch(this.unrecoverable);
+      detach(Effect.promise(() => this.survive(reason)));
     });
     await this.boundary(`ws ${where.host}${where.pathname}`, () => new Promise<void>((resolve, reject) => {
       socket.addEventListener('open', () => resolve(), { once: true });
@@ -1153,7 +1157,7 @@ export class KinuPublicSession {
     const recorder = recordPublicTurn();
 
     const admitted = new Promise<PublicTurn>((resolve, reject) => {
-      this.turns.set(requestId, { recorder, resolve, reject, sentAt: new Date().toISOString() });
+      this.turns.set(requestId, { recorder, resolve, reject });
       this.send(encodeChatRequest({ requestId, text, ...(mode !== undefined && { mode }) })).catch(reject);
     });
 
@@ -1164,10 +1168,10 @@ export class KinuPublicSession {
     const settled: Promise<PublicSendResult> = admitted.then(async (result) => {
       if (result.landed !== 'mid-turn') return result;
 
-      const landedAt = this.midTurnLandings.get(requestId) ?? null;
-      this.midTurnLandings.delete(requestId);
+      const absorber = this.absorbers.get(requestId) ?? ((events) => absorbingRunId(events, new Date().toISOString()));
+      this.absorbers.delete(requestId);
 
-      return { landed: 'mid-turn', absorbedBy: await this.awaitAbsorbingRunEnd(landedAt) };
+      return { landed: 'mid-turn', absorbedBy: await this.awaitAbsorbingRunEnd(absorber) };
     });
 
     return { requestId, settled };
@@ -1175,9 +1179,9 @@ export class KinuPublicSession {
 
   /** Follow the absorbing run to its terminal event. A stream rollover is not
    * completion; followRun resumes it from the last recorded event. */
-  private async awaitAbsorbingRunEnd(landedAt: string | null): Promise<string | null> {
+  private async awaitAbsorbingRunEnd(absorber: Absorber): Promise<string | null> {
     const events = await this.runEvents();
-    const runId = absorbingRunId(events, landedAt ?? new Date().toISOString());
+    const runId = absorber(events);
 
     if (runId === null) return null;
     const own = events.filter((event) => event.runId === runId);
@@ -1664,7 +1668,7 @@ export class KinuPublicSession {
    */
   disconnect(): void {
     this.turns.clear();
-    this.midTurnLandings.clear();
+    this.absorbers.clear();
     this.listen([]);
     this.socket?.close();
     this.socket = null;
@@ -2058,15 +2062,8 @@ export class KinuPublicSession {
     }
 
     if (frame.kind === 'resuming') {
-      // The DO holds a stream for a turn this session started, on whatever stream
-      // carries it now: ack it so the buffered chunks are replayed. The accumulator
-      // is replay-idempotent, so an ack cannot double an answer. A turn the product
-      // opened on its own is acked too: until then the DO keeps its live chunks from
-      // this socket, and they are the workspace working.
-      const resuming = this.streams.resuming(frame.id, frame.turnId, this.turns);
-
-      if (resuming?.moved === true) resuming.turn.recorder.follow();
-      resuming?.turn.recorder.beginReplay();
+      // Acked as the SDK's hook acks it: until then the DO keeps the stream's live chunks from this socket, and they are
+      // the workspace working. A turn of this session's own that the socket dropped is not followed there (`survive`).
       this.socket?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }));
 
       return;
@@ -2090,7 +2087,7 @@ export class KinuPublicSession {
   /** One frame of a stream in the workspace's room: heard whoever opened the stream, recorded when it is a turn of ours. */
   private handleResponse(frame: PublicResponseFrame, heard: HeardStreams): void {
     const { live, chunk } = heard.hear(frame.id, frame);
-    const requestId = this.streams.requestOf(frame.id);
+    const requestId = frame.id;
     const turn = this.turns.get(requestId);
 
     // A stream nobody here submitted: a turn the product opened on its own. Heard, but its bodies
@@ -2104,13 +2101,15 @@ export class KinuPublicSession {
     if (live) this.framesHeard += 1;
 
     if (frame.done === true && frame.landed === 'mid-turn') {
-      this.midTurnLandings.set(requestId, new Date().toISOString());
+      const landedAt = new Date().toISOString();
+
+      this.absorbers.set(requestId, (events) => absorbingRunId(events, landedAt));
     }
 
     const body = frame.body;
 
     if (body !== undefined) {
-      if (chunk !== null) this.onChunk(frame.replay === true ? 'replay' : chunk.type);
+      if (chunk !== null) this.onChunk(chunk.type);
 
       const watchers = this.chunkWatchers.get(requestId) ?? [];
 
@@ -2131,47 +2130,59 @@ export class KinuPublicSession {
 
     if (done === null) return;
     this.turns.delete(requestId);
-    this.streams.ended(frame.id);
     turn.resolve(done);
   }
 
   /**
-   * A dropped socket, survived as the browser survives it: rpcs in flight are lost with it and fail
-   * now, but a turn is durable up there, so the socket is redialled at once and the DO's
-   * stream-resume frames finish it (`resuming` in handleFrame), on its own stream or on the one a
-   * later activation re-opened it under. A turn whose run ended while no
-   * socket was open has no stream left to resume; the run ledger says when that run ended, and a turn
-   * still unsettled then fails under the infrastructure marker, not as the agent's.
+   * A dropped socket, survived as the browser survives it: rpcs in flight are lost with it and fail now, but a turn is
+   * durable up there, so each is asked how it ended (`awaitSend`, again on each redial) and answered with what its turn
+   * recorded. A turn that cannot be asked fails under the infrastructure marker, not as the agent's.
    */
   private async survive(reason: string): Promise<void> {
     this.failRequests(reason);
+    const turns = [...this.turns];
 
-    if (this.turns.size === 0) return;
+    this.turns.clear();
+    await Promise.all(turns.map(async ([requestId, turn]) => {
+      const [asked] = await Promise.allSettled([this.reacquire(requestId, turn)]);
 
-    try {
-      await this.connect();
-    } catch (error) {
-      this.failInFlight(`${reason}; redialling failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (asked.status === 'rejected') {
+        turn.reject(new Error(`${INFRA_FAILURE_MARKER} — ${reason}, and how its turn ended could not be read: ${renderThrownChain({ cause: asked.reason })}`));
+      }
+    }));
+  }
+
+  private async reacquire(requestId: string, turn: OpenTurn): Promise<void> {
+    const state = await this.endOf(requestId);
+
+    if (state.status !== 'settled') throw new Error('no turn took the message: it was handed back or refused before one read it');
+
+    if (state.landed === 'mid-turn') {
+      this.absorbers.set(requestId, (events) => events.find((event) => event.type === 'run_start' && event.turn?.turnId === state.turnId)?.runId ?? null);
+      turn.resolve({ landed: 'mid-turn' });
 
       return;
     }
 
-    await Promise.all([...this.turns].map(async ([requestId, turn]) => {
-      await this.awaitAbsorbingRunEnd(turn.sentAt);
-      // One more round trip: a resumed stream's last frames may still be in flight behind the run's end.
-      await this.runEvents();
+    const page = async (request: PositionPageRequest) => v.parse(HistoryPageSchema, await this.rpc('getChatHistoryPage', [request.cursor === undefined ? {} : { cursor: { before: request.cursor.before } }]));
 
-      if (this.turns.get(requestId) !== turn) return;
-      this.turns.delete(requestId);
-      turn.reject(new Error(`${INFRA_FAILURE_MARKER} — ${reason}, and the turn's run ended before its stream `
-        + 'could be resumed, so its answer was never observed'));
-    }));
+    turn.recorder.finish(await recordedAnswer(page, state.turnId), state.outcome !== 'completed' && state.outcome !== 'aborted');
+    const done = turn.recorder.settled();
+
+    if (done !== null) turn.resolve(done);
   }
 
-  /** A drop the session could not survive: the ledger read that settles a turn failed too. */
-  private readonly unrecoverable = (error: Error): void => {
-    this.failInFlight(`the workspace socket closed and could not be recovered: ${error.message}`);
-  };
+  /** Asked again on each redial while sockets drop; a refusal, or a redial that fails, ends the asking. */
+  private async endOf(requestId: string): Promise<SendState> {
+    for (;;) {
+      await this.connect();
+      const [asked] = await Promise.allSettled([this.rpc('awaitSend', [requestId])]);
+
+      if (asked.status === 'fulfilled') return v.parse(SendStateSchema, asked.value);
+
+      if (asked.reason instanceof DeploymentAnswer) throw asked.reason;
+    }
+  }
 
   /** Fail what a dropped socket cannot carry over: rpc replies, as the deployment's failure, not the
    *  caller's. Turns survive it, and the next rpc redials. */
@@ -2189,8 +2200,7 @@ export class KinuPublicSession {
   private failInFlight(reason: string): void {
     const turns = [...this.turns.values()];
     this.turns.clear();
-    this.streams.clear();
-    this.midTurnLandings.clear();
+    this.absorbers.clear();
     const rpcs = [...this.rpcs.values()];
     this.rpcs.clear();
 
