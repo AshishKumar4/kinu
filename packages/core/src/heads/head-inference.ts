@@ -490,7 +490,7 @@ function settleRunContext(deps: HeadInferenceDeps, turn: {
 
   return settleExecutionContext({ ...deps.compaction, recorder: deps.actor.stores.eventRecorder }, {
     runId: deps.runId,
-    failure: turn.outcome.failure === null ? null : renderThrownChain({ cause: turn.outcome.failure }),
+    failure: turn.outcome.failure,
     turnWasOverflowRetry: turn.overflowRetry,
     lastPromptTokens: deps.actor.session.orchestrator.acc.lastPromptTokens,
     historyLength: turn.historyLength,

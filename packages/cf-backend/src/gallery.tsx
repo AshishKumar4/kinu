@@ -380,7 +380,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
       { key: "anthropic.bearer", kind: "bearer" },
       { key: "anthropic.bearer@work", kind: "bearer" },
       ...(settingsClaudeConnected ? [{ key: "claude.oauth", kind: "oauth" }] : []),
-      ...[...settingsSavedCredentials.keys()].map((key) => ({ key, kind: "openai-compat" })),
+      ...[...settingsSavedCredentials].map(([key, saved]) => ({ key, kind: v.parse(v.object({ kind: v.string() }), saved).kind })),
     ]);
   }
 
@@ -392,6 +392,15 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
 
     // The route's own answer: whether the store now holds the key.
     return fixtureJson({ ok: settingsSavedCredentials.has(key) });
+  }
+
+  if (path.startsWith("/api/user/credentials/") && method === "DELETE") {
+    const key = decodeURIComponent(path.slice("/api/user/credentials/".length));
+
+    settingsSavedCredentials.delete(key);
+
+    // The route's own answer: whether the key is gone.
+    return fixtureJson({ ok: !settingsSavedCredentials.has(key) });
   }
 
   if (path === "/api/user/unrevoked-grants") return fixtureJson([]);
@@ -453,16 +462,21 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
         { spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] },
         { spec: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", provider: "anthropic", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
         ...settingsChatGptSignedIn ? [{ spec: "chatgpt/gpt-5.5", label: "GPT-5.5", provider: "chatgpt", reasoningEfforts: [] }] : [],
+        ...settingsSavedCredentials.has("groq.bearer")
+          ? [{ spec: "groq/llama-3.3-70b-versatile", label: "Llama 3.3 70B", provider: "groq", reasoningEfforts: [] }]
+          : [],
       ],
       failures: [],
       accounts: { anthropic: ["main", "work"] },
     });
   }
 
+  // A models.dev provider beside the connected one: Groq, connected once its key is saved.
   if (path === "/api/user/providers/catalog") {
-    return fixtureJson([{
-      id: "anthropic", credKey: "anthropic.bearer", name: "Anthropic", connected: true,
-    }]);
+    return fixtureJson([
+      { id: "anthropic", credKey: "anthropic.bearer", name: "Anthropic", connected: true },
+      { id: "groq", credKey: "groq.bearer", name: "Groq", connected: settingsSavedCredentials.has("groq.bearer") },
+    ]);
   }
 
   if (path === "/api/user/cloudflare/accounts") {

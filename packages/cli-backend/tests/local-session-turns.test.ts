@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type LanguageModel, type ModelMessage } from 'ai';
+import { APICallError, type LanguageModel, type ModelMessage } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import type { TemporaryAgentPort } from '@kinu.run/core';
@@ -950,6 +950,34 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
     await session.settleBackgroundWork();
     expect(turnStarts(events)).toHaveLength(1);
     expect(calls).toBe(1);
+
+    const armed = db.query<{ c: number }, []>(
+      `SELECT COUNT(*) as c FROM compaction_state WHERE force_compaction = 1`,
+    ).get();
+
+    if (!armed) throw new Error('compaction state count row is missing');
+    expect(armed.c).toBe(0);
+  });
+
+  test('a 429 is a rate limit whatever its text says of tokens: no compaction, no retry', async () => {
+    const base = fakeModel('n/a');
+
+    const model = new TestLanguageModelV2({
+      provider: base.provider,
+      modelId: base.modelId,
+      doGenerate: base.doGenerate,
+      doStream: async () => {
+        throw new APICallError({
+          message: 'Tokens per minute limit exceeded - too many tokens processed.',
+          url: 'https://api.example.test/v1/chat/completions', requestBodyValues: {}, statusCode: 429, isRetryable: false,
+        });
+      },
+    });
+
+    const { db, session, events } = setup('unused', model);
+    await session.send('build the thing', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+    expect(turnStarts(events)).toHaveLength(1);
 
     const armed = db.query<{ c: number }, []>(
       `SELECT COUNT(*) as c FROM compaction_state WHERE force_compaction = 1`,

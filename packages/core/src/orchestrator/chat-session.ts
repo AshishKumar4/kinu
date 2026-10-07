@@ -1051,7 +1051,7 @@ export class ChatSession {
     return await this.ports.birthContext?.(drainTurnId) ?? subordinateTurnContext(this.eventLog, drainTurnId);
   }
 
-  private settleContext(item: QueueItem, prepared: PreparedTurn, failure: string | null): boolean {
+  private settleContext(item: QueueItem, prepared: PreparedTurn, failure: Error | null): boolean {
     const { chat } = prepared.execution;
 
     return settleExecutionContext({ state: this.compactionState, key: prepared.sessionKey, recorder: this.eventRecorder }, {
@@ -1121,9 +1121,8 @@ export class ChatSession {
 
     const fullText = execution.text;
     const interrupted = execution.interrupted;
-    const { failure, runError } = renderedFailure(execution.failure);
-
-    const overflowRetry = this.settleContext(item, prepared, failure);
+    const runError = runErrorOf(execution.failure);
+    const overflowRetry = this.settleContext(item, prepared, execution.failure);
 
     // Classified once: the classifier also files the mid-work defect.
     const facts: RunEndFacts = {
@@ -1508,12 +1507,6 @@ function normalizePromptInput(
   return v.is(v.string(), input) ? { text: input } : input;
 }
 
-interface RenderedFailure {
-  readonly failure: string | null;
-  /** As the turn's run records it. */
-  readonly runError: string | null;
-}
-
 /** What a programmatic announcement's producer is told when its turn settles. */
 function settledAnnouncement(failure: KinuError | null, yielded: boolean | undefined, abandoned: string | undefined): EnqueueTurnResult {
   if (yielded === true) return { status: 'yielded' };
@@ -1523,9 +1516,7 @@ function settledAnnouncement(failure: KinuError | null, yielded: boolean | undef
   return abandoned === undefined ? { status: 'queued' } : { status: 'failed', reason: abandoned };
 }
 
-function renderedFailure(cause: Error | null): RenderedFailure {
-  if (cause === null) return { failure: null, runError: null };
-  const failure = renderThrownChain({ cause });
-
-  return { failure, runError: failure.slice(0, 500) };
+/** A failed turn's error as its run records it. */
+function runErrorOf(cause: Error | null): string | null {
+  return cause === null ? null : renderThrownChain({ cause }).slice(0, 500);
 }

@@ -1,14 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { asSchema, jsonSchema, tool, type ToolSet } from 'ai';
+import type { LanguageModel } from 'ai';
 import { mcpToolKey } from '../src/tools/mcp-naming';
 import { describeMcpTool, McpToolSurfaceCache, type SerializableToolDescriptor } from '../src/tools/mcp-surface';
-import { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from '../src/tools/tool-schema';
+import { fitToolSchema } from '../src/providers/middleware/tool-schema-dialect';
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { runChat, type ChatEvent } from '../src/chat';
+import { createProviderRegistry, type ModelCallDeps } from '../src/index';
 import { conversationsFor } from './helpers';
 
 /** An MCP tool whose schema uses what providers reject: `$schema`, `const`, `oneOf`, a boolean subschema, a root `anyOf`. */
@@ -20,28 +21,28 @@ const REMOTE_SCHEMA: JsonObject = {
   ],
 };
 
-function sentSchema(dialect: ToolSchemaDialect, schema: JsonObject = REMOTE_SCHEMA): JsonObject {
-  const name = mcpToolKey('srv', 'probe');
-  const tools: ToolSet = { [name]: tool({ description: 'probe', inputSchema: jsonSchema<JsonObject>(schema), execute: async () => 'ran' }) };
-  const entry = withToolSchemaDialect(tools, dialect)[name];
+const DEPS: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
 
-  if (entry === undefined) throw new Error('the MCP tool vanished from the set');
-
-  return v.parse(JsonObjectSchema, asSchema(entry.inputSchema).jsonSchema);
+function sentSchema(gemini: boolean, schema: JsonObject = REMOTE_SCHEMA): JsonObject {
+  return v.parse(JsonObjectSchema, fitToolSchema(schema, gemini));
 }
 
 describe('MCP input schemas per provider', () => {
-  test('every provider gets an object root with the branches merged, and no $schema', () => {
-    for (const dialect of ['openai', 'anthropic', 'gemini'] as const) {
-      const schema = sentSchema(dialect);
+  test('every model gets an object root with the branches merged', () => {
+    for (const gemini of [false, true]) {
+      const schema = sentSchema(gemini);
 
-      expect({ dialect, type: schema.type, combiner: 'anyOf' in schema, meta: '$schema' in schema }).toEqual({ dialect, type: 'object', combiner: false, meta: false });
-      expect({ dialect, properties: Object.keys(obj(schema.properties)).sort(), required: schema.required }).toEqual({ dialect, properties: ['anything', 'mode', 'note', 'target'], required: ['mode'] });
+      expect({ gemini, type: schema.type, combiner: 'anyOf' in schema }).toEqual({ gemini, type: 'object', combiner: false });
+      expect({ gemini, properties: Object.keys(obj(schema.properties)).sort(), required: schema.required }).toEqual({ gemini, properties: ['anything', 'mode', 'note', 'target'], required: ['mode'] });
     }
   });
 
+  test('only Gemini loses $schema, which the other providers take', () => {
+    expect([false, true].map((gemini) => '$schema' in sentSchema(gemini))).toEqual([true, false]);
+  });
+
   test('Gemini gets its OpenAPI subset: const as enum, oneOf as anyOf, nullable for a null type', () => {
-    const properties = obj(sentSchema('gemini').properties);
+    const properties = obj(sentSchema(true).properties);
 
     expect(properties.mode).toEqual({ enum: ['fast', 'slow'] });
     expect(obj(properties.target).anyOf).toHaveLength(2);
@@ -50,10 +51,8 @@ describe('MCP input schemas per provider', () => {
     expect(properties.anything).toEqual({});
   });
 
-  test('OpenAI and Anthropic keep a nested oneOf, which they accept', () => {
-    for (const dialect of ['openai', 'anthropic'] as const) {
-      expect({ dialect, target: 'oneOf' in obj(obj(sentSchema(dialect).properties).target) }).toEqual({ dialect, target: true });
-    }
+  test('other models keep a nested oneOf, which they accept', () => {
+    expect('oneOf' in obj(obj(sentSchema(false).properties).target)).toBe(true);
   });
 
   test('a root union keeps every branch value of a property the branches share', () => {
@@ -65,11 +64,11 @@ describe('MCP input schemas per provider', () => {
       ],
     };
 
-    for (const dialect of ['openai', 'anthropic', 'gemini'] as const) {
-      const properties = obj(sentSchema(dialect, union).properties);
+    for (const gemini of [false, true]) {
+      const properties = obj(sentSchema(gemini, union).properties);
 
-      expect({ dialect, action: properties.action }).toEqual({ dialect, action: { enum: ['create', 'delete', 'archive'] } });
-      expect({ dialect, target: properties.target }).toEqual({ dialect, target: { anyOf: [{ type: 'string' }, { type: 'integer' }] } });
+      expect({ gemini, action: properties.action }).toEqual({ gemini, action: { enum: ['create', 'delete', 'archive'] } });
+      expect({ gemini, target: properties.target }).toEqual({ gemini, target: { anyOf: [{ type: 'string' }, { type: 'integer' }] } });
     }
   });
 
@@ -84,46 +83,42 @@ describe('MCP input schemas per provider', () => {
       },
     };
 
-    for (const dialect of ['openai', 'anthropic', 'gemini'] as const) {
-      const properties = obj(sentSchema(dialect, values).properties);
+    for (const gemini of [false, true]) {
+      const properties = obj(sentSchema(gemini, values).properties);
 
-      expect({ dialect, recursive: obj(properties.recursive).default, options: obj(properties.options).default, example: obj(properties.options).example })
-        .toEqual({ dialect, recursive: true, options: { depth: 2, flags: { verbose: true }, anyOf: true }, example: { depth: 1 } });
+      expect({ gemini, recursive: obj(properties.recursive).default, options: obj(properties.options).default, example: obj(properties.options).example })
+        .toEqual({ gemini, recursive: true, options: { depth: 2, flags: { verbose: true }, anyOf: true }, example: { depth: 1 } });
     }
 
-    for (const dialect of ['openai', 'anthropic'] as const) {
-      const properties = obj(sentSchema(dialect, values).properties);
+    const properties = obj(sentSchema(false, values).properties);
 
-      expect({ dialect, strict: properties.strict, mode: properties.mode })
-        .toEqual({ dialect, strict: { const: true }, mode: { type: 'string', enum: ['auto', 'manual'], default: 'auto', examples: ['auto'] } });
-    }
-  });
-
-  test('the dialect follows the model, including through a gateway', () => {
-    expect([
-      'anthropic/claude-opus-4-7', 'openrouter/anthropic/claude-sonnet-4.6', 'openrouter/google/gemini-2.5-pro',
-      'google/gemini-2.5-flash', 'openai/gpt-5.5', 'codex/gpt-5.5', 'openrouter/deepseek/deepseek-v4',
-    ].map(toolSchemaDialect)).toEqual(['anthropic', 'anthropic', 'gemini', 'gemini', 'openai', 'openai', 'openai']);
+    expect({ strict: properties.strict, mode: properties.mode })
+      .toEqual({ strict: { const: true }, mode: { type: 'string', enum: ['auto', 'manual'], default: 'auto', examples: ['auto'] } });
   });
 });
 
-describe('built-in input schemas per provider', () => {
-  /** One turn on `spec` whose model calls tasks with an off-vocabulary status: what it was sent, and what came back. */
-  async function builtinTurn(spec: string) {
+describe('built-in input schemas per model, as the registry resolves it', () => {
+  /** One turn on a model the registry resolves as `provider`/`modelId`, whose model calls tasks with an off-vocabulary
+   *  status: what it was sent, and what came back. */
+  async function builtinTurn(provider: string, modelId: string) {
     const { rt } = createTestRuntime();
     let step = 0;
     const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
 
     const model = scriptedTurnModel({
+      provider,
+      modelId,
       doGenerate: () => (step++ === 0
         ? { content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'tasks', input: JSON.stringify({ action: 'update', id: 't1', status: 'Done' }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] }
         : { content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] }),
     });
 
+    const registry = createProviderRegistry();
+    registry.register({ id: 'probe', isAvailable: () => true, listModels: () => [], createModel: (): LanguageModel => model });
     const results: Extract<ChatEvent, { type: 'tool-result' }>[] = [];
 
     for await (const event of runChat({
-      model, modelSpec: spec, system: 's', history: [{ role: 'user', content: 'go' }],
+      model: registry.resolve('probe/m', DEPS), system: 's', history: [{ role: 'user', content: 'go' }],
       tools: buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
     })) {
       if (event.type === 'tool-result') results.push(event);
@@ -134,8 +129,8 @@ describe('built-in input schemas per provider', () => {
     return { sent, results };
   }
 
-  test('a Gemini turn sends each built-in in its subset: no $schema or additionalProperties, a nullable as `nullable`', async () => {
-    const { sent } = await builtinTurn('google/gemini-2.5-pro');
+  test('a Gemini model gets each built-in in its subset: no $schema or additionalProperties, a nullable as `nullable`', async () => {
+    const { sent } = await builtinTurn('google.chat', 'gemini-2.5-pro');
 
     expect(sent.size).toBeGreaterThan(0);
 
@@ -147,11 +142,26 @@ describe('built-in input schemas per provider', () => {
     expect(obj(obj(v.parse(JsonObjectSchema, sent.get('tasks')).properties).note)).toMatchObject({ type: 'string', nullable: true });
   });
 
-  test('a normalized built-in is still checked by its own schema', async () => {
-    for (const spec of ['google/gemini-2.5-pro', 'openai/gpt-5.5']) {
-      const { results } = await builtinTurn(spec);
+  test('Gemini is known by its route or, through a gateway, by its id', async () => {
+    const routes = [
+      ['anthropic.messages', 'claude-opus-4-7'], ['openrouter.chat', 'anthropic/claude-sonnet-4.6'], ['openrouter.chat', 'google/gemini-2.5-pro'],
+      ['google.chat', 'gemini-2.5-flash'], ['google-vertex.chat', 'gemma-3-27b-it'], ['openai.responses', 'gpt-5.5'], ['openrouter.chat', 'deepseek/deepseek-v4'],
+    ] as const;
 
-      expect({ spec, outcome: results[0] }).toMatchObject({ spec, outcome: { success: false, reason: 'bad_input', error: expect.stringContaining('got "Done"') } });
+    const nullable = await Promise.all(routes.map(async ([provider, modelId]) => {
+      const { sent } = await builtinTurn(provider, modelId);
+
+      return 'nullable' in obj(obj(v.parse(JsonObjectSchema, sent.get('tasks')).properties).note);
+    }));
+
+    expect(nullable).toEqual([false, false, true, true, true, false, false]);
+  });
+
+  test('a fitted built-in is still checked by its own schema', async () => {
+    for (const [provider, modelId] of [['google.chat', 'gemini-2.5-pro'], ['openai.responses', 'gpt-5.5']] as const) {
+      const { results } = await builtinTurn(provider, modelId);
+
+      expect({ provider, outcome: results[0] }).toMatchObject({ provider, outcome: { success: false, reason: 'bad_input', error: expect.stringContaining('got "Done"') } });
     }
   });
 });

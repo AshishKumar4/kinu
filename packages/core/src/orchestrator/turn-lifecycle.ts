@@ -18,7 +18,7 @@ import {
 } from '../turn-failure';
 import type { ChatEvent } from '../chat';
 import type { ContextMeasures } from '../events/recorder';
-import { diagnostics, toKinuError, settleLoggedSync } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError, settleLoggedSync } from '../obs/index';
 
 /** Structural; both backends pass their RunEventRecorder. */
 export interface TurnRunRecorder {
@@ -279,7 +279,8 @@ export function persistMeasuredPromptTokens(
  * no provider/network await can sit between a persisted answer and its claim.
  */
 export function applyOverflowRecovery(opts: {
-  error: string;
+  /** The turn's failure, as thrown: an `APICallError` in its chain is read by its status. */
+  error: string | Error;
   /** Undefined when no step reported one; the size heuristic then does not apply. */
   lastPromptTokens: number | undefined;
   contextWindow: number | null;
@@ -307,7 +308,8 @@ export interface ExecutionContextLedger {
 
 export interface SettledExecution {
   readonly runId: string | null;
-  readonly failure: string | null;
+  /** As thrown: an `APICallError` in its chain is read by its status. */
+  readonly failure: Error | null;
   readonly turnWasOverflowRetry: boolean;
   readonly lastPromptTokens: number | undefined;
   readonly historyLength: number;
@@ -327,7 +329,7 @@ export function settleExecutionContext(ledger: ExecutionContextLedger, settled: 
   });
 
   const refused = Math.max(ledger.recorder.readContextMeasures().gate?.tokens ?? 0, settled.lastPromptTokens ?? 0);
-  const window = statedContextLimit(settled.failure) ?? (refused > 0 ? refused : null);
+  const window = statedContextLimit(renderThrownChain({ cause: settled.failure })) ?? (refused > 0 ? refused : null);
 
   if (recovery.failureClass === 'context_length' && settled.model !== undefined && window !== null && settled.runId !== null) {
     ledger.recorder.emit(settled.runId, { type: 'context_overflow', model: settled.model, window });

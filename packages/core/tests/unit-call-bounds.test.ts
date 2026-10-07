@@ -10,7 +10,7 @@ import { jsonSchema, tool } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { runChat } from '../src/index';
 
-test('the shared chat driver completes work beyond ten tool steps', async () => {
+test('the shared chat driver, given no stop condition, completes work beyond ten tool steps', async () => {
   let calls = 0;
   let executed = 0;
 

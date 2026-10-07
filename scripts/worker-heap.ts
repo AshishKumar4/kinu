@@ -554,8 +554,11 @@ export async function measure(): Promise<HeapMeasurement> {
 
       await ask('/?workspace=helpers');
       await hire(HELPERS.warm);
+      // A helper counts as answered before its final stream ends, so a snapshot waits for its runner to release too.
+      await noRunners(0);
       const beforeHelpers = await inspector.liveHeap();
       await hire(HELPERS.count);
+      await noRunners(0);
       const settledHelpers = await inspector.liveHeap();
       const perHelperRetained = (settledHelpers - beforeHelpers) / HELPERS.count;
 

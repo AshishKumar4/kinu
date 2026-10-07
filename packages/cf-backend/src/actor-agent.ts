@@ -162,7 +162,7 @@ import {
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
-  type TaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
+  toolsInWorkMode, type TaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
   type NimbusSandboxHandle, childContextResolver, localContextTree,
@@ -2966,13 +2966,14 @@ export abstract class ActorAgent extends Agent<Env> {
         }
 
         const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider(), this.agentStores(actor.handle.actorId).conversations());
-        const providers = providersInWorkMode(mode, surface.providers);
         // Narrow by the child's own durable, per-actor role.
-        const reach = slateToolReach(await this.hostedSlateReach(actor, providers, Object.keys(surface.native)));
+        const reach = slateToolReach(await this.hostedSlateReach(actor, surface.providers, Object.keys(surface.native)));
 
-        if (route.kind === 'tool') return this.callSlateTool({ rt: actor.runtime, native: surface.native, providers, reach, route, mode });
+        if (route.kind === 'tool') {
+          return this.callSlateTool({ rt: actor.runtime, native: toolsInWorkMode(mode, surface.native), providers: surface.providers, reach, route, mode });
+        }
 
-        return await callCodemodeMember(reach.narrowProviders(providers), route.namespace, route.member, route.args) ?? null;
+        return await callCodemodeMember(reach.narrowProviders(providersInWorkMode(mode, surface.providers)), route.namespace, route.member, route.args) ?? null;
       }));
     });
   }
@@ -3001,7 +3002,7 @@ export abstract class ActorAgent extends Agent<Env> {
         }
 
         case 'tool': {
-          const providers = providersInWorkMode(mode, this.slateNamespaces());
+          const providers = this.slateNamespaces();
           const reach = slateToolReach(yield* Effect.promise(async () => this.slateReach(providers)));
 
           return yield* Effect.promise(async () => this.callSlateTool({ rt: this.rt, native: this.getRawToolsForWorkMode(mode), providers, reach, route, mode }));

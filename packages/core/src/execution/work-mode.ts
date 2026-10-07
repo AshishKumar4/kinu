@@ -113,10 +113,9 @@ export function providersInWorkMode(mode: WorkMode, providers: CodemodeProvider[
 
 /** Bind SDK-delivered native calls to the mode of the admitted turn, not the SDK caller's async ancestry. */
 export function toolsForInvocation(mode: WorkMode, tools: ToolSet): ToolSet {
-  const permitted = toolsInWorkMode(mode, tools);
   const bound: ToolSet = {};
 
-  for (const [name, entry] of Object.entries(permitted)) {
+  for (const [name, entry] of Object.entries(tools)) {
     const execute = entry.execute;
     bound[name] = execute === undefined ? entry : {
       ...entry,

@@ -75,7 +75,7 @@ function PlanCard({ item, onOpen }: { item: OwnedPlan; onOpen: () => void }) {
   const { owner, plan, tasks } = item;
 
   return (
-    <div className="p-group">
+    <div className="p-group" data-plan-card={plan.revision}>
       <button type="button" onClick={onOpen}
         className="w-full rounded-t-md px-3 pt-2.5 pb-2 text-left transition-colors hover:p-elevated">
         <div className="flex min-w-0 items-baseline gap-2">

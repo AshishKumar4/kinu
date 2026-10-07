@@ -206,7 +206,6 @@ export {
 
 export { DEFAULT_CONFIG } from './config';
 
-
 export {
   createAgentConfigStore, initAgentConfigTable,
   canonicalConversationId,
@@ -548,8 +547,6 @@ export { seedActorLoop, defaultLoopOrigin, type LoopOrigin } from './scaffold/bo
 export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } from './craft/source';
 
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
-
-export { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from './tools/tool-schema';
 
 export {
   describeMcpTool, toolSurfaceTokens, omitEmptyOptionalArgs,

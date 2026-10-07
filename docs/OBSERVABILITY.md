@@ -444,8 +444,8 @@ A turn that stops with tool calls pending is `incomplete`, and
 (`turn.ended_mid_work`, code `unavailable`). The status tells the reader the
 turn did not answer; the failure line reports the defect that stopped the
 loop: a step ceiling, a stop condition, or a relay the loop waited on. Neither
-loop sets a step ceiling: `UNBOUNDED_STEPS` (`core/src/chat.ts`) is `runChat`'s
-default `stopWhen`, and `ActorAgent` passes it explicitly.
+loop sets a step ceiling: `runChat` (`core/src/chat.ts`) defaults `stopWhen` to
+the SDK's `isLoopFinished()`, and `ActorAgent` passes none.
 
 Host death writes no `run_end`. `RunEventRecorder.unterminatedModelOperations`
 (`events/recorder.ts`) detects it.
