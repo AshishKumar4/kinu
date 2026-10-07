@@ -42,7 +42,8 @@ export interface AgentWorkspace {
   parentReport(report: {
     readonly text: string; readonly status: SubordinateReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
   }): Promise<string>;
-  autoTitle(subject: string): Promise<void>;
+  /** Persists the title the agent suggested itself; null lands the stand-in alone. */
+  autoTitle(subject: string, title: string | null): Promise<void>;
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   /** A facet sets no alarm. */
   armWake(atMs: number): Promise<void>;

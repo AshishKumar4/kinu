@@ -4,7 +4,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { currentDateForPrompt, publishSubordinateReport, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
-import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type { AgentRuntime, HeadSeat, OwedReport, RunTurnSources } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { isCFRuntime, type CFRuntime } from './runtime';
@@ -76,8 +76,6 @@ export interface HostedActorSeams {
   /** A head's mission, from its labels; a hire is never budgeted here. */
   mission(input: HeadInput): MissionScope | null;
   split(actor: HostedActor, runtime: CFRuntime, input: HeadInput): (request: HeadSplitRequest) => Promise<HeadSplitResult>;
-  /** The root's own auto-title round-trip, asked on the hosted actor's behalf. */
-  suggestTitle(mission: string): Promise<string | null>;
   taskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile>;
   announce(actor: BoundActor): void;
   /** Drain on a reaction (a child's report). Never for an assignment: `wakesADrain` excludes it. */
@@ -395,17 +393,10 @@ export async function hostedParentReport(
   return relayed.disposition;
 }
 
-/** Names a hosted actor after the work it was given; a failed titling model keeps the stand-in. */
-export function hostedAutoTitle(seams: HostedActorSeams, actor: BoundActor, subject: string): Promise<void> {
-  return settle(attempt(
-    { doing: 'deriving a hosted actor title from its brief', otherwise: 'unavailable' },
-    () => titleActorFromMessage(actor.handle, subject, (brief) => seams.suggestTitle(brief)),
-  ).pipe(Effect.match({
-    onSuccess: (renamed) => { if (renamed) seams.announce(actor); },
-    onFailure: (failure) => {
-      diagnostics.failure('agent.auto_title_suggestion_failed', failure, { workspace: actor.record.workspaceId });
-    },
-  })));
+/** Names a hosted actor after the work it was given, with the title its own isolate suggested (null: the stand-in
+ *  only). A failure throws, so the agent's owed row keeps it. */
+export async function hostedAutoTitle(seams: HostedActorSeams, actor: BoundActor, subject: string, title: string | null): Promise<void> {
+  if (await titleActorFromMessage(actor.handle, subject, async () => title)) seams.announce(actor);
 }
 
 /** One actor's child substrate: every verb is a call on the workspace's one host. */

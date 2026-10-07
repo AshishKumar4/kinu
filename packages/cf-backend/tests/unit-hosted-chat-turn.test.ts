@@ -7,12 +7,11 @@
  * carries, and a watching tab takes the turn's terminal error frame (`terminalChatError`).
  */
 import { expect, test } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
-import { terminalChatError } from '@kinu.run/core';
+import { terminalChatError, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import * as v from 'valibot';
 import { gatewayWorkspace, runDelegatedTask, wakeForDelegatedTask } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
-import { chatCompletion, stubAiBinding, type RecordedGatewayRun } from './helpers/platform-gateway';
+import { chatCompletion, requestOf, stubAiBinding, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 const ChatResponseSchema = v.looseObject({
   type: v.literal('cf_agent_use_chat_response'), body: v.string(), done: v.boolean(), error: v.optional(v.boolean()),
@@ -40,25 +39,16 @@ async function firstTask(answer: (run: RecordedGatewayRun) => Response): Promise
   const seen: string[] = [];
   const shown: string[] = [];
   const ended = Promise.withResolvers<void>();
-  const workspace = gatewayWorkspace(stubAiBinding(answer));
 
-  // The title answers only once the turn has ended: a turn that waited on it would never end.
-  workspace.agent.sideModelFactory = () => new MockLanguageModelV3({
-    doGenerate: async () => {
-      await ended.promise;
-      seen.push('title model');
+  // The title is the agent's own model call, and answers only once the turn has ended: a turn that waited on it would
+  // never end.
+  const workspace = gatewayWorkspace(stubAiBinding(async (run) => {
+    if (!JSON.stringify(requestOf(run).messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) return answer(run);
+    await ended.promise;
+    seen.push('title model');
 
-      return {
-        content: [{ type: 'text', text: '{"title":"Greeter"}' }],
-        finishReason: { unified: 'stop', raw: undefined },
-        usage: {
-          inputTokens: { total: 0, noCache: 0, cacheRead: undefined, cacheWrite: undefined },
-          outputTokens: { total: 0, text: 0, reasoning: undefined },
-        },
-        warnings: [],
-      };
-    },
-  });
+    return chatCompletion(run, '{"title":"Greeter"}');
+  }));
 
   await workspace.agent.setSoul('# Purpose\n\nGreet whoever asks.');
   const { subordinate } = await workspace.agent.createSubordinateAgent();

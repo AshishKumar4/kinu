@@ -235,7 +235,7 @@ test('settled turns under an owner-fixable refusal leave one row per effect and 
   expect(wakes.length).toBe(armed);
 
   // The owner's change: both fall due on one wake.
-  await transitions.releaseParked();
+  await transitions.modelSettingsChanged();
   expect(wakes.slice(armed)).toEqual([NOW]);
   expect(transitions.nextRetryAt()).toBe(NOW);
 });
@@ -262,7 +262,7 @@ function gatedGateway(answers: number[], gate: Promise<void>, calls: { n: number
 // Review of T1, 2026-09-30: the owner replaced a refused key while a call made with the old one still waited on its
 // answer. The release found nothing parked, the late refusal parked the row, and nothing tried the new key.
 test.each([
-  ['the owner changes the model settings', 401, (transitions: TerminalTransitions) => transitions.releaseParked()],
+  ['the owner changes the model settings', 401, (transitions: TerminalTransitions) => transitions.modelSettingsChanged()],
   ['a newer turn claims its effects', 402, async (transitions: TerminalTransitions) => {
     transitions.ledger.claim('t2/t2-answer', [{ name: 'sleep_time', scope: 't2-answer', input: {}, lane: 'detached' }]);
   }],

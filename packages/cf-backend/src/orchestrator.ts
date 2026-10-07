@@ -763,7 +763,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The turn's report disposition is the agent's own, kept where the turn ran.
       owedReport: async (turn, ended) => await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), turn, ended),
       parentReport: (report) => hostedParentReport(this.hostedSeams(), this.agentBound(actorId), report),
-      autoTitle: (subject) => hostedAutoTitle(this.hostedSeams(), this.agentBound(actorId), subject),
+      autoTitle: (subject, title) => hostedAutoTitle(this.hostedSeams(), this.agentBound(actorId), subject, title),
       hireAdvisor: async (advisor) => {
         const { session } = await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)));
 
@@ -889,6 +889,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.agentTurns.inFlight(reference.actorId) || this.actorHost().hosted(reference)?.session.inFlight === true;
   }
 
+  /** Each agent parks in its own isolate's ledger, so each is told; detached, so the owner's write never waits on them. */
+  protected override async modelSettingsChanged(): Promise<void> {
+    await super.modelSettingsChanged();
+
+    for (const { actorId } of this.workspaceActors().list()) {
+      if (!this.isAgent(actorId)) continue;
+      this.detachOwned(logged('agent.settings_release_failed', { doing: "telling an agent's isolate the model settings changed", otherwise: 'unavailable' },
+        async () => { await (await this.agentCalls(actorId)).modelSettingsChanged(this.agentSnapshot(actorId)); }, { workspace: this.name, actor: actorId }));
+    }
+  }
+
   protected override async agentTurnSettled(actor: ActorReference): Promise<void> {
     if (this.liveActor(actor.actorId)) await this.agentTurns.settled(actor.actorId);
   }
@@ -1010,7 +1021,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       profile: (input) => this.actorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
       priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
-      suggestTitle: (mission) => this.suggestTitle(mission),
       taskProfile: (turn) => this.hostedTaskProfile(turn),
       announce: () => { this.liveReadsMoved(ROSTER_READS); },
       // The root's turns run on this object's own chat loop, not its hosted slot.
@@ -5243,7 +5253,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** A hosted actor's own model pin, over the workspace's for its turns. */
   @callable() setActorModel(actor: string, spec: string) {
     return settle(Effect.gen({ self: this }, function* () {
-      return setModel(this.modelSetting((yield* this.hostedChild(actor)).child.stores.config, () => {}), spec);
+      const set = setModel(this.modelSetting((yield* this.hostedChild(actor)).child.stores.config, () => {}), spec);
+
+      yield* Effect.promise(async () => this.modelSettingsChanged());
+
+      return set;
     }));
   }
 
