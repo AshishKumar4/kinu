@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
 import { INSPECTOR_SHUT_PX } from '../../scripts/product-flows';
-import { SLATE_TITLE } from '../../scripts/scripted-model';
+import { PLAN_TASK_TITLES, SLATE_TITLE } from '../../scripts/scripted-model';
 import { liveRows } from '../../scripts/live-app-rows';
 
-const { observed, verdictOf, boot } = liveRows('live-app-plans', ['plan-tabs', 'walkthrough', 'kept-tab', 'chat-scroll', 'state']);
+const { observed, verdictOf, boot } = liveRows('live-app-plans', ['plan-tabs', 'walkthrough', 'kept-tab', 'chat-scroll', 'plan-tasks', 'state']);
 
 beforeAll(boot);
 
@@ -86,5 +86,16 @@ describe('the live app boots on its own Durable Object state', () => {
 
   test('nothing but this run stood in that state', () => {
     expect(verdictOf(observed.state, 'state').foreign).toEqual([]);
+  });
+});
+
+// The approved plan owns the work its turn adds, natively or from a program, a subtask under its step; a chore added
+// before any plan existed stays apart from it.
+describe('the approved plan owns the tasks its turn adds', () => {
+  test('its step, the step\'s subtask and a program\'s step sit under the plan; an earlier chore does not', () => {
+    const { plans, unlinked } = verdictOf(observed.planTasks, 'plan-tasks');
+
+    expect(plans).toEqual([[[PLAN_TASK_TITLES.step, 0], [PLAN_TASK_TITLES.sub, 1], [PLAN_TASK_TITLES.programmed, 0]]]);
+    expect(unlinked).toEqual([PLAN_TASK_TITLES.chore]);
   });
 });
