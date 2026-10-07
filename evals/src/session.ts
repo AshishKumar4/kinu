@@ -103,7 +103,7 @@ import {
   RunEventSchema, STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type SubordinateInspectionRequest, type WorkMode, type WorkspaceSpend,
-  QualityDaySchema, type QualityDay, ProfileCatalogEnvelopeSchema, betaSwarms,
+  QualityDaySchema, type QualityDay, ProfileCatalogEnvelopeSchema, betaSwarms, type ProfileCatalog,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate, detach } from '../../packages/core/src/obs/index';
 import { TurnStreams } from '../../packages/cli/src/cloud-turn-stream';
@@ -329,6 +329,10 @@ interface PublicSessionInput {
   readonly purpose: string;
   readonly genesis?: boolean;
   readonly llm: LLMProviderConfig;
+  /** A catalog role the workspace is created in, which narrows its tools; absent is the account's default. */
+  readonly role?: string;
+  /** What the workspace needs of its account's catalog besides Beta: swarms, such as its role's definition. */
+  readonly catalog?: readonly CatalogNeed[];
 }
 
 /** The POST /api/user/workspaces body, exactly the optional fields
@@ -338,6 +342,7 @@ interface CreateWorkspaceBody {
   name: string;
   displayName: string;
   purpose?: string;
+  role?: string;
 }
 
 const WorkspaceEntrySchema = v.object({
@@ -731,30 +736,37 @@ export function beatWorkspace(origin: string, identity: PublicWebIdentity, name:
 /** Writers per account racing for its catalog, and a spare: each lost race means another writer landed. */
 const CATALOG_WRITE_ATTEMPTS = 4;
 
-/** "Beta: swarms" on for the account the evals run as, whose swarms are part of what they measure; the cases of one
- *  run race to turn it on, so a lost version race reads again until it is on. */
-async function turnOnSwarms(origin: string, headers: Record<string, string>): Promise<void> {
+/** What a workspace needs of its account's catalog: the catalog with it, or null when the catalog already holds it. */
+export type CatalogNeed = (catalog: ProfileCatalog) => ProfileCatalog | null;
+
+/** "Beta: swarms" on for the account the evals run as, whose swarms are part of what they measure. */
+const SWARMS_ON: CatalogNeed = (catalog) => betaSwarms(catalog) ? null : { ...catalog, betaSwarms: true };
+
+/** Bring the account's catalog to what `needs` ask of it. The cases of one run race to write it, so a lost version race
+ *  reads again, until nothing is left to write. */
+async function settleCatalog(origin: string, headers: Record<string, string>, needs: readonly CatalogNeed[]): Promise<void> {
   for (let attempt = 1; ; attempt += 1) {
     const read = await fetch(`${origin}/api/user/profile-catalog`, { headers });
     const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await readJson(read, 'read the profile catalog'));
+    const wanted = needs.reduce<ProfileCatalog | null>((sofar, need) => need(sofar ?? catalog) ?? sofar, null);
 
-    if (betaSwarms(catalog)) return;
+    if (wanted === null) return;
 
     const answer = await fetch(`${origin}/api/user/profile-catalog`, {
       method: 'PUT',
       headers: { ...headers, 'content-type': 'application/json' },
-      body: JSON.stringify({ catalog: { ...catalog, betaSwarms: true }, expectedVersion: version }),
+      body: JSON.stringify({ catalog: wanted, expectedVersion: version }),
     });
 
     if (answer.ok || (answer.status === 409 && attempt < CATALOG_WRITE_ATTEMPTS)) continue;
-    await readJson(answer, 'turn on Beta: swarms');
+    await readJson(answer, 'write the profile catalog');
   }
 }
 
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
   const headers = webHeaders(input.identity);
 
-  await infraBoundary(`PUT ${input.origin}/api/user/profile-catalog`, () => turnOnSwarms(input.origin, headers));
+  await infraBoundary(`PUT ${input.origin}/api/user/profile-catalog`, () => settleCatalog(input.origin, headers, [SWARMS_ON, ...input.catalog ?? []]));
 
   const created = await infraBoundary(
     `POST ${input.origin}/api/user/workspaces`,
@@ -771,6 +783,8 @@ export async function openPublicSession(input: PublicSessionInput): Promise<Kinu
       // placeholder mission `workspaceGenesisSignal` returns null for, and
       // the real mission is written over the socket below.
       if (input.genesis !== false) body.purpose = input.purpose;
+
+      if (input.role !== undefined) body.role = input.role;
 
       const response = await fetch(`${input.origin}/api/user/workspaces`, {
         method: 'POST',

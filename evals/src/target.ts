@@ -2,8 +2,9 @@ import * as v from 'valibot';
 import { USER_AI_PROXY_PATH } from '@kinu.run/core';
 import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
 import {
-  openPublicSession, resolveWebIdentity, type KinuPublicSession, type PublicWebIdentity,
+  openPublicSession, resolveWebIdentity, type CatalogNeed, type KinuPublicSession, type PublicWebIdentity,
 } from './session';
+import { REVIEWER_CATALOG, REVIEWER_ROLE_ID } from './reviewer';
 import type { SeedFile } from './task';
 import { answered, repliesTo, settle, TurnWatch } from './workspace-completion';
 
@@ -62,7 +63,9 @@ export function deployedBuild(target: EvalTarget): Promise<Served> {
  * A fresh eval-prefixed workspace on `model`, its mission written before the first prompt so no
  * genesis turn runs. The caller tears it down.
  */
-export function openWorkspace(target: EvalTarget, request: { subject: string; mission: string; model: string }): Promise<KinuPublicSession> {
+export function openWorkspace(target: EvalTarget, request: {
+  subject: string; mission: string; model: string; role?: string; catalog?: readonly CatalogNeed[];
+}): Promise<KinuPublicSession> {
   return openPublicSession({
     origin: target.origin,
     identity: target.identity,
@@ -70,20 +73,22 @@ export function openWorkspace(target: EvalTarget, request: { subject: string; mi
     purpose: request.mission,
     genesis: false,
     llm: { name: 'eval', baseURL: `${target.origin}${USER_AI_PROXY_PATH}`, headers: {}, model: request.model },
+    ...(request.role !== undefined && { role: request.role }),
+    ...(request.catalog !== undefined && { catalog: request.catalog }),
   });
 }
 
 /**
  * One question put to a model in a fresh eval workspace of its own: `files` written into it, `prompt` sent in Plan, the
  * workspace waited out, and its last reply, trimmed. The workspace is deleted whatever happened. The diagnosis, the
- * trajectory review and the judge ask through it, and read what they are given as untrusted: Plan is the product's own
- * confinement to the tools that change nothing, so a trajectory that tells its reader to write or run something is
- * refused by the turn, not by the prompt's request.
+ * trajectory review and the judge ask through it, and read what they are given as untrusted, so the workspace is the
+ * reviewer's role (`REVIEWER_ROLE`): the product itself offers the turn the file tool alone, and Plan refuses its writes.
+ * A trajectory that tells its reader to write, run, fetch or remember something is refused by the turn, not the prompt.
  */
 export async function askOnce(target: EvalTarget, request: {
   subject: string; mission: string; model: string; files: readonly SeedFile[]; prompt: string;
 }): Promise<string> {
-  const session = await openWorkspace(target, request);
+  const session = await openWorkspace(target, { ...request, role: REVIEWER_ROLE_ID, catalog: [REVIEWER_CATALOG] });
 
   try {
     for (const file of request.files) await session.writeFile(file.path, file.content);
