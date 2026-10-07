@@ -322,6 +322,9 @@ type ProbeAnswer = { ok: true; value: unknown } | { ok: false; reason: string; e
 
 interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   start(): Promise<void>;
+  authorTriage(): Promise<void>;
+  operationAs(as: 'root' | 'plan' | 'hire', input: import('@kinu.run/core').JsonValue): Promise<ProbeAnswer>;
+  unnamedShareCall(share: string): Promise<ProbeAnswer>;
   previewAsHire(): Promise<{ preview: ProbeAnswer; removed: ProbeAnswer; left: boolean }>;
   share(approved?: readonly { binding: string; member: string }[]): Promise<ProbeAnswer>;
   liveShares(): Promise<ProbeAnswer>;
