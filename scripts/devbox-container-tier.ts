@@ -11,7 +11,7 @@ import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
-import { deleteR2Prefix } from './cloudflare-rest';
+import { deleteR2Prefix, wranglerSessionToken } from './cloudflare-rest';
 import { runWrangler, wranglerProvesAbsence, deleteContainerApps, containerAppIds, publishTeardown, runTeardownOnce, delay } from './fixtures/r2-bench/deploy-substrate';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import artifact from '../packages/devbox/block-lower/upstream.json';
@@ -32,14 +32,6 @@ const Exec = v.object({ exitCode: v.number(), stdout: v.string(), stderr: v.stri
 const Commit = v.looseObject({ kind: v.string(), reason: v.optional(v.string()), movedBytes: v.optional(v.number()) });
 
 const State = v.looseObject({ chain: v.nullable(v.looseObject({ rev: v.number(), base: v.looseObject({ key: v.string() }), deltas: v.array(v.unknown()) })), snapshot: v.nullable(v.looseObject({ id: v.string() })) });
-
-function authToken(): string {
-  const ran = spawnSync(join(REPO, 'node_modules/.bin/wrangler'), ['auth', 'token', '--json'], { encoding: 'utf8' });
-
-  if (ran.status !== 0) throw new Error(`the fixture has no Cloudflare authority: ${ran.stderr.slice(-300)}`);
-
-  return v.parse(v.object({ token: v.string() }), JSON.parse(ran.stdout)).token;
-}
 
 async function installTools(bucket: string, cached?: string): Promise<void> {
   const key = `devbox-tools/${artifact.tools.sha256}.tgz`;
@@ -120,7 +112,7 @@ async function main(): Promise<void> {
   const app = `${worker}-contractbox`;
   const scratch = recovering === undefined ? mkdtempSync(join(tmpdir(), 'kinu-devbox-contracts-')) : dirname(process.argv[recoveryArgument + 1] ?? '');
   process.env['WRANGLER_LOG_PATH'] = join(scratch, 'wrangler');
-  const token = authToken();
+  const token = wranglerSessionToken();
   // Only the throwaway application's REST cleanup uses this credential; never printed or persisted.
   process.env['KINU_CLOUDFLARE_API_TOKEN'] = token;
   const report = join(scratch, 'report.json');

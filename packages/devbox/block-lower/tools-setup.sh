@@ -1,4 +1,4 @@
-# The tools tarball's build environment (D66, D77), run as root once per environment by armada's recipe setup on
+# The tools tarball's build environment (D66, D78), run as root once per environment by armada's recipe setup on
 # cloudflare/debian-trixie: every Debian package from one day of the archive, the toolchain included, and each other
 # input fetched by its pinned sha256. tools-build.sh then compiles and packs as the user.
 set -eu

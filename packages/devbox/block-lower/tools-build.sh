@@ -1,4 +1,4 @@
-# The tools tarball (D66, D77), built as the user by armada's recipe install after tools-setup.sh, in a work
+# The tools tarball (D66, D78), built as the user by armada's recipe install after tools-setup.sh, in a work
 # directory that holds this tree's block lower in block-lower/. It leaves tools.tgz there; each task reads a part.
 set -eu
 umask 022
