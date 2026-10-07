@@ -199,7 +199,7 @@ describe('two real turns over the HTTP model seam', () => {
     expect(done.leases['ev-answered']).toEqual({ turnId: 'evt-answered', consumedAt: null });
     expect(done.leases['ev-unanswered']?.consumedAt).toBeNull();
     expect(done.transition).toBe('done');
-    expect(done.asked.some((words) => words.includes('The unanswered event'))).toBe(true);
+    expect(done.asked.some((words) => words.includes('The unanswered event')), JSON.stringify(done)).toBe(true);
     expect(done.asked.filter((words) => words.includes('The answered event'))).toEqual([]);
   });
 
