@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { accountCredentialKey, CODEX_CRED_KEY } from '@kinu.run/core';
+import { accountCredentialKey, CODEX_CRED_KEY, type ModelTestResult } from '@kinu.run/core';
 import { childEnv } from '@kinu.run/test-utils';
 import { codexReviewModel, REVIEW_ACCOUNTS } from '../src/config';
 
@@ -33,9 +33,11 @@ const deployment = Bun.serve({
         const account = REVIEW_ACCOUNTS.find((name) => codexReviewModel(name) === spec);
         const answers = account !== undefined && held.has(accountCredentialKey(CODEX_CRED_KEY, account));
 
-        return Response.json(answers
+        const result: ModelTestResult = answers
           ? { ok: true, firstTokenMs: 400, totalMs: 900 }
-          : { ok: false, failure: 'denied', message: `No usable codex credential for the account "${account ?? spec}"` });
+          : { ok: false, failure: 'signed-out', message: `No usable codex credential for the account "${account ?? spec}"` };
+
+        return Response.json(result);
       },
     },
   },
