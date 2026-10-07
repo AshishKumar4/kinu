@@ -21,8 +21,5 @@ unset KINU_EVAL_MODELS
 if [[ -n "${KINU_DEPLOY_REPORT:-}" ]]; then
   export BENCH_ARTIFACTS="$KINU_DEPLOY_REPORT/evals"
 fi
-# Readiness belongs to this row: deterministic tiers and source gates need no real-model provider keys.
-status=0
-bun scripts/eval-provider-keys.ts "${KINU_EVAL_ORIGIN%/}" || status=1
-bun run evals || status=1
-exit "$status"
+# The eval accounts' provider keys are stored by the deploy before it starts this row (deploy.sh, provision_eval_keys).
+exec bun run evals
