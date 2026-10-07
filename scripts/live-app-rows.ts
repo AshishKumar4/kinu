@@ -1429,7 +1429,10 @@ async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Pr
   try {
     await sendInChat(page, PLAN_TASKS_CHORE);
     await until(page, 'the chore turn to end', TURN_ANSWERED);
+    // The modes hold still while the composer is busy; a press then is lost.
+    await until(page, 'Plan offered', `[...document.querySelectorAll('#chat [aria-label="Turn mode"] button')].some((button) => button.textContent?.trim() === 'Plan' && !button.disabled)`);
     await pressButton(page, '#chat [aria-label="Turn mode"] button', 'Plan');
+    await until(page, 'Plan chosen', `[...document.querySelectorAll('#chat [aria-label="Turn mode"] button[aria-pressed="true"]')].some((button) => button.textContent?.trim() === 'Plan')`);
     await sendInChat(page, PLAN_TASKS_PLAN);
     await until(page, "the plan's decisions", `[...document.querySelectorAll('[data-plan-decisions] button')].some((button) => /approve/iu.test(button.textContent ?? '') && !button.disabled)`);
     await page.$$eval('[data-plan-decisions] button', (buttons) => {
