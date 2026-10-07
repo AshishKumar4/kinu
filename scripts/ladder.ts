@@ -1332,11 +1332,9 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything needing a Workers runtime rather than a composition root — every '
       + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
       + 'bun, which is why `bun run test:workerd` exists below.',
-    // `unit-codemode-sandbox.test.ts` imports the node shim it wrote to scratch
-    // from `KINU_NODE_MODULE_SOURCE`, whose bytes are this file's. Measured by
-    // `--audit-closure` 2026-09-23: the suite opens 247 tracked files off its
+    // Measured by `--audit-closure` 2026-09-23: the suite opens 247 tracked files off its
     // graph, across docs/, public/ and src/components/, so it reads the tree.
-    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/core/src/execution/codemode-node-shim.ts'] },
+    inputs: { ...AMBIENT_BY_NAME, corpus: true },
   },
 
   {
