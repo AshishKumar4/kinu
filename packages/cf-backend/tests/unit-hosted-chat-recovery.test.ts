@@ -127,9 +127,10 @@ test("a delegated task whose turn cannot be prepared is answered to its hirer as
   rosterOver(workspace.db).assign('drafter', SECOND);
   await wakeForDelegatedTask(workspace, child.reference.actorId, SECOND);
 
-  const told = () => openings().filter((text) => text.includes('[subordinate_report]') && text.includes('kinu-probe-does-not-exist'));
+  const told = () => openings().filter((text) => text.includes('[subordinate_report]') && text.includes('failed to run its assigned turn'));
 
   await driveUntil(workspace, 'the hirer was never told the second task could not run', () => told().length > 0);
-  expect(told().join(' ')).toContain('drafter failed to run its assigned turn');
+  // The report names what refused the turn: the pinned model its provider does not list.
+  expect(told().join(' ')).toContain('kinu-probe-does-not-exist');
   expect(openings().filter((text) => text.includes(SECOND) && !text.includes('[subordinate_report]'))).toEqual([]);
 });
