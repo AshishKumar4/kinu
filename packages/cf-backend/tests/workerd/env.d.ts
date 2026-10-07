@@ -35,7 +35,7 @@ import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
-  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork,
+  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork, AgentHeldWork,
 } from './two-turn-shapes';
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
@@ -106,6 +106,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   refusedChangeNotes(): Promise<{ readonly sent: boolean; readonly owed: { readonly sends: number; readonly cards: number } }>;
   claimUnderRecovery(): Promise<ClaimUnderRecovery>;
   strandedWork(): Promise<StrandedWork>;
+  agentHeldWork(): Promise<AgentHeldWork>;
   seedOwedReplyWorkspace(): Promise<string>;
   recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered>;
   hostedActorTab(): Promise<{ name: string; snapshot: string; jobs: string; frames: number }>;

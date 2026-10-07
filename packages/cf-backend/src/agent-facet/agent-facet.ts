@@ -5,7 +5,7 @@ import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-s
 import type { UIMessage } from 'ai';
 import {
   encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
-  type AgentFigures,
+  type AgentFigures, type InspectedWork,
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
@@ -80,6 +80,8 @@ export interface AgentFacetCalls {
   /** What a reset left owed is taken up; answers the next instant the agent owes and the turn its chat holds. */
   wake(snapshot: AgentSnapshot): Promise<AgentOwed>;
   owed(snapshot: AgentSnapshot): Promise<boolean>;
+  /** Its own turns and effects still owed, as the workspace's work read reports them. */
+  owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]>;
   /** A retirement waits on it. */
   idle(): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
@@ -198,6 +200,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async owed(snapshot: AgentSnapshot): Promise<boolean> {
     return (await this.chatOf(snapshot)).session.turnOwed;
+  }
+
+  async owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]> {
+    return (await this.chatOf(snapshot)).owedWork();
   }
 
   async idle(): Promise<void> {

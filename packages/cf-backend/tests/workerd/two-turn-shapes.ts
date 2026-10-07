@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
@@ -351,6 +351,7 @@ export interface ChangeNotesCompleted {
 /** One unit of owed work as the workspace's work read reports it. */
 export interface OwedWorkRow {
   readonly kind: string;
+  readonly actor: string | null;
   readonly id: string;
   readonly phase: string;
   readonly attempt: number | null;
@@ -363,6 +364,12 @@ export interface ClaimUnderRecovery {
   readonly settled: string | null;
   readonly heldWork: readonly OwedWorkRow[];
   readonly settledWork: readonly OwedWorkRow[];
+}
+
+/** The work read while a hired agent's own turn is held at the model, and the agent's name. */
+export interface AgentHeldWork {
+  readonly agent: string;
+  readonly held: readonly OwedWorkRow[];
 }
 
 /** The work read over what a dead activation and an older build left, then what the person's Recover did and left. */

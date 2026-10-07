@@ -73,4 +73,9 @@ export class AgentWakes {
   next(): number | null {
     return this.sql<{ at: number | null }>`SELECT MIN(wake_at) AS at FROM agent_wakes`[0]?.at ?? null;
   }
+
+  /** Every agent with a wake armed: those whose isolates still owe something. */
+  owing(): readonly string[] {
+    return this.sql<{ actor_id: string }>`SELECT actor_id FROM agent_wakes ORDER BY wake_at`.map((row) => row.actor_id);
+  }
 }
