@@ -186,7 +186,9 @@ export async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeli
   const checks: EvalCheck[] = cut.length === 0 ? [] : [{ id: CUT_REPORTED_COMPLETED, pass: false, evidence: { runs: cut } }];
   const verify = turn.verify;
 
-  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies, runStartedAt).collect(verify)));
+  const settled = (): Promise<void> => settle(new TurnWatch(session, watching));
+
+  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies, runStartedAt, settled).collect(verify)));
   const afterEviction = turn.verifyAfterEviction;
 
   if (afterEviction !== undefined && checks.every((check) => check.pass)) {
@@ -195,7 +197,7 @@ export async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeli
       session.disconnect();
       await session.connect();
 
-      return new EvalVerifier(session, replies, runStartedAt).collect(afterEviction);
+      return new EvalVerifier(session, replies, runStartedAt, settled).collect(afterEviction);
     }));
   }
 

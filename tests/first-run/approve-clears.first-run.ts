@@ -43,7 +43,7 @@ import type { PublicSessionPlan } from '../../evals/src/session';
 import type { DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import { approvalClearsSelection, isApprovalButtonLabel } from './approval-observation';
-import { openBrowser, signedInPage } from './browser';
+import { openBrowser, signedInPage } from '../../evals/src/browser';
 import type { TestChrome } from '../../scripts/test-chrome';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,

@@ -142,6 +142,9 @@ export type PublicWebIdentity =
   /** A remote deployment: the synthetic identity's secret, sent per request. */
   | { readonly kind: 'secret'; readonly secret: string; readonly account?: EvalAccount };
 
+/** A workspace as its owner's browser reaches it. */
+export type WorkspaceWeb = { readonly origin: string; readonly identity: PublicWebIdentity; readonly workspace: string };
+
 export type PublicWebIdentityResolution =
   | { readonly kind: 'ready'; readonly identity: PublicWebIdentity }
   /** No authority for the browser plane. `remedy` names the command and the
@@ -968,6 +971,11 @@ export class KinuPublicSession {
     if (took) this.lastMarked = Date.now();
 
     return took;
+  }
+
+  /** Where this workspace's pages are, and who opens them: this session's own account. */
+  get web(): WorkspaceWeb {
+    return { origin: this.input.origin, identity: this.input.identity, workspace: this.workspace };
   }
 
   get describe(): string {

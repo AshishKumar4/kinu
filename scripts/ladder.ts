@@ -1555,8 +1555,9 @@ export const LADDER: readonly Gate[] = [
       + 'counts or infrastructure failures, a leg refused when a task or trial is missing or it ran on '
       + 'another build than planned, the verdict a promote reads, another build\'s ledger rows read '
       + 'without the types it alone writes, a check that throws failing alone, a slate call the deployment could '
-      + 'not carry failing the trial as infrastructure rather than a check, and the session '
-      + 'client\'s frame and socket handling. Plus the preflight that refuses to measure a '
+      + 'not carry failing the trial as infrastructure rather than a check, the session '
+      + 'client\'s frame and socket handling, and a page read in Chrome as a person sees it '
+      + '(each name\'s own part of the page, what hides it, the control pressed). Plus the preflight that refuses to measure a '
       + 'deployment serving another revision.',
     blind: 'anything a model does, and whether a task\'s checker is right about its task. That '
       + 'is proved per task, before its first run, against hand-written reference slates on the '
