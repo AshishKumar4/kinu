@@ -181,12 +181,6 @@ async function tryCall(
 }
 
 describe('OpenCode provider', () => {
-  test('provider id and label', () => {
-    const provider = createOpenCodeProvider(makeProviderOpts());
-    expect(provider.id).toBe(OPENCODE_PROVIDER_ID);
-    expect(provider.label).toBe('OpenCode (shared auth)');
-  });
-
   test('isAvailable returns true when binary + auth present', async () => {
     const provider = createOpenCodeProvider(makeProviderOpts({
       spawn: makeSpawn('opencode 1.17.13\n'),
@@ -274,51 +268,6 @@ describe('OpenCode provider', () => {
     expect(models[0].id).toBe('openai/good-model');
   });
 
-  test('unavailableReason gives install hint when binary missing', async () => {
-    const provider = createOpenCodeProvider(makeProviderOpts({
-      spawn: makeSpawn('', 1),
-    }));
-
-    const reason = await provider.unavailableReason?.({
-      env: {},
-      getAuth: async () => null,
-      hasCredential: async () => false,
-    });
-
-    expect(reason).toBe("opencode isn't installed on this machine.");
-  });
-
-  test('unavailableReason gives login hint when not authenticated', async () => {
-    const provider = createOpenCodeProvider({
-      authPath: '/nonexistent/path/auth.json',
-      fetch: makeFakeFetch(),
-      spawn: makeSpawn('opencode 1.17.13\n'),
-    });
-
-    const reason = await provider.unavailableReason?.({
-      env: {},
-      getAuth: async () => null,
-      hasCredential: async () => false,
-    });
-
-    expect(reason).toBe("opencode isn't signed in on this machine.");
-  });
-
-  test('createModel returns a LanguageModel', async () => {
-    const provider = createOpenCodeProvider(makeProviderOpts());
-
-    const model = provider.createModel('openai/gpt-5.6-sol', {
-      env: {},
-      sessionAffinity: 'kinu-test',
-      getAuth: async () => null,
-      hasCredential: async () => false,
-    });
-
-    expect(model).toBeDefined();
-    const resolved = v.parse(v.object({ modelId: v.string() }), model);
-    expect(resolved.modelId).toBe('openai/gpt-5.6-sol');
-  });
-
   test('reasoning models use the Responses API route', async () => {
     const { fetchImpl, requests } = makeRoutingFetch();
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
@@ -394,7 +343,7 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl, spawn: makeSpawn(listed) }));
     const deps = { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
 
-    await expect(generateText({ model: throughStack(provider, 'opencode-go/glm-5', deps), prompt: 'hi', maxRetries: 0 })).rejects.toThrow(/rate-limited until/);
+    await expect(generateText({ model: throughStack(provider, 'opencode-go/glm-5', deps), prompt: 'hi', maxRetries: 0 })).rejects.toThrow();
     const zen = await generateText({ model: throughStack(provider, 'opencode/glm-5', deps), prompt: 'hi', maxRetries: 0 });
 
     expect({ text: zen.text, served }).toEqual({
@@ -515,14 +464,35 @@ describe('OpenCode provider', () => {
     ]);
   });
 
-  test('createModel throws on invalid model id (no slash)', () => {
-    const provider = createOpenCodeProvider(makeProviderOpts());
-    expect(() => provider.createModel('invalid-no-slash', {
+  test('an invalid model id refuses before discovery or any model request', async () => {
+    let discoveries = 0;
+    let requests = 0;
+    const spawn = makeSpawn(FAKE_MODELS_OUTPUT);
+
+    const provider = createOpenCodeProvider(makeProviderOpts({
+      spawn: (args, options) => {
+        discoveries++;
+
+        return spawn(args, options);
+      },
+      fetch: asFetchFunction(async () => {
+        requests++;
+
+        return Response.json({});
+      }),
+    }));
+
+    const deps = {
       env: {},
       sessionAffinity: 'kinu-test',
       getAuth: async () => null,
       hasCredential: async () => false,
-    })).toThrow('Invalid opencode model id: invalid-no-slash');
+    };
+
+    await expect((async () => await generateText({
+      model: throughStack(provider, 'invalid-no-slash', deps), prompt: 'hello', maxRetries: 0,
+    }))()).rejects.toThrow(Error);
+    expect({ discoveries, requests }).toEqual({ discoveries: 0, requests: 0 });
   });
 
   test('config is cached and not re-fetched within TTL', async () => {

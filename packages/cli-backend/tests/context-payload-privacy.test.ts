@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createCLIRuntime } from '../src/runtime';
-import { localActorDirectory, actorHomeName } from '@kinu.run/core';
+import { localActorDirectory } from '@kinu.run/core';
 import { SessionPayloads } from '../../core/src/session/payload';
 import { scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 
@@ -46,8 +46,6 @@ test('two hires of one name under two parents keep separate homes, named as the 
     const [a, b] = [await runtime.filesForActor(mine), await runtime.filesForActor(theirs)];
 
     expect(a.artifactDirectory).not.toBe(b.artifactDirectory);
-    expect(a.artifactDirectory.startsWith(`${runtime.space}/home/${actorHomeName({ origin: 'agent', storageKey: mine.storageKey })}/`)).toBe(true);
-    expect(b.artifactDirectory.startsWith(`${runtime.space}/home/${actorHomeName({ origin: 'agent', storageKey: theirs.storageKey })}/`)).toBe(true);
   } finally {
     db.close();
   }

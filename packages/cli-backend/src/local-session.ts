@@ -2400,7 +2400,9 @@ export class LocalAgentSession {
 
   /** One routed non-turn lane as an {@link LLM}; `system` carries core-declared prompt pairs. */
   private localRouteLlm(resolution: ModelRouteResolution, system?: string): LLM {
-    return routedLlm((route) => this.bindRouteModel(route), resolution, { report: this.modelCallSink, operations: this.modelOperations }, system);
+    const canonical = { ...resolution, model: this.profiles().normalizeSpec(resolution.model) };
+
+    return routedLlm((route) => this.bindRouteModel(route), canonical, { report: this.modelCallSink, operations: this.modelOperations }, system);
   }
 
   /** A routed lane's client and effort options, shared with the head merge (policy in core's
