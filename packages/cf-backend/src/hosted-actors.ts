@@ -1,10 +1,11 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shared tools and roster for non-main agents; their turns run in AgentFacet. */
 
-import { INTERRUPTED_TURN, currentDateForPrompt, publishSubordinateReport, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type ToolSurfaceNarrowing } from '@kinu.run/core';
+import { currentDateForPrompt, publishSubordinateReport, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
-import { EventLog, HeadCapture, subordinateMessageDedupeKey, titleActorFromMessage, spawnSeatedHead, buildHeadMessages, buildHeadSystemPrompt, callableToolNames, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type HeadInferenceDeps, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
-import { attempt, attemptInItsWords, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import type { AgentRuntime, HeadSeat, OwedReport, RunTurnSources } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { isCFRuntime, type CFRuntime } from './runtime';
 import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting';
@@ -14,8 +15,9 @@ import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting
  * `model`/`profile` resolution (a second lookup can land a different digest than the claim).
  */
 export interface HostedTaskTurn {
-  /** The assignment row's id: keys this turn's claim and effects. */
+  /** The turn's id: keys its claim and effects. */
   readonly turnId: string;
+  readonly parentDriven: boolean;
   readonly actor: HostedActor;
   readonly runtime: CFRuntime;
   readonly reports: SubordinateReportLedger;
@@ -25,11 +27,11 @@ export interface HostedTaskTurn {
   readonly profile: ExplorationProfile;
 }
 
-/** Tools and framing together: the prompt's tool index is rendered from the built surface. */
+/** A hosted turn's tools, and where its turn is assembled from: the prompt's tool index is rendered from them. */
 export interface HostedTaskProfile {
   readonly tools: ToolSet;
   readonly raw: ToolSet;
-  readonly framing: AssignedTurnFraming;
+  readonly sources: RunTurnSources;
 }
 
 /** One workspace's host and directory, for every hosted kind. */
@@ -39,8 +41,9 @@ export interface HostedActorSeams {
   readonly exec: SqlExec;
   readonly directory: WorkspaceActorDirectory;
   turnInFlight(reference: ActorReference): boolean;
-  infer(reference: ActorReference, input: HeadInput, inference: HeadInferenceDeps): Promise<HeadReport>;
-  windowOf: HostedNodeSeat['windowOf'];
+  infer(reference: ActorReference, input: HeadInput, inference: RunInference): Promise<HeadReport>;
+  /** Where a run actor's turns are assembled from, read in this object; `dynamic` is its live block. */
+  turnSources(actor: HostedActor, runtime: AgentRuntime, dynamic: RunTurnSources['dynamic']): RunTurnSources;
   transaction<Result>(body: () => Result): Result;
   /** Scoped to the actor, so a subordinate manages only its own subtree. */
   roster(actor: BoundActor): SubordinateRosterStore;
@@ -197,31 +200,6 @@ export async function admitHostedTask(
   ));
 }
 
-/** Retry on a hosted chat: the message's assignment pends again. */
-export function retryHostedMessage(
-  seams: HostedActorSeams, reference: ActorReference,
-  input: { readonly reserved: Set<string>; readonly reopen: () => Promise<string>; readonly claim: (turnId: string) => void },
-): Promise<'turn'> {
-  if (seams.turnInFlight(reference) || input.reserved.has(reference.actorId)) {
-    return settle(Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.')));
-  }
-
-  input.reserved.add(reference.actorId);
-
-  return settle(Effect.gen(function* () {
-    const turnId = yield* attemptInItsWords('bad_input', input.reopen);
-    const log = new EventLog(seams.exec, seams.host.bindStores(reference).handle);
-    const assignment = log.idForDedupeKey(subordinateMessageDedupeKey(turnId));
-
-    if (assignment === null) return yield* Effect.fail(new KinuError('bad_input', 'That turn was not opened by a chat message, so it cannot be retried.'));
-    input.claim(turnId);
-    log.unbind(assignment);
-    seams.armWake();
-
-    return 'turn' as const;
-  }).pipe(Effect.ensuring(Effect.sync(() => { input.reserved.delete(reference.actorId); }))));
-}
-
 function hostedHirer(seams: HostedActorSeams, child: BoundActor): BoundActor {
   const parent = registeredParent(seams.host, child.record, {
     orphan: 'The workspace main actor was not hired by anyone.',
@@ -303,14 +281,16 @@ export interface HostedTurnRequest {
   readonly mode: WorkMode;
   readonly sequenceId: string;
   readonly inheritedContext?: SubordinateInheritedContext;
-  readonly run?: { readonly input: HeadInput; readonly inference: HeadInferenceDeps };
+  /** A hirer's turn carries `report`; an owner's chat with the actor does not. */
+  readonly parentDriven: boolean;
+  readonly run?: { readonly input: HeadInput; readonly inference: RunInference };
 }
 
 export interface PreparedHostedTurn {
   readonly turn: HostedTaskTurn;
   readonly model: string;
   readonly tools: ToolSet;
-  readonly framing: AssignedTurnFraming;
+  readonly sources: RunTurnSources;
   readonly birthContext: readonly ModelMessage[];
 }
 
@@ -324,16 +304,12 @@ export function prepareHostedTurn(
     const actor = run?.inference.actor ?? (yield* Effect.promise(() => seams.host.acquire(reference)));
     const { turn, model } = yield* hostedTaskTurn(seams, actor, task, run);
 
-    const profile = run === undefined ? yield* Effect.promise(() => seams.taskProfile(turn)) : {
-      tools: run.inference.tools,
-      framing: run.inference.framing ?? {
-        system: buildHeadSystemPrompt(turn.input, callableToolNames(turn.input.mode, run.inference.tools), run.inference.workspaceLayout),
-        messages: buildHeadMessages(turn.input),
-      },
-    };
+    const profile = run === undefined
+      ? yield* Effect.promise(() => seams.taskProfile(turn))
+      : { tools: run.inference.tools, sources: run.inference.sources };
 
     return {
-      turn, model, tools: profile.tools, framing: profile.framing,
+      turn, model, tools: profile.tools, sources: profile.sources,
       birthContext: run === undefined ? turn.input.inheritedContext.map(inheritedAsModelMessage) : [],
     };
   }));
@@ -343,7 +319,7 @@ export function prepareHostedTurn(
 export function hostedRetryTools(seams: HostedActorSeams, reference: ActorReference, mode: WorkMode, sequenceId: string): Promise<ToolSet> {
   return settle(Effect.gen(function* () {
     const actor = yield* Effect.promise(() => seams.host.acquire(reference));
-    const { turn } = yield* hostedTaskTurn(seams, actor, { body: '', mode, sequenceId }, undefined);
+    const { turn } = yield* hostedTaskTurn(seams, actor, { body: '', mode, sequenceId, parentDriven: true }, undefined);
 
     return (yield* Effect.promise(() => seams.taskProfile(turn))).raw;
   }));
@@ -351,25 +327,23 @@ export function hostedRetryTools(seams: HostedActorSeams, reference: ActorRefere
 
 function hostedTaskTurn(
   seams: HostedActorSeams, actor: HostedActor,
-  task: { readonly body: string; readonly mode: WorkMode; readonly sequenceId: string; readonly inheritedContext?: SubordinateInheritedContext },
+  task: Omit<HostedTurnRequest, 'run'>,
   run: HostedTurnRequest['run'],
 ) {
   return Effect.gen(function* () {
     const runtime = yield* cfRuntimeOf(actor, 'a hosted agent');
 
-    const resolved = yield* Effect.promise(() => run === undefined
-      ? seams.profile({ actor, availableTools: [], workMode: task.mode })
-      : run.inference.profile({ availableTools: [], workMode: task.mode }));
+    const resolved = yield* Effect.promise(() => seams.profile({ actor, availableTools: [], workMode: task.mode }));
 
     const input = run?.input ?? delegatedHeadInput(actor.record, task);
-    const model = run?.inference.modelSpec ?? input.model ?? resolved.profile.tier.model;
+    const model = input.model ?? resolved.profile.tier.model;
 
     yield* Effect.promise(() => seams.priceAs(actor, model));
 
     const turn: HostedTaskTurn = {
-      turnId: task.sequenceId, actor, runtime, reports: { spoke: false, settled: false }, input,
+      turnId: task.sequenceId, parentDriven: task.parentDriven, actor, runtime, reports: { spoke: false, settled: false }, input,
       capture: run?.inference.capture ?? new HeadCapture(),
-      model: run?.inference.model ?? seams.resolveModel(model),
+      model: seams.resolveModel(model),
       profile: resolved,
     };
 
@@ -377,88 +351,61 @@ function hostedTaskTurn(
   });
 }
 
-/** Only completion answers; abort resumes; the rest are errors. */
-const TASK_TURN_ENDING: Readonly<Record<HeadReport['status'], TaskTurnEnding>> = {
-  completed: 'answered',
-  aborted: 'interrupted',
-  budget_exceeded: 'errored',
-  errored: 'errored',
-};
-
-export interface HostedTaskEnd {
-  readonly status: HeadReport['status'];
-  readonly summary: string;
-  readonly errorMessage: string | null;
-  readonly narration: string;
-}
-
-export function hostedTaskEnding(end: HostedTaskEnd): TaskTurnEnding {
-  // An owner's Stop reaches the model call as an interrupted stream, which the head records as a failure.
-  return end.status === 'errored' && end.errorMessage?.includes(INTERRUPTED_TURN) === true
-    ? 'interrupted'
-    : TASK_TURN_ENDING[end.status];
-}
-
-/**
- * The workspace half of a turn's end: the title, then the report the hirer is owed, relayed after the turn so a
- * hirer waiting on this agent's queue is not waited on in turn. A report the run already settled suppresses it.
- */
-export function settleHostedTask(
+/** The report a hosted turn's ending owes its hirer, as a CLI hire's relay decides it: the hirer's roster first,
+ *  then a terminal answer, else a durable child's turn-end progress. A report the turn already settled suppresses it. */
+export function hostedOwedReport(
   seams: HostedActorSeams,
-  prepared: PreparedHostedTurn,
-  task: HostedTurnRequest,
-  end: HostedTaskEnd,
-): Promise<SubordinateEventResult | null> {
-  const { actor, reports } = prepared.turn;
-  const ending = hostedTaskEnding(end);
+  actor: BoundActor,
+  turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean },
+  ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] },
+): Promise<OwedReport | null> {
+  return settle(Effect.gen(function* () {
+    const hirer = hostedHirer(seams, actor);
 
-  // Title upgrade (#18): no `auto_title` effect on a hosted actor, so name it after the run.
-  // A failed titling model keeps the stand-in; the turn does not fail over its name.
-  const titled = attempt(
+    if (seams.roster(hirer).finishTurn(actor.record.name, ended.ending, Date.now())) seams.announce(hirer);
+
+    if (turn.reports.settled) return null;
+
+    const terminal = yield* Effect.promise(() => terminalTaskReport({
+      lifetime: hostedLifetime(actor.record), ending: ended.ending, assistantText: ended.assistantText,
+      delegating: taskAnswerIsLater({ roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle) }),
+      narration: async () => ended.narration,
+    }));
+
+    if (terminal !== null) return terminal;
+
+    // A task agent reports only its terminal answer.
+    return ended.ending === 'answered' && hostedLifetime(actor.record) !== TEMPORARY_LIFETIME && subordinateRelaysTurnEnd({
+      reportedThisTurn: turn.reports.spoke, ownerDriven: turn.ownerDriven, assistantText: ended.assistantText,
+    }) ? { status: 'progress', content: ended.assistantText } : null;
+  }));
+}
+
+/** A settled turn's report, relayed to the hirer's ingress, which dedupes on its sequence id; answers its disposition. */
+export async function hostedParentReport(
+  seams: HostedActorSeams,
+  actor: BoundActor,
+  report: { readonly text: string; readonly status: SubordinateReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true },
+): Promise<string> {
+  const relayed = await publishSubordinateReport({ mode: report.mode, reports: null }, {
+    status: report.status, content: report.text, origin: 'turn_end', sequenceId: report.sequenceId,
+    ...(report.quiet === true && { quiet: true }),
+  }, (published) => relayHostedReport(seams, actor, published));
+
+  return relayed.disposition;
+}
+
+/** Names a hosted actor after the work it was given; a failed titling model keeps the stand-in. */
+export function hostedAutoTitle(seams: HostedActorSeams, actor: BoundActor, subject: string): Promise<void> {
+  return settle(attempt(
     { doing: 'deriving a hosted actor title from its brief', otherwise: 'unavailable' },
-    () => titleActorFromMessage(actor.handle, task.body, (brief) => seams.suggestTitle(brief)),
+    () => titleActorFromMessage(actor.handle, subject, (brief) => seams.suggestTitle(brief)),
   ).pipe(Effect.match({
     onSuccess: (renamed) => { if (renamed) seams.announce(actor); },
     onFailure: (failure) => {
       diagnostics.failure('agent.auto_title_suggestion_failed', failure, { workspace: actor.record.workspaceId });
     },
-  }));
-
-  const owedReport = async (): Promise<{ readonly status: SubordinateReportStatus; readonly content: string; readonly quiet?: true } | null> => {
-    const owed = reports.settled ? null : await terminalTaskReport({
-      lifetime: hostedLifetime(actor.record), ending, assistantText: end.summary,
-      delegating: taskAnswerIsLater({ roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle), turnTaskId: task.sequenceId }),
-      narration: async () => (end.narration === '' ? [] : [end.narration]),
-    });
-
-    // A task agent reports only its terminal answer.
-    return owed ?? (
-      ending === 'answered' && hostedLifetime(actor.record) !== TEMPORARY_LIFETIME && subordinateRelaysTurnEnd({
-        reportedThisTurn: reports.spoke, ownerDriven: false, assistantText: end.summary,
-      })
-        ? { status: 'progress' as const, content: end.summary }
-        : null
-    );
-  };
-
-  return settle(Effect.gen(function* () {
-    const hirer = hostedHirer(seams, actor);
-
-    if (seams.roster(hirer).finishTurn(actor.record.name, ending, Date.now())) seams.announce(hirer);
-    yield* titled;
-    const relayed = yield* Effect.promise(owedReport);
-
-    if (relayed === null) {
-      new EventLog(seams.exec, actor.handle).markAnswered(task.sequenceId);
-
-      return null;
-    }
-
-    return yield* Effect.promise(() => publishSubordinateReport({ mode: task.mode, reports }, {
-      status: relayed.status, content: relayed.content, origin: 'turn_end', sequenceId: task.sequenceId,
-      ...(relayed.quiet === true && { quiet: true }),
-    }, (report) => relayHostedReport(seams, actor, { ...report, answers: task.sequenceId })));
-  }));
+  })));
 }
 
 /** One actor's child substrate: every verb is a call on the workspace's one host. */
@@ -489,7 +436,6 @@ export function hostedSubordinateRuntime(
     return refusal(!isSubordinateOrigin(entry.origin), () => new KinuError('denied', 'The roster name does not identify a subordinate.'))
       .pipe(Effect.as(entry.reference));
   });
-
 
   /** Runs `body` as the named hire. */
   const asHire = <Result>(name: string, body: (reference: ActorReference) => Promise<Result>): Effect.Effect<Result, KinuError> =>
@@ -596,34 +542,6 @@ async function retireExploration(
   }), retirement);
 }
 
-/** The caller's pinned spec wins (heterogeneous heads); else the route's, resolved through the
- *  profile, since the account default would ignore the role's tier. */
-function explorationModelSpec(
-  seams: HostedActorSeams,
-  actor: HostedActor,
-  source: 'head' | 'swarm',
-  pinned: string | null | undefined,
-): Effect.Effect<string, KinuError> {
-  if (pinned) return Effect.succeed(pinned);
-
-  return runRoute(seams, actor, { source, workMode: 'build', what: `a hosted ${source} run` }).pipe(Effect.map((route) => route.model));
-}
-
-/** The route a run actor's model call takes, resolved through its profile. */
-function runRoute(
-  seams: HostedActorSeams,
-  actor: HostedActor,
-  request: { readonly source: 'head' | 'swarm'; readonly workMode: WorkMode; readonly what: string },
-): Effect.Effect<NonNullable<ReturnType<typeof resolveModelRoute>>, KinuError> {
-  return Effect.promise(() => seams.profile({ actor, availableTools: [], workMode: request.workMode })).pipe(
-    Effect.flatMap(({ profile }) => {
-      const route = resolveModelRoute(request.source, profile);
-
-      return route ? Effect.succeed(route) : Effect.fail(new KinuError('denied', `${request.what} cannot use the fixed platform model route`));
-    }),
-  );
-}
-
 /** `memoryTail` absent and `missingCapabilities` empty by fact: heads don't read MEMORY.md and connect no MCP servers. */
 function explorationDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
   return collectDynamicContext({
@@ -646,21 +564,16 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
     // The watch is named before the acquire that builds the runtime over it; a later one sees no writes.
     seat: async (_input, writes) => {
       const unwatch = seams.watchWrites(reference, writes);
-      const seat = await runActorSeat(seams, reference);
 
-      return {
+      return await settle(Effect.map(runActorSeat(seams, reference), (seat): HeadSeat => ({
         ...seat,
         queue: (body) => seams.host.run(reference, body),
         release: async () => {
           unwatch();
           await retire();
         },
-      };
+      })));
     },
-    model: (head, seat) => settle(explorationModelSpec(seams, seat.actor, 'head', head.model).pipe(
-      Effect.tap((spec) => Effect.promise(() => seams.priceAs(seat.actor, spec))),
-      Effect.map((spec) => ({ model: seams.resolveModel(spec), spec })),
-    )),
     codemodeTool: (seat) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
       Effect.map((runtime) => seams.codemodeTool(runtime, seams.webSearch())),
     )),
@@ -672,7 +585,8 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
       const mission = seams.mission(head);
 
       return mission === null || spec === null ? mission
-        : { ...mission, port: { ...mission.port, debit: (tokens, opts) => mission.port.debit(tokens, { ...opts, spec }) } };
+        // The serving model prices a step: a fallback that took over names itself.
+        : { ...mission, port: { ...mission.port, debit: (tokens, opts) => mission.port.debit(tokens, { ...opts, spec: opts.spec ?? spec }) } };
     },
     reportStep: (headId, seq, step) => seams.recordStep(headId, seq, step),
     reportDelta: seams.publishDelta,
@@ -680,19 +594,20 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
 }
 
 /** One run actor's turn seams, over its acquired actor. */
-async function runActorSeat(seams: HostedActorSeams, reference: ActorReference): Promise<HostedNodeSeat> {
-  const actor = await seams.host.acquire(reference);
+function runActorSeat(seams: HostedActorSeams, reference: ActorReference): Effect.Effect<HostedNodeSeat, KinuError> {
+  return Effect.gen(function* () {
+    const actor = yield* attempt({ doing: 'acquiring a hosted run actor', otherwise: 'io' }, () => seams.host.acquire(reference));
+    const runtime = yield* cfRuntimeOf(actor, 'a hosted run');
 
-  return {
-    actor,
-    infer: (input, inference) => seams.infer(reference, input, inference),
-    windowOf: seams.windowOf,
-    runId: crypto.randomUUID(),
-    profile: (request) => seams.profile({ actor, ...request }),
-    dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
-    conversations: seams.conversations(reference),
-    jobs: seams.jobSeat(reference.actorId),
-  };
+    return {
+      actor,
+      infer: (input: HeadInput, inference: RunInference) => seams.infer(reference, input, inference),
+      runId: crypto.randomUUID(),
+      sources: seams.turnSources(actor, runtime, () => (profile: ResolvedTurnProfile, tools: ToolSet) => explorationDynamicContext(actor, profile, tools)),
+      conversations: seams.conversations(reference),
+      jobs: seams.jobSeat(reference.actorId),
+    };
+  });
 }
 
 /**
@@ -702,7 +617,9 @@ async function runActorSeat(seams: HostedActorSeams, reference: ActorReference):
 export async function hostNodeSeat(
   seams: HostedActorSeams, node: NodeIdentity,
 ): Promise<HostedNodeSeat> {
-  return await runActorSeat(seams, (await hostRunActor(seams, { creationId: node.nodeId })).reference);
+  const { reference } = await hostRunActor(seams, { creationId: node.nodeId });
+
+  return await settle(runActorSeat(seams, reference));
 }
 
 /** A swarm node's `eval`, over the hosted actor the node runs as. */

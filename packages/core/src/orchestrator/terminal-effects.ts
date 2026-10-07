@@ -19,7 +19,9 @@ import type { AgentOrchestrator, TurnContinuity } from './agent-orchestrator';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
 import { CompletedTurnSchema } from '../evolution/session-window';
-import { WorkModeSchema } from '../types/turn';
+import { WorkModeSchema, type WorkMode } from '../types/turn';
+import { AdvisorRecoverySnapshotSchema, type AdvisorRecoverySnapshot } from '../advisor/review';
+import { SUBORDINATE_REPORT_STATUSES, type SubordinateReportStatus } from '../events/hub/types';
 import {
   branchHeadId, branchOutcomeFromJournal, settleBranchIntoTakes, settlePendingBranch,
   type BranchStatusEvent, type PendingBranch,
@@ -206,6 +208,57 @@ export function chatTerminalEffects(deps: {
     turn_record: turnRecordTerminalEffect(deps.orchestrator),
     turn_lessons: turnLessonsTerminalEffect(deps.engine),
     event_drain: eventDrainTerminalEffect(deps.orchestrator),
+  };
+}
+
+export interface SubordinateEffectPorts {
+  readonly orchestrator: Pick<AgentOrchestrator, 'improvementLanesOpen'>;
+  hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
+  applyTitle(subject: string): Promise<void>;
+  /** Absent with no hirer. */
+  readonly sendReport?: (report: {
+    readonly text: string; readonly status: SubordinateReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
+  }) => Promise<string>;
+}
+
+/** A hired actor's turn effects, alike on every backend. */
+export function subordinateTerminalEffects(ports: SubordinateEffectPorts): TerminalEffectTable {
+  const { sendReport } = ports;
+
+  return {
+    improvement_lanes: terminalEffect({
+      input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
+      runSync: () => ({ status: 'completed' }),
+    }),
+    advisor_review: terminalEffect({
+      input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
+      run: async ({ status, workMode, advisor }) => {
+        if (ports.orchestrator.improvementLanesOpen(status, workMode)) await ports.hireAdvisor(advisor);
+
+        return { status: 'completed' };
+      },
+    }),
+    auto_title: terminalEffect({
+      input: v.object({ subject: v.string() }),
+      run: async ({ subject }) => {
+        await ports.applyTitle(subject);
+
+        return { status: 'completed' };
+      },
+    }),
+    // The mode comes off the row, so a cold replay keeps a Plan report Plan.
+    ...(sendReport !== undefined && {
+      parent_report: terminalEffect({
+        input: v.object({
+          text: v.string(), status: v.picklist(SUBORDINATE_REPORT_STATUSES),
+          sequenceId: v.string(), mode: WorkModeSchema, quiet: v.optional(v.boolean()),
+        }),
+        run: async ({ text, status, sequenceId, mode, quiet }) => ({
+          status: 'completed',
+          detail: await sendReport({ text, status, mode, sequenceId, ...(quiet === true && { quiet }) }),
+        }),
+      }),
+    }),
   };
 }
 

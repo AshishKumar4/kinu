@@ -5,6 +5,7 @@ import {
   bindingDecisionRun, restDecisionRun, type DecisionRun,
   type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type ProviderDeps, type ProviderEnv,
   type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
+  accountDeps, countRequestInputTokens, parseModelSpec, type TurnModelSources,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import type { CredentialSummary } from '../user/credentials';
@@ -53,6 +54,17 @@ export interface AgentProviderRegistry {
   resolveModel(spec: string, conversation: string): LanguageModel;
   /** A `provider/model` spec, or a bare `@cf/...` Workers AI id. */
   normalizeSpecSync(spec: string): string;
+}
+
+export function routedModelReads(providers: AgentProviderRegistry): NonNullable<TurnModelSources['routed']> {
+  return {
+    credentialFor: (spec) => providers.registry.credentialFor(providers.normalizeSpecSync(spec), providers.deps),
+    countInputTokens: (spec, request) => {
+      const counted = parseModelSpec(spec);
+
+      return countRequestInputTokens(providers.registry.get(counted.provider), counted.modelId, accountDeps(providers.deps, counted.provider, counted.account), request);
+    },
+  };
 }
 
 async function resolveCaller(source: UserCredentialSource): Promise<UserCaller> {

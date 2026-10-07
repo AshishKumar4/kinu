@@ -1566,7 +1566,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
     const timings = await captureSettleTimings(() => session.end());
 
     // The settle-timings line is quiet under 1s; the proof of no join is that no review call was issued.
-    if (timings) expect(timings.evolutionMs).toBeLessThan(100);
+    if (timings) expect(timings.trackedMs).toBeLessThan(100);
     expect(completions).toEqual([]);
     expect(ratings(db)).toBe(0);
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c)

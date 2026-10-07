@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { swarmSeats } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs';
 import { HeadJournal } from '../src/heads/journal';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
@@ -50,8 +50,7 @@ describe('a node keeps its assigned question across re-entry', () => {
     // A real actor per node over the one workspace database.
     const result = await runSwarm({
       reportModelCall: unobservedSpend,
-      rt, model: () => model(), mode: 'build', logger: createRecordingLogger(),
-      hostNode: hostedSeatsOver({ rt, db }).hostNode,
+      rt, ...swarmSeats({ rt, db }, () => model()), mode: 'build', logger: createRecordingLogger(),
     }, resolved());
 
     if ('reason' in result) throw new Error(result.error);

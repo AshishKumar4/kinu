@@ -457,22 +457,22 @@ export function passGrace(clock: HandClock, graceMs: number): void {
 
 export const SettleTimingsSchema = v.object({
   event: v.literal('session.settle_timings'),
-  fields: v.object({ evolutionMs: v.number() }),
+  fields: v.object({ trackedMs: v.number() }),
 });
 
 /**
  * The `session.settle_timings` line `end()` emits. It is quiet under 1s (the --json stderr contract), so null means
  * the tail fit under the threshold; an unparseable line naming the event is a logger defect and throws.
  */
-export async function captureSettleTimings(run: () => Promise<void>): Promise<{ evolutionMs: number } | null> {
+export async function captureSettleTimings(run: () => Promise<void>): Promise<{ trackedMs: number } | null> {
   const original = console.error;
-  let timings: { evolutionMs: number } | null = null;
+  let timings: { trackedMs: number } | null = null;
   console.error = (...args: unknown[]) => {
     const line = v.safeParse(v.string(), args[0]);
 
     if (!line.success || !line.output.includes('"session.settle_timings"')) return;
     const parsed = v.parse(SettleTimingsSchema, JSON.parse(line.output));
-    timings = { evolutionMs: parsed.fields.evolutionMs };
+    timings = { trackedMs: parsed.fields.trackedMs };
   };
 
   try {

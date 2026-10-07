@@ -237,8 +237,6 @@
   "packages/core/src/strategy/merge-back.ts#planMemberApply (unreached-export)",
   "packages/core/src/strategy/node-agent.ts#NODE_BUILTIN_TOOLS (unreached-export)",
   "packages/core/src/strategy/node-agent.ts#NODE_WITHHELD_TOOLS (unreached-export)",
-  "packages/core/src/strategy/node-agent.ts#NodeAgentDeps.backgroundPolicy (unsupplied-field)",
-  "packages/core/src/strategy/node-agent.ts#NodeAgentDeps.gradeReport (unsupplied-field)",
   "packages/core/src/strategy/node-agent.ts#PROPOSE_BRANCH_TOOL (unreached-export)",
   "packages/core/src/strategy/node-agent.ts#nodeSystemPrompt (unreached-export)",
   "packages/core/src/strategy/node-agent.ts#readNodeReport (unreached-export)",
@@ -275,12 +273,11 @@
   "packages/core/src/vfs/agent-home.ts#SESSION_UID (unreached-export)",
   "packages/core/src/web/provider.ts#DefaultWebSearchProviderDeps.htmlToMarkdown (unsupplied-field)",
   "packages/core/src/workspace-birth.ts#WorkspaceBirthConfig.scaffold (unsupplied-field)",
-
   "packages/devbox/src/incidents.ts#INCIDENT_LEDGER_MAX_ROWS (unreached-export)",
   "packages/devbox/src/incidents.ts#reapDeliveredIncidents (unreached-export)",
   "packages/devbox/src/lifecycle.ts#INCIDENT_STAGES (unreached-export)",
-  "packages/devbox/src/operation-lanes.ts#canonicalPath (unreached-export)",
   "packages/devbox/src/lifecycle.ts#healthProbeCommand (unreached-export)",
+  "packages/devbox/src/operation-lanes.ts#canonicalPath (unreached-export)",
   "packages/devbox/src/operation-lanes.ts#scopesOverlap (unreached-export)",
   "packages/devbox/src/storage.ts#ATTACH_OUTCOME_KINDS (unreached-export)"
 ]

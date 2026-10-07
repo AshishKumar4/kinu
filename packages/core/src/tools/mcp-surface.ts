@@ -219,7 +219,7 @@ export function toolSurfaceTokens(surface: ToolSurfacePriceable): number {
 }
 
 /** The catalog as admission names and orders it, whatever the budget: a repeated key takes its server's name. */
-export function servedMcpDescriptors(descriptors: readonly SerializableToolDescriptor[]): SerializableToolDescriptor[] {
+function servedMcpDescriptors(descriptors: readonly SerializableToolDescriptor[]): SerializableToolDescriptor[] {
   const keyUses = new Map<string, number>();
 
   for (const descriptor of descriptors) keyUses.set(descriptor.toolKey, (keyUses.get(descriptor.toolKey) ?? 0) + 1);

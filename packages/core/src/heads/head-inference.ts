@@ -6,24 +6,20 @@ import { z } from 'zod';
 import { invalidToolCallRefusal, oneOf } from '../tools/tool-schema';
 import {
   tool,
-  type ToolSet, type LanguageModel, type ModelMessage, type StepResult, type ToolExecutionOptions,
+  type ToolSet, type ModelMessage, type StepResult, type ToolExecutionOptions,
 } from 'ai';
 import type { ObserveStream } from '../chat';
 import type { HostedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
-import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
-import type { DynamicContext } from '../prompting/volatile-context';
-import type { PromptModelContext } from '../prompting/model-profile';
-import type { ModelWindow } from '../context-window';
 import {
   EVIDENCE_KINDS,
   HeadStepPartsSchema, type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
-import { MissionBudgetExhausted, type MissionBudgetRefusal, type MissionScope } from '../mission-budget';
+import { missionGate, type MissionBudgetRefusal, type MissionScope, type MissionSeam, type SpendGate } from '../mission-budget';
 import { failedToolOutcome, type ToolOutcome } from '../tools/outcome';
-import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from '../usage';
+import { addUsage, normalizeUsage, usageReported, type Usage } from '../usage';
 import { nanoid } from '../utils/nanoid';
 import { extractFinalText, synthesizeHeadSummary } from './head-summary';
 import { drawnStep } from '../session/transcript';
@@ -32,13 +28,17 @@ import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
-import type { BuiltinToolName } from '../tools/registry';
-import { agentAffinityKey } from '../providers/workers-ai';
+import { attempt, diagnostics, hold, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
+import { Cause, Exit } from 'effect';
+import { BUILTIN_TOOL_NAMES, type BuiltinToolName } from '../tools/registry';
+import { assembleActorTurn, withCompactionTrigger, type RunTurnSources, type TurnAssemblySources } from '../orchestrator/turn-assembly';
+import type { CompactionTriggerReader } from '../orchestrator/turn-context';
 import type { ActorTurnClaim, ClaimOutcome } from '../orchestrator/actor-claims';
-import type { ActorExecutionResult, ActorSession, ActorTurnLease } from '../orchestrator/actor-session';
+import type { ActorExecutionInput, ActorExecutionResult, ActorSession, ActorTurnLease } from '../orchestrator/actor-session';
+import type { ChatEvent } from '../chat';
 import type { MessageReference, MessagePartReference } from '../session/messages';
-import { snapshotCompletedTurn } from '../orchestrator/turn-lifecycle';
+import { recordExecutionEvent, settleExecutionContext, snapshotCompletedTurn, type CompactionTriggerState } from '../orchestrator/turn-lifecycle';
+import { OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import type { CompletedTurn } from '../evolution/types';
 
 /** A head's mutable findings; the backend's tools mutate the same instance runHeadInference reads. */
@@ -74,7 +74,7 @@ export interface HeadToolCall extends ToolCallRecord {
   outcome: ToolOutcome;
 }
 
-import { callableToolNames, permitInPlan } from '../execution/work-mode';
+import { permitInPlan } from '../execution/work-mode';
 import type { Clock } from '../types/clock';
 
 const RecordEvidenceInputSchema = z.object({
@@ -388,23 +388,13 @@ export interface HeadInferenceDeps {
   actor: HostedActor;
   /** Every turn is claimed under this run id, so a recovered re-admission is a new epoch of the same turn. */
   runId: string;
-  delegation?: {
-    readonly assignmentId: string;
-    readonly birthContext: readonly ModelMessage[];
-  };
-  /** Required: without a profile a head would run with no role restriction. */
-  profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
-    => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
-  /** This actor's live per-step block; required so a backend states when a head renders nothing live. */
-  dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
-  model: LanguageModel;
-  modelSpec?: string;
-  /** What `model` is admitted against, as the catalog reports it (`ModelCatalogSession`), like an actor's own turn. */
-  window: ModelWindow;
+  /** The run brings only its tools and its brief (orchestrator/turn-assembly.ts). */
+  sources: RunTurnSources;
+  compaction: { readonly state: CompactionTriggerReader & CompactionTriggerState; readonly key: string };
   /** Accumulator tools plus the backend's scratch tools; the caller controls the surface. */
   tools: ToolSet;
-  /** The prompt must name the same file plane the tools reach. */
-  workspaceLayout: HeadWorkspaceLayout;
+  /** In place of its role's section; it must name the file plane the tools reach. */
+  brief?: (callable: readonly string[]) => string;
   capture: HeadCapture;
   /** Polled at step boundaries: an RPC boundary carries a flag, not an AbortSignal. */
   isAborted: () => boolean;
@@ -423,11 +413,8 @@ export interface HeadInferenceDeps {
   /** Live output while a step is produced: one call per provider delta, in order, never buffered. A cross-isolate transport must not await it. */
   reportDelta?: ReportHeadDelta;
   observeStream?: ObserveStream;
-  /** A non-head caller's prompt (a swarm node); absent is the head's own framing. */
-  framing?: {
-    readonly system: string;
-    readonly messages: readonly ModelMessage[];
-  };
+  /** Absent is the head's own. */
+  opening?: readonly ModelMessage[];
   /**
    * The conversation this loop produced, handed over once for whatever settled. Absent for a head,
    * which merges findings rather than forking a conversation.
@@ -440,8 +427,80 @@ export interface HeadInferenceDeps {
   advise?: (turn: CompletedTurn, reachable: readonly string[], mode: WorkMode) => Promise<void>;
 }
 
-/** Duck-typed structurally so it survives an SDK spec bump. */
-const ConstructedModelSchema = v.object({ modelId: v.string(), provider: v.string() });
+
+function runTurnSources(deps: HeadInferenceDeps, gate: ReturnType<typeof missionGate> | undefined, refused: (refusal: MissionBudgetRefusal) => void): TurnAssemblySources {
+  const { brief } = deps;
+
+  const guard = async (seam: MissionSeam): Promise<MissionBudgetRefusal | null> => {
+    const ruled = await gate?.guard(seam) ?? null;
+
+    if (ruled !== null) refused(ruled);
+
+    return ruled;
+  };
+
+  return {
+    ...deps.sources,
+    ...(gate !== undefined && { budget: { guard, debit: (tokens: number, opts: Parameters<SpendGate['debit']>[1]) => { gate.debit(tokens, opts); } } }),
+    toolset: () => deps.tools,
+    externalTools: async () => ({}),
+    wiredToolNames: () => Object.keys(deps.tools).filter((name) => !BUILTIN_TOOL_NAMES.has(name)),
+    codemodeCapabilities: () => [],
+    ...(brief !== undefined && { brief: (callable: readonly string[]) => ({ id: 'run', label: 'Your task', instructions: brief(callable) }) }),
+  };
+}
+
+async function lastCharge(gate: ReturnType<typeof missionGate> | undefined, id: string): Promise<KinuError | undefined> {
+  if (gate === undefined) return undefined;
+  const doing = `charge agent ${id}'s last step to its mission`;
+  const charged = await hold(attempt({ doing, otherwise: 'unavailable' }, () => gate.settled()));
+
+  return Exit.isFailure(charged) ? toKinuError({ doing, cause: Cause.squash(charged.cause), otherwise: 'unavailable' }) : undefined;
+}
+
+/** Null ends the run. */
+async function nextRunInput(
+  deps: HeadInferenceDeps, overflowRetry: boolean,
+): Promise<{ readonly kind: 'resume' | 'overflow-retry'; readonly messages: readonly ModelMessage[] } | null> {
+  if (overflowRetry) return { kind: 'overflow-retry', messages: [{ role: 'user', content: OVERFLOW_RETRY_TEXT }] };
+  const resumed = await deps.resume?.();
+
+  return resumed ? { kind: 'resume', messages: resumed } : null;
+}
+
+/** True once the run's stream settled. */
+function relayRunEvent(deps: HeadInferenceDeps, event: ChatEvent): boolean {
+  recordExecutionEvent(deps.actor.stores.eventRecorder, deps.runId, event);
+
+  if (event.type === 'text-delta') deps.reportDelta?.('text', event.delta);
+
+  if (event.type === 'reasoning-delta') deps.reportDelta?.('reasoning', event.delta);
+
+  return event.type === 'done';
+}
+
+function settleRunContext(deps: HeadInferenceDeps, turn: {
+  readonly outcome: ActorExecutionResult;
+  readonly execution: Omit<ActorExecutionInput, 'task'>;
+  readonly historyLength: number;
+  readonly contextWindow: number | null;
+  readonly overflowRetry: boolean;
+}): boolean {
+  const { chat } = turn.execution;
+
+  return settleExecutionContext({ ...deps.compaction, recorder: deps.actor.stores.eventRecorder }, {
+    runId: deps.runId,
+    failure: turn.outcome.failure,
+    turnWasOverflowRetry: turn.overflowRetry,
+    lastPromptTokens: deps.actor.session.orchestrator.acc.lastPromptTokens,
+    historyLength: turn.historyLength,
+    contextWindow: turn.contextWindow,
+    model: chat.modelSpec ?? chat.modelContext?.id,
+  });
+}
+
+/** The seat supplies the compaction state where the actor lives. */
+export type RunInference = Omit<HeadInferenceDeps, 'compaction'>;
 
 interface HeadOutcome {
   status: HeadReport['status'];
@@ -467,20 +526,6 @@ function classifyHeadOutcome(
   return { status: aborted ? 'aborted' : 'completed', stopReason };
 }
 
-/** Parsed, not type-narrowed: a model that reports no identity still runs on the default window. */
-function promptModelContext(model: HeadInferenceDeps['model']): PromptModelContext {
-  const constructed = v.safeParse(ConstructedModelSchema, model);
-
-  if (constructed.success) {
-    return { id: constructed.output.modelId, provider: constructed.output.provider.split('.', 1)[0] };
-  }
-
-  const named = v.safeParse(v.string(), model);
-
-  if (named.success) return { id: named.output };
-
-  return {};
-}
 
 interface CompletedTurnReview {
   session: ActorSession;
@@ -510,7 +555,7 @@ interface NextTurnInput {
   deps: HeadInferenceDeps;
   conversation: ModelMessage[];
   turnId: string;
-  kind: 'resume';
+  kind: 'resume' | 'overflow-retry';
   messages: readonly ModelMessage[];
 }
 
@@ -595,30 +640,13 @@ function streamRelay(deps: HeadInferenceDeps): { observeStream?: HeadInferenceDe
  * (tests/unit-headless-learning.test.ts).
  */
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
-  const { capture, mission, clock } = deps;
+  const { capture, clock } = deps;
   const startedAt = clock.now();
 
   let refusal: MissionBudgetRefusal | null = null;
 
-  const outOfBudget = async (): Promise<boolean> => {
-    if (!mission || refusal) return refusal !== null;
-    refusal = await mission.port.guard('model_call', mission.labels);
-
-    return refusal !== null;
-  };
-
   const assertActive = (): void => {
     if (deps.isAborted()) throw new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError');
-  };
-
-  // Only the mission ledger is asked here; a cancel is cut by the turn's signal and `assertActive`.
-  const prepareModelStep = async () => {
-    if (deps.isAborted()) return undefined;
-    await outOfBudget();
-
-    if (refusal !== null) throw new MissionBudgetExhausted(refusal);
-
-    return undefined;
   };
 
   // One dense counter across every turn: `head_steps` is keyed `${id}-s${seq}`, so a per-turn
@@ -631,19 +659,16 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   const canonicalParts: MessagePartReference[] = [];
 
   const session = deps.actor.session;
-  const seed = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
+  const seed = deps.opening ? [...deps.opening] : buildHeadMessages(input);
 
   // Bridged before the first await, so a cancel during seed restore still interrupts.
   const unbridgeCancel = bridgeCancel(deps.signal, session);
 
-  if (deps.delegation) await session.restoreWorkingHistory();
-  else await session.restoreHistory(seed);
+  await session.restoreHistory(seed);
   const conversation: ModelMessage[] = [];
 
-  const system = deps.framing?.system
-    ?? buildHeadSystemPrompt(input, callableToolNames(input.mode, deps.tools), deps.workspaceLayout);
-
-  const modelContext = { ...promptModelContext(deps.model), ...deps.window };
+  const gate = deps.mission === undefined ? undefined : missionGate(deps.mission);
+  const sources = runTurnSources(deps, gate, (ruled) => { refusal ??= ruled; });
 
   /** A stream that died before its first step settles nothing; half a conversation is worse than none. */
   let settled = false;
@@ -674,90 +699,45 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     const usage = normalizeUsage(step.usage);
 
     // An unreported step meters nothing.
-    if (!usageReported(usage)) return;
-    capture.recordStepUsage(usage);
-    // Charged per step so the guard reads a current ledger.
-    await mission?.port.debit(usageTotal(usage) ?? 0, {
-      labels: mission.labels, calls: 1, usage,
-    });
+    if (usageReported(usage)) capture.recordStepUsage(usage);
   };
+
+  let overflowRetry = false;
 
   try {
     for (let index = 0; ; index++) {
-      // Checked before every turn: an agent spawned into a spent mission gets no free inference.
-      if (deps.isAborted() || await outOfBudget()) break;
+      if (deps.isAborted()) break;
 
       // Derived, not minted: a recovered activation re-admits the same turn under the next epoch.
-      const turnId = deps.delegation?.assignmentId ?? input.id;
+      const turnId = input.id;
 
       const lease = session.beginTurn(
         { runId: deps.runId, turnId: index === 0 ? turnId : `${turnId}#${index}` },
         input.mode, Date.now(),
       );
 
-      let turnFailed = false;
-
       try {
-        if (index === 0 && deps.delegation) {
-          const { birthContext } = deps.delegation;
-          await session.openDelegatedTurn(lease, { messages: seed, birthContext: async () => birthContext });
-        }
+        // Per turn: a promotion or a moved profile lands between turns.
+        const assembled = await assembleActorTurn(sources, { userText: input.task, workMode: input.mode, ...(input.model !== undefined && { model: input.model }) });
+        session.bindProfile(lease, assembled.profile, assembled.profileInputs);
 
-        const resolved = await deps.profile({ availableTools: Object.keys(deps.tools), workMode: input.mode });
-        session.bindProfile(lease, resolved.profile, resolved.inputs);
+        const historyLength = session.history.length;
 
-        const stopWhen = async (): Promise<boolean> => {
-          if (deps.isAborted()) return true;
+        const execution = withCompactionTrigger(assembled.execution, deps.compaction.state, deps.compaction.key, historyLength);
 
-          return await outOfBudget();
-        };
+        const stopWhen = (): boolean => deps.isAborted();
 
         const outcome = await session.execute(lease, {
+          ...execution,
           task: input.task,
-          // Read per turn so a promotion lands between turns, never mid-turn.
-          loopVersion: await deps.actor.runtime.identity.scaffold.version(),
-          chat: {
-            model: deps.model,
-            system,
-            tools: deps.tools,
-            modelContext,
-            cache: {
-              providerId: modelContext.provider,
-              modelId: modelContext.id,
-              sessionKey: agentAffinityKey(input.rootId),
-            },
-            stopWhen,
-            onStep,
-            ...streamRelay(deps),
-          },
-          extensions: [{ name: 'kinu.head-lifetime', prepareStep: prepareModelStep }],
-          dynamic: deps.dynamic,
+          chat: { ...execution.chat, stopWhen, onStep, ...streamRelay(deps) },
           assertActive,
-          scaffoldStreamOptions: { onStep, stopWhen, prepareStep: prepareModelStep },
-        }, (event) => {
-          // One frame per delta, in order, never held.
-          if (event.type === 'text-delta') {
-            deps.reportDelta?.('text', event.delta);
+          scaffoldStreamOptions: { onStep, stopWhen },
+        }, (event) => { settled = relayRunEvent(deps, event) || settled; });
 
-            return;
-          }
+        const retry = settleRunContext(deps, { outcome, execution, historyLength, contextWindow: assembled.window.contextWindow, overflowRetry });
 
-          if (event.type === 'reasoning-delta') {
-            deps.reportDelta?.('reasoning', event.delta);
-
-            return;
-          }
-
-          // Recorded as a root turn records them.
-          if (event.type === 'model-fallback') {
-            deps.actor.stores.eventRecorder.emit(deps.runId, { type: 'model_fallback', from: event.from, to: event.to, reason: event.reason });
-
-            return;
-          }
-
-          if (event.type !== 'done') return;
-          settled = true;
-        });
+        overflowRetry = retry;
 
         if (outcome.claim !== null) {
           canonicalClaim = outcome.claim;
@@ -766,8 +746,10 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
           conversation.push(...await materializeMessages(session, outcome.outputReferences));
         }
 
-        if (outcome.failure !== null) {
-          turnFailed = true;
+        const turnFailed = outcome.failure !== null;
+
+        // A refused step is reported as over budget; an overflowed turn is retried.
+        if (outcome.failure !== null && refusal === null && !retry) {
           failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: outcome.failure, otherwise: 'unavailable' });
         }
 
@@ -781,18 +763,21 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         session.finishTurn(lease);
       }
 
-      if (failure !== undefined || deps.isAborted()) break;
+      if (failure !== undefined || refusal !== null || deps.isAborted()) break;
 
-      const resumed = await deps.resume?.();
+      const next = await nextRunInput(deps, overflowRetry);
 
-      if (!resumed) break;
-      await appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, kind: 'resume', messages: resumed });
+      if (next === null) break;
+      await appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, ...next });
     }
   } catch (err) {
     failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
   } finally {
     unbridgeCancel();
   }
+
+  // Joined on every path: a run never settles past a step its mission has not been charged for.
+  failure ??= await lastCharge(gate, input.id);
 
   if (settled) failure = reportConversation(deps, input, conversation, failure);
 

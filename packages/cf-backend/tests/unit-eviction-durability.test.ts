@@ -167,7 +167,7 @@ describe('the post-turn lanes', () => {
 
     const result = await recover(agent, interrupted('evolution:settle', { lane: 'evolution:settle' }));
 
-    // Only the durable half re-enters here: `settleEvolution` joins promises this activation never dispatched,
+    // Only the durable half re-enters here: `settleTracked` joins promises this activation never dispatched,
     // and the session pass spends model calls, too heavy for a hook awaited inside the init gate.
     expect(result).toEqual({
       status: 'completed',

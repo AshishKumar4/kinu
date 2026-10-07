@@ -14,9 +14,27 @@ import { runNodeAgent } from '../src/strategy/node-agent';
 test('a node finishes after a 26-minute step: nothing times it out', async () => {
   const { rt, db } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
-  const seats = hostedSeatsOver({ rt, db });
   let steps = 0;
   let now = Date.now();
+
+  const model = scriptedTurnModel({
+    provider: 'fake', modelId: 'fake-long-step',
+    doGenerate: async () => {
+      steps++;
+      now += 26 * 60_000;
+
+      return {
+        content: [{ type: 'text', text: 'finished the long step' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 3, text: 3, reasoning: undefined },
+        }, warnings: [],
+      };
+    },
+  });
+
+  const seats = hostedSeatsOver({ rt, db, model: () => model });
   const clock = spyOn(Date, 'now').mockImplementation(() => now);
 
   try {
@@ -29,22 +47,6 @@ test('a node finishes after a 26-minute step: nothing times it out', async () =>
     }, {
       reportModelCall: unobservedSpend,
       hostNode: seats.hostNode,
-      model: scriptedTurnModel({
-        provider: 'fake', modelId: 'fake-long-step',
-        doGenerate: async () => {
-          steps++;
-          now += 26 * 60_000;
-
-          return {
-            content: [{ type: 'text', text: 'finished the long step' }],
-            finishReason: { unified: 'stop', raw: undefined },
-            usage: {
-              inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
-              outputTokens: { total: 3, text: 3, reasoning: undefined },
-            }, warnings: [],
-          };
-        },
-      }),
       journal, logger: createRecordingLogger(),
     });
 

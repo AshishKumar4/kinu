@@ -45,8 +45,8 @@ import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, hold, logged, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
-  createCompactionExtension, createVfsTranscriptStore, type CompactionExtension,
-  createCompactionStateStore, createModelSummarizer,
+  createActorCompaction, type CompactionExtension,
+  createCompactionStateStore,
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
 import { convertToModelMessages } from "ai";
@@ -68,14 +68,12 @@ import {
   type WebSearchProvider,
   type BrowserSessions,
   browserSessions,
-  buildSystemPromptSync,
   type PromptIdentity,
   turnArtifactBodies, artifactOverrides, currentArtifacts, withToolText, type TurnOpening,
   currentDateForPrompt,
   turnReasonForMetadata,
   workModeForTurnMetadata, authoredTurnMetadata,
-  renderUnverifiedInstructions,
-  observeSystemPromptHash, steerSkillsBlock, splitTurnSkills, activatedSkillsBlock,
+  observeSystemPromptHash, steerSkillsBlock,
   type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -83,7 +81,7 @@ import {
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   TurnAccumulator, AgentOrchestrator, ActorSession, ChatSession, type AgentOrchestratorDeps, type BackendHost,
-  type ChatTurnInput, type ComposedRequest, type PreparedTurn, type OwedTerminalEffectsInput, type ActorTurnLease, type ActorExecutionInput,
+  type ChatTurnInput, type ComposedRequest, type PreparedTurn, type OwedTerminalEffectsInput, type ActorTurnLease,
   type OwedEffect,
   type InlineSteer,
   type AgentsToolAction,
@@ -99,7 +97,6 @@ import {
   type HeadStreamFrame,
   type HeadId, type HeadInput, type HeadReport,
   type SerializedMessage, type HeadRuntime, type HeadGrounding,
-  readMemoryTail,
   type RunEventRecorder,
   // Spend governor is opt-in: no label means no cap.
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
@@ -124,7 +121,6 @@ import {
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
-  resolveTurnSkills, filterToolNamesBySkills,
   type ActiveSkillSet,
   inheritedContextFromTranscript,
   PlanReviewActions, planHandoffStillOwed, type PlanDecisionOutcome,
@@ -145,20 +141,18 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  accountDeps, parseModelSpec, specModelInfo, countRequestInputTokens,
+  parseModelSpec, specModelInfo, assembleActorTurn, withCompactionTrigger, promptCacheKey, vfsTurnSkills, type AssembledTurn, type TurnAssemblyRequest, type TurnAssemblySources,
+  type ModelWindow, type AgentsMdSources,
   ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
-  measureCompactionTrigger,
   // AGENTS.md discovery, and the trust authority deciding whether discovered bytes earn system placement.
   collectWorkspaceAgentsMd,
   InstructionApprovalStore, trustOfInstructionApprovals,
   type InstructionApproval, type InstructionTrustResolver,
   InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
-  type ModelWindow,
-  reasoningEffortOptions,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
-  agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
+  agentsProfileContext, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
@@ -168,8 +162,8 @@ import {
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
-  toolsForInvocation, toolsInWorkMode, withTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
-  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount,
+  toolsInWorkMode, type TaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
+  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
   type NimbusSandboxHandle, childContextResolver, localContextTree,
 } from "@kinu.run/core";
@@ -197,7 +191,7 @@ import {
   terminalEffect, chatTerminalEffects,
   RunEndReasonSchema, WorkModeSchema,
   AdvisorRecoverySnapshotSchema,
-  type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
+  type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
 import { codemodeLauncher, type ProgramLaunch } from "./codemode-sandbox";
@@ -227,6 +221,7 @@ import { AdviceJobs } from './advice-jobs';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from './wake-jobs';
 import { rawPath, rethrow } from './api/context';
 import { callUserMcpTool } from './user-mcp-call';
+import { routedModelReads } from './providers/agent-registry';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
 interface ModelDimensions {
@@ -263,47 +258,6 @@ interface TurnAssemblyInput {
   /** The actor's raw tool surface for the requested work mode. */
   readonly tools: ToolSet;
   readonly reads: TurnReads;
-}
-
-/** The pieces of core's `ChatOptions` only this backend can supply, plus readings the
- * turn's settlement and per-step assembly re-use. */
-interface TurnCompositionInput extends TurnAssemblyInput {
-  readonly requestedWorkMode: WorkMode;
-  readonly cliCwd: string | null;
-  readonly item: ChatTurnInput | null;
-}
-
-interface AssembledTurn extends ComposedTurn {
-  readonly measured: ReturnType<typeof measureCompactionTrigger>;
-}
-
-interface ComposedTurn {
-  readonly profile: ResolvedTurnProfile;
-  readonly profileInputs: ProfileAuthorityInputs;
-  readonly system: string;
-  readonly model: LanguageModel;
-  /** The invocable surface: task-plan and operation-profile wrapped. */
-  readonly tools: ToolSet;
-  /** MCP and extension tools; only `eval` reaches them. */
-  readonly externalTools: ToolSet;
-  readonly activeTools: string[];
-  /** The exact active subset, for admission counting and the dynamic ledger. */
-  readonly activeToolSurface: ToolSet;
-  /** The durable history with the CLI's cwd context laid over it. */
-  readonly rawMessages: readonly ModelMessage[];
-  /** The unapproved instruction files as one message, null for none. */
-  readonly instructions: string | null;
-  /** The input's `/name` activations, spliced before it for this turn only. */
-  readonly activated: string | null;
-  readonly activeSkills: ActiveSkillSet | null;
-  readonly operation: OperationProfile;
-  /** Window for admission, compaction and pruning; records whether figures are the
-   * catalog's or the static table's stand-in. */
-  readonly window: ModelWindow;
-  readonly memoryTail: string | undefined;
-  readonly countInputTokens: (request: CountableRequest) => Promise<InputTokenCount>;
-  readonly reasoningOptions: ReturnType<typeof reasoningEffortOptions>;
-  readonly promptModel: ReturnType<ActorAgent['promptModelContext']>;
 }
 
 interface AsyncTaskOwner {
@@ -1314,25 +1268,18 @@ export abstract class ActorAgent extends Agent<Env> {
       // regardless of what core later puts between them.
       transaction: (body) => this.ctx.storage.transactionSync(body),
       // Release must not run while an auto-continuation is calling tools under this turn before it
-      // has its own terminal claim; see {@link turnMayStillRun}.
-      turnIsLive: (turnId) => this.turnMayStillRun(turnId),
+      // has its own terminal claim.
+      turnIsLive: (turnId) => this.chatLoop.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
       settled: () => this.restWhenIdle(),
+      // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber.
+      hold: (close) => this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
+        ctx.stash({ lane: TERMINAL_LANE_FIBER });
+        await close();
+      }).finally(() => { this.overviewChanged(); }),
     });
 
     return this._terminalTransitions;
-  }
-
-  /**
-   * Whether another response of this turn may still run. `_inFlight` misses a fresh activation
-   * after isolate death, and `durableTurnId` alone outlives its turn.
-   */
-  private turnMayStillRun(turnId: string): boolean {
-    if (this._inFlight && this.durableTurnId() === turnId) return true;
-
-    // A ledger-open run for this turn will be re-opened as a continuation on restart; the settling
-    // response's own run is already closed.
-    return this.eventRecorder.openTurn()?.turn.turnId === turnId;
   }
 
   /** Set by the last maintenance pass. */
@@ -1393,6 +1340,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Subclasses prepend extra owed lanes here so all ride one durable wake.
    */
   protected async owedDeliveryWork(): Promise<void> {
+    // Detached effects close in their own fiber: a title in its provider's backoff must not hold the wake's job.
     await this.terminal.replayOwedAndRearm();
   }
 
@@ -1441,48 +1389,6 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   private installedBuildIdentity(): string | null {
     return this.env.CF_VERSION_METADATA?.id ?? null;
-  }
-
-  /**
-   * The terminal sequence this actor started most recently, resolved once its disposition is written.
-   * Retained because the close is detached; an unnamed detached chain could never be joined.
-   */
-  protected _terminalReported: Promise<Exit.Exit<void>> = Promise.resolve(Exit.void);
-  private _terminalReportedOwner: AsyncTaskOwner | null = null;
-
-  /** A settled turn's detached leftovers are still closing in this isolate. */
-  protected get terminalClosing(): boolean {
-    return this._terminalReportedOwner !== null;
-  }
-
-  /**
-   * Keep this isolate alive for a terminal close via a durable fiber, since a bare promise is not a
-   * wake; the fiber's run row hands leftovers to {@link classifyRecoveredFiber}. Order: hold, join, dispose.
-   */
-  protected holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void {
-    const prior = this._terminalReported;
-    const owner: AsyncTaskOwner = { promise: null };
-    this._terminalReportedOwner = owner;
-
-    const task = hold(Effect.ensuring(Effect.catchCause(Effect.gen({ self: this }, function* () {
-      // Chain closes so the latest owner retains every earlier close instead of overwriting a live fiber.
-      yield* (yield* Effect.promise(() => prior));
-      yield* Effect.promise(() => this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
-        ctx.stash({ lane: TERMINAL_LANE_FIBER });
-        await close();
-      }));
-    }), (failed) => Effect.promise(() => this.terminal.closeFailed(transition, { cause: Cause.squash(failed) }))), Effect.sync(() => {
-      // An eviction needs no cleanup; a rejection that leaves this isolate alive does (above).
-      if (this._terminalReportedOwner === owner) {
-        this._terminalReportedOwner = null;
-        this._terminalReported = Promise.resolve(Exit.void);
-      }
-
-      this.overviewChanged();
-    })));
-
-    owner.promise = task;
-    this._terminalReported = task;
   }
 
   /** Uses `effectiveModelSpec`: the stored spec can be null or an un-normalized alias. */
@@ -1546,26 +1452,14 @@ export abstract class ActorAgent extends Agent<Env> {
   private _compaction: CompactionExtension | null = null;
 
   protected compaction(): CompactionExtension {
-    this._compaction ??= createCompactionExtension({
-      ports: {
-        transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
-        plans: this.compactionState.plans,
-        logger: this.compactionLogger,
-      },
-      archive: this.compactionState.archive,
-      summarize: createModelSummarizer(() => this.getModel(), {
-        source: 'compaction', report: (report) => this.reportModelCall(report),
-        operations: this.modelOperations,
-      }),
-      // The ladder's first rung prunes this session ledger before any tool output.
-      ephemeral: this.actorSession.dynamic,
-      onOutcome: ({ outcome }) => {
-        // A new or invalidated plan makes the dynamic ledger's frozen block positions meaningless; this
-        // fires before the first step weave. A byte-stable replay keeps positions valid.
-        if (outcome !== 'replayed') this.actorSession.dynamic.reset();
-      },
+    this._compaction ??= createActorCompaction({
+      files: () => this.rt,
+      state: this.compactionState,
+      ledger: this.actorSession.dynamic,
+      logger: this.compactionLogger,
+      summarizer: () => this.getModel(),
+      spend: { report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       model: () => this.effectiveModelSpec(),
-      attachments: { files: () => this.rt },
     });
 
     return this._compaction;
@@ -1791,10 +1685,7 @@ export abstract class ActorAgent extends Agent<Env> {
           taskList: () => this.stores.taskList,
           // A running job's settle wakes the session; a reminder fired behind it would race that wake.
           hasPendingAsyncWake: () => this.stores.jobs.listRunning(1).total > 0,
-          holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
           driverGate: () => this.driverGate(),
-          // The workspace UI IS the review surface: a plan turn is admitted.
-          planTurnRefusal: () => null,
           stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
           // Prompt-cache warming belongs to the root actor (it owns the wake chain); hosted actors wire none.
           ...(this.cacheWarmingLane() && { cacheWarming: this.cacheWarmingLane() }),
@@ -1907,6 +1798,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Null when this workspace hosts no such actor; only the workspace root knows its directory. */
   protected abstract hostedChatWire(actorId: string): ChatWire | null;
+
+  /** An owner's words to an agent, resolved once its chat has reserved them, as the root's `admit` is. */
+  protected abstract hostedAdmit(actorId: string, input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<void>;
 
   protected abstract hostedWindowName(actorId: string): string | null;
 
@@ -2074,7 +1968,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this._evolutionSettling = owner;
     owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.runFiber(EVOLUTION_LANE_FIBER, async (ctx) => {
       ctx.stash({ lane: EVOLUTION_LANE_FIBER });
-      await this.orch.settleEvolution();
+      await this.orch.settleTracked();
       await this.orch.runDueSessionEvolution();
     })), recording({ doing: 'settling the turn and session evolution lanes', otherwise: 'unavailable' }, (failure) => {
       diagnostics.failure('evolution.settle_failed', failure);
@@ -2791,11 +2685,15 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.instructionApprovals().list();
   }
 
+  /** The workspace's instruction files, read through its sandbox where it has one. */
+  protected workspaceAgentsMd(window: ModelWindow, trust: InstructionTrustResolver): Promise<AgentsMdSources> {
+    return collectWorkspaceAgentsMd(this.rt.storage.vfs, window, trust, this.rt.executionRouter?.getProvider('sandbox'));
+  }
+
   private _instructionDesk: InstructionApprovalDesk | null = null;
   private instructionDesk(): InstructionApprovalDesk {
     this._instructionDesk ??= new InstructionApprovalDesk({
-      agentsMd: (window, trust) =>
-        collectWorkspaceAgentsMd(this.rt.storage.vfs, window, trust, this.rt.executionRouter?.getProvider('sandbox')),
+      agentsMd: (window, trust) => this.workspaceAgentsMd(window, trust),
       skillsVfs: this.rt.storage.vfs,
       approvals: this.instructionApprovals(),
       window: () => this.modelCatalog.window(),
@@ -3403,7 +3301,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.config.getModel();
   }
 
-
   /** Native owner inspection. Does not initialize the SDK or application tables. */
   async inspectSubordinateStorage(request: SubordinateInspectionRequest, authority: SubordinateInspectionAuthority): Promise<SubordinateInspectionResult> {
     // Core authorizes the directory path before resolving its canonical
@@ -3453,7 +3350,6 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-
   /** Used to preselect a menu entry; the model list comes from /api/user/models (user-scoped). */
   @callable()
   async getStoredModelSpec(): Promise<{ spec: string | null }> {
@@ -3498,10 +3394,8 @@ export abstract class ActorAgent extends Agent<Env> {
       const window = this.addressedActor();
 
       if (window !== null) {
-        const wire = this.hostedChatWire(window);
-
-        if (wire === null) return yield* new KinuError('missing', `${window} is not an agent of this workspace`);
-        yield* Effect.promise(async () => wire.send({ text, files: attachments, id, mode: workMode }));
+        if (this.hostedChatWire(window) === null) return yield* new KinuError('missing', `${window} is not an agent of this workspace`);
+        yield* Effect.promise(async () => this.hostedAdmit(window, { text, files: attachments, id, mode: workMode }));
 
         return;
       }
@@ -4012,23 +3906,15 @@ export abstract class ActorAgent extends Agent<Env> {
     // The revision, not a copy: a context:'inherit' hire reads back the conversation the caller had.
     this._turnOrigin = this.actorSession.turnContext;
     const assembled = await this.assembleTurn({ history, tools, reads });
-    this._turnDurableLength = assembled.rawMessages.length;
+    this._turnDurableLength = assembled.historyLength;
     // Bound exactly once before execution; the CLI adapter binds it at the same point.
     this.actorSession.bindProfile(lease, assembled.profile, assembled.profileInputs);
-    const execution = await this.executionFor(assembled);
-    const chat: ActorExecutionInput['chat'] = { ...execution.chat, transformTrigger: assembled.measured.trigger };
+    const execution = withCompactionTrigger(assembled.execution, this.compactionState, this.name, assembled.historyLength);
 
-    if (assembled.measured.providerReportedTokens !== undefined) {
-      chat.providerReportedTokens = assembled.measured.providerReportedTokens;
-    }
+    // Forced rebuild is armed by overflow recovery (onChatResponse).
+    if (execution.chat.transformTrigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
 
-    return {
-      execution: { ...execution, chat },
-      sessionKey: this.name,
-      contextWindow: assembled.window.contextWindow,
-      historyLength: assembled.rawMessages.length,
-      trial: artifacts.trial,
-    };
+    return { execution, sessionKey: this.name, contextWindow: assembled.window.contextWindow, historyLength: assembled.historyLength, trial: artifacts.trial };
   }
 
   /** The turn's evolved text; between turns, the promoted text. */
@@ -4039,66 +3925,13 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   private async composeNextRequest(): Promise<ComposedRequest> {
-    const surface = await this.turnToolsAndReads({});
-    const tools = withToolText(surface.tools, this.turnArtifacts().tools);
-    const { reads } = surface;
+    const { tools, reads } = await this.turnToolsAndReads({});
     const { messages: history } = await this.stores.history.materialize();
+    const requestedWorkMode = await this.preparedWorkMode();
+    const assembled = await assembleActorTurn(this.turnSources({ tools, reads, requestedWorkMode, item: null }), this.turnRequest(history, requestedWorkMode, {}));
+    this._settledProfile = assembled.profile;
 
-    const composed = await this.composeTurn({
-      history, tools, reads, requestedWorkMode: await this.preparedWorkMode(), cliCwd: this._cliCwd, item: null,
-    });
-
-    return { execution: await this.executionFor(composed), profile: composed.profile, sessionKey: this.name };
-  }
-
-  private async executionFor(composed: ComposedTurn): Promise<Omit<ActorExecutionInput, 'task'>> {
-    const liveTurn: ActorExecutionInput['chat'] = {
-      model: composed.model,
-      modelContext: {
-        id: composed.promptModel.id,
-        contextWindow: composed.window.contextWindow,
-        modelOutputLimit: composed.window.modelOutputLimit,
-      },
-      system: composed.system,
-      attachments: {
-        accepts: this.modelCatalog.acceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
-      },
-      tools: composed.tools,
-      activeTools: composed.activeTools,
-      cache: {
-        providerId: composed.promptModel.provider,
-        modelId: composed.promptModel.id,
-        sessionKey: this.ownedModelServices.affinityKey,
-        retention: this.config.getCacheRetention(),
-      },
-      budget: this.budget,
-      countInputTokens: composed.countInputTokens,
-      observeStream: (chunks, call) => this.chatTransport.observe(chunks, call),
-    };
-
-    if (composed.reasoningOptions) liveTurn.providerOptions = composed.reasoningOptions;
-
-    const providers = this.providerRegistry();
-    liveTurn.modelSpec = providers.normalizeSpecSync(composed.profile.tier.model);
-    liveTurn.credentialOf = (spec) => this.ownedModelServices.credentialFor(spec);
-    liveTurn.retries = composed.profile.retries;
-    liveTurn.fallbacks = composed.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
-      spec: providers.normalizeSpecSync(spec),
-      accepts: this.modelCatalog.acceptedMedia(spec),
-      window: this.modelCatalog.window(spec),
-      bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
-    }));
-
-    return {
-      loopVersion: await this.rt.identity.scaffold.version(),
-      chat: liveTurn,
-      // All registered extensions; the turn adds the orchestrator's inbox extension itself.
-      extensions: this.extensions.list(),
-      dynamic: (profile, turnTools) => this.dynamicContextSnapshot(profile, turnTools, composed.memoryTail, composed.activeSkills),
-      instructions: composed.instructions,
-      activated: composed.activated,
-      scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-    };
+    return { execution: assembled.execution, profile: assembled.profile, sessionKey: this.name };
   }
 
   /**
@@ -4178,184 +4011,83 @@ export abstract class ActorAgent extends Agent<Env> {
     return ownProfileChoices(this.config, profileInputs, undefined, { explicitTier: readTurnTier(body) ?? undefined });
   }
 
-  /** Effect-free: a measure between turns uses it. */
-  private async composeTurn(input: TurnCompositionInput): Promise<ComposedTurn> {
-    const { profileInputs, mcpTools, identity, catalog, choices } = input.reads;
-    const { activeRoleId } = choices;
-    const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
-    // Deps-gated builtins (report) are advertised only when this actor class wires them; the
-    // agents ladder renders only actions this profile supports, then the active skills' union.
+  private turnRequest(history: readonly ModelMessage[], workMode: WorkMode, body: JsonObject): TurnAssemblyRequest {
+    const explicitTier = readTurnTier(body);
+
+    return { userText: extractLastUserText(history), workMode, ...(explicitTier !== null && { explicitTier }) };
+  }
+
+  /** Where this actor's turns are assembled from (core orchestrator/turn-assembly.ts); `reads` were fetched before
+   *  the turn opened. */
+  private turnSources(input: { readonly tools: ToolSet; readonly reads: TurnReads; readonly requestedWorkMode: WorkMode; readonly item: ChatTurnInput | null }): TurnAssemblySources {
+    const { reads } = input;
+    // Deps-gated builtins (report) are wired only when this actor class wires them.
     const turnActorDeps = this.actorToolDeps();
-    const { requestedWorkMode } = input;
-    let activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
-    const trust = this.instructionTrust();
-
-    const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
-      vfs: this.rt.storage.vfs,
-      config: this.config,
-      userText: extractLastUserText(input.history),
-      roleSkills,
-      trust,
-      limits: catalog.window(),
-    });
-
-    if (activeSetForPrompt) activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
-    const { pinned, invoked } = splitTurnSkills(activeSetForPrompt);
-
-    const mcpToolNames = Object.keys(mcpTools);
-
-    const extensionTools = Object.fromEntries(
-      Object.entries(this.extensions.tools())
-        .filter(([name]) => !(name in input.tools) && !(name in mcpTools)),
-    );
-
-    const extensionToolNames = Object.keys(extensionTools);
-    const availableAgentActions = actorAgentsActions(turnActorDeps, this._accountSwarms === true);
-    // `agent` / `llm` are reachable only inside `eval`, so they must be listed here or
-    // the role intersection drops them; derived from providers wired for this mode.
-    const turnCodemodeProviders = this.turnCodemodeProviders();
-
-    const availableTools = [
-      ...activeTools,
-      ...mcpToolNames,
-      ...extensionToolNames,
-      ...(turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
-      ...codemodeCapabilitiesFor(turnCodemodeProviders),
-    ];
-
-    const profile = resolveAgentTurnProfile({
-      ...profileInputs,
-      ...choices,
-      workMode: requestedWorkMode,
-      availableTools,
-      activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
-    });
-
-    this._settledProfile = profile;
-
-    const operation = captureOperationProfile({
-      actor: this.actorHandle(), profile, inputs: profileInputs,
-      runId: this._currentRunId || WORKSPACE_RUN_ID, turnId: this.durableTurnId() ?? this._currentRunId,
-    });
-
-    const workMode = profile.workMode;
-    const modeTools = workMode === requestedWorkMode ? input.tools : this.actorToolsets(workMode).turn;
-    const allowedTools = new Set(profile.allowedTools);
-    const toolAllowed = (name: string): boolean => allowedTools.has(name);
-    const promptActiveTools = activeTools.filter(toolAllowed);
-    const resolvedAgentActions = toolAllowed('agents') ? availableAgentActions : [];
-
-    const planToolNames = workMode === 'plan' && turnActorDeps.submitPlan && toolAllowed(SUBMIT_PLAN_TOOL)
-      ? [SUBMIT_PLAN_TOOL]
-      : [];
-
-    const effectiveActiveTools = [...promptActiveTools, ...planToolNames];
-
-    const externalTools: ToolSet = toolAllowed('eval') ? Object.fromEntries(
-      [...Object.entries(mcpTools), ...Object.entries(extensionTools)]
-        .filter(([name]) => toolAllowed(name)),
-    ) : {};
-
-    // AGENTS.md is turn-scoped state, so it rides the beforeTurn system override, not the cached
-    // base prompt.
-    const agentsMd = await collectWorkspaceAgentsMd(
-      this.rt.storage.vfs,
-      catalog.window(),
-      trust,
-      this.rt.executionRouter?.getProvider('sandbox'),
-    );
-
-    // The cache prefix changes only on real agent events (soul, model, skills, tools, AGENTS.md);
-    // live state rides the dynamic ledger instead.
-    const execs = this.rt.executionRouter?.listExecutors() ?? [];
-    const model = this.promptModelContextFor(profile.tier.model);
-
-    const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
-      soulOverride: this.getSoulText(),
-      executors: execs,
-      availableTools: promptActiveTools,
-      agentsActions: resolvedAgentActions,
-      temporaryAsk: turnActorDeps.team?.temporary !== undefined,
-      backend: 'cf',
-      roleSection: profile.role,
-      model,
-      // Read here, not in the builder: the builder is the byte-stable cacheable prefix and does no I/O.
-      sectionOverrides: this.turnArtifacts().sections,
-      identity,
-    };
-
-    if (availableSkills.lines.length > 0) promptOptions.availableSkills = availableSkills;
-
-    if (pinned) promptOptions.activeSkills = pinned;
-    promptOptions.agentsMd = agentsMd;
-    const systemOverride = buildSystemPromptSync(this.rt, promptOptions);
-
-    const languageModel = this.turnModel(profile.tier.model);
-
-    // Attachment sanitization is per-part copy-on-write, so the raw count equals the sanitized
-    // durable length; recordTurnTelemetry measures against the same number.
-    const rawMessages = input.cliCwd ? withCliCwdContext(input.history, input.cliCwd) : input.history;
-    // Must be awaited before submission: synchronous catalog reads return static stand-in values
-    // while the lookup is in flight (#20).
-    const [window] = await Promise.all([catalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model))]);
-    // The reflection loop assumes the model sees its latest MEMORY.md lessons in-turn; read once
-    // here since it is the one dynamic-context input needing an await.
-    const memoryTail = await readMemoryTail(this.rt.memory);
-    const instructions = renderUnverifiedInstructions({ agentsMd, activeSkills: pinned });
-
-    const submittedTools = modeTools;
     const providers = this.providerRegistry();
-    // Normalise via the serving registry first: `parseModelSpec` throws on a bare model id and
-    // parses a bare `@cf/…` to an unknown provider. One parse serves admission and reasoning effort.
-    const tierModel = parseModelSpec(providers.normalizeSpecSync(profile.tier.model));
-
-    const activeToolSurface = Object.fromEntries(effectiveActiveTools.flatMap((name) => {
-      const entry = submittedTools[name];
-
-      return entry === undefined ? [] : [[name, entry]];
-    }));
-
-    const countInputTokens = (request: CountableRequest): Promise<InputTokenCount> => countRequestInputTokens(
-      providers.registry.get(tierModel.provider), tierModel.modelId,
-      accountDeps(providers.deps, tierModel.provider, tierModel.account), request,
-    );
-
-    const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(input.item) });
-    const tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, modeTools), taskPlan), operation);
-
-    const reasoningOptions = reasoningEffortOptions(
-      profile.tier.reasoningEffort,
-      tierModel.provider,
-    );
+    const trust = this.instructionTrust();
+    const extensionTools = this.extensions.tools();
 
     return {
-      profile, profileInputs, system: systemOverride, model: languageModel, tools, externalTools, activeTools: effectiveActiveTools, activeToolSurface,
-      rawMessages, instructions, activated: invoked ? activatedSkillsBlock(invoked) : null, window, memoryTail, countInputTokens,
-      reasoningOptions, promptModel: model, activeSkills: activeSetForPrompt ?? null, operation,
+      rt: this.rt,
+      backend: 'cf',
+      executors: () => this.rt.executionRouter?.listExecutors() ?? [],
+      config: this.config,
+      skills: vfsTurnSkills(this.rt.storage.vfs, this.config, trust),
+      models: {
+        catalog: this.modelCatalog,
+        normalize: (spec) => providers.normalizeSpecSync(spec),
+        resolve: (spec) => this.turnModel(spec),
+        routed: routedModelReads(providers),
+      },
+      profileInputs: async () => reads.profileInputs,
+      toolset: (mode) => (mode === input.requestedWorkMode ? input.tools : this.actorToolsets(mode).turn),
+      // MCP tools were admitted against the request's model in `readTurnInputs`.
+      externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),
+      wiredToolNames: (mode) => (mode === 'plan' && turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
+      // `agent` / `llm` are reachable only inside `eval`: derived from the providers wired for this mode.
+      codemodeCapabilities: () => codemodeCapabilitiesFor(this.turnCodemodeProviders()),
+      agentsActions: () => actorAgentsActions(turnActorDeps, this._accountSwarms === true),
+      temporaryAsk: () => turnActorDeps.team?.temporary !== undefined,
+      soul: async () => this.getSoulText(),
+      agentsMd: (window) => this.workspaceAgentsMd(window, trust),
+      identity: async () => reads.identity,
+      artifacts: () => this.turnArtifacts(),
+      taskPlan: () => Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(input.item) }),
+      cacheKey: () => promptCacheKey(this.ownedModelServices.affinityKey, CHAT_SESSION_ID),
+      budget: this.budget,
+      operations: this.modelOperations,
+      scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
+      attachmentBudget: this.acc.context,
+      observeStream: (chunks, call) => this.chatTransport.observe(chunks, call),
+      extensions: () => this.extensions.list(),
+      dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.dynamicContextSnapshot(profile, tools, memoryTail, activeSkills),
+      operation: (profile, inputs) => captureOperationProfile({
+        actor: this.actorHandle(), profile, inputs, runId: this._currentRunId || WORKSPACE_RUN_ID, turnId: this.durableTurnId() ?? this._currentRunId,
+      }),
     };
   }
 
-  private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn> {
+  private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn & { readonly historyLength: number }> {
     this._workspaceInstructionApprovals = null;
     this._turnActiveSkills = null;
-    const composed = await this.composeTurn({ ...input, requestedWorkMode: this.turnWorkMode(), cliCwd: this._cliCwd, item: this._turnItem });
+    const requestedWorkMode = this.turnWorkMode();
+    const body = this._turnItem?.metadata ?? {};
+    const assembled = await assembleActorTurn(this.turnSources({ ...input, requestedWorkMode, item: this._turnItem }), this.turnRequest(input.history, requestedWorkMode, body));
+    this._settledProfile = assembled.profile;
 
-    if (composed.activeSkills !== null) {
-      this._turnActiveSkills = composed.activeSkills;
-      this.logActivity('skills_active', composed.activeSkills.active.map((skill) => skill.name).join(',') || '(none)');
+    if (assembled.activeSkills !== null) {
+      this._turnActiveSkills = assembled.activeSkills;
+      this.logActivity('skills_active', assembled.activeSkills.active.map((skill) => skill.name).join(',') || '(none)');
     }
 
-    this._turnOperation = composed.operation;
-    this._turnExternalTools = composed.externalTools;
-    this.orch.restrictTurnWorkMode(composed.profile.workMode);
-    this.recordSystemPromptHash(composed.system);
-    this._turnDurableLength = composed.rawMessages.length;
-    const measured = measureCompactionTrigger(this.compactionState, this.name, composed.rawMessages.length);
+    this._turnOperation = assembled.operation;
+    this._turnExternalTools = assembled.externalTools;
+    this.orch.restrictTurnWorkMode(assembled.profile.workMode);
+    this.recordSystemPromptHash(assembled.execution.chat.system);
+    // The durable history with the CLI's cwd context laid over it: what the trigger measures against.
+    const raw = this._cliCwd ? withCliCwdContext(input.history, this._cliCwd) : input.history;
 
-    // Forced rebuild is armed by overflow recovery (onChatResponse).
-    if (measured.trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
-
-    return { ...composed, measured };
+    return { ...assembled, historyLength: raw.length };
   }
 
   private _turnOrigin: ContextSelection | null = null;
@@ -4515,7 +4247,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Ancestors' own pins, nearest first, up to the root. */
-  private ancestorProfiles(actor: ActorHandle): PinnedProfile[] {
+  protected ancestorProfiles(actor: ActorHandle): PinnedProfile[] {
     return ancestorPins(actor.parentActorId, { actorId: this.actorHandle().actorId, pins: this.config }, (id) => {
       const parent = this.actorHost().describe(id);
 
@@ -4648,7 +4380,7 @@ export abstract class ActorAgent extends Agent<Env> {
       await Promise.all([...this._backgroundTasks].map((task) => task.promise ?? Promise.resolve()));
     }
 
-    throw new KinuError('io', 
+    throw new KinuError('io',
       `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
       + 'laps: something keeps enqueuing work; join a narrower seam instead',
     );

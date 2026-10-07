@@ -59,7 +59,7 @@ const neverHost: HostedActorSeams = {
   },
   turnInFlight() { throw new Error("mergeLLM read an actor's turn"); },
   infer() { throw new Error('mergeLLM ran an actor turn'); },
-  windowOf() { throw new Error("mergeLLM read a model's window"); },
+  turnSources() { throw new Error("mergeLLM read an actor's turn sources"); },
   register() { throw new Error('mergeLLM reached actor registration'); },
   watchWrites() { throw new Error("mergeLLM watched an actor's writes"); },
   profile() { throw new Error('mergeLLM resolved an exploration profile'); },

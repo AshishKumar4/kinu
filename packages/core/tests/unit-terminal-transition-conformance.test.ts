@@ -129,6 +129,9 @@ class Plane {
   private readonly deferred: Array<() => Promise<void>> = [];
   /** `startup`: the close the live process is carrying. */
   private closing: Promise<void> | null = null;
+  /** How the live process carries a held close: a settle's under its adapter, a replay's at once. */
+  private carrier: 'settle' | 'replay' | 'lost' = 'replay';
+  private readonly replays: Promise<void>[] = [];
   private live: TerminalTransitions | null = null;
   private readonly interrupts: string[] = [];
 
@@ -164,6 +167,7 @@ class Plane {
       transaction: <T>(body: () => T): T => this.db.transaction(body)(),
       turnIsLive: () => false,
       settled: async () => {},
+      hold: (close) => this.carry(close),
     });
 
     return this.live;
@@ -193,13 +197,9 @@ class Plane {
   }
 
   async settle(declare: () => readonly OwedEffect[]): Promise<void> {
-    await this.capture(async () => {
-      await this.process().settle({
-        transition: TRANSITION,
-        declare,
-        hold: (_claimed, close) => { this.carry(close); },
-      });
-    });
+    this.carrier = 'settle';
+    await this.capture(async () => { await this.process().settle({ transition: TRANSITION, declare }); });
+    this.carrier = 'replay';
   }
 
   async join(): Promise<void> {
@@ -217,17 +217,10 @@ class Plane {
   }
 
   async settleOnLostCarrier(declare: () => readonly OwedEffect[]): Promise<void> {
-    const reported: Promise<void>[] = [];
-
-    await this.process().settle({
-      transition: TRANSITION,
-      declare,
-      hold: (claimed) => {
-        this.wakeAt = null;
-        reported.push(this.process().closeFailed(claimed, { cause: new Error('the carrier died before the close ran') }));
-      },
-    });
-    await Promise.all(reported);
+    this.carrier = 'lost';
+    await this.process().settle({ transition: TRANSITION, declare });
+    await this.process().idle();
+    this.carrier = 'replay';
   }
 
   /** False when nothing was armed. */
@@ -235,7 +228,7 @@ class Plane {
     if (this.wakeAt === null) return false;
     this.clock = Math.max(this.clock, this.wakeAt);
     this.wakeAt = null;
-    await this.capture(async () => { await this.process().replayOwedAndRearm(); });
+    await this.replay();
 
     return true;
   }
@@ -245,7 +238,13 @@ class Plane {
     if (this.kind === 'alarm' && (this.wakeAt === null || this.wakeAt > this.clock)) return;
     this.wakeAt = null;
     this.restart();
+    await this.replay();
+  }
+
+  /** A wake's pass, its closes carried to their end. */
+  async replay(): Promise<void> {
     await this.capture(async () => { await this.process().replayOwedAndRearm(); });
+    await Promise.all(this.replays.splice(0));
   }
 
   snapshot(): Snapshot {
@@ -303,14 +302,39 @@ class Plane {
     return at <= this.clock ? 'due' : 'future';
   }
 
-  private carry(close: () => Promise<void>): void {
-    if (this.kind === 'alarm') {
-      this.deferred.push(close);
+  private carry(close: () => Promise<void>): Promise<void> {
+    if (this.carrier === 'lost') {
+      this.wakeAt = null;
 
-      return;
+      return Promise.reject(new Error('the carrier died before the close ran'));
     }
 
-    this.closing = this.capture(close);
+    if (this.carrier === 'replay') {
+      const replayed = this.capture(close);
+
+      this.replays.push(replayed);
+
+      return replayed;
+    }
+
+    if (this.kind === 'startup') {
+      this.closing = this.capture(close);
+
+      return this.closing;
+    }
+
+    const drained = Promise.withResolvers<void>();
+
+    // Settled either way: an interruption is the process dying, which the carrier outlives in neither adapter.
+    this.deferred.push(async () => {
+      try {
+        await close();
+      } finally {
+        drained.resolve();
+      }
+    });
+
+    return drained.promise;
   }
 
   /** Catches only interruptions; any other throw is a defect and travels. */
@@ -387,8 +411,8 @@ test('a recorded terminal roster recovers through the same lifecycle on both tra
     plane.process().record(TRANSITION, roster(SEQUENCE));
     expect(plane.runOrder()).toEqual([]);
     plane.restart();
-    await plane.process().resumeAll();
-    await plane.process().resumeAll();
+    await plane.replay();
+    await plane.replay();
   });
 
   expect(snap.effects).toEqual([]);
@@ -411,6 +435,7 @@ test('recorded terminal rosters with colliding identities belong only to their a
     transaction: (body) => db.transaction(body)(),
     turnIsLive: () => false,
     settled: async () => {},
+    hold: (close) => close(),
     effects: {
       turn_record: terminalEffect({
         input: EffectInputSchema,
@@ -423,16 +448,23 @@ test('recorded terminal rosters with colliding identities belong only to their a
     },
   });
 
+  const wake = async (actor: ActorHandle) => {
+    const transitions = open(actor);
+
+    await transitions.resumeAll();
+    await transitions.idle();
+  };
+
   const root = open(actors.main);
   const subordinate = open(child);
   root.record(TRANSITION, [{ name: 'turn_record', scope: 'same', lane: 'inline', input: { answer: 'root' } }]);
   subordinate.record(TRANSITION, [{ name: 'turn_record', scope: 'same', lane: 'inline', input: { answer: 'child' } }]);
-  await open(actors.main).resumeAll();
+  await wake(actors.main);
   expect(effects).toEqual([`${actors.main.actorId}:root`]);
   expect(subordinate.incomplete()).toEqual([TRANSITION]);
-  await open(child).resumeAll();
-  await open(actors.main).resumeAll();
-  await open(child).resumeAll();
+  await wake(child);
+  await wake(actors.main);
+  await wake(child);
   expect(effects).toEqual([`${actors.main.actorId}:root`, `${child.actorId}:child`]);
   expect(root.incomplete()).toEqual([]);
   expect(subordinate.incomplete()).toEqual([]);
@@ -443,13 +475,13 @@ test('an unsupported recorded roster remains inspectable and owed after reopenin
   await conform(async (plane) => {
     plane.process().record(TRANSITION, roster([UNIMPLEMENTED]));
     plane.restart();
-    await plane.process().resumeAll();
+    await plane.replay();
     const sequence = plane.process().sequenceId(TRANSITION);
     const owed = plane.process().ledger.owed(sequence);
     expect(owed).toHaveLength(1);
     expect(owed[0]).toMatchObject({ status: 'blocked', rawName: UNIMPLEMENTED, input: JSON.stringify({ answer: ANSWER }) });
     plane.restart();
-    await plane.process().resumeAll();
+    await plane.replay();
     expect(plane.process().ledger.owed(sequence)).toEqual(owed);
     expect(plane.process().incomplete()).toEqual([TRANSITION]);
   });
@@ -459,10 +491,10 @@ test('an unreadable recorded effect input is retained instead of dropping its ob
   await conform(async (plane) => {
     plane.process().record(TRANSITION, [{ name: 'craft_usage', scope: 'answer', lane: 'inline', input: { answer: 42 } }]);
     plane.restart();
-    await plane.process().resumeAll();
+    await plane.replay();
     plane.advance(PAST_BACKOFF_MS);
     plane.restart();
-    await plane.process().resumeAll();
+    await plane.replay();
 
     const owed = plane.process().ledger.owed(plane.process().sequenceId(TRANSITION));
     expect(owed).toHaveLength(1);

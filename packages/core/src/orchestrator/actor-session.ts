@@ -647,7 +647,15 @@ export class ActorSession {
   async execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void | Promise<void>): Promise<ActorExecutionResult> {
     const active = this.requireTurn(lease);
     active.startedAt = Date.now();
-    const result = await this.run(lease, input, emit);
+    const release = this.orchestrator.acc.chargeTo(input.chat.budget);
+    let result: ActorExecutionResult;
+
+    try {
+      result = await this.run(lease, input, emit);
+    } finally {
+      release();
+    }
+
     active.ended = { steps: result.steps, interrupted: result.interrupted, failure: result.failure };
 
     return result;

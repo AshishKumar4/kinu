@@ -624,7 +624,7 @@ export class PlanReviewActions {
       const queued = yield* Effect.promise(() => enqueue({ text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt) }));
 
       if (queued.status !== 'queued') {
-        return { ok: true, plan, queued: false, queueError: 'the durable turn submission was skipped' };
+        return { ok: true, plan, queued: false, queueError: queued.reason ?? 'the durable turn submission was skipped' };
       }
 
       const accepted = this.markHandoffAccepted(plan.id, plan.revision);

@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { tool, jsonSchema, type ToolSet } from 'ai';
+import { tool, jsonSchema, type LanguageModel, type ToolSet } from 'ai';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
@@ -168,7 +168,7 @@ interface Fixture {
 }
 
 function fixture(over: {
-  readonly model: NodeAgentDeps['model'];
+  readonly model: LanguageModel;
   readonly codemodeTool?: (finished: ToolSet) => ToolSet[string];
 }): Fixture {
   const { rt, db } = createTestRuntime();
@@ -188,7 +188,7 @@ function fixture(over: {
     arbitrate: null,
   };
 
-  const seats = hostedSeatsOver({ rt, db });
+  const seats = hostedSeatsOver({ rt, db, model: () => over.model });
   const frames: JobOutputFrame[] = [];
   /** The node's own actor, which keys its detached job; counting under `rt.actor` stalls the wait. */
   let nodeActorId: string | null = null;
@@ -215,7 +215,7 @@ function fixture(over: {
 
       return { ...seat, jobs: { ...seat.jobs, ports: { jobOutput: (frame) => { frames.push(frame); } } } };
     },
-    model: over.model, journal,
+    journal,
     logger,
     backgroundPolicy: () => ({
       detachAfterMs: DETACH_MS, settleGraceMs: SETTLE_MS, wakesAfterTurn: true,

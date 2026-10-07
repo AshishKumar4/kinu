@@ -75,7 +75,12 @@ export class ModelCatalogSession {
 
   /** As {@link contextFor}, the window alone: what a head or swarm node on `spec` is admitted against. */
   windowFor(spec: string): Promise<ModelWindow> {
-    return settle(Effect.map(this.lookup(spec), (info) => this.windowFrom(spec, info)));
+    if (spec === this.deps.effectiveSpec()) return settle(this.resolvedOf(spec));
+    const known = this.others.get(spec);
+
+    if (known !== undefined) return Promise.resolve(this.windowFrom(spec, known));
+
+    return settle(Effect.map(this.lookup(spec, (info) => { if (info !== null) this.others.set(spec, info); }), (info) => this.windowFrom(spec, info)));
   }
 
   window(spec?: string): ModelWindow {

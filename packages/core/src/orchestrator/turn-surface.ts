@@ -145,15 +145,6 @@ function skillToolBound(activeSkills: ActiveSkillSet | undefined): ((name: strin
   return allowedUnion.length === 0 ? null : (name) => toolAllowedBySkills(name, allowedUnion);
 }
 
-export function filterToolNamesBySkills<T extends string>(
-  names: readonly T[],
-  activeSkills: ActiveSkillSet | undefined,
-): T[] {
-  const allowed = skillToolBound(activeSkills);
-
-  return allowed === null ? [...names] : names.filter(allowed);
-}
-
 export function filterToolSetBySkills(tools: ToolSet, activeSkills: ActiveSkillSet | undefined): ToolSet {
   const allowed = skillToolBound(activeSkills);
 

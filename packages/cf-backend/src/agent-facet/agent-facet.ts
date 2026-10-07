@@ -11,8 +11,11 @@ import {
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
 } from '@kinu.run/core';
 import { AgentDatabase } from './agent-database';
-import { queueAgentTask, type AgentWorkspace } from './agent-turn';
-import type { AgentTurnOpening, AgentRecovery, AgentSnapshot, AgentTurnTask, TurnRequestAt } from '@kinu.run/core';
+import { runAgentTask, type AgentWorkspace } from './agent-turn';
+import { FacetChat, type AgentOwed } from './agent-chat';
+import type {
+  AgentRecovery, AgentSnapshot, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
+} from '@kinu.run/core';
 
 export type { AgentWorkspace } from './agent-turn';
 
@@ -60,10 +63,25 @@ class AgentContextTree extends RpcTarget implements ContextTreeRemote {
   writeFileIfRevision(path: string, data: Uint8Array, expected: VfsRevision) { return this.served.writeFileIfRevision(path, data, expected); }
 }
 
+export interface AgentSend {
+  readonly text: string;
+  readonly files?: readonly PromptFile[];
+}
+
 export interface AgentFacetCalls {
-  deliver(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<void>;
-  holds(turnId: string): Promise<boolean>;
-  openTurn(snapshot: AgentSnapshot, opening: AgentTurnOpening): Promise<void>;
+  run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd>;
+  /** Answered once its chat has processed it. */
+  enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
+  send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding>;
+  /** Resolves once its chat has reserved the words, not when they land. */
+  admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void>;
+  retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding>;
+  interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]>;
+  /** What a reset left owed is taken up; answers the next instant the agent owes and the turn its chat holds. */
+  wake(snapshot: AgentSnapshot): Promise<AgentOwed>;
+  owed(snapshot: AgentSnapshot): Promise<boolean>;
+  /** A retirement waits on it. */
+  idle(): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
   messageCount(snapshot: AgentSnapshot): Promise<number>;
@@ -80,7 +98,6 @@ export interface AgentFacetCalls {
   scrollConversation(snapshot: AgentSnapshot, around: string, window?: number, maxChars?: number): Promise<ConversationScrollResult | null>;
   browseConversations(snapshot: AgentSnapshot, limit?: number): Promise<ConversationSummary[]>;
   admitted(snapshot: AgentSnapshot, id: string): Promise<boolean>;
-  reopen(snapshot: AgentSnapshot): Promise<string>;
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
@@ -94,9 +111,9 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   private database: AgentDatabase | undefined;
 
-  private queue: Promise<void> = Promise.resolve();
+  private chat: Promise<FacetChat> | undefined;
 
-  private readonly held = new Set<string>();
+  private held: FacetChat | undefined;
 
   protected workspace(): NimbusSandboxHandle {
     this.box ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.env.WORKSPACE.session())
@@ -115,7 +132,9 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   private open(snapshot: AgentSnapshot): AgentDatabase {
     this.database ??= new AgentDatabase(this.ctx.storage, {
-      agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(), enqueueTurn: (input) => this.env.WORKSPACE.enqueueTurn(input),
+      agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(),
+      enqueueTurn: async (input) => await (await this.chatOf(snapshot)).session.enqueueTurn(input),
+      turnInFlight: () => this.held?.session.turnInFlight() ?? false,
       memory: () => this.env.WORKSPACE.memory(), program: (...args) => this.env.WORKSPACE.program(...args),
       sayToParent: (signal) => this.env.WORKSPACE.sayToParent(signal),
     });
@@ -124,20 +143,65 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.database;
   }
 
-  async deliver(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<void> {
+  private async chatOf(snapshot: AgentSnapshot): Promise<FacetChat> {
     const database = this.open(snapshot);
 
-    this.held.add(task.sequenceId);
-    this.queue = queueAgentTask({ after: this.queue, database, workspace: this.env.WORKSPACE, providers: this.env, task })
-      .finally(() => { this.held.delete(task.sequenceId); });
+    // The workspace's program first: the actor is built on it.
+    this.chat ??= this.env.WORKSPACE.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false })
+      .then((prepared) => { database.adopt({ ...snapshot, scaffold: [prepared.scaffold] }); })
+      .then(() => database.acquire())
+      .then((actor) => {
+      const chat = new FacetChat({
+        actor, database, workspace: this.env.WORKSPACE, providers: this.env, storage: this.ctx.storage,
+      });
+
+      chat.session.measureSessionStart({ restored: chat.session.restoreHistory() });
+      this.held = chat;
+
+      return chat;
+    });
+
+    return await this.chat;
   }
 
-  async holds(turnId: string): Promise<boolean> {
-    return this.held.has(turnId);
+  async run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd> {
+    return await runAgentTask(this.open(snapshot), this.env.WORKSPACE, this.env, task);
   }
 
-  async openTurn(snapshot: AgentSnapshot, opening: AgentTurnOpening): Promise<void> {
-    await this.open(snapshot).open(opening);
+  async enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+    return await (await this.chatOf(snapshot)).session.enqueueTurn(turn);
+  }
+
+  async send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding> {
+    const { session } = await this.chatOf(snapshot);
+
+    return await session.send(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
+  }
+
+  async admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void> {
+    const { session } = await this.chatOf(snapshot);
+
+    await session.admit(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
+  }
+
+  async retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding> {
+    return await (await this.chatOf(snapshot)).session.retry(claim);
+  }
+
+  async interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]> {
+    return (await this.chatOf(snapshot)).session.interrupt();
+  }
+
+  async wake(snapshot: AgentSnapshot): Promise<AgentOwed> {
+    return await (await this.chatOf(snapshot)).wake();
+  }
+
+  async owed(snapshot: AgentSnapshot): Promise<boolean> {
+    return (await this.chatOf(snapshot)).session.turnOwed;
+  }
+
+  async idle(): Promise<void> {
+    await this.held?.idle();
   }
 
   async history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]> {
@@ -202,10 +266,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async admitted(snapshot: AgentSnapshot, id: string): Promise<boolean> {
     return this.open(snapshot).admitted(id);
-  }
-
-  async reopen(snapshot: AgentSnapshot): Promise<string> {
-    return this.open(snapshot).reopen();
   }
 
   async interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void> {

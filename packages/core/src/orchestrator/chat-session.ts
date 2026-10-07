@@ -25,7 +25,7 @@ import type { CacheWarmingLane } from '../providers/cache-warming';
 import { DEFAULT_CACHE_RETENTION } from '../providers/types';
 import { serverCompactor, SERVER_COMPACTION_MIN_TOKENS } from '../providers/server-compaction';
 import type { ToolOutcome } from '../tools/outcome';
-import { OVERFLOW_RETRY_EVENT, statedContextLimit } from '../turn-failure';
+import { OVERFLOW_RETRY_EVENT } from '../turn-failure';
 import type {
   BroadcastEvent, EnqueueTurnResult, ProgrammaticTurn, PromptFile,
 } from '../types/backend-host';
@@ -34,7 +34,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import type { Usage } from '../usage';
-import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
+import { announcementOf, authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
 import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
@@ -42,8 +42,8 @@ import { turnInputMessage, type LandedSteerRow, type PendingSendRow, type Pendin
 import type { OwedEffect } from './terminal-effects';
 import type { TerminalTransition, TerminalTransitions } from './terminal-transition';
 import {
-  applyOverflowRecovery, classifyRunEnd, closeTurnRun, creditedTurnId, openTurnRun,
-  owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, persistMeasuredPromptTokens, snapshotCompletedTurn,
+  classifyRunEnd, closeTurnRun, creditedTurnId, openTurnRun, recordExecutionEvent, settleExecutionContext,
+  owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, snapshotCompletedTurn,
   type CompactionTriggerState, type RunEndClassification, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
 import { answerParts, type SessionTranscript, type PreparedConversationEntry } from '../session/transcript';
@@ -56,6 +56,7 @@ import { TURN_END_METADATA_KEY } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tools/task-store';
 import { inheritedAsModelMessage } from '../heads/head-inference';
+import type { SerializedMessage } from '../types/heads';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
 
@@ -116,8 +117,9 @@ interface QueueItem {
   yieldsToUserMessage?: boolean;
   /** Re-opened under its own ids, its prior output re-entered ahead of the remaining calls. */
   continuation?: TurnContinuation;
-  /** Exactly once, and told whether the turn ran: a failure must reach the producer, the only one who can put things back. */
-  settle: (failure: KinuError | null, yielded?: boolean) => void;
+  /** Exactly once, and told whether the turn ran: a failure must reach the producer, the only one who can put things back.
+   *  `abandoned` names why an opened turn ended before it could answer. */
+  settle: (failure: KinuError | null, yielded?: boolean, abandoned?: string) => void;
 }
 
 interface TurnContinuation {
@@ -216,7 +218,6 @@ export interface ChatSessionPorts {
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** Asked per call: the bodies close over stores built after this session. */
   terminal(): TerminalTransitions;
-  holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void;
   /** Asked per item at dequeue and before a drain binds rows; a refusal settles the item to its producer. */
   driverGate(): Refusal | null;
   /** Called at the turn's synchronous open; soonest-wins. A backend whose process is the wake arms nothing. */
@@ -230,10 +231,10 @@ export interface ChatSessionPorts {
   /** A reminder fired behind such work would race its wake. */
   hasPendingAsyncWake(): boolean;
   steerSkills(text: string): Promise<string | null>;
-  /** A backend with no review surface refuses a plan turn at admission. */
-  planTurnRefusal(): string | null;
   /** Asked at dequeue; false drops the turn. */
   stillOwed(metadata: JsonObject | undefined): boolean;
+  /** Where the assignment lives in another database (a facet's hirer's). */
+  birthContext?(drainTurnId: string): Promise<readonly SerializedMessage[]>;
   /** The session drives it because both instants it needs are the session's; the policy is the lane's. */
   readonly cacheWarming?: CacheWarmingLane;
 }
@@ -317,6 +318,9 @@ export class ChatSession {
   private readonly taskReminders = new TaskReminders();
   /** Drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];
+
+  /** Producers waiting on an announcement already running or queued. */
+  private readonly joiners = new Map<string, ((result: EnqueueTurnResult) => void)[]>();
   private pumpActive = false;
   /** The only record that an item is being said for the whole length of a turn. */
   private runningAnnouncement: string | null = null;
@@ -372,29 +376,18 @@ export class ChatSession {
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
 
-  /** Arms the forced compaction and says whether to retry; a too-long refusal also records the window it measured. */
-  private recoverOverflow(prepared: PreparedTurn, failure: Error, error: string, turnWasOverflowRetry: boolean): boolean {
-    const lastPromptTokens = this.actorSession.orchestrator.acc.lastPromptTokens;
-
-    const recovery = applyOverflowRecovery({
-      error: failure, lastPromptTokens, contextWindow: prepared.contextWindow, turnWasOverflowRetry, state: this.compactionState, sessionKey: prepared.sessionKey,
-    });
-
-    const model = prepared.execution.chat.modelSpec ?? prepared.execution.chat.modelContext?.id;
-    const refused = Math.max(this.eventRecorder.readContextMeasures().gate?.tokens ?? 0, lastPromptTokens ?? 0);
-    const window = statedContextLimit(error) ?? (refused > 0 ? refused : null);
-
-    if (recovery.failureClass === 'context_length' && model !== undefined && window !== null && this.runId !== null) {
-      this.eventRecorder.emit(this.runId, { type: 'context_overflow', model, window });
-    }
-
-    return recovery.enqueueRetry;
-  }
   /** Open on purpose, so the wake reconcile must not seal them. */
   drivenRuns(): readonly string[] {
     return [...new Set([this.runId, this.reopenedRunId].filter((runId): runId is string => runId !== null))];
   }
   get currentTurnId(): string | null { return this.turnId; }
+
+  /** Whether another response of this turn may still run: the live one, or a run the ledger holds open, which a
+   *  restart re-opens as a continuation (the settling response's own run is already closed). */
+  turnMayStillRun(turnId: string): boolean {
+    return (this.pumping && this.turnId === turnId) || this.eventRecorder.openTurn()?.turn.turnId === turnId;
+  }
+
   /** The owner's teardown calls this first. */
   close(): void {
     this.ended = true;
@@ -438,16 +431,13 @@ export class ChatSession {
       return Promise.resolve({ status: 'queued' });
     }
 
-    if (workModeForTurnMetadata(input.metadata) === 'plan') {
-      const refusal = this.ports.planTurnRefusal();
-
-      if (refusal !== null) return Promise.reject(new Error(refusal));
-    }
-
     // During shutdown: 'skipped' sends the caller down its durable path; the next run drains it.
     if (this.ended) return Promise.resolve({ status: 'skipped' });
 
-    if (input.idempotencyKey !== undefined && this.hasAnnounced(input.idempotencyKey)) {
+    // The same announcement running or queued answers when that turn does, so a caller never takes it as done early.
+    if (input.idempotencyKey !== undefined && this.announcementInFlight(input.idempotencyKey)) return this.joinAnnounced(input.idempotencyKey);
+
+    if (input.idempotencyKey !== undefined && this.announcementOnDisk(input.idempotencyKey)) {
       return Promise.resolve({ status: 'queued' });
     }
 
@@ -458,15 +448,7 @@ export class ChatSession {
       metadata: input.metadata,
       kind: 'programmatic',
       // The signal seam compensates on anything but 'queued'. 'yielded' is consumed: nothing is retried.
-      settle: (failure, yielded) => {
-        if (yielded === true) {
-          resolve({ status: 'yielded' });
-
-          return;
-        }
-
-        resolve({ status: failure ? 'skipped' : 'queued' });
-      },
+      settle: (failure, yielded, abandoned) => { resolve(settledAnnouncement(failure, yielded, abandoned)); },
     };
 
     if (input.idempotencyKey !== undefined) item.idempotencyKey = input.idempotencyKey;
@@ -486,9 +468,23 @@ export class ChatSession {
     return promise;
   }
 
-  /** Durable table (cold activation), queue (same activation), or the running key (mid-turn). */
-  private hasAnnounced(identity: string): boolean {
-    return this.announcementInFlight(identity) || this.announcementOnDisk(identity);
+  /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
+  private settleItem(item: QueueItem, failure: KinuError | null, yielded?: boolean, abandoned?: string): void {
+    item.settle(failure, yielded, abandoned);
+
+    if (item.idempotencyKey === undefined) return;
+    const result = settledAnnouncement(failure, yielded, abandoned);
+
+    for (const joined of this.joiners.get(item.idempotencyKey) ?? []) joined(result);
+    this.joiners.delete(item.idempotencyKey);
+  }
+
+  private joinAnnounced(identity: string): Promise<EnqueueTurnResult> {
+    const joined = Promise.withResolvers<EnqueueTurnResult>();
+
+    this.joiners.set(identity, [...this.joiners.get(identity) ?? [], joined.resolve]);
+
+    return joined.promise;
   }
 
   announcementInFlight(identity: string): boolean {
@@ -847,7 +843,7 @@ export class ChatSession {
 
         if (refusal) {
           diagnostics.event('driver.turn_deferred', { kind: item.kind, reason: refusal.reason });
-          item.settle(refusedLanding(refusal));
+          this.settleItem(item, refusedLanding(refusal));
           continue;
         }
 
@@ -855,7 +851,7 @@ export class ChatSession {
           diagnostics.event('turn.no_longer_owed', {
             signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
           });
-          item.settle(null, true);
+          this.settleItem(item, null, true);
           continue;
         }
 
@@ -867,19 +863,20 @@ export class ChatSession {
             signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
           });
           this.actorSession.orchestrator.logActivity('genesis.yielded_to_message');
-          item.settle(null, true);
+          this.settleItem(item, null, true);
           continue;
         }
 
         this.runningAnnouncement = item.idempotencyKey ?? null;
         let failure: KinuError | null = null;
+        let abandoned: string | null = null;
 
         let opened: OpenedTurn | null = null;
 
         try {
           const opening = await this.openTurn(item);
           opened = opening;
-          await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening));
+          abandoned = await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening));
         } catch (err) {
           diagnostics.failure(
             'turn.processing_failed',
@@ -891,7 +888,7 @@ export class ChatSession {
         } finally {
           await this.flushEvents();
           this.runningAnnouncement = null;
-          item.settle(failure);
+          this.settleItem(item, failure, undefined, abandoned ?? undefined);
         }
       }
     } finally {
@@ -972,7 +969,8 @@ export class ChatSession {
     return { event, mode, turnId: this.turnId, runId: this.runId };
   }
 
-  private async runOpenedTurn(item: QueueItem, { event, mode, turnId, runId }: OpenedTurn): Promise<void> {
+  /** Null once the turn answered; the reason when it ended before it could. */
+  private async runOpenedTurn(item: QueueItem, { event, mode, turnId, runId }: OpenedTurn): Promise<string | null> {
     const startedAt = Date.now();
     // A re-opened turn continues its run; only a new turn opens one.
 
@@ -999,6 +997,8 @@ export class ChatSession {
 
     try {
       await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, lease)));
+
+      return null;
     } catch (error) {
       const message = renderThrownChain({ cause: error });
       const interrupted = lease.signal.aborted;
@@ -1007,6 +1007,8 @@ export class ChatSession {
       this.closeRun(classifyRunEnd({ completed: false, interrupted, errorText: message.slice(0, 500) }), lease);
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
+
+      return interrupted ? null : message;
     } finally {
       // Detached lanes retain the runtime profile of the turn they belong to.
       this.actorSession.finishTurn(lease);
@@ -1050,19 +1052,28 @@ export class ChatSession {
     return this.turnTrial === null ? snapshot : { ...snapshot, trial: this.turnTrial };
   }
 
-  private recordModelFallback(event: Extract<ChatEvent, { type: 'model-fallback' }>): void {
-    if (this.runId !== null) this.eventRecorder.emit(this.runId, { type: 'model_fallback', from: event.from, to: event.to, reason: event.reason });
-    this.emit({ type: 'broadcast', event: { type: 'model_fallback', message: `${event.to} took over from ${event.from}: ${event.reason}` } });
+  /** Everything here may throw; runOpenedTurn owns what that means. */
+  private async birthContext(drainTurnId: string): Promise<readonly SerializedMessage[]> {
+    return await this.ports.birthContext?.(drainTurnId) ?? subordinateTurnContext(this.eventLog, drainTurnId);
   }
 
-  /** Everything here may throw; runOpenedTurn owns what that means. */
+  private settleContext(item: QueueItem, prepared: PreparedTurn, failure: Error | null): boolean {
+    const { chat } = prepared.execution;
+
+    return settleExecutionContext({ state: this.compactionState, key: prepared.sessionKey, recorder: this.eventRecorder }, {
+      runId: this.runId, failure, turnWasOverflowRetry: item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT,
+      lastPromptTokens: this.actorSession.orchestrator.acc.lastPromptTokens, historyLength: prepared.historyLength,
+      contextWindow: prepared.contextWindow, model: chat.modelSpec ?? chat.modelContext?.id,
+    });
+  }
+
   private async runTurn(item: QueueItem, eventName: string | undefined, lease: ActorTurnLease): Promise<void> {
     const input: ChatTurnInput = item;
 
     await this.actorSession.openTurnInput(lease, {
       item: input,
       message: turnInputMessage(input),
-      birthContext: async (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
+      birthContext: async (drainTurnId) => (await this.birthContext(drainTurnId)).map(inheritedAsModelMessage),
     });
 
     // Before this turn's request voids the lane.
@@ -1102,11 +1113,10 @@ export class ChatSession {
       // Any tool result is progress on the last reminder.
       if (event.type === 'tool-result') this.taskReminders.noteToolResult();
 
-      if (event.type === 'model-fallback') this.recordModelFallback(event);
+      recordExecutionEvent(this.eventRecorder, this.runId, event);
 
-      // Durable beside the turn's steps: a reload reads it and never measures.
-      if (event.type === 'context-admitted' && this.runId !== null) {
-        this.eventRecorder.emit(this.runId, { type: 'context_admitted', tokens: event.tokens, contextWindow: event.contextWindow });
+      if (event.type === 'model-fallback') {
+        this.emit({ type: 'broadcast', event: { type: 'model_fallback', message: `${event.to} took over from ${event.from}: ${event.reason}` } });
       }
 
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
@@ -1117,14 +1127,8 @@ export class ChatSession {
 
     const fullText = execution.text;
     const interrupted = execution.interrupted;
-    let runError: string | null = null;
-    let overflowRetry = false;
-
-    if (execution.failure !== null) {
-      const message = renderThrownChain({ cause: execution.failure });
-      runError = message.slice(0, 500);
-      overflowRetry = this.recoverOverflow(prepared, execution.failure, message, item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT);
-    }
+    const runError = runErrorOf(execution.failure);
+    const overflowRetry = this.settleContext(item, prepared, execution.failure);
 
     // Classified once: the classifier also files the mid-work defect.
     const facts: RunEndFacts = {
@@ -1191,7 +1195,6 @@ export class ChatSession {
     const { turn, owed, transition } = commit.committed;
 
     try {
-      persistMeasuredPromptTokens(this.compactionState, prepared.sessionKey, this.actorSession.orchestrator.acc.lastPromptTokens, prepared.historyLength);
       // The lane decides whether the prefix is worth keeping.
       this.armCacheWarm(prepared);
 
@@ -1201,11 +1204,7 @@ export class ChatSession {
       this.settlingDepth += 1;
 
       try {
-        await this.ports.terminal().settle({
-          transition,
-          declare: () => owed,
-          hold: (claimed, close) => { this.ports.holdTerminalClose(claimed, close); },
-        });
+        await this.ports.terminal().settle({ transition, declare: () => owed });
       }
       finally { this.settlingDepth -= 1; }
 
@@ -1411,7 +1410,7 @@ export class ChatSession {
       settle: () => {},
     };
 
-    if (turn.kind === 'programmatic') item.idempotencyKey = turn.turnId.slice(PROGRAMMATIC_MESSAGE_ID_PREFIX.length);
+    if (turn.kind === 'programmatic') item.idempotencyKey = announcementOf(turn.turnId);
     this.reopened = turn.pendingSendId ?? null;
     this.reopenedTurnId = turn.turnId;
     this.reopenedRunId = runId;
@@ -1508,4 +1507,18 @@ function normalizePromptInput(
   input: string | { text: string; files: ReadonlyArray<PromptFile> },
 ): PromptInputParts {
   return v.is(v.string(), input) ? { text: input } : input;
+}
+
+/** What a programmatic announcement's producer is told when its turn settles. */
+function settledAnnouncement(failure: KinuError | null, yielded: boolean | undefined, abandoned: string | undefined): EnqueueTurnResult {
+  if (yielded === true) return { status: 'yielded' };
+
+  if (failure !== null) return { status: 'skipped' };
+
+  return abandoned === undefined ? { status: 'queued' } : { status: 'failed', reason: abandoned };
+}
+
+/** A failed turn's error as its run records it. */
+function runErrorOf(cause: Error | null): string | null {
+  return cause === null ? null : renderThrownChain({ cause }).slice(0, 500);
 }

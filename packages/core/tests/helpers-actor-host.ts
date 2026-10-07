@@ -14,15 +14,19 @@ import type { AgentTracing } from '../src/obs/agent-tracing';
 import { initEventsHubTables, EventLog } from '../src/events/hub/index';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { createScaffoldSurface } from '../src/scaffold/surface';
-import { resolveTurnProfile, type ProviderCatalogSnapshot } from '../src/profiles/resolve';
+import type { ProviderCatalogSnapshot } from '../src/profiles/resolve';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import {
   profileCatalogDigest,
   type ProfileCatalogEnvelope, type RoleDefinition, type TierAssignments,
 } from '../src/profiles/catalog';
 import type { HostedNodeSeat } from '../src/strategy/node-agent';
-import type { HeadInferenceDeps } from '../src/heads/head-inference';
+import { runHeadInference, type HeadInferenceDeps } from '../src/heads/head-inference';
 import { modelWindow } from '../src/context-window';
+import { promptCacheKey, vfsTurnSkills, type RunTurnSources } from '../src/orchestrator/turn-assembly';
+import { captureOperationProfile } from '../src/profiles/operation';
+import type { HostedActor } from '../src/state/actor-host';
+import type { LanguageModel } from 'ai';
 import type { NodeIdentity } from '../src/strategy/node-workspace';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
@@ -30,8 +34,7 @@ import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host
 import type { Identity } from '../src/types/primitives';
 import type { TemporaryAgentPort } from '../src/types/subordinates';
 
-/** A fixture seat also carries the window its heads are admitted against: no catalog here, so the table's. */
-type FixtureSeat = HostedNodeSeat & Pick<HeadInferenceDeps, 'window'>;
+type FixtureSeat = HostedNodeSeat;
 
 /** The one role a fixture actor resolves under; no `allowedTools`, so it never narrows a suite's surface. */
 const TESTER: RoleDefinition = {
@@ -42,9 +45,9 @@ const TESTER: RoleDefinition = {
   spawns: '*',
 };
 
-const TIERS: TierAssignments = { default: { model: 'test-model' } };
+const TIERS: TierAssignments = { default: { model: 'fake/test-model' } };
 
-const PROVIDER: ProviderCatalogSnapshot = { revision: 'rev-hosted-fixture', availableModels: ['test-model'] };
+const PROVIDER: ProviderCatalogSnapshot = { revision: 'rev-hosted-fixture', availableModels: ['fake/test-model'] };
 
 function envelope(): ProfileCatalogEnvelope {
   const catalog = { roles: { tester: TESTER }, tiers: TIERS };
@@ -53,6 +56,69 @@ function envelope(): ProfileCatalogEnvelope {
 }
 
 const ENVELOPE = envelope();
+
+/** A run's compaction trigger, kept in memory: no fold runs here, but a run measures and arms as every turn does. */
+export function fixtureCompaction(key = 'fixture-run'): HeadInferenceDeps['compaction'] {
+  const tokens = new Map<string, { readonly tokens: number; readonly historyLength: number }>();
+  const armed = new Set<string>();
+
+  return {
+    key,
+    state: {
+      loadPromptTokens: (sessionKey, historyLength) => {
+        const saved = tokens.get(sessionKey);
+
+        return saved !== undefined && saved.historyLength === historyLength ? saved.tokens : null;
+      },
+      takeArmedCompaction: (sessionKey) => armed.delete(sessionKey),
+      savePromptTokens: (sessionKey, saved, historyLength) => { tokens.set(sessionKey, { tokens: saved, historyLength }); },
+      armCompaction: (sessionKey) => { armed.add(sessionKey); },
+    },
+  };
+}
+
+/** A run's actor, sources and compaction over `seat`, its turns on `model`. */
+export function runningOn(seat: HostedNodeSeat, model: LanguageModel): Pick<HeadInferenceDeps, 'actor' | 'runId' | 'sources' | 'compaction'> {
+  return {
+    actor: seat.actor, runId: seat.runId,
+    sources: { ...seat.sources, models: { ...seat.sources.models, resolve: () => model } },
+    compaction: fixtureCompaction(seat.actor.record.actorId),
+  };
+}
+
+/** Where a fixture actor's turns are assembled from: the production assembly over its own stores, a role with no
+ *  narrowing, the catalog's default window, and the model a suite hands it. */
+export function fixtureRunSources(actor: HostedActor, model: (spec: string) => LanguageModel): RunTurnSources {
+  actor.stores.config.setRoleSelection('tester');
+
+  return {
+    rt: actor.runtime,
+    backend: 'cli-local',
+    executors: () => [],
+    config: actor.stores.config,
+    models: {
+      catalog: { window: () => modelWindow(null), windowFor: async () => modelWindow(null), warm: async () => {}, acceptedMedia: () => new Set() },
+      // A suite's bare model id is addressed under the fake provider: a spec names its provider.
+      normalize: (spec) => (spec.includes('/') ? spec : `fake/${spec}`),
+      resolve: (spec) => model(spec.replace(/^fake\//, '')),
+    },
+    skills: vfsTurnSkills(actor.runtime.storage.vfs, actor.stores.config, () => 'approved'),
+    profileInputs: async () => ({ envelope: ENVELOPE, provider: PROVIDER }),
+    agentsActions: () => [],
+    temporaryAsk: () => false,
+    soul: async () => undefined,
+    agentsMd: async () => ({ admitted: [], referenced: [] }),
+    identity: async () => ({ agent: actor.record.name }),
+    artifacts: () => ({ sections: {}, tools: { descriptions: {}, fields: {} } }),
+    taskPlan: () => null,
+    cacheKey: () => promptCacheKey('fixture', actor.record.actorId),
+    scaffoldSpend: { source: 'scaffold', report: () => {} },
+    attachmentBudget: actor.session.orchestrator.acc.context,
+    extensions: () => [],
+    dynamic: () => () => ({}),
+    operation: (profile, inputs) => captureOperationProfile({ actor: actor.handle, profile, inputs, runId: 'run-hosted-fixture', turnId: null }),
+  };
+}
 
 export interface HostedSeats {
   readonly host: ActorHost;
@@ -82,6 +148,8 @@ export function hostedSeatsOver(input: {
   readonly tracing?: AgentTracing;
   /** The port every seat hires its advisor through; absent, no seat is reviewed. */
   readonly advisorPort?: TemporaryAgentPort;
+  /** The model every seat's turns run on; read per turn. Absent, a seat that runs a turn refuses it. */
+  readonly model?: (spec: string) => LanguageModel;
 }): HostedSeats {
   const { rt, db } = input;
   const runId = input.runId ?? 'run-hosted-fixture';
@@ -188,21 +256,17 @@ export function hostedSeatsOver(input: {
       actorId: handle.actorId, workspaceId: handle.workspaceId, parentActorId: handle.parentActorId,
     });
 
+    const compaction = fixtureCompaction(actor.record.actorId);
+
     const seated: FixtureSeat = {
       actor,
       runId,
-      windowOf: async () => modelWindow(null),
-      window: modelWindow(null),
+      // The real assembly over a real catalog envelope, so role narrowing is applied, not assumed.
+      sources: fixtureRunSources(actor, input.model ?? (() => {
+        throw new KinuError('unavailable', `the hosted fixture was given no model, so ${name} cannot run a turn`);
+      })),
+      infer: (headInput, inference) => runHeadInference(headInput, { ...inference, compaction }),
       conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
-      // The real resolver over a real catalog envelope, so role narrowing is applied, not assumed.
-      profile: async ({ availableTools, workMode }) => ({
-        profile: resolveTurnProfile({
-          envelope: ENVELOPE, provider: PROVIDER, roleId: 'tester',
-          workMode, availableTools, activeSkills: [],
-        }),
-        inputs: { envelope: ENVELOPE, provider: PROVIDER },
-      }),
-      dynamic: () => ({}),
       jobs: { ports: { jobOutput: () => {} }, attach: (authority) => jobs.attach(authority) },
     };
 
@@ -220,6 +284,14 @@ export function hostedSeatsOver(input: {
     hostNode: (node) => seat(node.nodeId, 'swarm'),
     jobs,
   };
+}
+
+/** A swarm's node seats and its caller model, one model for both: a node resolves its model through its seat. */
+export function swarmSeats(input: Omit<Parameters<typeof hostedSeatsOver>[0], 'model'>, model: () => LanguageModel) {
+  let made: LanguageModel | null = null;
+  const once = (): LanguageModel => (made ??= model());
+
+  return { hostNode: hostedSeatsOver({ ...input, model: once }).hostNode, model: once };
 }
 
 /** A `hostNode` for a fixture that runs no node: refuses, naming the fixture, rather than seating a fabricated actor. */
