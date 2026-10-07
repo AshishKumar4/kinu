@@ -33,7 +33,8 @@ import { finding } from './gate-ratchet';
 import { parseJsonc } from './jsonc';
 import { PINNED_COMPILER_LINK } from './mossaic-sdk';
 
-/** One `bun.lock` package row: `[name@version, registry, metadata, integrity]`; a workspace link is `[name@workspace:path]`. */
+/** One `bun.lock` package row: `[name@version, registry, metadata, integrity]`; a workspace link is `[name@workspace:path]`;
+ *  a GitHub one is `[name@github:owner/repo#commit, metadata, tag, integrity]`. */
 const LockRow = v.pipe(v.array(v.unknown()), v.minLength(1));
 
 /** A platform field, one name or several, read as the list it means. */
@@ -80,6 +81,13 @@ export function lockedTree(lockText: string, platform: { readonly os: string; re
 
     // A workspace link is the workspace itself, which has no version to hold.
     if (version.startsWith('workspace:')) continue;
+
+    // A GitHub package is the commit bun fetched, which it writes beside the package as its tag.
+    if (version.startsWith('github:')) {
+      versions.set(key, gitTag(v.parse(v.string(), row[2])));
+      continue;
+    }
+
     const meta = v.safeParse(LockMeta, row[2]);
 
     if (meta.success && !(admits(meta.output.os, platform.os) && admits(meta.output.cpu, platform.cpu))) continue;
@@ -99,6 +107,11 @@ export function lockedTree(lockText: string, platform: { readonly os: string; re
   });
 
   return { versions, workspaces, declared };
+}
+
+/** A GitHub package's identity, as the lock names it and as its `.bun-tag` holds it. */
+function gitTag(tag: string): string {
+  return `git ${tag}`;
 }
 
 /** One package directory found under a `node_modules`: its install key, where it is, and the version it holds. */
@@ -145,13 +158,11 @@ function packagesUnder(
 
     if (ancestors.has(real)) continue;
     const manifest = tolerate(() => readFileSync(join(real, 'package.json'), 'utf8'), 'enoent');
+    const tag = tolerate(() => readFileSync(join(real, '.bun-tag'), 'utf8').trim(), 'enoent');
+    let version = manifest === undefined ? undefined : v.parse(PackageVersion, JSON.parse(manifest)).version;
 
-    found.push({
-      key: `${prefix}${name}`,
-      path,
-      real,
-      version: manifest === undefined ? undefined : v.parse(PackageVersion, JSON.parse(manifest)).version,
-    });
+    if (tag !== undefined) version = gitTag(tag);
+    found.push({ key: `${prefix}${name}`, path, real, version });
     found.push(...packagesUnder(join(real, 'node_modules'), `${prefix}${name}/`, workspaces, new Set([...ancestors, real])));
   }
 

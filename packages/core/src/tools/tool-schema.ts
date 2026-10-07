@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { asSchema, InvalidToolInputError, type ToolSet } from 'ai';
+import { asSchema, InvalidToolInputError, type Schema, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { Effect } from 'effect';
 import { KinuError, refusedInput, settle } from '../obs/index';
@@ -120,6 +120,23 @@ export function oneOf<const Values extends readonly string[]>(values: Values) {
   return z.enum(values, {
     error: (issue) => `one of ${values.join(', ')}; got ${issue.input === undefined ? 'nothing' : JSON.stringify(issue.input)}`,
   });
+}
+
+/** `asSchema` wraps a zod or standard schema anew on each call, and the SDK's step loop calls it on every step, so one
+ *  wrapper per schema object builds each tool's JSON Schema once. */
+const stableSchemas = new WeakMap<object, Schema>();
+
+export function withStableSchemas(tools: ToolSet): ToolSet {
+  const stable: ToolSet = {};
+
+  for (const [name, entry] of Object.entries(tools)) {
+    const declared = entry.inputSchema;
+    const schema = stableSchemas.get(declared) ?? asSchema(declared);
+    stableSchemas.set(declared, schema);
+    stable[name] = { ...entry, inputSchema: schema };
+  }
+
+  return stable;
 }
 
 export function withCheckedInputs(tools: ToolSet): ToolSet {

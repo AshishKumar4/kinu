@@ -32,9 +32,9 @@ const DIST = join(CF_BACKEND, 'dist/kinu');
 
 export const GATE = 'worker-heap';
 
-/** Measured 2026-10-02: 42.7 and 42.6 MB on lane/nimbus-014 2b6eb90d5 (Nimbus 0.14), 42.5 MB on integration 33d93e529
- *  (0.13.1); plus the same 7 MB of room the 48.9 MB in the header had, for the product to grow before this row asks why. */
-export const HEAP_AFTER_SETUP_BOUND_BYTES = 50_000_000;
+/** Measured 2026-10-07: 45.4 MB used on b0de8580f, where 15 dependents each bundled their own zod; 35.7-36.5 MB over 3
+ *  runs on lane/memory-gap 9875bab49 with one. Plus 5 MB of room for the product to grow before this row asks why. */
+export const HEAP_AFTER_SETUP_BOUND_BYTES = 41_500_000;
 
 /** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
@@ -74,11 +74,18 @@ export const WAITING_PARENT_LIVE_BOUND_BYTES = 14_500_000;
  *  row trips only as the peak nears the 128 MB isolate, and the growth row below is the one that pins what a turn keeps. */
 export const LONG_TURN_PEAK_BOUND_BYTES = 124_000_000;
 
-/** Measured 2026-10-01 at {@link LONG_TURN}: 2.9-6.8 MB over 7 runs on lane/staging-fix-1 c7beb9ce1; 32.1-35.2 MB over
- *  2 with each step's request body left on the AI SDK's record (98517e993 reverted), as production 2f660875cc ran.
+/** Measured 2026-10-07 at {@link LONG_TURN}: 6.9-7.1 MB over 3 runs on b0de8580f, about 1 MB of it the chat room's relay
+ *  of every chunk body and 2 MB workerd's open-pipe promise chains. Measured 2026-10-01: 2.9-6.8 MB over 7 runs on lane/staging-fix-1
+ *  c7beb9ce1; 32.1-35.2 MB over 2 with each step's request body left on the AI SDK's record (98517e993 reverted), as
+ *  production 2f660875cc ran.
  *  The `file stat` turn this row measured before read 7.7 MB for that defect against 3.6-4.0 MB: its requests shared
  *  the history's strings, where the hosted providers' path copies them for every request. */
-export const LONG_TURN_GROWTH_BOUND_BYTES = 12_000_000;
+export const LONG_TURN_GROWTH_BOUND_BYTES = 8_500_000;
+
+/** Measured 2026-10-07 at {@link LONG_TURN}, sampled from its start to its settlement: 491-499 MB over 3 runs on
+ *  b0de8580f, 351-362 MB on lane/memory-gap 9875bab49 once a tool's JSON Schema is built once and only a decode walks the
+ *  SDK's message schema. The sampler's own spread is about 10 MB; past this row, a per-step rebuild came back. */
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 400_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on
@@ -677,6 +684,10 @@ async function main(args: readonly string[]): Promise<number> {
 
   if (measured.longTurnGrowth > LONG_TURN_GROWTH_BOUND_BYTES) {
     findings.push(`a ${String(LONG_TURN.steps)}-step turn holds ${mb(measured.longTurnGrowth)} more live at its last step than its first, over ${mb(LONG_TURN_GROWTH_BOUND_BYTES)}`);
+  }
+
+  if (measured.longTurnAllocated.total > LONG_TURN_ALLOCATED_BOUND_BYTES) {
+    findings.push(`a ${String(LONG_TURN.steps)}-step turn allocates ${mb(measured.longTurnAllocated.total)}, over ${mb(LONG_TURN_ALLOCATED_BOUND_BYTES)}`);
   }
 
   if (measured.longTurnPeak > LONG_TURN_PEAK_BOUND_BYTES) {

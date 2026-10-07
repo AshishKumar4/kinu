@@ -14,7 +14,7 @@ const reviews = [{ id: 'trial-1', insights: extractInsights(assertion, evidence)
 const reply = { verdict: { value: 'unchanged', reason: 'Comparable pass counts did not change.' }, trials: [{
   id: 'trial-1', cause: { kind: 'agent:tool-misuse', tool: 'file' }, explanation: 'The lead used a relative slate path.',
   evidence: [{ file: 'ledger.jsonl', line: 2 }], fix: 'docs/TOOLS.md: clarify the workspace root.',
-}] };
+}], changes: [] };
 
 describe('the advisory diagnosis contract', () => {
   test('unknown or multiple causes and extra reply fields cannot produce a diagnosis', () => {
@@ -24,16 +24,16 @@ describe('the advisory diagnosis contract', () => {
 
     for (const cause of [{ kind: 'model error' }, [{ kind: 'harness' }, { kind: 'agent:wrong-answer' }],
       { kind: 'agent:orchestration', problem: 'bad delegation' }]) {
-      expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [{ ...first, cause }] }), 'unchanged', reviews)).toThrow(v.ValiError);
+      expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [{ ...first, cause }] }), 'unchanged', reviews, [])).toThrow(v.ValiError);
     }
 
-    expect(() => parseDiagnosis(JSON.stringify({ ...reply, unsolicited: 'comment' }), 'unchanged', reviews)).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(JSON.stringify({ ...reply, unsolicited: 'comment' }), 'unchanged', reviews, [])).toThrow(v.ValiError);
   });
 
   test('every failed trial must be diagnosed exactly once, with no invented id', () => {
-    expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [] }), 'unchanged', reviews)).toThrow(v.ValiError);
-    expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [...reply.trials, ...reply.trials] }), 'unchanged', reviews)).toThrow(v.ValiError);
-    expect(() => parseDiagnosis(JSON.stringify(reply), 'unchanged', reviews.map((review) => ({ ...review, id: 'other' })))).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [] }), 'unchanged', reviews, [])).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [...reply.trials, ...reply.trials] }), 'unchanged', reviews, [])).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(JSON.stringify(reply), 'unchanged', reviews.map((review) => ({ ...review, id: 'other' })), [])).toThrow(v.ValiError);
   });
 
   test('a diagnosis cannot change the verdict or invent a tool or evidence line', () => {
@@ -41,10 +41,10 @@ describe('the advisory diagnosis contract', () => {
 
     if (first === undefined) throw new Error('reply has no trial');
 
-    expect(() => parseDiagnosis(JSON.stringify(reply), 'regressed', reviews)).toThrow(v.ValiError);
-    expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [{ ...first, cause: { kind: 'agent:tool-misuse', tool: 'unseen' } }] }), 'unchanged', reviews)).toThrow(v.ValiError);
-    expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [{ ...first, evidence: [{ file: 'ledger.jsonl', line: 10000 }] }] }), 'unchanged', reviews)).toThrow(v.ValiError);
-    expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [{ ...first, evidence: [] }] }), 'unchanged', reviews)).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(JSON.stringify(reply), 'regressed', reviews, [])).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [{ ...first, cause: { kind: 'agent:tool-misuse', tool: 'unseen' } }] }), 'unchanged', reviews, [])).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [{ ...first, evidence: [{ file: 'ledger.jsonl', line: 10000 }] }] }), 'unchanged', reviews, [])).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [{ ...first, evidence: [] }] }), 'unchanged', reviews, [])).toThrow(v.ValiError);
   });
 
   test('a trial whose turn hung is a product hang, and only such a trial is', () => {
@@ -56,9 +56,9 @@ describe('the advisory diagnosis contract', () => {
     const hungReviews = [{ id: 'trial-1', insights: extractInsights(hung, evidence) }];
     const causedBy = (kind: string) => JSON.stringify({ ...reply, trials: [{ ...first, cause: { kind } }] });
 
-    expect(parseDiagnosis(causedBy('product:hang'), 'unchanged', hungReviews).trials[0]?.cause).toEqual({ kind: 'product:hang' });
-    expect(() => parseDiagnosis(causedBy('agent:gave-up/incomplete'), 'unchanged', hungReviews)).toThrow(v.ValiError);
-    expect(() => parseDiagnosis(causedBy('product:hang'), 'unchanged', reviews)).toThrow(v.ValiError);
+    expect(parseDiagnosis(causedBy('product:hang'), 'unchanged', hungReviews, []).trials[0]?.cause).toEqual({ kind: 'product:hang' });
+    expect(() => parseDiagnosis(causedBy('agent:gave-up/incomplete'), 'unchanged', hungReviews, [])).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(causedBy('product:hang'), 'unchanged', reviews, [])).toThrow(v.ValiError);
   });
 
   test('an empty ledger has no line 1 to cite when a workspace failed before recording events', () => {
@@ -68,12 +68,12 @@ describe('the advisory diagnosis contract', () => {
 
     const empty = [{ id: 'trial-1', insights: extractInsights(assertion, { ledger: '', timeline: '', transcript: '' }) }];
     const diagnosis = { ...reply, trials: [{ ...first, cause: { kind: 'harness' }, evidence: [{ file: 'ledger.jsonl', line: 1 }] }] };
-    expect(() => parseDiagnosis(JSON.stringify(diagnosis), 'unchanged', empty)).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(JSON.stringify(diagnosis), 'unchanged', empty, [])).toThrow(v.ValiError);
   });
 
   test('Markdown fences and a heading followed by arbitrary prose are not an in-shape reply', () => {
-    expect(() => parseDiagnosis(`\`\`\`json\n${JSON.stringify(reply)}\n\`\`\``, 'unchanged', reviews)).toThrow(SyntaxError);
-    expect(() => parseDiagnosis('## Why the evals failed\nThe tool was confusing.', 'unchanged', reviews)).toThrow(SyntaxError);
+    expect(() => parseDiagnosis(`\`\`\`json\n${JSON.stringify(reply)}\n\`\`\``, 'unchanged', reviews, [])).toThrow(SyntaxError);
+    expect(() => parseDiagnosis('## Why the evals failed\nThe tool was confusing.', 'unchanged', reviews, [])).toThrow(SyntaxError);
   });
 
   test('counts each cause per task/model/arm, with passing trials still in the denominators', () => {
@@ -90,15 +90,42 @@ describe('the advisory diagnosis contract', () => {
     const trialReviews = rows.map((row, index) => ({ id: `trial-${String(index + 1)}`, insights: extractInsights(row, evidence) }));
 
     const complete = { verdict: reply.verdict, trials: trialReviews.map((review) => ({ ...reply.trials[0], id: review.id,
-      cause: { kind: 'agent:wrong-answer' }, explanation: 'The book lost an existing order.', fix: 'none in this repo' })) };
+      cause: { kind: 'agent:wrong-answer' }, explanation: 'The book lost an existing order.', fix: 'none in this repo' })), changes: [] };
 
-    const parsed = parseDiagnosis(JSON.stringify(complete), 'unchanged', trialReviews);
-    const comment = renderDiagnosis(parsed, trialReviews, [...rows, { ...first, status: 'passed' }, { ...third, status: 'passed' }]);
+    const parsed = parseDiagnosis(JSON.stringify(complete), 'unchanged', trialReviews, []);
+    const comment = renderDiagnosis(parsed, trialReviews, [...rows, { ...first, status: 'passed' }, { ...third, status: 'passed' }], []);
     const causeRows = comment.split('\n').filter((line) => line.startsWith('| agent:wrong-answer |'));
     expect(causeRows.map((line) => line.split('|').slice(2, -1).map((cell) => Number(cell.trim())))).toEqual([[2, 1]]);
     const header = comment.split('\n').find((line) => line.startsWith('| Cause |')) ?? '';
     expect(header).toContain('test/alpha · product (2/3 failed)');
     expect(header).toContain('test/beta · product (1/2 failed)');
     expect(comment.split('\n').filter((line) => line.startsWith('- **')).map((line) => /trial (\d+)/.exec(line)?.[1])).toEqual(['1', '2', '1']);
+  });
+
+  test('every compared cohort is reviewed once, its citations within its own trajectories, worse first', () => {
+    const changes = [
+      { id: 'change-1', taskId: 'budget-board', model: 'test/alpha', arm: 'product', lines: { baseline: 40, candidate: 60 } },
+      { id: 'change-2', taskId: 'latency-chart', model: 'test/alpha', arm: 'product', lines: { baseline: 30, candidate: 30 } },
+    ];
+
+    const change = (id: string, kind: string, line: number) => ({
+      id, change: kind, explanation: 'The candidate re-read the ledger twice before writing.', evidence: [{ leg: 'candidate', line }], fix: 'none in this repo',
+    });
+
+    const replied = (entries: readonly object[]) => JSON.stringify({ ...reply, trials: [], changes: entries });
+
+    // A cohort left out, a line past its leg's end, and a change no review can say.
+    for (const refused of [[change('change-1', 'same', 3)], [change('change-1', 'same', 61), change('change-2', 'same', 3)],
+      [change('change-1', 'sideways', 3), change('change-2', 'same', 3)]]) {
+      expect(() => parseDiagnosis(replied(refused), 'unchanged', [], changes)).toThrow(v.ValiError);
+    }
+
+    const parsed = parseDiagnosis(replied([change('change-2', 'same', 3), change('change-1', 'worse', 60)]), 'unchanged', [], changes);
+    const comment = renderDiagnosis(parsed, [], [], changes);
+
+    expect(comment.startsWith('## \u{1F52C} How the evals\u2019 work changed')).toBe(true);
+    expect(comment).not.toContain('| Cause |');
+    expect(comment.split('\n').filter((line) => line.startsWith('- **')).map((line) => /\*\*([a-z-]+)\*\*/.exec(line)?.[1])).toEqual(['budget-board', 'latency-chart']);
+    expect(comment).toContain('`change-1/candidate.md:60`');
   });
 });

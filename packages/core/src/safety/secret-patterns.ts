@@ -90,7 +90,7 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
 
 /** Shapes redaction masks but a source scan does not flag: a fixture or a doc legitimately
  *  spells them, while a stored transcript or a debug bundle never should. */
-export const REDACTION_ONLY_PATTERNS: readonly SecretPattern[] = [
+const REDACTION_ONLY_PATTERNS: readonly SecretPattern[] = [
   {
     // A device token's body is base64url from its first character, so `kinu-token`'s hex body
     // misses it; the scan keeps the hex shape because fixtures spell whole-token placeholders.
@@ -189,4 +189,26 @@ export function secretSightings(path: string, text: string, patterns: readonly S
   }
 
   return sightings;
+}
+
+/** Each pattern with a non-global copy, so a match's mask expands its own groups. */
+const REDACTION_PASSES = [...SECRET_PATTERNS, ...REDACTION_ONLY_PATTERNS].map((pattern) => ({
+  pattern,
+  one: new RegExp(pattern.regex.source, pattern.regex.flags.replace('g', '')),
+}));
+
+/** Applies `SECRET_PATTERNS` and `REDACTION_ONLY_PATTERNS` per line (a match that is itself a
+ *  pattern's `benign` form stays) and masks with `<redacted>`, the marker every redacted line carries. */
+export function redactSecrets(text: string): string {
+  return text.split('\n').map((line) => {
+    let redacted = line;
+
+    for (const { pattern, one } of REDACTION_PASSES) {
+      // `benign` judges the match, not the line: prose beside a live key never spares it.
+      redacted = redacted.replaceAll(pattern.regex, (match) =>
+        pattern.benign?.test(match) === true ? match : match.replace(one, pattern.mask ?? '<redacted>'));
+    }
+
+    return redacted;
+  }).join('\n');
 }

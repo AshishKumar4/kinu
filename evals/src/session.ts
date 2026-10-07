@@ -102,8 +102,8 @@ import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
   RunEventSchema, STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
-  type SubordinateInspectionRequest, type WorkspaceSpend,
-  QualityDaySchema, type QualityDay, ProfileCatalogEnvelopeSchema, betaSwarms,
+  type SubordinateInspectionRequest, type WorkMode, type WorkspaceSpend,
+  QualityDaySchema, type QualityDay, ProfileCatalogEnvelopeSchema, betaSwarms, type ProfileCatalog,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate, detach } from '../../packages/core/src/obs/index';
 import { TurnStreams } from '../../packages/cli/src/cloud-turn-stream';
@@ -141,6 +141,9 @@ export type PublicWebIdentity =
   | { readonly kind: 'loopback'; readonly account?: EvalAccount }
   /** A remote deployment: the synthetic identity's secret, sent per request. */
   | { readonly kind: 'secret'; readonly secret: string; readonly account?: EvalAccount };
+
+/** A workspace as its owner's browser reaches it. */
+export type WorkspaceWeb = { readonly origin: string; readonly identity: PublicWebIdentity; readonly workspace: string };
 
 export type PublicWebIdentityResolution =
   | { readonly kind: 'ready'; readonly identity: PublicWebIdentity }
@@ -326,6 +329,10 @@ interface PublicSessionInput {
   readonly purpose: string;
   readonly genesis?: boolean;
   readonly llm: LLMProviderConfig;
+  /** A catalog role the workspace is created in, which narrows its tools; absent is the account's default. */
+  readonly role?: string;
+  /** What the workspace needs of its account's catalog besides Beta: swarms, such as its role's definition. */
+  readonly catalog?: readonly CatalogNeed[];
 }
 
 /** The POST /api/user/workspaces body, exactly the optional fields
@@ -335,6 +342,7 @@ interface CreateWorkspaceBody {
   name: string;
   displayName: string;
   purpose?: string;
+  role?: string;
 }
 
 const WorkspaceEntrySchema = v.object({
@@ -728,30 +736,37 @@ export function beatWorkspace(origin: string, identity: PublicWebIdentity, name:
 /** Writers per account racing for its catalog, and a spare: each lost race means another writer landed. */
 const CATALOG_WRITE_ATTEMPTS = 4;
 
-/** "Beta: swarms" on for the account the evals run as, whose swarms are part of what they measure; the cases of one
- *  run race to turn it on, so a lost version race reads again until it is on. */
-async function turnOnSwarms(origin: string, headers: Record<string, string>): Promise<void> {
+/** What a workspace needs of its account's catalog: the catalog with it, or null when the catalog already holds it. */
+export type CatalogNeed = (catalog: ProfileCatalog) => ProfileCatalog | null;
+
+/** "Beta: swarms" on for the account the evals run as, whose swarms are part of what they measure. */
+const SWARMS_ON: CatalogNeed = (catalog) => betaSwarms(catalog) ? null : { ...catalog, betaSwarms: true };
+
+/** Bring the account's catalog to what `needs` ask of it. The cases of one run race to write it, so a lost version race
+ *  reads again, until nothing is left to write. */
+async function settleCatalog(origin: string, headers: Record<string, string>, needs: readonly CatalogNeed[]): Promise<void> {
   for (let attempt = 1; ; attempt += 1) {
     const read = await fetch(`${origin}/api/user/profile-catalog`, { headers });
     const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await readJson(read, 'read the profile catalog'));
+    const wanted = needs.reduce<ProfileCatalog | null>((sofar, need) => need(sofar ?? catalog) ?? sofar, null);
 
-    if (betaSwarms(catalog)) return;
+    if (wanted === null) return;
 
     const answer = await fetch(`${origin}/api/user/profile-catalog`, {
       method: 'PUT',
       headers: { ...headers, 'content-type': 'application/json' },
-      body: JSON.stringify({ catalog: { ...catalog, betaSwarms: true }, expectedVersion: version }),
+      body: JSON.stringify({ catalog: wanted, expectedVersion: version }),
     });
 
     if (answer.ok || (answer.status === 409 && attempt < CATALOG_WRITE_ATTEMPTS)) continue;
-    await readJson(answer, 'turn on Beta: swarms');
+    await readJson(answer, 'write the profile catalog');
   }
 }
 
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
   const headers = webHeaders(input.identity);
 
-  await infraBoundary(`PUT ${input.origin}/api/user/profile-catalog`, () => turnOnSwarms(input.origin, headers));
+  await infraBoundary(`PUT ${input.origin}/api/user/profile-catalog`, () => settleCatalog(input.origin, headers, [SWARMS_ON, ...input.catalog ?? []]));
 
   const created = await infraBoundary(
     `POST ${input.origin}/api/user/workspaces`,
@@ -768,6 +783,8 @@ export async function openPublicSession(input: PublicSessionInput): Promise<Kinu
       // placeholder mission `workspaceGenesisSignal` returns null for, and
       // the real mission is written over the socket below.
       if (input.genesis !== false) body.purpose = input.purpose;
+
+      if (input.role !== undefined) body.role = input.role;
 
       const response = await fetch(`${input.origin}/api/user/workspaces`, {
         method: 'POST',
@@ -970,6 +987,11 @@ export class KinuPublicSession {
     return took;
   }
 
+  /** Where this workspace's pages are, and who opens them: this session's own account. */
+  get web(): WorkspaceWeb {
+    return { origin: this.input.origin, identity: this.input.identity, workspace: this.workspace };
+  }
+
   get describe(): string {
     return `public session · ${this.input.origin} · workspace ${this.workspace} `
       + `· model ${this.input.llm.model}`;
@@ -1127,13 +1149,13 @@ export class KinuPublicSession {
   /** Start a turn and hand back its id and its promise. The promise resolves
    *  when the run that ANSWERS the prompt closes — the prompt's own turn, or
    *  the run it spliced into when the done frame answers `mid-turn`. */
-  submit(text: string): PublicSubmission {
+  submit(text: string, mode?: WorkMode): PublicSubmission {
     const requestId = this.mintId('turn');
     const recorder = recordPublicTurn();
 
     const admitted = new Promise<PublicTurn>((resolve, reject) => {
       this.turns.set(requestId, { recorder, resolve, reject, sentAt: new Date().toISOString() });
-      this.send(encodeChatRequest({ requestId, text })).catch(reject);
+      this.send(encodeChatRequest({ requestId, text, ...(mode !== undefined && { mode }) })).catch(reject);
     });
 
     // The observation window IS the absorbing run: a mid-turn landing is
@@ -1186,9 +1208,9 @@ export class KinuPublicSession {
    *  from a turn that was merely still running. A send the DO answers
    *  `mid-turn` resolves when the run it spliced into closes — the same
    *  denominator rule, one run further up. */
-  prompt(text: string): Promise<PublicSendResult> {
+  prompt(text: string, mode?: WorkMode): Promise<PublicSendResult> {
     return this.boundary(`turn on ${this.input.origin}/${this.workspace}`, () =>
-      this.submit(text).settled);
+      this.submit(text, mode).settled);
   }
 
   /**

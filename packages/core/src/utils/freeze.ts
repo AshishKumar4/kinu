@@ -2,15 +2,6 @@ import * as v from 'valibot';
 
 const ObjectTreeSchema = v.record(v.string(), v.unknown());
 
-/** Every object `freezeTree` froze, each a tree frozen to its leaves: a shallow `Object.freeze` is not one. */
-const frozenTrees = new WeakSet<object>();
-
-export function isFrozenTree(node: { readonly value: unknown }): boolean {
-  const { value } = node;
-
-  return typeof value === 'object' && value !== null && frozenTrees.has(value);
-}
-
 /** Byte views cannot be frozen and are skipped. */
 export function freezeTree(node: { readonly value: unknown }): void {
   const { value } = node;
@@ -26,5 +17,4 @@ export function freezeTree(node: { readonly value: unknown }): void {
   }
 
   Object.freeze(value);
-  frozenTrees.add(value);
 }

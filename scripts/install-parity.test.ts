@@ -143,6 +143,20 @@ esac
     expect(installDrift(root)).toEqual([`${join(root, 'node_modules/tool')} holds 2.0.0+9bd19c9 where bun.lock names 2.0.0+other`]);
   });
 
+  // bun names a GitHub package by the commit it fetched, written beside the package as `.bun-tag`; its own
+  // package.json version says nothing of which commit it is.
+  test('a GitHub package is the commit its tag names, whatever its package.json says', () => {
+    const root = checkout('install-parity-github');
+    const lock = LOCK.replace('"typescript": ["typescript@7.0.2"', '"gh": ["gh@github:owner/gh#abc1234", {}, "owner-gh-abc1234", "sha512-j"],\n    "typescript": ["typescript@7.0.2"');
+
+    writeFileSync(join(root, 'bun.lock'), lock);
+    install(root, 'node_modules/gh', '0.1.0');
+    writeFileSync(join(root, 'node_modules/gh/.bun-tag'), 'owner-gh-abc1234');
+    expect(installDrift(root)).toEqual([]);
+    writeFileSync(join(root, 'node_modules/gh/.bun-tag'), 'owner-gh-0000000');
+    expect(installDrift(root)).toEqual([`${join(root, 'node_modules/gh')} holds git owner-gh-0000000 where bun.lock names git owner-gh-abc1234`]);
+  });
+
   test.each([
     ['a stale package in a workspace\'s node_modules, shadowing the root\'s,', 'packages/app/node_modules/tool', '1.0.0', 'where bun.lock installs nothing'],
     ['a package at another version than the lock names at its path', 'node_modules/tool', '2.1.0', 'where bun.lock names 2.0.0'],
