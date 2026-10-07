@@ -14,6 +14,7 @@ import type { AuthRequest, AuthResolution, ModelInfo, ModelProvider, ProviderDep
 import { StaleModelList, statelessResponses } from './util';
 import { JsonObjectSchema } from '../utils/json';
 import { streamedGenerate } from './middleware/stream-generate';
+import { heardFetch } from './middleware/attempt';
 
 export const CHATGPT_BASE_URL = 'https://api.openai.com/v1';
 
@@ -337,7 +338,8 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         const url = requestUrl(input);
         const route = await relayed(deps);
 
-        const send = route?.fetch ?? deps.fetch ?? fetch;
+        // The raw answer reports its keepalives: `guardedStream` re-reads it and drops comments.
+        const send = heardFetch(route?.fetch ?? deps.fetch ?? fetch);
 
         // A device's own sign-in renews nowhere from here: its 401 is the answer.
         const deviceLogin = async (_key: string, request?: AuthRequest): Promise<AuthResolution | null> => (request === undefined ? { headers: {} } : null);

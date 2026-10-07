@@ -1,11 +1,14 @@
 /**
  * One provider attempt's reach below the model stack: its own cancel, which the retry layer fires when the attempt goes
  * silent, and its wire's activity, which a transport reports as bytes arrive. SSE comments are activity no stream part
- * carries (OpenRouter's `: OPENROUTER PROCESSING` while a model thinks).
+ * carries (OpenRouter's `: OPENROUTER PROCESSING` while a model thinks). The decorated transport is the inference
+ * request's own, the fetch each SDK provider is built with (ChatGPT's raw send, before its stream is re-read): a side
+ * request inside the attempt (a models.dev refresh, a login renewal) reports nothing.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { LanguageModelV4, LanguageModelV4CallOptions } from '@ai-sdk/provider';
 import { asFetchFunction } from '../fetch-shim';
+import type { JsonObject } from '../../utils/json';
 
 export interface Attempt {
   /** Aborted when the attempt is abandoned or its caller cancels. */
@@ -45,18 +48,43 @@ export function attemptBound(model: LanguageModelV4): LanguageModelV4 {
 /** A transport whose answers report each arriving chunk to the attempt that sent them. */
 export function heardFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
   return asFetchFunction(async (input, init) => {
-    const attempt = current.getStore();
     const response = await fetch(input, init);
+    const body = heardBody(response.body);
 
-    if (attempt === undefined || response.body === null) return response;
-
-    const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        attempt.heard();
-        controller.enqueue(chunk);
-      },
-    }));
-
-    return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+    return body === null ? response : new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
   });
+}
+
+/** What `Ai.run` answers: a raw response when asked for one, a stream, or a parsed completion. */
+type BindingAnswer = Response | ReadableStream<Uint8Array> | JsonObject;
+
+/** The binding's `run`, reporting a streamed answer's chunks as `heardFetch` does; any other answer passes as it is. */
+export function heardBinding<Binding extends object>(binding: Binding & { run(...args: never[]): Promise<BindingAnswer> }): Binding {
+  const run = binding.run.bind(binding);
+
+  return Object.create(binding, { run: { value: async (...args: Parameters<typeof run>) => heardAnswer(await run(...args)) } });
+}
+
+function heardAnswer(answer: BindingAnswer): BindingAnswer {
+  if (answer instanceof Response) {
+    const body = heardBody(answer.body);
+
+    return body === null ? answer : new Response(body, { status: answer.status, statusText: answer.statusText, headers: answer.headers });
+  }
+
+  return answer instanceof ReadableStream ? heardBody(answer) ?? answer : answer;
+}
+
+/** The body re-read through the attempt's activity report, or null when no attempt is listening. */
+function heardBody(body: ReadableStream<Uint8Array> | null): ReadableStream<Uint8Array> | null {
+  const attempt = current.getStore();
+
+  if (attempt === undefined || body === null) return null;
+
+  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      attempt.heard();
+      controller.enqueue(chunk);
+    },
+  }));
 }

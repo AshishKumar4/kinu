@@ -14,6 +14,7 @@ import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } fr
 import { Effect } from 'effect';
 import { classify, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';
+import { heardFetch } from './middleware/attempt';
 
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 
@@ -177,7 +178,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         return withCallAccount(res, 'codex', answer.auth.credentialKey ?? CODEX_CRED_KEY);
       })));
 
-      const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });
+      const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: heardFetch(customFetch) });
 
       return wrapLanguageModel({ model: provider.responses(modelId), middleware: statelessResponses(true) });
     },

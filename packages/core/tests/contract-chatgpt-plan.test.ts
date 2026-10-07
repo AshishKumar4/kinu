@@ -4,7 +4,7 @@ import { afterEach, describe, expect, jest, test } from 'bun:test';
 import { APICallError, generateText, jsonSchema, streamText, tool, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import {
-  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, silenceBoundMs,
+  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, createProviderRegistry, JsonObjectSchema, silenceBoundMs,
   type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { KinuError, createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
@@ -460,5 +460,48 @@ describe('on the web, through the machine that signed in', () => {
     expect(api.sent.map(({ url, authorization, body }) => ({ url, authorization, store: body?.store, stream: body?.stream }))).toEqual([
       { url: 'https://api.openai.com/v1/responses', authorization: 'Bearer at-1', store: false, stream: true },
     ]);
+  });
+});
+
+describe('a stream after its sign-in was renewed', () => {
+  test('keepalives on the renewed request reach the silence bound', async () => {
+    jest.useFakeTimers();
+    const encoder = new TextEncoder();
+    let pulls = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
+
+    const body = new ReadableStream<Uint8Array>({ pull(controller) { pulls.resolve(controller); } }, { highWaterMark: 0 });
+
+    const next = async (): Promise<ReadableStreamDefaultController<Uint8Array>> => {
+      const controller = await pulls.promise;
+
+      pulls = Promise.withResolvers();
+
+      return controller;
+    };
+
+    const api = openai(refusal(401, 'token_expired'), () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const { deps, asked } = signedIn(api.fetch);
+    const registry = createProviderRegistry();
+
+    registry.register(createChatGptProvider());
+    const result = streamText({ model: registry.resolve('chatgpt/gpt-6.1-sol', deps), prompt: 'hello', maxRetries: 0 });
+    const IDLE_MS = silenceBoundMs('provider.stream.idle_ms');
+
+    // The model thinks for three bounds, sending only keepalive comments, then answers.
+    for (let comment = 0; comment < 3; comment++) {
+      const controller = await next();
+
+      for (let turn = 0; turn < 100; turn++) await Promise.resolve();
+      jest.advanceTimersByTime(IDLE_MS - 1);
+      controller.enqueue(encoder.encode(': keepalive\n\n'));
+    }
+
+    const answer = await answered().text();
+
+    (await next()).enqueue(encoder.encode(answer));
+    (await next()).close();
+
+    expect({ text: await result.text, renewed: asked.some((request) => request?.rejected !== undefined), sent: api.sent.length })
+      .toEqual({ text: 'ok', renewed: true, sent: 2 });
   });
 });
