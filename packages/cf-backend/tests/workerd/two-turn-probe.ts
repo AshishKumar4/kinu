@@ -23,6 +23,8 @@ import { SqlMeter, type OperationCost } from './sql-meter';
 import type {
   AgentLogEvent,
   CallRecord,
+  ChangeNotesCompleted,
+  ChangeNotesPrepared,
   DriveOnceInput,
   DriveOnceResult,
   ExerciseResult,
@@ -61,7 +63,8 @@ import {
   type WakeDriveResult,
   type WakeRows,
 } from './two-turn-shapes';
-import { ownerCaller, type PeerMessage, type SessionTranscript, type WorkMode } from '@kinu.run/core';
+import { changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type SessionTranscript, type WorkMode } from '@kinu.run/core';
+import { renderThrownChain, type Refusal } from '@kinu.run/core/obs';
 import type { ToolSet } from 'ai';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
@@ -150,7 +153,35 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'meterEnd');
     Reflect.deleteProperty(this, 'settleState');
     Reflect.deleteProperty(this, 'sleepTimeNow');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed']);
+    Reflect.deleteProperty(this, 'refuseDriving');
+    Reflect.deleteProperty(this, 'refuseReservations');
+    Reflect.deleteProperty(this, 'owedSends');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends']);
+  }
+
+  /** What the loop's driver gate answers once refused, as when another activation holds the lease. */
+  private drivingRefused: Refusal | null = null;
+
+  protected override driverGate(): Refusal | null {
+    return this.drivingRefused ?? super.driverGate();
+  }
+
+  async refuseDriving(): Promise<void> {
+    this.drivingRefused = { reason: 'unavailable', error: 'another activation is driving' };
+  }
+
+  /** A storage fault on every reservation the workspace writes while `refused`. */
+  async refuseReservations(refused: boolean): Promise<void> {
+    this.unmetered(refused
+      ? "CREATE TRIGGER refuse_reservation BEFORE INSERT ON pending_steers BEGIN SELECT RAISE(ABORT, 'reservation refused'); END"
+      : 'DROP TRIGGER refuse_reservation');
+  }
+
+  /** The sends the workspace still owes, and how many of them carry a card. */
+  async owedSends(): Promise<{ readonly sends: number; readonly cards: number }> {
+    const count = (where: string): number => Number(this.unmetered(`SELECT COUNT(*) AS n FROM pending_steers WHERE ${where}`).one().n);
+
+    return { sends: count('1'), cards: count('metadata_json IS NOT NULL') };
   }
 
   /** The closed-tab sleep-time wake, run now: the tab closed past its grace, then a timer tick. */
@@ -532,10 +563,20 @@ type ExerciseTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'writeWorkspaceFile'>
   & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'settleState'>;
 
+/** The one note the Changes-tab journeys send, anchored to a line of a changed file. */
+const NOTE: ReviewAnnotation = {
+  id: 'clamp', type: 'COMMENT', blockId: 'src/apply.ts', startOffset: 0, endOffset: 0, originalText: 'const rule = rules[kind];', createdA: 1,
+  text: 'Clamp it, but log it too.',
+  anchor: { scope: 'lines', path: 'src/apply.ts', side: 'new', lineStart: 1, lineEnd: 1, baseline: 'gen-4f1c9a' },
+};
+
+const NOTED: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline' };
+
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent'>
-  & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
+  & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -787,7 +828,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1140,6 +1181,73 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const steerFiles = await target.pendingSteerFileRows();
 
     return v.parse(PreparedConversationSchema, { workspace, owner, bFrame: bWire, cFrame: cWire, steers, steerFiles });
+  }
+
+  /**
+   * Notes saved on the Changes tab and sent while the genesis turn is held, so they wait for a turn of their own. The
+   * first send meets a storage fault on its reservation and must leave the notes where they were; the second takes a
+   * reservation carrying the notes' card.
+   */
+  async prepareChangeNotes(): Promise<ChangeNotesPrepared> {
+    const { target, workspace } = await this.claimQueueWorkspace('notes');
+
+    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 1 }) });
+
+    if (!(await target.beginGenesisTurn()).started) throw new Error('notes probe genesis did not start');
+    await fetch('http://probe-control.invalid/queue/arrived');
+    await target.saveChangeNotes('workspace', [NOTE]);
+    await target.refuseReservations(true);
+    let refusal: string | null = null;
+
+    try {
+      await target.sendChangeNotes(NOTED);
+    } catch (cause) {
+      refusal = renderThrownChain({ cause });
+    }
+
+    const kept = (await target.getChangeNotes('workspace')).map((note) => note.id);
+    const owedAfterRefusal = await target.owedSends();
+
+    await target.refuseReservations(false);
+    const sent = await target.sendChangeNotes(NOTED);
+
+    return {
+      workspace, refusal, kept, owedAfterRefusal, sent: sent.ok ? { ok: true, left: sent.notes.length } : { ok: false, left: -1 },
+      keptAfterSend: (await target.getChangeNotes('workspace')).length, owed: await target.owedSends(),
+    };
+  }
+
+  /** After the eviction: the held turn released, the notes' own turn runs on the wake their send armed. */
+  async completeChangeNotes(workspace: string): Promise<ChangeNotesCompleted> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+    await awaitSettled(target);
+    const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
+    const messages = v.parse(v.array(v.looseObject({ id: v.string(), role: v.string(), metadata: v.optional(v.unknown()) })), await page.json());
+
+    return {
+      cards: messages.flatMap((message) => {
+        const card = changeNotesCard({ metadata: message.metadata });
+
+        return card === null ? [] : [{ role: message.role, notes: card.notes.map((note) => note.id), author: turnAuthor({ metadata: message.metadata }) ?? null }];
+      }),
+      kept: (await target.getChangeNotes('workspace')).length,
+      owed: await target.owedSends(),
+    };
+  }
+
+  /** A send the loop refuses to drive takes its card row with it. */
+  async refusedChangeNotes(): Promise<{ readonly sent: boolean; readonly owed: { readonly sends: number; readonly cards: number } }> {
+    const { target } = await this.claimQueueWorkspace('notes-refused');
+
+    await target.saveChangeNotes('workspace', [NOTE]);
+    await target.refuseDriving();
+    const sent = await target.sendChangeNotes(NOTED);
+
+    await awaitSettled(target);
+
+    return { sent: sent.ok, owed: await target.owedSends() };
   }
 
   /** The durable pending_steers row, not the socket, binds each replay to the turn. */

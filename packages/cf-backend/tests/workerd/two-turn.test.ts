@@ -158,6 +158,29 @@ describe('two real turns over the HTTP model seam', () => {
     expect(done.runEnds).toEqual([{ runId: expect.any(String), reason: 'completed' }]);
   });
 
+  // Notes sent from the Changes tab while a turn holds the queue: they move with their reservation or not at all,
+  // survive an eviction before their own turn, arrive once with their card, and leave nothing owed.
+  it('Changes-tab notes wait for a turn of their own, through a refused reservation and an eviction, and arrive once with their card', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-driver'));
+    const prepared = await root.prepareChangeNotes();
+
+    expect(prepared.refusal).toContain('reservation refused');
+    expect([prepared.kept, prepared.owedAfterRefusal.cards]).toEqual([['clamp'], 0]);
+    expect([prepared.sent, prepared.keptAfterSend, prepared.owed.cards]).toEqual([{ ok: true, left: 0 }, 0, 1]);
+
+    await abortAllDurableObjects();
+    const done = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-driver')).completeChangeNotes(prepared.workspace);
+
+    expect(done.cards).toEqual([{ role: 'user', notes: ['clamp'], author: 'operator' }]);
+    expect([done.kept, done.owed]).toEqual([0, { sends: 0, cards: 0 }]);
+  });
+
+  it('a Changes-tab send the loop refuses to drive takes its card row with it', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-refused-driver'));
+
+    expect(await root.refusedChangeNotes()).toEqual({ sent: true, owed: { sends: 0, cards: 0 } });
+  });
+
   it('splices a mid-turn attachment into the next model call as a file part', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('attach-queue-driver'));
 
