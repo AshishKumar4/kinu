@@ -32,7 +32,7 @@ import { signalGroup } from './process-group';
 import { withTestChrome } from './test-chrome';
 import { devPreviewTlsDir } from '../packages/cf-backend/vite-preview-zone';
 
-const REPO = join(import.meta.dir, '..');
+const REPO = join(import.meta.dirname, '..');
 
 const CF = join(REPO, 'packages', 'cf-backend');
 
