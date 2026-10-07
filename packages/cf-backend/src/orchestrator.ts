@@ -1113,16 +1113,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
-    const factory = createCodemodeToolFactory({
-      launch: this.codemodeLaunch(turn.runtime.actor.actorId), rt: turn.runtime,
-      // The role's own list: this profile was resolved before the tools it would intersect existed.
-      reach: narrowToolSurface(effectiveRoleCatalog(turn.profile.inputs.envelope.catalog)[turn.profile.profile.role.id]?.allowedTools),
-      workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
-      // A thunk, so it reads the `report` deps declared below rather than a construction-time copy.
-      extraProviders: () => [createReportCodemodeProvider(() => report)],
-    });
-
-    const report: ReportToolDeps = {
+    // `report` belongs only to a parent-driven turn: an owner chat with this actor carries it neither natively nor in eval.
+    const report: ReportToolDeps | undefined = !turn.parentDriven ? undefined : {
       report: async (input) => {
         const relayed = await publishSubordinateReport({ mode: turn.input.mode, reports: turn.reports }, {
           status: input.status, content: input.content, origin: 'report_tool',
@@ -1135,6 +1127,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return { id: relayed.id, disposition: relayed.disposition };
       },
     };
+
+    const factory = createCodemodeToolFactory({
+      launch: this.codemodeLaunch(turn.runtime.actor.actorId), rt: turn.runtime,
+      // The role's own list: this profile was resolved before the tools it would intersect existed.
+      reach: narrowToolSurface(effectiveRoleCatalog(turn.profile.inputs.envelope.catalog)[turn.profile.profile.role.id]?.allowedTools),
+      workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
+      extraProviders: () => (report === undefined ? [] : [createReportCodemodeProvider(() => report)]),
+    });
 
     // Named: both the tool surface and the framing read these deps.
     const agents = this.hostedAgentsToolDeps(turn);
@@ -1158,10 +1158,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       facts: turn.actor.stores.facts,
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
+      ...(report !== undefined && { report }),
     };
 
-    // `report` belongs only to a parent-driven turn; an owner chat with this actor must not carry it.
-    if (turn.parentDriven) deps.report = report;
     const built = buildActorTools(deps);
     const tools = withHeadCaptureRecording(built.turn, turn.capture);
 
