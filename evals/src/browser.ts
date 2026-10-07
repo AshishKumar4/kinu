@@ -130,7 +130,9 @@ export class WorkspaceBrowser {
     const card = (await page.$$(cards)).at(-1);
 
     if (card === undefined) throw new Error(`the chat's preview of ${id} left the page`);
+    // A folded card keeps its frame, drawn at no height: a page read there would read as seen.
     await (await card.$('button[aria-expanded="false"]'))?.click();
+    await shown(card, 'button[aria-expanded="true"]', `the chat's preview of ${id}, unfolded`);
 
     return loaded(await shown(card, 'iframe', `the frame of the chat's preview of ${id}`), id);
   }
