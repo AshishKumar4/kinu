@@ -49,13 +49,32 @@ export const DRAW_MS = 60_000;
 
 const Faults = v.object({ errors: v.array(v.string()), scripts: v.array(v.string()) });
 
+/**
+ * `work`, or a failure once the draw budget passes. Chrome's own protocol never times out here (`protocolTimeout: 0`,
+ * `scripts/test-chrome.ts`), so a page that wedges its renderer would hold a check, its trial and the leg forever; on
+ * expiry the check fails, and `browsing` closes Chrome by killing its process group, which needs no answer from it.
+ */
+async function bounded<T>(what: string, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { reject(new Error(`${what} did not answer in ${String(DRAW_MS / 1000)} s`)); }, DRAW_MS);
+  });
+
+  try {
+    return await Promise.race([work, expiry]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** One slate's page as it is drawn inside the workspace: in the work surface or in the chat. */
 export class SlateView {
   constructor(readonly frame: Frame) {}
 
   /** The page as read now: its text, and each name's regions (`sight.ts`). */
   async read(names: readonly string[]): Promise<Sight> {
-    return (await this.frame.evaluate(look, names, null)).sight;
+    return (await bounded('the slate page, read', this.frame.evaluate(look, names, null))).sight;
   }
 
   /** Read the page until `done` holds or the draw budget passes: the last reading, and whether it held. */
@@ -74,23 +93,24 @@ export class SlateView {
 
   /** Press the control `press` names, as a person's pointer does; false when the page has no such one control. */
   async press(names: readonly string[], press: Press): Promise<boolean> {
-    const found = await this.frame.evaluateHandle(look, names, press);
-    const control = await found.evaluateHandle((looked) => looked.control);
+    return bounded(`the slate page, pressed for ${press.name}`, (async () => {
+      const found = await this.frame.evaluateHandle(look, names, press);
+      const control = await found.evaluateHandle((looked) => looked.control);
 
-    await found.dispose();
+      await found.dispose();
 
-    if (!(control instanceof ElementHandle)) return false;
-    await control.click();
-    await control.dispose();
+      if (!(control instanceof ElementHandle)) return false;
+      await control.click();
+      await control.dispose();
 
-    return true;
+      return true;
+    })());
   }
 
   /** What failed in the page: errors nothing caught and scripts that did not load (`script-failures.ts`). */
   async faults(): Promise<{ errors: string[]; scripts: string[] }> {
-    return v.parse(Faults, await this.frame.evaluate(DOCUMENT_FAULTS));
+    return v.parse(Faults, await bounded('the slate page, asked what failed', this.frame.evaluate(DOCUMENT_FAULTS)));
   }
-
 }
 
 /** The workspace's pages as its owner opens them, in one Chrome. */
@@ -102,7 +122,7 @@ export class WorkspaceBrowser {
     const page = await signedInPage(this.browser, this.web.identity);
 
     await recordScriptFailures(page);
-    await page.goto(`${this.web.origin}/workspace/${encodeURIComponent(this.web.workspace)}${query}`, { waitUntil: 'domcontentloaded' });
+    await bounded('the workspace page', page.goto(`${this.web.origin}/workspace/${encodeURIComponent(this.web.workspace)}${query}`, { waitUntil: 'domcontentloaded' }));
 
     return page;
   }
@@ -135,18 +155,25 @@ export class WorkspaceBrowser {
   }
 
   /**
-   * Pictures of the chat's ephemeral slates as a person sees them, oldest first, for a judge to look at: each frame
-   * scrolled into view, its page loaded, then pictured from the chat's own document. The chat's frames are cross-origin
-   * documents, which a picture taken through the frame's own handle can lose; the element the chat holds it in cannot.
+   * Pictures of the chat's ephemeral slates as a person sees them, oldest first, for a judge to look at. Taken once every
+   * frame's page has loaded and `done` holds of what it shows: while the chat is still drawing the answer it replaces its
+   * frame elements, and a picture of a replaced one fails as detached (measured 2026-10-07; once loaded, scrolling keeps
+   * every frame's document). Each is scrolled into view and pictured from the chat's own document.
    */
-  async answerPictures(page: Page, least: number): Promise<Uint8Array<ArrayBuffer>[]> {
+  async answerPictures(page: Page, least: number, names: readonly string[], done: (sight: Sight) => boolean): Promise<Uint8Array<ArrayBuffer>[]> {
+    const views = await this.answerSlates(page, least);
+
+    // A page that reads its data draws it after it loads: picture what it shows once it shows it, or the budget passes.
+    await Promise.all(views.map((view) => view.until(names, done)));
     const pictures: Uint8Array<ArrayBuffer>[] = [];
 
     // One at a time: each is scrolled into view to be pictured.
-    for (const [index, frame] of (await answerFrames(page, least)).entries()) {
-      await frame.scrollIntoView();
-      await loaded(frame, `ephemeral slate ${String(index + 1)}`);
-      pictures.push(new Uint8Array(await frame.screenshot({ type: 'png' })));
+    for (let index = 0; index < views.length; index += 1) {
+      const frame = (await answerFrames(page, views.length))[index];
+
+      if (frame === undefined) throw new Error(`the chat no longer shows ephemeral slate ${String(index + 1)}`);
+      await bounded('the chat, scrolled', frame.scrollIntoView());
+      pictures.push(new Uint8Array(await bounded('the chat, pictured', frame.screenshot({ type: 'png' }))));
     }
 
     return pictures;
