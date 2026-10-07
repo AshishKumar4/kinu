@@ -372,8 +372,6 @@ export interface TerminalState {
   readonly owed: readonly { readonly name: string; readonly status: string; readonly attempts: number }[];
   readonly open: number;
   readonly recorded: number;
-  /** Recorded turns owed a review, written in the same insert as the turn. */
-  readonly reviews: number;
 }
 
 /** A row from a build with another effect set, after the recovery pass: its status, and what its transition answers. */

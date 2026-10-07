@@ -318,9 +318,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const open = Number(this.unmetered("SELECT COUNT(*) AS n FROM tool_effect_claims WHERE normalized_call_id LIKE 'terminal:response:%' AND result_json IS NULL").one().n);
 
     const recorded = Number(this.unmetered('SELECT COUNT(*) AS n FROM completed_turns').one().n);
-    const reviews = Number(this.unmetered("SELECT COUNT(*) AS n FROM completed_turns WHERE review IN ('awaiting_followup', 'queued')").one().n);
 
-    return { owed, open, recorded, reviews };
+    return { owed, open, recorded };
   }
 
   /** A row a build with another effect set left owed, then the recovery pass over it. */
