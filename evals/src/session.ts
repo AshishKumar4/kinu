@@ -592,13 +592,12 @@ const DirectorySchema = v.object({ entries: v.optional(v.array(DirEntrySchema)),
 
 export type PublicDirEntry = v.InferOutput<typeof DirEntrySchema>;
 
-/** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
- *  (core/src/read-models/files.ts): the preview's text, or the reason there is
+/** What the harness reads of `readExecutorFile`'s answer (`ExecutorTextFile`,
+ *  core/src/read-models/files.ts): the preview's text, or the reason there is
  *  none. Both optional, because the read model answers one or the other. */
 const ViewedFileSchema = v.object({
   content: v.optional(v.string()),
   truncated: v.optional(v.boolean()),
-  revision: v.optional(v.number()),
   readOnlyReason: v.optional(v.string()),
   error: v.optional(v.string()),
 });
