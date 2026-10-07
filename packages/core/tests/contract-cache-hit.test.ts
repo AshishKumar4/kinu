@@ -19,6 +19,7 @@ import {
   type ModelCallDeps, type AuthResolution, type WorkersAIRunBinding,
 } from '../src/index';
 import { Database } from 'bun:sqlite';
+import { freezeTree } from '../src/utils/freeze';
 import { createMockFetch, testActorHandle, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql } from './helpers';
 
@@ -663,6 +664,22 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
     expect(sent[1]).toContain('the second words');
     expect(sent[1]).not.toContain('the first words');
     expect(sent[1]).toContain('a settled question');
+
+    // A frozen tool input whose value comes from a function is data that can still change: it converts every time.
+    let current = 'before';
+    const input = Object.freeze({ toJSON: () => ({ value: current }) });
+    const called: ModelMessage = { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'probe', input }] };
+    const answered: ModelMessage = { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'probe', output: { type: 'text', value: 'done' } }] };
+    freezeTree({ value: called });
+    freezeTree({ value: answered });
+
+    await streamText({ model, messages: [frozen, called, answered] }).consumeStream();
+    current = 'after';
+    await streamText({ model, messages: [frozen, called, answered] }).consumeStream();
+
+    expect(sent[2]).toContain('before');
+    expect(sent[3]).toContain('after');
+    expect(sent[3]).not.toContain('before');
   });
 
   test('an Anthropic turn arms a warm whose request reads the prefix the turn cached', async () => {

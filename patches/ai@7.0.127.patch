@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..c93920d98fc26871ef080dd87efd60bb4bfc4dad 100644
+index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..3ecf6e7d26776852f5a58e6b20315118d10e72e5 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -1342,11 +1342,7 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
@@ -38,7 +38,7 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..c93920d98fc26871ef080dd87efd60bb
  		} else combinedMessages.push(message);
  	}
  	const toolCallIds = /* @__PURE__ */ new Set();
-@@ -1379,6 +1383,66 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
+@@ -1379,6 +1383,67 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
  	return combinedMessages.filter((message) => message.role !== "tool" || message.content.length > 0);
  }
  /**
@@ -57,9 +57,10 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..c93920d98fc26871ef080dd87efd60bb
 +	"tool-approval-request",
 +	"tool-approval-response"
 +]);
-+/** Plain data frozen to its leaves: a getter could answer differently on each read, and a class instance (a byte view,
-+* a URL) carries state freezing does not reach. */
++/** Plain data frozen to its leaves: a getter or a function (a `toJSON`) could answer differently on each read, and a class
++* instance (a byte view, a URL) carries state freezing does not reach. */
 +function isFrozenTree(value) {
++	if (typeof value === "function") return false;
 +	if (typeof value !== "object" || value === null || frozenTrees.has(value)) return true;
 +	const prototype = Object.getPrototypeOf(value);
 +	if (!Object.isFrozen(value) || prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) return false;
@@ -105,7 +106,7 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..c93920d98fc26871ef080dd87efd60bb
  * Convert a ModelMessage to a LanguageModelV4Message.
  *
  * @param message - The ModelMessage to convert.
-@@ -8034,10 +8098,27 @@ const originalGenerateCallId$8 = createIdGenerator$1({
+@@ -8034,10 +8099,27 @@ const originalGenerateCallId$8 = createIdGenerator$1({
  *
  * @returns A stream of model call parts together with request and response metadata when available.
  */
@@ -135,7 +136,7 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..c93920d98fc26871ef080dd87efd60bb
  		instructions,
  		system,
  		prompt,
-@@ -8054,7 +8135,7 @@ async function streamLanguageModelCall({ model, tools, toolOrder, output, toolCh
+@@ -8054,7 +8136,7 @@ async function streamLanguageModelCall({ model, tools, toolOrder, output, toolCh
  		abortSignal,
  		provider: resolvedModel.provider.split(".")[0]
  	});
@@ -144,7 +145,7 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..c93920d98fc26871ef080dd87efd60bb
  		tools,
  		toolOrder,
  		toolsContext,
-@@ -9555,7 +9636,10 @@ var DefaultStreamTextResult = class {
+@@ -9555,7 +9637,10 @@ var DefaultStreamTextResult = class {
  								callbacks: [onStepStart, telemetryDispatcher.onStepStart]
  							});
  						},

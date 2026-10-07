@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..e02395c841da1b99eb06d03613a3ec38e930e63c 100644
+index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..c3e76b5f8f12c74fa90db0dbc19031421848365a 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -136,9 +136,56 @@ function convertToolContentPart(part) {
+@@ -136,9 +136,57 @@ function convertToolContentPart(part) {
  	if (part.type === "custom") throw new UnsupportedFunctionalityError({ functionality: "custom tool content parts" });
  	return convertToOpenAICompatibleContentPart(part);
  }
@@ -16,6 +16,7 @@ index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..e02395c841da1b99eb06d03613a3ec38
 +/** Plain data frozen to its leaves: a getter could answer differently on each read, and a class instance carries state
 +* freezing does not reach. */
 +function isFrozenPromptTree(value) {
++	if (typeof value === "function") return false;
 +	if (typeof value !== "object" || value === null || frozenPromptTrees.has(value)) return true;
 +	const prototype = Object.getPrototypeOf(value);
 +	if (!Object.isFrozen(value) || prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) return false;
@@ -60,7 +61,7 @@ index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..e02395c841da1b99eb06d03613a3ec38
  		const metadata = getOpenAIMetadata({ ...message });
  		switch (role) {
  			case "system":
-@@ -820,7 +867,7 @@ const chunkBaseSchema = z.looseObject({
+@@ -820,7 +868,7 @@ const chunkBaseSchema = z.looseObject({
  			})).nullish()
  		}).nullish(),
  		finish_reason: z.string().nullish()
