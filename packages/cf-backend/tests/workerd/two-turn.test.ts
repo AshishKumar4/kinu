@@ -172,6 +172,9 @@ describe('two real turns over the HTTP model seam', () => {
     const done = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-driver')).completeChangeNotes(prepared.workspace);
 
     expect(done.cards).toEqual([{ role: 'user', notes: ['clamp'], author: 'operator' }]);
+    // The typed message that waited beside the notes reran as its own row; the card stayed on its own.
+    expect(done.users.filter((user) => user.text === 'check staging' || user.card)
+      .map((user) => (user.card ? user.text.startsWith('# Notes on the changes') : user.text))).toEqual(['check staging', true]);
     expect([done.kept, done.owed]).toEqual([0, { sends: 0, cards: 0 }]);
   });
 

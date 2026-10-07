@@ -1195,6 +1195,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     if (!(await target.beginGenesisTurn()).started) throw new Error('notes probe genesis did not start');
     await fetch('http://probe-control.invalid/queue/arrived');
+    // A typed message the held turn never reads waits beside the notes.
+    await this.sendChatFrame(target, workspace, 'check staging');
     await target.saveChangeNotes('workspace', [NOTE]);
     await target.refuseReservations(true);
     let refusal: string | null = null;
@@ -1224,9 +1226,15 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
     await awaitSettled(target);
     const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
-    const messages = v.parse(v.array(v.looseObject({ id: v.string(), role: v.string(), metadata: v.optional(v.unknown()) })), await page.json());
+
+    const messages = v.parse(v.array(v.looseObject({
+      id: v.string(), role: v.string(), metadata: v.optional(v.unknown()), parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })),
+    })), await page.json());
 
     return {
+      users: messages.filter((message) => message.role === 'user').map((message) => ({
+        text: message.parts.map((part) => part.text ?? '').join(''), card: changeNotesCard({ metadata: message.metadata }) !== null,
+      })),
       cards: messages.flatMap((message) => {
         const card = changeNotesCard({ metadata: message.metadata });
 

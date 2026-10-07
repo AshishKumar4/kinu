@@ -341,6 +341,8 @@ export interface ChangeNotesPrepared {
 
 /** What it saw once the notes' own turn ran on the fresh activation. */
 export interface ChangeNotesCompleted {
+  /** Each message the operator's side wrote, by its text, and whether it carries the notes' card. */
+  readonly users: readonly { readonly text: string; readonly card: boolean }[];
   readonly cards: readonly { readonly role: string; readonly notes: readonly string[]; readonly author: string | null }[];
   readonly kept: number;
   readonly owed: { readonly sends: number; readonly cards: number };
