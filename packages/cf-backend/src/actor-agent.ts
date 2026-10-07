@@ -2018,7 +2018,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this._evolutionSettling = owner;
     owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.runFiber(EVOLUTION_LANE_FIBER, async (ctx) => {
       ctx.stash({ lane: EVOLUTION_LANE_FIBER });
-      await this.orch.settleEvolution();
+      await this.orch.settleTracked();
       await this.orch.runDueSessionEvolution();
     })), recording({ doing: 'settling the turn and session evolution lanes', otherwise: 'unavailable' }, (failure) => {
       diagnostics.failure('evolution.settle_failed', failure);

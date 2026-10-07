@@ -1239,7 +1239,7 @@ export class LocalAgentSession {
 
     if (this.sleepTimeTimer) clearTimeout(this.sleepTimeTimer);
     const t0 = Date.now();
-    await this.actorSession.orchestrator.settleEvolution();
+    await this.actorSession.orchestrator.settleTracked();
     const t1 = Date.now();
     await this.joinBackgroundFibers(this.drainDeadline());
     const t2 = Date.now();
@@ -1250,7 +1250,7 @@ export class LocalAgentSession {
     // Quiet under 1s: the --json contract promises an empty stderr on a fast exit.
     if (t3 - t0 > 1_000) {
       diagnostics.event('session.settle_timings', {
-        evolutionMs: t1 - t0, fibersMs: t2 - t1, mcpMs: t3 - t2,
+        trackedMs: t1 - t0, fibersMs: t2 - t1, mcpMs: t3 - t2,
       });
     }
   }

@@ -158,7 +158,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     orch.recordTurn(aTurn(1, 'programmatic'), 'independent_task');
     orch.beginTurn(Date.now(), {});
     orch.recordTurn(aTurn(2, 'programmatic'), 'independent_task');
-    await orch.settleEvolution();
+    await orch.settleTracked();
 
     // Absent, not `[]`: an unscoped review must never get a label.
     expect(reviews.map((r) => [r.turn.turnId, r.turn.missionLabels]))
@@ -172,14 +172,14 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
 
     for (let i = 0; i < 2; i++) orch.recordTurn(aTurn(i), 'conversation');   // below the interval
     expect(sessions).toEqual([]);
-    await orch.settleEvolution();
+    await orch.settleTracked();
     // The last turn's follow-up may still arrive.
     expect(sessions).toEqual([]);
     expect(reviews).toEqual([]);
     expect(orch.sessionTurnIndex).toBe(2);
   });
 
-  test('settleEvolution waits for the evolution the run dispatched', async () => {
+  test('settleTracked waits for the evolution the run dispatched', async () => {
     const { engine, sessions } = fakeEngine();
     const { host } = fakeHost();
     let release = () => {};
@@ -196,7 +196,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     orch.recordTurn(aTurn(4), 'conversation');
     const pass = orch.runDueSessionEvolution();
     expect(sessions).toEqual([]);
-    await orch.settleEvolution();
+    await orch.settleTracked();
     expect(sessions).toEqual([]);
     release();
     await pass;
@@ -210,7 +210,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const oneShot = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
 
     for (let i = 0; i < 5; i++) oneShot.recordTurn(aTurn(i), 'independent_task');
-    await oneShot.settleEvolution();
+    await oneShot.settleTracked();
     expect(sessions).toEqual([]);
     expect(oneShot.sessionTurnIndex).toBe(5);
 
@@ -228,7 +228,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), oneShot: true });
     orch.recordTurn(aTurn(0), 'independent_task');
 
-    await orch.settleEvolution();
+    await orch.settleTracked();
     expect(reviews).toEqual([]);
     expect(store.countQueuedReviews()).toBe(1);
   });
@@ -244,7 +244,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     orch.recordTurn(aTurn(0), 'independent_task');
 
     let settled = false;
-    const settle = orch.settleEvolution().then(() => { settled = true; });
+    const settle = orch.settleTracked().then(() => { settled = true; });
     await Promise.resolve();
     expect(settled).toBe(false);
 
@@ -260,7 +260,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const eventLog = newEventLog();
     const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
     exec.recordTurn(aTurn(7), 'independent_task');
-    await exec.settleEvolution();
+    await exec.settleTracked();
     expect(reviews).toEqual([]);
 
     const next = new AgentOrchestrator({ host, engine, eventLog });
@@ -293,7 +293,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     // A later one-shot process with a different task.
     const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
     exec.observeUserTurn('unrelated next task', 'independent_task');
-    await exec.settleEvolution();
+    await exec.settleTracked();
     expect(reviews).toEqual([]);
     const next = new AgentOrchestrator({ host, engine, eventLog });
     await next.runDeferredTurnReviews();
@@ -301,7 +301,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     expect(reviews[0].followup).toBeNull();
   });
 
-  test('settleEvolution JOINS the turn lane until it settles — background work is never abandoned by the clock', async () => {
+  test('settleTracked JOINS the turn lane until it settles — background work is never abandoned by the clock', async () => {
     const { engine } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
@@ -311,7 +311,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     orch.track(gate.promise.then(() => { done = true; }), 'Turn review');
 
     let settled = false;
-    const settle = orch.settleEvolution().then(() => { settled = true; });
+    const settle = orch.settleTracked().then(() => { settled = true; });
     await Promise.resolve();
     expect(done).toBe(false);
     expect(settled).toBe(false);
