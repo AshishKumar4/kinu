@@ -59,6 +59,7 @@ import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
+import type { MessageBlock } from "./slates/sources";
 import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type WorkspaceHostSeams,
 } from "./actor-hosting";
@@ -134,7 +135,7 @@ import {
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
-  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock,
+  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
   readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -4451,15 +4452,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.armDurableWake();
       },
       previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
-      // The root's own answers, every text part as the chat draws it; the page runs with the root's authority in the mode
-      // its next turn runs in.
-      messageBlock: async (address) => {
-        const answer = await this.chatTranscript.message(address.messageId);
-        const texts = answer?.role === 'assistant' ? answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])) : [];
-        const { html } = addressedBlock(texts, address);
-
-        return { html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
-      },
+      messageBlock: (address) => this.answerBlock(address),
       sharesChanged: async () => {
         this.overviewChanged(true);
 
@@ -4468,6 +4461,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
 
     return this._slates;
+  }
+
+  /**
+   * The block an answer's page is read from, every text part as the chat draws it. The workspace's own answer runs
+   * with its authority in the mode its next turn runs in. A hired agent's is read from its own isolate and drawn with
+   * nothing bound: a binding run from here would not run where that agent's stores are.
+   */
+  private async answerBlock(address: EphemeralSlateAddress): Promise<MessageBlock> {
+    if (address.actorId !== null) {
+      const answer = this.liveActor(address.actorId)
+        ? await (await this.agentCalls(address.actorId)).answerTexts(this.agentSnapshot(address.actorId), address.messageId)
+        : null;
+
+      return { html: addressedBlock(answer?.texts ?? [], address).html, author: null };
+    }
+
+    const answer = await this.chatTranscript.message(address.messageId);
+    const texts = answer?.role === 'assistant' ? answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])) : [];
+
+    return { html: addressedBlock(texts, address).html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
   }
 
   async slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult> {

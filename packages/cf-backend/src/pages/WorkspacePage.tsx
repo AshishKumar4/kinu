@@ -366,6 +366,9 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
   );
 }
 
+/** The workspace's own chat, where its answers' blocks resolve. */
+const WORKSPACE_CHAT = { actorId: null } as const;
+
 const MAIN_AGENT: PanelAgent = {
   key: "main", label: "Main", category: "main", activity: "idle", parent: null,
   open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null },
@@ -554,6 +557,9 @@ function SubordinateChatColumn({
     steerRuns: state.steerRuns, actor: state.paneActorId,
   });
 
+  // Its answers' blocks resolve in its own chat, once the pane knows whose that is.
+  const answerChat = useMemo(() => (state.paneActorId === null ? undefined : { actorId: state.paneActorId }), [state.paneActorId]);
+
   const { thread } = chat;
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -603,7 +609,7 @@ function SubordinateChatColumn({
           rows={(before) => thread.entries.map(({ message: msg, steers }, i) => (
             <Fragment key={msg.id}>
               {before(msg.id)}
-              <MessageView message={msg} steers={steers} liveTail={i === thread.entries.length - 1 ? tail : null} />
+              <MessageView message={msg} steers={steers} answerSlates={answerChat} liveTail={i === thread.entries.length - 1 ? tail : null} />
             </Fragment>
           ))}>
           <ChatLiveTail tail={tail} />
@@ -1142,7 +1148,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                     <MessageView
                       message={msg}
                       steers={steers}
-                      answerSlates
+                      answerSlates={WORKSPACE_CHAT}
                       liveTail={i === thread.entries.length - 1 ? mainTail : null}
                       onFork={onForkMessage}
                       onFeedback={onMessageFeedback}
