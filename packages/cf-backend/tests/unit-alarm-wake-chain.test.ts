@@ -305,12 +305,16 @@ describe('the workspace keeps exactly one wake per job', () => {
   // job (fiber.job_lane_redriven), and from then until the workspace was deleted at 01:33:54Z the object took an alarm a
   // second: 2 a minute before the re-drive, 60 after. A re-drive writes the job's next-attempt instant before it runs, for
   // the activation after a death, and every pass armed the wake at that instant while this activation drove the job.
-  test('a re-driven job owes the workspace no wake while it runs', async () => {
+  test.each(['orphan', 'fiber-recovered'] as const)('a re-driven job owes the workspace no wake while it runs (%s)', async (carrier) => {
     const task = 'Name one way to tokenize faster.';
+    const modelReached = Promise.withResolvers<void>();
 
     // The search's model calls wait on the gateway until their signal stops them; the cancel's wake turn is answered.
     const { agent, db } = gatewayWorkspace(stubAiBinding((run) => openingOf(run).includes(task)
-      ? new Promise<Response>((_resolve, reject) => { run.signal?.addEventListener('abort', () => { reject(run.signal?.reason); }); })
+      ? new Promise<Response>((_resolve, reject) => {
+        modelReached.resolve();
+        run.signal?.addEventListener('abort', () => { reject(run.signal?.reason); });
+      })
       : chatCompletion(run, 'The search was cancelled.')));
 
     // Started by a dead activation: this one's first pass re-drives it.
@@ -320,18 +324,36 @@ describe('the workspace keeps exactly one wake per job', () => {
     });
 
     try {
+      if (carrier === 'fiber-recovered') agent.harnessSeedOrphanFiber('bg:agents', { phase: 'running', jobId: 'bgjob-search', kind: 'agents' });
+
       await agent.activateActor();
-      await agent.terminalRetryPass();
+
+      if (carrier === 'fiber-recovered') {
+        await agent.harnessAlarmHousekeeping();
+        // The SDK owns the drive before the workspace sweep offers the same job.
+        await agent.terminalRetryPass();
+      } else {
+        await until(() => wakeArmed(db), 'the orphan job armed its activation wake');
+        // A direct pass does not consume the firing row or carry its lap pace.
+        await fireSoonestWake(agent, db);
+        await modelReached.promise;
+      }
+
       const redriven = present(jobsOver(db).get('bgjob-search'), 'the re-driven job');
       expect(redriven).toMatchObject({ status: 'running', resumeAttempts: 1 });
 
-      // The next wake's pass, a second after the instant the re-drive wrote.
-      const passAt = present(redriven.resumeAfter, "the re-drive's next-attempt instant") + 1_000;
+      // Reach the next armed wake, or pass the saved resume instant if none is armed.
+      const passAt = Math.max(
+        present(redriven.resumeAfter, "the re-drive's next-attempt instant") + 1_000,
+        armedWakes(db)[0]?.time ?? 0,
+      );
+
       setSystemTime(new Date(passAt));
-      await agent.terminalRetryPass();
+      await agent.alarm();
 
       // A wake armed at or before the pass fires at once, and its pass arms it again.
       expect(armedWakes(db).filter((wake) => wake.time <= passAt)).toEqual([]);
+      expect(jobsOver(db).get('bgjob-search')?.resumeAttempts).toBe(1);
     } finally {
       expect(await agent.cancelBackgroundJob('bgjob-search')).toEqual({ ok: true });
       await joinHarnessFibers();
