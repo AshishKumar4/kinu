@@ -31,7 +31,7 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall,
+  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
@@ -199,6 +199,7 @@ export interface TierVerdicts {
   midThought: MidThoughtVerdict | null;
   droppedFile: DroppedFileVerdict | null;
   cleared: ClearedVerdict | null;
+  planTasks: PlanTasksVerdict | null;
   state: StateVerdict | null;
 }
 
@@ -1397,6 +1398,58 @@ async function measureDroppedFile(newPage: LiveApp['newPage'], origin: string): 
   }
 }
 
+/** The Work tab's plan cards once the approved plan's turn ran: each card's tasks by title and depth, and the titles
+ *  listed apart from any plan. */
+interface PlanTasksVerdict {
+  readonly plans: readonly (readonly (readonly [string, number])[])[];
+  readonly unlinked: readonly string[];
+}
+
+const PLAN_CARDS = `[...document.querySelectorAll('[data-plan-card]')].map((card) => [...card.querySelectorAll('[data-task-depth]')]
+  .map((row) => [row.querySelector('.p-row-text')?.firstChild?.textContent ?? '', Number(row.getAttribute('data-task-depth'))]))`;
+
+const PLANLESS_TASKS = `[...document.querySelectorAll('[data-task-depth]')].filter((row) => row.closest('[data-plan-card]') === null)
+  .map((row) => row.querySelector('.p-row-text')?.firstChild?.textContent ?? '')`;
+
+/** Presses the button showing `words` among those `buttons` selects. */
+async function pressButton(page: Page, buttons: string, words: string): Promise<void> {
+  await page.$$eval(buttons, (found, label) => {
+    const button = found.find((each) => each.textContent?.trim() === label);
+
+    if (button instanceof HTMLElement) button.click();
+  }, words);
+}
+
+/** The plan's tasks, from the turn an approval hands off. A chore added before any plan stays apart from it; the
+ *  approved plan's step, its subtask and a step a program adds are the plan's, the subtask under its step. */
+async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Promise<PlanTasksVerdict> {
+  const workspace = await createWorkspace(origin, { name: `live-row-plan-tasks-${RUN_ID}`, purpose: 'plan tasks probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openRecorded(newPage, origin, workspace);
+
+  try {
+    await sendInChat(page, PLAN_TASKS_CHORE);
+    await until(page, 'the chore turn to end', TURN_ANSWERED);
+    await pressButton(page, '#chat [aria-label="Turn mode"] button', 'Plan');
+    await sendInChat(page, PLAN_TASKS_PLAN);
+    await until(page, "the plan's decisions", `[...document.querySelectorAll('[data-plan-decisions] button')].some((button) => /approve/iu.test(button.textContent ?? '') && !button.disabled)`);
+    await page.$$eval('[data-plan-decisions] button', (buttons) => {
+      const approve = buttons.find((button) => /approve/iu.test(button.textContent ?? ''));
+
+      if (approve instanceof HTMLElement) approve.click();
+    });
+    await page.click('.p-tabstrip button[aria-label="Work"]');
+    await until(page, "the approved plan's last step", `(${PLAN_CARDS}).flat().some(([title]) => title === ${JSON.stringify(PLAN_TASK_TITLES.programmed)})`);
+    await painted(page);
+
+    return {
+      plans: v.parse(v.array(v.array(v.tuple([v.string(), v.number()]))), await page.evaluate(PLAN_CARDS)),
+      unlinked: v.parse(v.array(v.string()), await page.evaluate(PLANLESS_TASKS)),
+    };
+  } finally {
+    await page.close();
+  }
+}
+
 /** Main's conversation as the page shows it, at each step of a clear. */
 interface ClearedVerdict {
   /** The dialog's alert after Clear was pressed while a turn ran; null if the dialog closed without one. */
@@ -1414,26 +1467,18 @@ const CLEAR_ANSWERED = `document.querySelector('[role="dialog"] [role="alert"]')
 
 const CHAT_HOLDS_ASK = `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(CLEARED_TURN_ASK)})`;
 
-async function pressInDialog(page: Page, words: string): Promise<void> {
-  await page.$$eval('[role="dialog"] button', (buttons, label) => {
-    const button = buttons.find((each) => each.textContent?.trim() === label);
-
-    if (button instanceof HTMLElement) button.click();
-  }, words);
-}
-
 /** Presses Clear Main and Clear, and reads the dialog once the server has answered: its alert, or null once it
  *  closed. A refused dialog is then cancelled, since a notice left standing ends every later wait. */
 async function pressClearMain(page: Page): Promise<string | null> {
   await page.hover('nav[aria-label="Chats"] [data-agent-tab="main"] a');
   await page.click('nav[aria-label="Chats"] [data-agent-tab="main"] button[aria-label="Clear Main"]');
   await until(page, 'the Clear Main dialog', `document.querySelector('[role="dialog"]') !== null`);
-  await pressInDialog(page, 'Clear');
+  await pressButton(page, '[role="dialog"] button', 'Clear');
   await page.waitForFunction(CLEAR_ANSWERED);
   const refusal = v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] [role="alert"]')?.textContent ?? null`));
 
   if (refusal !== null) {
-    await pressInDialog(page, 'Cancel');
+    await pressButton(page, '[role="dialog"] button', 'Cancel');
     await page.waitForFunction(`document.querySelector('[role="dialog"]') === null`);
   }
 
@@ -1496,7 +1541,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 /** A row a file can run, by the name its log line carries, in the order the suite ran them. */
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
-  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'state',
+  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -1518,7 +1563,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null, planTabs: null, geometry: null,
-    controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, state: null,
+    controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -1546,7 +1591,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
       ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
-      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planWalkthrough(request));
+      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
       const { newPage, origin } = app;
@@ -1576,6 +1621,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'mid-thought': async () => { observed.midThought = await attempt('mid-thought', () => measureMidThought(newPage, origin)); },
         'dropped-file': async () => { observed.droppedFile = await attempt('dropped-file', () => measureDroppedFile(newPage, origin)); },
         'cleared': async () => { observed.cleared = await attempt('cleared', () => measureCleared(newPage, origin, clearedHeld)); },
+        'plan-tasks': async () => { observed.planTasks = await attempt('plan-tasks', () => measurePlanTasks(newPage, origin)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
       };
 

@@ -367,6 +367,69 @@ export function toldBackTurn(request: ScriptedRequest, heard: (request: Scripted
   return { text: TOLD_BACK_ANSWER };
 }
 
+/* ── The plan's own tasks ──────────────────────────────────────────────── */
+
+/** The handoff an approval enqueues names the approved plan; only a decision puts it in the conversation. */
+const APPROVAL_TEXT = /approved plan/i;
+
+/** The plan-tasks row's asks: a chore before any plan exists, then the plan itself, sent on a Plan turn. */
+export const PLAN_TASKS_CHORE = 'Plan tasks probe: note the old chore before any plan.';
+
+export const PLAN_TASKS_PLAN = 'Plan tasks probe: plan the guard fix.';
+
+/** What the plan-tasks row's turns add: a chore before the plan, then the approved plan's step, its subtask, and a
+ *  step added from a program. */
+export const PLAN_TASK_TITLES = {
+  chore: 'Sweep the old logs', step: 'Guard the segment read', sub: 'Cover the guest cart', programmed: 'Ship the guard fix',
+} as const;
+
+const PLAN_TASKS_MARKDOWN = ['# Guard the segment read', '', '1. Guard the read.', '2. Cover the guest cart.', '3. Ship it.'].join('\n');
+
+/** The ids a native `tasks` add answers with. */
+const TasksAddedSchema = v.pipe(v.string(), v.parseJson(), v.looseObject({ added: v.array(v.looseObject({ id: v.string() })) }));
+
+/** The approved plan's build turn: the step, its subtask under the id the step was given, then a step from a program. */
+function planTasksBuild(request: ScriptedRequest): ScriptedAnswer {
+  const adds = request.turn.filter((call) => call.name === 'tasks');
+  const [first] = adds;
+
+  if (first === undefined) return { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.step] } } };
+
+  if (adds.length === 1) {
+    const step = v.safeParse(TasksAddedSchema, first.result);
+    const parent = step.success ? step.output.added[0]?.id : undefined;
+
+    if (parent === undefined) return { text: `The step's id was not in its answer: ${first.result}` };
+
+    return { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.sub], parent } } };
+  }
+
+  if (!request.turn.some((call) => call.name === 'eval')) {
+    return { toolCall: { name: 'eval', arguments: { code: `// Add the last step\nawait tasks.add([${JSON.stringify(PLAN_TASK_TITLES.programmed)}]);\nreturn 'added';` } } };
+  }
+
+  return { text: 'Implemented the approved plan.' };
+}
+
+/** The plan-tasks row's turns, or null for any other request. */
+export function planTasksProbe(request: ScriptedRequest): ScriptedAnswer | null {
+  if (request.available.length === 0 || !request.userTexts.some((text) => text.includes('Plan tasks probe'))) return null;
+  const last = request.userTexts.at(-1) ?? '';
+  const done = (name: string) => request.turn.some((call) => call.name === name);
+
+  if (last.includes(PLAN_TASKS_CHORE)) {
+    return done('tasks') ? { text: 'Noted.' } : { toolCall: { name: 'tasks', arguments: { action: 'add', titles: [PLAN_TASK_TITLES.chore] } } };
+  }
+
+  if (last.includes(PLAN_TASKS_PLAN)) {
+    if (done('submit_plan') || !request.available.includes('submit_plan')) return { text: 'The plan is ready for your review.' };
+
+    return { toolCall: { name: 'submit_plan', arguments: { edits: [{ start: 1, content: PLAN_TASKS_MARKDOWN }] } } };
+  }
+
+  return APPROVAL_TEXT.test(last) ? planTasksBuild(request) : null;
+}
+
 /* ── The plan walkthrough ──────────────────────────────────────────────── */
 
 /** The mission the walkthrough is driven with, sent on a Plan turn. */
@@ -439,8 +502,6 @@ const SLATE_WRITES: readonly ScriptedAnswer[] = [
     toolCall: { name: 'file', arguments: { action: 'write', path: `${SLATE_ROOT}/server.ts`, content: SLATE_SERVER } },
   },
 ];
-
-const APPROVAL_TEXT = /approved plan/i;
 
 /**
  * The walkthrough the README's film records and the live-app tier asserts:
