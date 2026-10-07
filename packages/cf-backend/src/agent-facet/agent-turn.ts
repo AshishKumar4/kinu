@@ -5,7 +5,7 @@ import {
   type AuthRequest, type AuthResolution, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type ObservedCall, type ProviderEnv, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
-  type SubordinateReportStatus, type TaskTurnEnding, type WorkMode,
+  type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile, type DynamicContext,
 } from '@kinu.run/core';
 
 import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
@@ -30,10 +30,15 @@ export interface AgentWorkspace {
   guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>): ReturnType<MissionBudgetPort['guard']>;
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>): Promise<void>;
   prepareTurn(turnId: string): Promise<PreparedAgentTurn>;
+  /** The profile the agent assembled its turn on; answers the live block on it. */
+  bindProfile(turnId: string, profile: ResolvedTurnProfile): Promise<DynamicContext>;
   /** A null id reads one between turns. */
   prepareChat(request: ChatTurnRequest): Promise<PreparedAgentTurn>;
   chatEvent(event: SessionEvent): Promise<void>;
-  owedReport(turnId: string, ending: TaskTurnEnding, assistantText: string, narration: readonly string[]): Promise<OwedReport | null>;
+  owedReport(
+    turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean },
+    ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] },
+  ): Promise<OwedReport | null>;
   parentReport(report: {
     readonly text: string; readonly status: SubordinateReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
   }): Promise<string>;
@@ -166,6 +171,7 @@ function workspaceTools(
         });
 
         turn.live.dynamic = answer.dynamic;
+        turn.database.recordReports(turn.id, answer.reports);
         turn.capture.evidence.push(...answer.captured.evidence);
         turn.capture.decisions.push(...answer.captured.decisions);
         turn.capture.artifacts.push(...answer.captured.artifacts);
@@ -248,6 +254,8 @@ export function facetTurnSources(turn: {
     attachmentBudget: actor.session.orchestrator.acc.context,
     extensions: () => [compaction.extension],
     dynamic: () => () => turn.live.dynamic,
+    // The workspace answers tools and the live block on the profile assembled here.
+    settle: async (profile) => { turn.live.dynamic = await turn.workspace.bindProfile(turn.turnId, profile); },
     taskPlan: () => null,
     operation: (profile, inputs) => captureOperationProfile({ actor: actor.handle, profile, inputs, runId: turn.runId, turnId: turn.turnId }),
   });

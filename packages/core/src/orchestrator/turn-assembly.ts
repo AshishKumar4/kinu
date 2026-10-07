@@ -78,13 +78,13 @@ export interface TurnAssemblySources {
   dynamic(turn: { readonly memoryTail: string | undefined; readonly activeSkills: ActiveSkillSet | null }): ActorExecutionInput['dynamic'];
   operation(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile;
   /** Binds the resolved profile; `toolset` is read again after it. */
-  settle?(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void;
+  settle?(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void | Promise<void>;
   /** A run's brief in place of its role's section. */
   brief?(callable: readonly string[]): { readonly id: string; readonly label: string; readonly instructions: string };
 }
 
 /** A one-shot run brings its tools and brief; the actor brings the rest. */
-export type RunTurnSources = Omit<TurnAssemblySources, 'toolset' | 'externalTools' | 'wiredToolNames' | 'codemodeCapabilities' | 'settle' | 'brief'>;
+export type RunTurnSources = Omit<TurnAssemblySources, 'toolset' | 'externalTools' | 'wiredToolNames' | 'codemodeCapabilities' | 'brief'>;
 
 export function vfsTurnSkills(vfs: VFS, config: TurnSkillsConfig, trust: InstructionTrustResolver): TurnAssemblySources['skills'] {
   return (userText, roleSkills, limits) => resolveTurnSkills({ vfs, config, userText, roleSkills, trust, limits });
@@ -122,16 +122,36 @@ export function promptCacheKey(affinity: string, conversation: string): string {
   return `${affinity}:${conversation}`;
 }
 
+/** What a turn is before its tools are known, resolved once: the bundle a facet is sent and the turn it assembles
+ *  read the same choices. Neither the tier nor a role's imposed mode depends on the tools. */
+interface TurnDraft {
+  readonly profileInputs: ProfileAuthorityInputs;
+  readonly ancestors: readonly PinnedProfile[];
+  readonly choices: ReturnType<typeof ownProfileChoices>;
+  readonly roleSkills: readonly string[];
+  readonly drafted: ResolvedTurnProfile;
+  readonly served: string;
+  readonly limits: ModelWindow;
+}
+
+async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'config' | 'ancestors' | 'models'>, request: TurnAssemblyRequest): Promise<TurnDraft> {
+  const profileInputs = await sources.profileInputs();
+  const ancestors = sources.ancestors?.() ?? [];
+  const choices = ownProfileChoices(sources.config, profileInputs, ancestors.length === 0 ? undefined : ancestors, request.explicitTier === undefined ? {} : { explicitTier: request.explicitTier });
+  const drafted = resolveAgentTurnProfile({ ...profileInputs, ...choices, workMode: request.workMode, availableTools: [], activeSkills: [] });
+  const served = sources.models.normalize(request.model ?? drafted.tier.model);
+
+  return {
+    profileInputs, ancestors, choices, drafted, served,
+    roleSkills: effectiveRoleCatalog(profileInputs.envelope.catalog)[choices.activeRoleId]?.skills ?? [],
+    limits: sources.models.catalog.window(served),
+  };
+}
+
 /** Effect-free: a measure between turns assembles too. */
 export async function assembleActorTurn(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<AssembledTurn> {
   const { models } = sources;
-  const profileInputs = await sources.profileInputs();
-  const choices = ownProfileChoices(sources.config, profileInputs, sources.ancestors?.(), request.explicitTier === undefined ? {} : { explicitTier: request.explicitTier });
-  const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[choices.activeRoleId]?.skills ?? [];
-  // Neither tier nor imposed mode depends on the tools.
-  const drafted = resolveAgentTurnProfile({ ...profileInputs, ...choices, workMode: request.workMode, availableTools: [], activeSkills: [] });
-  const served = models.normalize(request.model ?? drafted.tier.model);
-  const limits = models.catalog.window(served);
+  const { profileInputs, choices, roleSkills, drafted, served, limits } = await draftTurn(sources, request);
 
   const { available: availableSkills, activeSkills } = await sources.skills(request.userText, roleSkills, limits);
 
@@ -152,7 +172,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   });
 
   const operation = sources.operation(profile, profileInputs);
-  sources.settle?.(profile, profileInputs);
+  await sources.settle?.(profile, profileInputs);
   const allowed = new Set(profile.allowedTools);
   const { workMode } = profile;
   // Read again: the resolved mode may be narrower, and a settled profile rebuilds its tools.
@@ -162,7 +182,8 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const invocable = toolsForInvocation(workMode, withToolText(callable, artifacts.tools));
   const tools = withOperationProfile(taskPlan === null ? invocable : withTaskPlan(invocable, taskPlan), operation);
   const externalTools = allowed.has('eval') ? pick(external, allowed) : {};
-  const spec = models.normalize(request.model ?? profile.tier.model);
+  // The tier never depends on the tools, so the drafted model is the served one.
+  const spec = served;
   const { pinned, invoked } = splitTurnSkills(activeSkills);
 
   const [window, agentsMd, soul, identity, memoryTail] = await Promise.all([
@@ -299,13 +320,7 @@ export interface TurnSourcesBundle {
 
 export async function materializeTurnSources(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<TurnSourcesBundle> {
   const { models } = sources;
-  const profileInputs = await sources.profileInputs();
-  const ancestors = sources.ancestors?.() ?? [];
-  const choices = ownProfileChoices(sources.config, profileInputs, ancestors.length === 0 ? undefined : ancestors, request.explicitTier === undefined ? {} : { explicitTier: request.explicitTier });
-  const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[choices.activeRoleId]?.skills ?? [];
-  const { tier, workMode } = resolveAgentTurnProfile({ ...profileInputs, ...choices, workMode: request.workMode, availableTools: [], activeSkills: [] });
-  const served = models.normalize(request.model ?? tier.model);
-  const limits = models.catalog.window(served);
+  const { profileInputs, ancestors, roleSkills, drafted: { tier, workMode }, served, limits } = await draftTurn(sources, request);
   const specs = [served, ...tier.fallbacks.map((fallback) => models.normalize(fallback.model))];
   await models.catalog.warm(specs);
 

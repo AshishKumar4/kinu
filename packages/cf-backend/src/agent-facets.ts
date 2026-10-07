@@ -6,7 +6,7 @@ import { decodeModelMessageValues, relayedAnswer, remoteContextTree } from '@kin
 import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
-import type { AdvisorRecoverySnapshot, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TaskTurnEnding, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
+import type { AdvisorRecoverySnapshot, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -62,8 +62,9 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   reportModelCall(report: ModelCallReport) { return this.answers.reportModelCall(report); }
   reportModelOperation(event: ModelOperationEvent) { return this.answers.reportModelOperation(event); }
   prepareChat(request: ChatTurnRequest) { return this.answers.prepareChat(request); }
+  bindProfile(turnId: string, profile: ResolvedTurnProfile) { return this.answers.bindProfile(turnId, profile); }
   chatEvent(event: SessionEvent) { return this.answers.chatEvent(event); }
-  owedReport(turnId: string, ending: TaskTurnEnding, assistantText: string, narration: readonly string[]) { return this.answers.owedReport(turnId, ending, assistantText, narration); }
+  owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.answers.owedReport(...args); }
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.answers.parentReport(report); }
   autoTitle(subject: string) { return this.answers.autoTitle(subject); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.answers.hireAdvisor(advisor); }
@@ -135,8 +136,9 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   reportModelCall(report: ModelCallReport) { return relayedAnswer(this.host().reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return relayedAnswer(this.host().reportModelOperation(event)); }
   prepareChat(request: ChatTurnRequest) { return relayedAnswer(this.host().prepareChat(request)); }
+  bindProfile(turnId: string, profile: ResolvedTurnProfile) { return relayedAnswer(this.host().bindProfile(turnId, profile)); }
   chatEvent(event: SessionEvent) { return relayedAnswer(this.host().chatEvent(event)); }
-  owedReport(turnId: string, ending: TaskTurnEnding, assistantText: string, narration: readonly string[]) { return relayedAnswer(this.host().owedReport(turnId, ending, assistantText, narration)); }
+  owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return relayedAnswer(this.host().owedReport(...args)); }
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return relayedAnswer(this.host().parentReport(report)); }
   autoTitle(subject: string) { return relayedAnswer(this.host().autoTitle(subject)); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return relayedAnswer(this.host().hireAdvisor(advisor)); }

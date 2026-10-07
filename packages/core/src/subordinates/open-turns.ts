@@ -47,8 +47,21 @@ export class AgentWakes {
       ON CONFLICT(actor_id) DO UPDATE SET wake_at = MIN(wake_at, excluded.wake_at)`;
   }
 
-  takeDue(now: number): readonly string[] {
-    return this.sql<{ actor_id: string }>`DELETE FROM agent_wakes WHERE wake_at <= ${now} RETURNING actor_id`.map((row) => row.actor_id);
+  /** Due wakes, moved to `until` before any is dispatched: a reset before the agent answers wakes it again then. */
+  lease(now: number, until: number): readonly string[] {
+    return this.sql<{ actor_id: string }>`UPDATE agent_wakes SET wake_at = ${until} WHERE wake_at <= ${now} RETURNING actor_id`.map((row) => row.actor_id);
+  }
+
+  /** The agent answered a wake leased until `until` with the next instant it owes, or none. An arm since keeps the sooner. */
+  settle(actorId: string, until: number, next: number | null): void {
+    if (next === null) {
+      void this.sql`DELETE FROM agent_wakes WHERE actor_id = ${actorId} AND wake_at = ${until}`;
+
+      return;
+    }
+
+    void this.sql`INSERT INTO agent_wakes (actor_id, wake_at) VALUES (${actorId}, ${next})
+      ON CONFLICT(actor_id) DO UPDATE SET wake_at = CASE WHEN wake_at = ${until} THEN excluded.wake_at ELSE MIN(wake_at, excluded.wake_at) END`;
   }
 
   next(): number | null {

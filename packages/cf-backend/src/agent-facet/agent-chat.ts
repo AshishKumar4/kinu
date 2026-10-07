@@ -1,6 +1,6 @@
 /** A non-main agent's chat in its own isolate (D9). */
 import {
-  CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, TerminalTransitions,
+  CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   assembleActorTurn, chatTerminalEffects, chatTurnParts, declareTerminalRoster, planHandoffStillOwed, projectJsonValue,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   type ActorTurnLease, type ChatTurnInput, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -33,6 +33,9 @@ export class FacetChat {
 
   private read: PreparedAgentTurn | null = null;
 
+  /** Whether the turn running answers the agent's hirer (a delegated task), not its owner. */
+  private parentDriven = false;
+
   private activeSkills: readonly string[] = [];
 
   private terminalTransitions: TerminalTransitions | null = null;
@@ -62,7 +65,11 @@ export class FacetChat {
         composeRequest: () => this.composeRequest(),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         answerMetadata: async (turnId, texts) => await workspace.answerMetadata(turnId, await texts()),
-        owedReport: async (ending, assistantText, narration) => await workspace.owedReport(this.session.currentTurnId ?? '', ending, assistantText, await narration()),
+        // What the turn already told its hirer is the agent's own record, so a reset of the workspace cannot repeat it.
+        owedReport: async (ending, assistantText, narration) => await workspace.owedReport(
+          { reports: this.deps.database.reports(this.session.currentTurnId ?? ''), ownerDriven: !this.parentDriven },
+          { ending, assistantText, narration: await narration() },
+        ),
         terminal: () => this.terminal,
         holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
         driverGate: () => null,
@@ -90,14 +97,20 @@ export class FacetChat {
       ...bundle,
       toolset: () => tools,
       externalTools: async () => ({}),
-      ...(bind !== undefined && { settle: bind }),
+      // A measure between turns binds nothing: no turn is open to bind it to.
+      settle: async (profile, inputs) => {
+        if (bind === undefined) return;
+        await bind(profile, inputs);
+        await bundle.settle?.(profile, inputs);
+      },
     }, asked);
   }
 
   private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     const { actor, database, workspace } = this.deps;
     const mode = actor.session.workMode;
-    const prepared = await workspace.prepareChat({ turnId: lease.turnId, mode, userText: item.text, parentDriven: item.kind === 'programmatic' });
+    this.parentDriven = item.kind === 'programmatic';
+    const prepared = await workspace.prepareChat({ turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven });
 
     database.prepare(lease.turnId, prepared);
 
@@ -189,10 +202,14 @@ export class FacetChat {
 
   /** An eviction leaves the effects owed; the workspace's wake re-drives them. */
   private holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void {
+    // Removed only once added: a close that settles at once must not leave a settled promise behind for `idle` to spin on.
     const closing: Promise<unknown> = hold(attempt({ doing: "closing an agent's settled turn", otherwise: 'io' }, close).pipe(
       Effect.catch((failure) => Effect.promise(() => this.terminal.closeFailed(transition, { cause: failure }))),
-      Effect.ensuring(Effect.sync(() => { this.closing.delete(closing); })),
-    ));
+    )).then((exit) => {
+      this.closing.delete(closing);
+
+      return exit;
+    });
 
     this.closing.add(closing);
   }
@@ -206,17 +223,35 @@ export class FacetChat {
     await this.spend.settled();
   }
 
-  wake(): Promise<void> {
+  /** Every wake re-arms what is still owed, so an effect still closing when it fires keeps a wake after it. */
+  wake(): Promise<AgentOwed> {
     return settle(attempt({ doing: "resuming what an agent's isolate owed", otherwise: 'unavailable' }, async () => {
       this.session.reclaimStrandedEventDeliveries();
       await this.terminal.releaseParked();
-      await this.terminal.resumeAll((transition, close) => { this.holdTerminalClose(transition, close); });
+      await this.terminal.replayOwedAndRearm((transition, close) => { this.holdTerminalClose(transition, close); });
       await this.session.flushPendingDrains();
     }).pipe(
       Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('agent.wake_failed', failure); })),
       Effect.ensuring(Effect.sync(() => { this.session.pump(); })),
+      Effect.map(() => this.owed()),
     ));
   }
+
+  /** A turn running or queued, or effects still closing, is looked at again a lap later. */
+  private owed(): AgentOwed {
+    const busy = this.session.turnOwed || this.closing.size > 0 || this.terminal.hasIncomplete();
+    const next = Math.min(this.terminal.nextRetryAt() ?? Infinity, busy ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : Infinity);
+
+    return { next: Number.isFinite(next) ? next : null, turnId: this.session.pumping ? this.session.currentTurnId : null };
+  }
+}
+
+/** What an agent's isolate still owes, as a wake answers it. */
+export interface AgentOwed {
+  /** The next instant to wake it; null when it owes nothing. */
+  readonly next: number | null;
+  /** The turn its chat is running. */
+  readonly turnId: string | null;
 }
 
 function request(item: ChatTurnInput, mode: WorkMode): TurnAssemblyRequest {

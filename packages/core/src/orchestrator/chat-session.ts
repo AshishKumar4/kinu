@@ -34,7 +34,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import type { Usage } from '../usage';
-import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
+import { announcementOf, authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
 import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
@@ -117,8 +117,9 @@ interface QueueItem {
   yieldsToUserMessage?: boolean;
   /** Re-opened under its own ids, its prior output re-entered ahead of the remaining calls. */
   continuation?: TurnContinuation;
-  /** Exactly once, and told whether the turn ran: a failure must reach the producer, the only one who can put things back. */
-  settle: (failure: KinuError | null, yielded?: boolean) => void;
+  /** Exactly once, and told whether the turn ran: a failure must reach the producer, the only one who can put things back.
+   *  `abandoned` names why an opened turn ended before it could answer. */
+  settle: (failure: KinuError | null, yielded?: boolean, abandoned?: string) => void;
 }
 
 interface TurnContinuation {
@@ -318,6 +319,9 @@ export class ChatSession {
   private readonly taskReminders = new TaskReminders();
   /** Drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];
+
+  /** Producers waiting on an announcement already running or queued. */
+  private readonly joiners = new Map<string, ((result: EnqueueTurnResult) => void)[]>();
   private pumpActive = false;
   /** The only record that an item is being said for the whole length of a turn. */
   private runningAnnouncement: string | null = null;
@@ -424,7 +428,10 @@ export class ChatSession {
     // During shutdown: 'skipped' sends the caller down its durable path; the next run drains it.
     if (this.ended) return Promise.resolve({ status: 'skipped' });
 
-    if (input.idempotencyKey !== undefined && this.hasAnnounced(input.idempotencyKey)) {
+    // The same announcement running or queued answers when that turn does, so a caller never takes it as done early.
+    if (input.idempotencyKey !== undefined && this.announcementInFlight(input.idempotencyKey)) return this.joinAnnounced(input.idempotencyKey);
+
+    if (input.idempotencyKey !== undefined && this.announcementOnDisk(input.idempotencyKey)) {
       return Promise.resolve({ status: 'queued' });
     }
 
@@ -435,15 +442,7 @@ export class ChatSession {
       metadata: input.metadata,
       kind: 'programmatic',
       // The signal seam compensates on anything but 'queued'. 'yielded' is consumed: nothing is retried.
-      settle: (failure, yielded) => {
-        if (yielded === true) {
-          resolve({ status: 'yielded' });
-
-          return;
-        }
-
-        resolve({ status: failure ? 'skipped' : 'queued' });
-      },
+      settle: (failure, yielded, abandoned) => { resolve(settledAnnouncement(failure, yielded, abandoned)); },
     };
 
     if (input.idempotencyKey !== undefined) item.idempotencyKey = input.idempotencyKey;
@@ -463,9 +462,23 @@ export class ChatSession {
     return promise;
   }
 
-  /** Durable table (cold activation), queue (same activation), or the running key (mid-turn). */
-  private hasAnnounced(identity: string): boolean {
-    return this.announcementInFlight(identity) || this.announcementOnDisk(identity);
+  /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
+  private settleItem(item: QueueItem, failure: KinuError | null, yielded?: boolean, abandoned?: string): void {
+    item.settle(failure, yielded, abandoned);
+
+    if (item.idempotencyKey === undefined) return;
+    const result = settledAnnouncement(failure, yielded, abandoned);
+
+    for (const joined of this.joiners.get(item.idempotencyKey) ?? []) joined(result);
+    this.joiners.delete(item.idempotencyKey);
+  }
+
+  private joinAnnounced(identity: string): Promise<EnqueueTurnResult> {
+    const joined = Promise.withResolvers<EnqueueTurnResult>();
+
+    this.joiners.set(identity, [...this.joiners.get(identity) ?? [], joined.resolve]);
+
+    return joined.promise;
   }
 
   announcementInFlight(identity: string): boolean {
@@ -824,7 +837,7 @@ export class ChatSession {
 
         if (refusal) {
           diagnostics.event('driver.turn_deferred', { kind: item.kind, reason: refusal.reason });
-          item.settle(refusedLanding(refusal));
+          this.settleItem(item, refusedLanding(refusal));
           continue;
         }
 
@@ -832,7 +845,7 @@ export class ChatSession {
           diagnostics.event('turn.no_longer_owed', {
             signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
           });
-          item.settle(null, true);
+          this.settleItem(item, null, true);
           continue;
         }
 
@@ -844,19 +857,20 @@ export class ChatSession {
             signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
           });
           this.actorSession.orchestrator.logActivity('genesis.yielded_to_message');
-          item.settle(null, true);
+          this.settleItem(item, null, true);
           continue;
         }
 
         this.runningAnnouncement = item.idempotencyKey ?? null;
         let failure: KinuError | null = null;
+        let abandoned: string | null = null;
 
         let opened: OpenedTurn | null = null;
 
         try {
           const opening = await this.openTurn(item);
           opened = opening;
-          await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening));
+          abandoned = await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening));
         } catch (err) {
           diagnostics.failure(
             'turn.processing_failed',
@@ -868,7 +882,7 @@ export class ChatSession {
         } finally {
           await this.flushEvents();
           this.runningAnnouncement = null;
-          item.settle(failure);
+          this.settleItem(item, failure, undefined, abandoned ?? undefined);
         }
       }
     } finally {
@@ -949,7 +963,8 @@ export class ChatSession {
     return { event, mode, turnId: this.turnId, runId: this.runId };
   }
 
-  private async runOpenedTurn(item: QueueItem, { event, mode, turnId, runId }: OpenedTurn): Promise<void> {
+  /** Null once the turn answered; the reason when it ended before it could. */
+  private async runOpenedTurn(item: QueueItem, { event, mode, turnId, runId }: OpenedTurn): Promise<string | null> {
     const startedAt = Date.now();
     // A re-opened turn continues its run; only a new turn opens one.
 
@@ -976,6 +991,8 @@ export class ChatSession {
 
     try {
       await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, lease)));
+
+      return null;
     } catch (error) {
       const message = renderThrownChain({ cause: error });
       const interrupted = lease.signal.aborted;
@@ -984,6 +1001,8 @@ export class ChatSession {
       this.closeRun(classifyRunEnd({ completed: false, interrupted, errorText: message.slice(0, 500) }), lease);
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
+
+      return interrupted ? null : message;
     } finally {
       // Detached lanes retain the runtime profile of the turn they belong to.
       this.actorSession.finishTurn(lease);
@@ -1390,7 +1409,7 @@ export class ChatSession {
       settle: () => {},
     };
 
-    if (turn.kind === 'programmatic') item.idempotencyKey = turn.turnId.slice(PROGRAMMATIC_MESSAGE_ID_PREFIX.length);
+    if (turn.kind === 'programmatic') item.idempotencyKey = announcementOf(turn.turnId);
     this.reopened = turn.pendingSendId ?? null;
     this.reopenedTurnId = turn.turnId;
     this.reopenedRunId = runId;
@@ -1493,6 +1512,15 @@ interface RenderedFailure {
   readonly failure: string | null;
   /** As the turn's run records it. */
   readonly runError: string | null;
+}
+
+/** What a programmatic announcement's producer is told when its turn settles. */
+function settledAnnouncement(failure: KinuError | null, yielded: boolean | undefined, abandoned: string | undefined): EnqueueTurnResult {
+  if (yielded === true) return { status: 'yielded' };
+
+  if (failure !== null) return { status: 'skipped' };
+
+  return abandoned === undefined ? { status: 'queued' } : { status: 'failed', reason: abandoned };
 }
 
 function renderedFailure(cause: Error | null): RenderedFailure {

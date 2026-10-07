@@ -28,7 +28,8 @@ import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
+import { attempt, diagnostics, hold, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
+import { Cause, Exit } from 'effect';
 import { BUILTIN_TOOL_NAMES, type BuiltinToolName } from '../tools/registry';
 import { assembleActorTurn, withCompactionTrigger, type RunTurnSources, type TurnAssemblySources } from '../orchestrator/turn-assembly';
 import type { CompactionTriggerReader } from '../orchestrator/turn-context';
@@ -387,10 +388,6 @@ export interface HeadInferenceDeps {
   actor: HostedActor;
   /** Every turn is claimed under this run id, so a recovered re-admission is a new epoch of the same turn. */
   runId: string;
-  delegation?: {
-    readonly assignmentId: string;
-    readonly birthContext: readonly ModelMessage[];
-  };
   /** The run brings only its tools and its brief (orchestrator/turn-assembly.ts). */
   sources: RunTurnSources;
   compaction: { readonly state: CompactionTriggerReader & CompactionTriggerState; readonly key: string };
@@ -431,9 +428,8 @@ export interface HeadInferenceDeps {
 }
 
 
-function runTurnSources(deps: HeadInferenceDeps, refused: (refusal: MissionBudgetRefusal) => void): TurnAssemblySources {
-  const { mission, brief } = deps;
-  const gate = mission === undefined ? undefined : missionGate(mission);
+function runTurnSources(deps: HeadInferenceDeps, gate: ReturnType<typeof missionGate> | undefined, refused: (refusal: MissionBudgetRefusal) => void): TurnAssemblySources {
+  const { brief } = deps;
 
   const guard = async (seam: MissionSeam): Promise<MissionBudgetRefusal | null> => {
     const ruled = await gate?.guard(seam) ?? null;
@@ -452,6 +448,14 @@ function runTurnSources(deps: HeadInferenceDeps, refused: (refusal: MissionBudge
     codemodeCapabilities: () => [],
     ...(brief !== undefined && { brief: (callable: readonly string[]) => ({ id: 'run', label: 'Your task', instructions: brief(callable) }) }),
   };
+}
+
+async function lastCharge(gate: ReturnType<typeof missionGate> | undefined, id: string): Promise<KinuError | undefined> {
+  if (gate === undefined) return undefined;
+  const doing = `charge agent ${id}'s last step to its mission`;
+  const charged = await hold(attempt({ doing, otherwise: 'unavailable' }, () => gate.settled()));
+
+  return Exit.isFailure(charged) ? toKinuError({ doing, cause: Cause.squash(charged.cause), otherwise: 'unavailable' }) : undefined;
 }
 
 /** Null ends the run. */
@@ -660,11 +664,11 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // Bridged before the first await, so a cancel during seed restore still interrupts.
   const unbridgeCancel = bridgeCancel(deps.signal, session);
 
-  if (deps.delegation) await session.restoreWorkingHistory();
-  else await session.restoreHistory(seed);
+  await session.restoreHistory(seed);
   const conversation: ModelMessage[] = [];
 
-  const sources = runTurnSources(deps, (ruled) => { refusal ??= ruled; });
+  const gate = deps.mission === undefined ? undefined : missionGate(deps.mission);
+  const sources = runTurnSources(deps, gate, (ruled) => { refusal ??= ruled; });
 
   /** A stream that died before its first step settles nothing; half a conversation is worse than none. */
   let settled = false;
@@ -705,7 +709,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       if (deps.isAborted()) break;
 
       // Derived, not minted: a recovered activation re-admits the same turn under the next epoch.
-      const turnId = deps.delegation?.assignmentId ?? input.id;
+      const turnId = input.id;
 
       const lease = session.beginTurn(
         { runId: deps.runId, turnId: index === 0 ? turnId : `${turnId}#${index}` },
@@ -713,11 +717,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       );
 
       try {
-        if (index === 0 && deps.delegation) {
-          const { birthContext } = deps.delegation;
-          await session.openDelegatedTurn(lease, { messages: seed, birthContext: async () => birthContext });
-        }
-
         // Per turn: a promotion or a moved profile lands between turns.
         const assembled = await assembleActorTurn(sources, { userText: input.task, workMode: input.mode, ...(input.model !== undefined && { model: input.model }) });
         session.bindProfile(lease, assembled.profile, assembled.profileInputs);
@@ -776,6 +775,9 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   } finally {
     unbridgeCancel();
   }
+
+  // Joined on every path: a run never settles past a step its mission has not been charged for.
+  failure ??= await lastCharge(gate, input.id);
 
   if (settled) failure = reportConversation(deps, input, conversation, failure);
 

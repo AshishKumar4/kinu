@@ -44,7 +44,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
 import {
-  AgentOpenTurns, AgentWakes, PROGRAMMATIC_MESSAGE_ID_PREFIX, TERMINAL_EFFECT_RETRY_BASE_MS, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
+  AgentOpenTurns, AgentWakes, PROGRAMMATIC_MESSAGE_ID_PREFIX, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -230,8 +230,8 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { Cause, Effect } from 'effect';
-import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { Cause, Effect, Exit } from 'effect';
+import { attempt, authoredRefusal, classify, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { ownerContainer, type CodexContainer } from "./egress/codex-egress-route";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
@@ -720,6 +720,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (turnId === null) await calls.interruptChat(snapshot);
         else await calls.interrupt(snapshot, turnId);
       },
+      chatOwed: async (reference) => await (await this.agentCalls(reference.actorId)).owed(this.agentSnapshot(reference.actorId)),
+      chatIdle: async (reference) => { await (await this.agentCalls(reference.actorId)).idle(); },
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
     });
@@ -756,11 +758,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),
       prepareTurn: (turnId) => this.agentTurns.prepare(actorId, turnId),
       prepareChat: (request) => this.agentTurns.prepareChat(actorId, request),
+      bindProfile: async (turnId, profile) => this.agentTurns.bindProfile(actorId, turnId, profile),
       chatEvent: (event) => this.hostedChatEvent(actorId, event),
-      owedReport: async (turnId, ending, assistantText, narration) => await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), {
-        reports: this.agentTurns.reports(actorId, turnId) ?? { spoke: false, settled: false },
-        ownerDriven: this.agentTurns.ownerDriven(actorId, turnId),
-      }, { ending, assistantText, narration }),
+      // The turn's report disposition is the agent's own, kept where the turn ran.
+      owedReport: async (turn, ended) => await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), turn, ended),
       parentReport: (report) => hostedParentReport(this.hostedSeams(), this.agentBound(actorId), report),
       autoTitle: (subject) => hostedAutoTitle(this.hostedSeams(), this.agentBound(actorId), subject),
       hireAdvisor: async (advisor) => {
@@ -768,10 +769,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         await session.hireAdvisor(advisor);
       },
-      armWake: async (atMs) => {
-        new AgentWakes(this.boundSql).arm(actorId, atMs);
-        await this.scheduleTerminalRetry(atMs);
-      },
+      armWake: (atMs) => this.armAgentWake(actorId, atMs),
       birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.boundExec(), this.agentBound(actorId).handle), drainTurnId),
       steerSkills: async (text, alreadyActive) => await steerSkillsBlock({
         vfs: this.rt.storage.vfs,
@@ -838,22 +836,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async hostedChatEvent(actorId: string, event: SessionEvent): Promise<void> {
-    const opened = event.type === 'turn-start' ? { actorId, turnId: event.turnId } : null;
-
-    // A reset of this workspace wakes the agent to finish it.
-    if (opened !== null) {
-      this.agentTurns.chatOpened(actorId, opened.turnId);
-      new AgentOpenTurns(this.boundSql).open(opened, Date.now());
-    }
+    if (event.type === 'turn-start') this.agentTurns.chatOpened(actorId, event.turnId);
 
     await this.chatRooms.hostedRoom(actorId)?.deliver(event);
 
     if (event.type !== 'turn-end') return;
-    const turnId = this.agentTurns.currentTurn(actorId);
-
     this.agentTurns.chatClosed(actorId);
-
-    if (turnId !== null) new AgentOpenTurns(this.boundSql).close({ actorId, turnId });
 
     if (!this.liveActor(actorId)) return;
     recordAgentFigures(this.boundSql, actorId, await (await this.agentCalls(actorId)).figures(this.agentSnapshot(actorId)));
@@ -902,9 +890,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override async agentTurnSettled(actor: ActorReference): Promise<void> {
-    await this.agentTurns.settled(actor.actorId);
-
-    if (this.liveActor(actor.actorId)) await (await this.agentCalls(actor.actorId)).idle();
+    if (this.liveActor(actor.actorId)) await this.agentTurns.settled(actor.actorId);
   }
 
   protected override currentTurnOf(reference: ActorReference): string | null {
@@ -1495,7 +1481,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         for (const pending of log.pending({ variant: 'subordinate_task' })) log.dismiss(pending.id, 'stopped by the owner', 'system');
 
-        if (this.agentTurns.inFlight(actor.actorId)) {
+        if (await this.agentTurns.holdsTurn(actor.actorId)) {
           await this.agentTurns.beforeRetirement(actor.actorId, true);
           continue;
         }
@@ -1592,42 +1578,42 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const swept = await drainAssignments(log, {
       now: Date.now(), budget: 1, staleMs: STALE_EVENT_DELIVERY_MS,
-      // Answered once the agent's chat processed it; a reset mid-turn re-drives it under the same key.
+      // The lease closes once the agent's chat has run the task to its end; a turn its isolate lost re-drives under the
+      // same key, and the agent's chat joins a run of it still in flight rather than answering early.
       run: async (task) => {
+        // Open until the agent answers: a workspace reset meanwhile recovers the agent's claims from this row.
         const openTurns = new AgentOpenTurns(this.boundSql);
         const opened = { actorId: record.actorId, turnId: task.sequenceId };
 
         openTurns.open(opened, Date.now());
+        await this.armAgentWake(record.actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
 
-        const turnId = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${task.sequenceId}`;
-
-        try {
-          const admitted = await (await this.agentCalls(record.actorId)).enqueue(this.agentSnapshot(record.actorId), {
+        const handed = await hold(attempt({ doing: "handing a delegated task to the agent's own chat", otherwise: 'unavailable' },
+          () => this.agentTurns.handOff(record.actorId, async () => await (await this.agentCalls(record.actorId)).enqueue(this.agentSnapshot(record.actorId), {
             text: task.body,
             metadata: { ...delegatedTaskMetadata(this.hirerName(record), task.mode), drainTurnId: task.turnId },
             idempotencyKey: task.sequenceId,
-          });
+          }))));
 
-          if (!this.liveActor(record.actorId)) return;
+        openTurns.close(opened);
 
-          if (admitted.status === 'skipped') await this.hireCouldNotRun(record, reference, task, `its chat could not open the turn`);
+        if (!this.liveActor(record.actorId)) return;
+
+        if (Exit.isFailure(handed)) {
+          const lost = toKinuError({ doing: "handing a delegated task to the agent's own chat", cause: Cause.squash(handed.cause), otherwise: 'unavailable' });
+
+          // Its chat heard the task open, and its isolate died under it; any other loss repeats on every re-drive.
+          if (this.agentTurns.currentTurn(record.actorId) === `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${task.sequenceId}`) return await this.redriveLostHire(record, task, log, lost);
+          await this.hireCouldNotRun(record, reference, task, renderThrownChain({ cause: lost }));
           log.markTurnCompleted(task.turnId);
-        } catch (cause) {
-          const lostMidTurn = this.liveActor(record.actorId) && this.agentTurns.currentTurn(record.actorId) === turnId;
 
-          // An isolate that never opened the turn cannot run it.
-          if (this.liveActor(record.actorId) && !lostMidTurn) {
-            await this.hireCouldNotRun(record, reference, task, renderThrownChain({ cause }));
-            log.markTurnCompleted(task.turnId);
-
-            return;
-          }
-
-          if (lostMidTurn) await this.recoverLostHire(record, task.sequenceId, log);
-          throw cause;
-        } finally {
-          openTurns.close(opened);
+          return;
         }
+
+        const { status, reason } = handed.value;
+
+        if (status === 'failed' || status === 'skipped') await this.hireCouldNotRun(record, reference, task, reason ?? 'its chat could not open the turn');
+        log.markTurnCompleted(task.turnId);
 
         // Released first: a drain armed on this session would fire against the release and keep its transcript
         // until then. Mid-turn reports, a reset's re-run too, go to the durable wake, which reopens the agent.
@@ -1649,15 +1635,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     diagnostics.failure('subordinate.delegated_turn_failed', new KinuError('io', reason), { workspace: this.name, actor: record.name });
     await relayHostedReport(this.hostedSeams(), this.actorHost().bindStores(reference), {
       status: 'blocked', content: `${record.name} failed to run its assigned turn: ${reason}`,
-      origin: 'turn_end', mode: task.mode, sequenceId: task.sequenceId,
+      origin: 'turn_end', mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
     });
   }
 
-  private async recoverLostHire(record: WorkspaceActor, sequenceId: string, log: EventLog): Promise<void> {
+  /** A hand-off its isolate lost: the agent's claims decide. One stalled twice retires with a blocked report, any other
+   *  re-drives; an isolate that cannot load cannot run the task, and its hirer is told so. */
+  private async redriveLostHire(record: WorkspaceActor, task: { readonly sequenceId: string; readonly mode: WorkMode; readonly turnId: string }, log: EventLog, lost: KinuError): Promise<void> {
     this.agentTurns.chatClosed(record.actorId);
+    const recovered = await hold(attempt({ doing: 'recovering an agent whose hand-off was lost', otherwise: 'io' }, () => this.recoverAgent(record.actorId, [task.sequenceId])));
 
-    if (await this.recoverAgent(record.actorId, [sequenceId])) return;
-    log.unbind(sequenceId);
+    if (Exit.isFailure(recovered)) {
+      await this.hireCouldNotRun(record, actorReferenceOf(record), task, renderThrownChain({ cause: lost }));
+      log.markTurnCompleted(task.turnId);
+
+      return;
+    }
+
+    if (recovered.value) return;
+    diagnostics.failure('subordinate.delegated_turn_lost', lost, { workspace: this.name, actor: record.name });
+    log.unbind(task.sequenceId);
     this.delegatedTurns.start([record]);
   }
 
@@ -1671,38 +1668,62 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     for (const turn of open.openedBefore(this.activationStartedAt)) byAgent.set(turn.actorId, [...byAgent.get(turn.actorId) ?? [], turn]);
 
-    return settle(Effect.forEach([...byAgent], ([actorId, turns]) => attempt(
+    return settle(Effect.forEach([...byAgent], ([actorId, turns]) => logged(
+      'subordinate.agent_recovery_failed',
       { doing: "recovering the turns an agent's own isolate held when the workspace reset", otherwise: 'io' },
       async () => {
         await this.recoverAgent(actorId, []);
 
-        if (this.liveActor(actorId) && isSubordinateOrigin(this.liveAgentOf(actorId).origin)) {
-          await (await this.agentCalls(actorId)).wake(this.agentSnapshot(actorId));
-        }
+        // Its chat takes up the turn it held; the ledger keeps a wake until it answers that it owes nothing.
+        if (isSubordinateOrigin(this.liveAgentOf(actorId).origin)) await this.wakeAgent(actorId, this.leaseAgentWake(actorId));
 
         for (const turn of turns) open.close(turn);
       },
-    ).pipe(Effect.catch((failure) => Effect.sync(() => {
-      diagnostics.failure('subordinate.agent_recovery_failed', failure, { workspace: this.name, actor: actorId });
-    }))), { discard: true }));
+      { workspace: this.name, actor: actorId },
+    ), { discard: true }));
   }
 
-  /** A facet sets no alarm, so this pass is its wake; detached, so the wake's job never waits on it. */
+  /** A wake held a lap ahead while it is sent: a reset before the agent answers wakes it again then. */
+  private leaseAgentWake(actorId: string): number {
+    const until = Date.now() + RECOVERY_BACKOFF_CEILING_MS;
+
+    new AgentWakes(this.boundSql).arm(actorId, until);
+
+    return until;
+  }
+
+  private async wakeAgent(actorId: string, until: number): Promise<void> {
+    const owed = await (await this.agentCalls(actorId)).wake(this.agentSnapshot(actorId));
+
+    if (owed.turnId !== null) this.agentTurns.chatOpened(actorId, owed.turnId);
+    new AgentWakes(this.boundSql).settle(actorId, until, owed.next);
+    await this.scheduleTerminalRetry(owed.next ?? until);
+  }
+
+  /** A facet sets no alarm, so this pass is its wake; detached, so the wake's job never waits on it. Each due wake is
+   *  leased a lap ahead before it is sent, and settled only on the agent's answer: the next instant it owes, or none. */
   private async wakeDueAgents(): Promise<void> {
     const wakes = new AgentWakes(this.boundSql);
-    const lap = Date.now() + TERMINAL_EFFECT_RETRY_BASE_MS;
+    const until = Date.now() + RECOVERY_BACKOFF_CEILING_MS;
+    const leased = wakes.lease(Date.now(), until);
 
-    for (const actorId of wakes.takeDue(Date.now())) {
-      if (!this.liveActor(actorId)) continue;
+    if (leased.length > 0) await this.scheduleTerminalRetry(until);
 
-      this.detachOwned(attempt({ doing: "waking an agent's own isolate for what it owes", otherwise: 'io' },
-        async () => { await (await this.agentCalls(actorId)).wake(this.agentSnapshot(actorId)); },
-      ).pipe(Effect.catch((failure) => Effect.promise(async () => {
-        diagnostics.failure('subordinate.agent_wake_failed', failure, { workspace: this.name, actor: actorId });
-        wakes.arm(actorId, lap);
-        await this.scheduleTerminalRetry(lap);
-      }))));
+    for (const actorId of leased) {
+      if (!this.liveActor(actorId)) {
+        wakes.settle(actorId, until, null);
+        continue;
+      }
+
+      this.detachOwned(logged('subordinate.agent_wake_failed', { doing: "waking an agent's own isolate for what it owes", otherwise: 'io' },
+        () => this.wakeAgent(actorId, until), { workspace: this.name, actor: actorId }));
     }
+  }
+
+  /** Owed from the agent's admission until it answers a wake, so a send its isolate never reached is not lost. */
+  private async armAgentWake(actorId: string, atMs: number): Promise<void> {
+    new AgentWakes(this.boundSql).arm(actorId, atMs);
+    await this.scheduleTerminalRetry(atMs);
   }
 
   private async recoverAgent(actorId: string, turnIds: readonly string[]): Promise<boolean> {
@@ -2155,6 +2176,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return actor?.handle.actorId === actorId ? actor.entry.actorReference : null;
   }
 
+  protected override async hostedAdmit(actorId: string, input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<void> {
+    await whenActorTakesInput(this.boundSql, actorId, async () => {
+      await this.armAgentWake(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
+      await (await this.agentCalls(actorId)).admit(this.agentSnapshot(actorId), { text: input.text, files: input.files }, { id: input.id, mode: input.mode });
+    });
+  }
+
   protected override hostedChatWire(actorId: string): ChatWire | null {
     const reference = this.hostedReference(actorId);
 
@@ -2170,7 +2198,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
       history: (limit) => this.agentStores(actorId).history(limit),
       admitted: (id) => this.agentStores(actorId).admitted(id),
-      send: (input) => whenActorTakesInput(this.boundSql, actorId, async () => await (await facet()).send(snapshot(), { text: input.text, files: input.files }, { id: input.id, mode: input.mode })),
+      send: (input) => whenActorTakesInput(this.boundSql, actorId, async () => {
+        await this.armAgentWake(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
+
+        return await (await facet()).send(snapshot(), { text: input.text, files: input.files }, { id: input.id, mode: input.mode });
+      }),
       retry: (claim) => whenActorTakesInput(this.boundSql, actorId, async () => await (await facet()).retry(snapshot(), claim)),
       interrupt: () => {
         this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));

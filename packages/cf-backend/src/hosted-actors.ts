@@ -585,7 +585,8 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
       const mission = seams.mission(head);
 
       return mission === null || spec === null ? mission
-        : { ...mission, port: { ...mission.port, debit: (tokens, opts) => mission.port.debit(tokens, { ...opts, spec }) } };
+        // The serving model prices a step: a fallback that took over names itself.
+        : { ...mission, port: { ...mission.port, debit: (tokens, opts) => mission.port.debit(tokens, { ...opts, spec: opts.spec ?? spec }) } };
     },
     reportStep: (headId, seq, step) => seams.recordStep(headId, seq, step),
     reportDelta: seams.publishDelta,

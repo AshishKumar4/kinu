@@ -1957,7 +1957,7 @@ export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor
 
 export {
   restoredRows, rowText, transcriptRole,
-  PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
+  PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
 export type { TurnAuthor } from './utils/ui-message';

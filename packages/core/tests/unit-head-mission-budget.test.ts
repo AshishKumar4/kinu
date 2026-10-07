@@ -246,3 +246,49 @@ describe('a declared budget reaches the head mid-flight', () => {
     ledger.db.close();
   });
 });
+
+describe("a run's last step is charged before the run settles", () => {
+  /** A port whose debits wait on `answer`: a guard answers at once, a charge when released. */
+  function deferredPort() {
+    const answer = Promise.withResolvers<void>();
+    let debits = 0;
+
+    const port: MissionBudgetPort = {
+      guard: async () => null,
+      debit: async () => {
+        debits++;
+        await answer.promise;
+      },
+    };
+
+    return { port, answer, debits: () => debits };
+  }
+
+  test('a one-step head returns only once its last charge lands', async () => {
+    const { port, answer, debits } = deferredPort();
+    let returned = false;
+
+    const running = runHead({ labels: ['mission:last'], port }, { stopAfter: 0 }).then((ran) => {
+      returned = true;
+
+      return ran;
+    });
+
+    while (debits() === 0) await Promise.resolve().then(() => new Promise((resolve) => { setImmediate(resolve); }));
+    expect(returned).toBe(false);
+
+    answer.resolve();
+    expect((await running).report.status).toBe('completed');
+  });
+
+  test('a last charge that fails fails the run, rather than settling it uncharged', async () => {
+    const { port, answer } = deferredPort();
+
+    answer.reject(new Error('the mission ledger refused the write'));
+
+    const { report } = await runHead({ labels: ['mission:last'], port }, { stopAfter: 0 });
+
+    expect(report.status).toBe('errored');
+    expect(report.errorMessage).toContain('the mission ledger refused the write');
+  });
+});

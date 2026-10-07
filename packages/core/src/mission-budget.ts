@@ -460,7 +460,7 @@ export interface SpendGate {
 }
 
 /** A debit lands before the next guard reads the ledger. */
-export function missionGate(mission: MissionScope): SpendGate {
+export function missionGate(mission: MissionScope): SpendGate & { settled(): Promise<void> } {
   let charged: Promise<void> = Promise.resolve();
 
   return {
@@ -470,6 +470,8 @@ export function missionGate(mission: MissionScope): SpendGate {
       return await mission.port.guard(seam, mission.labels);
     },
     debit: (tokens, opts) => { charged = charged.then(() => mission.port.debit(tokens, { ...opts, labels: mission.labels })); },
+    // A run's last debit has no next guard to wait on it: the run joins it before it settles, failures included.
+    settled: () => charged,
   };
 }
 

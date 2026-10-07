@@ -10,10 +10,10 @@ import {
   readAgentFigures, NO_FIGURES, type AgentFigures,
   localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
-  type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor,
+  type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes,
-  initPendingSendTables, initTerminalEffectTable, PendingSendStore,
+  initPendingSendTables, initTerminalEffectTable, PendingSendStore, announcementOf, classifyRunEnd, closeTurnRun,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
@@ -124,6 +124,11 @@ export class AgentDatabase {
     });
     initPendingSendTables((ddl) => { storage.sql.exec(ddl); });
     initTerminalEffectTable((ddl) => { storage.sql.exec(ddl); });
+    storage.sql.exec(`CREATE TABLE IF NOT EXISTS agent_turn_reports (
+      turn_id TEXT PRIMARY KEY,
+      spoke   INTEGER NOT NULL,
+      settled INTEGER NOT NULL
+    )`);
   }
 
   /** Writes only when the workspace's rows changed, so a read of an unchanged agent writes nothing. */
@@ -382,8 +387,18 @@ export class AgentDatabase {
       },
     });
 
+    // A stalled turn's run is closed, so the agent's chat does not take it up a third time when it next opens.
+    for (const turn of recovered.stalled) {
+      const { eventRecorder } = (await host.acquire(turn.reference)).stores;
+      const open = eventRecorder.openTurn();
+
+      if (open?.turn.turnId !== turn.claim.turnId) continue;
+      closeTurnRun(eventRecorder, open.runId, { turnIndex: 0, ...classifyRunEnd({ completed: false, interrupted: false, errorText: `stalled after ${String(turn.claim.epoch)} runs` }) });
+    }
+
+    // Named for the hirer's assignment row the turn answered, which its retirement dismisses.
     return {
-      stalled: recovered.stalled.map((turn) => ({ turnId: turn.claim.turnId, runs: turn.claim.epoch, workMode: turn.claim.workMode })),
+      stalled: recovered.stalled.map((turn) => ({ turnId: announcementOf(turn.claim.turnId), runs: turn.claim.epoch, workMode: turn.claim.workMode })),
     };
   }
 
@@ -409,6 +424,19 @@ export class AgentDatabase {
     const { actor, transcript } = this.readable();
 
     return transcript.has(id) || new PendingSendStore(this.sql, actor.actorId).has(id);
+  }
+
+  /** What a turn has told its hirer, kept as its tools answered: only ever more. */
+  recordReports(turnId: string, reports: SubordinateReportLedger): void {
+    if (!reports.spoke) return;
+    void this.sql`INSERT INTO agent_turn_reports (turn_id, spoke, settled) VALUES (${turnId}, 1, ${reports.settled ? 1 : 0})
+      ON CONFLICT(turn_id) DO UPDATE SET spoke = 1, settled = MAX(settled, excluded.settled)`;
+  }
+
+  reports(turnId: string): SubordinateReportLedger {
+    const row = this.sql<{ settled: number }>`SELECT settled FROM agent_turn_reports WHERE turn_id = ${turnId}`[0];
+
+    return row === undefined ? { spoke: false, settled: false } : { spoke: true, settled: row.settled === 1 };
   }
 
   interrupt(turnId: string): void {

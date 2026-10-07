@@ -14,7 +14,7 @@ import {
 } from '@kinu.run/core';
 import { AgentDatabase } from './agent-database';
 import { runAgentTask, type AgentWorkspace } from './agent-turn';
-import { FacetChat } from './agent-chat';
+import { FacetChat, type AgentOwed } from './agent-chat';
 import type {
   AgentRecovery, AgentSnapshot, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
 } from '@kinu.run/core';
@@ -75,9 +75,12 @@ export interface AgentFacetCalls {
   /** Answered once its chat has processed it. */
   enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding>;
+  /** Resolves once its chat has reserved the words, not when they land. */
+  admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void>;
   retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding>;
   interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]>;
-  wake(snapshot: AgentSnapshot): Promise<void>;
+  /** What a reset left owed is taken up; answers the next instant the agent owes and the turn its chat holds. */
+  wake(snapshot: AgentSnapshot): Promise<AgentOwed>;
   owed(snapshot: AgentSnapshot): Promise<boolean>;
   /** A retirement waits on it. */
   idle(): Promise<void>;
@@ -178,6 +181,12 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await session.send(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
   }
 
+  async admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void> {
+    const { session } = await this.chatOf(snapshot);
+
+    await session.admit(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
+  }
+
   async retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding> {
     return await (await this.chatOf(snapshot)).session.retry(claim);
   }
@@ -186,8 +195,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return (await this.chatOf(snapshot)).session.interrupt();
   }
 
-  async wake(snapshot: AgentSnapshot): Promise<void> {
-    await (await this.chatOf(snapshot)).wake();
+  async wake(snapshot: AgentSnapshot): Promise<AgentOwed> {
+    return await (await this.chatOf(snapshot)).wake();
   }
 
   async owed(snapshot: AgentSnapshot): Promise<boolean> {

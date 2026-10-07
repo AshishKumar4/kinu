@@ -4,7 +4,7 @@ import { hold, KinuError, logged, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
   AgentOpenTurns, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
-  BUILTIN_TOOL_NAMES,
+  BUILTIN_TOOL_NAMES, announcementOf,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type Executor,
 } from '@kinu.run/core';
@@ -17,6 +17,9 @@ export interface AgentTurnsDeps {
   reference(actorId: string): ActorReference;
   run(reference: ActorReference, task: AgentTurnTask): Promise<AgentTurnEnd>;
   interrupt(reference: ActorReference, turnId: string | null): Promise<void>;
+  /** The agent's own chat answers for itself: whether it holds a turn, running or queued, and once it holds none. */
+  chatOwed(reference: ActorReference): Promise<boolean>;
+  chatIdle(reference: ActorReference): Promise<void>;
   pricing(spec: string): ModelPricing | null;
   accounts(): Readonly<Record<string, string>>;
 }
@@ -48,7 +51,11 @@ async function describe(tools: ToolSet): Promise<AgentToolDescriptor[]> {
 export class AgentTurns {
   private readonly open = new Map<string, OpenTurn>();
 
+  /** Each agent's chat turn as its room last heard it: a view for the overview, never an authority. */
   private readonly chats = new Map<string, string>();
+
+  /** Tasks handed to an agent's chat and not yet answered: its actor stays held while one is out. */
+  private readonly handing = new Map<string, number>();
 
   private readonly waiting = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
 
@@ -112,11 +119,7 @@ export class AgentTurns {
     this.waiting.delete(turn.reference.actorId);
   }
 
-  private running(actorId: string): string | null {
-    const chat = this.chats.get(actorId);
-
-    if (chat !== undefined) return chat;
-
+  private runOf(actorId: string): string | null {
     for (const [turnId, turn] of this.open) {
       if (turn.reference.actorId === actorId && turn.request.run !== undefined) return turnId;
     }
@@ -124,42 +127,74 @@ export class AgentTurns {
     return null;
   }
 
+  private running(actorId: string): string | null {
+    return this.chats.get(actorId) ?? this.runOf(actorId);
+  }
+
   inFlightAny(): boolean {
     return this.chats.size > 0 || [...this.open.values()].some((turn) => turn.request.run !== undefined);
   }
 
   inFlight(actorId: string): boolean {
-    return this.running(actorId) !== null;
+    return this.running(actorId) !== null || (this.handing.get(actorId) ?? 0) > 0;
   }
 
-  async settled(actorId: string): Promise<void> {
-    if (!this.inFlight(actorId)) return;
-    const waiting = this.waiting.get(actorId) ?? Promise.withResolvers<void>();
+  async handOff<A>(actorId: string, work: () => Promise<A>): Promise<A> {
+    this.handing.set(actorId, (this.handing.get(actorId) ?? 0) + 1);
 
-    this.waiting.set(actorId, waiting);
-    await waiting.promise;
-  }
+    try {
+      return await work();
+    } finally {
+      const left = (this.handing.get(actorId) ?? 1) - 1;
 
-  async idle(): Promise<void> {
-    while (this.inFlightAny()) {
-      const actors = new Set([...this.chats.keys(), ...[...this.open.values()].map((turn) => turn.reference.actorId)]);
-
-      await Promise.all([...actors].map((actorId) => this.settled(actorId)));
+      if (left > 0) this.handing.set(actorId, left);
+      else this.handing.delete(actorId);
     }
   }
 
-  async interrupt(actorId: string): Promise<void> {
-    const turnId = this.running(actorId);
+  /** Its runs have ended and its own chat holds nothing. */
+  async settled(actorId: string): Promise<void> {
+    if (this.runOf(actorId) !== null) {
+      const waiting = this.waiting.get(actorId) ?? Promise.withResolvers<void>();
 
-    if (turnId !== null) await this.deps.interrupt(this.deps.reference(actorId), this.chats.has(actorId) ? null : turnId);
+      this.waiting.set(actorId, waiting);
+      await waiting.promise;
+    }
+
+    await this.deps.chatIdle(this.deps.reference(actorId));
+  }
+
+  /** Each agent's chat is asked once, as it answers for itself; runs are waited out, since a run may start another. */
+  async idle(): Promise<void> {
+    await Promise.all([...this.chats.keys()].map((actorId) => this.deps.chatIdle(this.deps.reference(actorId))));
+
+    for (let runs = this.runActors(); runs.length > 0; runs = this.runActors()) await Promise.all(runs.map((actorId) => this.settled(actorId)));
+  }
+
+  private runActors(): string[] {
+    return [...new Set([...this.open.values()].filter((turn) => turn.request.run !== undefined).map((turn) => turn.reference.actorId))];
+  }
+
+  /** The chat is asked whatever the view says: a workspace that reset since its turn began has no view of it. */
+  async interrupt(actorId: string): Promise<void> {
+    const reference = this.deps.reference(actorId);
+    const run = this.runOf(actorId);
+
+    if (run !== null) await this.deps.interrupt(reference, run);
+    await this.deps.interrupt(reference, null);
   }
 
   currentTurn(actorId: string): string | null {
     return this.running(actorId);
   }
 
+  /** Whether the agent holds a turn: a run this workspace started, or its own chat's, as the chat says. */
+  async holdsTurn(actorId: string): Promise<boolean> {
+    return this.runOf(actorId) !== null || await this.deps.chatOwed(this.deps.reference(actorId));
+  }
+
   async beforeRetirement(actorId: string, interrupt: boolean): Promise<void> {
-    if (!this.inFlight(actorId)) return;
+    if (!await this.holdsTurn(actorId)) return;
 
     if (interrupt) return await this.interrupt(actorId);
 
@@ -203,7 +238,7 @@ export class AgentTurns {
 
     const turn: OpenTurn = {
       reference: this.deps.reference(actorId),
-      request: { sequenceId: turnId, body: request.userText, mode: request.mode, parentDriven: request.parentDriven },
+      request: { sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven },
       prepared: null,
       profile: null,
     };
@@ -224,7 +259,6 @@ export class AgentTurns {
     turn.prepared = prepared;
     const { actor, input } = prepared.turn;
 
-    turn.profile = (await this.deps.seams().profile({ actor, availableTools: Object.keys(prepared.tools), workMode: turn.request.mode })).profile;
     const version = await actor.runtime.identity.scaffold.version();
 
     const scaffold = this.scaffold(actor, version);
@@ -273,16 +307,14 @@ export class AgentTurns {
     return settleSync(Effect.fail(new KinuError('missing', "The agent's selected scaffold has no stored version.")));
   }
 
-  ownerDriven(actorId: string, turnId: string): boolean {
-    const turn = this.open.get(turnId);
+  /** The profile the agent's isolate assembled the turn on: the workspace's tools and live block read it, never a
+   *  resolution of their own. Answers the live block on it. */
+  bindProfile(actorId: string, turnId: string, profile: ResolvedTurnProfile): DynamicContext {
+    const turn = this.turn(actorId, turnId);
 
-    return turn !== undefined && turn.reference.actorId === actorId && !turn.request.parentDriven;
-  }
+    turn.profile = profile;
 
-  reports(actorId: string, turnId: string): PreparedHostedTurn['turn']['reports'] | null {
-    const turn = this.open.get(turnId);
-
-    return turn !== undefined && turn.reference.actorId === actorId ? turn.prepared?.turn.reports ?? null : null;
+    return this.dynamic(turn, this.prepared(turn));
   }
 
   async advise(actorId: string, { turnId, turn: completed, reachable, mode }: AgentReview): Promise<void> {
@@ -361,6 +393,7 @@ export class AgentTurns {
         childHeadIds: capture.childHeadIds.slice(before.childHeadIds),
       },
       dynamic: this.dynamic(turn, prepared),
+      reports: { ...prepared.turn.reports },
     };
   }
 }

@@ -1850,6 +1850,9 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Null when this workspace hosts no such actor; only the workspace root knows its directory. */
   protected abstract hostedChatWire(actorId: string): ChatWire | null;
 
+  /** An owner's words to an agent, resolved once its chat has reserved them, as the root's `admit` is. */
+  protected abstract hostedAdmit(actorId: string, input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<void>;
+
   protected abstract hostedWindowName(actorId: string): string | null;
 
   /** Fires for any actor's connection; the root's sleep-time closed-tab trigger overrides both hooks. */
@@ -3445,10 +3448,8 @@ export abstract class ActorAgent extends Agent<Env> {
       const window = this.addressedActor();
 
       if (window !== null) {
-        const wire = this.hostedChatWire(window);
-
-        if (wire === null) return yield* new KinuError('missing', `${window} is not an agent of this workspace`);
-        yield* Effect.promise(async () => wire.send({ text, files: attachments, id, mode: workMode }));
+        if (this.hostedChatWire(window) === null) return yield* new KinuError('missing', `${window} is not an agent of this workspace`);
+        yield* Effect.promise(async () => this.hostedAdmit(window, { text, files: attachments, id, mode: workMode }));
 
         return;
       }

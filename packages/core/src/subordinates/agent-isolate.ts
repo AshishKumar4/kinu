@@ -9,6 +9,7 @@ import type { JsonObject, JsonValue } from '../utils/json';
 import type { ModelPricing } from '../providers/types';
 import type { WorkMode } from '../types/turn';
 import type { TurnSourcesBundle } from '../orchestrator/turn-assembly';
+import type { SubordinateReportLedger } from './ingress';
 
 export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | null>>;
 
@@ -96,6 +97,8 @@ export interface AgentToolAnswer {
   readonly output: unknown;
   readonly captured: AgentCaptureDelta;
   readonly dynamic: DynamicContext;
+  /** What the turn has told its hirer by now; the agent keeps it, so a reset of the workspace forgets none of it. */
+  readonly reports: SubordinateReportLedger;
 }
 
 export interface AgentTrace {

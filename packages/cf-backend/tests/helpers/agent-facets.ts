@@ -114,6 +114,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           debit: (...args) => host.debit(...args),
           prepareTurn: (turnId) => host.prepareTurn(turnId),
           prepareChat: (request) => host.prepareChat(request),
+          bindProfile: (turnId, profile) => host.bindProfile(turnId, profile),
           chatEvent: (event) => host.chatEvent(event),
           owedReport: (...args) => host.owedReport(...args),
           parentReport: (report) => host.parentReport(report),
