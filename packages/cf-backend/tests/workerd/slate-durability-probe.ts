@@ -374,6 +374,61 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
+  /** A pane attaching after another left: what it is shown before its terminal says it is ready. */
+  async reattachTerminal(workspace: string): Promise<{ frames: string[]; output: string }> {
+    const socket = await this.terminalSocket(workspace);
+    const frames: string[] = [];
+    let output = '';
+
+    const ready = new Promise<void>((resolve) => {
+      socket.addEventListener('message', (event) => {
+        const parsed = v.safeParse(WorkspaceTerminalOutputSchema, JSON.parse(String(event.data)));
+
+        frames.push(parsed.success ? parsed.output.type : 'other');
+
+        if (parsed.success && parsed.output.type === 'output') output += parsed.output.data;
+
+        if (parsed.success && parsed.output.type === 'ready') resolve();
+      });
+    });
+
+    try {
+      await ready;
+
+      return { frames, output };
+    } finally {
+      socket.close(1000, 'reattach read');
+    }
+  }
+
+  /** Sends `frame` on a fresh terminal socket and answers how the workspace closed it. */
+  async refusedTerminalFrame(workspace: string, frame: string): Promise<{ code: number; reason: string }> {
+    const socket = await this.terminalSocket(workspace);
+
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      socket.addEventListener('close', (event) => { resolve({ code: event.code, reason: event.reason }); });
+    });
+
+    socket.send(frame);
+
+    return await closed;
+  }
+
+  private async terminalSocket(workspace: string): Promise<WebSocket> {
+    const target = await this.workspaceTarget(workspace);
+
+    const response = await target.fetch(new Request(`https://workspace.invalid${WORKSPACE_TERMINAL_PATH}`, {
+      headers: { Upgrade: 'websocket' },
+    }));
+
+    const socket = response.webSocket;
+
+    if (socket === null || socket === undefined) throw new Error(`upgrade refused: ${response.status} ${await response.text()}`);
+    socket.accept();
+
+    return socket;
+  }
+
   async readWorkspaceFile(workspace: string, path: string): Promise<string | null> {
     const target = await this.workspaceTarget(workspace);
     const answer = await target.executeInExecutor('workspace', `cat ${path}`);

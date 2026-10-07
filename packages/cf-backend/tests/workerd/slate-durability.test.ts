@@ -78,6 +78,30 @@ it('the /__rpc surface answers over the durable URL after eviction', async () =>
   expect(await subject().rpcPreview(boot.url, 'ping')).toEqual({ ok: true, value: '{"rows":2}' });
 });
 
+it('a slate URL starts its application once, for a spawn and for cold requests that arrive together', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('cold-once'));
+
+  const boot = await subject().serveSlate({
+    workspace: 'durability-cold', owner: 'durability-owner', id: 'keeper', body: 'keeper-body',
+  });
+
+  // Its spawn started it; a request finds that same application, not a second one.
+  const spawned = await subject().rpcPreview(boot.url, 'evaluation');
+
+  expect(spawned.ok).toBe(true);
+  expect(await subject().rpcPreview(boot.url, 'evaluation')).toEqual(spawned);
+  await abortAllDurableObjects();
+
+  // Cold: two RPC calls and a page at once all reach one application.
+  const [first, second, page] = await Promise.all([
+    subject().rpcPreview(boot.url, 'evaluation'), subject().rpcPreview(boot.url, 'evaluation'), subject().drivePreview(boot.url),
+  ]);
+
+  expect(first.ok).toBe(true);
+  expect(second).toEqual(first);
+  expect(page).toEqual({ status: 200, body: 'keeper-body' });
+});
+
 // #26. The platform can end an activation and keep its facets. The next activation launches the
 // application again under the same facet name with a class of its own, and a running facet does not
 // take a new class: on the platform the object resets ("code was updated"), and here the old
@@ -152,6 +176,21 @@ it('the workspace terminal is the runtime shell: a typed line runs and its outpu
   expect(drive.frames).toContain('ready');
   expect(drive.frames).not.toContain('other');
   expect(drive.output).toContain('shell-23');
+
+  // A pane that attaches after the first left is shown the screen, then told the terminal is ready.
+  const again = await subject().reattachTerminal(workspace);
+
+  expect(again.output).toContain('shell-23');
+  expect(again.frames.at(-1)).toBe('ready');
+  expect(again.frames).not.toContain('other');
+
+  // A frame that is no terminal frame closes its socket as a policy violation; the shell never runs it.
+  for (const frame of [JSON.stringify({ type: 'rpc', id: '1', method: 'exportWorkspaceArchive' }), 'not json']) {
+    const refused = await subject().refusedTerminalFrame(workspace, frame);
+
+    expect(refused.code).toBe(1008);
+    expect(refused.reason).toContain('terminal frame refused');
+  }
 });
 
 it('a node run leaves its log janitor as an alarm the object sleeps on, not a timer it stays awake for', async () => {
