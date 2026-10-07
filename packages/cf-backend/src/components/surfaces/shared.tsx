@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useCallback, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useCallback, useMemo, useState, type ReactNode } from "react";
 import { CaretRightIcon, CopyIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { useAsyncResource } from "@/hooks/use-async-resource";
@@ -6,6 +6,7 @@ import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { findPlaneReferences, isWholeReference, MAX_LINES_PER_FILE, SLATE_LINK, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
+import { ephemeralSlateId, slateUiSegments, type SlateUiSegment } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -112,6 +113,41 @@ export function SlateLink({ id }: { id: string }) {
 
   // Spans only — this renderer runs inside the markdown <p>.
   return <span className="block my-2"><InlineSlate id={id} rpc={inline.rpc} display="inline" /></span>;
+}
+
+/** A `<slate-ui>` block of a stored answer, drawn by the same slate path a file slate is; where no slate can be drawn,
+ *  its source, folded. */
+function SlateUiBlock({ messageId, name, html }: { messageId: string; name: string; html: string }) {
+  const inline = useContext(SlateInlineContext);
+
+  if (inline === null) {
+    return (
+      <details className="my-2">
+        <summary className="p-meta p-text-3 cursor-pointer">{name}</summary>
+        <CodeBlock className="language-html">{html}</CodeBlock>
+      </details>
+    );
+  }
+
+  return <InlineSlate id={ephemeralSlateId({ messageId, name })} block={name} rpc={inline.rpc} display="inline" />;
+}
+
+function AnswerSegment({ segment, messageId, stored }: { segment: SlateUiSegment; messageId: string; stored: boolean }) {
+  if (segment.kind === "text" || (segment.kind === "open" && stored)) return <MarkdownContent content={segment.text} />;
+
+  // Its page is read from the stored answer, so until the answer is stored it is a quiet line.
+  if (segment.kind === "open" || !stored) {
+    return <div data-slate-ui-pending={segment.name} aria-label={`Drawing ${segment.name}`} className="my-2 h-8 rounded-md p-recessed animate-pulse" />;
+  }
+
+  return <SlateUiBlock messageId={messageId} name={segment.name} html={segment.html} />;
+}
+
+/** An answer's text with its `<slate-ui>` blocks drawn in place. */
+export function AnswerText({ text, messageId, stored }: { text: string; messageId: string; stored: boolean }) {
+  const segments = useMemo(() => slateUiSegments(text), [text]);
+
+  return <>{segments.map((segment, index) => <AnswerSegment key={index} segment={segment} messageId={messageId} stored={stored} />)}</>;
 }
 
 // Local mdast slice: importing `mdast` types for two plugins is heavier than the plugins.

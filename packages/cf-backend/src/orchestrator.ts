@@ -134,7 +134,7 @@ import {
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
-  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork,
+  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock,
   readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -4441,6 +4441,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.armDurableWake();
       },
       previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
+      // The root's own answers; the page runs with the root's authority in the mode its next turn runs in.
+      messageBlock: async (address) => {
+        const answer = await this.chatTranscript.project(address.messageId);
+        const { html } = addressedBlock(answer?.role === 'assistant' ? answer.content : '', address);
+
+        return { html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
+      },
       sharesChanged: async () => {
         this.overviewChanged(true);
 

@@ -296,6 +296,11 @@ export {
   SlateFrameMessageSchema, type SlateHostContext,
 } from './slates/host-context';
 
+export {
+  addressedBlock, ephemeralSlateAddress, ephemeralSlateId, slateUiSegments, SLATE_UI_ATTRIBUTE,
+  type EphemeralSlateAddress, type SlateUiBlock, type SlateUiSegment,
+} from './slates/ui-blocks';
+
 // Cross-workspace experience transfer
 export {
   createExperienceLibrary,

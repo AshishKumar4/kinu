@@ -159,8 +159,12 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     // A durable spawn starts only under a reservation its owner holds.
     if (app !== null) await probeDurableApps(this.facets).ensure({ owner, preferredPort: app.port });
 
+    // The caller's own view, as the host reads it: a file the caller cannot see is one the slate does not hold.
+    const authored = this.vfs.as(cred);
+    const read = (entry: string) => (authored.exists(`${root}/${entry}`) ? authored.readFileString(`${root}/${entry}`) : null);
+
     const boot = {
-      key: crypto.randomUUID(), owner, root, app, cred,
+      key: crypto.randomUUID(), owner, root, read, app, cred,
       globalOutbound: codemodeEgress({ workspace: null, actor: null }),
       project: parseSlateProject(project),
     };

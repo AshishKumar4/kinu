@@ -42,6 +42,8 @@ export interface ResidentSlateBoot {
   readonly owner: string;
   readonly root: string;
   readonly project: SlateProject;
+  /** An authored entry's text, wherever the slate's source keeps it; null for one it does not hold. */
+  readonly read: (entry: string) => string | null;
   /** Set for the durable application (reserved port, owner-pinned facet whose SQLite persists); null spawns a private ephemeral process. */
   readonly app: { readonly port: number } | null;
   /** Whose file plane compiles the authored tree: the caller's, never the origin's on its behalf. */
@@ -340,7 +342,10 @@ function isPageEntry(browser: string): boolean {
   return browser.endsWith('.html');
 }
 
-const PAGE_PREAMBLE = `${IMPORT_MAP}<script type="module">import { fit } from "kinu:slate"; fit();</script>`;
+/** Zero-specificity defaults so a page reads as part of the answer it sits in, until its own styles say otherwise. */
+const PAGE_BASE = ':where(html){background:transparent;color:var(--c-text);font:16px/1.625 var(--font-ui,system-ui,sans-serif)}:where(body){margin:0}';
+
+const PAGE_PREAMBLE = `${IMPORT_MAP}<style>${PAGE_BASE}</style><script type="module">import { fit } from "kinu:slate"; fit();</script>`;
 
 /** The page as written, opened with the import map and kinu:slate's `fit`, so it takes the host's theme and height. A
  *  fragment with no `<html>` is opened in front. */
@@ -516,10 +521,9 @@ export class ResidentSlateProcesses {
       const session = yield* Effect.promise(async () => this.deps.session());
       const main = input.project.main;
       const browser = input.project.browser;
-      const authored = session.vfs.as(input.cred);
 
       for (const [field, entry] of [['main', main], ['browser', browser]] as const) {
-        if (entry !== undefined && !authored.exists(`${input.root}/${entry}`)) {
+        if (entry !== undefined && input.read(entry) === null) {
           return yield* new KinuError('bad_input', `package.json "${field}" names ${entry}, which is not a file in ${input.root}`);
         }
       }
@@ -552,7 +556,7 @@ export class ResidentSlateProcesses {
 
       const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision };
       const application = yield* serverModule(build, input.project);
-      const { assets, shell } = yield* browserSurface(build, input.project, (entry) => authored.readFileString(`${input.root}/${entry}`));
+      const { assets, shell } = yield* browserSurface(build, input.project, (entry) => input.read(entry) ?? '');
 
       const modules = {
         [MAIN_MODULE]: slateRunnerSource(assets, shell, main === undefined ? 'bindings' : 'class'),

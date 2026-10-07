@@ -22,7 +22,7 @@ import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
-import { MarkdownContent, CodeBlock, SlateLink } from "@/components/surfaces/shared";
+import { AnswerText, MarkdownContent, CodeBlock, SlateLink } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { extractPreviewUrl } from "@kinu.run/core";
 import {
@@ -591,7 +591,7 @@ export const MessageView = memo(function MessageView({
       return (
         <div key={key} {...(isTailPart ? { "data-live-indicator": "text" } : {})}
           className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
-          <MarkdownContent content={t} />
+          {message.role === "assistant" ? <AnswerText text={t} messageId={message.id} stored={tail === null} /> : <MarkdownContent content={t} />}
         </div>
       );
     }
