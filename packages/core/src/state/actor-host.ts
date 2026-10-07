@@ -21,6 +21,7 @@ import type { TemporaryAgentPort } from '../types/subordinates';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { decideInterruptedTurn } from '../orchestrator/turn-recovery';
+import type { ReportedTurn } from '../subordinates/turn-reports';
 import { diagnostics, flight, settle, settleSync, toKinuError, type AgentTracing } from '../obs/index';
 
 /** The runtime must be built over this same handle, never a second binding. */
@@ -65,6 +66,8 @@ export interface ActorHostDeps {
   readonly directory: WorkspaceActorDirectory;
   readonly installedBuild: string | null;
   readonly workspace?: string;
+  /** Whether a hosted turn already gave its hirer the report that answers its assignment. */
+  readonly answered?: (turn: ReportedTurn) => boolean;
   runtimeFor(bound: BoundActor): AgentRuntime | Promise<AgentRuntime>;
   filesFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<SessionFilePlane>;
   /** Asked by the host so no hosted actor silently runs the shipped bootstrap loop. */
@@ -226,6 +229,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       return new ActorSession({
         runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
         ...(deps.workspace !== undefined && { workspace: deps.workspace }),
+        ...(deps.answered !== undefined && { answered: deps.answered }),
         turns: tracing && (() => tracing().turns(actor)),
         history: bound.stores.history,
         events: deps.contextEvents(bound),
@@ -487,6 +491,8 @@ export function hostedChildTree(host: Pick<ActorHost, 'bindStores'>, events: (ch
  */
 export function recoverActorTurns(
   host: Pick<ActorHost, 'resumable' | 'installedBuild' | 'workspace'> & {
+    /** Whether a turn already gave its hirer the report that answers its assignment. */
+    readonly answered?: (turn: ReportedTurn) => boolean;
     acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores'> & {
       readonly session: Pick<ActorSession, 'turnOpen'>;
     }>;
@@ -513,6 +519,7 @@ export function recoverActorTurns(
         const verdict = yield* decideInterruptedTurn({
           runtime: actor.runtime, stores: actor.stores, runs: actor.stores.eventRecorder, installedBuild: host.installedBuild,
           workspace: host.workspace ?? '', actor: turn.record.name, runId: turn.claim.runId, claim: turn.claim,
+          ...(host.answered !== undefined && { answered: host.answered }),
           turnOpen: () => actor.session.turnOpen,
         });
 

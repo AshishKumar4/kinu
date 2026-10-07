@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { JsonValueSchema, type JsonValue, WORKSPACE_ROOT } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask, type SeedFile } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
@@ -14,12 +14,12 @@ import { aSwarmRan } from './swarm-runs';
 
 const MISSION = "Fernway's workspace. We run a small invoicing service for our freelancers' clients.";
 
-const PROJECT = '/home/user/invoicing';
+const PROJECT = `${WORKSPACE_ROOT}/invoicing`;
 
 const REPORT = `${PROJECT}/AUDIT.json`;
 
 /** Where the checker writes its probes: outside the project, so nothing of the checker's is the agent's to read. */
-const PROBE = '/home/user/.fernway-checks/probe.mjs';
+const PROBE = `${WORKSPACE_ROOT}/.fernway-checks/probe.mjs`;
 
 // ── The library ──────────────────────────────────────────────────────
 

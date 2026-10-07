@@ -1,23 +1,23 @@
 {
-  "date": "2026-10-06",
+  "date": "2026-10-07",
   "base": "cloudflare/debian-trixie",
   "sandboxVersion": "1.0.0",
   "sandbox": "docker.io/cloudflare/sandbox@sha256:5bc187515bad0d9d486a4f1476f7d8ad39fe97c57965f044e4b0a0dcc93eac06",
-  "rust": "docker.io/library/rust@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d",
   "squashfuse": {
     "url": "https://github.com/vasi/squashfuse/releases/download/0.1.103/squashfuse-0.1.103.tar.gz",
     "sha256": "42d4dfd17ed186745117cfd427023eb81effff3832bab09067823492b6b982e7",
     "driver": "low-level, unmodified upstream"
   },
   "binaries": {
-    "devbox-block-lower": "55533e69ccacc36cf06c041cae615a264c7c952df668950d77147f700d9715e3",
-    "devbox-squashfuse": "2c9f758b480621826d0d40d832512998b74c672fb5e7daaa6205d1e0b030df18",
+    "devbox-block-lower": "5f7b8bf06f0b55ae6625361c29c72b8d2df48cda765ed82196e7a5922d613f20",
+    "devbox-squashfuse": "477158afaa0e965535c168618c44e12a2b5af0189fcd663603fddfbbf67d57e9",
     "sandbox-shim": "a2973893e48d9b80c4ea9d763affdb5ea0135c94ed467716c8e3a57add032d97"
   },
   "files": {
     "Cargo.toml": "e1a269141da13953785f1fbaa6a18edb10cf644fdc9a710858ac02f31e426f83",
-    "Dockerfile": "af66c7231a8e207cd71092caa181907cc6efcbe93317f5da35f0ed9577e63246",
     "Cargo.lock": "42b0f84a3a09ad9cca1e51c35fb750d6fff123ce5c27f99996ced24c98d22109",
+    "tools-setup.sh": "3c85f0df9ef763f63258e34014fa559e6c2e0572b43a4e530488114a74d0254e",
+    "tools-build.sh": "3c301a53661845a20b5f8492b177c99b0ec8616855163bb676db55eb2794448f",
     "src/index.rs": "e26e54ebcc3893d7ba84470512bde960e239aec9ea7c89b05dd66992417961d7",
     "src/main.rs": "3b436f50857187a45ff68f9c5e72366c18c5504a8902b2e2f0dfd81383a0ead6",
     "src/model.rs": "1a9e2ab5d3e08e47e3b8a79cf03f1128ff81ff2a8df07ec42cdac31896f1831d",
@@ -25,7 +25,17 @@
     "src/storage.rs": "39e73d186faabde0724715283eba6c0f2bf2e7132b64e22307351da51ec4d60d"
   },
   "tools": {
-    "sha256": "d1639d063567ce0f6157cd4a294cae9c2454fa78b1de353fe2d789a4a6a5fb51",
-    "bytes": 335860844
+    "sha256": "a3146b2f6533e851fd842e7ec6ebf2c1213c8afbef7973d10f14deb7e138f6d1",
+    "bytes": 335856114
+  },
+  "rust": {
+    "version": "1.93.1",
+    "components": "rustc, cargo and rust-std for x86_64-unknown-linux-gnu and x86_64-unknown-linux-musl from static.rust-lang.org, each pinned by sha256 in tools-setup.sh"
+  },
+  "build": {
+    "base": "cloudflare/debian-trixie",
+    "debian": "snapshot.debian.org 20261002T000000Z",
+    "where": "armada recipe: tools-setup.sh as root, tools-build.sh as the user",
+    "job": "20261007173606-445ff1b2"
   }
 }

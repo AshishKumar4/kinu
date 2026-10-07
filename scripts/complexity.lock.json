@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-07",
-  "files": 3001,
-  "functions": 78655,
+  "files": 2989,
+  "functions": 78883,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -195,10 +195,6 @@
     },
     {
       "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 29
-    },
-    {
-      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
       "complexity": 29
     },
     {

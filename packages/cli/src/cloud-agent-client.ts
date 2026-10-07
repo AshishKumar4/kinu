@@ -5,7 +5,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
   PlanReviewSchema,
-  ChatHistoryEntrySchema,
+  ChatHistoryEntrySchema, SendStateSchema, type SendState,
   ORCHESTRATOR_AGENT_SLUG,
   hostedActorSocketPath,
   decodeJsonValue,
@@ -40,7 +40,7 @@ import {
   type CliSession,
   type CliSessionOptions,
 } from './session';
-import { CloudTurnStream, jsonErrorMessage, TurnStreams } from './cloud-turn-stream';
+import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import { cloudFileLinks, JobOutputFrameSchema, LIVE_READS, READS_CHANGED_EVENT, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
 import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
@@ -49,6 +49,7 @@ import {
   createUserUiMessage,
   findForkPivot,
   readConversation,
+  recordedAnswer,
   promptFiles,
   promptText,
   type AgentChangelogView,
@@ -251,14 +252,16 @@ const SocketFrameSchema = v.objectWithRest({
   error: v.optional(JsonValueSchema),
   body: v.optional(v.string()),
   done: v.optional(v.boolean()),
-  replay: v.optional(v.boolean()),
-  restated: v.optional(v.boolean()),
-  replayComplete: v.optional(v.boolean()),
   landed: v.optional(v.picklist(['mid-turn', 'turn'])),
-  turnId: v.optional(v.string()),
 }, JsonValueSchema);
 
 type SocketFrame = v.InferOutput<typeof SocketFrameSchema>;
+
+/** A send's settled state, and the answer its own turn recorded; none for a splice or a turn that recorded none. */
+interface SendEnd {
+  readonly state: SendState;
+  readonly answer: string | null;
+}
 
 const BranchStatusEventSchema = v.variant('status', [
   v.object({
@@ -326,7 +329,8 @@ export class CloudAgentClient implements AgentClient {
   /** A socket that dies after close() must not reconnect. */
   private closed = false;
   private readonly activeTurns = new Map<string, CloudTurnStream>();
-  private readonly streams = new TurnStreams();
+  /** Turns whose connection dropped, asked of the workspace instead of read off their stream. */
+  private readonly reacquiring = new Set<string>();
   private readonly pendingRpcs = new Map<string, { resolve: (value: JsonValue) => void; reject: (err: Error) => void }>();
   /** Kept visible until the actor confirms its durable cancellation sweep. */
   private readonly stoppingTurnIds = new Set<string>();
@@ -623,22 +627,21 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
+    return readConversation((request) => this.historyPage(request));
+  }
+
+  private async historyPage(request: Parameters<Parameters<typeof readConversation>[0]>[0]): Promise<v.InferOutput<typeof CloudChatPageSchema>> {
     const name = this.subordinateName;
 
-    if (name !== null) {
-      return readConversation(async (page) => {
-        const read = await this.inspectSubordinate({ path: [name], view: 'history', page });
-
-        if (read.view !== 'history') throw new Error(read.view === 'missing' ? read.error : `the conversation read answered "${read.view}"`);
-
-        return read.page;
-      });
+    if (name === null) {
+      return await this.callHttp('getChatHistoryPage', CloudChatPageSchema, [request.cursor === undefined ? {} : { cursor: { before: request.cursor.before } }]);
     }
 
-    return readConversation((request) => this.callHttp(
-      'getChatHistoryPage', CloudChatPageSchema,
-      [request.cursor === undefined ? {} : { cursor: { before: request.cursor.before } }],
-    ));
+    const read = await this.inspectSubordinate({ path: [name], view: 'history', page: request });
+
+    if (read.view !== 'history') throw new Error(read.view === 'missing' ? read.error : `the conversation read answered "${read.view}"`);
+
+    return read.page;
   }
 
   private async ownSnapshot(name: string): Promise<v.InferOutput<typeof ActorSnapshotSchema>> {
@@ -941,15 +944,7 @@ export class CloudAgentClient implements AgentClient {
 
       if (this.ws === ws) this.ws = null;
       this.failPendingRpcs(new Error('Cloud workspace connection closed.'));
-
-      try {
-        await this.rebindInFlightTurns();
-      } catch (cause) {
-        this.failInFlight(new Error(
-          `Could not reconnect to resume this cloud turn: ${renderThrownChain({ cause })}`,
-          { cause },
-        ));
-      }
+      await this.reacquireInFlightTurns();
     };
 
     const droppedConnection = () => detach(Effect.promise(onDrop));
@@ -1025,38 +1020,16 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    // Ack only our own turns, so the DO replays their chunks after a reconnect.
-    if (payload.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && payload.id) {
-      this.resume(payload.id, payload.turnId);
-
-      return;
-    }
-
-    // The DO holds no stream for us, so every turn awaiting rebind is settled there; acking replays its end.
-    if (payload.type === CHAT_MESSAGE_TYPES.STREAM_RESUME_NONE) {
-      for (const [id, turn] of this.activeTurns) {
-        if (turn.awaitingRebind) this.ackResume(id, turn);
-      }
-
-      return;
-    }
-
-    // The DO guarantees a later STREAM_RESUMING or STREAM_RESUME_NONE, so waiting is the handling.
-    if (payload.type === CHAT_MESSAGE_TYPES.STREAM_PENDING) return;
-
     if (payload.type !== CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE || !payload.id) return;
-    const id = this.streams.requestOf(payload.id);
+    const { id } = payload;
     const active = this.activeTurns.get(id);
 
-    if (!active) return;
-    // Read before clearing: the terminal branch needs to know whether anything rebound.
-    const unbound = active.awaitingRebind;
-    active.awaitingRebind = false;
+    // A turn being asked how it ended is not read off its stream.
+    if (!active || this.reacquiring.has(id)) return;
 
     if (payload.error) {
       if (this.stoppingTurnIds.has(id)) return;
       this.activeTurns.delete(id);
-      this.streams.ended(payload.id);
       const body = payload.body ?? '';
       const message = body === '' ? 'Cloud agent stream failed.' : body;
       this.emit({ type: 'error', message });
@@ -1073,39 +1046,18 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    active.apply(payload);
+    active.apply(payload.body);
 
     if (payload.done) {
       if (this.stoppingTurnIds.has(id)) return;
       this.activeTurns.delete(id);
-      this.streams.ended(payload.id);
-
-      // A replayed terminal as the first frame back means nothing rebound; settling it clean would present a
-      // truncated answer as complete.
-      if (payload.replay === true && unbound) {
-        this.emit({
-          type: 'error',
-          message: 'The cloud workspace has no stream to resume for this turn.'
-            + ' Read the workspace transcript before sending it again.',
-        });
-        active.settle(true);
-      } else {
-        active.settle();
-      }
-
-      // The DO went idle: re-probe so a turn still unbound after the drop gets answered.
-      for (const turn of this.activeTurns.values()) {
-        if (!turn.awaitingRebind) continue;
-        this.requestStreamResume();
-        break;
-      }
+      active.settle();
     }
   }
 
   private failInFlight(error: Error): void {
     const active = [...this.activeTurns.values()];
     this.activeTurns.clear();
-    this.streams.clear();
 
     if (active.length > 0) this.emit({ type: 'error', message: error.message });
 
@@ -1122,53 +1074,67 @@ export class CloudAgentClient implements AgentClient {
   }
 
   /**
-   * Rebind, never resubmit: the DO persisted each turn and keeps its stream resumable, so a rebind cannot produce a
-   * second turn. A turn already awaiting rebind made no progress and is reported instead.
+   * A dropped connection ends no turn and is not chased by its stream: each turn's end is asked of the workspace's
+   * durable record (`awaitSend`), again on every new connection, and its answer read from the turn the record names.
+   * The SDK's resume stream restates a turn from its first chunk for `useChat` to replace its message; a terminal cannot
+   * unprint, so following it would need a chunk cursor of its own. A turn being asked stays within Stop's reach.
    */
-  private async rebindInFlightTurns(): Promise<void> {
-    if (this.closed || this.activeTurns.size === 0) return;
+  private async reacquireInFlightTurns(): Promise<void> {
+    const turns = [...this.activeTurns].filter(([id]) => !this.reacquiring.has(id));
 
-    for (const [id, turn] of this.activeTurns) {
-      if (!turn.awaitingRebind) continue;
-      this.activeTurns.delete(id);
-      this.emit({
-        type: 'error',
-        message: 'The cloud workspace connection dropped again before this turn could be resumed.'
-          + ' It is still running there. Its answer lands in the workspace transcript.',
-      });
-      turn.settle(true);
+    for (const [id] of turns) this.reacquiring.add(id);
+    await Promise.allSettled(turns.map(([id, turn]) => this.reacquire(id, turn)));
+  }
+
+  private async reacquire(id: string, turn: CloudTurnStream): Promise<void> {
+    const [ended] = await Promise.allSettled([this.endOf(id)]);
+
+    this.reacquiring.delete(id);
+
+    // A Stop or a close settled it meanwhile.
+    if (this.activeTurns.get(id) !== turn) return;
+    this.activeTurns.delete(id);
+
+    if (ended.status === 'rejected') {
+      this.emit({ type: 'error', message: `Could not learn how this turn ended (${renderThrownChain({ cause: ended.reason })}). Its answer, if any, is in the workspace transcript.` });
+
+      return turn.settle(true);
     }
 
-    if (this.activeTurns.size === 0) return;
+    const { state, answer } = ended.value;
 
-    for (const turn of this.activeTurns.values()) {
-      turn.awaitingRebind = true;
-      turn.resumeAcked = false;
+    if (state.status !== 'settled') {
+      this.emit({ type: 'error', message: 'No turn took this message: it was handed back or refused before one read it.' });
+
+      return turn.settle(true);
     }
 
-    await this.ensureOpen();
-    this.requestStreamResume();
+    if (state.landed === 'mid-turn') return turn.landedMidTurn();
+
+    if (answer !== null) turn.finish(answer);
+
+    if (state.outcome === 'completed' || state.outcome === 'aborted') return turn.settle();
+    this.emit({ type: 'error', message: `The turn ended ${state.outcome} while the connection was down.` });
+    turn.settle(true);
   }
 
-  private resume(stream: string, turnId: string | undefined): void {
-    const resuming = this.streams.resuming(stream, turnId, this.activeTurns);
+  private async endOf(id: string): Promise<SendEnd> {
+    const state = v.parse(SendStateSchema, await this.askAwaitSend(id));
+    const turnId = state.status === 'settled' && state.landed === 'turn' ? state.turnId : null;
 
-    if (resuming === null) return;
-
-    if (resuming.moved) resuming.turn.follow();
-    this.ackResume(stream, resuming.turn);
+    return { state, answer: turnId === null ? null : await recordedAnswer((request) => this.historyPage(request), turnId) };
   }
 
-  private ackResume(requestId: string, turn: CloudTurnStream): void {
-    if (turn.resumeAcked) return;
-    turn.resumeAcked = true;
-    turn.beginReplay();
-    this.ws?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: requestId }));
-  }
+  /** Asked again on each new connection while connections drop. On one that held, a rejection is the workspace's
+   *  refusal, and asking again would be refused again. */
+  private async askAwaitSend(id: string): Promise<JsonValue> {
+    for (;;) {
+      await this.ensureOpen();
+      const asking = this.callRpc('awaitSend', [id]);
+      const [asked] = await Promise.allSettled([asking]);
 
-  /** Resolves on the DO's own state (RESUMING, PENDING, or RESUME_NONE), not a local clock. */
-  private requestStreamResume(): void {
-    this.ws?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_REQUEST }));
+      if (asked.status === 'fulfilled' || this.ws?.readyState === WebSocket.OPEN) return asking;
+    }
   }
 }
 

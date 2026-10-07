@@ -9,6 +9,7 @@ import {
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
+  type SendState,
 } from '@kinu.run/core';
 import { AgentDatabase } from './agent-database';
 import { runAgentTask, type AgentWorkspace } from './agent-turn';
@@ -76,6 +77,8 @@ export interface AgentFacetCalls {
   /** Resolves once its chat has reserved the words, not when they land. */
   admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void>;
   retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding>;
+  sendState(snapshot: AgentSnapshot, id: string): Promise<SendState>;
+  awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]>;
   /** What a reset left owed is taken up; the agent tells its workspace what is left once it rests. */
   wake(snapshot: AgentSnapshot): Promise<void>;
@@ -195,6 +198,14 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding> {
     return await (await this.chatOf(snapshot)).session.retry(claim);
+  }
+
+  async sendState(snapshot: AgentSnapshot, id: string): Promise<SendState> {
+    return (await this.chatOf(snapshot)).session.sendState(id);
+  }
+
+  async awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState> {
+    return await (await this.chatOf(snapshot)).session.awaitSend(id);
   }
 
   async interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]> {

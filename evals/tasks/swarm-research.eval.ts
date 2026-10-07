@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { JsonValueSchema, type JsonValue, WORKSPACE_ROOT } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask, type SeedFile } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
@@ -16,7 +16,7 @@ import { aSwarmRan } from './swarm-runs';
 
 const MISSION = "Lumen Cycles' workspace. We build e-bikes at two plants, Arnhem and Porto, and sell them through dealers across Europe.";
 
-const RECALL_DIR = '/home/user/recall';
+const RECALL_DIR = `${WORKSPACE_ROOT}/recall`;
 
 const CORPUS_DIR = `${RECALL_DIR}/corpus`;
 

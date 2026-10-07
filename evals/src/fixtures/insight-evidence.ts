@@ -18,7 +18,7 @@ export function assertion(turns: HarnessRun['output']['turns'] = []): Assertion 
   return { status: 'failed', duration: 1, meta: { harness: { run: v.parse(HarnessRunSchema, {
     session: { metadata: { taskId: 'order-book', taskVersion: 'v', evalCommit: 'c', productSha: 'p', arm: 'product', trial: 1 } },
     usage: { model: 'test/model' },
-    output: { metrics: { modelTurns: 21, toolCalls: 20, toolErrors: 1, providerWaits: 0, providerWaitMs: 0 }, turns }, errors: [],
+    output: { metrics: { modelTurns: 21, toolCalls: 20, toolErrors: 1, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 }, turns }, errors: [],
   }) } } };
 }
 

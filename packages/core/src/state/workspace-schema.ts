@@ -2,6 +2,7 @@
 // declared in `conformance/manifest.ts`, which checks `sqlite_master` against this.
 
 import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
+import { initTurnReportTable } from '../subordinates/turn-reports';
 import { initAgentFiguresTable } from '../read-models/agent-figures';
 import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
@@ -151,6 +152,8 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initHeadsTables(execRaw);
   initRunEventTables(execRaw);
   initActorClaimTables(resetGuardedExec(execRaw, exec));
+  // What a hired turn told its hirer, read by the recovery of its claim.
+  initTurnReportTable(execRaw);
   initFactsTable(execRaw);
   initCurriculumTable(execRaw);
   initGepaTables(execRaw);

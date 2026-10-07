@@ -7,8 +7,7 @@ import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import { SLATE_METHOD_NAME_SOURCE, type SlateProcess, type SlateProject } from '@kinu.run/core';
-import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
-import slateVendor, { workerCompatibility } from 'virtual:kinu-slate-vendor';
+import { attempt, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 
@@ -54,10 +53,9 @@ export interface ResidentSlateBoot {
 }
 
 /** Written only when the bytes differ, so a start never churns the file ledger. */
-const RUNTIME_FILES = {
-  'server.js': SLATE_SERVER_MODULE,
-  'react-stub.js': slateVendor.reactStub,
-} as const;
+function runtimeFiles(reactStub: string) {
+  return { 'server.js': SLATE_SERVER_MODULE, 'react-stub.js': reactStub };
+}
 
 const RUNTIME_DIR = '/usr/lib/kinu/slate';
 
@@ -536,7 +534,9 @@ export class ResidentSlateProcesses {
         this.bundlers.set(bundlerKey, bundler);
       }
 
-      this.provisionRuntimeFiles(session);
+      // Its react, capnweb and puppeteer sources are compiled only when a slate first starts in this isolate.
+      const { default: slateVendor, workerCompatibility } = yield* attempt({ doing: 'loading the slate runtime vendor', otherwise: 'io' }, async () => import('virtual:kinu-slate-vendor'));
+      this.provisionRuntimeFiles(session, slateVendor.reactStub);
 
       // Generated entries live under the runtime dir, never the slate root, where they would surface in listings,
       // snapshots and revision bumps.
@@ -662,12 +662,12 @@ export class ResidentSlateProcesses {
     }
   }
 
-  private provisionRuntimeFiles(session: Pick<WorkspaceSession, 'vfs' | 'processes'>): void {
+  private provisionRuntimeFiles(session: Pick<WorkspaceSession, 'vfs' | 'processes'>, reactStub: string): void {
     const vfs = session.vfs.as(CRED_KERNEL);
 
     vfs.mkdir(RUNTIME_DIR, { recursive: true, mode: 0o755 });
 
-    for (const [name, contents] of Object.entries(RUNTIME_FILES)) {
+    for (const [name, contents] of Object.entries(runtimeFiles(reactStub))) {
       const path = `${RUNTIME_DIR}/${name}`;
 
       if (vfs.exists(path) && vfs.readFileString(path) === contents) continue;

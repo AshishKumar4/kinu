@@ -1073,8 +1073,8 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
           page: {
             status: 'end',
             items: [
-              { id: 'h1', position: 0, role: 'user', content: 'Look through app.log for errors', createdAt: 1 },
-              { id: 'h2', position: 1, role: 'assistant', content: 'Found 3 errors in app.log', createdAt: 2 },
+              { id: 'h1', position: 0, turnId: null, role: 'user', content: 'Look through app.log for errors', createdAt: 1 },
+              { id: 'h2', position: 1, turnId: null, role: 'assistant', content: 'Found 3 errors in app.log', createdAt: 2 },
             ],
           },
         };
@@ -1236,7 +1236,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
         if (request.view !== 'history') return missingSubordinateHistory(request.path);
         reads.push(request);
 
-        return { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', content: 'The review found nothing', createdAt: 1 }] } };
+        return { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, turnId: null, role: 'assistant', content: 'The review found nothing', createdAt: 1 }] } };
       },
     });
 
@@ -1271,7 +1271,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
         reads.push(request);
 
         return request.actor === 'actor-refiner'
-          ? { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', content: 'Two edits proposed', createdAt: 1 }] } }
+          ? { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, turnId: null, role: 'assistant', content: 'Two edits proposed', createdAt: 1 }] } }
           : missingSubordinateHistory(request.path);
       },
     });
@@ -1305,7 +1305,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
         reads.push(request);
 
         return request.actor === 'actor-refiner'
-          ? { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', content: 'One wording change proposed', createdAt: 1 }] } }
+          ? { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', turnId: null, content: 'One wording change proposed', createdAt: 1 }] } }
           : missingSubordinateHistory(request.path);
       },
     });
@@ -1344,7 +1344,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
         return {
           view: 'history',
           path: request.path,
-          page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', content: 'Two edits proposed for the turn-ending section', createdAt: 1 }] },
+          page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', turnId: null, content: 'Two edits proposed for the turn-ending section', createdAt: 1 }] },
         };
       },
     });

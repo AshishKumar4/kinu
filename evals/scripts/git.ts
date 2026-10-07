@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 
 export function git(args: readonly string[]) {
-  const result = spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  // A release's product diff runs to megabytes; spawnSync's default 1 MiB buffer is no limit of git's.
+  const result = spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: Infinity });
 
   if (result.error !== undefined) throw new Error(`git ${args.join(' ')} could not start`, { cause: result.error });
 

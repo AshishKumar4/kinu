@@ -56,7 +56,7 @@ import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
 import { diagnostics, renderThrownChain, toKinuError, type TurnTrace } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
-import { invalidToolCallRefusal } from './tools/tool-schema';
+import { invalidToolCallRefusal, withStableSchemas } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
 import { StepSpans, traceTools } from './turn-trace';
 
@@ -101,12 +101,7 @@ export type ChatEvent = (
 
 export type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
 
-/** Which provider call of a turn a relayed stream belongs to: a continuation or fallback is another SDK stream. */
-export interface ObservedCall {
-  readonly index: number;
-}
-
-export type ObserveStream = (chunks: ReadableStream<UIMessageChunk>, call: ObservedCall) => Promise<void>;
+export type ObserveStream = (chunks: ReadableStream<UIMessageChunk>) => Promise<void>;
 
 export interface ChatFallback {
   readonly spec: string;
@@ -155,7 +150,7 @@ export interface ChatOptions {
   extensions?: ExtensionHost;
   /** Prompt-cache identity: provider id + stable conversation key. See prompting/cache-breakpoints.ts. */
   cache?: { providerId?: string; modelId?: string; sessionKey: string; retention?: CacheRetention };
-  /** A second reader of each call's stream as UIMessage chunks (the SDK tees it), once per call; {@link ObservedCall}. */
+  /** A second reader of each call's stream as UIMessage chunks (the SDK tees it), once per call. */
   observeStream?: ObserveStream;
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
   /** The subset of `tools` the model may call; the rest stay wired for execution. Absent, all are offered. */
@@ -666,7 +661,7 @@ async function admitRequest(opts: ChatOptions) {
   const extensions = opts.extensions;
 
   // Extension tools never shadow a caller tool of the same name.
-  const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
+  const tools = traceTools(opts.trace, withStableSchemas(extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools));
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
   const window = modelWindow(opts.modelContext);
   const { contextWindow } = window;
@@ -849,7 +844,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     stepSpans: StepSpans,
     responsePrefix: readonly ModelMessage[],
   ): AsyncGenerator<ChatEvent, CallOutcome> {
-    const callIndex = calls++;
+    calls += 1;
     const consumer = new AbortController();
     const signal = opts.signal === undefined ? consumer.signal : AbortSignal.any([opts.signal, consumer.signal]);
 
@@ -951,7 +946,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     suppressDeferredRejections(result, () => call.interrupted || signal.aborted);
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
-    const observed = opts.observeStream?.(withoutServerSummaries(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) })), { index: callIndex });
+    const observed = opts.observeStream?.(withoutServerSummaries(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) })));
 
     let drained = false;
 

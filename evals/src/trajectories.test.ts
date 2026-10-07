@@ -10,7 +10,7 @@ function trajectory(step: Pick<StepUsage, 'inputTokens' | 'cacheReadTokens' | 'c
       meta: { harness: { run: {
         session: { metadata: { taskId: 'task', taskVersion: 'v', evalCommit: 'e', productSha: 'p', arm: 'product', trial: 1 } },
         usage: { model: 'test/model', metadata: { steps: [{ actor: 'main', timestamp: '2026-10-02T19:00:00Z', runId: 'run-1', stepIndex: 0, outputTokens: 10, ...step }] } },
-        output: { metrics: { modelTurns: 1, toolCalls: 0, toolErrors: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
+        output: { metrics: { modelTurns: 1, toolCalls: 0, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
         errors: [],
       } } },
     }],
