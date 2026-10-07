@@ -15,6 +15,7 @@ import { silenceBoundMs } from '../../platform-catalog';
 import { DEFAULT_PROVIDER_RETRIES } from '../../types/profile';
 import { fmtSpan } from '../../utils/format';
 import { retryAfterOf } from '../fallback-cooldown';
+import { inAttempt, type Attempt } from './attempt';
 import { abortableSleep, providerPacer, type ProviderPacer } from '../pacing';
 import type { ProviderWaitInfo } from '../types';
 
@@ -28,12 +29,19 @@ const MAX_DELAY_MS = 60_000;
 /** OMP's `maxRetryDelayMs` (oh-my-pi ai/src/types.ts:499); a longer Retry-After means the account is spent. */
 const MAX_RETRY_DELAY_MS = 60_000;
 
+/** A lane known only by looking which credential the call bills (a sole named account stands in for `main`): looked up
+ *  only when a wait is declared, or when some lane under `route` is cooling, so a call costs no lookup otherwise. */
+export interface LaneLookup {
+  readonly route: string;
+  readonly billed: () => Promise<string>;
+}
+
 export interface RetryPolicy {
   /** Named in wait notices and refusals. */
   readonly provider: string;
   readonly modelId?: string;
-  /** Calls on one lane (a provider and the account it bills) share each declared wait. */
-  readonly lane: string;
+  /** Calls on one lane (a provider and the credential it bills) share each declared wait. */
+  readonly lane: string | LaneLookup;
   /** Called before each sleep, including joined cooldowns; a throw is reported and ignored. */
   readonly onWait?: (info: ProviderWaitInfo) => void;
   /** The provider streams every call on its wire (the ChatGPT plan): a generate is its stream collected, under the
@@ -91,13 +99,13 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
     },
     wrapGenerate: ({ doGenerate, doStream, params }) => settle(retrying(policy, params, policy.generateByStream === true
       ? async (last) => {
-        const opened = await openStream({ provider: policy.provider, opening: doStream(), last, keepRaw: false });
+        const opened = await openStream({ provider: policy.provider, start: doStream, last, keepRaw: false });
 
         return opened.kind === 'answer' ? await collected(opened.value) : opened;
       }
       : async () => ({ kind: 'answer', value: await doGenerate() }))),
     wrapStream: ({ doStream, params }) => settle(retrying(policy, params, (last) => openStream({
-      provider: policy.provider, opening: doStream(), last, keepRaw: kinuOptions(params).raw,
+      provider: policy.provider, start: doStream, last, keepRaw: kinuOptions(params).raw,
     }))),
   };
 }
@@ -109,6 +117,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
   const pacer = policy.pacer ?? providerPacer;
   const signal = params.abortSignal;
   const { retries } = kinuOptions(params);
+  const lane = new CallLane(policy.lane);
 
   const warn = policy.warn ?? ((message: string) => diagnostics.failure('provider.rate_limited', new KinuError('unavailable', message)));
 
@@ -136,21 +145,9 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
     const spendRetry = (spent: () => APICallError): Effect.Effect<void> => Effect.suspend(() => (++waits > retries ? Effect.die(spent()) : Effect.void));
 
     for (let attemptNumber = 1; ; attemptNumber++) {
-      // The lane's cooldown first, re-read after each wait: a sibling may extend it.
-      for (let cooling = pacer.cooling(policy.lane); cooling !== null; cooling = pacer.cooling(policy.lane)) {
-        if (signal?.aborted === true) return yield* Effect.die(signal.reason);
-        const { waitMs, untilMs, reason } = cooling;
+      const checked = yield* lane.toCheck(pacer);
 
-        if (waitMs > MAX_RETRY_DELAY_MS) return yield* Effect.die(waitTooLong({ provider: policy.provider, untilMs, nowMs: now(), reason }));
-
-        // Announce only cooldowns another call declared.
-        if (untilMs !== owned) {
-          if (retries === 0) return yield* Effect.die(handedOver({ provider: policy.provider, status: null, resetsInMs: waitMs }));
-          yield* reportWait(waitMs, 0, 'cooldown');
-        }
-
-        yield* Effect.promise(() => pacer.pause(waitMs, signal));
-      }
+      if (checked !== null) yield* cooledDown({ policy, pacer, lane: checked, owned, retries, now, signal, reportWait });
 
       const [opened] = yield* Effect.promise(() => Promise.allSettled([open(waits >= retries)]));
 
@@ -188,7 +185,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       if (limit.spent !== null) return yield* Effect.die(allowanceSpent(failure, limit.spent));
 
       if (retryAfter !== null && retryAfter > MAX_RETRY_DELAY_MS) {
-        pacer.declareWait(policy.lane, retryAfter, providerMessage(failure.responseBody ?? ''));
+        pacer.declareWait(yield* lane.billed(), retryAfter, providerMessage(failure.responseBody ?? ''));
 
         return yield* Effect.die(waitTooLong({
           provider: policy.provider, untilMs: now() + retryAfter, nowMs: now(), reason: providerMessage(failure.responseBody ?? ''), failure,
@@ -196,7 +193,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       }
 
       const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attemptNumber));
-      const declared = pacer.declareWait(policy.lane, waitMs);
+      const declared = pacer.declareWait(yield* lane.billed(), waitMs);
 
       yield* spendRetry(() => handedOver({ provider: policy.provider, status: limit.status, resetsInMs: retryAfter ?? waitMs }));
       owned = declared;
@@ -207,25 +204,87 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
   });
 }
 
+/** The call's lane, looked up at most once and only when a wait is in play. */
+class CallLane {
+  private known: string | null;
+  private readonly lookup: LaneLookup | null;
+
+  constructor(lane: string | LaneLookup) {
+    this.known = typeof lane === 'string' ? lane : null;
+    this.lookup = typeof lane === 'string' ? null : lane;
+  }
+
+  billed(): Effect.Effect<string> {
+    const { known, lookup } = this;
+
+    if (known !== null || lookup === null) return Effect.succeed(known ?? '');
+
+    return Effect.map(Effect.promise(lookup.billed), (billed) => {
+      this.known = billed;
+
+      return billed;
+    });
+  }
+
+  /** The lane to check before an attempt, or null while nothing under its route is cooling. */
+  toCheck(pacer: ProviderPacer): Effect.Effect<string | null> {
+    return this.known !== null || this.lookup === null || pacer.coolingUnder(this.lookup.route) ? this.billed() : Effect.succeed(null);
+  }
+}
+
+interface CooldownCheck {
+  readonly policy: RetryPolicy;
+  readonly pacer: ProviderPacer;
+  readonly lane: string;
+  /** The deadline this call declared itself, which it waits out without announcing. */
+  readonly owned: number | null;
+  readonly retries: number;
+  readonly now: () => number;
+  readonly signal: AbortSignal | undefined;
+  readonly reportWait: (waitMs: number, attempt: number, source: ProviderWaitInfo['source']) => Effect.Effect<void>;
+}
+
+/** The lane's cooldown waited out, re-read after each wait since a sibling may extend it; one past the longest wait, or
+ *  any for a call with no retries, ends the call instead. */
+function cooledDown(check: CooldownCheck): Effect.Effect<void> {
+  const { pacer, lane, policy, signal } = check;
+
+  return Effect.gen(function* () {
+    for (let cooling = pacer.cooling(lane); cooling !== null; cooling = pacer.cooling(lane)) {
+      if (signal?.aborted === true) return yield* Effect.die(signal.reason);
+      const { waitMs, untilMs, reason } = cooling;
+
+      if (waitMs > MAX_RETRY_DELAY_MS) return yield* Effect.die(waitTooLong({ provider: policy.provider, untilMs, nowMs: check.now(), reason }));
+
+      if (untilMs !== check.owned) {
+        if (check.retries === 0) return yield* Effect.die(handedOver({ provider: policy.provider, status: null, resetsInMs: waitMs }));
+        yield* check.reportWait(waitMs, 0, 'cooldown');
+      }
+
+      yield* Effect.promise(() => pacer.pause(waitMs, signal));
+    }
+  });
+}
+
 function backoffCeiling(attempt: number): number {
   return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32));
 }
 
 interface StreamAttempt {
   readonly provider: string;
-  readonly opening: PromiseLike<LanguageModelV4StreamResult>;
+  /** Called inside the attempt, so the transport below reports its bytes and takes the attempt's cancel. */
+  readonly start: () => PromiseLike<LanguageModelV4StreamResult>;
   readonly last: boolean;
   readonly keepRaw: boolean;
 }
 
 /** The first event decides: an error opens a backoff unless no retry is left; anything else is the answer, still read
- *  under the bound. Silence before it is a stall: an attempt silent before its answer is abandoned, and its stream
- *  cancelled if it ever arrives (a middleware cannot re-sign a call with an abort of its own). */
+ *  under the bound. Silence, on the wire as in the parts, past the bound abandons the attempt and aborts its request. */
 async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV4StreamResult>> {
   const started = Date.now();
-  const opening = Promise.resolve(attempt.opening);
   const silent = Promise.withResolvers<null>();
   const bound = new SilenceBound(attempt.provider, async () => { silent.resolve(null); });
+  const opening = Promise.resolve(inAttempt(bound.attempt, attempt.start));
   const opened = await Promise.race([opening, silent.promise]);
 
   if (opened === null) {
@@ -257,7 +316,7 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
     if (part.type === 'stream-start' || part.type === 'raw') continue;
 
     if (part.type === 'error' && !attempt.last) {
-      bound.stop();
+      bound.abandon();
       await abandoned(parts.cancel());
 
       return { kind: 'backoff' };
@@ -389,23 +448,33 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
   return { kind: 'answer', value: { ...opened, stream } };
 }
 
-/** One timer per attempt, not one per event: each event only moves `heard`, and the timer, when it fires, waits again
- *  for what is left of the bound or declares the silence. */
+/** The attempt's watchdog: every event or wire chunk re-arms it, and silence past the bound aborts the attempt's request
+ *  and declares the stall. */
 class SilenceBound {
   fired = false;
   readonly failure: APICallError;
-  private heard = Date.now();
+  readonly attempt: Attempt;
+  private stopped = false;
+  private readonly cut = new AbortController();
   private silenced: () => Promise<void>;
-  private timer: ReturnType<typeof setTimeout>;
+  private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(provider: string, silenced: () => Promise<void>) {
     this.silenced = silenced;
     this.failure = stalled(provider);
-    this.timer = this.arm(silenceBoundMs('provider.stream.idle_ms'));
+    this.attempt = { signal: this.cut.signal, heard: () => { this.hear(); } };
+    this.hear();
   }
 
   hear(): void {
-    this.heard = Date.now();
+    if (this.stopped || this.fired) return;
+    clearTimeout(this.timer);
+
+    this.timer = setTimeout(() => {
+      this.fired = true;
+      this.cut.abort(this.failure);
+      detach(Effect.promise(() => this.silenced()));
+    }, silenceBoundMs('provider.stream.idle_ms'));
   }
 
   onSilence(silenced: () => Promise<void>): void {
@@ -413,22 +482,14 @@ class SilenceBound {
   }
 
   stop(): void {
+    this.stopped = true;
     clearTimeout(this.timer);
   }
 
-  private arm(ms: number): ReturnType<typeof setTimeout> {
-    return setTimeout(() => {
-      const left = this.heard + silenceBoundMs('provider.stream.idle_ms') - Date.now();
-
-      if (left > 0) {
-        this.timer = this.arm(left);
-
-        return;
-      }
-
-      this.fired = true;
-      detach(Effect.promise(() => this.silenced()));
-    }, ms);
+  /** No longer wanted: its request is aborted. */
+  abandon(): void {
+    this.stop();
+    this.cut.abort(this.failure);
   }
 }
 
@@ -535,7 +596,8 @@ function exhaustedAllowance(body: string): ExhaustedAllowance | null {
 
   if (!envelope.success) return null;
   const { error, errors } = envelope.output;
-  const allocation = errors?.find((entry) => entry.code === WORKERS_AI_DAILY_ALLOCATION);
+  // Kinu's own error mapping (`errorResponse`) carries the code as text.
+  const allocation = errors?.find((entry) => String(entry.code) === String(WORKERS_AI_DAILY_ALLOCATION));
 
   if (allocation !== undefined) return { marker: String(WORKERS_AI_DAILY_ALLOCATION), message: allocation.message };
 
@@ -543,7 +605,7 @@ function exhaustedAllowance(body: string): ExhaustedAllowance | null {
   const anthropic = v.safeParse(AnthropicErrorDetailsSchema, error.details);
 
   const named = [error.code, error.type, anthropic.success ? anthropic.output.error_code : undefined, error.metadata?.provider_code]
-    .find((field) => field === WORKERS_AI_DAILY_ALLOCATION || v.is(ExhaustedAllowanceCodeSchema, field));
+    .find((field) => String(field) === String(WORKERS_AI_DAILY_ALLOCATION) || v.is(ExhaustedAllowanceCodeSchema, field));
 
   if (named !== undefined) return { marker: String(named), message: error.message };
   const details = v.safeParse(v.array(v.unknown()), error.details);

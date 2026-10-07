@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { generateText, wrapLanguageModel } from 'ai';
+import { generateText, wrapLanguageModel, type LanguageModel } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { callRetries, retryMiddleware, type RetryPolicy } from '../src/providers/middleware/retry';
 import { DEFAULT_PROVIDER_RETRIES } from '../src/types/profile';
 import { ProviderPacer } from '../src/providers/pacing';
 import { statedRetryAfterMs } from '../src/providers/fallback-cooldown';
 import { asFetchFunction } from '../src/providers/fetch-shim';
+import { createWorkersAIProvider } from '../src/providers/workers-ai-provider';
+import { withModelStack } from '../src/providers/wire-model';
 import { describeProviderError, toProviderError } from '../src/providers/util';
 import { classifyErrorCode } from '../src/obs/index';
 import type { JsonValue } from '../src/utils/json';
@@ -28,7 +30,7 @@ function stacked(fetchImpl: typeof globalThis.fetch, policy: Partial<RetryPolicy
 }
 
 /** One call, its retries the caller's; the SDK's own retries are left at their default to show the layer owns them. */
-async function called(model: ReturnType<typeof stacked>, retries?: number, signal?: AbortSignal): Promise<string> {
+async function called(model: LanguageModel, retries?: number, signal?: AbortSignal): Promise<string> {
   const result = await generateText({
     model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES,
     ...(retries !== undefined && { providerOptions: callRetries(retries) }),
@@ -304,6 +306,26 @@ describe('the model stack retries every call once, in one place', () => {
       expect({ provider, code: classifyErrorCode({ cause: failure }) }).toEqual({ provider, code: 'budget' });
       expect(describeProviderError({ cause: failure })).toContain('HTTP 429');
     }
+  });
+
+  test('a spent Workers AI allocation is read through Kinu\'s own Cloudflare error mapping too', async () => {
+    let sent = 0;
+
+    // The OAuth route maps Cloudflare's envelope into the OpenAI shape the SDK reads, its code as text.
+    const fetch = asFetchFunction(async () => {
+      sent += 1;
+
+      return Response.json({ success: false, errors: [{ code: 3036, message: 'You have used up your daily free allocation of 10,000 neurons.' }] }, { status: 429 });
+    });
+
+    const model = withModelStack(createWorkersAIProvider().createModel('@cf/moonshotai/kimi-k2.6', {
+      env: {}, sessionAffinity: 'kinu-test', fetch, hasCredential: async () => true,
+      getAuth: async () => ({ headers: { authorization: 'Bearer cf' }, baseURL: 'https://api.cloudflare.com/client/v4/accounts/a/ai/v1' }),
+    }), { provider: 'workers-ai', lane: LANE, sleep: async () => {}, pacer: new ProviderPacer({ sleep: async () => {} }) });
+
+    const failure = await rejectionOf(() => called(model));
+
+    expect({ sent, code: classifyErrorCode({ cause: failure }) }).toEqual({ sent: 1, code: 'budget' });
   });
 
   test('a quota 429 keeps the provider message and code for the user', async () => {

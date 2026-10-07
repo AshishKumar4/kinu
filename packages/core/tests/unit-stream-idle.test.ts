@@ -3,8 +3,8 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  createChatModel, createFallbackCooldowns, PLATFORM_CATALOG, runChat, silenceBoundMs, type ChatEvent, type ChatFallback,
-  type PlatformFactId, type SilenceBoundId,
+  createChatModel, createFallbackCooldowns, createProviderRegistry, PLATFORM_CATALOG, runChat, silenceBoundMs, type ChatEvent,
+  type ChatFallback, type ModelCallDeps, type PlatformFactId, type SilenceBoundId,
 } from '../src/index';
 import { APICallError, streamText } from 'ai';
 import { asFetchFunction } from '../src/providers/fetch-shim';
@@ -69,10 +69,16 @@ function turnOver(primary: ScriptedStream) {
     return new Response(new Blob([delta('from the fallback'), ...finish].map((chunk) => new Uint8Array(chunk))), sse);
   });
 
-  const model = (modelId: string) => withModelStack(
-    createChatModel({ kind: 'openai-compat', name: 'stub', baseURL: 'https://stub.invalid/v1', headers: {}, modelId, fetch }),
-    { provider: 'stub', modelId, lane: `stub/${modelId}` },
-  );
+  // As production resolves a model: the registry's stack, over a transport that reports its bytes.
+  const registry = createProviderRegistry();
+
+  registry.register({
+    id: 'stub', isAvailable: () => true, listModels: () => [],
+    createModel: (modelId, deps) => createChatModel({ kind: 'openai-compat', name: 'stub', baseURL: 'https://stub.invalid/v1', headers: {}, modelId, ...(deps.fetch !== undefined && { fetch: deps.fetch }) }),
+  });
+
+  const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false, fetch };
+  const model = (modelId: string) => registry.resolve(`stub/${modelId}`, deps);
 
   const fallback: ChatFallback = { spec: 'stub/fallback', accepts: new Set(), window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: model('fallback'), provider: 'stub' }) };
   const events: ChatEvent[] = [];
@@ -160,6 +166,28 @@ describe('a provider stream that stops sending', () => {
     expect(turn.events).toContainEqual(expect.objectContaining({ type: 'done', text: 'from the fallback' }));
   });
 
+  test('keepalive comments while the model thinks keep its stream alive past the bound', async () => {
+    jest.useFakeTimers();
+    const primary = scriptedStream();
+    const turn = turnOver(primary);
+
+    // OpenRouter's wait for a first token: comments only, three bounds long, which no stream part carries.
+    for (let comment = 0; comment < 3; comment++) {
+      const controller = await primary.next();
+      await advance(IDLE_MS - 1);
+      controller.enqueue(encoder.encode(': OPENROUTER PROCESSING\n\n'));
+    }
+
+    (await primary.next()).enqueue(delta('thought it through'));
+
+    for (const chunk of finish) (await primary.next()).enqueue(chunk);
+    (await primary.next()).close();
+    await turn.done;
+
+    expect(turn.asked).toEqual(['primary']);
+    expect(turn.events).toContainEqual(expect.objectContaining({ type: 'done', text: 'thought it through' }));
+  });
+
   test('a slow stream that keeps sending is never cut, however long it runs', async () => {
     jest.useFakeTimers();
     const primary = scriptedStream();
@@ -185,6 +213,7 @@ describe('a provider that sends nothing before its first byte', () => {
   /** A provider silent `silent` times, each request hanging until the transport cuts it, then answering. */
   function silentThenAnswering(silent: number) {
     let calls = 0;
+    let aborted = 0;
     const arrivals = Array.from({ length: silent + 1 }, () => Promise.withResolvers<void>());
     const waits: ProviderWaitInfo[] = [];
 
@@ -195,7 +224,10 @@ describe('a provider that sends nothing before its first byte', () => {
       if (calls > silent) return new Response(new Blob([delta('at last'), ...finish].map((chunk) => new Uint8Array(chunk))));
 
       return await new Promise<Response>((_, reject) => {
-        init?.signal?.addEventListener('abort', () => { reject(init.signal?.reason); }, { once: true });
+        init?.signal?.addEventListener('abort', () => {
+          aborted += 1;
+          reject(init.signal?.reason);
+        }, { once: true });
       });
     });
 
@@ -204,7 +236,7 @@ describe('a provider that sends nothing before its first byte', () => {
     /** Settles once request `n` (1-based) reached the provider. */
     const reached = (n: number) => arrivals[n - 1]?.promise;
 
-    return { call, waits, calls: () => calls, reached };
+    return { call, waits, calls: () => calls, aborted: () => aborted, reached };
   }
 
   test('each silent attempt spends a retry and declares a wait before the transport asks again', async () => {
@@ -219,6 +251,8 @@ describe('a provider that sends nothing before its first byte', () => {
 
     expect((await answered).text).toBe('at last');
     expect(provider.calls()).toBe(3);
+    // Each abandoned attempt's request is aborted, not left running beside the next.
+    expect(provider.aborted()).toBe(2);
     expect(provider.waits.map(({ source, attempt, provider: who }) => ({ source, attempt, who })))
       .toEqual([{ source: 'stall', attempt: 1, who: 'stub' }, { source: 'stall', attempt: 2, who: 'stub' }]);
   });
