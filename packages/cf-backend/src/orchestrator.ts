@@ -2989,7 +2989,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // The activation only classifies and arms a wake; all dispatch runs under that durable wake,
     // because an activation launches no external work, awaited or detached.
-    if (this.owedWorkExists()) {
+    if (this.owedWorkExists() || this.jobs.countRunningInWorkspace() > 0) {
       this.armOwedWorkWake('reconcile');
     }
 

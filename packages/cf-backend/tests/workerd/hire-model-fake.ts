@@ -8,7 +8,7 @@
 import * as v from 'valibot';
 import {
   CHAIN_BOTTOM, CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, JOB_COMMAND, JOB_MISSION, JOB_NOTED,
-  JOB_STARTED, NEST_MISSION, NEST_RELAY, REPORT_MARK, type ChildScript,
+  JOB_STARTED, NEST_MISSION, NEST_RELAY, REPORT_MARK, type ChildScript, type JobWatchState,
 } from './hire-shapes';
 
 export interface HireCall {
@@ -27,6 +27,9 @@ export interface HireCall {
  */
 interface HireRun {
   readonly log: HireCall[];
+  readonly sightings: Set<{ readonly texts: readonly string[]; readonly seen: () => void }>;
+  readonly alarms: JobWatchState[];
+  readonly alarmSightings: Set<{ readonly exclude: string; readonly seen: (state: JobWatchState) => void }>;
   /** Resolved when the root's turn opens on its hire's settling report; one waiter per arm. */
   readonly rootSaw: PromiseWithResolvers<void>;
   readonly childSpoke: PromiseWithResolvers<void>;
@@ -40,6 +43,9 @@ const runs = new Map<string, HireRun>();
 function freshRun(script: ChildScript): HireRun {
   return {
     log: [],
+    sightings: new Set(),
+    alarms: [],
+    alarmSightings: new Set(),
     rootSaw: Promise.withResolvers<void>(),
     childSpoke: Promise.withResolvers<void>(),
     childPark: Promise.withResolvers<void>(),
@@ -395,6 +401,15 @@ function modelsBody(): Response {
 
 const ControlPathSchema = v.tuple([v.literal(''), v.literal('hire'), v.pipe(v.string(), v.minLength(1)), v.string()]);
 
+const JobWatchStateSchema = v.object({
+  incarnation: v.string(),
+  terminalRetry: v.boolean(),
+  fibers: v.number(),
+  wakes: v.number(),
+  started: v.boolean(),
+  jobs: v.array(v.object({ actorId: v.string(), id: v.string(), status: v.string() })),
+});
+
 async function hireControl(url: URL, request: Request): Promise<Response> {
   const [, , encoded, op] = v.parse(ControlPathSchema, url.pathname.split('/'));
   const workspace = decodeURIComponent(encoded);
@@ -437,7 +452,49 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
     return Response.json({ calls: [...run.log] });
   }
 
+  if (op === 'saw' && request.method === 'GET') {
+    const texts = url.searchParams.getAll('text');
 
+    if (run.log.some((call) => texts.every((text) => call.lastUser.includes(text)))) return Response.json(true);
+    const sighting = Promise.withResolvers<void>();
+    const watcher = { texts, seen: () => { sighting.resolve(); } };
+    run.sightings.add(watcher);
+
+    try {
+      await sighting.promise;
+
+      return Response.json(true);
+    } finally {
+      run.sightings.delete(watcher);
+    }
+  }
+
+  if (op === 'alarm-returned' && request.method === 'POST') {
+    const state = v.parse(JobWatchStateSchema, await request.json());
+    run.alarms.push(state);
+
+    for (const sighting of run.alarmSightings) {
+      if (state.incarnation !== sighting.exclude && !state.terminalRetry && state.fibers === 0) sighting.seen(state);
+    }
+
+    return Response.json({ ok: true });
+  }
+
+  if (op === 'restart-alarm' && request.method === 'GET') {
+    const exclude = v.parse(v.string(), url.searchParams.get('exclude'));
+    const existing = run.alarms.find((state) => state.incarnation !== exclude && !state.terminalRetry && state.fibers === 0);
+
+    if (existing !== undefined) return Response.json(existing);
+    const sighting = Promise.withResolvers<JobWatchState>();
+    const watcher = { exclude, seen: (state: JobWatchState) => { sighting.resolve(state); } };
+    run.alarmSightings.add(watcher);
+
+    try {
+      return Response.json(await sighting.promise);
+    } finally {
+      run.alarmSightings.delete(watcher);
+    }
+  }
 
   throw new Error(`hire-control: unhandled ${request.method} ${url.pathname}`);
 }
@@ -477,6 +534,10 @@ export async function hireOutbound(request: Request): Promise<Response> {
     toolResults: results,
     lastUser: lastUser(body),
   });
+
+  for (const sighting of run.sightings) {
+    if (sighting.texts.every((text) => lastUser(body).includes(text))) sighting.seen();
+  }
 
   // No actor turn arrives unstreamed on this wire, so non-streamed is auxiliary.
   if (body.stream !== true) return auxLane(body);

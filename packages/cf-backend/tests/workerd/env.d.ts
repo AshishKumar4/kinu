@@ -173,6 +173,8 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
+  modelSaw(workspace: string, texts: readonly string[]): Promise<void>;
+  restartAlarm(workspace: string, exclude: string): Promise<import('./hire-shapes').JobWatchState>;
   callerObserved(): Promise<void>;
   openHire(workspace: string, prompt: string): Promise<void>;
   reenter(workspace: string): Promise<void>;
@@ -189,7 +191,8 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   outrunJobWindow(workspace: string): Promise<void>;
   openJobGate(workspace: string): Promise<void>;
   redeliverJobWake(workspace: string, jobId: string): Promise<void>;
-  loseJobFiber(workspace: string, jobId: string): Promise<number>;
+  ageJobFiber(workspace: string, jobId: string): Promise<number>;
+  jobWatchState(workspace: string): Promise<import('./hire-shapes').JobWatchState>;
   jobRows(workspace: string): Promise<import('./hire-shapes').JobRow[]>;
 }
 
