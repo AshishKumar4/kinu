@@ -331,7 +331,7 @@ export {
 // Chat engine
 export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
-  type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
+  type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObserveStream,
 } from './chat';
 
 export { createFallbackCooldowns, type FallbackCooldowns } from './providers/fallback-cooldown';
