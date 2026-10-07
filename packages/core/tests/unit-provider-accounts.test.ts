@@ -200,6 +200,41 @@ describe('which account a call spends', () => {
     expect({ sent, parked: parked.status === 'rejected' && String(parked.reason).includes('rate-limiting this account') }).toEqual({ sent: 1, parked: true });
   });
 
+  test('a resolved model asks which account it bills on each call, so a changed default is not parked by the old one\'s wait', async () => {
+    const KEYED = 'swap.bearer';
+    let sent = 0;
+    let account = 'a';
+
+    const fetch = asFetchFunction(async () => {
+      sent += 1;
+
+      return new Response('limited', { status: 429, headers: { 'retry-after': '30' } });
+    });
+
+    const registry = createProviderRegistry();
+
+    registry.register({
+      id: 'swap', credentialKey: KEYED, isAvailable: () => true, listModels: () => [],
+      createModel: (modelId) => createChatModel({ kind: 'openai-compat', name: 'swap', baseURL: 'https://swap.invalid/v1', headers: {}, modelId, fetch }),
+    });
+
+    const stored = [accountCredentialKey(KEYED, 'a'), accountCredentialKey(KEYED, 'b')];
+
+    const deps: ModelCallDeps = {
+      env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, accountFor: () => account,
+      hasCredential: async (key) => stored.includes(key), listCredentialKeys: async () => [...stored],
+    };
+
+    const model = registry.resolve('swap/m', deps);
+    const call = () => Promise.allSettled([generateText({ model, prompt: 'hi', maxRetries: 0, providerOptions: callRetries(0) })]);
+
+    await call();
+    account = 'b';
+    await call();
+
+    expect(sent).toBe(2);
+  });
+
   test('the spec\'s own account wins over the caller\'s choice', async () => {
     const { spend } = registryWith(['alpha.bearer@home', 'alpha.bearer@work'], () => 'work');
     expect(await spend('alpha@home/m')).toBe('alpha.bearer@home');

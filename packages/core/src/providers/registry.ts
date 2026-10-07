@@ -8,7 +8,7 @@ import type {
 import { parseModelSpec } from './types';
 import { StaleModelList } from './util';
 import { Effect, Result } from 'effect';
-import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, settle, settleSync, toKinuError } from '../obs/index';
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
 
 export interface DynamicProviderSource {
@@ -276,16 +276,18 @@ export function createProviderRegistry(): ProviderRegistry {
           const own = accountDeps(deps, parsed.provider, parsed.account);
           const route = provider.laneOf?.(parsed.modelId) ?? parsed.provider;
           const key = provider.credentialKey;
-          let billed: Promise<string> | undefined;
 
-          // A wait is the credential's: aliases of one stored login share it, as `credentialFor` resolves them.
+          // A wait is the credential's: aliases of one stored login share it, as `credentialFor` resolves them. Asked
+          // per call, as authentication asks, so a default changed since this model resolved names the new account.
           const lane: LaneLookup | string = key === undefined ? `${route}|` : {
             route,
-            billed: () => {
-              billed ??= Promise.allSettled([chosenCredentialKey(deps, parsed.provider, key, parsed.account)])
-                .then(([chosen]) => `${route}|${(chosen.status === 'fulfilled' ? chosen.value : null) ?? key}`);
+            billed: async () => {
+              const [chosen] = await Promise.allSettled([chosenCredentialKey(deps, parsed.provider, key, parsed.account)]);
 
-              return billed;
+              if (chosen.status === 'fulfilled') return `${route}|${chosen.value ?? key}`;
+              diagnostics.failure('provider.lane_lookup_failed', toKinuError({ doing: `finding the ${parsed.provider} account a wait belongs to`, cause: chosen.reason, otherwise: 'unavailable' }));
+
+              return `${route}|${key}`;
             },
           };
 
