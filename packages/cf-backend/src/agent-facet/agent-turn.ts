@@ -1,10 +1,10 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
-  CHAT_SESSION_ID, agentAffinityKey, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
+  CHAT_SESSION_ID, agentAffinityKey, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type ObservedCall, type ProviderEnv, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
-  type AdvisorRecoverySnapshot, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
+  type AdvisorRecoverySnapshot, type AgentFigures, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile, type DynamicContext,
 } from '@kinu.run/core';
 
@@ -35,6 +35,8 @@ export interface AgentWorkspace {
   /** A null id reads one between turns. */
   prepareChat(request: ChatTurnRequest): Promise<PreparedAgentTurn>;
   chatEvent(event: SessionEvent): Promise<void>;
+  /** The turn's end, with the agent's figures as it ends. */
+  turnEnded(event: SessionEvent, figures: AgentFigures): Promise<void>;
   owedReport(
     turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean },
     ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] },
@@ -45,8 +47,8 @@ export interface AgentWorkspace {
   /** Persists the title the agent suggested itself; null lands the stand-in alone. */
   autoTitle(subject: string, title: string | null): Promise<void>;
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
-  /** A facet sets no alarm. */
-  armWake(atMs: number): Promise<void>;
+  /** A facet sets no alarm: the instant it next owes work, or none, replacing what it said before. */
+  owes(next: number | null): Promise<void>;
   birthContext(drainTurnId: string): Promise<SerializedMessage[]>;
   steerSkills(text: string, alreadyActive: readonly string[]): Promise<string | null>;
   advise(review: AgentReview): Promise<void>;
@@ -181,6 +183,8 @@ function workspaceTools(
 
         return answer.output;
       },
+      // As the workspace's own tool renders it: an image reaches the model, and the transcript, as an image.
+      toModelOutput: imageModelOutput,
     });
 
     return [descriptor.name, descriptor.planAllowed ? permitInPlan(entry) : entry];
@@ -242,7 +246,6 @@ export function facetTurnSources(turn: {
     logger: compactionDiagnostics,
     summarizer: () => registry.resolveModel(prepared.sources.model, affinity),
     spend,
-    model: () => prepared.sources.model,
   });
 
   const sources = turnSourcesFromBundle(prepared.sources, {

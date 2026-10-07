@@ -242,6 +242,19 @@ export function modelSpecOf(model: LanguageModel): string {
   return asModel.success ? asModel.output.modelId : '';
 }
 
+/** The model the children run on and its window; null when unknown, which compacts nothing. */
+export interface SharedPrefixTarget {
+  readonly model: string;
+  readonly window: number | null;
+}
+
+/** What a shared prefix is compacted for: the children's model and window, under the branch point's durable key. */
+export interface SharedPrefixBasis {
+  readonly model: string;
+  readonly contextWindow: number;
+  readonly key: string;
+}
+
 /**
  * The *Inherited context* barrier: the one prefix every child of this parent inherits.
  * Verbatim below the threshold so siblings share a cacheable prefix; above it, compacted
@@ -249,14 +262,10 @@ export function modelSpecOf(model: LanguageModel): string {
  * the prefix is handed over whole and the absence is reported.
  */
 export async function sharedPrefix(input: {
-  /** The children's window; null when unknown, which compacts nothing. */
-  readonly window: number | null;
+  readonly target: SharedPrefixTarget;
   readonly parent: TreeNode;
   /** As {@link SwarmRunDeps.compactShared}; narrowed so this module needs no runner import. */
-  readonly compactShared?: (
-    messages: readonly ModelMessage[],
-    basis: { readonly contextWindow: number; readonly key: string },
-  ) => Promise<readonly ModelMessage[]>;
+  readonly compactShared?: (messages: readonly ModelMessage[], basis: SharedPrefixBasis) => Promise<readonly ModelMessage[]>;
   readonly log: Logger;
   readonly preset: SwarmPreset;
 }): Promise<readonly ModelMessage[]> {
@@ -270,7 +279,7 @@ export async function sharedPrefix(input: {
     (total, message) => total + JSON.stringify(message.content).length, 0,
   );
 
-  const { window } = input;
+  const { model, window } = input.target;
 
   if (window === null) return parent.transcript;
   const room = window * CONTEXT_COMPACTION_THRESHOLD;
@@ -287,11 +296,8 @@ export async function sharedPrefix(input: {
   }
 
   // Keyed by the branch point's durable id so a re-entered search replays byte-stably;
-      // the window is the one the threshold measured against.
-  const shared = await input.compactShared(parent.transcript, {
-    contextWindow: window,
-    key: `swarm:${parent.id}`,
-  });
+  // the window is the one the threshold measured against.
+  const shared = await input.compactShared(parent.transcript, { model, contextWindow: window, key: `swarm:${parent.id}` });
 
   parent.compacted = shared;
   input.log.event('swarm.context_compacted', {

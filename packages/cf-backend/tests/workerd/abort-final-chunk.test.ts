@@ -132,6 +132,7 @@ describe('KINU-084 — the abort-at-final-chunk boundary', () => {
 
     try {
       for await (const event of runChat({
+        modelSpec: 'test/model',
         model: gatedModel(gate),
         system: 'sys',
         history: [{ role: 'user', content: 'go' }],
@@ -167,6 +168,7 @@ describe('KINU-084 — the abort-at-final-chunk boundary', () => {
 
     try {
       for await (const event of runChat({
+        modelSpec: 'test/model',
         model: gatedModel(gate),
         system: 'sys',
         history: [{ role: 'user', content: 'go' }],

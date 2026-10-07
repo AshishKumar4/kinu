@@ -17,7 +17,7 @@ export interface AgentTurnsDeps {
   reference(actorId: string): ActorReference;
   run(reference: ActorReference, task: AgentTurnTask): Promise<AgentTurnEnd>;
   interrupt(reference: ActorReference, turnId: string | null): Promise<void>;
-  /** The agent's own chat answers for itself: whether it holds a turn, running or queued, and once it holds none. */
+  /** The agent's own chat answers for itself whether it holds a turn, running or queued; one at rest is not asked. */
   chatOwed(reference: ActorReference): Promise<boolean>;
   chatIdle(reference: ActorReference): Promise<void>;
   pricing(spec: string): ModelPricing | null;

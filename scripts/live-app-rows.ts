@@ -1423,6 +1423,8 @@ interface SlateUiVerdict {
   /** What the first page read through `workspace`, and whether its click reached the agent as a slate event. */
   readonly read: string;
   readonly heard: boolean;
+  /** What the first page shows once its card's open control brought it up in the work surface. */
+  readonly opened: string;
   readonly redrawn: readonly string[];
   readonly reshown: Readonly<Record<string, string>>;
   /** After a browser sent a block of its own: the blocks the chat draws, and what a preview of each forged id answered. */
@@ -1506,6 +1508,21 @@ async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Prom
   return { read, heard: request.userTexts.some((text) => text.includes(SLATE_UI_SENT)) };
 }
 
+/** The first page, opened from its card in the work surface: what the work surface's frame of it shows. */
+async function openedInWorkSurface(page: Page): Promise<string> {
+  await page.$eval('[data-slate-ui="first"] button[aria-label="Open first in the work surface"]', (open) => {
+    if (open instanceof HTMLElement) open.click();
+  });
+
+  const pane = await named('the first page in the work surface', () => page.waitForSelector('#inspector iframe[title$="/first"]'));
+  const frame = await named("the work surface frame's document", async () => await pane?.contentFrame() ?? null);
+
+  if (frame === null) throw new Error('the work surface frame has no document');
+  await named("the work surface page's words", () => frame.waitForFunction(() => document.querySelector('[data-words]') !== null));
+
+  return await frame.evaluate(() => document.querySelector('[data-words]')?.textContent ?? '');
+}
+
 /** An answer with two blocks is drawn as two slates, each its own page, and a reload draws them again from the stored answer. */
 async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard: Promise<ScriptedRequest>): Promise<SlateUiVerdict> {
   const workspace = await createWorkspace(origin, { name: `live-row-slate-ui-${RUN_ID}`, purpose: 'slate ui probe', model: SCRIPTED_MODEL_SPEC });
@@ -1516,13 +1533,14 @@ async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard
     await until(page, 'both blocks drawn', `${SLATE_UI_DRAWN} && !(${STOP_OFFERED})`);
     const first = await slateUiFrames(page);
     const reach = await firstPageReach(page, heard);
+    const opened = await openedInWorkSurface(page);
 
     await until(page, 'the click turn to end', `!(${STOP_OFFERED})`);
     await named('the reload', () => page.reload({ waitUntil: 'load' }));
     await until(page, 'both blocks drawn again', SLATE_UI_DRAWN);
     const again = await slateUiFrames(page);
 
-    return { ...reach, drawn: first.drawn, shown: first.shown, redrawn: again.drawn, reshown: again.shown, forged: await forgedBlocks(page, origin, workspace) };
+    return { ...reach, opened, drawn: first.drawn, shown: first.shown, redrawn: again.drawn, reshown: again.shown, forged: await forgedBlocks(page, origin, workspace) };
   } finally {
     await page.close();
   }
