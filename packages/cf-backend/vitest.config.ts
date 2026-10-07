@@ -150,7 +150,7 @@ function agentAssets(entry = AGENT_BUNDLE_ENTRY) {
     let bundle = agentBundles.get(entry);
 
     if (bundle === undefined) {
-      bundle = buildAgentBundle(entry);
+      bundle = buildAgentBundle(entry).code;
       agentBundles.set(entry, bundle);
     }
 

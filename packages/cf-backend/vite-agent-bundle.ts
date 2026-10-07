@@ -18,9 +18,10 @@ export const AGENT_BUNDLE_ENTRY = resolve(import.meta.dirname, 'src/agent-facet/
 
 const AGENT_BUNDLE_OUTPUT = resolve(import.meta.dirname, 'public/_agent/agent.js');
 
-export function buildAgentBundle(entry: string = AGENT_BUNDLE_ENTRY): string {
+/** The bundle and its source map, which names each package's share of a facet isolate's heap and churn. */
+export function buildAgentBundle(entry: string = AGENT_BUNDLE_ENTRY) {
   const result = buildSync({
-    entryPoints: [entry],
+    entryPoints: [entry], outfile: 'agent.js', sourcemap: 'external',
     bundle: true, write: false, format: 'esm', platform: 'neutral', target: 'es2022',
     mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'],
     minify: true, keepNames: true, charset: 'ascii', legalComments: 'none',
@@ -28,11 +29,12 @@ export function buildAgentBundle(entry: string = AGENT_BUNDLE_ENTRY): string {
     external: ['cloudflare:*', 'node:*'],
   });
 
-  const text = result.outputFiles[0]?.text;
+  const text = result.outputFiles.find((file) => file.path.endsWith('.js'))?.text;
+  const map = result.outputFiles.find((file) => file.path.endsWith('.js.map'))?.text;
 
-  if (text === undefined) throw new Error('the agent bundle build produced no output');
+  if (text === undefined || map === undefined) throw new Error('the agent bundle build produced no output');
 
-  return text.replace(/[^\0-\x7f]/g, (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return { code: text.replace(/[^\0-\x7f]/g, (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`), map };
 }
 
 /**
@@ -54,7 +56,9 @@ export function agentBundle(): Plugin {
     async buildStart() {
       if (built) return;
       mkdirSync(dirname(AGENT_BUNDLE_OUTPUT), { recursive: true });
-      writeWhole(AGENT_BUNDLE_OUTPUT, buildAgentBundle());
+      const bundle = buildAgentBundle();
+      writeWhole(AGENT_BUNDLE_OUTPUT, bundle.code);
+      writeWhole(`${AGENT_BUNDLE_OUTPUT}.map`, bundle.map);
       writeWhole(resolve(dirname(AGENT_BUNDLE_OUTPUT), 'compatibility.json'), JSON.stringify(workerCompatibility));
       // buildSync leaves esbuild's service process running for the life of the process that ran the build.
       await stop();
