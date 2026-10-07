@@ -6,10 +6,13 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
 import {
-  EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
+  EVOLUTION_LANE_FIBER,
   TERMINAL_LANE_FIBER, classifyRecoveredFiber, type FiberLaneTransports,
 } from '../src/fiber-recovery';
 import { BACKGROUND_FIBER_PREFIX, recoveryBackoffMs } from '@kinu.run/core';
+
+/** The lane a deploy before the MCP warm left its fiber wrote. */
+const EARLIER_MCP_WARM_LANE = 'mcp:warm';
 
 /** Read from the module's own verdict rather than restated. */
 const LaneSnapshotSchema = v.object({ lane: v.string(), redrive: v.string() });
@@ -51,9 +54,9 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
     }
   });
 
-  test('the MCP warm lane drops on purpose: the next settled turn warms again', () => {
+  test('an MCP warm row an earlier deploy left drops on purpose: the next settled turn warms again', () => {
     const scene = recordingTransports();
-    const verdict = classifyRecoveredFiber(scene.transports, fiber(MCP_WARM_LANE_FIBER));
+    const verdict = classifyRecoveredFiber(scene.transports, fiber(EARLIER_MCP_WARM_LANE));
     expect(verdict.status).toBe('completed');
     // No carrier by contract: the successor turn re-establishes the connection unconditionally.
     expect(scene.redriven).toEqual([]);
