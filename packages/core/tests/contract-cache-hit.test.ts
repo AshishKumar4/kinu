@@ -2,7 +2,7 @@
  *  models each provider's cache: a request reads only when its addressed prefix continues a stored one byte for byte. */
 
 import { describe, test, expect } from 'bun:test';
-import { generateText, isStepCount, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { isStepCount, streamText, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import * as v from 'valibot';
 import {
@@ -654,9 +654,9 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
     const mutable: ModelMessage = { role: 'user', content: 'the first words' };
     const frozen: ModelMessage = Object.freeze({ role: 'user', content: 'a settled question' });
 
-    await generateText({ model, messages: [frozen, mutable] });
+    await streamText({ model, messages: [frozen, mutable] }).consumeStream();
     mutable.content = 'the second words';
-    await generateText({ model, messages: [frozen, mutable] });
+    await streamText({ model, messages: [frozen, mutable] }).consumeStream();
 
     expect(sent).toHaveLength(2);
     expect(sent[0]).toContain('the first words');
