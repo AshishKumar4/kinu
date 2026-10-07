@@ -91,17 +91,6 @@ export class SlateView {
     return v.parse(Faults, await this.frame.evaluate(DOCUMENT_FAULTS));
   }
 
-  /** A picture of the frame as the person sees it, for a judge to look at, once the chat has scrolled it into view:
-   *  the chat lays out only what is near the screen, and a frame it has not laid out has no box to picture. */
-  async picture(): Promise<Uint8Array<ArrayBuffer>> {
-    const element = await this.frame.frameElement();
-
-    if (element === null) throw new Error('the slate frame is no longer on the page');
-    await element.evaluate((frame) => { frame.scrollIntoView({ block: 'center' }); });
-    await element.evaluate(() => new Promise((painted) => { requestAnimationFrame(() => { requestAnimationFrame(painted); }); }));
-
-    return new Uint8Array(await element.screenshot({ type: 'png' }));
-  }
 }
 
 /** The workspace's pages as its owner opens them, in one Chrome. */
@@ -142,16 +131,39 @@ export class WorkspaceBrowser {
 
   /** The frames of the chat's ephemeral slates, oldest first, once the page shows at least `least` of them. */
   async answerSlates(page: Page, least: number): Promise<SlateView[]> {
-    const frames = `[${SLATE_UI_ATTRIBUTE}] iframe`;
+    return Promise.all((await answerFrames(page, least)).map((frame, index) => loaded(frame, `ephemeral slate ${String(index + 1)}`)));
+  }
 
-    try {
-      await page.waitForFunction((selector, wanted) => document.querySelectorAll(selector).length >= wanted, { polling: 250, timeout: DRAW_MS }, frames, least);
-    } catch (error) {
-      throw new Error(`the chat did not show ${String(least)} ephemeral slate(s) in ${String(DRAW_MS / 1000)} s`, { cause: error });
+  /**
+   * Pictures of the chat's ephemeral slates as a person sees them, oldest first, for a judge to look at: each frame
+   * scrolled into view, its page loaded, then pictured from the chat's own document. The chat's frames are cross-origin
+   * documents, which a picture taken through the frame's own handle can lose; the element the chat holds it in cannot.
+   */
+  async answerPictures(page: Page, least: number): Promise<Uint8Array<ArrayBuffer>[]> {
+    const pictures: Uint8Array<ArrayBuffer>[] = [];
+
+    // One at a time: each is scrolled into view to be pictured.
+    for (const [index, frame] of (await answerFrames(page, least)).entries()) {
+      await frame.scrollIntoView();
+      await loaded(frame, `ephemeral slate ${String(index + 1)}`);
+      pictures.push(new Uint8Array(await frame.screenshot({ type: 'png' })));
     }
 
-    return Promise.all((await page.$$(frames)).map((frame, index) => loaded(frame, `ephemeral slate ${String(index + 1)}`)));
+    return pictures;
   }
+}
+
+/** The chat's ephemeral slate frames, once it shows at least `least` of them. */
+async function answerFrames(page: Page, least: number): Promise<ElementHandle[]> {
+  const frames = `[${SLATE_UI_ATTRIBUTE}] iframe`;
+
+  try {
+    await page.waitForFunction((selector, wanted) => document.querySelectorAll(selector).length >= wanted, { polling: 250, timeout: DRAW_MS }, frames, least);
+  } catch (error) {
+    throw new Error(`the chat did not show ${String(least)} ephemeral slate(s) in ${String(DRAW_MS / 1000)} s`, { cause: error });
+  }
+
+  return page.$$(frames);
 }
 
 /** The element `selector` names inside `within`, once it shows; one that never shows fails with what was awaited. */

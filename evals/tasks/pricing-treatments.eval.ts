@@ -64,15 +64,10 @@ yearly price with the annual discount taken off.`,
 
       // Pictured in a browser of its own, so a picture that cannot be taken fails this check alone.
       await verifier.check('the-treatments-look-different', () => verifier.browse(async (browser) => {
-        const views = await browser.answerSlates(await browser.open(), 3);
-        const pictures: Uint8Array<ArrayBuffer>[] = [];
-
-        // One at a time: each is scrolled into view to be pictured.
-        for (const view of views) pictures.push(await view.picture());
-
+        const pictures = await browser.answerPictures(await browser.open(), 3);
         const judged = await verifier.judgement(DIFFERENT_DESIGNS, pictures);
 
-        return { pass: views.length >= 3 && judged.verdict === true, evidence: { judged, treatments: views.length } };
+        return { pass: pictures.length >= 3 && judged.verdict === true, evidence: { judged, treatments: pictures.length } };
       }));
 
       await verifier.check('a-reload-shows-the-same', () => everyTreatment(verifier));
