@@ -14,7 +14,7 @@ import type { SessionHistory } from '../session/history';
 import type { ContextSelection } from '../session/context';
 import type { PromptCacheRoute } from '../prompting/cache-breakpoints';
 
-const CLAIM_OUTCOMES = [...RUN_END_REASONS, 'indeterminate'] as const;
+export const CLAIM_OUTCOMES = [...RUN_END_REASONS, 'indeterminate'] as const;
 
 const CLAIM_STATUSES = ['admitted', 'settled'] as const;
 

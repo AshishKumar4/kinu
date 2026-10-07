@@ -247,19 +247,13 @@ describe('kinu acp — prompt turn', () => {
     expect(fake.sent).toEqual([{ prompt: 'hi', cwd: '/work' }]);
   });
 
-  test('a mid-step restart over ACP keeps the partial, one notice, and the re-run in emitted order', async () => {
+  test('a turn its connection lost over ACP keeps the partial, then what the workspace recorded beyond it', async () => {
     const events: AgentClientEvent[] = [];
     const stream = new CloudTurnStream((event) => events.push(event), () => {});
-    stream.apply({ body: JSON.stringify({ type: 'text-delta', delta: 'one, ' }) });
-    stream.apply({ body: JSON.stringify({ type: 'finish-step' }) });
-    stream.apply({ body: JSON.stringify({ type: 'text-delta', delta: 'tw' }) });
-    stream.follow();
-    stream.beginReplay();
-    stream.apply({ body: JSON.stringify({ type: 'text-delta', delta: 'one, ' }), replay: true, restated: true });
-    stream.apply({ body: JSON.stringify({ type: 'finish-step' }), replay: true, restated: true });
-    stream.apply({ body: JSON.stringify({ type: 'data-kinu-step-cut', data: { stepIndex: 2 }, transient: true }), replay: true });
-    stream.apply({ body: JSON.stringify({ type: 'text-delta', delta: 'two' }), replay: true });
-    stream.apply({ replayComplete: true });
+    stream.apply(JSON.stringify({ type: 'text-delta', delta: 'one, ' }));
+    stream.apply(JSON.stringify({ type: 'finish-step' }));
+    stream.apply(JSON.stringify({ type: 'text-delta', delta: 'tw' }));
+    stream.finish('one, two');
     stream.settle();
 
     const updates = await promptUpdates(fakeClient({ events }));
@@ -267,7 +261,7 @@ describe('kinu acp — prompt turn', () => {
     const text = updates.flatMap((update) => update.sessionUpdate === 'agent_message_chunk'
       ? [v.parse(v.object({ text: v.string() }), update.content).text] : []);
 
-    expect(text).toEqual(['one, ', 'tw', expect.stringContaining('restarted'), 'two']);
+    expect(text).toEqual(['one, ', 'tw', 'o']);
   });
 
   test('a tool call is reported with its id, kind and title, then settled as completed', async () => {

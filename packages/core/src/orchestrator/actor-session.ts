@@ -47,6 +47,7 @@ import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import { decideInterruptedTurn, type InterruptedTurnVerdict } from './turn-recovery';
+import type { ReportedTurn } from '../subordinates/turn-reports';
 import { lostToolCall } from '../tools/effect-claim';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
 
@@ -54,6 +55,7 @@ import type { MessageReference, MessagePartReference, PreparedMessage } from '..
 const RESTORE_REFUSALS: Readonly<Record<Extract<InterruptedTurnVerdict, { kind: 'closed' }>['cause'], string>> = {
   settled: 'This turn ended before the last process did, so it is not run again.',
   stopped: 'This turn was stopped before the last process ended, so it is not run again.',
+  answered: 'This turn had already given its report before the last process ended, so it is not run again.',
   record_unreadable: 'The record of what this turn had done could not be read after the last process ended, so it is not run again.',
   stalled: 'This turn made no progress across two runs, so it is not run a third time.',
   unverified: 'The program this turn ran has changed since the last process ended, so it is not run again under another.',
@@ -75,6 +77,8 @@ export interface ActorSessionOptions {
   /** Null is recorded and read back as unknown, never filled in from a placeholder version or descriptor. */
   readonly installedBuild: string | null;
   readonly workspace?: string;
+  /** Whether a turn already gave its hirer the report that answers its assignment; absent where nothing is hired. */
+  readonly answered?: (turn: ReportedTurn) => boolean;
   /** Optional: the revision rows are the durable record; no recorder means no event, never a fabricated one. */
   readonly events?: ContextEventRecorder | null;
   readonly recording?: RunEventRecorder;
@@ -288,6 +292,8 @@ export class ActorSession {
   }
   /** A host settles the claim under the outcome it named. */
   get turnClaim(): ActorTurnClaim | null { return this.active?.claim ?? null; }
+  /** Read, and observed, by whoever asks where a turn stands. */
+  get claims(): ActorClaimStore { return this.options.claims; }
   /** The revision the open turn's input was placed on. */
   get turnContext(): ContextSelection | null { return this.active?.context?.selection ?? null; }
 
@@ -634,6 +640,7 @@ export class ActorSession {
       runtime: this.runtime, stores: { claims: this.options.claims, history: this.options.history }, runs: this.options.recording ?? null,
       installedBuild: this.options.installedBuild, workspace: this.options.workspace ?? '', actor: this.runtime.identity.name,
       runId: lease.runId, claim: this.options.claims.read(lease.turnId),
+      ...(this.options.answered !== undefined && { answered: this.options.answered }),
       // This session holds the turn: it is the one deciding.
       turnOpen: () => false,
     }), (verdict) => {
@@ -901,7 +908,9 @@ export class ActorSession {
               await this.canonical.recordRender({ role: 'user', content: birth.text }, { before: entry?.entryId ?? null, replaces: birth.replaces }, claim.turnId, assertClaim);
             }
 
-            const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages, cache });
+            // The turn's step, not this call's: a resumed turn's call counts from 0 again, and a recovery measures
+            // progress, and the request read pairs each response, across the turn.
+            const consumed = await this.options.claims.consume(claim, { index: (input.resumedSteps ?? 0) + stepNumber, messages, cache });
 
             if (stepNumber === 0) tally.admittedMessages = [...messages];
             stream.beginRequest(consumed.requestId, stepNumber);

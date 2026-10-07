@@ -373,11 +373,14 @@ describe('an eviction with acknowledged steers', () => {
     ]);
     await chatSessionTurns(restarted.agent).settle({ messageId: 'a-live-again', text: 'kept' });
 
-    const rerun = present((await storedChat(restarted)).filter((message) => message.role === 'user').at(-1), 'the rerun user turn');
+    // One rerun turn, opened under the first send's id, each send published under its own.
+    const rerun = (await storedChat(restarted)).filter((message) => message.role === 'user').slice(-2);
 
-    expect(rerun.parts).toEqual([{ type: 'text', text: 'orphaned by an eviction\n\nalso orphaned' }]);
-    expect(turnAuthor(rerun)).toBe('operator');
-    expect(restarted.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(rerun.id)).toEqual({ work_mode: 'plan' });
+    expect(rerun.map((message) => [message.id, message.parts, turnAuthor(message)])).toEqual([
+      ['steer-dead-1', [{ type: 'text', text: 'orphaned by an eviction' }], 'operator'],
+      ['steer-dead-2', [{ type: 'text', text: 'also orphaned' }], 'operator'],
+    ]);
+    expect(restarted.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get('steer-dead-1')).toEqual({ work_mode: 'plan' });
 
     expect(present(restarted.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
   });

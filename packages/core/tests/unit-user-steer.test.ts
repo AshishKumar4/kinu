@@ -139,7 +139,7 @@ describe('Inbox — the user kind, accepted', () => {
     expect(queued).toEqual([{
       text: 'nothing is running',
       origin: 'user',
-      steerIds: ['s1'],
+      sends: [{ id: 's1', text: 'nothing is running' }],
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     }]);
     // The idle path: no idempotency key and nothing queued, but the broadcast still owes where the words went.
@@ -395,7 +395,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
     expect(queued).toEqual([{
       text: 'one more thing\n\nand this',
       origin: 'user',
-      steerIds: ['s1', 's2'],
+      sends: [{ id: 's1', text: 'one more thing' }, { id: 's2', text: 'and this' }],
       idempotencyKey: 'steer-rerun:turn-9:build:s1',
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     }]);
@@ -502,7 +502,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     // One turn: the users' rerun (the absorbed user is never requeued, its row exists), which both events ride.
     expect(queued.map((turn) => turn.text)).toEqual(['typed too late']);
     expect(queued[0]).toMatchObject({
-      origin: 'user', steerIds: ['s2'], metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
+      origin: 'user', sends: [{ id: 's2', text: 'typed too late' }], metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     });
     expect(queued[0].idempotencyKey).toMatch(/^steer-rerun:.*:build:/);
 
@@ -670,7 +670,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     expect(queued.map((turn) => ({
       text: turn.text,
       kinuMode: turn.metadata?.kinuMode,
-      steerIds: turn.steerIds,
+      steerIds: turn.sends?.map((send) => send.id),
       idempotencyKey: turn.idempotencyKey,
       origin: turn.origin,
     }))).toEqual([
@@ -704,7 +704,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     const first = inbox.send(steer('s1', 'first'));
     expect(await inbox.send(steer('s2', 'second'))).toBe('mid-turn');
     expect(await inbox.send(steer('s3', 'third'))).toBe('mid-turn');
-    expect(queued.map((turn) => ({ text: turn.text, steerIds: turn.steerIds, origin: turn.origin })))
+    expect(queued.map((turn) => ({ text: turn.text, steerIds: turn.sends?.map((send) => send.id), origin: turn.origin })))
       .toEqual([{ text: 'first', steerIds: ['s1'], origin: 'user' }]);
 
     // The turn opens on the first message; its first step carries the rest.

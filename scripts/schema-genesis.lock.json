@@ -139,10 +139,12 @@
     "session_id TEXT",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "agent_turn_reports@packages/cf-backend/src/agent-facet/agent-database.ts": [
-    "turn_id TEXT PRIMARY KEY",
+  "agent_turn_reports@packages/core/src/subordinates/turn-reports.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
     "spoke INTEGER NOT NULL",
-    "settled INTEGER NOT NULL"
+    "settled INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, turn_id)"
   ],
   "agent_wakes@packages/core/src/subordinates/open-turns.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
