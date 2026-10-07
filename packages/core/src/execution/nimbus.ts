@@ -94,7 +94,7 @@ export interface NimbusExecResult {
   timestamp?: number;
 }
 
-export interface NimbusProcessInfo {
+interface NimbusProcessInfo {
   pid: number;
   command: string;
   state: string;
@@ -120,7 +120,7 @@ export interface NimbusStartResult {
 
 /** The handle's file plane. `as(cred)` binds it to one identity; when absent the credentialed plane refuses
  *  rather than acting as the session user. */
-export interface NimbusSandboxFiles {
+interface NimbusSandboxFiles {
   as?(cred: VfsCred): NimbusSandboxFiles;
     read(path: string): Promise<string | null>;
     /** Raw-byte read (SDK ≥0.1.4). */

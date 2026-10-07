@@ -497,13 +497,13 @@ async function retireDescendants(seams: HostedActorSeams, below: ActorReference,
 }
 
 /** Heads, swarm nodes and steer branches are run actors. */
-export interface ExplorationActorRequest {
+interface ExplorationActorRequest {
   readonly creationId: string;
   /** Absent lets `defaultLoopOrigin` stand (`inherit`). */
   readonly loop?: LoopOrigin;
 }
 
-export interface ExplorationProfile {
+interface ExplorationProfile {
   readonly profile: ResolvedTurnProfile;
   readonly inputs: ProfileAuthorityInputs;
 }

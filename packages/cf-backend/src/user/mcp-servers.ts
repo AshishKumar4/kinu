@@ -86,7 +86,7 @@ interface McpCallInFlight {
   workspace: string | null;
 }
 
-export interface McpServerUnavailable {
+interface McpServerUnavailable {
   server: string;
   reason: string;
 }

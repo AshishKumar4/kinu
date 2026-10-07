@@ -34,6 +34,11 @@
  * only by tests. That set difference IS the classification. Two knip runs, no
  * reference resolver of our own.
  *
+ * A reference inside the declaring file is NOT a use (`ignoreExportsUsedInFile:
+ * false` in the knip block). Until 2026-10-07 it was, and 125 exports read only
+ * where they were declared, plus 107 exported for tests alone, were invisible to
+ * both runs. An export whose only reader is its own file needs no `export`.
+ *
  * The FOURTH is derived here instead, and the reason is measured rather than
  * stylistic. knip's dependency pass reported `vitest-evals` unused until
  * 2026-09-24: the eval suite sat outside its root entry globs, so its imports

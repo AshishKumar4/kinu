@@ -42,7 +42,7 @@ export interface ChatWire {
   interrupt(): void;
 }
 
-export interface ChatRoom {
+interface ChatRoom {
   onConnect(connection: ChatSocket): Promise<void>;
   onClose(connection: Pick<ChatSocket, 'id'>): void;
   onMessage(connection: ChatSocket, raw: string): Promise<boolean>;

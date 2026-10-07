@@ -680,9 +680,9 @@ export const LADDER: readonly Gate[] = [
       + 'therefore an entry. Measured 2026-08-19 on a four-file probe carrying this repository '
       + "own `knip` block: two leaf symbols called by nothing, published through `export *` "
       + "from the entry, were clean in knip's default run AND in `--production`, and importing "
-      + 'one THROUGH the barrel from a test changed neither run. `ignoreExportsUsedInFile: '
-      + 'true` closes the other half, which is `FORK_STRATEGY_ID` exactly: declared at '
-      + '`strategy/heads.ts:36`, read at `:40`, never reported. This gate measures PRODUCTION '
+      + 'one THROUGH the barrel from a test changed neither run. (`ignoreExportsUsedInFile` was '
+      + 'true until 2026-10-07, which also hid every export read only inside its own file; it '
+      + 'is false now, so `gate:dead-code` names those.) This gate measures PRODUCTION '
       + 'REACHABILITY instead — a path from an entrypoint that passes through no test and does '
       + 'not consist solely of re-exports — over entrypoints DISCOVERED from the declarations '
       + 'that create them: a handler bound under a `BUILTIN_TOOLS` name, a `@callable()`, a '

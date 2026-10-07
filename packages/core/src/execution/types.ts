@@ -189,7 +189,7 @@ export type PortExposureResult =
       reason: string;
     };
 
-export interface ExposedPortInfo {
+interface ExposedPortInfo {
   port: number;
   url: string;
   name?: string;

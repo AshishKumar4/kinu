@@ -33,7 +33,7 @@ function isStaleChunkFailure(cause: Error): boolean {
 /** `sessionStorage` key: must survive the reload it guards and die with the tab. */
 export const CHUNK_RELOAD_KEY = 'kinu.chunk-reload';
 
-export interface ChunkReloadStore {
+interface ChunkReloadStore {
   getItem: (key: string) => string | null;
   setItem: (key: string, value: string) => void;
 }
@@ -49,7 +49,7 @@ function claimChunkReload(session: ChunkReloadStore, target: string): boolean {
 /** Written by a browser gate to declare a chunk present; nothing in production reads it. */
 export const CHUNK_FIXED_KEY = 'kinu.chunk-fixed';
 
-export interface ChunkRecoveryDeps {
+interface ChunkRecoveryDeps {
   baseline: () => Promise<string | null>;
   live: () => Promise<string | null>;
   session: ChunkReloadStore;

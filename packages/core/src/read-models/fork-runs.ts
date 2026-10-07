@@ -15,7 +15,7 @@ import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch';
 import type { ActorHandle } from '../identity/actor-handle';
 
 /** `partial`: stopped without a settled answer. */
-export type ForkRunStatus = 'running' | 'completed' | 'failed' | 'partial';
+type ForkRunStatus = 'running' | 'completed' | 'failed' | 'partial';
 
 export interface ForkRunSummary {
   /** The run's `root_id`; exactly one summary exists per root id. */

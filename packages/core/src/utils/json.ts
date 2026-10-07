@@ -9,7 +9,7 @@ export interface JsonObject {
 }
 
 /** An interface, not `JsonValue[]`: workers-types' `Serializable<T>` on a typed DO stub hits TS2589 on alias recursion. */
-export interface JsonArray extends Array<JsonValue> {}
+interface JsonArray extends Array<JsonValue> {}
 
 export type JsonValue = JsonPrimitive | JsonArray | JsonObject;
 

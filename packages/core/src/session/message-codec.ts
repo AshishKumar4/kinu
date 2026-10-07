@@ -11,13 +11,13 @@ import * as v from 'valibot';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
 
-export type NativeValue =
+type NativeValue =
   | string | number | boolean | null | undefined
   | Uint8Array | ArrayBuffer | URL
   | readonly NativeValue[]
   | { readonly [key: string]: NativeValue };
 
-export type StoredValue = JsonValue;
+type StoredValue = JsonValue;
 
 /** What the codec carries, confirmed by one walk that allocates nothing: a union schema here recorded an issue for
  *  every option a node failed, on every write of every message (the heap gate's largest Kinu churn, 2026-10-07). */

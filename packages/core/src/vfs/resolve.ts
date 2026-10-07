@@ -6,13 +6,13 @@ import { EXECUTOR_MOUNTS } from './mounts';
 import { workspacePath } from './workspace-path';
 
 /** A prefix: the name before `://`, and the subtree of `vfs://`, the one tree an agent sees, that it names. */
-export interface PathPrefix {
+interface PathPrefix {
   readonly prefix: string;
   readonly subtree: string;
 }
 
 /** Where one subtree of the VFS sits on this machine. */
-export interface VfsSubtree {
+interface VfsSubtree {
   readonly subtree: string;
   readonly at: string;
 }

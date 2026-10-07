@@ -13,13 +13,13 @@ import { diagnostics, settle } from './index';
 import { nowMs } from '../utils/date';
 
 /** `peer` crosses a workspace boundary; `subordinate` stays inside one workspace. */
-export type MsgTransport = 'peer' | 'subordinate';
+type MsgTransport = 'peer' | 'subordinate';
 
 /** `agent` names a roster entry; `event` answers an inbound message event by id. */
-export type MsgAddressing = 'agent' | 'event';
+type MsgAddressing = 'agent' | 'event';
 
 /** `replied` is a send-and-await that got an answer; its `wait_ms` includes the other agent's think time. */
-export type MsgOutcome = 'delivered' | 'queued' | 'replied' | 'rejected' | 'failed';
+type MsgOutcome = 'delivered' | 'queued' | 'replied' | 'rejected' | 'failed';
 
 export interface MsgSendFact {
   readonly action: 'msg' | 'hire';

@@ -11,7 +11,7 @@ import { attempt, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 
-export interface SlateBootArtifacts {
+interface SlateBootArtifacts {
   application: string;
   client?: string;
   shell?: string;

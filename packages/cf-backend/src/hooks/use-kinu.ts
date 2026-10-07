@@ -178,7 +178,7 @@ export interface SubordinateSnapshot {
   pendingSteers: InlineSteer[];
 }
 
-export interface WorkspaceSnapshot {
+interface WorkspaceSnapshot {
   status: AgentStatus;
   memoryContent: string;
   slates: SlateSummary[];
@@ -474,9 +474,9 @@ export async function refreshLiveResource<Value>(
 
 export interface UnavailableDevice { id: string; label: string; lastSeenAt: number | null }
 
-export type ConsentDecision = "once" | "always" | "deny";
+type ConsentDecision = "once" | "always" | "deny";
 
-export interface PendingConsentResolution {
+interface PendingConsentResolution {
   readonly consentId: string;
   readonly decision: ConsentDecision;
   readonly resolve: (id: string, choice: ConsentDecision) => Promise<void>;

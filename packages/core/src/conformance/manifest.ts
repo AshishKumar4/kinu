@@ -14,7 +14,7 @@ import type { SpendSource } from '../events/model-call';
  */
 export const CONFORMANCE_PRODUCERS = ['judge'] as const satisfies readonly SpendSource[];
 
-export type ConformanceProducer = (typeof CONFORMANCE_PRODUCERS)[number];
+type ConformanceProducer = (typeof CONFORMANCE_PRODUCERS)[number];
 
 /** cf splits by actor profile because the profiles differ (`actorToolDeps`). */
 export const CONFORMANCE_ROOTS = ['cf-orchestrator', 'cf-subordinate', 'cli'] as const;

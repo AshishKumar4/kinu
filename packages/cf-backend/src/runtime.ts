@@ -645,7 +645,7 @@ function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'env' | 'actor' | 
 export const MODEL_SETTINGS = 'Settings > Models';
 
 /** `resolveProfile` absent means no lane to build. */
-export interface ProfileLaneOptions {
+interface ProfileLaneOptions {
   readonly agent: AgentHost;
   readonly env: Env;
   readonly actor: ActorRuntimeIdentity;

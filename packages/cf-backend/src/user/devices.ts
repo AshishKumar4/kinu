@@ -111,7 +111,7 @@ export const DeviceHelloSchema = v.object({
 
 /** An object type rather than an interface, so it satisfies the row constraint `sqlx` puts
  *  on its result shape. */
-export type SandboxColumns = {
+type SandboxColumns = {
   sandbox_capability: string | null;
   sandbox_reason: string | null;
   sandbox_detail: string | null;
@@ -155,7 +155,7 @@ function absolutePathOrNull(value: string | undefined): string | null {
   return parsed.output.replace(/\/+$/, '') || '/';
 }
 
-export type SandboxVerdict = Pick<DeviceSandboxStatus, 'capability' | 'reason' | 'detail'>;
+type SandboxVerdict = Pick<DeviceSandboxStatus, 'capability' | 'reason' | 'detail'>;
 
 /** An absent or unrecognised word narrows to "not proved"; detail travels as written. */
 function readSandboxColumns(row: SandboxColumns | undefined): SandboxVerdict & Pick<DeviceSandboxStatus, 'gpu'> {

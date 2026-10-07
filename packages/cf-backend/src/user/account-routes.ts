@@ -27,7 +27,7 @@ const ExperienceQuery = v.object({
   limit: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(100)),
 });
 
-export type AccountAuthority = Pick<
+type AccountAuthority = Pick<
   UserDO, 'completeOnboarding' | 'searchExperience' | 'deleteAccount' | 'setDisplayName' | 'heldRows'
 >;
 

@@ -135,7 +135,7 @@ export function runEventsRoutes<Bindings extends object>(
 }
 
 
-export interface RunEventStreamOptions {
+interface RunEventStreamOptions {
   readonly resolveAgent: RunEventsResolver;
   readonly agentName: string;
   readonly runId: string;

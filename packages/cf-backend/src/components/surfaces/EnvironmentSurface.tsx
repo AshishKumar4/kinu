@@ -41,7 +41,7 @@ function filesRootFor(name: string): string | null {
 
 type StatusReading = { word: string; dotClass: string };
 
-export function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReading {
+function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReading {
   // Reach before liveness, but only for a live row: `granted` is answered only while
   // the machine is connected, so a not-live mount stays offline.
   if (mount.live && mount.name === "device" && exec?.granted === false) {

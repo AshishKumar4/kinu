@@ -21,7 +21,7 @@ export interface MossaicChild {
   readonly stat?: MossaicStat;
 }
 
-export interface MossaicChildrenPage {
+interface MossaicChildrenPage {
   readonly entries: readonly MossaicChild[];
   readonly cursor?: string;
 }

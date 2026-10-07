@@ -1,7 +1,7 @@
 import type { ToolExecutionOptions, ToolSet } from 'ai';
 import type { ScopedSpan, TurnTrace, TurnUnitTimer } from './obs/index';
 
-export type TracedToolOptions = ToolExecutionOptions<unknown> & { readonly trace?: TurnTrace };
+type TracedToolOptions = ToolExecutionOptions<unknown> & { readonly trace?: TurnTrace };
 
 type ToolInput = Parameters<NonNullable<ToolSet[string]['execute']>>[0];
 

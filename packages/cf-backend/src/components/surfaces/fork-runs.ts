@@ -37,14 +37,14 @@ function canvasIndex<T>(
 
 export const FORK_REVALIDATE_MS = 1500;
 
-export const FORK_IDLE_REVALIDATE_MS = 15_000;
+const FORK_IDLE_REVALIDATE_MS = 15_000;
 
 export function hasLiveForkRun(runs: readonly ForkRunSummary[] | null): boolean {
   return runs?.some((run) => run.status === "running") === true;
 }
 
 /** Detached jobs do not stream through the chat connection, so they count independently. */
-export function hasActiveForkWork(
+function hasActiveForkWork(
   isStreaming: boolean,
   backgroundJobs: readonly BackgroundJob[],
 ): boolean {
@@ -80,7 +80,7 @@ export function selectForkRun(
   return runs[0] ?? null;
 }
 
-export function forkRunsRevalidateMs(
+function forkRunsRevalidateMs(
   runs: readonly ForkRunSummary[] | null,
   hasActiveWork: boolean,
 ): number {

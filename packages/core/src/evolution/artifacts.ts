@@ -40,7 +40,7 @@ const ArtifactIdSchema = v.union([
   v.object({ kind: v.literal('tool'), id: v.string(), part: v.picklist(['description', 'schema']) }),
 ]);
 
-export type ParsedArtifactId = v.InferOutput<typeof ArtifactIdSchema>;
+type ParsedArtifactId = v.InferOutput<typeof ArtifactIdSchema>;
 
 function parseArtifactId(artifactId: string): ParsedArtifactId | null {
   const section = /^section:(.+)$/.exec(artifactId);

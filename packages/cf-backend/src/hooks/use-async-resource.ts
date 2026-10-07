@@ -10,7 +10,7 @@ export type AsyncResource<T> =
   | { status: "ready"; value: T };
 
 /** A value already on screen stays while it revalidates. */
-export function beginLoad<T>(previous: AsyncResource<T>): AsyncResource<T> {
+function beginLoad<T>(previous: AsyncResource<T>): AsyncResource<T> {
   if (previous.status === "ready") return previous;
 
   if (previous.status === "error" && previous.last !== null) return previous;

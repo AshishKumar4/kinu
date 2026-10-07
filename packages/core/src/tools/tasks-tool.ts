@@ -115,7 +115,7 @@ function updateTask(taskList: TaskListStore, args: TasksToolInput, now: number):
   return Effect.succeed(result);
 }
 
-export type RoleSwitchOutcome =
+type RoleSwitchOutcome =
   | { readonly kind: 'applied' }
   | { readonly kind: 'no-authority' }
   | { readonly kind: 'denied'; readonly text: string }

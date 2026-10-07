@@ -62,7 +62,7 @@ const RESTORE_REFUSALS: Readonly<Record<Extract<InterruptedTurnVerdict, { kind: 
 };
 
 /** A hosted actor shares workspace priorities, but delivers feedback to itself. */
-export interface ActorAdvisorContext {
+interface ActorAdvisorContext {
   readonly config: AgentConfigStore;
   readonly workspace: () => Promise<VFS>;
   readonly parent: (signal: AgentSignal) => Promise<SendOutcome>;

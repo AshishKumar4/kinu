@@ -106,7 +106,7 @@ const QuerySchema = z.string().min(1);
 
 /** Why a `file` call failed: the ledger's reasons plus malformed arguments, which never
  *  became an edit attempt and must not inflate `attempts`. */
-export type FileToolFailureReason = FileEditOutcomeReason | 'bad_input';
+type FileToolFailureReason = FileEditOutcomeReason | 'bad_input';
 
 /** Fail at the operation that made the decision; callers choose the native or namespace boundary. */
 function failure(reason: FileToolFailureReason, error: string): never {

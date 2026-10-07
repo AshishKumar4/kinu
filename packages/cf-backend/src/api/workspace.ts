@@ -11,7 +11,7 @@ export interface WorkspaceAgent {
   evalAbortActivation(): Promise<void>;
 }
 
-export interface OwnedWorkspace {
+interface OwnedWorkspace {
   readonly name: string;
   readonly agent: WorkspaceAgent;
   /** Identity headers rewritten from the verified identity. */

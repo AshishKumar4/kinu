@@ -24,7 +24,7 @@ import type { CliAuthAuthority } from '../cli/auth-store';
 
 /** Client view of a proxyable credential; never carries secret material. `baseURL` and `contextWindow` are the
  * endpoint an openai-compat credential names; `failure` marks an unreadable entry without failing the listing. */
-export interface ProxyableCredential {
+interface ProxyableCredential {
   key: string;
   baseURL?: string;
   contextWindow?: number;
@@ -41,7 +41,7 @@ const STRIPPED_REQUEST_HEADERS: readonly string[] = [
   'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-real-ip',
 ];
 
-export type ProxyCredentialSource = Pick<UserDO, 'listCredentials' | 'getCredentialEndpoint' | 'getAuthHeaders'>;
+type ProxyCredentialSource = Pick<UserDO, 'listCredentials' | 'getCredentialEndpoint' | 'getAuthHeaders'>;
 
 type ProxyAuthority = CliAuthAuthority & ProxyCredentialSource;
 

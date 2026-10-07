@@ -156,7 +156,7 @@ import {
  * This session's actor as the root's host bound it. Absent: the session owns its actor outright
  * (`kinu evolve`, `kinu exec`, fixtures). Present: a {@link LocalAgentHost} bound it over the one database.
  */
-export interface LocalHostedSession {
+interface LocalHostedSession {
   readonly actor: HostedActor;
   readonly host: ActorHost;
   readonly orchestration: LocalOrchestration;

@@ -22,7 +22,7 @@ const RECOVER_LABEL = { idle: "Recover", busy: "Recovering…" } as const;
 export type ChatMode = (typeof CHAT_MODES)[number];
 
 /** `progress` is `neutral` plus a spinner, with no tint of its own. */
-export type NoticeTone = "danger" | "warning" | "info" | "success" | "neutral" | "progress";
+type NoticeTone = "danger" | "warning" | "info" | "success" | "neutral" | "progress";
 
 export interface ComposerNotice {
   id: string;

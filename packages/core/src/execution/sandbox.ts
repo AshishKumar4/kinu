@@ -43,7 +43,7 @@ interface SandboxExposeOptions {
 }
 
 /** Shared by core and every adapter; field semantics on `SandboxHandle.exec`. */
-export interface SandboxExecOptions {
+interface SandboxExecOptions {
   cwd?: string;
   timeout?: number;
   signal?: AbortSignal;
@@ -51,7 +51,7 @@ export interface SandboxExecOptions {
   output?: OutputSink;
 }
 
-export interface SandboxPortListener {
+interface SandboxPortListener {
   readonly port: number;
   readonly pid: number;
   readonly stamp: string | null;

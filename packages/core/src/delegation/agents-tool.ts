@@ -614,7 +614,7 @@ function msgInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVaria
   return variants;
 }
 
-export function agentsActionFieldsFor(
+function agentsActionFieldsFor(
   deps: AgentsToolDeps,
   action: AgentsToolAction,
 ): readonly AgentsToolInputField[] {
