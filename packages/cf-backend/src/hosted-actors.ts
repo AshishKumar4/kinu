@@ -379,7 +379,8 @@ export function hostedOwedReport(
   }));
 }
 
-/** A settled turn's report, relayed to the hirer's ingress, which dedupes on its sequence id; answers its disposition. */
+/** A settled turn's report, relayed to the hirer's ingress, which dedupes on its sequence id; answers its disposition.
+ *  It answers the assignment it is keyed on, in the relay's own commit; any other key names none. */
 export async function hostedParentReport(
   seams: HostedActorSeams,
   actor: BoundActor,
@@ -388,7 +389,7 @@ export async function hostedParentReport(
   const relayed = await publishSubordinateReport({ mode: report.mode, reports: null }, {
     status: report.status, content: report.text, origin: 'turn_end', sequenceId: report.sequenceId,
     ...(report.quiet === true && { quiet: true }),
-  }, (published) => relayHostedReport(seams, actor, published));
+  }, (published) => relayHostedReport(seams, actor, { ...published, answers: report.sequenceId }));
 
   return relayed.disposition;
 }

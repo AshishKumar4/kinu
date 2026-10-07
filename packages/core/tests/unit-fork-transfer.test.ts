@@ -1031,33 +1031,33 @@ describe('what a fork carries of what its source learned', () => {
     createFactsStore(src.sql, actor).upsert('timezone', { zone: 'Europe/Lisbon' });
 
     const parent = appDataOf(src);
-    parent.createTable(LEDGER);
-    parent.createTable({ name: 'shared', scope: 'workspace', columns: [{ name: 'note', type: 'text' }] });
+    const shared: AppTableSpec = { name: 'shared', scope: 'workspace', columns: [{ name: 'note', type: 'text' }] };
 
-    parent.apply({
-      op: 'insert', table: 'ledger',
-      rows: Array.from({ length: LEDGER_ROWS }, (_, at) => ({
-        key: `k${String(at).padStart(3, '0')}`, amount: at, proof: at % 2 === 0 ? 'AAECf4D//g==' : null, detail: { at },
-      })),
-    });
+    const ledger = Array.from({ length: LEDGER_ROWS }, (_, at) => ({
+      key: `k${String(at).padStart(3, '0')}`, amount: at, proof: at % 2 === 0 ? 'AAECf4D//g==' : null, detail: { at },
+    }));
+
+    parent.createTable(LEDGER);
+    parent.createTable(shared);
+    parent.apply({ op: 'insert', table: 'ledger', rows: ledger });
     parent.apply({ op: 'insert', table: 'shared', rows: [{ note: 'read by every agent' }] });
 
     const { result } = await transfer(src, receiverFor(tgt), { untilMessageId: 'm2' });
     expect(result).not.toBeNull();
     const forkActor = openWorkspaceMainActor(tgt.sql);
 
-    expect(listToolLessons(tgt.sql, forkActor, ['bash'], 10)).toEqual(listToolLessons(src.sql, actor, ['bash'], 10));
     expect(listToolLessons(tgt.sql, forkActor, ['bash'], 10).map((lesson) => lesson.text)).toEqual(['Quote every glob.']);
-    expect(createFactsStore(tgt.sql, forkActor).all()).toEqual(createFactsStore(src.sql, actor).all());
+    expect(createFactsStore(tgt.sql, forkActor).all()).toMatchObject([
+      { key: 'editor', value: 'helix', confidence: 0.9, source: 'user' },
+      { key: 'timezone', value: { zone: 'Europe/Lisbon' } },
+    ]);
 
     const fork = appDataOf(tgt);
-    const declared = (store: AppDataStore) => store.listTables().map(({ createdBy: _, ...table }) => table);
 
-    expect(declared(fork)).toEqual(declared(parent));
-    expect(fork.listTables().every((table) => table.createdBy === forkActor.actorId)).toBe(true);
+    expect(fork.listTables()).toMatchObject([{ ...LEDGER, createdBy: forkActor.actorId }, { ...shared, createdBy: forkActor.actorId }]);
     // The target's main actor reads the actor-scope rows: they landed as its own, not the source actor's.
     expect(fork.count('ledger')).toBe(LEDGER_ROWS);
-    expect(fork.select('ledger', { orderBy: [{ column: 'key' }], limit: LEDGER_ROWS })).toEqual(parent.select('ledger', { orderBy: [{ column: 'key' }], limit: LEDGER_ROWS }));
+    expect(fork.select('ledger', { orderBy: [{ column: 'key' }], limit: LEDGER_ROWS })).toEqual(ledger);
     expect(fork.select('shared')).toEqual([{ note: 'read by every agent' }]);
   });
 

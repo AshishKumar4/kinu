@@ -227,69 +227,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  try {
-    runWrangler(REPO, ['r2', 'bucket', 'create', worker]);
-    const toolsArgument = process.argv.indexOf('--tools');
-    await installTools(worker, toolsArgument === -1 ? undefined : process.argv[toolsArgument + 1]);
-    const secrets = join(scratch, 'secrets.json');
-    // Wrangler's secret file exists only in the run's private scratch directory and is removed immediately.
-    const authority: FixtureSecrets = { EVAL_IDENTITY: identity, DEVBOX_REGISTRY_TOKEN: token };
-
-    if (process.argv.includes('--probe')) {
-      authority['PROBE_ACCESS_KEY_ID'] = process.env['R2_ACCESS_KEY_ID'];
-      authority['PROBE_SECRET_ACCESS_KEY'] = process.env['R2_SECRET_ACCESS_KEY'];
-    }
-
-    writeFileSync(secrets, JSON.stringify(authority), { mode: 0o600 });
-    let published: string;
-
-    try { published = runWrangler(REPO, ['deploy', '--config', config, '--secrets-file', secrets]); }
-    finally { rmSync(secrets); }
-
-    origin = /https:\/\/[\w.-]+\.workers\.dev/u.exec(published)?.[0];
-
-    if (origin === undefined) throw new Error('the fixture deploy printed no origin');
-    writeReport();
-    // D17's fixture readiness: deploy returns before the workers.dev route answers.
-    const readyBy = Date.now() + 180_000;
-
-    for (;;) {
-      const ready = await fetch(`${origin}/health`, { headers: { authorization: `Bearer ${identity}` } });
-
-      if (ready.status === 200) break;
-
-      if (Date.now() >= readyBy) throw new Error(`the fixture route did not become ready: ${String(ready.status)}`);
-      await delay(3_000);
-    }
-
-    requireEqual((await fetch(`${origin}/health`)).status, 401);
-    await step('golden', () => call('/golden', v.object({ id: v.string() }), {}, 'devbox-golden'));
-    await collectSnapshots('devbox-golden');
-    await step('declared-image-use', () => call('/inspection', v.unknown()));
-    const probeArgument = process.argv.indexOf('--probe');
-
-    if (probeArgument !== -1) {
-      await step('storage-alternatives', async () => {
-        const probe = '/var/tmp/devbox-probe';
-        const command = `bash -c ${shellQuote(readFileSync(process.argv[probeArgument + 1] ?? '', 'utf8'))}; rc=$?; echo "$rc" >${probe}/exit`;
-        const launched = await call('/storage-probe', Exec, { command: `mkdir -p ${probe}; setsid bash -c ${shellQuote(command)} >${probe}/output 2>&1 </dev/null & echo launched` });
-        requireEqual(launched.exitCode, 0);
-
-        for (;;) {
-          const status = await shell(`if [ -e ${probe}/exit ]; then cat ${probe}/exit; else echo running; fi`);
-
-          if (status === 'running') { await delay(1_000); continue; }
-
-          const output = await shell(`cat ${probe}/output`);
-
-          if (status !== '0') throw new Error(`storage probe exited ${status}: ${output.slice(-5000)}`);
-
-          return output;
-        }
-      });
-
-    } else {
-
+  /** The container's contracts, the desktop through the product routes, and the product's own chain. */
+  const productContracts = async () => {
     for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
     await step('desktop-client', async () => {
       const nativeBox = names[1] ?? '';
@@ -377,6 +316,72 @@ async function main(): Promise<void> {
 
       return { base, recoveryExact: true, afterRecoveryExact: true, state: await call('/state', State) };
     });
+  };
+
+  try {
+    runWrangler(REPO, ['r2', 'bucket', 'create', worker]);
+    const toolsArgument = process.argv.indexOf('--tools');
+    await installTools(worker, toolsArgument === -1 ? undefined : process.argv[toolsArgument + 1]);
+    const secrets = join(scratch, 'secrets.json');
+    // Wrangler's secret file exists only in the run's private scratch directory and is removed immediately.
+    const authority: FixtureSecrets = { EVAL_IDENTITY: identity, DEVBOX_REGISTRY_TOKEN: token };
+
+    if (process.argv.includes('--probe')) {
+      authority['PROBE_ACCESS_KEY_ID'] = process.env['R2_ACCESS_KEY_ID'];
+      authority['PROBE_SECRET_ACCESS_KEY'] = process.env['R2_SECRET_ACCESS_KEY'];
+    }
+
+    writeFileSync(secrets, JSON.stringify(authority), { mode: 0o600 });
+    let published: string;
+
+    try { published = runWrangler(REPO, ['deploy', '--config', config, '--secrets-file', secrets]); }
+    finally { rmSync(secrets); }
+
+    origin = /https:\/\/[\w.-]+\.workers\.dev/u.exec(published)?.[0];
+
+    if (origin === undefined) throw new Error('the fixture deploy printed no origin');
+    writeReport();
+    // D17's fixture readiness: deploy returns before the workers.dev route answers.
+    const readyBy = Date.now() + 180_000;
+
+    for (;;) {
+      const ready = await fetch(`${origin}/health`, { headers: { authorization: `Bearer ${identity}` } });
+
+      if (ready.status === 200) break;
+
+      if (Date.now() >= readyBy) throw new Error(`the fixture route did not become ready: ${String(ready.status)}`);
+      await delay(3_000);
+    }
+
+    requireEqual((await fetch(`${origin}/health`)).status, 401);
+    await step('golden', () => call('/golden', v.object({ id: v.string() }), {}, 'devbox-golden'));
+    await collectSnapshots('devbox-golden');
+    await step('declared-image-use', () => call('/inspection', v.unknown()));
+    const probeArgument = process.argv.indexOf('--probe');
+
+    if (probeArgument !== -1) {
+      await step('storage-alternatives', async () => {
+        const probe = '/var/tmp/devbox-probe';
+        const command = `bash -c ${shellQuote(readFileSync(process.argv[probeArgument + 1] ?? '', 'utf8'))}; rc=$?; echo "$rc" >${probe}/exit`;
+        const launched = await call('/storage-probe', Exec, { command: `mkdir -p ${probe}; setsid bash -c ${shellQuote(command)} >${probe}/output 2>&1 </dev/null & echo launched` });
+        requireEqual(launched.exitCode, 0);
+
+        for (;;) {
+          const status = await shell(`if [ -e ${probe}/exit ]; then cat ${probe}/exit; else echo running; fi`);
+
+          if (status === 'running') { await delay(1_000); continue; }
+
+          const output = await shell(`cat ${probe}/output`);
+
+          if (status !== '0') throw new Error(`storage probe exited ${status}: ${output.slice(-5000)}`);
+
+          return output;
+        }
+      });
+
+    } else {
+    // `--disk`: only the disk chain's contracts, with no desktop and so no browser on this host.
+    if (!process.argv.includes('--disk')) await productContracts();
 
     for (const kind of DISK_CONTRACTS) await step(`disk-${kind}`, () => call(`/disk-contract?kind=${kind}`, Json, {}, `${box}-disk`));
     }

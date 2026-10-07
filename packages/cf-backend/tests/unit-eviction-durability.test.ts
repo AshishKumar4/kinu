@@ -10,7 +10,7 @@ import {
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import {
   catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, historyOver, jobsOver, orchestratorHarness,
-  adviceDue, driveUntil, reactivateOrchestratorHarness, until, workspaceMainActor,
+  alarmDue, driveUntil, reactivateOrchestratorHarness, until, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
@@ -206,7 +206,7 @@ describe('the post-turn lanes', () => {
 
       await restarted.agent.terminalRetryPass();
       // The review is the hired advisor's own delegated turn, which the wake drains; its answer's job delivers the note.
-      await driveUntil(restarted, 'the replayed review settled', () => owedReview(restarted) === 0 && advisorsWorking(restarted) === 0 && !adviceDue(restarted.db));
+      await driveUntil(restarted, 'the replayed review settled', () => owedReview(restarted) === 0 && advisorsWorking(restarted) === 0 && !alarmDue(restarted.db));
       await joinHarnessFibers();
 
       return restarted;

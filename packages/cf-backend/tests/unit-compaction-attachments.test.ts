@@ -165,7 +165,7 @@ async function addedAgent(agent: HarnessOrchestratorAgent) {
 
   return async (text: string): Promise<void> => {
     await asPane(pane, () => agent.send(text, crypto.randomUUID()));
-    await agent.harnessSettleDetached();
+    await agent.harnessAgentsIdle();
   };
 }
 

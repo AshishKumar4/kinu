@@ -4309,6 +4309,32 @@ count is not a cost. A local workerd clock is not a cloud latency. A run is
 admitted only when every G gate passes; a refused run ranks nothing. The
 admission code that enforced this left the tree with D27's instruments.
 
+D77. The disk chain's deltas are a binary counter (2026-10-07, m1966b). A
+recovery mounted every layer the chain held, and a rest compacted only at
+eight deltas or a quarter of the base, so a box that ticked between rests
+recovered through up to nine squashfuse mounts, block-lower manifests and
+overlay lowers. Now each save takes in the newest layers no larger than
+what it has gathered, the way a binary counter carries, and publishes one
+layer cut from the boundary below them: n saves since the base are held in
+at most floor(log2 n) + 1 deltas, so L <= floor(log2 n) + 2 layers.
+
+- A merged layer is cumulative from its boundary. Its changes are the union
+  of the lists its layers answer for, each path written as it is now or
+  whited out if gone. Every delta carries that list
+  (`.devbox-delta/paths`) and leaves it on the disk; after a recovery the
+  list is read from the object. A delta from before D77 has none, so the
+  save that would take it in is a base.
+- The block digests of each boundary below a kept layer stay on the disk,
+  so an edited block in a large file still travels as a block when a merge
+  re-cuts it. A boundary without them sends its changed large files whole.
+- Nothing merges into a layer a mounted recovery reads: saves on it count
+  above those layers, and take them in once the copy is the workspace.
+- `COMPACT_LAYERS` is gone; the quarter-of-the-base compaction at a rest
+  stays. No change to `devbox-block-lower`: a merged layer is an ordinary
+  layer over the ones below it.
+- A delta no longer whites out a path under one that stopped being a
+  directory; the archive held such a parent as both a file and a directory.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

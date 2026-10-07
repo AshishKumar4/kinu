@@ -71,6 +71,8 @@ const MOVED_ELSEWHERE = new Map([
   ['conversation_entries', "the work mode follows the root's own turns, and every page re-reads at turn end"],
   ['run_events', 'the changelog reads only promotions and rollbacks, each written with its scaffold_versions row; '
     + "the agents list reads each agent's figures, which move when its turn settles its actor_turn_claims row"],
+  ['cf_agents_jobs', "the work read asks the agents whose wake is armed; the SDK's queue writes pass no watched statement, "
+    + 'so the agent wakes name the read on each arm and cancel'],
 ]);
 
 test('every table a live read selects from is one whose writes name that read', async () => {

@@ -140,7 +140,7 @@ describe("a hired agent's job", () => {
     pane.close();
     await probe(workspace).settled(workspace);
     const before = await probe(workspace).jobWatchState(workspace);
-    expect(before).toMatchObject({ terminalRetry: false, fibers: 1 });
+    expect(before).toMatchObject({ terminalRetry: false, agentWakes: 0, fibers: 1 });
 
     // No row is deleted by the fixture: the installed SDK's max-age policy expires it on activation.
     if (fiberKind === 'expired') expect(await probe(workspace).ageJobFiber(workspace, job.id)).toBe(1);
