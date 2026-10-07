@@ -2461,7 +2461,7 @@ describe('LocalAgentHost — the driver lease', () => {
     }
   });
 
-  test('opening a workspace settles a task left for a hire that is gone, with a reason', async () => {
+  test('opening a workspace settles a task left for a hire that is gone, with a reason, and a live actor\'s with its own', async () => {
     // The rule lives in core; cf's copy of this row woke its workspace every lap for days (2026-09-26).
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
@@ -2469,10 +2469,16 @@ describe('LocalAgentHost — the driver lease', () => {
     const db = workspaceDatabase(dbPath);
 
     try {
-      db.query(
+      const insert = db.query(
         `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
-         VALUES ('gone-actor', 'orphan-task', 'event', 'subordinate_task', 'trace-orphan', '{"body":"brief"}', ?)`,
-      ).run(Date.now());
+         VALUES (?, ?, 'event', 'subordinate_task', 'trace-orphan', '{"body":"brief"}', ?)`,
+      );
+
+      const root = present(db.query<{ actor_id: string }, []>('SELECT actor_id FROM workspace_actors WHERE parent_actor_id IS NULL').get(), 'the root actor');
+
+      insert.run('gone-actor', 'orphan-task', Date.now());
+      // Any hosted actor can be handed a task; the drain runs hires only.
+      insert.run(root.actor_id, 'unrun-task', Date.now());
     } finally {
       db.close();
     }
@@ -2491,6 +2497,14 @@ describe('LocalAgentHost — the driver lease', () => {
       expect(view.query<{ step_idx: number | null; reason: string | null }, []>(
         `SELECT step_idx, json_extract(payload, '$.__dismissed.reason') AS reason FROM agent_log WHERE id = 'orphan-task'`,
       ).get()).toEqual({ step_idx: -2, reason: 'its actor is retired or gone' });
+
+      const unrun = view.query<{ step_idx: number | null; reason: string | null }, []>(
+        `SELECT step_idx, json_extract(payload, '$.__dismissed.reason') AS reason FROM agent_log WHERE id = 'unrun-task'`,
+      ).get();
+
+      // Settled too, and not said to be for an actor that is gone.
+      expect(unrun?.step_idx).toBe(-2);
+      expect(unrun?.reason).not.toBe('its actor is retired or gone');
     } finally {
       view.close();
     }

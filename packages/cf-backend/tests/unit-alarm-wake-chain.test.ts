@@ -521,6 +521,30 @@ describe('the workspace keeps exactly one wake per job', () => {
     expect(wakeArmed(db)).toBe(false);
   });
 
+  test('a task for a live actor no drain runs settles, never said to be for an actor that is gone', async () => {
+    const { agent, db } = orchestratorHarness();
+    await agent.activateActor();
+    await joinHarnessFibers();
+
+    // Any hosted actor can be handed a task; the drain runs hires only, so the root's settles undone.
+    const insert = db.prepare(
+      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
+       VALUES (?, ?, 'event', 'subordinate_task', 'trace-unrun', '{"body":"brief"}', ?)`,
+    );
+
+    insert.run(harnessActorId(db), 'unrun-task', Date.now());
+    insert.run('gone-actor', 'gone-task', Date.now());
+
+    await agent.terminalRetryPass();
+    await joinHarnessFibers();
+
+    const [unrun, gone] = [orphanRow(db, 'unrun-task'), orphanRow(db, 'gone-task')];
+
+    expect([unrun.step_idx, gone.step_idx]).toEqual([-2, -2]);
+    // The live root's reason is its own, not the reason a gone actor's task is given.
+    expect(unrun.dismissed).not.toBe(gone.dismissed);
+  });
+
   test('a task left for a retired hire settles, and a live hire\'s task still runs', async () => {
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();

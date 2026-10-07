@@ -1596,10 +1596,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private startDelegationDrain(): void {
-    const hires = this.workspaceActors().list().filter((record) => isSubordinateOrigin(record.origin));
+    const live = this.workspaceActors().list();
+    const hires = live.filter((record) => isSubordinateOrigin(record.origin));
 
-    for (const orphan of dismissOrphanedAssignments(this.boundExec(), new Set(hires.map((record) => record.actorId)))) {
-      diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id });
+    // Any hosted actor can be handed a task; the drain runs hires only.
+    const orphans = dismissOrphanedAssignments(this.boundExec(), {
+      live: new Set(live.map((record) => record.actorId)), drained: new Set(hires.map((record) => record.actorId)),
+    });
+
+    for (const orphan of orphans) {
+      diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id, reason: orphan.reason });
     }
 
     this.delegatedTurns.start(hires);
