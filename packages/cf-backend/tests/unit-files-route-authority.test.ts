@@ -557,7 +557,8 @@ describe('a transfer that does not finish', () => {
     expect(rail.device.get(DEVICE_FILE)).toBe('all of it');
   });
 
-  test('a precondition this plane cannot honour refuses base and mounted writes instead of taking them', async () => {
+  // The workspace's own files keep revisions, so a stale one is a failed precondition; a device's plane keeps none.
+  test('a stale revision of a workspace file and any precondition on a device file refuse the write, taking nothing', async () => {
     const rail = await seam({ workspaces: ['upload-conditional'] });
     rail.user.consentDecision = 'always';
     await rail.files({
@@ -580,8 +581,7 @@ describe('a transfer that does not finish', () => {
       method: 'PUT', body: 'third', ifMatch: 'W/"etag"',
     });
 
-    expect(conditional.status).toBe(409);
-    expect(await errorOf(conditional)).toContain('cannot protect an in-place edit');
+    expect(conditional.status).toBe(412);
     expect(mountedConditional.status).toBe(409);
     expect(await errorOf(mountedConditional)).toContain('cannot protect an in-place edit');
     expect(malformed.status).toBe(400);

@@ -1,1 +1,1 @@
-Prefixes name parts of `vfs://`: {{aliases}}. Here {{mounts}}.
+Prefixes name parts of `vfs://`: {{aliases}}. Here {{mounts}}.{{#if hasViews}} {{views}} are views only the `file` tool and `workspace.*` read; no shell has a path for them.{{#if hasOwnSkills}} The workspace's own skills are files at `{{ownSkills}}`.{{/if}}{{/if}}

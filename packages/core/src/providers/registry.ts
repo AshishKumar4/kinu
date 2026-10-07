@@ -1,5 +1,7 @@
 // ProviderRegistry: resolves "<provider>/<modelId>" synchronously; static providers win.
-import { withToolResultImages } from './tool-result-images';
+import { heardFetch } from './middleware/attempt';
+import type { LaneLookup } from './middleware/retry';
+import { withModelStack } from './wire-model';
 import type { LanguageModel } from 'ai';
 import type {
   AuthResolution, ModelCallDeps, ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
@@ -271,7 +273,30 @@ export function createProviderRegistry(): ProviderRegistry {
       const provider = providerFor(parsed.provider);
 
       return settleSync(provider
-        ? Effect.sync(() => withToolResultImages(provider.createModel(parsed.modelId, accountDeps(deps, parsed.provider, parsed.account))))
+        ? Effect.sync(() => {
+          // The transport reports its bytes to the attempt in flight, so the stack's silence bound hears keepalives.
+          const own = { ...accountDeps(deps, parsed.provider, parsed.account), fetch: heardFetch(deps.fetch ?? fetch) };
+          const route = provider.laneOf?.(parsed.modelId) ?? parsed.provider;
+          const key = provider.credentialKey;
+          let billed: Promise<string> | undefined;
+
+          // A wait is the credential's: aliases of one stored login share it, as `credentialFor` resolves them.
+          const lane: LaneLookup | string = key === undefined ? `${route}|` : {
+            route,
+            billed: () => {
+              billed ??= Promise.allSettled([chosenCredentialKey(deps, parsed.provider, key, parsed.account)])
+                .then(([chosen]) => `${route}|${(chosen.status === 'fulfilled' ? chosen.value : null) ?? key}`);
+
+              return billed;
+            },
+          };
+
+          return withModelStack(provider.createModel(parsed.modelId, own), {
+            provider: parsed.provider, modelId: parsed.modelId, lane,
+            ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
+            ...(provider.streamsGenerate === true && { generateByStream: true }),
+          });
+        })
         : Effect.die(new Error(`Unknown provider ${JSON.stringify(parsed.provider)} (registered: ${Array.from(byId.keys()).join(', ') || 'none'}).`)));
     },
 

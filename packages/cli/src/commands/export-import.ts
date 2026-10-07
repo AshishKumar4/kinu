@@ -133,7 +133,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
         stampSchemaGenesis(db);
       }
 
-      // The store keeps only agent state: a cloud archive's own-space files land with a local archive's.
+      // Locally every file is a real one: a cloud archive's own-space files, agent state too, land with a local archive's.
       await publishStoreFiles(opened().vfs, files);
     } finally {
       db.close();

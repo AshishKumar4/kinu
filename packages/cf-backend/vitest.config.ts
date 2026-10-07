@@ -465,7 +465,6 @@ const runnerOptions = {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
           NEIGHBOUR: { className: 'NeighbourDO', useSQLite: true },
           GATED: { className: 'GatedDO', useSQLite: true },
-          TRANSACTION: { className: 'TransactionDO', useSQLite: true },
           ALARMED: { className: 'AlarmDO', useSQLite: true },
           CACHE_WARM_PROBE: { className: 'CacheWarmProbeDO', useSQLite: true },
           EVICTION_PROBE: { className: 'EvictionProbeDO', useSQLite: true },
@@ -506,6 +505,8 @@ const runnerOptions = {
           ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', scriptName: 'attribution-probe', useSQLite: true },
           // The shipped root as the product seals it: `public-surface-probe` re-exports `src/server`'s class unchanged.
           SEALED_ORCHESTRATOR: { className: 'OrchestratorAgent', scriptName: 'public-surface-probe', useSQLite: true },
+          // The shipped account object, sealed as the product seals it.
+          SEALED_USER_DO: { className: 'UserDO', scriptName: 'public-surface-probe', useSQLite: true },
           DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
         },
       } satisfies NonNullable<Parameters<typeof getDurableObjectDesignators>[0]['miniflare']>;
@@ -581,9 +582,6 @@ const sharedTestOptions = {
     onUnhandledError(error) {
       // `AlarmDO.alarm` rethrows so the runtime owns redelivery (worker.ts:503-506).
       if (error.message.includes('alarm-body-failed')) return false;
-
-      // `TransactionDO`'s async-body arm throws after commit, with no owner (worker.ts:258, :289).
-      if (error.message.includes('unknown subordinate "relay"')) return false;
 
       // `deploy-lifecycle.test.ts` aborts a DeployRunDO mid-plan on purpose.
       if (error.message.includes('probe: the object died mid-plan')) return false;

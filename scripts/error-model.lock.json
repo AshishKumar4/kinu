@@ -94,7 +94,7 @@
     "packages/cli-backend/src/config-lock.ts#throw": 3,
     "packages/cli-backend/src/executor.ts#catch": 2,
     "packages/cli-backend/src/executor.ts#throw": 2,
-    "packages/cli-backend/src/host-mount.ts#catch": 6,
+    "packages/cli-backend/src/host-mount.ts#catch": 1,
     "packages/cli-backend/src/host-mount.ts#throw": 1,
     "packages/cli-backend/src/local-session.ts#catch": 9,
     "packages/cli-backend/src/local-session.ts#promise-rejection": 1,

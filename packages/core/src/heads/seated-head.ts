@@ -1,7 +1,7 @@
 import { REAL_CLOCK } from '../types/clock';
 import type { MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/provider';
-import type { WriteObserver } from '../vfs/observe';
+import type { WriteObserver } from '../vfs/write-events';
 import type { HostedNodeSeat } from '../strategy/node-agent';
 import type { SpawnedHead } from './controller';
 import { buildHeadSystemPrompt, HeadCapture, type RunInference } from './head-inference';

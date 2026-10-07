@@ -1,7 +1,7 @@
 /** Model menu and connectable-provider catalog for HTTP clients. The provider registry is the
  *  source of truth for models; models.dev for which providers a BYO key can connect. */
 import {
-  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, openAICompatNameOf, testModel,
+  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, testModel,
   type ModelTestResult, type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
@@ -57,20 +57,6 @@ export async function listAvailableModels<Id>(
     contextWindow: model.contextWindow,
     reasoningEfforts: model.reasoningEfforts,
   }));
-
-  // openai-compat providers are user-named; each surfaces as one entry (`openai-compat:<name>/<modelId>`).
-  const keys = await deps.listCredentialKeys?.() ?? [];
-
-  const compatNames = new Set(keys.flatMap((key) => openAICompatNameOf(key) ?? []));
-
-  for (const name of compatNames) {
-    out.push({
-      spec: `openai-compat:${name}/<modelId>`,
-      label: `${name} (custom model id)`,
-      provider: `openai-compat:${name}`,
-      capabilities: ['tools', 'streaming'],
-    });
-  }
 
   return { models: out, failures: menu.failures, ...(menu.accounts !== undefined && { accounts: menu.accounts }) };
 }

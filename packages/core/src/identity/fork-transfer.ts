@@ -21,7 +21,6 @@ import { renderIssues, type JsonObject } from '../utils/json';
 import { compareCodeUnits } from '../utils/text';
 import { openWorkspaceMainActor } from './workspace-actors';
 import { FORK_PIN_PREFIX, forkCarries, type ForkFileSource, type ForkPinnedFiles } from './fork';
-import { SOUL_PATH } from './soul';
 import {
   forkArtifactPath,
   forkConversationCounts,
@@ -37,7 +36,6 @@ import {
   ForkConversationEntryRowSchema,
   ForkConversationEntryPartRowSchema,
   ForkContextMemberRowSchema,
-  ForkMemoryChunkRowSchema,
   ForkCraftedToolRowSchema,
   ForkConfigRowSchema,
   type ForkConfigRow,
@@ -45,15 +43,14 @@ import {
   type ForkConversationEntryPartRow,
   type ForkConversationEntryRow,
   type ForkCraftedToolRow,
-  type ForkMemoryChunkRow,
   type ForkSessionMessageRow,
 } from './fork-rows';
 import { ForkSectionCountsSchema, ForkTargetWriter, forkResultOf, type ForkResult, type ForkStagedCounts } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
 /** Fork transfer protocol version; a receiver refuses one it does not implement. Bump when an older
- *  receiver would misread the frame union. v4 carries files as Nimbus export pages and chunks. */
-export const FORK_TRANSFER_VERSION = 4;
+ *  receiver would misread the frame union. v5 carries no memory index: the target derives it from the notes. */
+export const FORK_TRANSFER_VERSION = 5;
 
 /** Payload bytes per frame: a quarter of `do.facet.rpc_bytes`, leaving headroom for clone metadata and envelope. */
 export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
@@ -62,7 +59,6 @@ export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.val
 export const FORK_ROW_SECTIONS = [
   'agentConfig',
   'craftedTools',
-  'memoryChunks',
   'sessionMessages',
   'conversationEntries',
   'conversationEntryParts',
@@ -113,13 +109,10 @@ const ForkFrameSchema = v.variant('kind', [
   }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('agentConfig'), rows: v.array(ForkConfigRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('craftedTools'), rows: v.array(ForkCraftedToolRowSchema) }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('memoryChunks'), rows: v.array(ForkMemoryChunkRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('sessionMessages'), rows: v.array(ForkSessionMessageRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntries'), rows: v.array(ForkConversationEntryRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntryParts'), rows: v.array(ForkConversationEntryPartRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('contextMembers'), rows: v.array(ForkContextMemberRowSchema) }),
-  /** SOUL.md whole: its protected write takes one argument. */
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('soul'), bytes: v.instance(Uint8Array) }),
   /** Chunks a page names that the target lacked, stored ahead of that page. */
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('chunks'), target: ForkImportTargetSchema, chunks: v.array(ForkExportChunkSchema) }),
   /** One page of one import. */
@@ -187,18 +180,12 @@ function pageJson(page: VfsExportPage): JsonObject {
 }
 
 /**
- * Canonical preimage of one frame (all but its digest). SOUL.md's bytes are hashed as bytes, not JSON; a chunk is
- * named by the sha256 of its bytes, which the target's import re-hashes before storing it.
+ * Canonical preimage of one frame (all but its digest). A chunk is named by the sha256 of its bytes, which the
+ * target's import re-hashes before storing it.
  */
 type ForkFrameSealInput = (UnsealedForkFrame | UnsealedForkSectionFrame) & { digest?: string };
 
 function forkFramePreimage(frame: ForkFrameSealInput): string {
-  if (frame.kind === 'soul') {
-    const { bytes, digest: _digest, ...meta } = frame;
-
-    return `${stableStringify({ ...meta })}|${sha256Hex(bytes)}`;
-  }
-
   if (frame.kind === 'chunks') {
     const { chunks, digest: _digest, ...meta } = frame;
 
@@ -256,9 +243,6 @@ function craftedToolPayloadBytes(row: ForkCraftedToolRow): number {
   return utf8Bytes(row.name) + utf8Bytes(row.description) + utf8Bytes(row.code);
 }
 
-function memoryChunkPayloadBytes(row: ForkMemoryChunkRow): number {
-  return utf8Bytes(row.id) + utf8Bytes(row.path) + utf8Bytes(row.hash) + utf8Bytes(row.text);
-}
 
 /** Message content is the one unbounded conversation field: inline `content_json` is a whole message's parts. */
 function sessionMessagePayloadBytes(row: ForkSessionMessageRow): number {
@@ -324,23 +308,6 @@ async function* craftedToolRows(sql: SqlExecutor): AsyncGenerator<ForkCraftedToo
   }
 }
 
-async function* memoryChunkRows(sql: SqlExecutor): AsyncGenerator<ForkMemoryChunkRow> {
-  let rowid = 0;
-
-  for (;;) {
-    const row = sql<ForkMemoryChunkRow & { rowid: number }>`
-      SELECT rowid, id, path, start_line, end_line, hash, text
-      FROM memory_chunks WHERE rowid > ${rowid} ORDER BY rowid ASC LIMIT 1
-    `[0];
-
-    if (row === undefined) return;
-    rowid = row.rowid;
-    yield {
-      id: row.id, path: row.path, start_line: row.start_line, end_line: row.end_line,
-      hash: row.hash, text: row.text,
-    };
-  }
-}
 
 /** Conversation sections, read one message or one entry's parts at a time to bound the sender. */
 async function* sessionMessageRows(
@@ -419,14 +386,6 @@ export async function* forkTransferFrames(
   const pinned = await source.vfs.pin(`${FORK_PIN_PREFIX}${source.transferId}`);
 
   try {
-    const soulPath = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
-    const soul = pinned.kind(soulPath) === 'file' ? pinned.readFile(soulPath) : null;
-
-    if (soul !== null && soul.byteLength > source.frameBytes) {
-      throw new KinuError('bad_input', `SOUL.md is ${soul.byteLength} bytes, past the ${source.frameBytes} one fork frame carries; `
-        + 'its protected write takes the file whole');
-    }
-
     const imports: ForkImport[] = [
       ...pinned.readdir(WORKSPACE_ROOT).filter(forkCarries).sort(compareCodeUnits)
         .map((name): ForkImport => ({ target: { in: 'home', name }, root: `${WORKSPACE_ROOT}/${name}` })),
@@ -439,9 +398,8 @@ export async function* forkTransferFrames(
       agentConfig: source.sql<{ key: string }>`SELECT key FROM actor_config WHERE actor_id = ${actorId}`
         .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)).length,
       craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
-      memoryChunks: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`[0]?.count ?? 0,
       ...conversation,
-      files: imports.length + (soul === null ? 0 : 1),
+      files: imports.length,
     };
 
     const identity = source.sql<{ id: string; name: string }>`
@@ -508,9 +466,6 @@ export async function* forkTransferFrames(
         case 'craftedTools':
           yield* yieldRows(section, craftedToolRows(source.sql), craftedToolPayloadBytes);
           break;
-        case 'memoryChunks':
-          yield* yieldRows(section, memoryChunkRows(source.sql), memoryChunkPayloadBytes);
-          break;
         case 'sessionMessages':
           yield* yieldRows(
             section,
@@ -533,9 +488,6 @@ export async function* forkTransferFrames(
           break;
       }
     }
-
-    // Copy: structured clone of a view carries its whole backing buffer.
-    if (soul !== null) yield* send({ ...envelope(), kind: 'soul', bytes: soul.slice() });
 
     /** The chunks a page wants, a frame of them at a time. */
     const chunkFrames = async function* (
@@ -680,14 +632,6 @@ export class ForkTransferReceiver {
     staged: ForkStaging, frame: Exclude<ForkFrame, { kind: 'begin' | 'commit' }>,
   ): Effect.Effect<{ status: 'staged'; sectionCursor: number } | { status: 'want'; hashes: string[] }> {
     return Effect.gen({ self: this }, function* () {
-      if (frame.kind === 'soul') {
-        yield* this.filesPhase(staged);
-        yield* Effect.promise(() => this.files.publishSoul(frame.bytes));
-        this.writer.stageSoul();
-
-        return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
-      }
-
       if (frame.kind === 'chunks') {
         const dst = yield* this.open(staged, frame.target);
         yield* Effect.promise(() => this.files.importChunks(dst, frame.chunks));
@@ -723,20 +667,12 @@ export class ForkTransferReceiver {
 
     if (frame.kind === 'agentConfig') this.writer.stageAgentConfig(frame.rows);
     else if (frame.kind === 'craftedTools') this.writer.stageCraftedTools(frame.rows);
-    else if (frame.kind === 'memoryChunks') this.writer.stageMemoryChunks(frame.rows);
     else if (frame.kind === 'sessionMessages') this.writer.stageSessionMessages(frame.rows);
     else if (frame.kind === 'conversationEntries') this.writer.stageConversationEntries(frame.rows);
     else if (frame.kind === 'conversationEntryParts') this.writer.stageConversationEntryParts(frame.rows);
     else this.writer.stageContextMembers(frame.rows);
 
     return Effect.succeed(at);
-  }
-
-  /** Files come once the row sections are done, and one import at a time. */
-  private filesPhase(staged: ForkStaging): Effect.Effect<void> {
-    return staged.importing === null
-      ? Effect.void
-      : Effect.die(new Error(`fork transfer sent SOUL.md while the import at ${JSON.stringify(staged.importing)} was still incomplete`));
   }
 
   /**
@@ -747,7 +683,7 @@ export class ForkTransferReceiver {
    */
   private open(staged: ForkStaging, target: ForkImportTarget): Effect.Effect<string> {
     return Effect.gen({ self: this }, function* () {
-      // SOUL.md publishes only through its protected write; the rest are the target's own to make.
+      // The rest are the target's own to make.
       if (target.in === 'home' && !forkCarries(target.name)) {
         return yield* Effect.die(new Error(`fork transfer sent an import of ${JSON.stringify(target.name)}, a name under the home a fork does not carry`));
       }
@@ -780,7 +716,6 @@ export class ForkTransferReceiver {
       const shortfall = [
         ['agentConfig', staged.declared.agentConfig, taken.agentConfig],
         ['craftedTools', staged.declared.craftedTools, taken.craftedTools],
-        ['memoryChunks', staged.declared.memoryChunks, taken.memoryChunks],
         ['sessionMessages', staged.declared.sessionMessages, taken.sessionMessages],
         ['conversationEntries', staged.declared.conversationEntries, taken.conversationEntries],
         ['conversationEntryParts', staged.declared.conversationEntryParts, taken.conversationEntryParts],

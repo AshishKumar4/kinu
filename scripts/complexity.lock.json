@@ -318,10 +318,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/cf-backend/tests/workerd/fork-probe.ts#ForkSourceProbeDO.deliver",
-      "complexity": 27
-    },
-    {
       "key": "packages/cli/src/commands/debug.ts#summarizeRun",
       "complexity": 27
     },

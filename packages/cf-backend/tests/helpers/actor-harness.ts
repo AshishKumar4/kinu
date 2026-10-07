@@ -44,7 +44,7 @@ import {
   type TierAssignments,
   composePrepareStep,
   BackgroundJobStore, parseJsonValue, type JsonValue,
-  type WorkMode, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown, WORKSPACE_SOUL_DDL,
+  type WorkMode, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
   type EgressSecretSummary,
@@ -530,7 +530,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
         extensions,
         dynamic: { ledger: this.actorSession.dynamic, snapshot: () => this.actorSession.stepContext(dynamic, profile, this._preparedTools) },
         // The destination provider a cross-provider replay is re-keyed at.
-        destinationProviderId: this.promptModelContext().provider,
+        destination: { providerId: this.promptModelContext().provider, modelId: this.promptModelContext().id },
       },
       { stepNumber, messages: [...messages], steps: [] },
     );
@@ -993,17 +993,17 @@ export function tapDiagnostics(logger: Logger): () => void {
   };
 }
 
-/** Replace, not update: `onStart` seeds its own row after its first await. */
-/** The mission as production holds it: in the owner's soul, which every listing reads it off. */
-export function seedMission(db: Database, mission: string): void {
-  db.prepare('DELETE FROM workspace_identity').run();
-  db.prepare(
+/**
+ * The mission as production holds it: in SOUL.md, which every listing reads it off, written as the owner's Settings
+ * write it. The identity row is replaced, not updated: `onStart` seeds its own after its first await.
+ */
+export async function seedMission(harness: { db: Database; agent: Pick<HarnessOrchestratorAgent, 'setSoul'> }, mission: string): Promise<void> {
+  harness.db.prepare('DELETE FROM workspace_identity').run();
+  harness.db.prepare(
     `INSERT INTO workspace_identity (id, name, owner_user_id)
      VALUES ('harness-actor', 'harness-actor', 'harness-owner')`,
   ).run();
-  db.exec(WORKSPACE_SOUL_DDL);
-  db.prepare('INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown')
-    .run(renderSoulMarkdown({ name: 'harness-actor', mission }));
+  await harness.agent.setSoul(renderSoulMarkdown({ name: 'harness-actor', mission }));
 }
 
 /** The workspace's main actor as its durable identity rows name it, read through core's directory. */

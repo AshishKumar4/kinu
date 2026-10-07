@@ -2,10 +2,19 @@ import { describe, test, expect, mock } from 'bun:test';
 import { generateText } from 'ai';
 import { writeFileSync } from 'node:fs';
 import { scratchPath } from '@kinu.run/test-utils';
-import { asFetchFunction, JsonObjectSchema } from '@kinu.run/core';
+import { asFetchFunction, createProviderRegistry, JsonObjectSchema, type ModelCallDeps } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createOpenCodeProvider, OPENCODE_PROVIDER_ID } from '../src/opencode-provider';
 import type { OpenCodeSpawn, SpawnedOpenCode, OpenCodeProviderOptions } from '../src/opencode-provider';
+
+/** A model as the registry resolves it: the provider's, inside the one stack, on the provider's own lane. */
+function throughStack(provider: ReturnType<typeof createOpenCodeProvider>, modelId: string, deps: ModelCallDeps) {
+  const registry = createProviderRegistry();
+
+  registry.register(provider);
+
+  return registry.resolve(`${OPENCODE_PROVIDER_ID}/${modelId}`, deps);
+}
 
 function makeSpawn(output: string, exitCode = 0): OpenCodeSpawn {
   return (_args: string[], _opts: { signal?: AbortSignal }) => {
@@ -61,13 +70,14 @@ const FAKE_CONFIG = JSON.stringify({
   },
 });
 
+// OpenCode names every model's SDK (`api.npm`, its provider's when the model names none: opencode provider.ts).
 const FAKE_MODELS_OUTPUT = [
   'openai/gpt-5.6-sol',
   JSON.stringify({
     name: 'GPT 5.6 Sol',
     limit: { context: 1050000 },
     capabilities: { output: { text: true }, toolcall: true, reasoning: true },
-    api: { id: 'gpt-5.6-sol' },
+    api: { id: 'gpt-5.6-sol', npm: '@ai-sdk/openai' },
   }),
   '',
   'openai/gpt-5.4-nano',
@@ -118,6 +128,11 @@ const FAKE_CHAT_REPLY = {
   usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
 };
 
+const FAKE_MESSAGES_REPLY = {
+  id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-test', stop_reason: 'end_turn', stop_sequence: null,
+  content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 },
+};
+
 function makeProviderOpts(overrides: Partial<OpenCodeProviderOptions> = {}): OpenCodeProviderOptions {
   const authPath = makeAuthFile('https://opencode.example.com', 'test-token-123');
 
@@ -149,6 +164,8 @@ function makeRoutingFetch() {
     const body = v.safeParse(v.string(), init?.body);
 
     if (body.success) requestBodies.push(body.output);
+
+    if (url.endsWith('/messages')) return Response.json(FAKE_MESSAGES_REPLY);
 
     return Response.json(url.endsWith('/responses') ? FAKE_RESPONSES_REPLY : FAKE_CHAT_REPLY);
   }));
@@ -337,7 +354,7 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
 
-    const model = provider.createModel('openai/gpt-5.6-sol', {
+    const model = throughStack(provider, 'openai/gpt-5.6-sol', {
       env: {},
       sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
     });
@@ -377,8 +394,8 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl, spawn: makeSpawn(listed) }));
     const deps = { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
 
-    await expect(generateText({ model: provider.createModel('opencode-go/glm-5', deps), prompt: 'hi', maxRetries: 0 })).rejects.toThrow(/rate-limited until/);
-    const zen = await generateText({ model: provider.createModel('opencode/glm-5', deps), prompt: 'hi', maxRetries: 0 });
+    await expect(generateText({ model: throughStack(provider, 'opencode-go/glm-5', deps), prompt: 'hi', maxRetries: 0 })).rejects.toThrow(/rate-limited until/);
+    const zen = await generateText({ model: throughStack(provider, 'opencode/glm-5', deps), prompt: 'hi', maxRetries: 0 });
 
     expect({ text: zen.text, served }).toEqual({
       text: 'ok',
@@ -472,34 +489,31 @@ describe('OpenCode provider', () => {
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
   });
 
-  // A resumed session resolves its model before listModels, so the metadata map is cold: the gpt-5.x family
-  // fallback must pick Responses without dragging non-reasoning families along.
-  const cold = [
-    {
-      name: 'cold metadata routes OpenAI reasoning families to Responses (resumed sessions)',
-      id: 'openai/gpt-5.6-sol', endpoint: 'https://opencode.example.com/openai/v1/responses',
-    },
-    {
-      name: 'cold metadata keeps non-reasoning families on Chat Completions',
-      id: 'openai/gpt-4.1-mini', endpoint: 'https://opencode.example.com/openai/v1/chat/completions',
-    },
-  ];
+  // A resumed session resolves its model before any listing; each model's API is its SDK's, read from OpenCode's
+  // metadata before the first request, and a reasoning model on a Chat Completions SDK stays there.
+  test('a resumed session reads each model\'s SDK before its first request: Responses, Messages or Chat Completions', async () => {
+    const output = [
+      FAKE_MODELS_OUTPUT,
+      'openai/claude-routed',
+      JSON.stringify({ name: 'Claude', capabilities: { output: { text: true }, toolcall: true, reasoning: true }, api: { id: 'claude-routed', npm: '@ai-sdk/anthropic' } }),
+      '',
+      'openai/reasoner',
+      JSON.stringify({ name: 'Reasoner', capabilities: { output: { text: true }, toolcall: true, reasoning: true }, api: { id: 'reasoner', npm: '@ai-sdk/openai-compatible' } }),
+      '',
+    ].join('\n');
 
-  for (const c of cold) {
-    test(c.name, async () => {
-      const { fetchImpl, requests } = makeRoutingFetch();
-      const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
+    const { fetchImpl, requests } = makeRoutingFetch();
+    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl, spawn: makeSpawn(output) }));
 
-      const model = provider.createModel(c.id, {
-        env: {},
-        sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
-      });
+    for (const id of ['openai/gpt-5.6-sol', 'openai/claude-routed', 'openai/reasoner']) {
+      await tryCall(provider.createModel(id, { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false }));
+    }
 
-      await tryCall(model);
-
-      expect(requests).toEqual([c.endpoint]);
-    });
-  }
+    expect(requests).toEqual([
+      'https://opencode.example.com/openai/v1/responses', 'https://opencode.example.com/openai/v1/messages',
+      'https://opencode.example.com/openai/v1/chat/completions',
+    ]);
+  });
 
   test('createModel throws on invalid model id (no slash)', () => {
     const provider = createOpenCodeProvider(makeProviderOpts());

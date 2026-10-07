@@ -1,15 +1,15 @@
+import { dirname, join } from 'node:path';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The backend a shared behaviour suite runs against is configuration: `KINU_TEST_BACKEND=cf` or `cli`
  * runs one, unset runs both. Each adapter maps a shared operation onto that backend's public method
  * and does nothing else, so a behaviour one backend changes on its own fails in that backend, by name.
  */
-import { Database } from 'bun:sqlite';
-import { copyFileSync } from 'node:fs';
+import { copyFileSync, cpSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
 import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { scratchDir, scratchPath, scriptedTurnModel, sqlOver, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { scratchDir, scratchPath, scriptedTurnModel, sqlOver, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
 import {
   historyOver, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
@@ -22,6 +22,7 @@ import { LocalAgentSession } from '../../../cli-backend/src/local-session';
 import { createHostCheckpoints } from '../../../cli-backend/src/checkpoints';
 import { createLocalModelResolver, type LocalModelResolver } from '../../../cli-backend/src/model-resolver';
 import { openWorkspaceCLI } from '../../../cli-backend/src/open';
+import { workspaceHome } from '../../../cli-backend/src/runtime';
 
 export const TEST_BACKEND_ENV = 'KINU_TEST_BACKEND';
 
@@ -54,7 +55,7 @@ type SameCall =
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
   | 'listRefinements' | 'showRefinement' | 'decideRefinement'
-  | 'revertConversation' | 'runOptimization' | 'branchTurn';
+  | 'revertConversation' | 'clearConversation' | 'runOptimization' | 'branchTurn';
 
 /** The cf signature, answered asynchronously: the CLI's synchronous answers are awaited the same way. */
 type Answer<K extends SameCall> = OrchestratorAgent[K] extends (...args: infer A) => infer R
@@ -79,7 +80,7 @@ export interface SharedBackend {
   /** The main actor's durable rows, addressed the way core's stores address them. */
   readonly sql: SqlExecutor;
   readonly actor: ActorHandle;
-  /** The workspace file plane, as the owner and the agent reach it. */
+  /** The workspace's own files named by their `vfs://` path, as core names a skill or a slate. */
   readonly files: VFS;
   /** The main actor's conversation store, as each backend records its turns. */
   readonly history: SessionHistory;
@@ -149,8 +150,8 @@ function turnGate() {
 
 /** The cf Durable Object, in process over bun:sqlite, owned by a real UserDO whose one device is the
  *  real daemon with Sandbox off, so a checkpoint call crosses the hub and its consent gate. */
-async function cloudflare(): Promise<SharedBackend> {
-  const daemon = pcAgentDaemon();
+async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
+  const daemon = pcAgentDaemon(opens.gitBin === undefined ? {} : { gitBin: opens.gitBin });
   const device = await deviceHarness('ashish@studio', async (frame) => await daemon.answer(frame) ?? null);
   await device.userDO.setDeviceTier(await testOwner(), device.deviceId, 'raw');
   device.consentDecision = 'always';
@@ -222,6 +223,7 @@ async function cloudflare(): Promise<SharedBackend> {
       requestRefinement: (opts) => agent.requestRefinement(opts),
       decideRefinement: (input) => agent.decideRefinement(input),
       revertConversation: (entryId) => agent.revertConversation(entryId),
+      clearConversation: () => agent.clearConversation(),
       runOptimization: (target) => agent.runOptimization(target),
       send: (text, id) => sentTurn(agent, text, id ?? crypto.randomUUID()),
       branchTurn: (text) => agent.branchTurn(text),
@@ -258,9 +260,8 @@ let born: Promise<string> | null = null;
 function bornWorkspace(): Promise<string> {
   born ??= (async () => {
     const path = scratchPath('shared-backend-born', 'agent.db');
-    const db = new Database(path);
-    db.exec('PRAGMA journal_mode = WAL');
-    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT });
+    const db = workspaceDatabase(path);
+    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT, home: workspaceHome(db) });
     db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
     db.close();
 
@@ -271,12 +272,17 @@ function bornWorkspace(): Promise<string> {
 }
 
 /** The CLI session over a copy of the born workspace, opened as `kinu` opens one, with its checkpoint store under scratch. */
-async function cli(): Promise<SharedBackend> {
+async function cli(opens: BackendOpening): Promise<SharedBackend> {
   const dbPath = scratchPath('shared-backend', 'agent.db');
-  copyFileSync(await bornWorkspace(), dbPath);
-  const db = new Database(dbPath);
+  const original = await bornWorkspace();
+  copyFileSync(original, dbPath);
+  // Main's home (SOUL.md, memory notes, the scaffold) is files of the space beside the database: the copy takes them.
+  cpSync(join(dirname(original), 'home'), join(dirname(dbPath), 'home'), { recursive: true });
+  const db = workspaceDatabase(dbPath);
   const { rt } = await openWorkspaceCLI(db, dbPath, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
-  const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
+  const machine = opens.gitBin === undefined ? {} : { gitBin: opens.gitBin };
+  const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store'), ...machine });
+
   rt.checkpoints = checkpoints;
   const gate = turnGate();
   const modelResolver = scriptedResolver(gate.model);
@@ -294,7 +300,7 @@ async function cli(): Promise<SharedBackend> {
     end: () => session.end(),
     sql: rt.storage.sql,
     actor: rt.actor,
-    files: rt.storage.vfs,
+    files: rt.ownFiles,
     history: rt.stores.history,
     snapshot: async (dir, turn) => {
       checkpoints.beginTurn(turn);
@@ -364,6 +370,8 @@ async function cli(): Promise<SharedBackend> {
       requestRefinement: (opts) => session.requestRefinement(opts),
       decideRefinement: (input) => session.decideRefinement(input),
       revertConversation: (entryId) => session.revertConversation(entryId),
+      // The clear's answer is the emptied request's measure, which cf records instead of returning.
+      clearConversation: async () => { await session.clearConversation(); },
       runOptimization: (target) => session.runOptimization(target),
       send: async (text, id) => { await session.send(text, { id: id ?? crypto.randomUUID() }); },
       branchTurn: async (text) => session.branchTurn(text),
@@ -371,6 +379,11 @@ async function cli(): Promise<SharedBackend> {
   };
 }
 
-export function openBackend(name: BackendName): Promise<SharedBackend> {
-  return name === 'cf' ? cloudflare() : cli();
+/** What a case needs of the machine its backend runs on; a `gitBin` that does not exist is a machine without git. */
+export interface BackendOpening {
+  readonly gitBin?: string;
+}
+
+export function openBackend(name: BackendName, opens: BackendOpening = {}): Promise<SharedBackend> {
+  return name === 'cf' ? cloudflare(opens) : cli(opens);
 }

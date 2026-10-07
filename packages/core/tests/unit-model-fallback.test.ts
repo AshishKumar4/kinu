@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import { tool, type ModelMessage, type ToolSet } from 'ai';
 import * as v from 'valibot';
+import { withModelStack } from '../src/providers/wire-model';
 import { z } from 'zod';
 import {
   createChatModel, createFallbackCooldowns, createOpenAICompatProvider, createProviderRegistry, runChat,
@@ -86,10 +87,11 @@ async function turn(
     },
   });
 
-  const modelFor = (modelId: string) => createChatModel({
+  // As the registry resolves it: the one stack around the provider's model.
+  const modelFor = (modelId: string) => withModelStack(createChatModel({
     kind: 'openai-compat', name: 'openrouter', baseURL: `http://localhost:${String(server.port)}/v1`,
     headers: { Authorization: 'Bearer test' }, modelId,
-  });
+  }), { provider: 'openrouter', modelId, lane: `openrouter/${modelId}` });
 
   const tools: ToolSet = {
     run: tool({

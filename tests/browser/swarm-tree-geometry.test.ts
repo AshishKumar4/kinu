@@ -710,3 +710,341 @@ describe('a search, as it happens', () => {
     expect(workingAfterDecay, 'the working mark never expired').toBe(0);
   });
 });
+
+/** Each node the scene draws, by its id (unique across the fixture's searches): its status, its parent, whether it is folded. */
+function drawnNodes(page: Page): Promise<{ key: string; status: string; parent: string | null; folded: boolean }[]> {
+  return page.$$eval('g.mcts-node[data-node]', (nodes) => nodes.map((node) => ({
+    key: node.getAttribute('data-node') ?? '',
+    status: node.getAttribute('data-status') ?? '',
+    parent: node.getAttribute('data-parent'),
+    folded: node.hasAttribute('data-folded'),
+  })));
+}
+
+/**
+ * Folding hides what was abandoned and nothing else: a pruned or failed branch keeps its own node, folded, and shows
+ * none of its children; every node with no abandoned branch above it stays, a settled search's own root included,
+ * though settling marks that root pruned; and Expand brings every node back.
+ */
+test('folding hides exactly the abandoned branches, never a search itself, and expanding restores them', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1280, height: 1238 });
+    await page.goto(`${origin}/gallery.html?frame=forks`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('g.mcts-node[data-node]');
+    await settled(page);
+
+    const before = await drawnNodes(page);
+    const byKey = new Map(before.map((node) => [node.key, node]));
+
+    const abandoned = (id: string | null): boolean => {
+      const node = id === null ? undefined : byKey.get(id);
+
+      return node !== undefined && node.parent !== null && (node.status === 'pruned' || node.status === 'failed');
+    };
+
+    const underAbandoned = (id: string): boolean => {
+      for (let at = byKey.get(id)?.parent ?? null; at !== null; at = byKey.get(at)?.parent ?? null) if (abandoned(at)) return true;
+
+      return false;
+    };
+
+    const parents = new Set(before.flatMap((node) => (node.parent === null ? [] : [node.parent])));
+
+    // The fixture has something to fold, or this proves nothing.
+    expect(before.some((node) => abandoned(node.key) && parents.has(node.key))).toBe(true);
+
+    await page.click('button[aria-label="Fold abandoned branches"]');
+    await settled(page);
+    const after = await drawnNodes(page);
+    const shown = new Set(after.map((node) => node.key));
+
+    expect(after.filter((node) => node.parent !== null && underAbandoned(node.key))).toEqual([]);
+    expect(before.filter((node) => !underAbandoned(node.key) && !shown.has(node.key))).toEqual([]);
+    expect(after.filter((node) => abandoned(node.key) && parents.has(node.key)).every((node) => node.folded)).toBe(true);
+
+    await page.click('button[aria-label="Expand every branch"]');
+    await settled(page);
+    expect((await drawnNodes(page)).map((node) => node.key).sort()).toEqual(before.map((node) => node.key).sort());
+    await page.close();
+  });
+});
+
+/** The explorer's footer and the scores and depths of the nodes it summarises. */
+async function readExplorer(page: Page) {
+  return page.evaluate(() => {
+    const number = (selector: string) => {
+      const text = document.querySelector(selector)?.textContent;
+
+      return text === undefined || text === null ? null : Number.parseFloat(text);
+    };
+
+    const nodes = [...document.querySelectorAll('g.mcts-node[data-node]')].map((node) => ({
+      status: node.getAttribute('data-status'),
+      depth: Number(node.getAttribute('data-depth')),
+      value: node.hasAttribute('data-value') ? Number(node.getAttribute('data-value')) : null,
+    }));
+
+    return { branches: number('[data-tree-branches]'), depth: number('[data-tree-depth]'), winner: number('[data-tree-winner]'), nodes };
+  });
+}
+
+/**
+ * The explorer's footer agrees with the tree it draws: one branch per node under the root, the deepest stored depth,
+ * and the winner's score is the chosen branch's, never a higher-scoring branch the search did not choose.
+ */
+test('the explorer names the chosen branch as the winner and counts the tree it draws', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    let settledOnWinner = 0;
+
+    for (const frame of ['forkfull', 'forkswarmfull']) {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('g.mcts-node[data-node]');
+      await settled(page);
+      const seen = await readExplorer(page);
+      const chosen = seen.nodes.find((node) => node.status === 'terminal' && node.value !== null);
+
+      expect({ frame, branches: seen.branches, depth: seen.depth })
+        .toEqual({ frame, branches: seen.nodes.length - 1, depth: Math.max(...seen.nodes.map((node) => node.depth)) });
+      expect(seen.winner).toBe(chosen?.value === undefined || chosen.value === null ? null : Math.round(chosen.value * 100));
+
+      if (seen.winner !== null) settledOnWinner += 1;
+      await page.close();
+    }
+
+    // At least one search settled on a winner, so the footer's winner was read at all.
+    expect(settledOnWinner).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A running swarm whose stores disagree: the search table holds the root and two settled nodes, the journal all eleven.
+ * Every journalled node is drawn, under its own parent and once, the settled row winning for a node both hold: it
+ * carries its score, while a running node and the unevaluated root carry none. A node that ended badly is drawn failed and keeps its own
+ * journal word: aborted, errored, out of budget, or interrupted.
+ */
+test('a running swarm draws every journalled node once, under its own parent, in its own state', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1440, height: 1100 });
+    await page.goto(`${origin}/gallery.html?frame=forkrunning`, { waitUntil: 'networkidle0' });
+    // The surface draws every listed run as a region of one canvas; this search is the focused one, `lv000`.
+    await page.waitForFunction(() => document.querySelectorAll('g.mcts-region[data-run="lv000"] g.mcts-node[data-node]').length >= 12);
+    await settled(page);
+
+    const nodes = await page.$$eval('g.mcts-region[data-run="lv000"] g.mcts-node[data-node]', (drawn) => drawn.map((node) => ({
+      id: node.getAttribute('data-node') ?? '',
+      parent: node.getAttribute('data-parent'),
+      status: node.getAttribute('data-status'),
+      lifecycle: node.getAttribute('data-lifecycle'),
+      scored: node.hasAttribute('data-value'),
+    })));
+
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+
+    expect(nodes.map((node) => node.id).sort((a, b) => a.localeCompare(b))).toEqual(
+      Array.from({ length: 12 }, (_, at) => `lv${String(at).padStart(3, '0')}`),
+    );
+    expect(['lv006', 'lv007', 'lv009'].map((id) => byId.get(id)?.parent)).toEqual(['lv001', 'lv001', 'lv001']);
+    expect(['lv008', 'lv010', 'lv011'].map((id) => byId.get(id)?.parent)).toEqual(['lv002', 'lv002', 'lv002']);
+    // A root nothing has been backpropagated through has no score, not a zero.
+    expect(byId.get('lv000')?.scored).toBe(false);
+    // The settled rows win: scored and open, not the journal's unscored copy.
+    expect(['lv001', 'lv002'].map((id) => [byId.get(id)?.status, byId.get(id)?.scored])).toEqual([['open', true], ['open', true]]);
+    expect(['lv003', 'lv004', 'lv006', 'lv007', 'lv009'].map((id) => [byId.get(id)?.status, byId.get(id)?.scored]))
+      .toEqual(Array.from({ length: 5 }, () => ['running', false]));
+    expect(['lv005', 'lv008', 'lv010', 'lv011'].map((id) => [byId.get(id)?.status, byId.get(id)?.lifecycle])).toEqual([
+      ['failed', 'aborted'], ['failed', 'errored'], ['failed', 'budget_exceeded'], ['failed', 'interrupted'],
+    ]);
+    await page.close();
+  });
+});
+
+/** The explorer at `run`, or with no run asked for: the run it opened, by name, and whether it says the run is missing. */
+async function explorerAt(newPage: Gallery['newPage'], origin: string, asked: string | null): Promise<{ page: Page; name: string; missing: boolean }> {
+  const page = await newPage();
+
+  await page.setViewport({ width: 1280, height: 900 });
+  await page.goto(`${origin}/gallery.html?frame=forkexplorer${asked === null ? '' : `&run=${asked}`}`, { waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => document.querySelector('g.mcts-node[data-node]') !== null
+    || document.body.textContent?.includes('Swarm not found') === true);
+
+  return {
+    page,
+    name: await page.evaluate(() => document.querySelector('[data-explorer-run]')?.textContent ?? ''),
+    missing: await page.evaluate(() => document.body.textContent?.includes('Swarm not found') === true),
+  };
+}
+
+/**
+ * A swarm's permalink opens that swarm and no other: an id the workspace never ran says so rather than showing a
+ * different one, and only with no id does the explorer open the newest. A merge drawn there is not a competition:
+ * every head hangs from the split, none is scored, none is the winner.
+ */
+test('a permalink opens its own swarm or none, and a merge is drawn unscored with no winner', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const newest = await explorerAt(newPage, origin, null);
+    expect([newest.name, newest.missing]).toEqual(['coupon.kind readers', false]);
+    await newest.page.close();
+
+    const unknown = await explorerAt(newPage, origin, 'never-ran');
+    expect([unknown.missing, await unknown.page.$('g.mcts-node')]).toEqual([true, null]);
+    await unknown.page.close();
+
+    const merge = await explorerAt(newPage, origin, 'root-merge-1');
+    expect([merge.name, merge.missing]).toEqual(['rules-by-kind call sites', false]);
+    await settled(merge.page);
+
+    const heads = await merge.page.$$eval('g.mcts-node[data-node]', (nodes) => nodes.map((node) => ({
+      parent: node.getAttribute('data-parent'), status: node.getAttribute('data-status'), scored: node.hasAttribute('data-value'),
+    })));
+
+    expect(heads.filter((node) => node.parent === null)).toHaveLength(1);
+    expect(heads.filter((node) => node.parent !== null).every((node) => node.parent === 'root-merge-1')).toBe(true);
+    expect(heads.some((node) => node.scored || node.status === 'terminal')).toBe(false);
+    expect(await merge.page.$('[data-tree-winner]')).toBeNull();
+    await merge.page.close();
+  });
+});
+
+/**
+ * What a run's own journal says reaches the swarm surface: a fan-in vertex is drawn as one, and only the nodes the
+ * engine spawned as fan-ins are; a run that reached nothing says so above its tree, in the words of the branch that failed.
+ */
+test('fan-in vertices are the nodes the engine fanned in, and a run that reached nothing names its branch\'s cause', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const swarm = await newPage();
+    await swarm.setViewport({ width: 1280, height: 900 });
+    await swarm.goto(`${origin}/gallery.html?frame=forkfanin`, { waitUntil: 'networkidle0' });
+    await swarm.waitForSelector('g.mcts-region[data-run="sw000"] g.mcts-node[data-node]');
+    await settled(swarm);
+    // The fixture's two vertices are the heads spawned as `fan-in over k parents`; every expansion is a sibling.
+    expect(await swarm.$$eval('g.mcts-region[data-run="sw000"] g.mcts-node[data-node]', (nodes) => nodes
+      .filter((node) => node.querySelector('rect.mcts-fan-in') !== null)
+      .map((node) => node.getAttribute('data-node') ?? '').sort((a, b) => a.localeCompare(b)))).toEqual(['sw004', 'sw009']);
+    await swarm.close();
+
+    const refused = await newPage();
+    await refused.setViewport({ width: 1280, height: 900 });
+    await refused.goto(`${origin}/gallery.html?frame=forkrefused`, { waitUntil: 'networkidle0' });
+    await refused.waitForSelector('[data-run-refusal]');
+
+    const note = await refused.$eval('[data-run-refusal]', (element) => ({ reason: element.getAttribute('data-run-refusal'), text: element.textContent ?? '' }));
+
+    expect(note.reason).toBe('failed');
+    expect(note.text).toContain('Every node failed to provision a home');
+    await refused.close();
+  });
+});
+
+/** The swarm configuration a frame's focused run resolved: its kind, its text, and the axes it names. */
+async function resolutionOf(newPage: Gallery['newPage'], origin: string, frame: string) {
+  const page = await newPage();
+
+  await page.setViewport({ width: 1920, height: 1100 });
+  await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('details[data-swarm-config]');
+  // The disclosure ships shut; what it holds is the subject here, not the press that opens it.
+  await page.$eval('details[data-swarm-config]', (details) => { if (details instanceof HTMLDetailsElement) details.open = true; });
+  await page.waitForSelector('[data-swarm-resolution]');
+
+  const seen = await page.$eval('[data-swarm-resolution]', (body) => ({
+    kind: body.getAttribute('data-swarm-resolution'),
+    text: body.textContent ?? '',
+    axes: [...body.querySelectorAll('dt')].map((term) => term.textContent),
+  }));
+
+  await page.close();
+
+  return seen;
+}
+
+/** The liveness counts the panel and each level row carry: depth (null for the panel), running, reported, stopped, total. */
+function livenessCounts(page: Page): Promise<(number | null)[][]> {
+  return page.$$eval('[data-run-liveness], [data-run-level]', (rows) => rows.map((row) => [
+    row.hasAttribute('data-run-level') ? Number(row.getAttribute('data-run-level')) : null,
+    ...['data-running', 'data-reported', 'data-failed', 'data-total'].map((name) => Number(row.getAttribute(name))),
+  ]));
+}
+
+/**
+ * What a run resolved and how its nodes stand, as the swarm surface shows them. A named preset shows its six axes and
+ * the settle they derive: a scored search settles on its best, an unscored one merges. A composition shows only its
+ * label. Liveness counts each node by its own journal word at its own level: errored and aborted count as stopped,
+ * and words that settle nothing, out of budget or interrupted, count toward no bucket and never as running.
+ */
+test('a run shows the preset or composition it resolved, and counts each node by its own word at its own level', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const prove = await resolutionOf(newPage, origin, 'forkpreset');
+    expect(prove.kind).toBe('preset');
+    expect(prove.axes).toEqual(['unit', 'context', 'expand', 'score', 'advance', 'carry']);
+    expect(prove.text).toContain('settle best');
+
+    const ideate = await resolutionOf(newPage, origin, 'forkrefused');
+    expect([ideate.kind, ideate.text.includes('settle merge')]).toEqual(['preset', true]);
+
+    const composed = await resolutionOf(newPage, origin, 'forkfanin');
+    expect([composed.kind, composed.axes]).toEqual(['custom', []]);
+
+    const page = await newPage();
+    await page.setViewport({ width: 1920, height: 1100 });
+    await page.goto(`${origin}/gallery.html?frame=forkrunning`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-run-liveness]');
+    expect(await livenessCounts(page)).toEqual([[null, 5, 2, 2, 11], [1, 2, 2, 1, 5], [2, 3, 0, 1, 6]]);
+    await page.close();
+  });
+});
+
+/** The step a running head is still writing, as the open transcript shows it; empty when there is none. */
+const arrivingStep = (page: Page): Promise<string> => page.evaluate(() => document.querySelector('[data-node-pending-step]')?.textContent ?? '');
+
+/** Has the workspace's server send `frames` on the open socket, in order. */
+async function headFrames(page: Page, frames: Record<string, string>[]): Promise<void> {
+  await page.evaluate((all) => {
+    for (const detail of all) window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail }));
+  }, frames);
+}
+
+/**
+ * A head's step paints as it arrives, from the provider's own deltas: its thinking first, then its prose, each
+ * verbatim and in order, and never another head's. Once the step lands in the journal the paint goes, so the step is
+ * never shown twice, and the head's next step starts clean.
+ */
+test('a running head paints its arriving step, only its own, until the step lands', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1920, height: 1100 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('button[title="Swarms"]');
+    await page.click('button[title="Swarms"]');
+    await page.waitForSelector('[data-run-node="lv003"]');
+    // The node list may sit in a panel this layout keeps folded; the row is what opens the head, not its geometry.
+    await page.$eval('[data-run-node="lv003"]', (row) => { if (row instanceof HTMLElement) row.click(); });
+    await page.waitForFunction(() => document.body.textContent?.includes('the guard may have moved rather than gone') === true);
+    expect(await arrivingStep(page)).toBe('');
+
+    await headFrames(page, [{ type: 'head_stream', headId: 'lv003', kind: 'reasoning', delta: 'Weighing the two readers.' }]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]')?.textContent?.includes('Weighing the two readers.') === true);
+
+    await headFrames(page, [
+      { type: 'head_stream', headId: 'lv004', kind: 'text', delta: 'Another head entirely.' },
+      { type: 'head_stream', headId: 'lv003', kind: 'text', delta: 'Two readers' },
+      { type: 'head_stream', headId: 'lv003', kind: 'text', delta: ' skip the guard.' },
+    ]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]')?.textContent?.includes('Two readers skip the guard.') === true);
+    const painted = await arrivingStep(page);
+
+    expect(painted).toContain('Weighing the two readers.');
+    expect(painted).not.toContain('Another head entirely.');
+
+    await headFrames(page, [{ type: 'head_activity', headId: 'lv003' }]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]') === null);
+
+    await headFrames(page, [{ type: 'head_stream', headId: 'lv003', kind: 'text', delta: 'Next step.' }]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]') !== null);
+    expect(await arrivingStep(page)).toBe('Next step.');
+    await page.close();
+  });
+});

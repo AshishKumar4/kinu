@@ -33,6 +33,29 @@ export function readHostedCosts(): HostedCosts {
   return v.parse(HostedCostsSchema, JSON.parse(readFileSync(new URL('./ci-cost.json', import.meta.url), 'utf8')));
 }
 
+/** What the container runner measured (cf-ci's `{timings}`): each green row's seconds by its command, each file's. */
+const RunnerTimingsSchema = v.object({ rows: v.record(v.string(), v.number()), files: v.record(v.string(), v.number()) });
+
+export type RunnerTimings = v.InferOutput<typeof RunnerTimingsSchema>;
+
+export function parseRunnerTimings(text: string): RunnerTimings {
+  return v.parse(RunnerTimingsSchema, JSON.parse(text));
+}
+
+/** The hosted costs with the runner's measurements over them: a row (named by `labels` from its command) or a file
+ *  the runner timed takes its time. */
+export function withRunnerCosts(hosted: HostedCosts, measured: RunnerTimings, labels: ReadonlyMap<string, string>): HostedCosts {
+  const seconds = { ...hosted.seconds };
+
+  for (const [run, taken] of Object.entries(measured.rows)) {
+    const label = labels.get(run);
+
+    if (label !== undefined) seconds[label] = taken;
+  }
+
+  return { ...hosted, seconds, files: { ...hosted.files, ...measured.files } };
+}
+
 /** Bun's first-party --timings/--update-timings report, measured per file rather than inferred from its console. */
 export function readFileTimings(path: string): Record<string, number> | undefined {
   if (!existsSync(path)) return undefined;

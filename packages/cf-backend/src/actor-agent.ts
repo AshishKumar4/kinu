@@ -176,7 +176,7 @@ import {
   type HostedActorSeams,
 } from "./hosted-actors";
 import {
-  classifyRecoveredFiber, EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
+  classifyRecoveredFiber, EVOLUTION_LANE_FIBER,
   TERMINAL_LANE_FIBER,
   // Recovery budget this backend declares to the SDK, applied before the framework allocates.
   sweepUnrecoverableFibers, fiberRowStore,
@@ -209,7 +209,7 @@ import type { UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import type { WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
-import { sha256Hex } from '@kinu.run/core';
+import { CLEAR_NEEDS_IDLE, sha256Hex } from '@kinu.run/core';
 import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { openAnalyticsWindow } from "@kinu.run/core/analytics";
 import {
@@ -413,8 +413,8 @@ function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsToolAct
 }
 
 /**
- * Ledgers that can owe work with no instant and nothing else to watch it. A running background job is not one: its
- * `bg:` fiber holds the object while it runs and re-drives it after a death, and a deferred one is timed (`nextOwedAt`).
+ * Ledgers that can owe work with no instant and nothing else to watch it. A live background job has its `bg:` fiber;
+ * activation arms one ledger recovery pass even if that row expired, and a deferred job is timed (`nextOwedAt`).
  */
 export interface UntimedArms {
   readonly openDrainLease?: boolean;
@@ -1784,7 +1784,6 @@ export abstract class ActorAgent extends Agent<Env> {
         this.chatLoop.interrupt();
         this.stopSubtree(this.actorHandle().actorId);
       },
-      clear: () => this.clearConversation(),
     });
 
     return this._chatTransport;
@@ -2029,22 +2028,18 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * Warm this user's MCP connections for the next turn, detached on a durable fiber, via
-   * `userMcp_warmConnections`. Covers alarm/email/post-eviction turns the HTTP warmup misses.
-   * Failures are dropped; the next settled turn retries.
+   * Warm this user's MCP connections for the next turn, detached, via `userMcp_warmConnections`. Covers
+   * alarm/email/post-eviction turns the HTTP warmup misses. Failures are dropped and a warm lost to eviction is not
+   * resumed: the next settled turn warms again, so it is held by `keepAliveWhile`, not a `cf_agents_runs` row.
    */
   protected _mcpWarmTask: AsyncTaskOwner | null = null;
 
   protected warmUserMcpInBackground(): void {
-    if (!this.getOwnerUserId() || this._mcpWarmTask !== null) return;
+    // Same gate as `buildUserMcpTools`: no capability token yet is an ordinary state, not a failure.
+    if (!this.getOwnerUserId() || !this.workspaceCapabilityToken() || this._mcpWarmTask !== null) return;
     const owner: AsyncTaskOwner = { promise: null };
     this._mcpWarmTask = owner;
-    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.runFiber(MCP_WARM_LANE_FIBER, async (ctx) => {
-      ctx.stash({ lane: MCP_WARM_LANE_FIBER });
-
-      // Same gate as `buildUserMcpTools`: no capability token yet is an ordinary state, not a failure.
-      // Checked rather than caught so real read failures still propagate.
-      if (!this.workspaceCapabilityToken()) return;
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.keepAliveWhile(async () => {
       const { stub, caller } = await this.userHub();
       await stub.userMcp_warmConnections(caller);
     })), recording({ doing: 'establishing the user MCP connections after a settled turn', otherwise: 'unavailable' }, (failure) => {
@@ -3508,7 +3503,7 @@ export abstract class ActorAgent extends Agent<Env> {
       : Effect.sync(() => this.ownedModelServices.resolveModel(spec)));
   }
 
-  /** Cached SOUL.md text, refreshed at turn start and invalidated by setSoul(). */
+  /** SOUL.md as this turn read it: any agent may have edited it since the last turn. */
   protected _cachedSoulText: string | null = null;
   protected async loadSoulText(): Promise<string> {
     return (await readSoul(this.rt.storage.vfs)) ?? '';
@@ -3525,7 +3520,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * The workspace's purpose as this actor knows it: the auto-title source, and what an
    * added agent inherits. Each root answers from wherever its mission durably lives.
    */
-  protected abstract ownMission(): string;
+  protected abstract ownMission(): Promise<string>;
 
   /**
    * Failures propagate so the durable caller keeps the row owed and the ledger retries it.
@@ -3988,10 +3983,14 @@ export abstract class ActorAgent extends Agent<Env> {
     return { execution: assembled.execution, profile: assembled.profile, sessionKey: this.name };
   }
 
-  /** Clears transcript, working history, dynamic ledger and compaction plan. */
-  private async clearConversation(): Promise<void> {
+  /**
+   * Main's Clear, answered: transcript, working history, dynamic ledger and compaction plan, refused while a turn
+   * runs. Only once the stores are empty is every window told to empty, so no page drops what the server still holds.
+   */
+  @callable()
+  async clearConversation(): Promise<void> {
     this.stores.history.clearConversation(CHAT_SESSION_ID, () => this._chatLoop?.turnInFlight() === true || this._actorSession?.inFlight === true
-      ? Effect.fail(new KinuError('denied', 'Stop the active turn before clearing its conversation'))
+      ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE))
       : Effect.void);
     this.actorSession.dynamic.reset();
 
@@ -3999,8 +3998,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const unmeasured = await this.chatLoop.measureCleared();
 
-    // The clear frame has no answer; the failure is recorded where the operator's diagnostics read it.
+    // The clear stands without its measure; the failure is recorded where the operator's diagnostics read it.
     if (unmeasured !== null) diagnostics.failure('context.clear_measure_failed', unmeasured, { workspace: this.name });
+    this.broadcastToActor(null, JSON.stringify({ type: MessageType.CF_AGENT_CHAT_CLEAR }));
   }
 
   /** Awaited ahead of `orch.beginTurn`: the turn is not in flight until these reads are back,
@@ -4008,7 +4008,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async readTurnInputs(tools: ToolSet, body: JsonObject): Promise<TurnReads> {
     await this.ensureOwnedScaffold();
 
-    if (this._cachedSoulText === null) await this.refreshSoulText();
+    await this.refreshSoulText();
 
     const inputs = this.profileInputs();
 

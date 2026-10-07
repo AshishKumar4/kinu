@@ -36,7 +36,6 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
     createModel(modelId, deps): LanguageModel {
       const customFetch = createAuthedFetch(deps, {
         provider: 'openai',
-        modelId,
         credKey: OPENAI_CRED_KEY,
         missingCredentialError: 'OpenAI API key not configured',
       });

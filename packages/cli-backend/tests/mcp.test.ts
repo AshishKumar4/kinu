@@ -1,6 +1,5 @@
 // Local MCP integration: stdio server connect, tool exposure, call proxying, merge into a local turn.
 import { afterAll, beforeAll, describe, test, expect, spyOn } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { jsonSchema, tool, type LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -12,7 +11,7 @@ import { connectMcpServers } from '../src/mcp';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { createLocalProfileAuthority, resolverModelPlane } from '../src/profile-authority';
-import { scratchPath, scriptedTurnModel, toolExecute, scratchDir, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { scratchPath, scriptedTurnModel, toolExecute, scratchDir, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -63,7 +62,7 @@ function capturingModel(sink: (request: CapturedRequest) => void): LanguageModel
 }
 
 function sessionWithModel(model: LanguageModel) {
-  const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
+  const db = workspaceDatabase(scratchPath('mcp', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const rt = createCLIRuntime(db, {
@@ -286,7 +285,7 @@ function latestDeclarations(prompt: string): string {
 
 /** Two models known by their windows: the session switches between them through its public `setModel`. */
 function sessionWithWindows(model: LanguageModel, windows: Readonly<Record<string, number>>) {
-  const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
+  const db = workspaceDatabase(scratchPath('mcp', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 

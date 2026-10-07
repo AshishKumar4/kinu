@@ -23,6 +23,9 @@ import { SqlMeter, type OperationCost } from './sql-meter';
 import type {
   AgentLogEvent,
   CallRecord,
+  ChangeNotesCompleted,
+  ChangeNotesPrepared,
+  OwedRepliesRecovered,
   DriveOnceInput,
   DriveOnceResult,
   ExerciseResult,
@@ -61,7 +64,9 @@ import {
   type WakeDriveResult,
   type WakeRows,
 } from './two-turn-shapes';
-import { ownerCaller, type PeerMessage, type SessionTranscript, type WorkMode } from '@kinu.run/core';
+import { CHAT_SESSION_ID, changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type SessionTranscript, type WorkMode } from '@kinu.run/core';
+import { renderThrownChain, type Refusal } from '@kinu.run/core/obs';
+import { seedTranscriptEntry } from '@kinu.run/test-utils/transcript';
 import type { ToolSet } from 'ai';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
@@ -150,7 +155,94 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'meterEnd');
     Reflect.deleteProperty(this, 'settleState');
     Reflect.deleteProperty(this, 'sleepTimeNow');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed']);
+    Reflect.deleteProperty(this, 'refuseDriving');
+    Reflect.deleteProperty(this, 'refuseReservations');
+    Reflect.deleteProperty(this, 'owedSends');
+    Reflect.deleteProperty(this, 'latestClaimOutcome');
+    Reflect.deleteProperty(this, 'recoveryPass');
+    Reflect.deleteProperty(this, 'seedOwedReplies');
+    Reflect.deleteProperty(this, 'replyLeases');
+    Reflect.deleteProperty(this, 'transitionState');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState']);
+  }
+
+  /** What the loop's driver gate answers once refused, as when another activation holds the lease. */
+  private drivingRefused: Refusal | null = null;
+
+  protected override driverGate(): Refusal | null {
+    return this.drivingRefused ?? super.driverGate();
+  }
+
+  async refuseDriving(): Promise<void> {
+    this.drivingRefused = { reason: 'unavailable', error: 'another activation is driving' };
+  }
+
+  /** A storage fault on every reservation the workspace writes while `refused`. */
+  async refuseReservations(refused: boolean): Promise<void> {
+    this.unmetered(refused
+      ? "CREATE TRIGGER refuse_reservation BEFORE INSERT ON pending_steers BEGIN SELECT RAISE(ABORT, 'reservation refused'); END"
+      : 'DROP TRIGGER refuse_reservation');
+  }
+
+  /** The sends the workspace still owes, and how many of them carry a card. */
+  async owedSends(): Promise<{ readonly sends: number; readonly cards: number }> {
+    const count = (where: string): number => Number(this.unmetered(`SELECT COUNT(*) AS n FROM pending_steers WHERE ${where}`).one().n);
+
+    return { sends: count('1'), cards: count('metadata_json IS NOT NULL') };
+  }
+
+  /** The newest turn claim's outcome: null while its foreground owner holds it; `missing` with no claim at all. */
+  async latestClaimOutcome(): Promise<string | null> {
+    const row = this.unmetered('SELECT outcome FROM actor_turn_claims ORDER BY claimed_at DESC LIMIT 1').toArray()[0];
+
+    if (row === undefined) return 'missing';
+
+    return row.outcome === null ? null : textColumn(row.outcome);
+  }
+
+  /** The alarm's recovery pass, run now. */
+  async recoveryPass(): Promise<void> {
+    await this.terminalRetryPass();
+  }
+
+  /**
+   * What a dead activation left owed: two events bound to drain turns whose leases it took long ago, one turn whose
+   * answer reached the transcript and one that never answered, and the open transition of the answered reply.
+   */
+  async seedOwedReplies(): Promise<void> {
+    const actorId = this.actorHandle().actorId;
+
+    for (const turn of ['answered', 'unanswered']) {
+      this.unmetered(`INSERT INTO agent_log
+          (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at, dedupe_key, consumed_at)
+        VALUES (?, ?, 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook', 'authenticated', 'normal', 'full',
+          '{"webhook_id":"w1","http_method":"POST","http_headers":{},"body":{"x":1},"delivery_id":"d1"}', 1, NULL, 5)`, actorId, `ev-${turn}`, `evt-${turn}`);
+      await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
+        id: `u-evt-${turn}`, origin: 'input', message: { role: 'user', content: `The ${turn} event arrived while you were idle.` },
+        metadata: { kinuEvent: 'event_drain', drainTurnId: `evt-${turn}` },
+      });
+
+      // Each answer follows its own drain turn, as the loop writes them.
+      if (turn === 'answered') {
+        await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, { id: 'a-evt-answered', origin: 'output', message: { role: 'assistant', content: 'the build passed' } });
+      }
+    }
+
+    this.terminal.begin({ turnId: 'u-owed', messageId: 'a-1' });
+  }
+
+  /** Each seeded event's lease: the drain turn it is bound to and when that took it. */
+  async replyLeases(): Promise<Record<string, { readonly turnId: string | null; readonly consumedAt: number | null }>> {
+    const rows = this.unmetered("SELECT id, turn_id, consumed_at FROM agent_log WHERE id IN ('ev-answered', 'ev-unanswered')").toArray();
+
+    return Object.fromEntries(rows.map((row) => [textColumn(row.id), {
+      turnId: row.turn_id === null ? null : textColumn(row.turn_id), consumedAt: row.consumed_at === null ? null : Number(row.consumed_at),
+    }]));
+  }
+
+  /** `done` once a transition closed; an open one answers that it resumed. */
+  async transitionState(turnId: string): Promise<string> {
+    return this.terminal.begin({ turnId, messageId: 'a-1' });
   }
 
   /** The closed-tab sleep-time wake, run now: the tab closed past its grace, then a timer tick. */
@@ -532,10 +624,26 @@ type ExerciseTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'writeWorkspaceFile'>
   & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'settleState'>;
 
+/** A new workspace's logo is drawn by its own model; a count of what was asked leaves that call out. */
+function drawsLogoCall(call: HttpCall): boolean {
+  return call.users.some((message) => message.startsWith('Design the logo'));
+}
+
+/** The one note the Changes-tab journeys send, anchored to a line of a changed file. */
+const NOTE: ReviewAnnotation = {
+  id: 'clamp', type: 'COMMENT', blockId: 'src/apply.ts', startOffset: 0, endOffset: 0, originalText: 'const rule = rules[kind];', createdA: 1,
+  text: 'Clamp it, but log it too.',
+  anchor: { scope: 'lines', path: 'src/apply.ts', side: 'new', lineStart: 1, lineEnd: 1, baseline: 'gen-4f1c9a' },
+};
+
+const NOTED: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline' };
+
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent'>
-  & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
+  & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -762,8 +870,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await awaitSleepTimeSettled(recording, workspace, 21);
     await awaitSettled(target);
 
-    // A lost binding call is retried by its owed effect inside the window: a fixture fault, never a cost.
-    const lost = recording.of(workspace).filter((event) => event.event === 'workers_ai.direct_call_failed');
+    // A lost binding call fails the sleep-time pass, retried by its owed effect inside the window: a fixture fault, never a cost.
+    const lost = recording.of(workspace).filter((event) => event.event === 'memory.fact_compression_failed');
 
     if (lost.length > 0) throw new Error(`long cost: the AI binding lost ${String(lost.length)} call(s): ${lost[0]?.cause ?? ''}`);
 
@@ -787,7 +895,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1140,6 +1248,126 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const steerFiles = await target.pendingSteerFileRows();
 
     return v.parse(PreparedConversationSchema, { workspace, owner, bFrame: bWire, cFrame: cWire, steers, steerFiles });
+  }
+
+  /**
+   * Notes saved on the Changes tab and sent while the genesis turn is held, so they wait for a turn of their own. The
+   * first send meets a storage fault on its reservation and must leave the notes where they were; the second takes a
+   * reservation carrying the notes' card.
+   */
+  async prepareChangeNotes(): Promise<ChangeNotesPrepared> {
+    const { target, workspace } = await this.claimQueueWorkspace('notes');
+
+    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 1 }) });
+
+    if (!(await target.beginGenesisTurn()).started) throw new Error('notes probe genesis did not start');
+    await fetch('http://probe-control.invalid/queue/arrived');
+    // A typed message the held turn never reads waits beside the notes.
+    await this.sendChatFrame(target, workspace, 'check staging');
+    await target.saveChangeNotes('workspace', [NOTE]);
+    await target.refuseReservations(true);
+    let refusal: string | null = null;
+
+    try {
+      await target.sendChangeNotes(NOTED);
+    } catch (cause) {
+      refusal = renderThrownChain({ cause });
+    }
+
+    const kept = (await target.getChangeNotes('workspace')).map((note) => note.id);
+    const owedAfterRefusal = await target.owedSends();
+
+    await target.refuseReservations(false);
+    const sent = await target.sendChangeNotes(NOTED);
+
+    return {
+      workspace, refusal, kept, owedAfterRefusal, sent: sent.ok ? { ok: true, left: sent.notes.length } : { ok: false, left: -1 },
+      keptAfterSend: (await target.getChangeNotes('workspace')).length, owed: await target.owedSends(),
+    };
+  }
+
+  /** After the eviction: the held turn released, the notes' own turn runs on the wake their send armed. */
+  async completeChangeNotes(workspace: string): Promise<ChangeNotesCompleted> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+    await awaitSettled(target);
+    const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
+
+    const messages = v.parse(v.array(v.looseObject({
+      id: v.string(), role: v.string(), metadata: v.optional(v.unknown()), parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })),
+    })), await page.json());
+
+    return {
+      users: messages.filter((message) => message.role === 'user').map((message) => ({
+        text: message.parts.map((part) => part.text ?? '').join(''), card: changeNotesCard({ metadata: message.metadata }) !== null,
+      })),
+      cards: messages.flatMap((message) => {
+        const card = changeNotesCard({ metadata: message.metadata });
+
+        return card === null ? [] : [{ role: message.role, notes: card.notes.map((note) => note.id), author: turnAuthor({ metadata: message.metadata }) ?? null }];
+      }),
+      kept: (await target.getChangeNotes('workspace')).length,
+      owed: await target.owedSends(),
+    };
+  }
+
+  /**
+   * The root's turn claim under the alarm's real recovery pass: once while the genesis turn is held, and again while
+   * its response settles. Each time the claim stays its foreground owner's, so it settles with its own outcome.
+   */
+  async claimUnderRecovery(): Promise<{ readonly held: string | null; readonly settled: string | null }> {
+    const { target } = await this.claimQueueWorkspace('claims');
+
+    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 1 }) });
+
+    if (!(await target.beginGenesisTurn()).started) throw new Error('claims probe genesis did not start');
+    await fetch('http://probe-control.invalid/queue/arrived');
+    await target.recoveryPass();
+    const held = await target.latestClaimOutcome();
+
+    await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+    await Promise.all([target.recoveryPass(), awaitSettled(target)]);
+    await awaitSettled(target);
+
+    return { held, settled: await target.latestClaimOutcome() };
+  }
+
+  /** Owed replies seeded in a workspace whose activation then dies; returns the workspace to read after the eviction. */
+  async seedOwedReplyWorkspace(): Promise<string> {
+    const { target, workspace } = await this.claimQueueWorkspace('replies');
+
+    await target.seedOwedReplies();
+    // From here on, everything the model is asked is recovery's: the eviction's alarm may wake the object first.
+    await this.httpReset();
+
+    return workspace;
+  }
+
+  /** After the eviction: the alarm's recovery pass on the fresh activation, then what it left. */
+  async recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    await target.recoveryPass();
+    await awaitSettled(target);
+
+    return {
+      leases: await target.replyLeases(), transition: await target.transitionState('u-owed'),
+      asked: (await this.httpCalls()).filter((call) => !drawsLogoCall(call)).map((call) => call.users.at(-1) ?? ''),
+    };
+  }
+
+  /** A send the loop refuses to drive takes its card row with it. */
+  async refusedChangeNotes(): Promise<{ readonly sent: boolean; readonly owed: { readonly sends: number; readonly cards: number } }> {
+    const { target } = await this.claimQueueWorkspace('notes-refused');
+
+    await target.saveChangeNotes('workspace', [NOTE]);
+    await target.refuseDriving();
+    const sent = await target.sendChangeNotes(NOTED);
+
+    await awaitSettled(target);
+
+    return { sent: sent.ok, owed: await target.owedSends() };
   }
 
   /** The durable pending_steers row, not the socket, binds each replay to the turn. */

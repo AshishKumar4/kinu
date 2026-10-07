@@ -1,13 +1,13 @@
-/** SOUL write, and the store's fork and archive transfers. */
+/** SOUL.md's reads and writes, and the store's fork and archive transfers. */
 
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import type { ForkFileSink } from '../identity/fork-sink';
 import type { ForkFileSource } from '../identity/fork';
 import type { ArchiveFileSource, ArchiveFileTarget, ArchivePinnedStore, ArchiveStoreSource, ArchiveStoreTarget } from '../identity/archive';
-import { isWorkspaceSoul, storeDurableSoulDb } from '../identity/soul';
+import { readSoul } from '../identity/soul';
 import { tolerate } from '../obs/index';
-import { resealWorkspaceSoul, sealWorkspaceSoul } from './agent-home';
+import { provisionWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 import type { WorkspaceBundle, WorkspaceSession } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -15,14 +15,12 @@ import type { CredentialedVfs, SqliteVFS, VfsExportPage, VfsStat } from '@nimbus
 
 type FileSessionSource = { session(): Promise<Pick<WorkspaceSession, 'vfs' | 'sql'>> };
 
-/** The prompt's soul; reseals the file. */
-export async function settledWorkspaceSoul(bundle: WorkspaceBundle): Promise<string | null> {
-  const session = await bundle.session();
-
-  return resealWorkspaceSoul(session.vfs.as(CRED_KERNEL), session.sql);
+/** SOUL.md as the workspace's agents left it, read on the namespace: what the next turn's prompt carries. */
+export async function workspaceSoul(bundle: Pick<WorkspaceBundle, 'namespace'>): Promise<string | null> {
+  return await readSoul(await bundle.namespace());
 }
 
-/** The owner's SOUL write, then sealed. */
+/** SOUL.md written whole, as birth, a restore and the owner's Settings write it, and left editable by every agent. */
 export function writeWorkspaceSoul(
   bundle: FileSessionSource, content: string | Uint8Array,
 ): Promise<void> {
@@ -34,8 +32,7 @@ export function writeWorkspaceSoul(
       return yield* Effect.die(new Error(`the workspace root ${WORKSPACE_ROOT} does not exist`));
     }
 
-    sealWorkspaceSoul(kernel, content);
-    storeDurableSoulDb(session.sql, content instanceof Uint8Array ? new TextDecoder().decode(content) : content);
+    provisionWorkspaceSoul(kernel, content);
   }));
 }
 
@@ -63,11 +60,9 @@ function forkPageOwnership(page: VfsExportPage): VfsExportPage {
 
 /**
  * Where a fork lands in one store: Nimbus imports, each under a parent made if missing (a payload's directory may not
- * exist on a fresh target), and SOUL.md through `publishSoul`, the owner's protected write.
+ * exist on a fresh target).
  */
-function forkSinkOver(
-  store: () => Promise<SqliteVFS>, publishSoul: (bytes: Uint8Array) => Promise<void>,
-): ForkFileSink {
+function forkSinkOver(store: () => Promise<SqliteVFS>): ForkFileSink {
   const parentOf = async (dst: string): Promise<SqliteVFS> => {
     const vfs = await store();
     const parent = dst.slice(0, dst.lastIndexOf('/'));
@@ -84,9 +79,6 @@ function forkSinkOver(
       const { want, done } = (await parentOf(dst)).importPage(dst, forkPageOwnership(page));
 
       return { want, done };
-    },
-    async publishSoul(bytes) {
-      await publishSoul(bytes);
     },
     async remove(paths) {
       const plane = (await store()).as(CRED_SESSION_USER);
@@ -105,7 +97,7 @@ function forkSinkOver(
 }
 
 export function createWorkspaceForkSink(bundle: FileSessionSource): ForkFileSink {
-  return forkSinkOver(async () => (await bundle.session()).vfs, (bytes) => writeWorkspaceSoul(bundle, bytes));
+  return forkSinkOver(async () => (await bundle.session()).vfs);
 }
 
 /** One store's files as a pinned instant, read as the kernel, so no file's mode hides it from the copy. */
@@ -127,14 +119,11 @@ function forkSourceOver(store: SqliteVFS): ForkFileSource {
   };
 }
 
-/** The workspace's files, SOUL.md resealed first so the pin holds the owner's. */
+/** The workspace's files, SOUL.md among them. */
 export function createWorkspaceForkSource(bundle: FileSessionSource): ForkFileSource {
   return {
     async pin(name) {
-      const session = await bundle.session();
-      resealWorkspaceSoul(session.vfs.as(CRED_KERNEL), session.sql);
-
-      return forkSourceOver(session.vfs).pin(name);
+      return forkSourceOver((await bundle.session()).vfs).pin(name);
     },
   };
 }
@@ -176,9 +165,7 @@ export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarg
   const store = async (): Promise<SqliteVFS> => (await bundle.session()).vfs;
 
   return {
-    writeFile: async (path, data) => (isWorkspaceSoul(path)
-      ? await writeWorkspaceSoul(bundle, data)
-      : await bundle.vfs.writeFile(path, data)),
+    writeFile: async (path, data) => { await bundle.vfs.writeFile(path, data); },
     mkdir: async (path, opts) => { await bundle.vfs.mkdir(path, opts); },
     async importPage(page) {
       const vfs = await store();

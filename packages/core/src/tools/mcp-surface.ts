@@ -4,7 +4,7 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
-import { estimateTokens } from '../llm';
+import { estimateTokens } from '../token-estimate';
 import { stepContextLimit } from '../context-window';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError, settle } from '../obs/index';

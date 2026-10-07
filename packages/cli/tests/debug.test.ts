@@ -2,7 +2,6 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
-import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import {
   BackgroundJobStore, MctsSearchStore, RunEventRecorder,
@@ -12,7 +11,7 @@ import {
   type ExplorationWrite, type ObjectiveIdentity,
 } from '@kinu.run/core';
 import { makeSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
-import { scratchDir, createTestActorsOver } from '@kinu.run/test-utils';
+import { scratchDir, createTestActorsOver, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -60,7 +59,7 @@ const PRIVATE_KEY = ['-----BEGIN ', 'PRIVATE KEY-----'].join('');
  * root sorts first by created_at, where an unscoped client buildTree() shows the wrong tree.
  */
 function seedInvestigationWorkspace(dbPath: string): void {
-  const db = new Database(dbPath, { create: true });
+  const db = workspaceDatabase(dbPath, { create: true });
   stampSchemaGenesis(db);
   const execRaw = (sql: string) => { db.exec(sql); };
 

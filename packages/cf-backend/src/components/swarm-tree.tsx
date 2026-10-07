@@ -645,6 +645,13 @@ export function SwarmTree({
 				.data(region.nodes)
 				.join("g")
 				.attr("class", "mcts-node")
+				.attr("data-node", (d) => d.data.id)
+				.attr("data-status", (d) => d.data.status)
+				.attr("data-lifecycle", (d) => d.data.lifecycle ?? null)
+				.attr("data-parent", (d) => d.parent?.data.id ?? null)
+				.attr("data-depth", (d) => d.data.depth)
+				.attr("data-value", (d) => d.data.value)
+				.attr("data-folded", (d) => (collapsed.has(foldKey(region.runId, d.data.id)) ? "" : null))
 				.attr("transform", (d) => `translate(${d.y},${d.x})`)
 				.style("cursor", "pointer");
 

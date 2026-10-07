@@ -180,6 +180,8 @@ describe('Retry on a failed turn', () => {
 
     const { agent } = workspace;
     await workspace.started;
+    // An added agent inherits SOUL.md's mission, which a workspace holds from its birth.
+    await agent.setSoul('# Purpose\n\nDo each task asked.');
     const { subordinate } = await agent.createSubordinateAgent();
 
     if (subordinate.actorId === null) throw new Error('the added agent has no actor');
@@ -287,6 +289,8 @@ describe('Retry on a failed turn', () => {
 
     const { agent } = workspace;
     await workspace.started;
+    // An added agent inherits SOUL.md's mission, which a workspace holds from its birth.
+    await agent.setSoul('# Purpose\n\nDo each task asked.');
     const { subordinate } = await agent.createSubordinateAgent();
 
     if (subordinate.actorId === null) throw new Error('the added agent has no actor');

@@ -61,14 +61,14 @@ const TEAM_RECURSES = {
   cli: WIRED,
 } satisfies RootStatuses;
 
-/** Nimbus tables: `createWorkspace` opens Nimbus over the host database every actor shares. */
+const LAZY_ON_FIRST_USE = (what: string): CapabilityStatus => ({ lazy: `created on first use by ${what}, not at boot` });
+
+/** Nimbus tables: hosted, `createWorkspace` opens Nimbus over the host database every actor shares; locally files are real. */
 const NIMBUS_BASE = {
   'cf-orchestrator': WIRED,
   'cf-subordinate': WIRED,
-  cli: WIRED,
+  cli: LAZY_ON_FIRST_USE("a cloud archive's import, whose store lands there before its files move to the own space"),
 } satisfies RootStatuses;
-
-const LAZY_ON_FIRST_USE = (what: string): CapabilityStatus => ({ lazy: `created on first use by ${what}, not at boot` });
 
 const NAMED_SHELL_STATE = {
   'cf-orchestrator': LAZY_ON_FIRST_USE("a named shell's first command"),
@@ -122,7 +122,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
 
   table: {
     workspace_identity: EVERYWHERE,
-    workspace_soul: EVERYWHERE,
     // The workspace's actor directory; subordinates read the root's roster.
     workspace_actors: EVERYWHERE,
     // Delegated turns handed to an agent's own isolate; created with the workspace schema everywhere.
@@ -219,7 +218,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
           + '`triggers` rows driven by the local AlarmScheduler (core/src/events/hub/triggers.ts)',
       },
     },
-    // Created by the Agents SDK's constructor (agents 0.24 `_ensureSchema`), so the fiber sweep asks no schema.
+    // Created by the Agents SDK's constructor (agents 0.26 `_ensureSchema`), so the fiber sweep asks no schema.
     cf_agents_runs: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,
@@ -377,8 +376,9 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     },
     cache_warm: EVERYWHERE,
 
-    memory_chunks: EVERYWHERE,
-    memory_chunks_fts: EVERYWHERE,
+    memory_note_chunks: EVERYWHERE,
+    memory_note_chunks_fts: EVERYWHERE,
+    memory_note_files: EVERYWHERE,
     crafted_tools_fts: EVERYWHERE,
 
     // Created by their consumers' constructors (evolution/engine.ts, mission-budget.ts).

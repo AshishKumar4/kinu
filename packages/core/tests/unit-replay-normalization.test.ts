@@ -21,7 +21,7 @@ const SOURCE: ModelMessage[] = [
 
 describe('destination replay normalization', () => {
   test('rekeys both halves of a replayed tool pair without changing durable source messages', () => {
-    const normalized = normalizeReplayForDestination(SOURCE, 'openai');
+    const normalized = normalizeReplayForDestination(SOURCE, { providerId: 'openai' });
     expect(normalized).toBeDefined();
     const assistant = normalized?.[0];
     const tool = normalized?.[1];
@@ -40,11 +40,11 @@ describe('destination replay normalization', () => {
   });
 
   test('is deterministic and leaves a text-only request untouched', () => {
-    const once = normalizeReplayForDestination(SOURCE, 'anthropic');
-    const twice = normalizeReplayForDestination(SOURCE, 'anthropic');
+    const once = normalizeReplayForDestination(SOURCE, { providerId: 'anthropic' });
+    const twice = normalizeReplayForDestination(SOURCE, { providerId: 'anthropic' });
     expect(once).toEqual(twice);
     const textOnly: ModelMessage[] = [{ role: 'user', content: 'hello' }];
-    expect(normalizeReplayForDestination(textOnly, 'openai')).toBeUndefined();
+    expect(normalizeReplayForDestination(textOnly, { providerId: 'openai' })).toBeUndefined();
     expect(normalizeReplayForDestination(SOURCE, undefined)).toBeUndefined();
   });
 });

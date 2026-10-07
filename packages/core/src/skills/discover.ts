@@ -3,7 +3,7 @@ import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
  * Skill discovery over the roots `/skills` views, merged by `SKILL_ROOTS`. Malformed files are
  * skipped; reads stay under the `admissionBytes` ceiling and the budget's file count.
  */
-import { admissionBytes, estimateTokens } from '../llm';
+import { admissionBytes, estimateTokens } from '../token-estimate';
 import { Effect, Result } from 'effect';
 import { classify, diagnostics, renderThrownChain, settle, toKinuError } from '../obs/index';
 
@@ -223,7 +223,10 @@ export function discoverSkills(
 /** One root's unopened candidates in name order; a missing directory or mount is empty. */
 function listSkillCandidates(vfs: VFS, dir: string): Effect.Effect<Omit<SkillFile, 'source'>[]> {
   return Effect.gen(function* () {
-    const entries = yield* Effect.tryPromise({ try: async () => (await vfs.readdir(dir)).map(({ name }) => name), catch: (cause) => ({ cause }) }).pipe(
+    // Looked up before it is listed: a listing walks to a missing root twice, and every turn asks for every root.
+    const listed = async (): Promise<string[]> => ((await vfs.stat(dir, { follow: false })) === null ? [] : (await vfs.readdir(dir)).map(({ name }) => name));
+
+    const entries = yield* Effect.tryPromise({ try: listed, catch: (cause) => ({ cause }) }).pipe(
       Effect.catch((failed) => (classify(failed) === 'enoent' || (isVfsError(failed.cause) && failed.cause.code === 'ENXIO')
         ? Effect.succeed<string[]>([])
         : Effect.die(failed.cause))),

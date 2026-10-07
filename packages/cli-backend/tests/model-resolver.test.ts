@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { generateText } from 'ai';
+import { generateText, streamText } from 'ai';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, KINU_USER_AGENT, credentialToHeaders, usageTotal,
 } from '@kinu.run/core';
@@ -8,10 +8,9 @@ import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } f
 import { createFileOAuthStore } from '../src/oauth-store';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { asFetchFunction, requestUrl } from '@kinu.run/core';
+import { asFetchFunction, callRetries, requestUrl } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend, WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils';
-import { Database } from 'bun:sqlite';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend, WORKERS_AI_MODELS_DEV, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
@@ -19,11 +18,31 @@ import { LocalAgentSession } from '../src/local-session';
 const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
 describe('createLocalModelResolver', () => {
-  test('a cloud model relays the retry allowance without consuming it on the CLI', async () => {
-    const received: Array<string | null> = [];
+  test('a cloud Workers AI model keeps the cached tokens a trailing duplicate usage report zeroed', async () => {
+    const usage = (cached: number) => `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],`
+      + `"usage":{"prompt_tokens":100,"completion_tokens":3,"total_tokens":103,"prompt_tokens_details":{"cached_tokens":${String(cached)}}}}\n\n`;
 
-    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
-      received.push(request.headers.get('x-kinu-retries'));
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(
+      `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"ok"}}]}\n\n${usage(96)}${usage(0)}data: [DONE]\n\n`,
+      { headers: { 'content-type': 'text/event-stream' } },
+    ) });
+
+    const resolver = createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_transport' } });
+
+    try {
+      const result = streamText({ model: resolver.resolveModel('workers-ai/@cf/test/relay', 'relay'), prompt: 'test', maxRetries: 0 });
+
+      expect((await result.usage).inputTokenDetails.cacheReadTokens).toBe(96);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test('a cloud model spends its retries once, on this machine; each relayed request carries none of Kinu\'s options', async () => {
+    const received: boolean[] = [];
+
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      received.push((await request.text()).includes('kinu') || request.headers.has('x-kinu-retries'));
 
       return Response.json({ error: { message: 'limited' } }, { status: 429, headers: { 'retry-after': '0' } });
     } });
@@ -35,9 +54,9 @@ describe('createLocalModelResolver', () => {
         received.length = 0;
         await expect(generateText({
           model: resolver.resolveModel('workers-ai/@cf/test/relay', 'relay'), prompt: 'test',
-          maxRetries: 0, headers: { 'x-kinu-retries': String(retries) },
+          maxRetries: 0, providerOptions: callRetries(retries),
         })).rejects.toThrow();
-        expect(received).toEqual([String(retries)]);
+        expect(received).toEqual(Array.from({ length: retries + 1 }, () => false));
       }
     } finally {
       await server.stop(true);
@@ -54,7 +73,7 @@ describe('createLocalModelResolver', () => {
     } });
 
     const llm = { name: 'workers-ai', baseURL: server.url.toString(), headers: { Authorization: 'Bearer test' }, model: '@cf/test/session-retries' };
-    const db = new Database(scratchPath('session-retries', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('session-retries', 'agent.db'));
     const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm });
     let session: LocalAgentSession | undefined;
 
@@ -222,7 +241,7 @@ describe('createLocalModelResolver', () => {
       },
     });
 
-    const db = new Database(scratchPath('model-resolver', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('model-resolver', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
     const rt = createCLIRuntime(db, {
@@ -256,7 +275,7 @@ describe('createLocalModelResolver', () => {
       },
     });
 
-    const db = new Database(scratchPath('model-resolver', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('model-resolver', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
     const rt = createCLIRuntime(db, {

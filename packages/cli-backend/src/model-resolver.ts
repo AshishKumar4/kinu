@@ -397,7 +397,6 @@ function createGatewayBackedProvider(opts: {
         headers: withAffinity(opts.llm, deps.sessionAffinity).headers,
         modelId,
         fetch: opts.fetch,
-        onWait: deps.onProviderWait,
       });
     },
   };
@@ -542,7 +541,7 @@ function createCloudProxyProvider(opts: {
           reasoningEfforts: entry.reasoningEfforts,
         }));
     },
-    // A relay: the worker's transport spends the call's retry allowance, so the header must reach it unspent.
+    // A relay: this machine's model stack retries; the worker answers each request once.
     createModel(modelId, deps): LanguageModel {
       const transport = {
         baseURL,

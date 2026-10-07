@@ -2,12 +2,12 @@
  * A workspace has a name; the slug is its address. It must not reach `kinu list`, and the system prompt has it only
  * inside the own space's real path, which the agent's shell needs (2026-10-04).
  */
+import { workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, rmSync } from 'node:fs';
 
 import { dirname, join } from 'node:path';
-import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
@@ -23,7 +23,7 @@ import {
   openWorkspaceCLI,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
-  type SessionEvent,
+  type SessionEvent, workspaceHome,
 } from '@kinu.run/cli-backend';
 // The v2 fixture model is a test helper, not a package export: reuse it rather than keep a second copy.
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
@@ -115,11 +115,10 @@ function recordingModel(): PromptLog {
 async function seedUntitledWorkspace(project: string): Promise<string> {
   const dbPath = join(AGENT_HOME, SLUG, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
-  db.exec('PRAGMA journal_mode = WAL');
+  const db = workspaceDatabase(dbPath);
 
   try {
-    const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, llm: DUMMY_LLM });
+    const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, llm: DUMMY_LLM, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     rt.actor.config.setDisplayNameOrigin('', 'auto');
   } finally {

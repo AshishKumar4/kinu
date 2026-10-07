@@ -5,7 +5,6 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Workspace fork write and its accounting. The target DB must already be initialized (initWorkspaceSchema). */
 
 import type { SqlExecutor } from '../types/primitives';
-import { SOUL_PATH } from './soul';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { ForkStagingState } from './fork-staging';
 import { invalidateConversationSearchIndex } from '../memory/conversation-search';
@@ -18,7 +17,6 @@ import type {
   ForkConversationEntryPartRow,
   ForkConversationEntryRow,
   ForkCraftedToolRow,
-  ForkMemoryChunkRow,
   ForkSessionMessageRow,
   ForkSnapshotHead,
 } from './fork-rows';
@@ -49,7 +47,6 @@ export interface ForkWriteTarget {
 export const ForkSectionCountsSchema = v.object({
   agentConfig: v.number(),
   craftedTools: v.number(),
-  memoryChunks: v.number(),
   sessionMessages: v.number(),
   conversationEntries: v.number(),
   conversationEntryParts: v.number(),
@@ -112,7 +109,9 @@ export class ForkTargetWriter {
     const actorId = this.actorId;
     void this.target`DELETE FROM crafted_tools`;
     markStoreChanged(this.target);
-    void this.target`DELETE FROM memory_chunks`;
+    void this.target`DELETE FROM memory_note_chunks_fts`;
+    void this.target`DELETE FROM memory_note_chunks`;
+    void this.target`DELETE FROM memory_note_files`;
     void this.target`DELETE FROM actor_config WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM fork_lineage`;
     void this.target`DELETE FROM conversation_entry_parts WHERE actor_id = ${actorId}`;
@@ -143,18 +142,6 @@ export class ForkTargetWriter {
     }
 
     this.staging.count({ craftedTools: rows.length });
-  }
-
-  /** FTS content table behind memory search; a failure means the fork lost the parent's index. */
-  stageMemoryChunks(rows: readonly ForkMemoryChunkRow[]): void {
-    for (const c of rows) {
-      void this.target`
-        INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text)
-        VALUES (${c.id}, ${c.path}, ${c.start_line}, ${c.end_line}, ${c.hash}, ${c.text})
-      `;
-    }
-
-    this.staging.count({ memoryChunks: rows.length });
   }
 
   /** Carried messages under this target's actor; request, output slot and ingress id do not cross. */
@@ -225,11 +212,6 @@ export class ForkTargetWriter {
     }
 
     this.staging.count({ contextMembers: rows.length });
-  }
-
-  /** SOUL.md landed through its protected write; the mission is read off it, never copied. */
-  stageSoul(): void {
-    this.staging.addFile(SOUL_PATH);
   }
 
   publish(): Promise<ForkResult> {

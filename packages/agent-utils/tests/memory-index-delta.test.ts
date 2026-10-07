@@ -69,8 +69,9 @@ describe("MemoryStore.indexFile delta", () => {
 describe("MemoryStore.allChunksAfter (backfill pagination)", () => {
 	test("returns all chunks from an empty cursor, ordered by id", async () => {
 		const { store } = createStore();
+		await store.writeFile(PATH, doc(60));
 		const { upserted } = await store.indexFile(PATH, doc(60));
-		const all = store.allChunksAfter("", 1000);
+		const all = (await store.allChunksAfter("", 1000)).chunks;
 		expect(all.length).toBe(upserted.length);
 		const ids = all.map((c) => c.id);
 		expect([...ids].sort()).toEqual(ids);
@@ -79,14 +80,14 @@ describe("MemoryStore.allChunksAfter (backfill pagination)", () => {
 
 	test("pages the table across a cursor without overlap or gaps", async () => {
 		const { store } = createStore();
+		await store.writeFile(PATH, doc(60));
 		await store.indexFile(PATH, doc(60));
-		const all = store.allChunksAfter("", 1000);
+		const all = (await store.allChunksAfter("", 1000)).chunks;
 		expect(all.length).toBeGreaterThan(1);
-		const firstPage = store.allChunksAfter("", 1);
-		expect(firstPage.length).toBe(1);
-		expect(firstPage[0].id).toBe(all[0].id);
-		const rest = store.allChunksAfter(firstPage[0].id, 1000);
-		expect(rest.map((c) => c.id)).toEqual(all.slice(1).map((c) => c.id));
-		expect(store.allChunksAfter(all[all.length - 1].id, 1000)).toEqual([]);
+		const firstPage = await store.allChunksAfter("", 1);
+		expect(firstPage.chunks.map((c) => c.id)).toEqual([all[0].id]);
+		const rest = await store.allChunksAfter(firstPage.next ?? "", 1000);
+		expect(rest.chunks.map((c) => c.id)).toEqual(all.slice(1).map((c) => c.id));
+		expect(rest.next).toBeNull();
 	});
 });

@@ -63,6 +63,21 @@ different Durable Object", in 2 of 5 runs of `slate-durability.test.ts` and
 object's id to the loader id. It goes when a worker release keeps the binding
 from crossing objects.
 
+The core patch also gives `vfs/composite` two public methods Kinu's one file
+namespace needs (NIMBUS-ASKS #23 and #24, 2026-10-06), in `src/` and `dist/` with
+their declarations. `routeOf(path)` answers where a path lands for a view: the
+mount point, the backend as that principal sees it (null with the mount's reason
+where it is absent), the backend path after lexical `..`, and whether the mount
+is read-only, so the file tool reaches a device's own write report.
+`resolvePath(path, { follow, creating })` is the composite's own walk, every
+link resolved through the view's mounts, so the approval gate judges where a
+path lands rather than how it is spelled. And
+`observeWrites(observer)` tells an observer of every `writeFile`,
+`writeFileIfRevision`, `unlink` and `rename` that lands, from any view, with the
+bytes it replaced where the observer asks (a rename always carries the bytes
+it moved), so a head's file changes are attributed where the write lands. `packages/core/tests/unit-composite-patch.test.ts`
+holds all three. Each goes when core ships its ask.
+
 Core 0.12.0 and worker 0.10.0 carry what the earlier patches held: the
 read-only-open guards in core's `src/vfs/sqlite-vfs.ts` (D21, D22),
 `NPM_REGISTRY` passed from the command's environment to the installer
@@ -141,9 +156,9 @@ resolver layer of five packages or more is sharded across objects called
 same shape. Each is an ordinary instance of our class, so each composes a
 hosted runtime over its own storage and answers from it. A sibling is not a
 Kinu workspace: it has no genesis, no owner and no transcript, because
-`supervisorOp` is a plain RPC method and Kinu's schema bootstrap runs from
-`onStart`, which the Agents SDK starts for `fetch`, `alarm` and its own
-internal RPCs only. `packages/cf-backend/tests/workerd/nimbus-git-npm.test.ts`
+Kinu's schema bootstrap runs from `onStart`, which returns at once for a
+sibling (since agents 0.25 the SDK starts an object for its first async RPC,
+`supervisorOp` included). `packages/cf-backend/tests/workerd/nimbus-git-npm.test.ts`
 holds this: it installs six packages, one wider than the coordinator resolves
 alone. D23-N records the measurement.
 

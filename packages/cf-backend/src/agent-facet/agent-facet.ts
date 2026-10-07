@@ -1,8 +1,6 @@
 import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** One non-main agent in its own loader isolate (D9). */
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
-import { Effect } from 'effect';
-import { settleSync } from '@kinu.run/core/obs';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
 import {
@@ -101,7 +99,6 @@ export interface AgentFacetCalls {
   browseConversations(snapshot: AgentSnapshot, limit?: number): Promise<ConversationSummary[]>;
   admitted(snapshot: AgentSnapshot, id: string): Promise<boolean>;
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
-  clear(snapshot: AgentSnapshot): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
   deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
@@ -273,12 +270,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void> {
     this.open(snapshot).interrupt(turnId);
-  }
-
-  async clear(snapshot: AgentSnapshot): Promise<void> {
-    const refused = await (await this.chatOf(snapshot)).session.clear();
-
-    return settleSync(refused === null ? Effect.void : Effect.fail(refused));
   }
 
   async recover(snapshot: AgentSnapshot): Promise<AgentRecovery> {

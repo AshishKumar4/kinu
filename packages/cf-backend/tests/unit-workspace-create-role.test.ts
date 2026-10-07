@@ -1,10 +1,11 @@
-// The requested `role` must cross the named request-to-input mapping and be selected before the first turn;
-// crossing by structural accident is what `gate:wired` reported.
+// What the public surface cannot drive: a name whose teardown is pending, a workspace's own authority when it hires a
+// workspace, and an account with no model it can serve. Role, model, effort and names are the workerd public-surface
+// journey's (tests/workerd/public-surface.test.ts).
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   asFetchFunction, BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
-  resolveTurnProfile, workspaceSlug, type ProfileCatalog, type ProfileCatalogEnvelope,
+  type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest, type CreateWorkspaceEnv } from '../src/user/workspace-access';
 import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
@@ -20,9 +21,6 @@ import type { NameOrigin, ReasoningEffort, UserCaller } from '@kinu.run/core';
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
 const AGENT = 'jarvis';
-
-/** Not the native default, so a create landing on it must have read the catalog. */
-const CATALOG_DEFAULT = 'workers-ai/@cf/moonshotai/kimi-k2.6';
 
 function envelopeWithDefault(model: string): ProfileCatalogEnvelope {
   const catalog: ProfileCatalog = { ...BUILTIN_PROFILE_CATALOG, tiers: { default: { model } } };
@@ -198,72 +196,8 @@ describe('a workspace that hires a new workspace', () => {
   });
 });
 
-describe('the role a create request asks for', () => {
-  test('reaches the new workspace, before its first turn runs', async () => {
-    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', role: 'auditor' });
-
-    expect(created.status).toBe(201);
-    expect(created.calls).toContain('role:auditor');
-    // Ordering: the genesis turn must run under the chosen role.
-    expect(created.calls.indexOf('role:auditor')).toBeLessThan(created.calls.indexOf('genesis'));
-  });
-
-  test('is left alone when the request names none', async () => {
-    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' });
-
-    expect(created.status).toBe(201);
-    expect(created.calls).toEqual(['genesis']);
-  });
-
-  test('selects nothing when the request names the default role', async () => {
-    // 'task' is the starting role, so asking for it must not spend an RPC.
-    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', role: 'task' });
-
-    expect(created.status).toBe(201);
-    expect(created.calls).toEqual(['genesis']);
-  });
-});
-
-describe('the model and effort a create request asks for', () => {
-  test('a supplied model short-circuits the catalog default', async () => {
-    const created = await postCreate(
-      { name: AGENT, purpose: 'Review the checkout flow.', model: DEFAULT_WORKERS_AI_MODEL_SPEC },
-      envelopeWithDefault(CATALOG_DEFAULT),
-    );
-
-    expect(created.status).toBe(201);
-    expect(created.calls).toContain(`model:${DEFAULT_WORKERS_AI_MODEL_SPEC}`);
-  });
-
-  test('a workspace that names no model pins none, so it follows the account default tier as the CLI does', async () => {
-    // One default, read from one place (#6): a copy pinned at birth would outlive the owner's next default.
-    const envelope = envelopeWithDefault(CATALOG_DEFAULT);
-    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' }, envelope);
-
-    expect(created.status).toBe(201);
-    expect(created.calls.filter((call) => call.startsWith('model:'))).toEqual([]);
-
-    const turn = resolveTurnProfile({
-      envelope,
-      provider: { revision: 'r1', availableModels: [CATALOG_DEFAULT] },
-      roleId: 'task',
-      workMode: 'build',
-      availableTools: [],
-      activeSkills: [],
-    });
-
-    expect(turn.tier.model).toBe(CATALOG_DEFAULT);
-  });
-
-  test('effort reaches the new workspace, before its first turn runs', async () => {
-    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', reasoningEffort: 'high' });
-
-    expect(created.status).toBe(201);
-    expect(created.calls).toContain('effort:high');
-    expect(created.calls.indexOf('effort:high')).toBeLessThan(created.calls.indexOf('genesis'));
-  });
-
-  test('an account with no model it can serve is refused before a workspace exists', async () => {
+describe('an account with no model it can serve', () => {
+  test('is refused before a workspace exists', async () => {
     // The catalog default names a model no connected provider serves, and nothing is connected to offer another.
     const created = await postCreate(
       { name: AGENT, purpose: 'Review the checkout flow.' },
@@ -275,28 +209,5 @@ describe('the model and effort a create request asks for', () => {
     expect(created.status).toBe(409);
     expect(created.error).toContain('Workers AI is not connected');
     expect([created.registered, created.calls]).toEqual([[], []]);
-  });
-
-  test('an unknown effort is a bad request, not a workspace', async () => {
-    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', reasoningEffort: 'ultra' });
-
-    expect(created.status).toBe(400);
-    expect(created.calls).not.toContain('genesis');
-  });
-});
-
-describe('the name a create request asks for', () => {
-  test('a name no preview hostname can carry is refused with the limit, before a workspace exists', async () => {
-    const name = 'a'.repeat(32);
-    const created = await postCreate({ name, purpose: 'Review the checkout flow.' });
-
-    expect(created.status).toBe(400);
-    expect(created.error).toContain('31');
-    expect(created.calls).toEqual([]);
-  });
-
-  test('a generated address always fits', async () => {
-    const created = await postCreate({ name: workspaceSlug(crypto.randomUUID()), purpose: 'Review the checkout flow.' });
-    expect(created.status).toBe(201);
   });
 });

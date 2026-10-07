@@ -2,7 +2,7 @@
 // Augments `Cloudflare.Env`, which `cloudflare:test` and `cloudflare:workers` both read.
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type {
-  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, StreamLifecycleDO, TransactionDO,
+  AlarmDO, CacheWarmProbeDO, GatedDO, NeighbourDO, RetentionDO, StreamLifecycleDO,
 } from './worker';
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
@@ -35,7 +35,7 @@ import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
-  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult,
+  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered,
 } from './two-turn-shapes';
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
@@ -64,6 +64,9 @@ interface SurfaceControlRpc extends Rpc.WorkerEntrypointBranded {
   holdQueuedModel(): Promise<void>;
   modelCalledWith(marker: string): Promise<void>;
   releaseQueuedModel(): Promise<void>;
+  holdParityModel(parkAt: 'first' | 'partial'): Promise<void>;
+  parityParked(): Promise<void>;
+  releaseParityModel(): Promise<void>;
   mintCliBearer(): Promise<string>;
 }
 
@@ -98,6 +101,12 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: Array<{ id: string; role: string }>; sleepTimeSettled: number }>;
   twinSends(): Promise<{ http: HttpCall[]; transcript: Array<{ id: string; role: string }>; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }>;
   evalAbort(): Promise<{ receipt: string | null; alive: boolean }>;
+  prepareChangeNotes(): Promise<ChangeNotesPrepared>;
+  completeChangeNotes(workspace: string): Promise<ChangeNotesCompleted>;
+  refusedChangeNotes(): Promise<{ readonly sent: boolean; readonly owed: { readonly sends: number; readonly cards: number } }>;
+  claimUnderRecovery(): Promise<{ readonly held: string | null; readonly settled: string | null }>;
+  seedOwedReplyWorkspace(): Promise<string>;
+  recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered>;
   hostedActorTab(): Promise<{ name: string; snapshot: string; jobs: string; frames: number }>;
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
@@ -109,8 +118,8 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
 
 /** The shipped root, sealed as the product seals it: the call `getAgentByName` makes on every stub, which it answers,
  *  and the inherited members it must refuse (`tests/helpers/rpc-denied.ts`), declared so a test can make each call. */
-interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded {
-  __unsafe_ensureInitialized(): Promise<void>;
+/** The inherited members every sealed object must refuse, each called with no arguments. */
+interface DeniedRpc {
   sql(): Promise<void>;
   destroy(): Promise<void>;
   setState(): Promise<void>;
@@ -122,6 +131,33 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded {
   schedule(): Promise<void>;
   runFiber(): Promise<void>;
   keepAlive(): Promise<void>;
+}
+
+/** The account object: its own internals, and two listed reads asked with no caller. */
+interface SealedUserDoRpc extends Rpc.DurableObjectBranded, DeniedRpc {
+  __unsafe_ensureInitialized(): Promise<void>;
+  sqlx(): Promise<void>;
+  readCredential(): Promise<void>;
+  writeCredential(): Promise<void>;
+  requireTier(): Promise<void>;
+  ensureInit(): Promise<void>;
+  createMcpOAuthProvider(): Promise<void>;
+  listWorkspaces(): Promise<void>;
+  listCredentials(): Promise<void>;
+}
+
+interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
+  __unsafe_ensureInitialized(): Promise<void>;
+  hostedWorkspace(): Promise<void>;
+  loadSoulText(): Promise<void>;
+  currentProfile(): Promise<void>;
+  startExecutorFileDownload(): Promise<void>;
+  abortExecutorFileDownload(): Promise<void>;
+  writeExecutorFileChunk(): Promise<void>;
+  readExecutorFileChunk(): Promise<void>;
+  abortExecutorFileWrite(): Promise<void>;
+  prepareTerminal(): Promise<void>;
+  openDeviceTerminal(): Promise<void>;
 }
 
 interface CodexEgressProbeRpc extends Rpc.DurableObjectBranded, HostileCalls {
@@ -137,6 +173,8 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
+  modelSaw(workspace: string, texts: readonly string[]): Promise<void>;
+  restartAlarm(workspace: string, exclude: string): Promise<import('./hire-shapes').JobWatchState>;
   callerObserved(): Promise<void>;
   openHire(workspace: string, prompt: string): Promise<void>;
   reenter(workspace: string): Promise<void>;
@@ -153,7 +191,8 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   outrunJobWindow(workspace: string): Promise<void>;
   openJobGate(workspace: string): Promise<void>;
   redeliverJobWake(workspace: string, jobId: string): Promise<void>;
-  loseJobFiber(workspace: string, jobId: string): Promise<number>;
+  ageJobFiber(workspace: string, jobId: string): Promise<number>;
+  jobWatchState(workspace: string): Promise<import('./hire-shapes').JobWatchState>;
   jobRows(workspace: string): Promise<import('./hire-shapes').JobRow[]>;
 }
 
@@ -249,6 +288,9 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
     | { ok: true; frames: string[]; output: string }
     | { ok: false; error: string }
   >;
+  reattachTerminal(workspace: string): Promise<{ frames: string[]; output: string }>;
+  shellCalls(workspace: string, owner: string, calls: Array<{ command: string; cwd?: string; name?: string }>): Promise<string[]>;
+  refusedTerminalFrame(workspace: string, frame: string): Promise<{ code: number; reason: string }>;
 }
 
 
@@ -342,7 +384,6 @@ declare global {
       RETENTION: DurableObjectNamespace<RetentionDO>;
       NEIGHBOUR: DurableObjectNamespace<NeighbourDO>;
       GATED: DurableObjectNamespace<GatedDO>;
-      TRANSACTION: DurableObjectNamespace<TransactionDO>;
       ALARMED: DurableObjectNamespace<AlarmDO>;
       CACHE_WARM_PROBE: DurableObjectNamespace<CacheWarmProbeDO>;
       EVICTION_PROBE: DurableObjectNamespace<EvictionProbeDO>;
@@ -381,6 +422,7 @@ declare global {
       AGENT_FACET_PROBE: DurableObjectNamespace<AgentFacetProbeRpc>;
       ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
       SEALED_ORCHESTRATOR: DurableObjectNamespace<SealedOrchestratorRpc>;
+      SEALED_USER_DO: DurableObjectNamespace<SealedUserDoRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
       LOADER: WorkerLoader;
       /** The production Worker entry hosted by `public-surface-probe`, WebSocket upgrades included. */

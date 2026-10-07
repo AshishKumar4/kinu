@@ -7,7 +7,7 @@
 import { Cause, Effect } from 'effect';
 import { createHash } from 'node:crypto';
 import { execFile, type ExecFileException } from 'node:child_process';
-import { promises as fs, existsSync, realpathSync, statSync } from 'node:fs';
+import { promises as fs, existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { homedir, devNull, tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { kinuHome } from './home';
@@ -410,8 +410,9 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
         const abs = resolve(path);
         let candidate = abs;
 
+        // The entry itself: an unlink or a move of a link changes the directory holding it, wherever the link points.
         yield* Effect.catchCause(Effect.sync(() => {
-          if (!statSync(abs).isDirectory()) candidate = dirname(abs);
+          if (!lstatSync(abs).isDirectory()) candidate = dirname(abs);
         }), (failed) => Effect.gen(function* () {
           const error = Cause.squash(failed);
 

@@ -126,20 +126,6 @@ function lease(
 }
 
 describe('an interrupted terminal transition finishes the reply it still owed', () => {
-  test('the answer already in the transcript is dispatched and the lease closes', async () => {
-    const harness = orchestratorHarness();
-    boundDelivery(harness, 'ev-owed', 'evt-owed', 5);
-    await persistedDrainTurn(harness, 'evt-owed', 'the build passed');
-    expect(openTransition(harness, 'u-owed')).toBe('first');
-
-    // Classification arms the wake and dispatches nothing; the alarm frame sends the reply.
-    await activateAndClassify(harness);
-    expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: 5 });
-    await harness.agent.terminalRetryPass();
-
-    expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: null });
-    expect(transitionState(harness, 'u-owed')).toBe('done');
-  });
 
   /** Negative control: a lease whose turn produced no answer must stay open to be re-asked. */
   test('a lease whose turn never answered is left open for the sweep to re-ask', async () => {
@@ -177,25 +163,6 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     expect(transitionState(harness, 'u-nothing')).toBe('done');
   });
 
-  test('activation finishes what was answered and re-asks only what was not', async () => {
-    const harness = orchestratorHarness();
-    boundDelivery(harness, 'ev-answered', 'evt-answered', 5);
-    boundDelivery(harness, 'ev-unanswered', 'evt-unanswered', 5);
-    await persistedDrainTurn(harness, 'evt-answered', 'the build passed');
-    await persistedDrainTurn(harness, 'evt-unanswered', null);
-
-    // The reconcile is detached from `onStart`; the wake it arms is its record that it ran.
-    await activateAndClassify(harness);
-
-    // Activation only proves existence and arms the wake; the wake frame does the work.
-    expect(lease(harness, 'ev-answered')).toEqual({ turn_id: 'evt-answered', consumed_at: 5 });
-    expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: 'evt-unanswered', consumed_at: 5 });
-    await harness.agent.terminalRetryPass();
-
-    expect(lease(harness, 'ev-answered').turn_id).toBe('evt-answered');
-    expect(lease(harness, 'ev-answered').consumed_at).toBeNull();
-    expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: null, consumed_at: null });
-  });
 });
 
 const interruptedTerminalFiber: FiberRecoveryContext = {
@@ -271,7 +238,10 @@ function installedFiberRecoveryScene() {
       id TEXT PRIMARY KEY NOT NULL,
       name TEXT NOT NULL,
       snapshot TEXT,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      outcome TEXT,
+      error_message TEXT
     );
     CREATE TABLE cf_agents_fibers (
       fiber_id TEXT PRIMARY KEY,
@@ -399,7 +369,7 @@ describe('the installed Agents recovery scan', () => {
         .toEqual(['fresh-control', 'ledger-only']);
 
       const runMetadataPages = scene.queries.filter(({ query }) => (
-        query.includes('SELECT rowid AS rowid, id, name, created_at FROM cf_agents_runs')
+        query.includes('SELECT rowid AS rowid, id, name, created_at, completed_at, outcome,') && query.includes('FROM cf_agents_runs')
       ));
 
       expect(runMetadataPages.length).toBeGreaterThan(expiredRuns);
@@ -429,7 +399,7 @@ describe('the installed Agents recovery scan', () => {
       ));
 
       const firstRunPage = scene.queries.findIndex(({ query }) => (
-        query.includes('SELECT rowid AS rowid, id, name, created_at FROM cf_agents_runs')
+        query.includes('SELECT rowid AS rowid, id, name, created_at, completed_at, outcome,') && query.includes('FROM cf_agents_runs')
       ));
 
       const freshSnapshot = scene.queries.findIndex(({ query, bindings }) => (
@@ -457,10 +427,11 @@ describe('the installed Agents recovery scan', () => {
 
       expect(scene.recovered).toEqual(['fresh-control', 'ledger-only']);
       expect(scene.terminalNotifications).toEqual(['terminal-managed', 'ledger-only']);
+      // Since agents 0.25 (cloudflare/agents#2363) a fiber that already finished is settled, never reported interrupted.
       expect(scene.events
         .filter(({ name }) => name === 'fiber:run:interrupted')
         .map(({ payload }) => payload.fiberId))
-        .toEqual(['terminal-managed', 'fresh-control', 'ledger-only']);
+        .toEqual(['fresh-control', 'ledger-only']);
       expect(scene.database.query('SELECT id FROM cf_agents_runs').all()).toEqual([]);
       expect(
         scene.database.query('SELECT status FROM cf_agents_fibers WHERE fiber_id = ?')
@@ -644,7 +615,7 @@ const NOW = 1_700_000_000_000;
   });
 
   test('the PATCHED framework scan carries the same row budget, never a stopwatch', async () => {
-    // patches/agents@0.24.0.patch rewrites _checkRunFibers as Kinu code; its budget must match the sweep's.
+    // patches/agents@0.26.0.patch rewrites _checkRunFibers as Kinu code; its budget must match the sweep's.
     const scene = installedFiberRecoveryScene();
 
     try {

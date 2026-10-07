@@ -12,6 +12,7 @@
     "./mossaic": "./src/mossaic.ts",
     "./hand-clock": "./src/hand-clock.ts",
     "./models-dev": "./src/models-dev.ts",
+    "./transcript": "./src/transcript.ts",
     "./vfs": "./src/vfs.ts"
   },
   "dependencies": {

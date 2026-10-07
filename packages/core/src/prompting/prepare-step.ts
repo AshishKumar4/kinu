@@ -12,7 +12,7 @@ import type { ExtensionHost } from '../extension';
 import { MissionBudgetExhausted, type SpendGate } from '../mission-budget';
 import { markCacheTail, type PromptCacheRoute, type PromptCacheStrategy } from './cache-breakpoints';
 import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
-import { normalizeReplayForDestination } from './replay-normalization';
+import { normalizeReplayForDestination, type ReplayDestination } from './replay-normalization';
 import type { DynamicContext, DynamicContextLedger, TurnInput } from './volatile-context';
 import type { ToolErrorStep } from './tool-error-feedback';
 
@@ -49,8 +49,8 @@ export interface StepPipeline {
   readonly prune?: StepPruneBudget | null | undefined;
   readonly budget?: SpendGate | undefined;
   readonly dynamic?: StepDynamicContext | undefined;
-  /** Replayed tool ids/reasoning are normalized for this provider right before cache markers and measurement. */
-  readonly destinationProviderId?: string | undefined;
+  /** Replayed tool ids/reasoning are normalized for this destination right before cache markers and measurement. */
+  readonly destination?: ReplayDestination | undefined;
   /** Measures the final composed array, the only place it exists. */
   readonly meter?: TurnContextMeter | undefined;
   /** Where a staged mid-turn edit lands and the consumed revision is recorded. Absent = unclaimed work. */
@@ -135,7 +135,7 @@ function finishPrepareStep(
   // Spliced after the weave, so the blocks born before the input anchor on the stored input, not on this.
   const opened = withActivated(woven ?? shrunk, activated, input && shrunk[input.at]);
   const working = opened ?? woven ?? shrunk;
-  const replayed = normalizeReplayForDestination(working, pipeline.destinationProviderId);
+  const replayed = normalizeReplayForDestination(working, pipeline.destination);
   const destinationReady = replayed ?? working;
   const plan = pipeline.cache;
   const messages = plan ? markCacheTail(destinationReady, plan.strategy) : destinationReady;

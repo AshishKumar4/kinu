@@ -58,7 +58,7 @@ import { ActorSession, type ActorTurnLease,
   resolveTurnSkills, steerSkillsBlock,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
-  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, readMission, SleepTimeLane, initSleepTimeUpdatesTable,
+  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
   assembleActorTurn, runHeadInference, withCompactionTrigger, promptCacheKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, subordinateTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
@@ -114,8 +114,9 @@ import { ActorSession, type ActorTurnLease,
   type WorkspaceTitleState,
   type PromptIdentity,
   narrowToolSurface, codemodeCapabilitiesFor,
-  readSoul,
-  type ResolvedTurnProfile, decodeJsonValue, projectJsonValue, agentSelfHost, createAgentSelfProvider,
+  type ResolvedTurnProfile,
+  decodeJsonValue, projectJsonValue,
+  agentSelfHost, createAgentSelfProvider,
   cancelBackgroundJob, jobResult, listBackgroundJobs,
   getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, gatedGrants, type ApprovalGrant,
@@ -137,7 +138,7 @@ import { ActorSession, type ActorTurnLease,
 import {
   diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, detach, type Refusal,
 } from '@kinu.run/core/obs';
-import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
+import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, soulIn, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, nodeWorkspace, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { OS_LEASE_PROCESS } from './agent-host/lease-process';
@@ -316,10 +317,6 @@ function seatRead<T>(input: LocalOrchestrationInput, read: (session: LocalAgentS
   }
 }
 
-/** The owner's soul from its row where the runtime holds a workspace, else the actor's own file. */
-async function currentSoul(rt: CLIRuntime): Promise<string | null> {
-  return await (rt.ownerSoul?.() ?? readSoul(rt.agentStateVfs ?? rt.storage.vfs));
-}
 
 export class LocalAgentSession {
   /** The seam core publishes and enqueues through, as cf's actor holds one; outside callers publish here too. */
@@ -504,7 +501,7 @@ export class LocalAgentSession {
     );
     this.instructionDesk = new InstructionApprovalDesk({
       agentsMd: async (window, trust) => discoverAgentsMd(this.cwd, window, trust),
-      skillsVfs: this.rt.storage.vfs,
+      skillsVfs: this.rt.ownFiles,
       approvals: this.instructionApprovals,
       window: () => this.modelCatalog.window(),
     });
@@ -591,7 +588,7 @@ export class LocalAgentSession {
         // No durable wake: this process is the wake, and a crashed turn re-arms from the ledger on restart.
         armTurnWake: async () => {},
         steerSkills: (text) => steerSkillsBlock({
-          vfs: this.rt.storage.vfs,
+          vfs: this.rt.ownFiles,
           config: this.config,
           userText: text,
           trust: this.instructionTrust,
@@ -1660,7 +1657,7 @@ export class LocalAgentSession {
       backend: 'cli-local',
       executors: () => this.rt.executionRouter?.listExecutors() ?? [],
       config: this.config,
-      skills: vfsTurnSkills(this.rt.storage.vfs, this.config, this.instructionTrust),
+      skills: vfsTurnSkills(this.rt.ownFiles, this.config, this.instructionTrust),
       models: {
         catalog: this.modelCatalog,
         normalize: (spec) => this.profiles().normalizeSpec(spec),
@@ -1692,7 +1689,8 @@ export class LocalAgentSession {
       // A session with no roster substrate never advertises the temporary rung.
       temporaryAsk: () => this.teamDeps?.temporary !== undefined,
       // A missing SOUL.md renders the default.
-      soul: async () => (await currentSoul(this.rt)) ?? undefined,
+      // The workspace's SOUL.md as its agents left it; a missing one renders the default.
+      soul: async () => soulIn(this.rt.space) ?? undefined,
       // Re-statted each turn; only files fitting the model window are read, each classified by owner approval.
       agentsMd: (window) => discoverAgentsMd(this.cwd, window, this.instructionTrust),
       identity: async () => this.promptIdentity(),
@@ -1724,7 +1722,7 @@ export class LocalAgentSession {
    *  decisions, so the CLI cannot drift from the Durable Object. */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     // A child titles from its brief, as a hosted actor does; the workspace mission names only the root.
-    const mission = this.rt.actor.parentActorId === null ? readMission(this.rt.storage.sql) : null;
+    const mission = this.rt.actor.parentActorId === null ? missionOf(soulIn(this.rt.space)) : null;
 
     // Decided on the live turn: `shouldGate` reads RAM a restart lacks, so the row's existence carries it.
     const gated = this.rt.shell !== undefined
@@ -2068,7 +2066,7 @@ export class LocalAgentSession {
     roleSkills: readonly string[] = [],
   ): Promise<TurnSkillSurface> {
     return resolveTurnSkills({
-      vfs: this.rt.storage.vfs,
+      vfs: this.rt.ownFiles,
       config: this.config,
       userText,
       roleSkills,
@@ -2699,7 +2697,8 @@ export class LocalAgentSession {
       }),
       agentsActions: () => [],
       temporaryAsk: () => false,
-      soul: async () => (await currentSoul(this.rt)) ?? undefined,
+      // The workspace's SOUL.md as its agents left it; a missing one renders the default.
+      soul: async () => soulIn(this.rt.space) ?? undefined,
       agentsMd: (window) => discoverAgentsMd(this.cwd, window, this.instructionTrust),
       // Addressed as a named agent of this workspace, not the workspace's own chat.
       identity: async () => ({ ...(await this.promptIdentity()), agent: actor.stores.config.getDisplayName() ?? actor.record.name }),

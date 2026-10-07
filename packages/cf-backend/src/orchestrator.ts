@@ -14,7 +14,7 @@ import { NimbusTasks } from "./nimbus-tasks";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
-  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
+  createWorkspaceForkSink, createWorkspaceForkSource, workspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
@@ -139,7 +139,7 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
-  readMission, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT, isPlaceholderMission, drawWorkspaceLogo,
+  missionOf, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT, isPlaceholderMission, drawWorkspaceLogo,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
@@ -356,7 +356,7 @@ function clampLimit(requested: number | undefined, max: number): number {
   return Math.min(Math.max(Math.floor(requested), 1), max);
 }
 
-/** agents 0.24's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
+/** agents 0.26's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
 const PERSISTED_NAME_KEY = '__ps_name';
 
 /** An alarm phase's failure: marked on its span and recorded, so the tick goes on to its next phase. */
@@ -1214,7 +1214,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ancestors: () => this.ancestorProfiles(actor.handle),
       agentsActions: () => (agents === null ? [] : agentsActionsFor(agents)),
       temporaryAsk: () => agents?.team?.temporary !== undefined,
-      soul: async () => this.getSoulText(),
+      // Read for this turn: the owner or any agent may have changed SOUL.md since main's last one.
+      soul: async () => await this.loadSoulText(),
       agentsMd: (window) => this.workspaceAgentsMd(window, trust),
       // Addressed as a named agent of this workspace, not the workspace's own chat.
       identity: async () => ({ ...(await this.promptIdentity()), agent: actor.stores.config.getDisplayName() ?? actor.record.name }),
@@ -2208,7 +2209,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));
         this.stopSubtree(actorId);
       },
-      clear: async () => { await (await facet()).clear(snapshot()); },
     };
   }
 
@@ -2411,7 +2411,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       evolutionEnabled: this._turnEvolutionEnabled,
     };
 
-    return declareTerminalRoster(facts, this.rosterParts(input, readMission(this.boundSql)));
+    return declareTerminalRoster(facts, this.rosterParts(input, missionOf(this.getSoulText())));
   }
 
   /** Built per use: the actor handle and the fast lane are this activation's. */
@@ -2586,8 +2586,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Titling source for the root, and inherited by agents the owner adds. */
-  protected ownMission(): string {
-    return readMission(this.boundSql) ?? '';
+  protected async ownMission(): Promise<string> {
+    return missionOf(await this.loadSoulText()) ?? '';
   }
 
   /** UserDO is authoritative for the shown name; the manual-rename refusal lives in its
@@ -3056,10 +3056,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Synchronous by contract: runs inside blockConcurrencyWhile, which gates every request and
    *  resets the object at 30s (`do.block_concurrency.cancel_ms`); `scripts/do-init-gate.ts` enforces. */
   async onStart(): Promise<void> {
+    // A sibling's first RPC starts it too (agents 0.25); it is no workspace, so it records no startup.
+    if (this.nimbusSibling) return;
     diagnostics.event('actor.startup', { workspace: this.name });
 
     // An unborn workspace owes nothing: its first claim writes it.
-    if (this.storageRefusal !== undefined || this.nimbusSibling || !this.workspaceBorn()) return;
+    if (this.storageRefusal !== undefined || !this.workspaceBorn()) return;
     this.rependDeadActivationLeases();
     // Row-budgeted (init gate); a truncated pass drains under the wake below.
     this.maintenanceUnfinished = this.maintenanceSweeps(true);
@@ -3068,7 +3070,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // The activation only classifies and arms a wake; all dispatch runs under that durable wake,
     // because an activation launches no external work, awaited or detached.
-    if (this.owedWorkExists()) {
+    if (this.owedWorkExists() || this.jobs.countRunningInWorkspace() > 0) {
       this.armOwedWorkWake('reconcile');
     }
 
@@ -3377,6 +3379,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       const status = yield* Effect.promise(async () => getAgentStatus({
         sql: this.boundSql,
+        soul: () => workspaceSoul(this.hostedWorkspace().bundle),
         actor: this.rt.actor,
         model: this.effectiveModelSpec(),
         reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
@@ -4537,7 +4540,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const refusal = await this.titlingRefusal();
 
     if (refusal !== null) return { drawn: false, refusal };
-    const mission = readMission(this.boundSql);
+    const mission = missionOf(await this.loadSoulText());
     const subject = mission === null || isPlaceholderMission(mission) ? await this.workspaceTitle() ?? this.name : mission;
 
     return { drawn: await this.drawLogo(subject), refusal: null };
@@ -4572,7 +4575,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Returns once the turn is queued; the agents-SDK heartbeat holds the DO.
    */
   async beginGenesisTurn(): Promise<{ started: boolean }> {
-    const signal = workspaceGenesisSignal(readMission(this.boundSql));
+    const signal = workspaceGenesisSignal(missionOf(await this.loadSoulText()));
 
     if (!signal) return { started: false };
     // The send admits the turn before its first await; only the wait is detached.
@@ -5098,10 +5101,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         executorId,
         path,
         expectedRevision,
-        upload: new ExecutorFileUpload(router, executorId, path, {
-          expectedRevision,
-          writeSoul: async (bytes) => { await this.setSoul(new TextDecoder().decode(bytes)); },
-        }),
+        upload: new ExecutorFileUpload(router, executorId, path, { expectedRevision }),
       };
       this.executorFileUploads.set(transferId, row);
     } else if (!row || row.executorId !== executorId || row.path !== path) {
@@ -5267,9 +5267,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { ok: true };
   }
 
-  /** From the owner's row, the file resealed first. */
+  /** The workspace's SOUL.md, wherever this actor's own home is. */
   protected override async loadSoulText(): Promise<string> {
-    return (await settledWorkspaceSoul(this.hostedWorkspace().bundle)) ?? '';
+    return (await workspaceSoul(this.hostedWorkspace().bundle)) ?? '';
   }
 
   @callable() setSoul(soul: string) {
@@ -5281,8 +5281,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (!ownerUserId) return yield* new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
       yield* Effect.promise(() => writeWorkspaceSoul(this.hostedWorkspace().bundle, text));
-      // The next turn re-reads the soul from its row.
-      this._cachedSoulText = null;
 
       return { soul: text, purpose: summarizeSoul(text) };
     }));

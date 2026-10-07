@@ -1,6 +1,6 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect } from 'bun:test';
-import { AwaitedList, createTestActorsOver, createTestSql, readTranscriptRows, scratchPath, type HandClock, type TranscriptRow, scratchDir } from '@kinu.run/test-utils';
+import { AwaitedList, createTestActorsOver, createTestSql, readTranscriptRows, scratchPath, type HandClock, type TranscriptRow, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -106,7 +106,7 @@ export function headStreamFrames(events: AwaitedList<SessionEvent>) {
 
 /** A governor over its own scratch ledger; the ledger is actor-scoped, so the handle is required to read rows back. */
 export function governorDeps() {
-  const db = new Database(scratchPath('workspace', 'agent.db'));
+  const db = workspaceDatabase(scratchPath('workspace', 'agent.db'));
 
   return { actor: createTestActorsOver(db).main, storage: createTestSql() };
 }
@@ -222,9 +222,7 @@ export function systemCapturingModel(answer: string, sink: (system: string) => v
 
 /** Workspace database and runtime; the only place the bun:sqlite handle is widened to the factory's parameter. */
 export function workspaceRuntime() {
-  const db = new Database(scratchPath('local-session', 'agent.db'));
-  // As openWorkspaceCLI opens one: WAL, not the rollback journal's fsyncs per commit.
-  db.exec('PRAGMA journal_mode = WAL');
+  const db = workspaceDatabase(scratchPath('local-session', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 
@@ -519,9 +517,10 @@ export const FOCUSED_SKILL =
 
 export const FOCUSED_PATH = workspaceSkillPath('focused');
 
+/** Written where core names a workspace skill, its `vfs://` path in the space. */
 export async function writeFocusedSkill(rt: CLIRuntime): Promise<void> {
-  await rt.storage.vfs.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
-  await writeText(rt.storage.vfs, FOCUSED_PATH, FOCUSED_SKILL);
+  await rt.ownFiles.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
+  await writeText(rt.ownFiles, FOCUSED_PATH, FOCUSED_SKILL);
 }
 
 export function messageText(message: PromptMessage): string {

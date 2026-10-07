@@ -5,19 +5,14 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { createCLIRuntime } from '../src/runtime';
-import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
-import { scratchPath, scratchDir } from '@kinu.run/test-utils';
+import { createInlineWorkspace, inlineWorkspaceStorage } from '@kinu.run/core/identity';
+import { scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 
+/** The store under test, alone: a CLI runtime's own plane is host files, which bind no BLOB. */
 function freshVfs() {
-  const db = new Database(scratchPath('vfs-blob', 'agent.db'), { create: true });
+  const db = workspaceDatabase(scratchPath('vfs-blob', 'agent.db'), { create: true });
 
-  const rt = createCLIRuntime(db, {
-    cwd: scratchDir('workspace-folder'),
-    llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
-  });
-
-  return rt.storage.vfs;
+  return createInlineWorkspace(db).vfs;
 }
 
 describe('workspace filesystem byte round-trip (bun:sqlite)', () => {
@@ -56,7 +51,7 @@ describe('workspace filesystem over a read-only handle', () => {
   // each guard is load-bearing on its own, see docs/DEVBOX-DECISIONS.md D21, D22 and D23-N.
   test('a current filesystem opens read-only and reads what a writer left', async () => {
     const path = scratchPath('vfs-readonly', 'agent.db');
-    const writer = new Database(path, { create: true });
+    const writer = workspaceDatabase(path, { create: true });
 
     const written = inlineWorkspaceStorage(writer);
     await new SqliteVFS(written.sql, written.transactions).as(CRED_KERNEL).writeFile('/note.txt', 'kept');

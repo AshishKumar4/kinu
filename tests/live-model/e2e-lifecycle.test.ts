@@ -29,14 +29,14 @@ import {
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
-  readSoul,
 } from '../../packages/core/src/index';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { buildEvalAgentSurface, collectStepText, createStepToolCallLog } from './harness';
 import { localTargetFolder, provisionLocalTarget, type LocalTarget } from './target-local';
 import { seedTranscriptEntry, EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
-recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
+recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM, workspaceDatabase,
+} from '@kinu.run/test-utils';
 
 /**
  * THIS SUITE IS THE IN-PROCESS LOOP, and it reads the target knob to say so.
@@ -123,7 +123,7 @@ interface ChatTurn {
 async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
   const { history, model, rt, tools, userMessage } = turn;
   const start = Date.now();
-  const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
+  const soul = soulIn(rt.space) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
   const log = createStepToolCallLog();
 
@@ -223,10 +223,10 @@ describe('E2E Lifecycle', () => {
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     ).all().map(t => t.name);
 
-    expect(tables).toContain('vfs_inodes');
+    expect(tables).toContain('memory_note_files');
     expect(tables).toContain('conversation_entries');
     expect(tables).toContain('search_nodes');
-    const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs) ?? '';
+    const soul = soulIn(rt.space) ?? '';
     expect(soul).toContain('TypeScript');
   });
 
@@ -367,13 +367,13 @@ describe('E2E Lifecycle', () => {
   liveTest('persistence', async () => {
     const msgsBefore = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;
     db.close();
-    const db2 = new Database(DB_PATH);
+    const db2 = workspaceDatabase(DB_PATH);
     const msgsAfter = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;
     const reopened = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG, cwd: localTargetFolder(TEST_DIR) });
     const soul = reopened.info.soul;
     db2.close();
     expect(msgsAfter).toBe(msgsBefore);
     expect(soul).toContain('TypeScript');
-    db = new Database(DB_PATH);
+    db = workspaceDatabase(DB_PATH);
   });
 });

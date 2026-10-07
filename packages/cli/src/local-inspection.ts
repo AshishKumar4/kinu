@@ -43,7 +43,6 @@ import {
   type GepaRunSummary,
   type HeadRunView,
   type JsonObject,
-  type JsonValue,
   type ResolvedTurnProfile,
   type EventVariant,
   type KinuEvent,
@@ -59,7 +58,8 @@ import {
   type ReasoningEffort,
   setModel,
   setReasoningEffort,
-  decodeJsonValue,
+  getRunTimeline,
+  JsonObjectSchema,
   parseJsonValue,
   listRecordObjectives,
   listRecordCells,
@@ -78,16 +78,14 @@ import {
   type WorkspaceSpend,
   type AccountSpend,
   MEMORY_PATH,
-  WORKSPACE_ROOT,
-  readMission,
-  searchMemoryChunks,
+  missionOf,
   type MemorySearchResult,
 } from '@kinu.run/core';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
-import { classify, tolerateAsync } from '@kinu.run/core/obs';
+import { tolerateAsync } from '@kinu.run/core/obs';
 import {
   agentStateFiles, makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
-  openWorkspaceCLI, resolverModelPlane,
+  openWorkspaceCLI, resolverModelPlane, soulOf, workspaceMemory,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveLocalAgent } from './config';
@@ -238,18 +236,17 @@ export async function readLocalNextTurnTier(name: string, opts: LocalModelResolv
   });
 }
 
-/** The file itself, through the read-only plane; `memory_chunks` is the search index and can lag an edit. */
+/** The note itself, a real file of main's home; `memory_note_chunks` is the search index. */
 export function readLocalMemory(name: string): Promise<string> {
-  return withLocalDbAsync(name, async (db) =>
-    await tolerateAsync(() => readText(agentStateFiles(db), `${WORKSPACE_ROOT}/${MEMORY_PATH}`), 'enoent') ?? '');
+  return withLocalDbAsync(name, async (db) => await tolerateAsync(() => readText(agentStateFiles(db), MEMORY_PATH), 'enoent') ?? '');
 }
 
 /** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */
-/** The agent's own ranked search over the same index. */
-export function searchLocalMemory(name: string, query: string, limit = 10): MemorySearchResult[] {
+/** The agent's own search, as its memory tool runs it: a note a shell changed is indexed again first, so its new words are found. */
+export function searchLocalMemory(name: string, query: string, limit = 10): Promise<MemorySearchResult[]> {
   const window = boundedInt(limit, 10, 1, Number.MAX_SAFE_INTEGER);
 
-  return withLocalDb(name, (db) => tableExists(db, 'memory_chunks_fts') ? searchMemoryChunks(makeSql(db), query, window) : []);
+  return withLocalDbAsync(name, async (db) => workspaceMemory(db).search(query, window), 'repair');
 }
 
 export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {
@@ -278,92 +275,22 @@ export function listLocalRunEvents(
   return readMainActorTable(name, 'run_events', [], (sql, actor) => new RunEventRecorder(sql, actor).read(runId, opts));
 }
 
-/** Local peer of core's `getRunTimeline`, sharing its ceiling; `limit` is user input bound to raw `LIMIT ?`. */
+/** Core's `getRunTimeline` over the local database, as the cloud answers it; only the default of 100 is this surface's. */
 export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
   return withLocalDb(name, (db) => localTimeline(db, limit));
 }
 
 function localTimeline(db: SqliteDb, limit: number): JsonObject[] {
-  const window = boundedInt(limit, 100, 1, RUN_TIMELINE_MAX);
-
-  // Every rail is actor-scoped; this reports the main actor.
   const actor = mainActor(db);
-  const rows: JsonObject[] = [];
 
-  if (tableExists(db, 'run_events')) {
-    const sql = makeSql(db);
-    const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
-    const latest = listRuns(recorder, null, 1).items[0];
+  if (actor === null || !tableExists(db, 'run_events')) return [];
+  const sql = makeSql(db);
+  const deps = { sql, actor, events: new RunEventRecorder(sql, actor), jobs: new BackgroundJobStore(sql, actor), currentRunId: null };
 
-    if (latest) {
-      rows.push(...recorder.read(latest.runId, { limit: window }).map((e) => ({
-        id: `${e.runId}:${e.eventIndex}`,
-        kind: `run:${e.type}`,
-        runId: e.runId,
-        payload: decodeJsonValue({ value: e }),
-        ts: Date.parse(e.timestamp) || 0,
-      })));
-    }
-  }
+  // Through JSON, as the cloud's spans cross its wire: an absent field is no key.
+  const spans = getRunTimeline(deps, { limit: boundedInt(limit, 100, 1, RUN_TIMELINE_MAX) });
 
-  if (tableExists(db, 'agent_log')) {
-    rows.push(...all<{
-      id: string; kind: string; turn_id: string | null; step_idx: number | null; payload: string; received_at: number;
-    }>(
-      db,
-      `SELECT id, kind, turn_id, step_idx, payload, received_at
-       FROM agent_log
-       ORDER BY received_at DESC
-       LIMIT ?`,
-      window,
-    ).map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      turnId: row.turn_id,
-      stepIdx: row.step_idx,
-      payload: parseJson(row.payload),
-      ts: row.received_at,
-    })));
-  }
-
-  if (actor && tableExists(db, 'evolution_events')) {
-    rows.push(...all<{ id: string; type: string; message: string; data: string | null; created_at: number }>(
-      db,
-      `SELECT id, type, message, data, created_at
-       FROM evolution_events
-       WHERE actor_id = ?
-       ORDER BY created_at DESC
-       LIMIT ?`,
-      actor.actorId, window,
-    ).map((row) => ({
-      id: row.id,
-      kind: `evolution:${row.type}`,
-      message: row.message,
-      data: parseJson(row.data),
-      ts: row.created_at,
-    })));
-  }
-
-  if (actor && tableExists(db, 'search_nodes')) {
-    rows.push(...all<{ id: string; action: string; value: number; status: string; created_at: number }>(
-      db,
-      `SELECT id, action, value, status, created_at
-       FROM search_nodes
-       WHERE actor_id = ?
-       ORDER BY created_at DESC
-       LIMIT ?`,
-      actor.actorId, window,
-    ).map((row) => ({
-      id: row.id,
-      kind: 'swarm',
-      label: row.action,
-      value: row.value,
-      status: row.status,
-      ts: row.created_at,
-    })));
-  }
-
-  return rows.sort((a, b) => timestampOf(b) - timestampOf(a)).slice(0, window);
+  return v.parse(v.array(JsonObjectSchema), parseJsonValue(JSON.stringify(spans)));
 }
 
 /** Every search, deliberately; core's projections answer one. */
@@ -633,8 +560,8 @@ export async function executeLocalExecutor(name: string, executorId: string, com
   }, 'write');
 }
 
-/** A read refuses a database another schema genesis wrote; a write opens it as it stands. */
-type DbMode = 'read' | 'write';
+/** A read, and a write that repairs a derived index, refuse a database another schema genesis wrote; a write opens it as it stands. */
+type DbMode = 'read' | 'repair' | 'write';
 
 function openLocalDb(name: string, mode: DbMode): SqliteDb {
   const dbPath = agentDbPath(name);
@@ -813,8 +740,8 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
       db, `SELECT name, created_at FROM workspace_identity LIMIT 1`).at(0)
     : null;
 
-  // Off the soul's row, not SOUL.md: opening the workspace filesystem writes.
-  const mission = readMission(makeSql(db));
+  // SOUL.md read where it lies in the workspace's space, without opening a filesystem.
+  const mission = missionOf(soulOf(db));
 
   return {
     name: identity?.name ?? null,
@@ -852,20 +779,3 @@ const NOOP_ALARM: AlarmScheduler = {
   async scheduleAt() {},
 };
 
-function parseJson(value: string | null): JsonValue {
-  if (value == null) return null;
-
-  try {
-    return parseJsonValue(value);
-  } catch (error) {
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
-
-    return value;
-  }
-}
-
-function timestampOf(value: JsonObject): number {
-  const parsed = v.safeParse(v.number(), value.ts);
-
-  return parsed.success ? parsed.output : 0;
-}

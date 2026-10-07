@@ -2,7 +2,7 @@
 import { expect } from 'bun:test';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { FileRestoreChange } from '@kinu.run/core';
+import { CHECKPOINTS_UNAVAILABLE_NO_GIT, type FileRestoreChange } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
 import type { SharedCase } from '../cases';
 
@@ -38,6 +38,17 @@ export const CHECKPOINT_CASES: readonly SharedCase[] = [
         .toEqual({ dir: project, id, files: changes, preRestoreId: expect.any(String) });
       expect(readFileSync(join(project, 'notes.txt'), 'utf8')).toBe('before the turn');
       expect(existsSync(join(project, 'created.txt'))).toBe(false);
+    },
+  },
+  {
+    title: 'a machine without git has no store, and says why instead of answering empty',
+    covers: ['checkpointStatus', 'listFileCheckpoints'],
+    opens: () => ({ gitBin: join(scratchDir('shared-checkpoint-no-git'), 'git') }),
+    async run({ surface }) {
+      const unavailable = { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT };
+
+      expect(await surface.checkpointStatus()).toEqual(unavailable);
+      expect(await surface.listFileCheckpoints(10, 'turn-quiet')).toEqual({ availability: unavailable, entries: [] });
     },
   },
   {

@@ -7,7 +7,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
+import { restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, TURN_END_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
@@ -80,12 +80,12 @@ import UserSettingsPage from "@/pages/UserSettingsPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
-  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
+  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, TURN_CLAIM_FRAME, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
-  type AdvisorSeverity, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
+  type AdvisorSeverity, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc } from "@kinu.run/core";
@@ -104,7 +104,7 @@ import type {
 import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
-import { galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -603,6 +603,16 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
           capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
         },
       },
+      // `&devices=history`: a machine that refused an update, and one written before the registry recorded a sandbox.
+      ...(new URLSearchParams(location.search).get("devices") === "history" ? [{
+        id: "dev-3", label: "Lab box", os: "linux", hostname: "lab", connected: true, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
+        replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+        sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+        version: "0.2.0+older", servedVersion: "0.3.0+served", update: "refused", updateRefusal: "Bun 1.4.2 install failed: permission denied",
+      }, {
+        id: "dev-old", label: "Old box", os: "linux", hostname: "old", connected: false, createdAt: NOW - 90 * 864e5, lastSeenAt: null, expiresAt: null,
+        replacedAt: null, revokedAt: null, unstoppedAt: null,
+      }] : []),
       ...(frame === "devices" ? [{
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
@@ -1298,9 +1308,14 @@ window.WebSocket = new Proxy(RealWebSocket, {
   },
 });
 
-/** A frame the gate makes the server send: only cards and steers carry an actor stamp, which no fixture read can produce. */
+/** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo; `turn_claim` is the root's claim as it changes; `head_stream` and `head_activity` are a swarm head's live paint and landed step. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status"]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity"]),
+  reads: v.optional(v.array(v.string())),
+  claim: v.optional(JsonObjectSchema),
+  headId: v.optional(v.string()),
+  kind: v.optional(v.string()),
+  delta: v.optional(v.string()),
   actorId: v.optional(v.string()),
   id: v.optional(v.string()),
   state: v.optional(v.string()),
@@ -1862,10 +1877,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   previewSlate: (args?: unknown[]) => ({
     ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
   }),
-  // `&consent=waiting`: a device command already waiting.
-  listPendingConsents: () => (new URLSearchParams(location.search).get("consent") === "waiting"
-    ? [{ consentId: "c-1", deviceLabel: "studio", method: "exec", command: "git push origin main", createdAt: 1 }]
-    : []),
+  listPendingConsents: galleryConsents,
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
   listFileCheckpoints: () => REVERT_LISTING,
@@ -1884,6 +1896,13 @@ type GalleryAnswer = { readonly value: unknown } | null;
 function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
   if (method === "inspectSubordinate") {
     return { value: galleryPlanInspection(v.parse(SubordinateInspectionRequestSchema, args?.[0]), [galleryAgentPlan]) };
+  }
+
+  if (method === "dismissPlanReview") {
+    document.documentElement.dataset.galleryPlanDismissed = "1";
+    galleryAgentPlan = { ...galleryAgentPlan, status: "dismissed", updatedAt: Date.now() };
+
+    return { value: { ok: true, plan: galleryAgentPlan } };
   }
 
   if (method !== "decidePlanReview") return null;
@@ -2004,6 +2023,26 @@ const HISTORY_UNEVEN = new URLSearchParams(location.search).get("historyUneven")
 
 const HISTORY_PICTURE = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220"><rect width="480" height="220" fill="#3a3530"/><text x="24" y="120" fill="#e8dcc4" font-size="28">chart</text></svg>')}`;
 
+/**
+ * `gallery:live-window` with `{ rows, edited?, cleared? }`: the socket's live window moves to those history rows, `edited`
+ * saying more live than stored; `cleared` is another tab's clear, which empties the store too.
+ */
+const LiveWindowSchema = v.object({ rows: v.array(v.number()), edited: v.optional(v.number()), cleared: v.optional(v.boolean()) });
+
+window.addEventListener("gallery:live-window", (event: Event) => {
+  const asked = v.parse(LiveWindowSchema, event instanceof CustomEvent ? event.detail : null);
+
+  if (asked.cleared === true) document.documentElement.dataset.historyCleared = "1";
+
+  const entries = asked.rows.map((index) => {
+    const row = historyRow(index);
+
+    return index === asked.edited ? { ...row, content: `${row.content} Edited live.` } : row;
+  });
+
+  galleryChatWindow("", restoredRows(entries));
+});
+
 function historyRow(index: number): ChatHistoryEntry {
   const id = `hist-${String(index).padStart(5, "0")}`;
   const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
@@ -2032,7 +2071,8 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
 
   asks.historyAsks = String(Number(asks.historyAsks ?? 0) + 1);
   asks.historyReads = `${asks.historyReads ?? ""} ${cursor === undefined ? "newest" : `${String(cursor.before - limit)}-${String(cursor.before)}`}`;
-  const held = Math.min(cursor?.before ?? HISTORY_ROWS, HISTORY_ROWS);
+  const stored = asks.historyCleared === "1" ? 0 : HISTORY_ROWS;
+  const held = Math.min(cursor?.before ?? stored, stored);
   const from = Math.max(0, held - limit);
   const items = Array.from({ length: held - from }, (_, offset) => historyRow(from + offset));
   const settled = Promise.withResolvers<void>();
@@ -2115,15 +2155,175 @@ function rosterMoved(): void {
   queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubordinates"] })); });
 }
 
-/** The page reads the gallery answers only after a wait it controls. */
+async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
+  galleryRevertConversation(v.parse(v.string(), args?.[0]));
+
+  return null;
+}
+
+/** The first `name` event whose detail parses as `schema` and is `mine`. */
+function galleryEvent<Schema extends v.GenericSchema>(
+  name: string, schema: Schema, mine: (asked: v.InferOutput<Schema>) => boolean,
+): Promise<v.InferOutput<Schema>> {
+  return new Promise((resolve) => {
+    const listen = (event: Event) => {
+      const asked = v.parse(schema, event instanceof CustomEvent ? event.detail : null);
+
+      if (!mine(asked)) return;
+      window.removeEventListener(name, listen);
+      resolve(asked);
+    };
+
+    window.addEventListener(name, listen);
+  });
+}
+
+const TWO_CONSENTS = [
+  { consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1, command: "git push origin main" },
+  { consentId: "c-2", deviceLabel: "laptop", method: "exec", createdAt: 2, command: "bun run deploy" },
+];
+
+/**
+ * `&consent=waiting`: a device command already waiting. `&consent=spoofed`: one whose bidi and zero-width characters
+ * would show a reader a different command. `&consent=two`: two devices' commands, each resolution held until
+ * `gallery:consent-settle` `{ id, failed? }`, and a resolved one no longer listed.
+ */
+function galleryConsents(): JsonValue {
+  const asked = new URLSearchParams(location.search).get("consent");
+  const root = document.documentElement.dataset;
+  const resolved = (root.galleryConsentsResolved ?? "").split(",");
+
+  root.galleryConsentReads = String(Number(root.galleryConsentReads ?? "0") + 1);
+
+  if (asked === "two") return TWO_CONSENTS.filter((consent) => !resolved.includes(consent.consentId));
+
+  if (asked !== "waiting" && asked !== "spoofed") return [];
+
+  return [{ consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1,
+    command: asked === "spoofed" ? "rm -rf ./build \u202E\u2066gpj.x\u200B" : "git push origin main" }];
+}
+
+const ConsentSettleSchema = v.object({ id: v.string(), failed: v.optional(v.string()) });
+
+async function galleryResolveConsent(args?: unknown[]): Promise<JsonValue> {
+  const [id] = v.parse(v.tuple([v.string(), v.string()]), args);
+
+  if (new URLSearchParams(location.search).get("consent") !== "two") return {};
+
+  const settled = await galleryEvent("gallery:consent-settle", ConsentSettleSchema, (asked) => asked.id === id);
+
+  if (settled.failed !== undefined) throw new Error(settled.failed);
+  const root = document.documentElement.dataset;
+
+  root.galleryConsentsResolved = `${root.galleryConsentsResolved ?? ""},${id}`;
+
+  return {};
+}
+
+const JobsAnswerSchema = v.object({ at: v.number(), label: v.optional(v.string()), failed: v.optional(v.string()) });
+
+function heldJob(at: number, label: string | undefined): JsonValue {
+  return [{
+    id: `bgjob-held-${String(at)}`, kind: "shell", label: label ?? null, workMode: "build", status: "running",
+    result: null, error: null, createdAt: NOW - 60e3, settledAt: null,
+  }];
+}
+
+/**
+ * `&jobs=held`: one running job, `first build`, until `data-gallery-jobs-hold="1"`; from then each read waits for
+ * `gallery:jobs-answer` `{ at, label?, failed? }`, `at` counting held reads from 0, and answers one running job named
+ * `label` or fails with `failed`. Otherwise there are none.
+ */
+async function galleryJobsRead(): Promise<JsonValue> {
+  if (new URLSearchParams(location.search).get("jobs") !== "held") return [];
+  const root = document.documentElement.dataset;
+
+  if (root.galleryJobsHold !== "1") return heldJob(-1, "first build");
+  const at = Number(root.galleryJobReads ?? "0");
+
+  root.galleryJobReads = String(at + 1);
+
+  const answer = await galleryEvent("gallery:jobs-answer", JobsAnswerSchema, (asked) => asked.at === at);
+
+  if (answer.failed !== undefined) throw new Error(answer.failed);
+
+  return heldJob(at, answer.label);
+}
+
+/**
+ * The plan decision, as `&decision=` asks: `held` until `gallery:decision-answer`, or `fail-first` failing the first
+ * attempt. `data-gallery-decisions` counts the decisions sent.
+ */
+async function galleryDecidePlan(args?: unknown[]): Promise<JsonValue> {
+  const root = document.documentElement.dataset;
+  const sent = Number(root.galleryDecisions ?? "0") + 1;
+  const asked = new URLSearchParams(location.search).get("decision");
+
+  root.galleryDecisions = String(sent);
+
+  if (asked === "held") await galleryEvent("gallery:decision-answer", v.unknown(), () => true);
+
+  if (asked === "fail-first" && sent === 1) throw new Error("review-fixture-rpc-failed");
+
+  return v.parse(JsonValueSchema, galleryPlanRpc("decidePlanReview", args)?.value ?? null);
+}
+
+/** Settles a stranded turn as the server does: the claim frame says so, and `data-gallery-recoveries` counts the asks. */
+async function galleryRecoverTurn(): Promise<JsonValue> {
+  const root = document.documentElement.dataset;
+
+  root.galleryRecoveries = String(Number(root.galleryRecoveries ?? "0") + 1);
+  galleryServerPush(JSON.stringify({ type: TURN_CLAIM_FRAME, claim: { kind: "settled" } }));
+
+  return null;
+}
+
+/** What went to the running turn rather than opening one. */
+async function galleryMidTurnSend(args?: unknown[]): Promise<JsonValue> {
+  const asks = document.documentElement.dataset;
+
+  asks.galleryMidTurnSends = `${asks.galleryMidTurnSends ?? ""}${v.parse(v.string(), args?.[0])}\n`;
+
+  return {};
+}
+
+/** Stop's cancel, held while `data-gallery-cancel-held` is set, until `gallery:release-cancel`. */
+async function galleryCancelWork(): Promise<JsonValue> {
+  if (document.documentElement.dataset.galleryCancelHeld === "1") {
+    await new Promise((released) => { window.addEventListener("gallery:release-cancel", released, { once: true }); });
+  }
+
+  return {};
+}
+
+/** `&clear=refused`: a turn is running, so the server refuses and keeps every message. */
+async function galleryClearConversation(): Promise<JsonValue> {
+  if (new URLSearchParams(location.search).get("clear") === "refused") throw new Error(CLEAR_NEEDS_IDLE);
+  galleryClearChat("");
+
+  return null;
+}
+
+/** The page's conversation writes, and the reads the gallery answers only after a wait it controls. */
 const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>([
   ...(HISTORY_ROWS > 0 ? [["getChatHistoryPage", galleryHistoryPage] as const] : []),
   ["savePlanReviewAnnotations", galleryAnnotationSave],
+  ["revertConversation", galleryRevert],
+  ["clearConversation", galleryClearConversation],
+  ["send", galleryMidTurnSend],
+  ["cancelCurrentWork", galleryCancelWork],
+  ["resolveDeviceConsent", galleryResolveConsent],
+  ["listBackgroundJobs", galleryJobsRead],
+  ["decidePlanReview", galleryDecidePlan],
+  ["recoverStrandedTurn", galleryRecoverTurn],
 ]);
 
 /** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
 async function snapshotGate(): Promise<void> {
   const query = new URLSearchParams(location.search);
+  const asks = document.documentElement.dataset;
+
+  asks.gallerySnapshotReads = String(Number(asks.gallerySnapshotReads ?? "0") + 1);
 
   if (query.get("terminal") === "denied") await new Promise<never>(() => {});
 
@@ -2164,12 +2364,15 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 
     if (method === "listMounts") return rpcResult([]).json<T>();
 
-    if (method === "getMemoryContent") return rpcResult(`Memory ${revision}`).json<T>();
+    // `data-workspace-revision="empty"`: the workspace remembers nothing.
+    const memory = revision === "empty" ? "" : `Memory ${revision}`;
+
+    if (method === "getMemoryContent") return rpcResult(memory).json<T>();
 
     if (method === "getWorkspaceSnapshot") {
       const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
 
-      return rpcResult(v.parse(JsonValueSchema, { ...snapshot, memoryContent: `Memory ${revision}`, activePlan: galleryAgentPlan })).json<T>();
+      return rpcResult(v.parse(JsonValueSchema, { ...snapshot, memoryContent: memory, activePlan: galleryAgentPlan })).json<T>();
     }
   }
 
@@ -2178,12 +2381,6 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
   const roster = galleryRosterRpc(method, args);
 
   if (roster) return rpcResult(v.parse(JsonValueSchema, roster.value)).json<T>();
-
-  if (method === "revertConversation") {
-    galleryRevertConversation(v.parse(v.string(), args?.[0]));
-
-    return rpcResult(null).json<T>();
-  }
 
   const listing = method === "getExposedPorts" ? galleryPortListing(v.parse(v.optional(v.string()), args?.[0])) : null;
 
@@ -4586,10 +4783,11 @@ const BUILD_LINES = [
 
 const BUILD_JOB_ID = "bgjob-4e1a77c0";
 
-function buildTail(lines: number, lost: number): JobOutputTail {
+/** `lost[n]` is the bytes the sender dropped just before line n. */
+function buildTail(lines: number, lost: readonly number[]): JobOutputTail {
   return BUILD_LINES.slice(0, lines).reduce<JobOutputTail | undefined>((tail, line, at) => followJobOutput(tail, {
-    type: JOB_OUTPUT_EVENT, jobId: BUILD_JOB_ID, seq: at + 1, dropped: at === 0 ? lost : 0,
-    chunks: [{ stream: line.startsWith("warn:") ? "stderr" : "stdout", text: `${line}\n`, ...(at === 0 && lost > 0 && { omitted: lost }) }],
+    type: JOB_OUTPUT_EVENT, jobId: BUILD_JOB_ID, seq: at + 1, dropped: lost[at] ?? 0,
+    chunks: [{ stream: line.startsWith("warn:") ? "stderr" : "stdout", text: `${line}\n`, ...((lost[at] ?? 0) > 0 && { omitted: lost[at] }) }],
   }), undefined) ?? { seq: 0, chunks: [], omitted: 0 };
 }
 
@@ -4603,7 +4801,7 @@ function buildingJob(output: JobOutputTail): BackgroundJob {
 function useBuildingJob(): BackgroundJob {
   const params = new URLSearchParams(location.search);
   const live = params.get("live") === "1";
-  const lost = Math.max(Number(params.get("lost") ?? 0) || 0, 0);
+  const lost = (params.get("lost") ?? "").split(",").map((bytes) => Math.max(Number(bytes) || 0, 0));
   const [lines, setLines] = useState(Math.min(Math.max(Number(params.get("lines") ?? 4) || 4, 1), BUILD_LINES.length));
 
   useEffect(() => {
@@ -5485,15 +5683,75 @@ const ADVISOR_NOTES = {
   blocker: "The migration drops coupons.kind while the old worker is still deployed. Roll the worker first or every checkout 500s.",
 } satisfies Record<AdvisorSeverity, string>;
 
-/** Core's rank order; metadata is the pair `classifyProgrammaticTurn` reads, taken from core. Held to the classifier in `tests/unit-background-event.test.ts`. */
+/** Core's rank order; metadata is the pair `classifyProgrammaticTurn` reads, taken from core. */
 const ADVISOR_MESSAGES: UIMessage[] = ADVISOR_SEVERITIES.map((severity) => msg({
   id: `adv-${severity}`, role: "user",
   metadata: { kinuEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: severity },
   parts: [{ type: "text", text: ADVISOR_NOTES[severity] }],
 }));
 
-function AdvisorFrame() {
-  return <MessageColumn messages={ADVISOR_MESSAGES} />;
+const DRAINED_EVENT = {
+  trace_id: "trace-1", caused_by: null, trust: "external", priority: "background", payload_visibility: "full",
+  received_at: 0, reply_channel: null, dedupe_key: null,
+} as const;
+
+/** Core's own drain text, so the card reads what the agent was given. Plan and Build never share a batch, so delegated work and the rest are two. */
+const DRAIN_BATCHES = {
+  delegated: [
+    {
+      ...DRAINED_EVENT, id: "ev-report", ingress: "subordinate", variant: "subordinate_report",
+      payload: { from_subordinate: "cli-auditor", status: "completed", content: "Report line one.\nReport line two.", sequence_id: "seq-1", kinu_mode: "build" },
+    },
+    {
+      ...DRAINED_EVENT, id: "ev-ask", ingress: "peer_async", variant: "peer_agent",
+      payload: {
+        from_agent_name: "atlas", from_user_id: "u1", topic: "schema", body: "which shape?", sender_event_id: "out-1",
+        reply_expected: true, kinu_mode: "build",
+      },
+    },
+  ],
+  idle: [
+    { ...DRAINED_EVENT, id: "ev-timer", ingress: "timer_alarm", variant: "timer", payload: { label: "background-job-wake:job-7", trigger_id: "x", scheduled_fire_at: 0 } },
+    {
+      ...DRAINED_EVENT, id: "ev-mail", ingress: "email_inbound", variant: "email",
+      payload: {
+        from: "ops@example.com", to: "agent@example.com", subject: "Deploy failed", body_text: "exit 1",
+        message_id: null, in_reply_to: null, references: null, attachments: [],
+      },
+    },
+  ],
+} satisfies Record<string, KinuEvent[]>;
+
+const said = (text: string) => [{ type: "text" as const, text }];
+
+const GENESIS = workspaceGenesisSignal("Audit the OAuth callback flow.");
+
+/** Every way a turn reaches the transcript, each under its own id: what the person said keeps their bubble, and nothing else does. */
+const PROVENANCE_MESSAGES: UIMessage[] = [
+  msg({ id: "genesis", role: "user", metadata: { kinuEvent: GENESIS?.kind ?? "", signalId: "sig-genesis" }, parts: said(GENESIS?.text ?? "") }),
+  msg({ id: "typed", role: "user", parts: said("Audit the checkout flow.") }),
+  msg({ id: "mcp", role: "user", metadata: { kinuEvent: "mcp", kinuAuthor: "operator" }, parts: said("Run the release checklist.") }),
+  msg({ id: "programmatic:steer", role: "user", metadata: { kinuAuthor: "operator" }, parts: said("Use the staging database instead.") }),
+  msg({ id: "job", role: "user", metadata: { kinuEvent: "background_job", kind: "research", status: "failed" }, parts: said("background job failed") }),
+  msg({ id: "job-bare", role: "user", metadata: { kinuEvent: "background_job" }, parts: said("background job finished") }),
+  msg({ id: "invented", role: "user", metadata: { kinuEvent: "a_kind_invented_tomorrow" }, parts: said("Something new happened.") }),
+  msg({ id: "harness", role: "user", metadata: { kinuAuthor: "harness" }, parts: said("[Runtime check] The tree is clean.") }),
+  ...ADVISOR_MESSAGES,
+  ...Object.entries(DRAIN_BATCHES).map(([id, events]) => msg({
+    id: `drain-${id}`, role: "user", metadata: { kinuEvent: "event_drain" }, parts: said(buildDrainBatch(events)?.text ?? ""),
+  })),
+];
+
+function ProvenanceFrame() {
+  return (
+    <div className="flex justify-center p-bg p-text min-h-screen">
+      <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
+        {PROVENANCE_MESSAGES.map((message) => (
+          <div key={message.id} data-chat-row={message.id}><MessageView message={message} onFork={() => {}} /></div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 const BRAIN_MEMORY = "## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n"
@@ -6088,11 +6346,11 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
 }
 
 /** The only dynamic import in this dispatch: the page pulls d3 and the tree renderer. It reads through `useKinu`, resolved to `gallery-agent-stub` here. */
-async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
+async function mctsExplorerFrame(run: string | null): Promise<MountedFrame> {
   const { default: SwarmExplorer } = await import("@/pages/SwarmExplorer");
-  serveGalleryRpc(focusRun(run));
+  serveGalleryRpc(run === null ? forkRpc : focusRun(run));
 
-  return routedPage(`/swarm/checkout-fixes?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
+  return routedPage(run === null ? "/swarm/checkout-fixes" : `/swarm/checkout-fixes?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
 }
 
 function routedPage(entry: string, path: string, page: React.ReactNode, height = "h-screen"): MountedFrame {
@@ -6403,6 +6661,8 @@ async function mount() {
     ["forkfull", () => mctsExplorerFrame("n000")],
     ["forkbig", () => mctsExplorerFrame("n000")],
     ["forkswarmfull", () => mctsExplorerFrame("sw000")],
+    // `&run=` is the permalink's run, as any id the reader typed; none opens the newest.
+    ["forkexplorer", () => mctsExplorerFrame(new URLSearchParams(location.search).get("run"))],
     ["settings", settingsFrame],
     ["control", controlFrame],
     ["home", homeFrame],
@@ -6465,7 +6725,7 @@ async function mount() {
   else if (frame === "qualityretry") node = <QualityRetryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "toolrun") node = <ToolRunScaleFrame secrets={new URLSearchParams(location.search).get("secrets") === "1"} />;
-  else if (frame === "advisor") node = <AdvisorFrame />;
+  else if (frame === "provenance") node = <ProvenanceFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;

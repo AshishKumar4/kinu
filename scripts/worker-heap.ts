@@ -46,7 +46,7 @@ export const STEP_LIVE_BOUND_BYTES = 5_500_000;
  * `cloudflare-internal:ai-api.#generateFetch` holds its inputs JSON until HTTP headers arrive; the product's
  * retry frame holds init.body until it can read the response status. A snapshot after SSE headers found neither
  * serialized request nor a live #generateFetch frame; the mid-stream step's measured delta was -0.1 MB. Bound unchanged.
- * So the step is read once the product reports the answer's first byte, not at the driver's park: on 2026-09-30 a
+ * So the step is read once the product reports the answer's headers in, not at the driver's park: on 2026-09-30 a
  * loaded CI tier read the park before the headers arrived and found 7.1 MB. */
 
 /** Measured 2026-09-27 at {@link HEADS}: 7.7 MB on main 20cacf3423, every released head's runtime held by the
@@ -186,14 +186,104 @@ const HeapUsageReplySchema = v.object({ result: v.object({ usedSize: v.number() 
 const SnapshotChunkSchema = v.object({ method: v.literal('HeapProfiler.addHeapSnapshotChunk'), params: v.object({ chunk: v.string() }) });
 
 const SnapshotSchema = v.object({
-  snapshot: v.object({ meta: v.object({ node_fields: v.array(v.string()) }) }),
+  snapshot: v.object({ meta: v.object({ node_fields: v.array(v.string()), node_types: v.looseTuple([v.array(v.string())]) }) }),
   nodes: v.array(v.number()),
+  strings: v.array(v.string()),
 });
 
+type Snapshot = v.InferOutput<typeof SnapshotSchema>;
+
+/** What a live heap is made of: bytes by kind (an object's constructor, compiled code, strings), and its largest strings. */
+interface HeapMakeup {
+  readonly kinds: readonly { readonly kind: string; readonly bytes: number; readonly count: number }[];
+  readonly strings: readonly { readonly bytes: number; readonly head: string }[];
+}
+
+function kindOf(type: string, name: string): string {
+  if (type.includes('string')) return '(strings)';
+
+  return type === 'object' || type === 'closure' ? `${type} ${name.slice(0, 40)}` : `(${type})`;
+}
+
+function heapMakeup(snapshot: Snapshot): HeapMakeup {
+  const fields = snapshot.snapshot.meta.node_fields;
+  const types = snapshot.snapshot.meta.node_types[0];
+  const [typeAt, nameAt, sizeAt] = ['type', 'name', 'self_size'].map((field) => fields.indexOf(field));
+  const kinds = new Map<string, { bytes: number; count: number }>();
+  const strings: { bytes: number; head: string }[] = [];
+
+  for (let at = 0; at < snapshot.nodes.length; at += fields.length) {
+    const type = types[snapshot.nodes[at + (typeAt ?? 0)] ?? 0] ?? '?';
+    const name = snapshot.strings[snapshot.nodes[at + (nameAt ?? 0)] ?? 0] ?? '';
+    const bytes = snapshot.nodes[at + (sizeAt ?? 0)] ?? 0;
+    const isString = type.includes('string');
+    const kind = kindOf(type, name);
+    const held = kinds.get(kind) ?? { bytes: 0, count: 0 };
+    kinds.set(kind, { bytes: held.bytes + bytes, count: held.count + 1 });
+
+    if (isString && bytes > 200_000) strings.push({ bytes, head: name.slice(0, 60).replaceAll(/\s+/g, ' ') });
+  }
+
+  return {
+    kinds: [...kinds].map(([kind, held]) => ({ kind, ...held })).sort((a, b) => b.bytes - a.bytes).slice(0, 15),
+    strings: strings.sort((a, b) => b.bytes - a.bytes).slice(0, 5),
+  };
+}
+
 /** One inspector session on the product isolate. */
+interface ProfileNode {
+  readonly callFrame: { readonly functionName: string; readonly url: string; readonly lineNumber: number };
+  readonly selfSize: number;
+  readonly children: readonly ProfileNode[];
+}
+
+const ProfileNodeSchema: v.GenericSchema<ProfileNode> = v.object({
+  callFrame: v.object({ functionName: v.string(), url: v.string(), lineNumber: v.number() }),
+  selfSize: v.number(),
+  children: v.array(v.lazy(() => ProfileNodeSchema)),
+});
+
+const SamplingReplySchema = v.object({ result: v.object({ profile: v.object({ head: ProfileNodeSchema }) }) });
+
+interface Allocations {
+  readonly total: number;
+  readonly sites: readonly { readonly site: string; readonly bytes: number }[];
+}
+
+function frameName(node: ProfileNode): string {
+  const { functionName, url, lineNumber } = node.callFrame;
+
+  return `${functionName === '' ? '(anonymous)' : functionName} ${url.split('/').slice(-2).join('/')}:${String(lineNumber + 1)}`;
+}
+
+/** Every sampled allocation by the function that made it and the five nearest distinct callers (a library's own
+ *  recursion collapses), collected or not: the churn, not what stays. */
+function allocationSites(head: ProfileNode): Allocations {
+  const bySite = new Map<string, number>();
+  const pending: { node: ProfileNode; callers: readonly string[] }[] = [{ node: head, callers: [] }];
+  let total = 0;
+
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const name = frameName(next.node);
+    const outer = next.callers.filter((caller) => caller !== name).slice(-5).reverse();
+    const site = outer.length === 0 ? name : `${name}  <-  ${outer.join('  <-  ')}`;
+    bySite.set(site, (bySite.get(site) ?? 0) + next.node.selfSize);
+    total += next.node.selfSize;
+    const callers = next.callers.at(-1) === name ? next.callers : [...next.callers, name];
+    pending.push(...next.node.children.map((node) => ({ node, callers })));
+  }
+
+  const sites = [...bySite].map(([site, bytes]) => ({ site, bytes })).sort((a, b) => b.bytes - a.bytes).slice(0, 25);
+
+  return { total, sites };
+}
+
 async function inspect(port: number): Promise<{
   readonly usedHeap: () => Promise<number>;
   readonly liveHeap: () => Promise<number>;
+  readonly makeup: () => Promise<HeapMakeup>;
+  readonly sampleAllocations: () => Promise<void>;
+  readonly allocations: () => Promise<Allocations>;
   readonly close: () => void;
 }> {
   const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
@@ -225,12 +315,22 @@ async function inspect(port: number): Promise<{
   });
   await opened.promise;
 
+  /** A snapshot collects first, so its node sizes add up to what is live. */
+  const snapshotNow = async (): Promise<Snapshot> => {
+    chunks = [];
+    await send('HeapProfiler.takeHeapSnapshot');
+    const snapshot = v.parse(SnapshotSchema, JSON.parse(chunks.join('')));
+    chunks = [];
+
+    return snapshot;
+  };
+
   /** The raw reply, which each caller parses for the field it asked for. */
-  const send = (method: string): Promise<string> => {
+  const send = (method: string, params?: Readonly<Record<string, number | boolean>>): Promise<string> => {
     next += 1;
     const answer = Promise.withResolvers<string>();
     replies.set(next, answer.resolve);
-    socket.send(JSON.stringify({ id: next, method }));
+    socket.send(JSON.stringify({ id: next, method, ...(params !== undefined && { params }) }));
 
     return answer.promise;
   };
@@ -239,11 +339,9 @@ async function inspect(port: number): Promise<{
     // Uncollected: what the isolate holds at this instant, garbage included.
     usedHeap: async () => v.parse(HeapUsageReplySchema, JSON.parse(await send('Runtime.getHeapUsage'))).result.usedSize,
     // A snapshot collects first, so its node sizes add up to what is live.
+    makeup: async () => heapMakeup(await snapshotNow()),
     liveHeap: async () => {
-      chunks = [];
-      await send('HeapProfiler.takeHeapSnapshot');
-      const snapshot = v.parse(SnapshotSchema, JSON.parse(chunks.join('')));
-      chunks = [];
+      const snapshot = await snapshotNow();
       const fields = snapshot.snapshot.meta.node_fields;
       const size = fields.indexOf('self_size');
       let live = 0;
@@ -252,6 +350,10 @@ async function inspect(port: number): Promise<{
 
       return live;
     },
+    sampleAllocations: async () => {
+      await send('HeapProfiler.startSampling', { samplingInterval: 65_536, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
+    },
+    allocations: async () => allocationSites(v.parse(SamplingReplySchema, JSON.parse(await send('HeapProfiler.stopSampling'))).result.profile.head),
     close: () => { socket.close(); },
   };
 }
@@ -295,6 +397,12 @@ export interface HeapMeasurement {
   readonly longTurnPeak: number;
   /** What {@link LONG_TURN} holds live at its last model call beyond its first. */
   readonly longTurnGrowth: number;
+  readonly longTurnAllocated: Allocations;
+  readonly setupMakeup: HeapMakeup;
+  /** Live (collected) heap: after setup, and at the long turn's first and last steps. */
+  readonly live: { readonly setUp: number; readonly longTurnFirst: number; readonly longTurnLast: number };
+  /** What {@link STEP}'s turns allocated on the Workers AI binding path, collected or not. */
+  readonly bindingTurnsAllocated: Allocations;
   /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
   readonly wide: readonly string[];
 }
@@ -307,9 +415,9 @@ export async function measure(): Promise<HeapMeasurement> {
 
   let driver: Awaited<ReturnType<Miniflare['getWorker']>>;
 
-  // The product's own reports that a streamed answer's first byte arrived, counted: only then are its response
-  // headers in. The driver's park starts before they leave it.
-  let firstBytes = 0;
+  // The product's own reports that a streamed answer's headers are in, counted. The driver's park starts before they
+  // leave it.
+  let streamsOpened = 0;
 
   // A native Ai binding transports cancellation to this local backend; an RPC fake cannot transport a facet's signal.
   const ai = await workersAiBinding((request) => driver.fetch('http://driver.invalid/ai', {
@@ -320,7 +428,7 @@ export async function measure(): Promise<HeapMeasurement> {
     inspectorPort: port,
     // Miniflare's default handler, printing every line as it would, plus the count above.
     handleStructuredLogs: ({ level, message }) => {
-      if (message.includes('"event":"workers_ai.direct_stream_first_byte"')) firstBytes += 1;
+      if (message.includes('"event":"provider.stream_opened"')) streamsOpened += 1;
 
       if (level === 'error' || level === 'warn') console.error(message);
       else console.log(message);
@@ -370,18 +478,21 @@ export async function measure(): Promise<HeapMeasurement> {
     try {
       const afterSetup = await inspector.usedHeap();
       const setUp = await inspector.liveHeap();
+      const setupMakeup = await inspector.makeup();
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
+      await inspector.sampleAllocations();
 
       for (let turn = 0; turn < STEP.turns; turn++) await ask(`/turn?workspace=heap&text=turn-${String(turn)}`);
+      const bindingTurnsAllocated = await inspector.allocations();
       const idle = await inspector.liveHeap();
-      const answered = firstBytes;
+      const answered = streamsOpened;
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`);
       const parked = ask('/turn?workspace=heap&text=parked');
       const waiting = v.object({ parked: v.number(), wide: v.array(v.string()) });
 
-      // Parked mid-stream: the driver holds the call, and the product has read the answer's first byte. Read at the
+      // Parked mid-stream: the driver holds the call, and the product has the answer's headers. Read at the
       // park alone, a loaded CI tier caught the step before its headers, holding the pre-header cost (2026-09-30).
-      while (firstBytes === answered
+      while (streamsOpened === answered
         || v.parse(waiting, JSON.parse(await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`))).parked === 0) {
         await Bun.sleep(20);
       }
@@ -399,6 +510,7 @@ export async function measure(): Promise<HeapMeasurement> {
 
       await ask('/?workspace=long&compat=1');
       await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
+      await inspector.sampleAllocations();
       const long = ask('/turn?workspace=long&text=long');
       let longTurnPeak = 0;
       let firstLive = 0;
@@ -416,6 +528,7 @@ export async function measure(): Promise<HeapMeasurement> {
       }
 
       await long;
+      const longTurnAllocated = await inspector.allocations();
 
       // A root turn returns once it has hired; its helpers' turns end with their runners, each after its release.
       const noRunners = async (left: number): Promise<void> => {
@@ -470,7 +583,7 @@ export async function measure(): Promise<HeapMeasurement> {
       await noRunners(0);
       await ask('/model?hires=0&nest=0');
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, wide };
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
       inspector.close();
     }
@@ -481,6 +594,12 @@ export async function measure(): Promise<HeapMeasurement> {
 
 function mb(bytes: number): string {
   return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+function printAllocations(workload: string, allocated: Allocations): void {
+  console.log(`${GATE}: ${workload} allocated ${mb(allocated.total)}; most by`);
+
+  for (const site of allocated.sites) console.log(`  ${mb(site.bytes).padStart(9)}  ${site.site}`);
 }
 
 function transcript(): string {
@@ -505,6 +624,17 @@ async function main(args: readonly string[]): Promise<number> {
   // One character above U+00FF stores a whole module's retained source two bytes per character.
   const wide = graph.filter((module) => module.endsWith('.js') && isWide(readFileSync(join(DIST, module), 'utf8')));
   const measured = await measure();
+  // A deployed object dies of allocation bursts, not only of what it keeps (platform-catalog `worker.memory_kill_is_burst_sensitive`),
+  // so each workload's churn is named by the code that makes it.
+  printAllocations(`the ${String(LONG_TURN.steps)}-step turn on the OpenAI-compatible path`, measured.longTurnAllocated);
+  printAllocations(`${transcript()} on the Workers AI binding`, measured.bindingTurnsAllocated);
+  console.log(`${GATE}: live heap ${mb(measured.live.setUp)} after setup, ${mb(measured.live.longTurnFirst)} at the long turn's first step, `
+    + `${mb(measured.live.longTurnLast)} at its last; it peaked at ${mb(measured.longTurnPeak)} used, garbage included`);
+  console.log(`${GATE}: the live heap after setup, by kind`);
+
+  for (const each of measured.setupMakeup.kinds) console.log(`  ${mb(each.bytes).padStart(9)}  ${String(each.count).padStart(7)}  ${each.kind}`);
+
+  for (const each of measured.setupMakeup.strings) console.log(`  ${mb(each.bytes).padStart(9)}  one string: ${JSON.stringify(each.head)}`);
   const findings: string[] = [];
 
   if (wide.length > 0) findings.push(`${wide.join(', ')} carry characters outside ASCII, which V8 keeps two bytes each`);
@@ -550,6 +680,15 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`a ${String(LONG_TURN.steps)}-step turn peaks at ${mb(measured.longTurnPeak)} used, over ${mb(LONG_TURN_PEAK_BOUND_BYTES)}`);
   }
 
+  // Every figure, red or green, so two runs compare.
+  console.log(`${GATE}: ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
+    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
+    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
+    + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
+    + `own hire ${mb(measured.waitingParentLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
+    + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
+  console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
+
   if (findings.length > 0) {
     console.error(`${GATE}: ${String(findings.length)} finding(s)\n`);
 
@@ -558,13 +697,7 @@ async function main(args: readonly string[]): Promise<number> {
     return 1;
   }
 
-  console.log(`${GATE}: ok — ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
-    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
-    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
-    + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
-    + `own hire ${mb(measured.waitingParentLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
-    + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
-  console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
+  console.log(`${GATE}: ok`);
 
   return 0;
 }

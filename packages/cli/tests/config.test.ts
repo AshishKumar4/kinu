@@ -1,4 +1,4 @@
-import { runToExit } from '@kinu.run/test-utils';
+import { runToExit, workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 
@@ -8,7 +8,6 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, parseJsonValue,
   type JsonObject, type JsonValue,
 } from "@kinu.run/core";
-import { Database } from "bun:sqlite";
 import { createCLIRuntime } from '@kinu.run/cli-backend';
 import { readWorkspaceDisplayName } from "../src/config";
 import * as v from 'valibot';
@@ -78,8 +77,7 @@ describe("CLI config safety", () => {
     // create the `-shm`, so a readonly open fails with "unable to open database file".
     const dir = scratchDir("cli-wal-read");
     const dbPath = join(dir, "agent.db");
-    const db = new Database(dbPath, { create: true });
-    db.exec("PRAGMA journal_mode = WAL");
+    const db = workspaceDatabase(dbPath, { create: true });
     const rt = createCLIRuntime(db, { llm: null, agentName: 'Smokey', cwd: scratchDir('cli-wal-read-folder') });
     rt.actor.config.setDisplayName('Smokey');
     db.query("PRAGMA wal_checkpoint(TRUNCATE)").get();

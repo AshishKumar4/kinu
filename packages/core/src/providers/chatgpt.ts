@@ -10,10 +10,10 @@ import { attempt, diagnostics, KinuError, settle, tolerate, type ErrorCode } fro
 import { chatgptCatalogRows, shownCatalogRows } from './codex';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
-import { withRateLimitRetry } from './rate-limit-retry';
 import type { AuthRequest, AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { StaleModelList, statelessResponses } from './util';
 import { JsonObjectSchema } from '../utils/json';
+import { streamedGenerate } from './middleware/stream-generate';
 
 export const CHATGPT_BASE_URL = 'https://api.openai.com/v1';
 
@@ -265,65 +265,17 @@ function guardedStream(res: Response, url: string): Response {
   return new Response(body ?? null, { status: res.status, statusText: res.statusText, headers: res.headers });
 }
 
-const OutputItemDoneSchema = v.object({ output_index: v.number(), item: v.unknown() });
-
-const TerminalSchema = v.object({ response: v.looseObject({ output: v.optional(v.array(v.unknown())) }) });
-
-function collectedResponse(res: Response, url: string): Effect.Effect<Response, KinuError> {
-  return Effect.gen(function* () {
-    const items = new Map<number, unknown>();
-    const events = res.body?.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream()).getReader();
-    let terminal: v.InferOutput<typeof TerminalSchema>['response'] | null = null;
-
-    while (events !== undefined && terminal === null) {
-      const next = yield* attempt({ doing: 'reading the ChatGPT stream', otherwise: 'unavailable' }, () => events.read());
-
-      if (next.done) break;
-      const event = eventOf(next.value);
-
-      if (event === null) continue;
-
-      if (event.type === 'response.failed' || event.type === 'error') return yield* Effect.die(streamRefusal(event, url, res.headers));
-
-      if (event.type === INCOMPLETE) return yield* Effect.fail(incompleteFailure(incompleteReason(event), res.headers));
-      const done = event.type === 'response.output_item.done' ? v.safeParse(OutputItemDoneSchema, event.value) : null;
-
-      if (done?.success === true) items.set(done.output.output_index, done.output.item);
-      const finished = event.type === COMPLETED ? v.safeParse(TerminalSchema, event.value) : null;
-
-      if (finished?.success === true) terminal = finished.output.response;
-    }
-
-    if (terminal === null) return yield* Effect.fail(new KinuError('unavailable', ENDED_EARLY));
-    yield* attempt({ doing: 'closing the ChatGPT stream', otherwise: 'io' }, async () => events?.cancel());
-    const output = v.safeParse(v.array(v.unknown()), terminal.output);
-    const headers = new Headers(res.headers);
-    headers.set('content-type', 'application/json');
-    headers.delete('content-length');
-
-    const body = output.success && output.output.length > 0
-      ? terminal
-      : { ...terminal, output: [...items].sort(([a], [b]) => a - b).map(([, item]) => item) };
-
-    return new Response(JSON.stringify(body), { status: 200, headers });
-  });
-}
-
-interface PlanCall {
-  readonly init: RequestInit | undefined;
-  readonly streamed: boolean;
-}
-
-function planRequest(init: RequestInit | undefined): PlanCall {
+/** The plan streams every call: a generate is its stream collected (`streamedGenerate`). */
+function planRequest(init: RequestInit | undefined): RequestInit | undefined {
   const text = v.safeParse(v.string(), init?.body);
   const parsed = text.success ? v.safeParse(JsonObjectSchema, tolerate<unknown>(() => JSON.parse(text.output), 'malformed-input')) : null;
 
-  if (parsed?.success !== true) return { init, streamed: true };
+  if (parsed?.success !== true) return init;
   const body = { ...parsed.output };
 
   for (const field of REFUSED_FIELDS) delete body[field];
 
-  return { init: { ...init, body: JSON.stringify({ ...body, stream: true }) }, streamed: parsed.output.stream === true };
+  return { ...init, body: JSON.stringify({ ...body, stream: true }) };
 }
 
 function resolvedAuth(deps: ProviderDeps): Effect.Effect<AuthResolution | null, KinuError> {
@@ -340,6 +292,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
   const relayed = async (deps: ProviderDeps): Promise<ChatGptDeviceRoute | null> => (device === undefined || await deps.hasCredential(CHATGPT_CRED_KEY) ? null : device);
 
   return {
+    streamsGenerate: true,
     id: 'chatgpt',
     credentialKey: CHATGPT_CRED_KEY,
     label: 'ChatGPT',
@@ -380,22 +333,11 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
 
     createModel(modelId, deps): LanguageModel {
       const customFetch = asFetchFunction(async (input, requested) => {
-        const { init, streamed } = planRequest(requested);
+        const init = planRequest(requested);
         const url = requestUrl(input);
         const route = await relayed(deps);
 
-        const send = withRateLimitRetry(asFetchFunction(async (target, sent) => {
-          const res = await (route?.fetch ?? deps.fetch ?? fetch)(target, sent);
-
-          if (res.status === 401 || res.status === 503) return res;
-
-          return settle(Effect.flatMap(refusalOf(res, requestUrl(target)), (refusal) => (refusal === null ? Effect.succeed(res) : Effect.die(refusal))));
-        }), {
-          provider: 'chatgpt',
-          modelId,
-          lane: CHATGPT_CRED_KEY,
-          ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
-        });
+        const send = route?.fetch ?? deps.fetch ?? fetch;
 
         // A device's own sign-in renews nowhere from here: its 401 is the answer.
         const deviceLogin = async (_key: string, request?: AuthRequest): Promise<AuthResolution | null> => (request === undefined ? { headers: {} } : null);
@@ -416,20 +358,21 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
 
           if (answer.kind === 'absent') return yield* Effect.fail(new KinuError('missing', 'No ChatGPT sign-in with plan usage on this machine'));
           const res = answer.response;
-          const refusal = yield* refusalOf(res, url);
+          // A 503 is the model stack's to wait out and ask again; every other refusal is the plan's answer.
+          const refusal = res.status === 503 ? null : yield* refusalOf(res, url);
 
           if (refusal !== null) return yield* Effect.die(refusal);
           const answered = withCallAccount(res, 'chatgpt', CHATGPT_CRED_KEY);
 
           if (!answered.ok || (init?.method ?? 'GET').toUpperCase() !== 'POST') return answered;
 
-          return streamed ? guardedStream(answered, url) : yield* collectedResponse(answered, url);
+          return guardedStream(answered, url);
         }));
       });
 
       const provider = createOpenAI({ baseURL: CHATGPT_BASE_URL, apiKey: 'chatgpt-plan', fetch: customFetch });
 
-      return wrapLanguageModel({ model: provider.responses(modelId), middleware: [statelessResponses(true), PLAN_REQUEST] });
+      return wrapLanguageModel({ model: provider.responses(modelId), middleware: [statelessResponses(true), PLAN_REQUEST, streamedGenerate] });
     },
   };
 }

@@ -19,7 +19,7 @@ import {
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
   mergePolicyProfile, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, createTestActorsOver,
-  type ScriptedTurnResult,
+  type ScriptedTurnResult, workspaceDatabase,
 } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
@@ -60,7 +60,7 @@ function routerOf(rt: AgentRuntime): ExecutionRouter {
 
 function makeParent(cwd = scratchDir('head-runtime-folder')): LocalParent {
   const dbPath = scratchPath('head-runtime-parent', 'parent.db');
-  const db = new Database(dbPath);
+  const db = workspaceDatabase(dbPath);
   // Production initializer first: hosted heads take claimed turns, which need tables `createCLIRuntime` does not create.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
@@ -779,8 +779,10 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
 
 describe('a head reports the files IT changed, with concurrent siblings on the same plane', () => {
   test('two heads writing at the same time do not smear into each other', async () => {
+    const parent = makeParent();
+
     const runtime = createCLIHeadRuntime(headDeps(
-      sharedWorkspaceProbeModel(barrier(2, () => {})),
+      sharedWorkspaceProbeModel(barrier(2, () => {})), { parentRuntime: parent },
     ));
 
     const [alpha, beta] = await Promise.all([
@@ -788,11 +790,12 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
       (await runtime.spawnHead(aHeadInput({ id: 'beta', task: 'beta' }))).run(),
     ]);
 
+    // Each change is named where it landed, as the parent's shell names it.
     expect(alpha.fileChanges).toEqual([
-      { path: 'alpha.ts', status: 'added', added: 3, removed: 0 },
+      { path: join(parent.cwd, 'alpha.ts'), status: 'added', added: 3, removed: 0 },
     ]);
     expect(beta.fileChanges).toEqual([
-      { path: 'beta.ts', status: 'added', added: 3, removed: 0 },
+      { path: join(parent.cwd, 'beta.ts'), status: 'added', added: 3, removed: 0 },
     ]);
   });
 

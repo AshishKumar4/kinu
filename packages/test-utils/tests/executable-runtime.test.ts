@@ -4,12 +4,12 @@
  */
 import { scratchDir } from '../src/scratch';
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { workspaceDatabase } from '../src/database';
 
 import { join } from 'node:path';
 import { createWorkspace } from '../../core/src/workspace-birth';
 import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/index';
-import { openWorkspaceCLI, makeWorkspaceSchemaSql } from '../../cli-backend/src/index';
+import { openWorkspaceCLI, makeWorkspaceSchemaSql, workspaceHome } from '../../cli-backend/src/index';
 import { assertExecutableRuntime, createTestRuntime } from '../src/runtime';
 
 // Never called; the unroutable baseURL makes any network use fail.
@@ -26,11 +26,10 @@ function scratch() {
 describe('assertExecutableRuntime', () => {
   test('REFUSES the birth runtime — the one two full eval runs were taken on', async () => {
     const { dbPath } = scratch();
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
 
     try {
-      db.exec('PRAGMA journal_mode = WAL');
-      const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM });
+      const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM, home: workspaceHome(db) });
       // A complete AgentRuntime with no router.
       expect(rt.executionRouter).toBeFalsy();
       expect(() => assertExecutableRuntime(rt, 'behaviour eval'))
@@ -42,20 +41,18 @@ describe('assertExecutableRuntime', () => {
 
   test('ACCEPTS the runtime every running surface actually opens', async () => {
     const { dbPath } = scratch();
-    const birth = new Database(dbPath);
+    const birth = workspaceDatabase(dbPath);
 
     try {
-      birth.exec('PRAGMA journal_mode = WAL');
-      await createWorkspace(birth, { name: 'open', purpose: 'open', llm: LLM });
+      await createWorkspace(birth, { name: 'open', purpose: 'open', llm: LLM, home: workspaceHome(birth) });
       initWorkspaceSchema(makeWorkspaceSchemaSql(birth));
     } finally {
       birth.close();
     }
 
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
 
     try {
-      db.exec('PRAGMA journal_mode = WAL');
       const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM, cwd: scratchDir('exec-runtime-folder') });
       expect(rt.executionRouter).toBeTruthy();
       expect(rt.executionRouter?.getProviders().length ?? 0).toBeGreaterThan(0);

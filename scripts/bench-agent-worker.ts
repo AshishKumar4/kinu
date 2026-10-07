@@ -20,7 +20,7 @@ import {
 import { initCraftedToolsTables } from '../packages/agent-utils/src/stores/index';
 import { createWorkspace } from '../packages/core/src/workspace-birth';
 import { openWorkspaceCLI, LocalAgentSession } from '../packages/cli-backend/src/index';
-import { makeSql } from '../packages/cli-backend/src/runtime';
+import { makeSql, workspaceHome } from '../packages/cli-backend/src/runtime';
 import type { SessionEvent } from '../packages/cli-backend/src/index';
 import { benchChatModel, createBenchInferenceProxy } from './bench-inference-proxy';
 import { parseAgentWorkerInput, type WorkerOutput } from './bench-worker-protocol';
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
   if (fresh) {
     // A v0 workspace: bootstrap scaffold, empty memory, empty CraftStore, no
     // lessons. This is the "stateless" arm's starting point, and it is one call.
-    await createWorkspace(db, { name: input.workspaceName, purpose: input.purpose, llm: meteredLLM });
+    await createWorkspace(db, { name: input.workspaceName, purpose: input.purpose, llm: meteredLLM, home: workspaceHome(db) });
     // `initSearchTables` and `initScaffoldTables` seed the search and scaffold
     // tables for the stateless arm's starting point.
     const sql = makeSql(db);

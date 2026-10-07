@@ -12,6 +12,7 @@ import {
   type McpPresetAvailability, type McpServerSummary, type McpTransport,
 } from "@/lib/user-api";
 import { McpPresetCards } from "@/components/plugins/McpPresetCards";
+import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { Choice, inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import * as v from "valibot";
@@ -85,15 +86,16 @@ export function McpServersPanel() {
     return () => clearTimeout(t);
   }, [authResult, refresh, searchParams, setSearchParams]);
 
-  const remove = useCallback((id: string, name: string) => detach(Effect.gen(function* () {
-    if (!confirm(`Remove "${name}"? All workspaces will lose access to its tools.`)) return;
+  const { ask, dialog } = useConfirmation();
 
-    return yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => removeMcpServer(id)); refresh(); }), (failed) => Effect.sync(() => {
-      const e = Cause.squash(failed); alert(renderThrownChain({ cause: e })); }));
-  })), [refresh]);
+  const remove = useCallback((id: string, name: string) => ask({
+    title: `Remove "${name}"?`, body: "All workspaces will lose access to its tools.", action: "Remove", failed: "Could not remove it",
+    run: async () => { await removeMcpServer(id); refresh(); },
+  }), [ask, refresh]);
 
   return (
     <div className="space-y-4">
+      {dialog}
       <div className="space-y-0.5">
         <McpPresetCards servers={servers} availability={presets} onChanged={refresh} />
       </div>

@@ -55,20 +55,20 @@ export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS, type 
 
 export {
   DEFAULT_SOUL_MD,
+  SOUL_FILE,
   SOUL_PATH,
   WORKSPACE_CREATED_EVENT,
   UNTITLED_WORKSPACE_NAME,
   isPlaceholderMission,
   workspaceGenesisSignal,
   readSoul,
-  storeDurableSoulDb,
-  readMission,
+  missionOf,
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
 } from './identity/soul';
 
-export { WORKSPACE_IDENTITY_DDL, WORKSPACE_SOUL_DDL } from './identity/schema';
+export { WORKSPACE_IDENTITY_DDL } from './identity/schema';
 
 export { validateSwarmProfileSnapshot } from './profiles';
 
@@ -81,7 +81,7 @@ export {
 } from './identity/fork';
 
 export {
-  type ForkSnapshotHead, type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow,
+  type ForkSnapshotHead, type ForkCraftedToolRow, type ForkConfigRow,
 } from './identity/fork-rows';
 
 export {
@@ -400,11 +400,10 @@ export {
   type OverflowRecoveryDecision,
 } from './turn-failure';
 
-export {
-  createVercelAILLM, createChatModel, estimateTokens,
-  // Surfaces import this instead of retyping the number.
-  CHARS_PER_TOKEN,
-} from './llm';
+export { createVercelAILLM, createChatModel } from './llm';
+
+// Surfaces import this instead of retyping the number.
+export { CHARS_PER_TOKEN, estimateTokens } from './token-estimate';
 
 export type { LLMProviderConfig, ChatModelConfig } from './llm';
 
@@ -785,7 +784,7 @@ export { rasterImage, type RasterImage } from './utils/raster-image';
 
 export { toolDescription } from './utils/tool-description';
 
-export { serverCompactor, isServerCompaction, type ServerCompactor, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
+export { serverCompactor, isServerCompaction, latestCompaction, type ServerCompactor, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {
   DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type RuntimeFacts, type DynamicTask, type MissingCapability,
@@ -979,7 +978,7 @@ export {
   DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
-  type DeviceCancelResult, type DeviceExecOutput,
+  type DeviceCancelResult, type DeviceExecOutput, watchedOutput,
   DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, type DeviceMethod,
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_CHATGPT, DEVICE_RELAY, DeviceChatGptStatusSchema, EGRESS_ROUTE_HEADER,
@@ -1039,12 +1038,12 @@ export type {
 } from './vfs/nimbus-workspace';
 
 export {
-  settledWorkspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
+  workspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
   workspaceArchiveStore, workspaceArchiveTarget, archiveFileTree,
 } from './vfs/workspace-planes';
 
 
-export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
+export { observeNamespace, type WriteEvent, type WriteObserver } from './vfs/write-events';
 
 export { isNimbusTable } from './vfs/nimbus-tables';
 
@@ -1054,7 +1053,6 @@ export { oneAtATime } from './utils/one-at-a-time';
 
 export { markStoreChanged, storeRevision } from '@kinu.run/agent-utils';
 
-export { searchMemoryChunks } from '@kinu.run/agent-utils/memory';
 
 export { ISOLATED_BUN_FLAGS, isolatedBunArgs } from './utils/bun-isolation';
 
@@ -1075,9 +1073,9 @@ export {
 } from './skills/drive';
 
 export {
-  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
+  withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
-  type VfsMount, type MountableProvider, type MountedVfs,
+  type VfsMount, type MountableProvider, type MountedVfs, type WorkspacePrincipal,
   type VfsListedEntry,
 } from './vfs/mounts';
 
@@ -1128,7 +1126,6 @@ export {
 // Memory writes
 export { memoryBytes } from './memory/note';
 
-export { AGENT_STATE_PATHS, agentViewMount, isAgentStatePath } from './vfs/agent-view';
 
 export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
 
@@ -1315,6 +1312,7 @@ export {
   DEV_IDENTITY_HEADER,
   EVAL_ACCOUNTS,
   EVAL_TRIAL_ACCOUNTS,
+  inheritedRows,
   parseEvalAccount,
   type EvalAccount,
   DEVICE_CONNECT_PATH,
@@ -1599,7 +1597,7 @@ export {
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
 
-export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
+export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
 
 export {
@@ -1700,7 +1698,7 @@ export {
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
   unionAllowedTools, toolAllowedBySkills, trustedActiveSkills,
-  SKILLS_VIEW, WORKSPACE_SKILLS_DIR, SKILL_FOLDER_FILE, skillViewPath,
+  SKILLS_VIEW, WORKSPACE_SKILLS_DIR, SKILL_FOLDER_FILE, skillReference, skillViewPath,
 } from './skills/index';
 
 export type {
@@ -2238,7 +2236,9 @@ export {
 
 export { createWorkersAIProvider } from './providers/workers-ai-provider';
 
-export { createWireModel } from './providers/wire-model';
+export { createWireModel, deferredModel, sdkWire, withModelStack, type WireProtocol } from './providers/wire-model';
+
+export { callRetries } from './providers/middleware/retry';
 
 export {
   type AnyToolPart,

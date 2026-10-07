@@ -48,8 +48,8 @@ const corsHeaders = {
 interface PeerMessageInput { agent: string; message: string; topic?: string }
 
 /**
- * A resolver, not the namespace binding: the SDK's `getAgentByName` (agents@0.24.0,
- * `dist/agent-routing.js:176-183`, read 2026-09-28) awaits `__unsafe_ensureInitialized`
+ * A resolver, not the namespace binding: the SDK's `getAgentByName` (agents@0.26.0,
+ * `dist/agent-routing.js:176-183`, read 2026-10-06) awaits `__unsafe_ensureInitialized`
  * so `onStart` runs before the first RPC.
  */
 export type McpResolver = (name: string) => Promise<McpAgentClient>;

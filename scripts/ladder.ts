@@ -61,7 +61,7 @@ import { resourceCostFile, withResourceCosts } from './gate-cost';
 import {
   awaitCI, awaitUploadCI, checkCoverage, collectVerdicts, downloadVerdicts, findPushCI, readCIRun,
   writeCIRun, writeVerdicts, type CIPart, type CIVerdict, type CIVerdictFile,
-  checkFileCoverage, readHostedCosts, readFileTimings, type HostedCosts,
+  checkFileCoverage, parseRunnerTimings, readHostedCosts, readFileTimings, withRunnerCosts, type HostedCosts,
   writeHostedCosts, readVerdicts,
   requireCIGreen,
 } from './ci-verdicts';
@@ -1332,11 +1332,9 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything needing a Workers runtime rather than a composition root — every '
       + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
       + 'bun, which is why `bun run test:workerd` exists below.',
-    // `unit-codemode-sandbox.test.ts` imports the node shim it wrote to scratch
-    // from `KINU_NODE_MODULE_SOURCE`, whose bytes are this file's. Measured by
-    // `--audit-closure` 2026-09-23: the suite opens 247 tracked files off its
+    // Measured by `--audit-closure` 2026-09-23: the suite opens 247 tracked files off its
     // graph, across docs/, public/ and src/components/, so it reads the tree.
-    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/core/src/execution/codemode-node-shim.ts'] },
+    inputs: { ...AMBIENT_BY_NAME, corpus: true },
   },
 
   {
@@ -3030,6 +3028,28 @@ export function ciParts(costs: HostedCosts = readHostedCosts()): CIPart[] {
   ];
 }
 
+/** A row a task must report, with the files a split suite must time, as `checkFileCoverage` holds GitHub's to. */
+type PlannedRow = string | { readonly name: string; readonly files: string[] };
+
+interface CIMatrix {
+  readonly include: { readonly name: string; readonly row: string; readonly weight: number; readonly rows: PlannedRow[] }[];
+}
+
+/** The container runner's matrix (armada, `.armada.json`): one task per CI unit, the same units GitHub's parts pack,
+ *  each weighed by its measured seconds so the longest start first, naming the row it must report. */
+function ciPlan(costs: HostedCosts): CIMatrix {
+  const tracked = trackedTestFiles();
+
+  return {
+    include: ciUnits(costs).map((unit) => ({
+      name: unit.gate.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80),
+      row: unit.gate.run,
+      weight: Math.round(unit.seconds),
+      rows: [unit.gate.ciShards === undefined ? unit.gate.run : { name: unit.gate.run, files: claims(unit.gate.run, tracked) }],
+    })),
+  };
+}
+
 /** A deploy runs only what CI cannot, and the preflight of this machine, not CI's inode/temp check. */
 export function localDeployGates(gates: readonly Gate[]): Gate[] {
   const ci = new Set(tierRun('ci').map((gate) => gate.run));
@@ -3589,14 +3609,36 @@ async function ciVerdicts(sha: string, request: { readonly runFile: string; read
   return green ? 0 : 1;
 }
 
+/** A `--name=value` argument's value. */
+function argumentValue(name: string): string | undefined {
+  return process.argv.find((argument) => argument.startsWith('--' + name + '='))?.slice(name.length + 3);
+}
+
+/** What CI units are cut and weighed from: `ci-cost.json`, with the container runner's own measurements over it
+ *  (`--ci-costs`, armada's timings). The plan and every task of one run are given the same file, so all cut the same
+ *  units. */
+function ciPlanCosts(): HostedCosts {
+  const measured = argumentValue('ci-costs');
+  const hosted = readHostedCosts();
+  const labels = new Map(ciUnits(hosted).map((unit) => [unit.gate.run, unit.gate.label]));
+
+  return measured === undefined ? hosted : withRunnerCosts(hosted, parseRunnerTimings(readFileSync(measured, 'utf8')), labels);
+}
+
 async function ciCommand(): Promise<number | undefined> {
-  const option = (name: string): string | undefined => process.argv.find((argument) => argument.startsWith('--' + name + '='))?.slice(name.length + 3);
+  const option = argumentValue;
   const measurements = option('ci-record-costs');
 
   if (measurements !== undefined) return recordHostedMeasurements(measurements, option('ci-run-url'));
 
   if (process.argv.includes('--ci-matrix')) {
     console.log(JSON.stringify({ include: ciParts().map((part) => ({ part: part.name })) }));
+
+    return 0;
+  }
+
+  if (process.argv.includes('--ci-plan')) {
+    console.log(JSON.stringify(ciPlan(ciPlanCosts())));
 
     return 0;
   }
@@ -3843,10 +3885,18 @@ if (import.meta.main) {
     throw new Error('CI row verdicts require a clean full SHA; commit the tree first');
   }
 
-  const part = ciPart === undefined ? undefined : ciParts().find((candidate) => candidate.name === ciPart);
+  const costs = ciPlanCosts();
+  const part = ciPart === undefined ? undefined : ciParts(costs).find((candidate) => candidate.name === ciPart);
 
   if (ciPart !== undefined && (tier !== 'ci' || part === undefined)) throw new Error('unknown CI part or a non-CI tier');
-  const chosen = part === undefined ? declared : ciUnits().map((unit) => unit.gate).filter((gate) => part.runs.includes(gate.run));
+  // `--ci-row`: one CI unit, as the container runner runs them, each in its own task.
+  const ciRow = process.argv.find((argument) => argument.startsWith('--ci-row='))?.slice('--ci-row='.length);
+  const rowGate = ciRow === undefined ? undefined : ciUnits(costs).find((unit) => unit.gate.run === ciRow)?.gate;
+
+  if (ciRow !== undefined && (tier !== 'ci' || rowGate === undefined)) throw new Error('unknown CI row or a non-CI tier: ' + ciRow);
+  let chosen = part === undefined ? declared : ciUnits(costs).map((unit) => unit.gate).filter((gate) => part.runs.includes(gate.run));
+
+  if (rowGate !== undefined) chosen = [rowGate];
   const tracked = trackedTestFiles();
   const changedByRun = new Map<string, Gate>();
 
@@ -3860,7 +3910,9 @@ if (import.meta.main) {
 
   const gates = changedFrom === undefined ? chosen : [...chosen.filter((gate) => !changedByRun.has(gate.run)), ...changedByRun.values()];
 
-  if (ciPart !== undefined && ciPart !== 'upload') {
+  const sourceRow = rowGate !== undefined && !['preflight', 'upload'].includes(rowGate.phase ?? 'source');
+
+  if ((ciPart !== undefined && ciPart !== 'upload') || sourceRow) {
     // This runner's prerequisite, not another source verdict or another row in the collected proof.
     const ready = await runUnderDeadline({ argv: ['bun', 'scripts/preflight.ts'], cwd: root, seconds: GATE_DEADLINE_SECONDS, label: 'Runner preflight', stdio: 'inherit' });
 
@@ -3997,9 +4049,11 @@ if (import.meta.main) {
   // in order with its output live, which is how `--gate` reads it.
   const concurrent = pending.length > 1 && !process.argv.includes('--serial');
   let stdio: 'inherit' | 'pipe' | 'tee' = 'inherit';
+  // A CI part or a single CI row reports each row's output and each file's seconds in its verdict file.
+  const verdictRows = ciPart !== undefined || rowGate !== undefined;
 
   if (concurrent) stdio = 'pipe';
-  else if (deployPhase !== undefined || ciPart !== undefined) stdio = 'tee';
+  else if (deployPhase !== undefined || verdictRows) stdio = 'tee';
   const failed: string[] = [];
   // A tier stops launching at its first red: the fastest path to a finding. A deploy phase never does (L18).
   const stopped = (): boolean => deployPhase === undefined && ciPart === undefined && failed.length > 0;
@@ -4087,7 +4141,7 @@ if (import.meta.main) {
     if (!concurrent) console.log([header, ...lines].join('\n'));
 
     const timingPath = resolve(root, 'bench-artifacts/ci/file-' + String(index) + '.json');
-    const argv = entry.argv === undefined ? rowArgv(gate, tracked, deployPhase !== undefined, ciPart === undefined ? undefined : timingPath) : [...entry.argv];
+    const argv = entry.argv === undefined ? rowArgv(gate, tracked, deployPhase !== undefined, verdictRows ? timingPath : undefined) : [...entry.argv];
 
     const env = cacheRunEnvironment(closure, argv);
 

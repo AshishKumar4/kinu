@@ -40,7 +40,6 @@ import { readText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 import { describe, test, expect, afterAll } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
@@ -49,7 +48,7 @@ import { initWorkspaceSchema, openWorkspaceMainActor, type LLMProviderConfig } f
 import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { LocalAgentSession, type SessionEvent } from '../../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
+import { makeSql, makeWorkspaceSchemaSql, workspaceHome } from '../../packages/cli-backend/src/runtime';
 import {
   ActivitySpendSchema, callAgentRpc, createCloudAgent, deleteCloudAgent,
 } from '../../packages/cli/src/cloud-api';
@@ -59,7 +58,7 @@ import { launchTestChrome } from '../../scripts/test-chrome';
 import {
   evalWorkspaceName, infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode,
   recordWorkspaceSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
-  workerSession,
+  workerSession, workspaceDatabase,
 } from '@kinu.run/test-utils';
 
 /** One row of `GET /api/cli/devices`, exactly as `UserDO.listDevices` declares
@@ -491,8 +490,7 @@ describe('Live Smoke — one real turn per backend', () => {
 
   liveTest('cli backend: one real turn through the local session spine', async () => {
     const dbPath = join(TEST_DIR, 'smoke.db');
-    const db = new Database(dbPath);
-    db.exec('PRAGMA journal_mode = WAL');
+    const db = workspaceDatabase(dbPath);
     let session: LocalAgentSession | null = null;
 
     try {
@@ -506,6 +504,7 @@ describe('Live Smoke — one real turn per backend', () => {
         name: 'live-smoke',
         purpose: 'A precise assistant that uses its tools rather than answering from memory.',
         llm: LLM_CONFIG,
+        home: workspaceHome(db),
       });
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
       // The episode's own scratch folder, for the reason tests/live-model/harness.ts

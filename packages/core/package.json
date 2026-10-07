@@ -30,7 +30,7 @@
     "@ai-sdk/anthropic": "4.0.71",
     "@ai-sdk/openai": "4.0.83",
     "@ai-sdk/openai-compatible": "3.0.62",
-    "@ai-sdk/provider-utils": "^5.0.53",
+    "@ai-sdk/provider-utils": "5.0.53",
     "@kinu.run/agent-utils": "workspace:*",
     "@nimbus-sh/core": "0.15.0",
     "@nimbus-sh/fabric": "^0.10.0",
@@ -38,6 +38,7 @@
     "ai": "7.0.127",
     "effect": "4.0.0-rc.117",
     "valibot": "^1.4.1",
+    "workers-ai-provider": "4.0.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

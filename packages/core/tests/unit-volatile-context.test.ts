@@ -26,7 +26,7 @@ import {
 import { Fnv1a64 } from '../src/utils/fnv1a';
 import { admitActiveSkills } from '../src/skills/loader';
 import { skillViewPath, WORKSPACE_SKILLS_DIR } from '../src/skills/types';
-import { estimateTokens } from '../src/llm';
+import { estimateTokens } from '../src/token-estimate';
 import type {
   ActiveSkill, ActiveSkillSet, DiscoveredSkill, InstructionTrustResolver,
 } from '../src/index';

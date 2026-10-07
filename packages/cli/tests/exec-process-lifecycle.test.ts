@@ -4,11 +4,10 @@
  */
 
 import { readFileSync } from "node:fs";
-import { Database } from "bun:sqlite";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { killAndAwaitExit, present, recordedIn, scratchDir } from '@kinu.run/test-utils';
+import { killAndAwaitExit, present, recordedIn, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(import.meta.dir, "../../..");
@@ -212,7 +211,7 @@ describe("kinu exec — a one-shot run terminates", () => {
 
     try {
       expect((await runCli(['create', 'refusedflow', '--mode', 'local', '--purpose', 'early failure flow'], env, home, 120_000)).exitCode).toBe(0);
-      const db = new Database(join(home, 'refusedflow', 'agent.db'));
+      const db = workspaceDatabase(join(home, 'refusedflow', 'agent.db'));
       // The daemon `create` started writes this file too; wait out its write as the product does.
       db.exec('PRAGMA busy_timeout = 30000');
       db.exec("CREATE TRIGGER refuse_opening BEFORE INSERT ON session_messages BEGIN SELECT RAISE(ABORT, 'the transcript refuses this write'); END");

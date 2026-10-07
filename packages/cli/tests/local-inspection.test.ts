@@ -1,11 +1,11 @@
-import { seedTranscriptEntry } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, workspaceDatabase } from '@kinu.run/test-utils';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { CHAT_SESSION_ID, SessionHistory, WorkspaceActorDirectory, type ActorHandle } from '@kinu.run/core';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
-import { MEMORY_PATH, WORKSPACE_ROOT } from '@kinu.run/core';
+import { MEMORY_PATH } from '@kinu.run/core';
 import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import { AGENT_HOME, agentDbPath, updateConfigFile } from '../src/config';
@@ -46,7 +46,7 @@ describe('local inspection of a subordinate', () => {
       baseUrl: 'http://localhost:0/v1', auth: 'Bearer offline', model: 'openai-compatible/offline-model',
     });
 
-    const db = new Database(agentDbPath(NAME));
+    const db = workspaceDatabase(agentDbPath(NAME));
     const identity = db.query<{ id: string; owner_user_id: string | null }, []>('SELECT id, owner_user_id FROM workspace_identity').get();
 
     if (identity === null) throw new Error('the created workspace has no identity row');
@@ -73,10 +73,10 @@ describe('local inspection of memory', () => {
   });
 
   test('reads MEMORY.md itself, never a reassembly of its search index', async () => {
-    const db = new Database(agentDbPath(MEMORY_NAME));
+    const db = workspaceDatabase(agentDbPath(MEMORY_NAME));
     const rt = createCLIRuntime(db, { llm: { name: 'offline', baseURL: 'http://localhost:0', headers: {}, model: 'offline-model' }, cwd: scratchDir('inspection-folder') });
     await rt.memory.write(MEMORY_PATH, '# Memory\n\nindexed note\n');
-    await writeText(present(rt.agentStateVfs, 'the agent state'), `${WORKSPACE_ROOT}/${MEMORY_PATH}`, '# Memory\n\nedited in place\n');
+    await writeText(present(rt.agentStateVfs, 'the agent state'), MEMORY_PATH, '# Memory\n\nedited in place\n');
     // The same file the agent's memory reads, not a second one beside it.
     expect(await rt.memory.read(MEMORY_PATH)).toBe('# Memory\n\nedited in place\n');
     db.close();
@@ -86,7 +86,7 @@ describe('local inspection of memory', () => {
 
   // The agent's own search ranks every term wherever it falls; inspection asks the same index the same way.
   test('searches as the agent does: terms in any order', async () => {
-    const db = new Database(agentDbPath(MEMORY_NAME));
+    const db = workspaceDatabase(agentDbPath(MEMORY_NAME));
     const rt = createCLIRuntime(db, { llm: { name: 'offline', baseURL: 'http://localhost:0', headers: {}, model: 'offline-model' }, cwd: scratchDir('inspection-folder') });
     await rt.memory.write(MEMORY_PATH, '# Memory\n\nthe wrangler deploy goes to staging\n');
     await rt.memory.index(MEMORY_PATH);
@@ -94,6 +94,6 @@ describe('local inspection of memory', () => {
     db.close();
 
     expect(agentHits).toEqual([MEMORY_PATH]);
-    expect(searchLocalMemory(MEMORY_NAME, 'staging wrangler', 5).map((hit) => hit.path)).toEqual(agentHits);
+    expect((await searchLocalMemory(MEMORY_NAME, 'staging wrangler', 5)).map((hit) => hit.path)).toEqual(agentHits);
   });
 });

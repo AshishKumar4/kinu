@@ -50,7 +50,7 @@ export function pruneStepToolOutputs(
 
   let total = budget.reservedTokens ?? 0;
 
-  for (const message of messages) total += estimateMessageTokens(message);
+  for (const message of messages) total += estimatedTokens(message);
   const over = total - limit;
 
   if (over <= 0) return undefined;
@@ -183,6 +183,19 @@ function serializedOutputLength(part: ToolResultPart): number {
 
 /** Chars/4, the compaction engine's scale. Media is priced flat (providers charge by dimensions). */
 const ESTIMATED_MEDIA_CHARS = 4_800;
+
+/** A step's messages are the SDK's own frozen objects, so each is priced once per turn, not once per step. */
+const ESTIMATED = new WeakMap<ModelMessage, number>();
+
+function estimatedTokens(message: ModelMessage): number {
+  const held = ESTIMATED.get(message);
+
+  if (held !== undefined) return held;
+  const tokens = estimateMessageTokens(message);
+  ESTIMATED.set(message, tokens);
+
+  return tokens;
+}
 
 function estimateMessageTokens(message: ModelMessage): number {
   let chars = 0;

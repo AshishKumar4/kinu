@@ -14,7 +14,7 @@ import { KinuError, refusalOf, type Refusal } from '../obs/error';
 import type { Logger } from '../obs/log';
 import type { SwarmCarrySetting, SwarmSettle } from './swarm';
 import { admitsPublication, type PublicationState } from './objective';
-import { textPayload } from '../vfs/observe';
+import { textPayload } from '../vfs/write-events';
 
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';

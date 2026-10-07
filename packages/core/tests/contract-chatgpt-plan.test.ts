@@ -1,13 +1,15 @@
 // The ChatGPT plan provider (Sign in with ChatGPT) against api.openai.com faked at its fetch seam: the request
 // shape the preview accepts, and each answer the plan route documents (developers.openai.com/siwc, 2026-09-30).
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, jest, test } from 'bun:test';
 import { APICallError, generateText, jsonSchema, streamText, tool, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import {
-  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema,
+  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, silenceBoundMs,
   type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { KinuError, createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { withModelStack } from '../src/providers/wire-model';
+import { callRetries } from '../src/providers/middleware/retry';
 
 interface Sent {
   readonly url: string;
@@ -195,7 +197,30 @@ describe('the request the preview accepts', () => {
     expect(result.text).toBe('ok');
     expect(result.usage.inputTokens).toBe(7);
   });
+
+  test('a call that wants one answer is held to the silence bound its stream is', async () => {
+    jest.useFakeTimers();
+    const opened = Promise.withResolvers<void>();
+
+    const api = openai(() => {
+      opened.resolve();
+
+      return new Response(new ReadableStream({ pull() {} }, { highWaterMark: 0 }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+
+    // As the registry resolves it: the one stack, which collects a generate from the plan's stream.
+    const model = withModelStack(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), { provider: 'chatgpt', lane: 'chatgpt@main', generateByStream: true });
+    // No retry, so the one silent attempt is the whole call.
+    const failure = failureOf(generateText({ model, prompt: 'hello', maxRetries: 0, providerOptions: callRetries(0) }));
+
+    await opened.promise;
+    jest.advanceTimersByTime(silenceBoundMs('provider.stream.idle_ms'));
+
+    expect(await failure).not.toBeNull();
+  });
 });
+
+afterEach(() => { jest.useRealTimers(); });
 
 describe('what the plan route answers', () => {
   test.each([
@@ -229,7 +254,8 @@ describe('what the plan route answers', () => {
 
   test.each(['subscription_sharing_usage_unavailable', 'subscription_sharing_user_unavailable'])('%s backs off and asks again', async (code) => {
     const api = openai(refusal(503, code), answered());
-    const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
+    // As the registry resolves it: the one stack, which waits the refusal out.
+    const model = withModelStack(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), { provider: 'chatgpt', lane: 'chatgpt@main', sleep: async () => {} });
 
     expect((await generateText({ model, prompt: 'hello', maxRetries: 0 })).text).toBe('ok');
     expect(api.sent).toHaveLength(2);
@@ -305,7 +331,21 @@ describe('what the plan route answers', () => {
     expect(await result.text).toBe('ok');
   });
 
-  test.each(['max_output_tokens', 'content_filter'])('a one-shot answer ChatGPT stops short (%s) is a failure, not the partial text', async (reason) => {
+  test('a one-shot answer ChatGPT stops at its output limit reads as its stream does: the partial text, finished by length', async () => {
+    const api = openai(sse(
+      { type: 'response.created', response: RESPONSE },
+      { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },
+      { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: 'ok' },
+      { type: 'response.output_item.done', output_index: 0, item: { ...MESSAGE, status: 'incomplete' } },
+      { type: 'response.incomplete', response: { ...RESPONSE, status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [MESSAGE], usage: USAGE } },
+    ));
+
+    const result = await generateText({ model: createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), prompt: 'hello', maxRetries: 0 });
+
+    expect({ finish: result.finishReason, text: result.text }).toEqual({ finish: 'length', text: 'ok' });
+  });
+
+  test.each(['content_filter'])('a one-shot answer ChatGPT stops short (%s) is a failure, not the partial text', async (reason) => {
     const api = openai(sse(
       { type: 'response.created', response: RESPONSE },
       { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },

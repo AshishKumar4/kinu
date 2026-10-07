@@ -53,9 +53,6 @@ function rowPayloadBytes(frame: ForkFrame): number {
     case 'craftedTools':
       return frame.rows.reduce((total, row) => total + bytes(row.name) + bytes(row.description)
         + bytes(row.code), 0);
-    case 'memoryChunks':
-      return frame.rows.reduce((total, row) => total + bytes(row.id) + bytes(row.path)
-        + bytes(row.hash) + bytes(row.text), 0);
     case 'sessionMessages':
       return frame.rows.reduce((total, row) => total + bytes(row.message_id) + bytes(row.role)
         + bytes(row.native_content_kind) + bytes(row.origin) + bytes(row.envelope_json)
@@ -69,7 +66,6 @@ function rowPayloadBytes(frame: ForkFrame): number {
     case 'contextMembers':
       return frame.rows.reduce((total, row) => total + bytes(row.entry_id) + bytes(row.message_id), 0);
     case 'begin':
-    case 'soul':
     case 'chunks':
     case 'page':
     case 'commit':
@@ -107,7 +103,7 @@ describe('forkTransferFrames source streamer', () => {
     const rowKinds = frames.filter(isRowFrame).map((frame) => frame.kind);
     expect(rowKinds).toEqual([...rowKinds].sort((a, b) => FORK_ROW_SECTIONS.indexOf(a) - FORK_ROW_SECTIONS.indexOf(b)));
     expect(frames.filter(isRowFrame).every((frame) => frame.rows.length > 0)).toBe(true);
-    const fileIndex = frames.findIndex((frame) => frame.kind === 'soul' || frame.kind === 'page');
+    const fileIndex = frames.findIndex((frame) => frame.kind === 'page');
     const lastRowIndex = frames.length - 1 - [...frames].reverse().findIndex(isRowFrame);
     expect(fileIndex).toBeGreaterThan(lastRowIndex);
   });
@@ -124,14 +120,12 @@ describe('forkTransferFrames source streamer', () => {
     expect(begin.counts).toEqual({
       agentConfig: carried.agentConfig.length,
       craftedTools: carried.craftedTools.length,
-      memoryChunks: carried.memoryChunks.length,
       sessionMessages: carried.sessionMessages.length,
       conversationEntries: carried.conversationEntries.length,
       conversationEntryParts: carried.conversationEntryParts.length,
       contextMembers: carried.contextMembers.length,
-      // SOUL.md, and one import a name under the home or a payload.
-      files: frames.filter((frame) => frame.kind === 'soul').length
-        + new Set(frames.filter(isPageFrame).map((frame) => JSON.stringify(frame.target))).size,
+      // One import a name under the home or a payload, SOUL.md among them.
+      files: new Set(frames.filter(isPageFrame).map((frame) => JSON.stringify(frame.target))).size,
     });
   });
 

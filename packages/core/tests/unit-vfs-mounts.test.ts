@@ -8,10 +8,10 @@ import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
 
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
+import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, workspaceFilePlane, type VfsMount, type WorkspacePrincipal } from '../src/vfs/mounts';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
-import { observeWrites } from '../src/vfs/observe';
 import { createWorkspaceBundle } from './helpers';
 import type { JsonValue } from '../src/utils/json';
 import { agentCred, agentHome, agentTmpRoot, confineAgentTmp, provisionAgentHome } from '../src/vfs/agent-home';
@@ -382,29 +382,6 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(renames).toEqual([['/big.bin', '/renamed.bin']]);
 		expect(bytesRead).toBe(0);
 	});
-	test('an observed plane keeps its native rename (no byte-carry fallback)', async () => {
-		const base = fakeTree({ '/big.bin': 'gigabytes, notionally' });
-		const renames: Array<[string, string]> = [];
-		let bytesRead = 0;
-
-		const native = {
-			...base,
-			readFile: async (path: string) => {
-				bytesRead += 1;
-
-				return base.readFile(path);
-			},
-			rename: async (oldPath: string, newPath: string) => { renames.push([oldPath, newPath]); },
-		};
-
-		const observer = { needsBaseline: () => false, record: () => {} };
-		const mounted = withMountTable(observeWrites(native, observer), [mountOf('pc', fakeTree({}))]);
-
-		await mounted.rename('/big.bin', '/renamed.bin');
-		expect(renames).toEqual([['/big.bin', '/renamed.bin']]);
-		expect(bytesRead).toBe(0);
-	});
-
 	test('a file rename inside a mount without native rename moves the bytes and drops the source', async () => {
 		const device = fakeTree({ '/home/dev/notes.txt': 'from the machine' });
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
@@ -570,14 +547,26 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		});
 
 		const realUnlink = device.unlink.bind(device);
+		const realRmdir = device.rmdir?.bind(device);
 
+		const held = (path: string): void => {
+			if (path === '/home/dev/build/deep') throw new VfsError('EACCES', 'held open', path);
+		};
+
+		// The directory is held however the walk removes it.
 		device.unlink = async (path) => {
-			if (path === '/home/dev/build/deep') {
-				throw new VfsError('EACCES', 'held open', path);
-			}
+			held(path);
 
 			return realUnlink(path);
 		};
+
+		if (realRmdir !== undefined) {
+			device.rmdir = async (path) => {
+				held(path);
+
+				return realRmdir(path);
+			};
+		}
 
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
 
@@ -591,9 +580,10 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(error.message).toContain('/home/dev/build/deep/two.js');
 		expect(error.message).toContain('/home/dev/build/out.js');
 		expect(error.message).toContain('still present');
+		// As `rm -r` does, the walk goes on past a refusal: what it could remove is gone, the held directory and its parents stay.
 		expect(await exists(device, '/home/dev/build/deep/two.js')).toBe(false);
 		expect(await exists(device, '/home/dev/build/deep')).toBe(true);
-		expect(await exists(device, '/home/dev/build/out.js')).toBe(true);
+		expect(await exists(device, '/home/dev/build/out.js')).toBe(false);
 	});
 
 	test('removeTreeWithVfsOps names an absent path instead of quietly succeeding', async () => {
@@ -624,6 +614,24 @@ describe('a live mount point is a directory of this plane', () => {
 
 });
 
+/** The file tool's plane on `bundle`'s one namespace, the shell's own: `principal`'s view holds `mounts`. */
+function shared(bundle: ReturnType<typeof createWorkspaceBundle>, mounts: readonly VfsMount[], principal: WorkspacePrincipal = {}) {
+	return workspaceFilePlane(bundle, { mounts, principal, home: WORKSPACE_ROOT }).files;
+}
+
+describe('a write on the workspace\'s namespace', () => {
+	test('makes the directories above it, as the principal: a slate\'s first file lands, and /etc stays root\'s', async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const files = shared(bundle, []);
+		await files.writeFile('/slates/keeper/package.json', new TextEncoder().encode('{"main":"server.ts"}'));
+		await writeText(files, 'notes/2026/today.md', 'kept');
+
+		expect(await bundle.shell.exec('cat /slates/keeper/package.json /home/main/notes/2026/today.md')).toMatchObject({ stdout: '{"main":"server.ts"}kept', exitCode: 0 });
+		await expect(writeText(files, '/etc/kinu/probe.conf', 'x')).rejects.toMatchObject({ code: 'EACCES' });
+		expect(await exists(files, '/etc/kinu')).toBe(false);
+	});
+});
+
 describe('the workspace shell serves the same mount table (#22)', () => {
 	/** A workspace whose session user holds `/shared` (a Drive), `/sandbox` (any ranged tree) and an absent `/pc`. */
 	async function workspaceWithMounts() {
@@ -633,10 +641,10 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		const container = mossaicVfs(store.tenant('container'));
 		await writeText(drive, '/notes.md', 'from the Drive\n');
 		await container.mkdir('/workspace', { recursive: true });
-		bundle.mountTable(withMountTable(bundle.vfs, [
+		shared(bundle, [
 			mountOf('shared', drive), mountOf('sandbox', container), mountOf('pc', null, 'no device connected'),
 			{ ...mountOf('context', fakeTree({ 'notes.md': 'history' })), storeView: true },
-		]));
+		]);
 
 		return { shell: bundle.shell, drive, container };
 	}
@@ -694,9 +702,8 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		provisionAgentHome(root, 'agent-a', cred);
 		confineAgentTmp(confiner, 'agent-a', cred);
 		const fleet = fakeTree({ '/laptop/notes.md': 'a', '/studio/notes.md': 'b' });
-		const table = withMountTable(bundle.vfs, [mountOf('pc', fleet)]);
-		bundle.mountTable(table);
-		bundle.mountTable(table, agentCred(cred));
+		shared(bundle, [mountOf('pc', fleet)]);
+		shared(bundle, [mountOf('pc', fleet)], { cred: agentCred(cred) });
 		const agent = await bundle.asAgent({ cred: agentCred(cred), home: agentHome('agent-a'), tmp: agentTmpRoot('agent-a') });
 
 		for (const command of ['mount', 'df -a', 'cat /proc/mounts']) {
@@ -717,8 +724,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 			const bundle = createWorkspaceBundle(new Database(':memory:'));
 			const calls: string[] = [];
 			const backend = counted(fakeTree({ '/home/me/a/b/c.txt': 'deep' }), calls);
-			const table = withMountTable(bundle.vfs, [mountOf(name, backend)]);
-			bundle.mountTable(table);
+			const table = shared(bundle, [mountOf(name, backend)]);
 
 			// Walked a component at a time, this `cat` asked the backend 35 times (25 of them a stat of an ancestor); now
 			// `cat` asks only of the file it names, as it would of a local one.
@@ -746,7 +752,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 			},
 		};
 
-		bundle.mountTable(withMountTable(bundle.vfs, [mountOf('pc', device)]));
+		shared(bundle, [mountOf('pc', device)]);
 
 		expect(await bundle.shell.exec('cat /pc/home/me/project/notes.md')).toMatchObject({ stdout: 'consented', exitCode: 0 });
 		expect((await bundle.shell.exec('cat /pc/etc/passwd')).exitCode).not.toBe(0);
@@ -778,7 +784,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		};
 
 		const view = deviceFiles(transport, { consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', scope: async () => 'root' });
-		bundle.mountTable(withMountTable(bundle.vfs, [mountOf('pc', view)]));
+		shared(bundle, [mountOf('pc', view)]);
 
 		expect(await bundle.shell.exec('cat /pc/home/dev/notes.txt')).toMatchObject({ stdout: 'consented', exitCode: 0 });
 
@@ -791,8 +797,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 	test('a read-only mount refuses every write from the shell and the file plane, and keeps its bytes', async () => {
 		const bundle = createWorkspaceBundle(new Database(':memory:'));
 		const skills = fakeTree({ '/kept.md': 'kept' });
-		const table = withMountTable(bundle.vfs, [{ ...mountOf('skills', skills), readOnly: true }]);
-		bundle.mountTable(table);
+		const table = shared(bundle, [{ ...mountOf('skills', skills), readOnly: true }]);
 
 		expect((await bundle.shell.exec('echo changed > /skills/kept.md')).exitCode).not.toBe(0);
 		await expect(writeText(table, '/skills/kept.md', 'changed')).rejects.toMatchObject({ code: 'EROFS' });

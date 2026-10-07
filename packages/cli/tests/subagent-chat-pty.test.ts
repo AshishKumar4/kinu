@@ -3,13 +3,12 @@
  * workspace database the way the web reads a cloud one. Driven through `bin/cli.ts` on a real pty.
  */
 import { expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createAgentConfigStore, initWorkspaceSchema, SubordinateRosterStore, WorkspaceActorDirectory, type LLMProviderConfig } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { makeSql, makeSqlExec, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
-import { runToExit, scratchDir } from '@kinu.run/test-utils';
+import { makeSql, makeSqlExec, makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
+import { runToExit, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 
 import { placeLocalWorkspace } from './helpers/local-refs';
 import { runTuiInPty } from './helpers/pty-screen';
@@ -41,10 +40,10 @@ async function kinuHome(): Promise<string> {
 async function workspaceThatHired(home: string, name: string, subagent: { name: string; displayName: string }): Promise<void> {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
-  const db = new Database(join(dir, 'agent.db'));
+  const db = workspaceDatabase(join(dir, 'agent.db'));
 
   try {
-    await createWorkspace(db, { name, purpose: 'Keep the shop running', llm: BIRTH_LLM });
+    await createWorkspace(db, { name, purpose: 'Keep the shop running', llm: BIRTH_LLM, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const identity = db.query<{ id: string; owner_user_id: string | null }, []>('SELECT id, owner_user_id FROM workspace_identity').get();
 

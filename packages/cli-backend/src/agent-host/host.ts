@@ -42,7 +42,7 @@ import {
   mintSubordinateName,
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
-  readMission,
+  missionOf,
   recoverSubordinateLifecycles,
   terminalTaskReport,
   taskAnswerIsLater,
@@ -81,7 +81,7 @@ import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, settle
 import { watchStatements } from '@kinu.run/core/identity';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
-  buildLocalActorRuntime, cleanupFacetScratch, writeTransaction,
+  buildLocalActorRuntime, cleanupFacetScratch, soulOf, writeTransaction,
   type CLIRuntime,
 } from '../runtime';
 import type { CLIOpenConfig } from '../open';
@@ -1084,7 +1084,7 @@ export class LocalAgentHost {
       now: () => Date.now(),
       inheritedContext: (): Promise<SerializedMessage[]> => inheritedContextFromTranscript(parent.actor.session.canonical.transcript(parent.sessionId)),
       originContext: async () => parent.actor.session.history,
-      ownMission: () => readMission(makeSql(parent.tree.db)) ?? '',
+      ownMission: () => missionOf(soulOf(parent.tree.db)) ?? '',
       createName: mintSubordinateName,
       rosterMoved: () => { parent.tree.liveReads.moved(ROSTER_READS); },
       broadcastTask: (event) => parent.session.host.broadcast(metadataBroadcastEvent(

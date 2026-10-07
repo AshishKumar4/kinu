@@ -33,12 +33,12 @@ export function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred 
     stat: (path) => operate(path, 'stat', (vfs) => absentAsNull(() => {
       const stat = vfs.stat(path);
 
-      return { type: stat.type, size: stat.size, mtime: stat.mtime };
+      return { type: stat.type, size: stat.size, mtime: stat.mtime, ctime: stat.ctime };
     })),
     lstat: (path) => operate(path, 'lstat', (vfs) => absentAsNull(() => {
       const stat = vfs.lstat(path);
 
-      return { type: stat.type, size: stat.size, mtime: stat.mtime, mode: stat.mode };
+      return { type: stat.type, size: stat.size, mtime: stat.mtime, ctime: stat.ctime, mode: stat.mode };
     })),
     readlink: (path) => operate(path, 'readlink', (vfs) => absentAsNull(() => vfs.readlink(path))),
     rename: (from, to) => operate(from, 'rename', (vfs) => vfs.rename(from, to)),

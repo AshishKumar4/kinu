@@ -340,7 +340,7 @@ export function createTeamToolDeps(deps: {
   inheritedContext(): Promise<SerializedMessage[]>;
   originContext?(): Promise<readonly ModelMessage[]>;
   /** Inherited by an owner-created agent given none; read at create time, not captured. */
-  ownMission(): string;
+  ownMission(): Promise<string> | string;
   rosterMoved(): void;
   broadcastTask(event: { subordinate: string; content: string; timestamp: number }): void;
   /**
@@ -392,7 +392,7 @@ export function createTeamToolDeps(deps: {
     const roleLabel = selection;
 
     const mission = ownerCreated
-      ? yield* requiredText(optionalText(input.mission) ?? deps.ownMission(), 'mission')
+      ? yield* requiredText(optionalText(input.mission) ?? (yield* Effect.promise(async () => deps.ownMission())), 'mission')
       : yield* requiredText(input.mission ?? '', 'mission');
 
     const typedName = input.name?.trim();

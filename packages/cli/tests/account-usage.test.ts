@@ -1,7 +1,6 @@
 // /stats counts spend per provider account over every workspace this person holds: each local workspace on
 // this machine and, when signed in, the cloud ones. A source it cannot read is named, never counted as zero.
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
@@ -10,8 +9,8 @@ import {
   type AccountUsage, type CallAccount, type LLMProviderConfig, type Usage,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
-import { scratchDir } from '@kinu.run/test-utils';
+import { makeSql, makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
+import { scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { placeLocalWorkspace } from './helpers/local-refs';
 
 const repoRoot = resolve(import.meta.dir, '../../..');
@@ -22,10 +21,10 @@ const DUMMY_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:
 async function localWorkspace(home: string, name: string, calls: ReadonlyArray<{ usage: Usage; usd: number; account: CallAccount }>) {
   mkdirSync(join(home, name), { recursive: true });
   placeLocalWorkspace(home, name);
-  const db = new Database(join(home, name, 'agent.db'));
+  const db = workspaceDatabase(join(home, name, 'agent.db'));
 
   try {
-    await createWorkspace(db, { name, purpose: 'Spend fixture', llm: DUMMY_LLM });
+    await createWorkspace(db, { name, purpose: 'Spend fixture', llm: DUMMY_LLM, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
 

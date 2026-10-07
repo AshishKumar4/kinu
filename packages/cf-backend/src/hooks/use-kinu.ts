@@ -482,7 +482,7 @@ export interface PendingConsentResolution {
   readonly isCurrent: () => boolean;
 }
 
-export function resolvePendingConsent(
+function resolvePendingConsent(
   { consentId, decision, resolve, remove, report, isCurrent }: PendingConsentResolution,
 ): Promise<void> {
   return refreshLiveResource({
@@ -733,10 +733,8 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
 
   const {
     messages,
-    setMessages,
     sendMessage,
     regenerate,
-    clearHistory,
     stop,
     isStreaming: streamingTokens,
     status: chatStatus,
@@ -748,31 +746,6 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     getInitialMessages: null,
     // Matches the SDK default (cloudflare/agents#2058), pinned so an upstream change cannot move it.
     throttle: 50,
-    onData: (chunk) => {
-      if (chunk.type !== 'data-kinu-step-cut') return;
-      const { stepIndex } = v.parse(v.object({ stepIndex: v.number() }), chunk.data);
-
-      setMessages((current) => {
-        let answer: UIMessage | undefined;
-
-        for (let index = current.length - 1; index >= 0; index -= 1) {
-          const candidate = current[index];
-
-          if (candidate?.role !== 'assistant') continue;
-          answer = candidate;
-          break;
-        }
-
-        if (answer === undefined) return current;
-        let step = 0;
-
-        return current.map((message) => message !== answer ? message : { ...message, parts: message.parts.filter((part) => {
-          if (part.type === 'step-start') step += 1;
-
-          return step < stepIndex;
-        }) });
-      });
-    },
   });
 
   /** The SDK's flag is false during `submitted` (message sent, no token yet); including it keeps
@@ -1285,7 +1258,8 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
       planFocus,
       sendChat,
       abortChat,
-      clearHistory,
+      /** Answered, and refused while a turn runs; the clear frame the server sends ahead of the answer empties every window. */
+      clearConversation: () => rpc<void>("clearConversation", []),
       setModel,
       setReasoningEffort,
       setDisplayName,
@@ -1378,8 +1352,6 @@ function useWorkspaceReads(link: ChatLink) {
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   // Unknown until the first read: an optimistic absence would flip the strip to Files first.
   const [tabPresence, setTabPresence] = useState<TabPresence | undefined>(undefined);
-  // Only for the sidebar roster's dot; the tab badge is the queue's length.
-  const [changelogUnseen, setChangelogUnseen] = useState(0);
   const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
   // Counts, not timestamps: a transcript only needs to notice its branch moved, without a shared clock.
   const [headActivity, setHeadActivity] = useState<ReadonlyMap<string, number>>(new Map());
@@ -1453,15 +1425,10 @@ function useWorkspaceReads(link: ChatLink) {
     "consents", () => rpc<PendingConsent[]>("listPendingConsents", []), setPendingConsents,
   ), [refreshCurrentLiveResource, rpc]);
 
-  // One call feeds the queue and the sidebar dot's unseen count so they cannot disagree.
   const refreshPendingActions = useCallback(() => refreshCurrentLiveResource(
     "pendingActions",
     () => rpc<PendingAction[]>("listPendingActions", []),
-    (actions) => {
-      setPendingActions(actions);
-      const unseen = actions.find((a) => a.kind === "unseen_changes");
-      setChangelogUnseen(unseen ? 1 : 0);
-    },
+    setPendingActions,
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshTabPresence = useCallback(() => refreshCurrentLiveResource(
@@ -1505,7 +1472,6 @@ function useWorkspaceReads(link: ChatLink) {
 
   // Stable, or the changelog hook's effect fires markChangelogSeen every render.
   const clearChangelogUnseen = useCallback(() => {
-    setChangelogUnseen(0);
     setPendingActions((prev) => prev.filter((a) => a.kind !== "unseen_changes"));
   }, []);
 
@@ -1805,7 +1771,6 @@ function useWorkspaceReads(link: ChatLink) {
     setSlateReloads(new Map());
     setPendingConsents([]);
     setPendingActions([]);
-    setChangelogUnseen(0);
     setBranchRuns([]);
     setSubordinates([]);
     setSubordinateEvents([]);
@@ -1914,7 +1879,6 @@ function useWorkspaceReads(link: ChatLink) {
       resolveConsent,
       unavailableDevices,
       /** Work marks self-changes seen server-side, then calls the clear. */
-      changelogUnseen,
       clearChangelogUnseen,
       branchRuns,
       dismissBranchRun: (branchId: string) =>

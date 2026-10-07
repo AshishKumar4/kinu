@@ -1,4 +1,4 @@
-import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, test } from 'bun:test';
 import { accountCredentialKey, agentAffinityKey, asFetchFunction, requestUrl } from '@kinu.run/core';
 import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
@@ -229,29 +229,49 @@ test("a hired agent's model spend counts in the workspace's and the account's to
 });
 
 test("a hired agent's working context is read and edited where its conversation is, by it and by its hirer", async () => {
-  const gateway = stubAiBinding((run) => chatCompletion(run, 'Done.'));
+  const EDIT = 'Edit your context.';
+  const edit = { action: 'edit', path: '/context/working.jsonl', edits: [{ old_text: 'First task OTTERX.', new_text: 'First task OTTERX. INJECTED-NOTE' }] };
+
+  // The hire edits with its own file tool: read, then edit, then answer.
+  const gateway = stubAiBinding((run) => {
+    const { messages } = requestOf(run);
+    const opened = messages.map((message) => message.role === 'user' && JSON.stringify(message.content).includes(EDIT)).lastIndexOf(true);
+
+    if (opened < 0) return chatCompletion(run, 'Done.');
+    const step = messages.slice(opened).filter((message) => message.role === 'tool').length;
+
+    if (step === 0) return toolCallCompletion(run, { tool: 'file', args: { action: 'read', path: '/context/working.jsonl' } }, 'call_read');
+
+    return step === 1 ? toolCallCompletion(run, { tool: 'file', args: edit }, 'call_edit') : chatCompletion(run, 'Done.');
+  });
+
   const workspace = gatewayWorkspace(gateway);
   const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const middleId = middle.actor.handle.actorId;
-  const own = middle.actor.runtime.storage.vfs;
+  const hirer = `/context/agents/${middle.actor.record.storageKey}/working.jsonl`;
 
   const ended = (): number => agentSql(middleId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'run_end'`[0]?.n ?? 0;
 
+  const main = async (): Promise<string> => readText((await hostedMainActor(workspace)).actor.runtime.storage.vfs, hirer);
+
   await wakeForDelegatedTask(workspace, middleId, 'First task OTTERX.');
   await driveUntil(workspace, 'the first turn never ended', () => ended() > 0);
-  const working = await readText(own, '/context/working.jsonl');
 
-  expect(working).toContain('First task OTTERX.');
-  const storageKey = middle.actor.record.storageKey;
-  const main = (await hostedMainActor(workspace)).actor.runtime.storage.vfs;
+  expect(await main()).toContain('First task OTTERX.');
+  await wakeForDelegatedTask(workspace, middleId, EDIT);
+  await driveUntil(workspace, 'the edit turn never ended', () => ended() > 1);
 
-  expect(await readText(main, `/context/agents/${storageKey}/working.jsonl`)).toContain('First task OTTERX.');
-  await writeText(own, '/context/working.jsonl', `${working}${JSON.stringify({ new: true, message: { role: 'user', content: 'INJECTED-NOTE' } })}\n`);
-  await wakeForDelegatedTask(workspace, middleId, 'Second task.');
-  await driveUntil(workspace, 'the second turn never ended', () => ended() > 1);
+  const answers = gateway.runs.filter((run) => openingOf(run).includes(EDIT))
+    .flatMap((run) => requestOf(run).messages.flatMap((message) => (message.role === 'tool' ? [String(message.content)] : [])));
 
-  expect(gateway.runs.some((run) => openingOf(run).includes('Second task.') && JSON.stringify(requestOf(run).messages).includes('INJECTED-NOTE'))).toBe(true);
+  expect(answers.some((answer) => answer.includes('First task OTTERX.'))).toBe(true);
+  expect(answers.some((answer) => answer.startsWith('{"ok":true'))).toBe(true);
+  expect(await main()).toContain('First task OTTERX. INJECTED-NOTE');
+  await wakeForDelegatedTask(workspace, middleId, 'Third task.');
+  await driveUntil(workspace, 'the third turn never ended', () => ended() > 2);
+
+  expect(gateway.runs.some((run) => openingOf(run).includes('Third task.') && openingOf(run).includes('INJECTED-NOTE'))).toBe(true);
 });
 
 test("a child's client snapshot counts its own chat inputs and answers", async () => {
