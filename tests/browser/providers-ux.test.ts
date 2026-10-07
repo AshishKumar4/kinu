@@ -65,4 +65,60 @@ describe('the providers list', () => {
       await page.close();
     });
   });
+
+  test("a catalog provider's key brings its model into the menus as the default, and disconnecting takes both away", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers`, { waitUntil: 'networkidle0' });
+      await page.evaluate(() => { window.dispatchEvent(new Event('gallery:settings-heal')); });
+
+      // Groq from the catalog, by its name, and its key.
+      await page.waitForSelector('input[placeholder^="Search providers"]');
+      await page.type('input[placeholder^="Search providers"]', 'Groq');
+      await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((option) => option.textContent?.trim() === 'Groq'));
+      await page.$$eval('[role="option"]', (options) => {
+        const groq = options.find((option) => option.textContent?.trim() === 'Groq');
+
+        if (groq instanceof HTMLElement) groq.click();
+      });
+      await page.waitForSelector('input[aria-label="API key"]');
+      await page.type('input[aria-label="API key"]', 'gsk_gallery');
+      await page.click('input[aria-label="API key"] ~ button[type="submit"]');
+      await page.waitForSelector('[data-provider="Groq"] button[aria-label="Disconnect Groq"]');
+
+      // Its model is offered, and chosen as the account's default it is saved as such.
+      const menu = async () => {
+        await page.click('[data-settings-section="models"]');
+        await page.waitForSelector('[data-model-picker="default model"]');
+        await page.click('[data-model-picker="default model"]');
+        await page.waitForSelector('[role="option"]');
+
+        return page.$$eval('[role="option"]', (options) => options.map((option) => option.textContent?.trim() ?? ''));
+      };
+
+      expect(await menu()).toContain('Llama 3.3 70B');
+      await page.$$eval('[role="option"]', (options) => {
+        const llama = options.find((option) => option.textContent?.trim() === 'Llama 3.3 70B');
+
+        if (llama instanceof HTMLElement) llama.click();
+      });
+      await page.waitForFunction(async () => JSON.stringify(await (await fetch('/api/user/profile-catalog')).json())
+        .includes('"default":{"model":"groq/llama-3.3-70b-versatile"'));
+
+      // Disconnected after its warning, the key and the model go together.
+      await page.keyboard.press('Escape');
+      await page.click('[data-settings-section="providers"]');
+      await page.click('[data-provider="Groq"] button[aria-label="Disconnect Groq"]');
+      await page.waitForSelector('[role="dialog"]');
+      await page.$$eval('[role="dialog"] button', (buttons) => {
+        const confirm = buttons.find((button) => button.textContent?.trim() === 'Disconnect');
+
+        if (confirm instanceof HTMLElement) confirm.click();
+      });
+      await page.waitForFunction(() => document.querySelector('[data-provider="Groq"] button[aria-label="Disconnect Groq"]') === null);
+      expect(await menu()).not.toContain('Llama 3.3 70B');
+      await page.close();
+    });
+  });
 });
