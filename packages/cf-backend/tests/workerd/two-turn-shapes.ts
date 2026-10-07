@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'close';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'close';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
@@ -364,6 +364,20 @@ export interface ClaimUnderRecovery {
   readonly settled: string | null;
   readonly heldWork: readonly OwedWorkRow[];
   readonly settledWork: readonly OwedWorkRow[];
+}
+
+/** The workspace's terminal sequences as stored: each owed effect by name, the outer transitions still open, and the
+ *  turns recorded. */
+export interface TerminalState {
+  readonly owed: readonly { readonly name: string; readonly status: string; readonly attempts: number }[];
+  readonly open: number;
+  readonly recorded: number;
+}
+
+/** A row from a build with another effect set, after the recovery pass: its status, and what its transition answers. */
+export interface AlienEffect {
+  readonly status: string;
+  readonly transition: string;
 }
 
 /** An answer's page writing a file through `workspace`, in Auto, and again after the owner's next ask is a Plan one. */

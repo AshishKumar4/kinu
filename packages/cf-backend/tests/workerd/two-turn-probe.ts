@@ -7,7 +7,10 @@
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
-import { HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, hostedActorSocketPath, JsonValueSchema, type SlateCallResult } from '@kinu.run/core';
+import {
+  HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
+  type SlateCallResult, type TerminalEffectName, type TerminalEffectPhase,
+} from '@kinu.run/core';
 import {
   createCompositeLogger,
   createConsoleLogger,
@@ -31,6 +34,8 @@ import type {
   AgentHeldWork,
   AgentSlateUi,
   AnswerPageModes,
+  TerminalState,
+  AlienEffect,
   StrandedWork,
   EffectStatus,
   HeldClose,
@@ -175,7 +180,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'strandedWork');
     Reflect.deleteProperty(this, 'answerSlates');
     Reflect.deleteProperty(this, 'answerPageModes');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes']);
+    Reflect.deleteProperty(this, 'cutTerminal');
+    Reflect.deleteProperty(this, 'terminalState');
+    Reflect.deleteProperty(this, 'alienEffect');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'terminalState', 'alienEffect']);
   }
 
   /** What the loop's driver gate answers once refused, as when another activation holds the lease. */
@@ -284,6 +292,39 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const ids = { answered: `${agent}/${answer}/card`, fromUser: `${agent}/${ask}/card`, asWorkspace: `${answer}/card` };
 
     return { answered: await call(ids.answered), fromUser: await call(ids.fromUser), asWorkspace: await call(ids.asWorkspace) };
+  }
+
+  /** The isolate stops once at `name`, `phase` its side effect, as an eviction would stop it there. */
+  async cutTerminal(name: TerminalEffectName, phase: TerminalEffectPhase): Promise<void> {
+    this.terminalEffectFault = (atPhase, atName, atScope) => {
+      if (atName !== name || atPhase !== phase) return;
+      this.terminalEffectFault = null;
+      throw new TerminalEffectInterrupt(atPhase, atName, atScope);
+    };
+  }
+
+  async terminalState(): Promise<TerminalState> {
+    const owed = this.unmetered("SELECT effect_name, status, attempts FROM terminal_effects WHERE status != 'completed' ORDER BY seq").toArray()
+      .map((row) => ({ name: textColumn(row.effect_name), status: textColumn(row.status), attempts: Number(row.attempts) }));
+
+    const open = Number(this.unmetered("SELECT COUNT(*) AS n FROM tool_effect_claims WHERE normalized_call_id LIKE 'terminal:response:%' AND result_json IS NULL").one().n);
+
+    const recorded = Number(this.unmetered('SELECT COUNT(*) AS n FROM completed_turns').one().n);
+
+    return { owed, open, recorded };
+  }
+
+  /** A row a build with another effect set left owed, then the recovery pass over it. */
+  async alienEffect(): Promise<AlienEffect> {
+    this.terminal.begin({ turnId: 'u-alien', messageId: 'a-alien' });
+    this.unmetered(`INSERT INTO terminal_effects (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status, attempts)
+      VALUES (?, ?, 'v9:teleport:a-alien', 'teleport', 'a-alien', 0, '{}', 'pending', 0)`,
+    this.actorHandle().actorId, this.terminal.sequenceId({ turnId: 'u-alien', messageId: 'a-alien' }));
+    await this.terminalRetryPass();
+
+    const row = this.unmetered("SELECT status FROM terminal_effects WHERE effect_key = 'v9:teleport:a-alien'").toArray()[0];
+
+    return { status: row === undefined ? 'gone' : textColumn(row.status), transition: this.terminal.begin({ turnId: 'u-alien', messageId: 'a-alien' }) };
   }
 
   /**
@@ -719,7 +760,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   | 'createSubordinateAgent'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -974,7 +1015,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'close'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'close'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1447,6 +1488,35 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       socket.close(1000, 'agent work probe complete');
     }
+  }
+
+  /** A real first turn whose isolate stops after recording the turn and before recording that it did; the workspace to
+   *  read after the eviction, and what it stored then. */
+  async cutRecordingWorkspace(): Promise<{ readonly workspace: string; readonly cut: TerminalState }> {
+    const { target, workspace } = await this.claimQueueWorkspace('terminal-cut');
+
+    await target.cutTerminal('turn_record', 'after');
+
+    if (!(await target.beginGenesisTurn()).started) throw new Error('the terminal-cut probe genesis did not start');
+    await awaitSettled(target);
+
+    return { workspace, cut: await target.terminalState() };
+  }
+
+  /** After the eviction: the alarm's recovery pass on the fresh activation, then what it stored. */
+  async recoverRecording(workspace: string): Promise<TerminalState> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    await target.recoveryPass();
+    await awaitSettled(target);
+
+    return await target.terminalState();
+  }
+
+  async alienEffectIn(): Promise<AlienEffect> {
+    const { target } = await this.claimQueueWorkspace('terminal-cut');
+
+    return await target.alienEffect();
   }
 
   async answerPageModesIn(): Promise<AnswerPageModes> {
