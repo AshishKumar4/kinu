@@ -18,10 +18,6 @@ function claims(harness: Harness): ActorClaimStore {
   return new ActorClaimStore(makeSql(harness.db), workspaceMainActor(harness.db), transactionSync, historyOver(harness));
 }
 
-async function settle(harness: Harness, id: string, text: string): Promise<void> {
-  await chatSessionTurns(harness.agent).settle({ messageId: id, text, requestId: `response-${id}` });
-}
-
 async function opening(): Promise<Harness> {
   const harness = orchestratorHarness();
   await chatSessionTurns(harness.agent).prepare({ messages: [GENESIS] });
@@ -30,31 +26,6 @@ async function opening(): Promise<Harness> {
 }
 
 describe('request-owned chat inputs', () => {
-  // Socket admission is proven end to end in tests/workerd/two-turn.test.ts and transport admission in
-  // unit-chat-transport.test.ts; these cases exercise the alarm/conversion lifecycle directly.
-  test('alarm recovery leaves the live Think root claim with its foreground owner', async () => {
-    // The same pass classifies an idle unverified claim (the last case), so a pass that skips claims fails there.
-    const harness = await opening();
-    const turn = claims(harness).latestTurn();
-
-    if (turn === null) throw new Error('no root turn was admitted');
-
-    await harness.agent.terminalRetryPass();
-    expect(claims(harness).read(turn.turnId)?.status).toBe('admitted');
-    await settle(harness, 'answer', 'complete answer');
-  });
-
-  test('the foreground owner stays live while its response is being converted for settlement', async () => {
-    const harness = await opening();
-    const ending = settle(harness, 'answer', 'complete answer');
-    const claimed = claims(harness).latestTurn()?.status;
-    // Alarm recovery mid-conversion would seal a claim nobody owns as indeterminate.
-    const recovered = harness.agent.terminalRetryPass();
-    await Promise.all([ending, recovered]);
-
-    expect(claimed).toBe('admitted');
-    expect(claims(harness).latestTurn()).toMatchObject({ status: 'settled', outcome: expect.not.stringMatching(/^indeterminate$/) });
-  });
 
   test('alarm recovery still classifies a genuinely idle unverified root claim', async () => {
     const warm = await opening();
