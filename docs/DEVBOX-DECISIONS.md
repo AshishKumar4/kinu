@@ -4336,8 +4336,8 @@ at most floor(log2 n) + 1 deltas, so L <= floor(log2 n) + 2 layers.
   directory; the archive held such a parent as both a file and a directory.
 
 Measured off-tree (`research/d77-lsm-bench/`: the driver, results and
-table), Medium, run `dc20261007175712f13ab`, before (the chain as at
-`integration/0965` `ff0b0a2f1`'s parent) and after (this design), n=5
+table), Medium, run `dc20261007175712f13ab`, before (the chain as
+`integration/0965` holds it at `ff0b0a2f1`) and after (this design), n=5
 recoveries per row. Each row filled a workspace (12,000 small files, a
 1 GiB file, 256 MiB random fills to the size), saved a base, then 3 or
 63 saves of a line, a new 4 KiB file and a 4 KiB write into the large
