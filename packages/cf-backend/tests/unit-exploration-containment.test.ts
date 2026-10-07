@@ -250,7 +250,7 @@ describe('exploration actors write the workspace journal and acquire only their 
 
 /**
  * Containment rides the actor (`actor_id` in every scoped key, per-statement handle checks, release fence):
- * see the actor-scoping suites, `unit-rpc-surface.test.ts` and `tests/workerd/plan-announce-probe.ts`.
+ * see the actor-scoping suites and `tests/workerd/orchestrator-seal.test.ts`.
  */
 
 describe('recursive split budget', () => {

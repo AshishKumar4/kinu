@@ -420,6 +420,37 @@ describe('a hosted actor pane reads its own chat back from nothing', () => {
   });
 });
 
+describe('what a page may call on its workspace', () => {
+  // A misplaced decorator once left the Work read uncallable from the page and made the egress recorder callable.
+  it('reads the overview and Work, and is refused the egress recorder and the scaffold runner', async () => {
+    const { rootPath } = await workspaceWithTwoChats('pool-page-callables');
+    const pane = await openPane(rootPath);
+    const answers: Record<string, string> = {};
+
+    const calls: ReadonlyArray<readonly [string, JsonValue[]]> = [
+      ['listWorkspaceWork', []], ['getWorkspaceGitHub', []], ['listWorkspaceAgents', []],
+      ['recordGitHubEgress', [[]]], ['runScaffoldOnce', ['probe task']],
+    ];
+
+    for (const [name, args] of calls) {
+      pane.send(rpcRequest(name, name, args));
+
+      try {
+        await pane.rpc(name, v.unknown());
+        answers[name] = 'answered';
+      } catch (error) {
+        answers[name] = String(error);
+      }
+    }
+
+    pane.close();
+    expect(answers).toEqual({
+      listWorkspaceWork: 'answered', getWorkspaceGitHub: 'answered', listWorkspaceAgents: 'answered',
+      recordGitHubEgress: expect.stringContaining('was refused'), runScaffoldOnce: expect.stringContaining('was refused'),
+    });
+  });
+});
+
 describe('a workspace created over REST with a role, a model and an effort', () => {
   const StatusSchema = v.object({ status: v.looseObject({ roleId: v.string(), model: v.string(), reasoningEffort: v.nullish(v.string()) }) });
 

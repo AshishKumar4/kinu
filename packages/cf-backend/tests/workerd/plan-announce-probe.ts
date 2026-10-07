@@ -1,7 +1,7 @@
 /**
  * `sealRpcSurface` as workerd enforces it, over a real DO stub: the seal shadows unlisted members as own
- * properties, callable in process and refused only on the wire. `unit-rpc-surface.test.ts` pins the rule;
- * this measures it against the runtime, peer-to-peer, with every hop outbound from `exercise()`.
+ * properties, callable in process and refused only on the wire. `orchestrator-seal.test.ts` drives it and
+ * measures it against the runtime, peer-to-peer, with every hop outbound from `exercise()`.
  */
 import { getAgentByName, type AgentContext } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
