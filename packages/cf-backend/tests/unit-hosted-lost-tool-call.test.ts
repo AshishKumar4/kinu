@@ -67,7 +67,7 @@ test('a hosted turn cut off inside a claimed call makes it once and is told it m
   await next.agent.accountSpend();
   await next.agent.terminalRetryPass();
   await joinHarnessFibers();
-  await next.agent.harnessSettleDetached();
+  await driveUntil(next, 'the resumed turn never asked the model again', () => resumed.length > 0);
 
   expect(tasks()).toBe(1);
   expect(resumed.join('\n')).toMatch(/may or may not have taken effect\..*the call is eval_0/su);

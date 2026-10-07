@@ -102,7 +102,6 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     turnRequests: (...args) => settle(through((isolate) => isolate.turnRequests(...args))),
     turnRequest: (...args) => settle(through((isolate) => isolate.turnRequest(...args))),
     spend: (...args) => settle(through((isolate) => isolate.spend(...args))),
-    figures: (...args) => settle(through((isolate) => isolate.figures(...args))),
     context: (...args) => settle(through((isolate) => isolate.context(...args))),
     searchConversations: (...args) => settle(through((isolate) => isolate.searchConversations(...args))),
     scrollConversation: (...args) => settle(through((isolate) => isolate.scrollConversation(...args))),
