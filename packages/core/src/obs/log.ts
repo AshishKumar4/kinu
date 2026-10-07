@@ -7,6 +7,7 @@ import { Cause, Effect, Exit } from 'effect';
 import type { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { attempt, settle, settleSync } from './effect';
 import { renderCauseChain, toKinuError, type ErrorCode, type KinuError } from './error';
+import { redactSecrets } from '../safety/secret-patterns';
 
 /**
  * Field names that may never appear on a log line (AGENTS.md § Errors). `content`, `body` and
@@ -80,17 +81,15 @@ interface LogLine {
 
 /** A logger over any line sink: the JSON envelope is this file's, the destination the caller's. */
 export function createLineLogger(write: (line: string) => void): Logger {
+  // Provider and tool text reaches fields and causes verbatim; the line leaving the process is where a key is masked.
+  const emit = (line: LogLine): void => write(redactSecrets(JSON.stringify(line)));
+
   return {
     event(name: LogEventName, fields?: LogFields): void {
-      write(JSON.stringify({ event: name, fields: fields ?? {} } satisfies LogLine));
+      emit({ event: name, fields: fields ?? {} });
     },
     failure(name: LogEventName, error: KinuError, fields?: LogFields): void {
-      write(JSON.stringify({
-        event: name,
-        code: error.code,
-        cause: renderCauseChain(error),
-        fields: fields ?? {},
-      } satisfies LogLine));
+      emit({ event: name, code: error.code, cause: renderCauseChain(error), fields: fields ?? {} });
     },
   };
 }
