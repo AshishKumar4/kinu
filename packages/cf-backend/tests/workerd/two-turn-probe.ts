@@ -270,9 +270,14 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return { stranded, recovered, after: await this.inspectWork() };
   }
 
-  /** How each id resolves, as a preview and as a page's `workspace` call: `ok`, or the refusal's reason. */
-  async answerSlates(ids: { readonly answered: string; readonly fromUser: string; readonly asWorkspace: string }): Promise<AgentSlateUi> {
+  /** How the agent's last answer's block, its last ask and the answer named as the workspace's resolve, as a preview
+   *  and as a page's `workspace` call: `ok`, or the refusal's reason. */
+  async answerSlates(agent: string): Promise<AgentSlateUi> {
     const reason = (result: SlateCallResult) => (result.ok ? 'ok' : result.reason);
+    const { items } = await this.agentStores(agent).historyPage({});
+    const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
+    const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
+    const ids = { answered: `${agent}/${answer}/card`, fromUser: `${agent}/${ask}/card`, asWorkspace: `${answer}/card` };
     const bound = await this.slateBindingCallAs(ROOT_SLATE_CALLER, ids.answered, 'workspace', { member: 'exists', args: ['/home'], invocation: null });
 
     return {
@@ -1436,32 +1441,19 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     if (response.status !== 101 || socket === null) throw new Error(`the hosted actor path answered ${String(response.status)}, not a socket`);
     socket.accept();
     const ended = Promise.withResolvers<void>();
-    const history = Promise.withResolvers<string>();
 
     socket.addEventListener('message', (event) => {
-      const frame = v.safeParse(v.looseObject({ type: v.string(), id: v.optional(v.string()), done: v.optional(v.boolean()), result: v.optional(JsonValueSchema) }),
+      const frame = v.safeParse(v.looseObject({ type: v.string(), done: v.optional(v.boolean()) }),
         v.is(v.string(), event.data) && event.data.startsWith('{') ? JSON.parse(event.data) : {});
 
-      if (!frame.success) return;
-
-      if (frame.output.type === 'cf_agent_use_chat_response' && frame.output.done === true) ended.resolve();
-
-      if (frame.output.type === 'rpc' && frame.output.id === 'agent-history') history.resolve(JSON.stringify(frame.output.result ?? null));
+      if (frame.success && frame.output.type === 'cf_agent_use_chat_response' && frame.output.done === true) ended.resolve();
     });
 
     try {
       socket.send(JSON.stringify({ type: 'rpc', id: 'agent-send', method: 'send', args: [AGENT_SLATE_ASK, 'agent-slate-1'] }));
       await awaitWithLimit(ended.promise, 20000, 'agent slate probe: the agent never finished its answer');
-      socket.send(JSON.stringify({ type: 'rpc', id: 'agent-history', method: 'getChatHistoryPage', args: [{}] }));
 
-      const { items } = v.parse(v.object({ items: v.array(v.object({ id: v.string(), role: v.string() })) }),
-        JSON.parse(await awaitWithLimit(history.promise, 20000, 'agent slate probe: no history')));
-
-      const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
-      const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
-      const agent = created.subordinate.actorId;
-
-      return await target.answerSlates({ answered: `${agent}/${answer}/card`, fromUser: `${agent}/${ask}/card`, asWorkspace: `${answer}/card` });
+      return await target.answerSlates(created.subordinate.actorId);
     } finally {
       socket.close(1000, 'agent slate probe complete');
     }
