@@ -7,6 +7,7 @@ import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-
 import { browsing, DRAW_MS, type WorkspaceBrowser } from './browser';
 import { helperAddress, ROOT, type RosterHelper } from './helper-address';
 import { judge, type Judgement } from './judge';
+import { WorkspaceHeld } from './workspace-completion';
 import { redact, redactJson } from './redact';
 import type { EvalCheck } from './task';
 import { invokedInTurn } from '../tasks/crafted-reuse';
@@ -419,8 +420,9 @@ export class EvalVerifier {
     try {
       await verify(this);
     } catch (error) {
-      // The deployment's transport failing (`infraBoundary`, a dropped socket) is nothing the build did.
-      if (renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
+      // The deployment's transport failing (`infraBoundary`, a dropped socket) is nothing the build did, and a workspace
+      // that hung or a run cancelled while a check waited on it (`reach`) ends the turn as the harness ends one.
+      if (error instanceof WorkspaceHeld || renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
       // A throw outside any check is the checker's own failure; it fails the turn and says why.
       this.#checks.push({ id: THREW, pass: false, evidence: truncate(redact(renderThrownChain({ cause: error }))) });
     }
@@ -439,8 +441,9 @@ export class EvalVerifier {
         ? { id, pass: outcome.pass }
         : { id, pass: outcome.pass, evidence: redactJson(projectJsonValue({ value: outcome.evidence })) };
     } catch (error) {
-      // The deployment failing to answer is not the build's failure: the trial fails as infrastructure.
-      if (renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
+      // The deployment failing to answer is not the build's failure: the trial fails as infrastructure. A held
+      // workspace is the turn's outcome, not this check's.
+      if (error instanceof WorkspaceHeld || renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
       // The failure is the check's result: its error is recorded as the evidence.
       this.#checks[index] = { id, pass: false, evidence: truncate(redact(renderThrownChain({ cause: error }))) };
     }

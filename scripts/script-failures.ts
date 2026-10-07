@@ -79,6 +79,10 @@ export async function documentScriptFailures(page: Page): Promise<ScriptFailure[
   return (scriptFailures.get(page) ?? []).filter((failure) => failure.at >= started);
 }
 
+/** In a page or any frame of it: what {@link RECORD_SCRIPT_FAILURES} recorded in that document, the errors nothing
+ *  caught and the scripts that did not load. */
+export const DOCUMENT_FAULTS = '({ errors: window.__uncaughtErrors ?? [], scripts: window.__scriptFailures ?? [] })';
+
 /** The prefix {@link FAILED_APP_SCRIPT} names a failed app script with. */
 export const SCRIPT_FAILED = 'the app script ';
 

@@ -12,7 +12,7 @@ import { ElementHandle, type Browser, type Frame, type Page } from 'puppeteer';
 import * as v from 'valibot';
 
 import { declaredSettings } from '../../scripts/browser-declarations';
-import { recordScriptFailures } from '../../scripts/script-failures';
+import { DOCUMENT_FAULTS, recordScriptFailures } from '../../scripts/script-failures';
 import { launchTestChrome, type TestChrome } from '../../scripts/test-chrome';
 import { webHeaders, type PublicWebIdentity, type WorkspaceWeb } from './session';
 import { look, type Press, type Sight } from './sight';
@@ -87,7 +87,7 @@ export class SlateView {
 
   /** What failed in the page: errors nothing caught and scripts that did not load (`script-failures.ts`). */
   async faults(): Promise<{ errors: string[]; scripts: string[] }> {
-    return v.parse(Faults, await this.frame.evaluate('({ errors: window.__uncaughtErrors ?? [], scripts: window.__scriptFailures ?? [] })'));
+    return v.parse(Faults, await this.frame.evaluate(DOCUMENT_FAULTS));
   }
 
   /** A picture of the frame as the person sees it, for a judge to look at. */
@@ -168,8 +168,13 @@ async function loaded(element: ElementHandle, what: string): Promise<SlateView> 
   const frame = await element.contentFrame();
 
   if (frame === null) throw new Error(`the frame of ${what} has no document`);
-  // The frame first holds its initial about:blank, which is already complete and empty.
-  await frame.waitForFunction('location.href !== "about:blank" && document.readyState === "complete"', { polling: 100, timeout: DRAW_MS });
+
+  try {
+    // The frame first holds its initial about:blank, which is already complete and empty.
+    await frame.waitForFunction('location.href !== "about:blank" && document.readyState === "complete"', { polling: 100, timeout: DRAW_MS });
+  } catch (error) {
+    throw new Error(`the page of ${what} did not load in ${String(DRAW_MS / 1000)} s`, { cause: error });
+  }
 
   return new SlateView(frame);
 }
