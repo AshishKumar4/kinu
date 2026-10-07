@@ -126,7 +126,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     workspace_actors: EVERYWHERE,
     // Delegated turns handed to an agent's own isolate; created with the workspace schema everywhere.
     agent_open_turns: EVERYWHERE,
-    agent_wakes: EVERYWHERE,
     agent_figures: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     search_nodes: EVERYWHERE,

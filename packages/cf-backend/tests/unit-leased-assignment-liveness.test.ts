@@ -10,7 +10,7 @@ import { admitSubordinateTask, EventLog, TERMINAL_EFFECT_RETRY_BASE_MS, WORKSPAC
 import { AwaitedList } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../core/tests/helpers';
 import {
-  agentSql, armedWakes, catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
+  agentSql, alarmDue, armedWakes, catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
   wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
@@ -65,7 +65,8 @@ async function hire(workspace: ReturnType<typeof gatewayWorkspace>, lifetime: Li
   return child.reference.actorId;
 }
 
-/** The next activation over the same rows, reached by one call, and everything it starts. */
+/** The next activation over the same rows, reached by one call, and everything it starts: its wake, and the alarm an
+ *  agent's due wake rides. */
 async function nextActivation(workspace: ReturnType<typeof gatewayWorkspace>, gateway: StubbedAiBinding): Promise<void> {
   const next = await reactivateOrchestratorHarness(workspace.db, undefined, {
     world: { aiGateway: gateway },
@@ -74,6 +75,8 @@ async function nextActivation(workspace: ReturnType<typeof gatewayWorkspace>, ga
 
   await next.agent.accountSpend();
   await next.agent.terminalRetryPass();
+
+  if (alarmDue(workspace.db)) await next.agent.alarm();
   await joinHarnessFibers();
 }
 

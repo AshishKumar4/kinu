@@ -5,14 +5,13 @@ import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-s
 import type { UIMessage } from 'ai';
 import {
   encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
-  type AgentFigures,
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
 } from '@kinu.run/core';
 import { AgentDatabase } from './agent-database';
 import { runAgentTask, type AgentWorkspace } from './agent-turn';
-import { FacetChat, type AgentOwed } from './agent-chat';
+import { FacetChat } from './agent-chat';
 import type {
   AgentRecovery, AgentSnapshot, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
 } from '@kinu.run/core';
@@ -77,8 +76,8 @@ export interface AgentFacetCalls {
   admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void>;
   retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding>;
   interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]>;
-  /** What a reset left owed is taken up; answers the next instant the agent owes and the turn its chat holds. */
-  wake(snapshot: AgentSnapshot): Promise<AgentOwed>;
+  /** What a reset left owed is taken up; the agent tells its workspace what is left once it rests. */
+  wake(snapshot: AgentSnapshot): Promise<void>;
   /** A refusal only the owner could fix, parked in the agent's own ledger, may answer now. */
   modelSettingsChanged(snapshot: AgentSnapshot): Promise<void>;
   owed(snapshot: AgentSnapshot): Promise<boolean>;
@@ -94,7 +93,6 @@ export interface AgentFacetCalls {
   turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex>;
   turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage>;
   spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger>;
-  figures(snapshot: AgentSnapshot): Promise<AgentFigures>;
   context(snapshot: AgentSnapshot, editor: ContextEditor): Promise<ContextTreeRemote>;
   searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]>;
   scrollConversation(snapshot: AgentSnapshot, around: string, window?: number, maxChars?: number): Promise<ConversationScrollResult | null>;
@@ -194,8 +192,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return (await this.chatOf(snapshot)).session.interrupt();
   }
 
-  async wake(snapshot: AgentSnapshot): Promise<AgentOwed> {
-    return await (await this.chatOf(snapshot)).wake();
+  async wake(snapshot: AgentSnapshot): Promise<void> {
+    await (await this.chatOf(snapshot)).wake();
   }
 
   async modelSettingsChanged(snapshot: AgentSnapshot): Promise<void> {
@@ -264,10 +262,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger> {
     return this.open(snapshot).spend(steps);
-  }
-
-  async figures(snapshot: AgentSnapshot): Promise<AgentFigures> {
-    return this.open(snapshot).figures();
   }
 
   async admitted(snapshot: AgentSnapshot, id: string): Promise<boolean> {

@@ -84,7 +84,7 @@ const FAMILIES = {
   turns: {
     policy: 'not-copied',
     tables: [
-      'run_events', 'open_turns', 'operator_requests', 'agent_open_turns', 'agent_wakes', 'actor_turn_claims', 'actor_requests',
+      'run_events', 'open_turns', 'operator_requests', 'agent_open_turns', 'actor_turn_claims', 'actor_requests',
       'request_renders', 'actor_program_state', 'fibers', 'effect_tombstones', 'tool_effect_claims', 'reply_channels',
       'agent_log', 'activity_log', 'executor_output', 'cache_warm', 'compaction_state', 'compaction_archive',
       'context_proposals', 'context_proposal_entries',

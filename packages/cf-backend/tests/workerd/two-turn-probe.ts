@@ -702,14 +702,9 @@ function sleepTimeSettled(emitted: readonly { event: string }[]): number {
   return emitted.filter((e) => e.event === 'memory.facts_deferred' || e.event === 'memory.facts_compressed').length;
 }
 
-function owedEffectKeys(emitted: readonly RecordedLog[]): string[] {
-  return emitted
-    .filter((e) => e.event === 'turn.terminal_effects_owed')
-    .flatMap((e) => {
-      const owed = e.fields['owed'];
-
-      return v.is(v.string(), owed) ? owed.split(',').filter((key) => key.length > 0) : [];
-    });
+/** Each close that left an effect owed, as it said so. */
+function owedEffects(emitted: readonly RecordedLog[]): string[] {
+  return emitted.filter((e) => e.event === 'turn.terminal_effects_owed').map((e) => JSON.stringify(e.fields));
 }
 
 /** A close that never finishes hangs here, ended by the row's deadline, not a side clock. */
@@ -855,7 +850,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         failures: recording.of('two-turn-workspace')
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
-        owedEffects: owedEffectKeys(recording.of('two-turn-workspace')),
+        owedEffects: owedEffects(recording.of('two-turn-workspace')),
         sleepTimeSettled: sleepTimeSettled(recording.of('two-turn-workspace')),
         catalogFallbacks: recording.of('two-turn-workspace').filter((e) => e.event === 'models_dev.catalog_fallback').length,
         catalogHits: (await this.probeLog()).catalogHits,
@@ -2129,7 +2124,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         failures: recording.of(drive.workspace)
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
-        owedEffects: owedEffectKeys(recording.of(drive.workspace)),
+        owedEffects: owedEffects(recording.of(drive.workspace)),
         sleepTimeSettled: sleepTimeSettled(recording.of(drive.workspace)),
         catalogFallbacks: recording.of(drive.workspace).filter((e) => e.event === 'models_dev.catalog_fallback').length,
         catalogHits: (await this.probeLog()).catalogHits,
