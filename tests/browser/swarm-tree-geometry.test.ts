@@ -711,19 +711,14 @@ describe('a search, as it happens', () => {
   });
 });
 
-/** Each node the scene draws, keyed by its search and id: its status, its parent, whether it is folded. */
+/** Each node the scene draws, by its id (unique across the fixture's searches): its status, its parent, whether it is folded. */
 function drawnNodes(page: Page): Promise<{ key: string; status: string; parent: string | null; folded: boolean }[]> {
-  return page.$$eval('g.mcts-node', (nodes) => nodes.map((node) => {
-    const search = node.closest('g.mcts-region')?.getAttribute('data-run') ?? '';
-    const parent = node.getAttribute('data-parent');
-
-    return {
-      key: `${search}/${node.getAttribute('data-node') ?? ''}`,
-      status: node.getAttribute('data-status') ?? '',
-      parent: parent === null ? null : `${search}/${parent}`,
-      folded: node.hasAttribute('data-folded'),
-    };
-  }));
+  return page.$$eval('g.mcts-node[data-node]', (nodes) => nodes.map((node) => ({
+    key: node.getAttribute('data-node') ?? '',
+    status: node.getAttribute('data-status') ?? '',
+    parent: node.getAttribute('data-parent'),
+    folded: node.hasAttribute('data-folded'),
+  })));
 }
 
 /**
