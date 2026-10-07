@@ -4,7 +4,7 @@
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { streamText, type LanguageModel, type LanguageModelUsage } from 'ai';
-import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage, withModelStack } from '@kinu.run/core';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { bindingModel, eventStreamOf } from './helpers/workers-ai-model';
 
@@ -63,7 +63,8 @@ async function usageOf(model: LanguageModel): Promise<LanguageModelUsage> {
 /** Both payers' Workers AI paths: the user's account endpoint and the deployment's binding. */
 const PATHS = [
   ['the account endpoint', (body: string) => accountModel(body)],
-  ['the binding', (body: string) => bindingModel(() => eventStreamOf(body)).model],
+  // As the registry resolves it: repair is the model stack's, around every provider alike.
+  ['the binding', (body: string) => withModelStack(bindingModel(() => eventStreamOf(body)).model, { provider: 'workers-ai', lane: 'workers-ai|' })],
 ] as const;
 
 describe.each(PATHS)('cached-usage repair through %s', (_path, modelOf) => {
