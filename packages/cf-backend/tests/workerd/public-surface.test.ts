@@ -7,7 +7,7 @@
 import { env } from 'cloudflare:test';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath, pageSchema, type JsonValue,
+  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath, pageSchema, positionPageSchema, type JsonValue,
 } from '@kinu.run/core';
 import { describe, expect, it, vi } from 'vitest';
 import * as v from 'valibot';
@@ -397,6 +397,65 @@ describe('a hosted actor pane reads its own chat back from nothing', () => {
     workspace.close();
 
     expect((await env.PUBLIC_SURFACE.fetch(`${ORIGIN}${actorPath}/get-messages`)).status).toBe(404);
+    await env.SURFACE_CONTROL.resetModelLog();
+  });
+});
+
+describe('a chat longer than one page', () => {
+  const PageSchema = positionPageSchema(ChatHistoryEntrySchema);
+
+  /** Every id, oldest first, by `limit` at a time from the newest, and the pages it took. */
+  const walk = async (pane: Pane, id: string, limit: number, actor?: string): Promise<{ ids: string[]; pages: number }> => {
+    const ids: string[] = [];
+    let cursor: { before: number } | undefined;
+
+    for (let pages = 1; ; pages += 1) {
+      pane.send(rpcRequest(`${id}-${String(pages)}`, 'getChatHistoryPage', [{ ...(actor !== undefined && { actor }), limit, ...(cursor !== undefined && { cursor }) }]));
+      const page = await pane.rpc(`${id}-${String(pages)}`, PageSchema);
+      ids.unshift(...page.items.map((entry) => entry.id));
+
+      if (page.status === 'end') return { ids, pages };
+      cursor = page.next;
+    }
+  };
+
+  it('is read page by page to its first word, each word once, for the workspace and for each actor apart', async () => {
+    const { rootPath, actorName, actorPath } = await workspaceWithTwoChats('pool-paged-chat');
+    const window = await openPane(actorPath);
+
+    for (const marker of ['actor-second-word', 'actor-third-word']) {
+      window.send(chatRequest(marker, marker));
+      await window.settled(marker);
+    }
+
+    window.send(rpcRequest('own', 'getActorSnapshot', [actorName]));
+    const { actorId } = await window.rpc('own', v.object({ actorId: v.string() }));
+    window.send(rpcRequest('whole', 'getChatHistoryPage', [{ actor: actorId, limit: 40 }]));
+    const whole = (await window.rpc('whole', PageSchema)).items.map((entry) => entry.id);
+    const paged = await walk(window, 'walk', 2, actorId);
+
+    window.close();
+    expect(whole.length).toBeGreaterThanOrEqual(6);
+    expect(paged.ids).toEqual(whole);
+    expect(paged.pages).toBe(Math.ceil(whole.length / 2));
+
+    // The workspace's own pager walks its own chat the same way, and none of the actor's words.
+    const root = await openPane(rootPath);
+    root.send(rpcRequest('root-whole', 'getChatHistoryPage', [{ limit: 40 }]));
+    const rootWhole = (await root.rpc('root-whole', PageSchema)).items.map((entry) => entry.id);
+
+    expect((await walk(root, 'root-walk', 1)).ids).toEqual(rootWhole);
+    expect(rootWhole.some((id) => whole.includes(id))).toBe(false);
+
+    // An actor that never spoke is an empty chat, whose walk ends at once.
+    root.send(rpcRequest('quiet', 'createSubordinateAgent', []));
+    const quietName = (await root.rpc('quiet', CreatedActorSchema)).name;
+    root.send(rpcRequest('quiet-id', 'listSubordinates', []));
+    const quiet = (await root.rpc('quiet-id', v.array(v.object({ name: v.string(), actorId: v.nullable(v.string()) })))).find((row) => row.name === quietName);
+    root.send(rpcRequest('quiet-page', 'getChatHistoryPage', [{ actor: quiet?.actorId ?? '', limit: 10 }]));
+
+    expect(await root.rpc('quiet-page', PageSchema)).toMatchObject({ status: 'end', items: [] });
+    root.close();
     await env.SURFACE_CONTROL.resetModelLog();
   });
 });
