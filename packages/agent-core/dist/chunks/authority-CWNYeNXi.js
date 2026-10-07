@@ -1,11 +1,11 @@
 import { C as canonicalJsonEqual, D as encodeCanonicalJson, O as frozenCanonicalJson, R as jsonDataParser, T as compareCanonicalText, b as decodeBase64, f as RecordCodec, g as Revision, h as SecretRef, i as SemVer, j as TextId, k as AgentCoreError, o as isMember, s as isNonempty, w as canonicalTupleKey, x as encodeBase64, y as Digest } from "./core-BjYGo1CC.js";
 import { d as ActorRef, f as ActorId } from "./actors-DJsP1nFM.js";
-import { F as PackagePin, I as PackageId, J as CapabilitySpec, Y as isCapabilityEffect, at as FacetPackageId, ct as OperationName, lt as OperationRef, nt as BindingName, ot as FacetRef, s as ProtectionDomain } from "./runtime-z1yMP0an.js";
-import { c as ItemClaimId, i as TurnId, o as ClaimWorkerId, r as RunId } from "./facets-D01bKQBL.js";
-import { A as Tenant, B as WorkspaceId, C as PrincipalRef, E as encodeScopeRef, F as ProjectId, N as MembershipId, O as Project, P as PrincipalId, R as TeamId, S as requireSubjectTenant, T as decodeScopeRef, a as ShareOffer, b as decodeSubjectRef, d as BUILT_IN_ROLES, h as Role, i as GuestTrust, j as Principal, k as Team, n as MemoryIdentityRepository, p as OWNER_ROLE, r as Workspace, u as Membership, v as GuestVerificationScheme, w as ScopeRef, x as encodeSubjectRef, y as SubjectRef, z as TenantId } from "./identity-CoqhjOFj.js";
-import { K as TargetLeaseEvidenceRecord } from "./runs-CRnZ9IFu.js";
+import { F as PackagePin, I as PackageId, J as CapabilitySpec, Y as isCapabilityEffect, at as FacetPackageId, ct as OperationName, lt as OperationRef, nt as BindingName, ot as FacetRef, s as ProtectionDomain } from "./runtime-RV2NCfR2.js";
+import { c as ItemClaimId, i as TurnId, o as ClaimWorkerId, r as RunId } from "./facets-ftoqxDdS.js";
+import { A as Tenant, B as WorkspaceId, C as PrincipalRef, E as encodeScopeRef, F as ProjectId, N as MembershipId, O as Project, P as PrincipalId, R as TeamId, S as requireSubjectTenant, T as decodeScopeRef, a as ShareOffer, b as decodeSubjectRef, d as BUILT_IN_ROLES, h as Role, i as GuestTrust, j as Principal, k as Team, n as MemoryIdentityRepository, p as OWNER_ROLE, r as Workspace, u as Membership, v as GuestVerificationScheme, w as ScopeRef, x as encodeSubjectRef, y as SubjectRef, z as TenantId } from "./identity-Bq_lzdgu.js";
+import { K as TargetLeaseEvidenceRecord } from "./runs-tw1bp7NI.js";
 import { i as InvocationId } from "./interaction-references-D9spp037.js";
-import { st as POLICY_IMPACTS } from "./definition-COokGikL.js";
+import { st as POLICY_IMPACTS } from "./definition-v-bZG98F.js";
 //#region src/authority/data.ts
 var parse = jsonDataParser((message) => new TypeError(message));
 function requireObject(value, name) {
@@ -530,6 +530,7 @@ var InvalidationWatermark = class InvalidationWatermark {
 			if (!entry.scope.tenantId.equals(ownerTenant)) throw new TypeError("Watermark entries must belong to the owning Tenant");
 			const key = scopeKey(entry.scope);
 			if (unique.has(key)) throw new TypeError("Watermark Scope entries must be unique");
+			if (entry.epoch === 0) continue;
 			unique.set(key, entry);
 		}
 		this.delivered = Object.freeze([...unique.values()].sort((left, right) => compareCanonicalText(scopeKey(left.scope), scopeKey(right.scope))));
@@ -561,8 +562,7 @@ var InvalidationWatermark = class InvalidationWatermark {
 		for (const entry of entries) {
 			if (!entry.scope.tenantId.equals(this.ownerTenant)) throw new AgentCoreError("protocol.invalid-state", "Watermark join entries must belong to the owning Tenant");
 			const key = scopeKey(entry.scope);
-			const previous = joined.get(key);
-			if (previous === void 0 || entry.epoch > previous.epoch) {
+			if (entry.epoch > (joined.get(key)?.epoch ?? 0)) {
 				joined.set(key, entry);
 				changed = true;
 			}
@@ -3623,4 +3623,4 @@ var TenantAuthorityTransactionPort = class {};
 //#endregion
 export { Binding as A, AuthorityCheckRequest as C, InvalidationWatermark as D, Grant as E, subjectKey as F, GrantId as I, BindingLifecycle as M, domainKey as N, PathEpochEvidence as O, scopeKey as P, AuthorityCheckEvidence as S, AuthorityPermitExpectation as T, TargetAuthorityPermitDenial as _, watermarkKey as a, TargetLeaseEvidenceKey as b, AuthorityChangeSet as c, AuthorityPermitAdmissionPort as d, AuthorityPermitIssuer as f, requireAuthenticatedAuthorityPermit as g, AuthorityPermitIssuedRecordSource as h, TargetLeaseEvidenceSourcePort as i, BindingCredentialCustody as j, ScopeEpoch as k, assertAuthorityClosure as l, AuthorityPermitAuthenticator as m, RunTargetLeaseEvidenceStore as n, MemoryTenantControlStore as o, StoredAuthorityPermitAdmissionPort as p, TargetLeaseEvidenceIssuer as r, createTenantControlBootstrapPlan as s, TenantAuthorityTransactionPort as t, BindingValidationEvidence as u, TargetAuthorityPermitRequest as v, AuthorityPermit as w, TargetLeaseEvidenceReference as x, TargetLeaseEvidence as y };
 
-//# sourceMappingURL=authority-BbHaDuhf.js.map
+//# sourceMappingURL=authority-CWNYeNXi.js.map

@@ -1148,7 +1148,7 @@ function requireIsolationMode(value) {
 var PackageId = class extends TextId {
 	constructor(value) {
 		super(value, "Package ID");
-		if (value.length === 0 || value !== value.trim()) throw new TypeError("Package ID must be a nonblank canonical string");
+		if (value !== value.trim()) throw new TypeError("Package ID must be a nonblank canonical string");
 		Object.freeze(this);
 	}
 };
@@ -2523,4 +2523,4 @@ var Facet = class {};
 //#endregion
 export { OperationAvailability as $, SlotEntry as A, requireSchemaDocument as At, canonicalIsolationModes as B, FieldMove as C, isString as Ct, OperationSelector as D, requireDataObject as Dt, OperationPattern as E, requireBytes as Et, PackagePin as F, OperationDescriptor as G, preferredPlacement as H, PackageId as I, CapabilitySpec as J, SurfaceDescriptor as K, BindingRequirement as L, SlotAuthorityPolicy as M, SlotDeclaration as N, PayloadMapping as O, requireExactFields as Ot, ContributionAttribution as P, AuthoredCodeSource as Q, FacetManifest as R, FieldMapping as S, isNumber as St, MappingRecord as T, requireBoolean$1 as Tt, Contribution as U, PlacementIntersection as V, Contributions as W, matchesGlob as X, isCapabilityEffect as Y, AUTHORED_CODE_CONSUMERS as Z, EventDeclaration as _, canonicalFacetDataMap as _t, Surface as a, FacetPackageId as at, IngressVerification as b, isFacetData as bt, Prompt as c, OperationName as ct, InterceptorDeclaration as d, SettingsLayerId as dt, requireAuthoredCodeConsumer as et, Command as f, SlotEntryId as ft, BoundOperationRef as g, canonicalFacetData as gt, Automation as h, DataRecordCodec as ht, ProtectedOperationPort as i, EventKind as it, InstalledSlot as j, requireString$1 as jt, ProvenanceMapping as k, requireSafeInteger as kt, PromptContribution as l, OperationRef as lt, commandInvocationSource as m, SurfaceId as mt, Interceptor as n, BindingName as nt, PackageInstallationRef as o, FacetRef as ot, commandAutomation as p, SlotName as pt, enforcementFloor as q, Operation as r, CatalogEntryId as rt, ProtectionDomain as s, InterceptorId as st, Facet as t, AuthoredCodeBackingId as tt, PromptSection as u, PromptSectionId as ut, EventPattern as v, dataRecord as vt, JsonPointer as w, requireArray as wt, canonicalTrustTiers as x, isFacetDataMap as xt, IngressDeclaration as y, freezeFacetData as yt, PLACEMENT_PREFERENCE as z };
 
-//# sourceMappingURL=runtime-z1yMP0an.js.map
+//# sourceMappingURL=runtime-RV2NCfR2.js.map

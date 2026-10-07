@@ -1,7 +1,7 @@
 import { D as encodeCanonicalJson, L as isObjectRecord, P as isJsonObject, T as compareCanonicalText, j as TextId, k as AgentCoreError, w as canonicalTupleKey, y as Digest } from "./core-BjYGo1CC.js";
 import { o as requireSynchronousResult } from "./actors-DJsP1nFM.js";
-import { Ct as isString, Dt as requireDataObject, G as OperationDescriptor, J as CapabilitySpec, K as SurfaceDescriptor, Q as AuthoredCodeSource, R as FacetManifest, St as isNumber, at as FacetPackageId, d as InterceptorDeclaration, et as requireAuthoredCodeConsumer, f as Command, gt as canonicalFacetData, jt as requireString, m as commandInvocationSource, nt as BindingName, ot as FacetRef, p as commandAutomation, pt as SlotName, r as Operation } from "./runtime-z1yMP0an.js";
-import { d as schema, f as strictObjectSchema } from "./facets-D01bKQBL.js";
+import { Ct as isString, Dt as requireDataObject, G as OperationDescriptor, J as CapabilitySpec, K as SurfaceDescriptor, Q as AuthoredCodeSource, R as FacetManifest, St as isNumber, at as FacetPackageId, d as InterceptorDeclaration, et as requireAuthoredCodeConsumer, f as Command, gt as canonicalFacetData, jt as requireString, m as commandInvocationSource, nt as BindingName, ot as FacetRef, p as commandAutomation, pt as SlotName, r as Operation } from "./runtime-RV2NCfR2.js";
+import { d as schema, f as strictObjectSchema } from "./facets-ftoqxDdS.js";
 //#region src/operations/interception.ts
 var OperationInterceptorRunner = class {
 	host;
@@ -1509,4 +1509,4 @@ function deferred() {
 //#endregion
 export { TurnInterceptorRunner as C, TurnCutPointPort as S, ConfirmedOperationFailure as _, CommandRuntime as a, OperationRequestKey as b, AuthoredCodeCapability as c, AuthoredCodeDelegationPort as d, AuthoredCodeHost as f, decodeSubmission as g, GatewayAuthoredCodeInvocationPort as h, FacetCorrespondenceValidator as i, AuthoredCodeCapabilitySet as l, AuthoredCodeOperation as m, FacetRuntimeHost as n, AuthoredCodeBacking as o, AuthoredCodeInvocationPort as p, FailClosedFacetRequirementResolver as r, AuthoredCodeBackingSet as s, FacetRequirementResolver as t, AuthoredCodeDelegation as u, OperationGateway as v, ResolvedFacet as x, OperationGatewayHost as y };
 
-//# sourceMappingURL=operations-BcSnYjIs.js.map
+//# sourceMappingURL=operations-CtwQDrOA.js.map

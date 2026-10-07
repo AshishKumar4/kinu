@@ -1,14 +1,14 @@
 import { D as encodeCanonicalJson, E as decodeCanonicalJson, M as hasExactJsonKeys, P as isJsonObject, T as compareCanonicalText, _ as ContentRef, b as decodeBase64, d as CodecDeclaration, f as RecordCodec, g as Revision, i as SemVer, j as TextId, k as AgentCoreError, o as isMember, t as JsonSchema, v as contentRetentionFields, x as encodeBase64, y as Digest } from "./core-BjYGo1CC.js";
 import { o as requireSynchronousResult } from "./actors-DJsP1nFM.js";
-import { $ as OperationAvailability, F as PackagePin, G as OperationDescriptor, I as PackageId, V as PlacementIntersection, at as FacetPackageId, ct as OperationName, gt as canonicalFacetData, lt as OperationRef, nt as BindingName, ot as FacetRef, st as InterceptorId, z as PLACEMENT_PREFERENCE } from "./runtime-z1yMP0an.js";
-import { a as ApprovalId, i as TurnId, l as ReceiptId, n as RunCommitId, r as RunId, s as EffectAttemptId } from "./facets-D01bKQBL.js";
-import { C as PrincipalRef, P as PrincipalId, z as TenantId } from "./identity-CoqhjOFj.js";
+import { $ as OperationAvailability, F as PackagePin, G as OperationDescriptor, I as PackageId, V as PlacementIntersection, at as FacetPackageId, ct as OperationName, gt as canonicalFacetData, lt as OperationRef, nt as BindingName, ot as FacetRef, st as InterceptorId, z as PLACEMENT_PREFERENCE } from "./runtime-RV2NCfR2.js";
+import { a as ApprovalId, i as TurnId, l as ReceiptId, n as RunCommitId, r as RunId, s as EffectAttemptId } from "./facets-ftoqxDdS.js";
+import { C as PrincipalRef, P as PrincipalId, z as TenantId } from "./identity-Bq_lzdgu.js";
 import { s as EnvironmentId } from "./provider-DK9Ak8da.js";
-import "./environments-CZCvxj-D.js";
+import { n as TreeCheckpointEntry, t as TreeCheckpoint } from "./environments-DCPgAUnY.js";
 import { i as InvocationId, o as RouteReservationId, r as EventId, t as AuditRecordId } from "./interaction-references-D9spp037.js";
-import { _t as preferredPlacement } from "./definition-COokGikL.js";
-import { P as AttemptReceipt } from "./invocations-Cpv8tzSW.js";
-import { c as ContentStore, g as requireOperationTime, m as contentOwnerNamespace, p as contentOwnerKey, r as MemoryContentStore, u as ContentOwnerEdge } from "./content-DYlOXpyu.js";
+import { _t as preferredPlacement, ct as PolicySet } from "./definition-v-bZG98F.js";
+import { P as AttemptReceipt } from "./invocations-CQ3BhsZE.js";
+import { c as ContentStore, g as requireOperationTime, m as contentOwnerNamespace, p as contentOwnerKey, r as MemoryContentStore, u as ContentOwnerEdge } from "./content-BC5qOQ4P.js";
 //#region src/agents/id.ts
 var AgentId = class extends TextId {
 	constructor(value) {
@@ -90,6 +90,10 @@ function digestFromData(value, subject) {
 }
 function bytesEqual(left, right) {
 	return left.byteLength === right.byteLength && left.every((value, index) => value === right[index]);
+}
+/** Two optional values are equal when both are absent or both are present and equal. */
+function optionalRefsEqual(left, right) {
+	return left === void 0 ? right === void 0 : right !== void 0 && left.equals(right);
 }
 //#endregion
 //#region src/agents/source.ts
@@ -1677,6 +1681,25 @@ function requireAbandonedFailureKind(stored) {
 	if (failure === void 0) throw deniedEvidence("Abandoned rewrite evidence names a Receipt that records no failed attempt");
 	return failure;
 }
+/**
+* A merge stands on its successful `administer` control Receipt (§5.2), so the control
+* evidence a host names is followed to the §7 records it claims rather than taken at its
+* word: the stored Receipt is a succeeded attempt, that attempt is the stored EffectAttempt it
+* names, the attempt's Invocation is the stored PreparedInvocation, and that invocation was
+* prepared for an `administer` Operation under a Principal's authority. Every link is read by
+* id and compared by id, so a record substituted anywhere along the chain breaks it.
+*/
+function requireAdministerChain(transaction, control, evidence) {
+	const receipt = requireSynchronousResult(evidence.storedReceipt(transaction, control.receipt));
+	if (!(receipt instanceof AttemptReceipt) || !receipt.id.equals(control.receipt) || receipt.outcome !== "succeeded") throw deniedEvidence("Merge control evidence names no succeeded attempt Receipt");
+	const attempt = requireSynchronousResult(evidence.storedAttempt(transaction, receipt.attempt));
+	if (attempt === void 0 || !attempt.id.equals(receipt.attempt)) throw deniedEvidence("Merge control Receipt names no stored EffectAttempt");
+	const invocation = requireSynchronousResult(evidence.storedInvocation(transaction, attempt.invocation));
+	if (invocation === void 0 || !invocation.header.id.equals(attempt.invocation) || !Number.isSafeInteger(attempt.itemIndex) || attempt.itemIndex < 0 || attempt.itemIndex >= invocation.itemCount) throw deniedEvidence("Merge control attempt names no stored PreparedInvocation item");
+	if (invocation.header.operation.impact !== "administer") throw deniedEvidence("Merge control Receipt is not for an administer-impact Operation");
+	const authority = invocation.header.authority;
+	if (authority.tenant.trim().length === 0 || authority.principal.trim().length === 0) throw deniedEvidence("Merge control invocation names no authenticated Principal");
+}
 function validateCommitWriter(transaction, commit, evidence) {
 	if (commit.writer.kind === "root") {
 		if (commit.kind !== "root") throw invalidWriter("Root writer may append only the root commit");
@@ -1704,6 +1727,7 @@ function validateCommitWriter(transaction, commit, evidence) {
 		const synthesis = requireSynchronousResult(evidence.synthesis(transaction, commit.resolution.receipt));
 		if (synthesis === void 0 || !synthesis.run.equals(commit.run) || !synthesis.receipt.equals(commit.resolution.receipt) || !leaseTokensEqual(synthesis.token, commit.resolution.token) || !commit.content?.equals(synthesis.content)) throw deniedEvidence("Synthesis evidence does not match the exact token and content");
 	}
+	if (commit.kind === "merge" && found.kind === "control") requireAdministerChain(transaction, found, evidence);
 }
 /**
 * A merge's parents are the one parent list this record proves rather than sizes: exactly two
@@ -4627,6 +4651,134 @@ function corruptStorage(message) {
 var RunEvidencePort = class {};
 var RunMergePort = class {};
 //#endregion
+//#region src/agents/runs/merge-content.ts
+/**
+* The content a merge reads — the trees it resolves and the PolicySet its pins name — read
+* from a ContentStore before the merge's synchronous span. The store is asynchronous and the
+* span may not await (§8.5, §10.3), and a ContentRef is a content address, so bytes fetched
+* earlier are exactly the bytes the span would have fetched. Only bytes whose SHA-256 is the
+* address they were fetched under are ever held, so nothing downstream decodes a byte its ref
+* does not prove.
+*/
+var MergeContent = class MergeContent {
+	static #empty = new MergeContent(/* @__PURE__ */ new Map());
+	#bytes;
+	constructor(bytes) {
+		this.#bytes = bytes;
+		Object.freeze(this);
+	}
+	/** Nothing prefetched: a merge that reads no content needs no more. */
+	static get empty() {
+		return MergeContent.#empty;
+	}
+	static async load(store, refs) {
+		const bytes = /* @__PURE__ */ new Map();
+		for (const ref of refs) {
+			if (bytes.has(ref.value)) continue;
+			const fetched = (await store.get(ref)).slice();
+			if (!Digest.sha256(fetched).equals(ref.digest)) throw new AgentCoreError("run.invalid-state", `Merge content does not match its content address ${ref.value}`);
+			bytes.set(ref.value, fetched);
+		}
+		return new MergeContent(bytes);
+	}
+	/**
+	* The prefetched bytes at `ref`. A ref nobody prefetched is refused rather than fetched:
+	* a fetch here would be an `await` inside the span this value exists to keep synchronous.
+	*/
+	bytes(ref) {
+		const held = this.#bytes.get(ref.value);
+		if (held === void 0) throw new AgentCoreError("run.invalid-state", `Merge content was not prefetched: ${ref.value}`);
+		return held.slice();
+	}
+};
+//#endregion
+//#region src/agents/runs/tree-merge.ts
+/**
+* One path both merge parents changed relative to their common-ancestor tree (§5.2.1). The
+* three contents are what stands at the path in each tree, absent where that tree has no file
+* there, so a deletion on one side and an edit on the other is as visible as two edits.
+*/
+var TreeConflict = class {
+	path;
+	base;
+	ours;
+	theirs;
+	constructor(path, base, ours, theirs) {
+		this.path = path;
+		this.base = base;
+		this.ours = ours;
+		this.theirs = theirs;
+		Object.freeze(this);
+	}
+};
+/**
+* The `perPath` tree merge of §5.2.1 over three decoded tree checkpoints: per path, the side
+* that changed it relative to the common ancestor. A path changed on both sides is a conflict
+* and is surfaced as a value, never guessed — even when both sides wrote the same bytes, since
+* the rule is about which sides changed the path and not about what they changed it to.
+*/
+var PerPathTreeMerge = class PerPathTreeMerge {
+	ours;
+	theirs;
+	conflicts;
+	/** The result at every path neither side contests; absent means no file there. */
+	#settled;
+	constructor(ours, theirs, conflicts, settled) {
+		this.ours = ours;
+		this.theirs = theirs;
+		this.conflicts = Object.freeze([...conflicts]);
+		this.#settled = settled;
+		Object.freeze(this);
+	}
+	static of(base, oursParent, theirsParent) {
+		const ours = oursParent.tree;
+		const theirs = theirsParent.tree;
+		const paths = /* @__PURE__ */ new Set([
+			...base.entries.map((entry) => entry.path),
+			...ours.entries.map((entry) => entry.path),
+			...theirs.entries.map((entry) => entry.path)
+		]);
+		const conflicts = [];
+		const settled = /* @__PURE__ */ new Map();
+		for (const path of paths) {
+			const ancestor = base.content(path);
+			const left = ours.content(path);
+			const right = theirs.content(path);
+			const oursChanged = !optionalRefsEqual(ancestor, left);
+			const theirsChanged = !optionalRefsEqual(ancestor, right);
+			if (oursChanged && theirsChanged) conflicts.push(new TreeConflict(path, ancestor, left, right));
+			else settled.set(path, oursChanged ? left : theirsChanged ? right : ancestor);
+		}
+		return new PerPathTreeMerge(oursParent.commit, theirsParent.commit, conflicts.sort((left, right) => compareCanonicalText(left.path, right.path)), settled);
+	}
+	/** The conflicts `sides` leaves without an explicit side. */
+	unresolved(sides) {
+		return this.conflicts.filter((conflict) => !sides.has(conflict.path));
+	}
+	/** The paths `sides` names that are not conflicts, so were never the operator's to pick. */
+	extraneous(sides) {
+		const contested = new Set(this.conflicts.map((conflict) => conflict.path));
+		return [...sides.keys()].filter((path) => !contested.has(path));
+	}
+	/**
+	* The merged tree once every conflict has an explicit side. Callers establish that with
+	* `unresolved` first; a conflict still unresolved here is a caller defect, not a guess.
+	*/
+	resolve(sides) {
+		const entries = [];
+		for (const [path, content] of this.#settled) if (content !== void 0) entries.push(new TreeCheckpointEntry(path, content));
+		for (const conflict of this.conflicts) {
+			const side = sides.get(conflict.path);
+			const content = side?.equals(this.ours) === true ? conflict.ours : side?.equals(this.theirs) === true ? conflict.theirs : conflictWithoutSide(conflict);
+			if (content !== void 0) entries.push(new TreeCheckpointEntry(conflict.path, content));
+		}
+		return new TreeCheckpoint(entries);
+	}
+};
+function conflictWithoutSide(conflict) {
+	throw new AgentCoreError("run.invalid-state", `Tree conflict at ${conflict.path} has no explicit side naming a merge parent`);
+}
+//#endregion
 //#region src/agents/runs/runtime.ts
 var RunRuntime = class {
 	repository;
@@ -4783,12 +4935,32 @@ var RunRuntime = class {
 		if (commit.kind !== "invocation" && commit.kind !== "eventDelivery" || commit.writer.kind !== "system") throw invalidRun("System evidence append requires an invocation or delivery commit");
 		this.appendInTransaction(tx, commit, expectedBranchRevision, now);
 	}
-	mergeRun(commit, expectedBranchRevision, now) {
-		this.repository.transaction((tx) => this.mergeRunInTransaction(tx, commit, expectedBranchRevision, now));
+	/**
+	* Reads, before the merge's synchronous span, every content a merge of `commit` can read:
+	* its parents' trees, its own tree and common-ancestor tree, and the bytes of the PolicySet
+	* its pins name. Pass the result to `mergeRun`; content this did not read is refused there.
+	*/
+	async loadMergeContent(store, commit) {
+		const refs = this.repository.transaction((tx) => {
+			const read = [];
+			for (const parent of commit.parents) {
+				const tree = this.repository.loadCommit(tx, parent)?.treeCheckpoint;
+				if (tree !== void 0) read.push(tree);
+			}
+			if (commit.treeCheckpoint !== void 0) read.push(commit.treeCheckpoint);
+			if (commit.treeResolution !== void 0) read.push(commit.treeResolution.base);
+			const policy = requireSynchronousResult(this.merge.effectivePolicy(tx, commit.pins.effectivePolicy));
+			if (policy !== void 0) read.push(policy.content);
+			return read;
+		});
+		return MergeContent.load(store, refs);
 	}
-	mergeRunInTransaction(tx, commit, expectedBranchRevision, now) {
+	mergeRun(commit, expectedBranchRevision, now, content = MergeContent.empty) {
+		this.repository.transaction((tx) => this.mergeRunInTransaction(tx, commit, expectedBranchRevision, now, content));
+	}
+	mergeRunInTransaction(tx, commit, expectedBranchRevision, now, content = MergeContent.empty) {
 		if (commit.kind !== "merge" || commit.writer.kind !== "system") throw invalidRun("Run merge requires a system-authored merge commit");
-		this.appendInTransaction(tx, commit, expectedBranchRevision, now);
+		this.appendInTransaction(tx, commit, expectedBranchRevision, now, false, content);
 	}
 	undoRun(commit, expectedBranchRevision, now) {
 		this.repository.transaction((tx) => this.undoRunInTransaction(tx, commit, expectedBranchRevision, now));
@@ -5194,13 +5366,13 @@ var RunRuntime = class {
 		if (!this.repository.isAncestor(tx, base, branch.head)) throw invalidRun("Transcript base is not an ancestor of the branch head");
 		return effectiveTranscript(requireValue(this.repository.loadCommit(tx, base), "Transcript base does not exist"), this.commitLoader(tx));
 	}
-	appendInTransaction(tx, commit, expectedBranchRevision, now, allowTerminal = false) {
+	appendInTransaction(tx, commit, expectedBranchRevision, now, allowTerminal = false, content = MergeContent.empty) {
 		const run = requireValue(this.repository.loadRun(tx, commit.run), "Run does not exist");
 		if (!allowTerminal && run.lifecycle.kind !== "active") throw new AgentCoreError("run.invalid-state", "Terminal Runs reject ordinary commits");
 		const branch = requireValue(this.repository.loadBranch(tx, commit.branch), "Run branch does not exist");
 		requireRevision(branch.revision, expectedBranchRevision);
 		if (!branch.run.equals(run.id) || this.repository.loadCommit(tx, commit.id) !== void 0) throw invalidRun("Run commit target is invalid");
-		if (commit.kind === "merge") this.validateMerge(tx, commit, branch);
+		if (commit.kind === "merge") this.validateMerge(tx, commit, branch, content);
 		else if (commit.parents.length !== 1 || !commit.parents[0].equals(branch.head)) throw new AgentCoreError("protocol.revision-conflict", "Run commit parent is not the current branch head");
 		const parent = requireValue(this.repository.loadCommit(tx, commit.parents[0]), "Run commit parent does not exist");
 		if (!parent.run.equals(run.id)) throw invalidRun("Run commit parent belongs to another Run");
@@ -5223,7 +5395,7 @@ var RunRuntime = class {
 		this.repository.replaceBranch(tx, branch.revision, branch.advance(commit.id));
 		this.repository.replaceRun(tx, run.revision, allowTerminal ? run.recordEvidence() : run.revise());
 	}
-	validateMerge(tx, commit, target) {
+	validateMerge(tx, commit, target, content) {
 		if (!commit.parents[0]?.equals(target.head) || commit.parents[1] === void 0 || commit.parents[0].equals(commit.parents[1])) throw new AgentCoreError("protocol.revision-conflict", "Merge parents are not distinct ordered current heads");
 		const source = this.repository.listBranches(tx).find((branch) => !branch.id.equals(target.id) && branch.run.equals(target.run) && branch.head.equals(commit.parents[1]));
 		const targetCommit = this.repository.loadCommit(tx, target.head);
@@ -5242,15 +5414,54 @@ var RunRuntime = class {
 		}
 		if (commit.resolution?.kind === "concat" && requireSynchronousResult(this.merge.verifyConcat(tx, commit, targetCommit, sourceCommit)) !== true) throw invalidRun("Concat resolution does not match canonical parent-order content");
 		const tree = commit.treeResolution;
-		if (requireSynchronousResult(this.merge.declaredTreeMerge(tx, commit)) === void 0 && (tree !== void 0 || targetCommit.treeCheckpoint !== void 0 && sourceCommit.treeCheckpoint !== void 0)) throw invalidRun("Merging two branches over one Environment requires a declared policies.treeMerge");
-		if (tree !== void 0) {
-			if (tree.policy === "ours" && !tree.side.equals(commit.parents[0]) || tree.policy === "theirs" && !tree.side.equals(commit.parents[1]) || tree.policy === "perPath" && tree.resolutions.some((path) => !parentIds.includes(path.side.value))) throw invalidRun("Tree resolution sides must name the ordered merge parents");
-			if (tree.policy === "ours" || tree.policy === "theirs") {
-				const selected = tree.policy === "ours" ? targetCommit : sourceCommit;
-				if (selected.treeCheckpoint === void 0 || commit.treeCheckpoint === void 0 || !selected.treeCheckpoint.equals(commit.treeCheckpoint)) throw invalidRun("Tree side resolution must copy the selected parent tree");
-			}
-			if (requireSynchronousResult(this.merge.verifyTree(tx, commit, targetCommit, sourceCommit)) !== true) throw invalidRun("Tree resolution lacks exact base, Environment, or conflict evidence");
-		}
+		const sharedTree = targetCommit.treeCheckpoint !== void 0 && sourceCommit.treeCheckpoint !== void 0;
+		if (tree === void 0 && !sharedTree) return;
+		const declared = this.declaredTreeMerge(tx, commit, content);
+		if (declared === void 0) throw invalidRun("Merging two branches over one Environment requires a declared policies.treeMerge");
+		if (tree === void 0) throw invalidRun("A merge over one shared tree must record its tree resolution");
+		this.validateTreeResolution(tx, commit, tree, declared, targetCommit, sourceCommit, content);
+	}
+	/**
+	* The `policies.treeMerge` of the PolicySet this merge's pins name (§5.2.1, §9.2), read
+	* off the prefetched bytes whose digest is the pinned one — never off a host's answer. The
+	* source record must be the one the pin names by id, revision and digest, and the bytes
+	* must hash to that digest before they are decoded.
+	*/
+	declaredTreeMerge(tx, commit, content) {
+		const pin = commit.pins.effectivePolicy;
+		const record = requireSynchronousResult(this.merge.effectivePolicy(tx, pin));
+		if (record === void 0 || !record.id.equals(pin.id) || !record.revision.equals(pin.revision) || !record.digest.equals(pin.digest)) throw invalidRun("Merge requires the effective PolicySet revision its pins name");
+		const bytes = content.bytes(record.content);
+		if (!Digest.sha256(bytes).equals(pin.digest)) throw invalidRun("Effective PolicySet bytes do not match the pinned digest");
+		return PolicySet.decode(bytes).treeMerge;
+	}
+	validateTreeResolution(tx, commit, tree, declared, targetCommit, sourceCommit, content) {
+		const [ours, theirs] = commit.parents;
+		if (ours === void 0 || theirs === void 0) throw invalidRun("Tree resolution requires the ordered merge parents");
+		if (tree.policy !== declared.kind) throw invalidRun("Tree resolution must follow the declared policies.treeMerge");
+		if (tree.environment !== commit.pins.environment.id.value) throw invalidRun("Tree resolution must name the Environment the merge is pinned to");
+		if (tree.policy === "ours" && !tree.side.equals(ours) || tree.policy === "theirs" && !tree.side.equals(theirs) || tree.policy === "perPath" && tree.resolutions.some((path) => !path.side.equals(ours) && !path.side.equals(theirs))) throw invalidRun("Tree resolution sides must name the ordered merge parents");
+		const merged = commit.treeCheckpoint;
+		const oursTree = targetCommit.treeCheckpoint;
+		const theirsTree = sourceCommit.treeCheckpoint;
+		if (merged === void 0 || oursTree === void 0 || theirsTree === void 0) throw invalidRun("Tree resolution requires both parent trees and the merged tree");
+		if (tree.policy === "perPath") {
+			const decoded = (ref) => TreeCheckpoint.decode(content.bytes(ref));
+			const perPath = PerPathTreeMerge.of(decoded(tree.base), {
+				commit: ours,
+				tree: decoded(oursTree)
+			}, {
+				commit: theirs,
+				tree: decoded(theirsTree)
+			});
+			const sides = new Map(tree.resolutions.map((path) => [path.path, path.side]));
+			const unresolved = perPath.unresolved(sides);
+			if (unresolved.length > 0) throw invalidRun("Tree merge conflicts have no explicit side: " + unresolved.map((conflict) => conflict.path).join(", "));
+			const extraneous = perPath.extraneous(sides);
+			if (extraneous.length > 0) throw invalidRun("Tree resolution names paths that are not conflicts: " + extraneous.join(", "));
+			if (!perPath.resolve(sides).equals(decoded(merged))) throw invalidRun("Merge tree is not the per-path resolution of its parents");
+		} else if (!(tree.policy === "ours" ? oursTree : theirsTree).equals(merged)) throw invalidRun("Tree side resolution must copy the selected parent tree");
+		if (requireSynchronousResult(this.merge.verifyTreeBase(tx, commit, targetCommit, sourceCommit)) !== true) throw invalidRun("Tree resolution base is not the common-ancestor tree");
 	}
 	/**
 	* A merge authorized by one item of a declared fold must be the step that item declared.
@@ -5481,9 +5692,6 @@ function currentToken(turn) {
 		holder: turn.lease.holder,
 		epoch: turn.lease.epoch
 	});
-}
-function optionalRefsEqual(left, right) {
-	return left === void 0 ? right === void 0 : right !== void 0 && left.equals(right);
 }
 function invalidRun(message) {
 	return new AgentCoreError("run.invalid-state", message);
@@ -7477,4 +7685,4 @@ function requireNotCancelled(signal) {
 //#endregion
 export { RunCheckpoint as $, TurnAdmissionHandle as A, exhaustedResource as At, RunMergePort as B, AcceptanceId as Bt, TurnPromptAssembler as C, TurnLease as Ct, TurnStreamHandle as D, ResourceCeiling as Dt, TurnShownContent as E, RESOURCE_DIMENSIONS as Et, TurnAdmissionReceiptFacts as F, RunAdmissionValidationPort as Ft, RunStoragePort as G, RunSourceRevisionPort as Gt, RUN_RECORD_CODECS as H, RunCheckpointId as Ht, TurnAdmissionRecordPort as I, AcceptanceCriterion as It, targetLeaseEvidenceRecordCodec as J, ModelPolicyId as Jt, TargetLeaseEvidenceRecord as K, AgentId as Kt, TurnAdmissionVerifier as L, AcceptanceCriterionCodec as Lt, TurnAdmissionIdentity as M, widensResourceCeiling as Mt, TurnAdmissionMessage as N, RunAdmissionRegistry as Nt, TurnStreamPort as O, SpawnAttenuation as Ot, TurnAdmissionPublisher as P, RunAdmissionRegistryCodec as Pt, SpawnReservation as Q, RunRuntime as R, AcceptanceVerdict as Rt, TurnOutcomeHandle as S, RepositoryTurnLeaseVerifier as St, TurnPromptSectionName as T, RealizedCost as Tt, RUN_RECORD_KINDS as U, SpawnReservationId as Ut, MemoryRunStorage as V, RunBranchId as Vt, RunRepository as W, TurnInboxEntryId as Wt, ForcedTurnCancellationCodec as X, ForcedTurnCancellation as Y, RunSpawnPort as Z, TurnModelInputHandle as _, BlueprintPin as _t, TurnCommitHandle as a, RunInvocationDeliveryCause as at, TurnOmission as b, RunPins as bt, TurnExecutor as c, SettlementObligation as ct, TurnInboxHandle as d, PlacementPin as dt, Turn as et, TurnInvocationHandle as f, TurnPlacementSnapshot as ft, TurnModelInputCodec as g, RunCommit as gt, TurnModelInput as h, unbalancedCut as ht, TurnCheckpointHandle as i, RunInvocationDelivery as it, TurnAdmissionHandleCodec as j, narrowResources as jt, turnModelRequestBytes as k, SpawnAttenuationCodec as kt, TurnExecutorHost as l, TerminalSnapshot as lt, TurnModelHandle as m, orderedAncestry as mt, TurnAdmittedEvent as n, Run as nt, TurnCommitOmission as o, RunInvocationDeliveryCodec as ot, TurnInvocationPort as p, effectiveTranscript as pt, ownRunStorageBackend as q, AgentPolicyId as qt, TurnBoundOperation as r, RunBranch as rt, TurnContentHandle as s, SettlementEvidencePort as st, GatewayTurnInvocationPort as t, TurnInboxEntry as tt, TurnGatewaySource as u, isSettled as ut, TurnModelInputReplay as v, RunConfigurationSnapshot as vt, TurnPromptSection as w, Currency as wt, TurnOperationSource as x, MemoryTurnLeaseVerifier as xt, TurnModelPort as y, RunPinDimension as yt, RunEvidencePort as z, AcceptanceVerdictCodec as zt };
 
-//# sourceMappingURL=runs-CRnZ9IFu.js.map
+//# sourceMappingURL=runs-tw1bp7NI.js.map

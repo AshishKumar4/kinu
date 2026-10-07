@@ -1,18 +1,18 @@
 import { D as encodeCanonicalJson, E as decodeCanonicalJson, M as hasExactJsonKeys, P as isJsonObject, R as jsonDataParser, T as compareCanonicalText, _ as ContentRef, f as RecordCodec, g as Revision, h as SecretRef, i as SemVer, j as TextId, k as AgentCoreError, o as isMember, t as JsonSchema, w as canonicalTupleKey, y as Digest } from "./core-BjYGo1CC.js";
 import { d as ActorRef, f as ActorId } from "./actors-DJsP1nFM.js";
-import { C as FieldMove, F as PackagePin, I as PackageId, J as CapabilitySpec, O as PayloadMapping, P as ContributionAttribution, T as MappingRecord, at as FacetPackageId, b as IngressVerification, ct as OperationName, gt as canonicalFacetData, it as EventKind, k as ProvenanceMapping, lt as OperationRef, mt as SurfaceId, nt as BindingName, ot as FacetRef, v as EventPattern, vt as dataRecord, w as JsonPointer, x as canonicalTrustTiers, xt as isFacetDataMap, y as IngressDeclaration } from "./runtime-z1yMP0an.js";
-import { c as ItemClaimId, i as TurnId, l as ReceiptId, r as RunId, s as EffectAttemptId, t as TaskId } from "./facets-D01bKQBL.js";
-import { B as WorkspaceId, C as PrincipalRef, E as encodeScopeRef, F as ProjectId, P as PrincipalId, T as decodeScopeRef, w as ScopeRef, z as TenantId } from "./identity-CoqhjOFj.js";
-import { I as GrantId, O as PathEpochEvidence, P as scopeKey, _ as TargetAuthorityPermitDenial, p as StoredAuthorityPermitAdmissionPort, v as TargetAuthorityPermitRequest, w as AuthorityPermit, y as TargetLeaseEvidence } from "./authority-BbHaDuhf.js";
-import { F as TurnAdmissionReceiptFacts, I as TurnAdmissionRecordPort, L as TurnAdmissionVerifier, t as GatewayTurnInvocationPort, u as TurnGatewaySource } from "./runs-CRnZ9IFu.js";
+import { C as FieldMove, F as PackagePin, I as PackageId, J as CapabilitySpec, O as PayloadMapping, P as ContributionAttribution, T as MappingRecord, at as FacetPackageId, b as IngressVerification, ct as OperationName, gt as canonicalFacetData, it as EventKind, k as ProvenanceMapping, lt as OperationRef, mt as SurfaceId, nt as BindingName, ot as FacetRef, v as EventPattern, vt as dataRecord, w as JsonPointer, x as canonicalTrustTiers, xt as isFacetDataMap, y as IngressDeclaration } from "./runtime-RV2NCfR2.js";
+import { c as ItemClaimId, i as TurnId, l as ReceiptId, r as RunId, s as EffectAttemptId, t as TaskId } from "./facets-ftoqxDdS.js";
+import { B as WorkspaceId, C as PrincipalRef, E as encodeScopeRef, F as ProjectId, P as PrincipalId, T as decodeScopeRef, w as ScopeRef, z as TenantId } from "./identity-Bq_lzdgu.js";
+import { I as GrantId, O as PathEpochEvidence, P as scopeKey, _ as TargetAuthorityPermitDenial, p as StoredAuthorityPermitAdmissionPort, v as TargetAuthorityPermitRequest, w as AuthorityPermit, y as TargetLeaseEvidence } from "./authority-CWNYeNXi.js";
+import { F as TurnAdmissionReceiptFacts, I as TurnAdmissionRecordPort, L as TurnAdmissionVerifier, t as GatewayTurnInvocationPort, u as TurnGatewaySource } from "./runs-tw1bp7NI.js";
 import { a as RouteProjectionId, i as InvocationId, n as CorrelationId, o as RouteReservationId, r as EventId, s as SubscriptionId, t as AuditRecordId } from "./interaction-references-D9spp037.js";
-import { lt as evaluatePolicy, ut as mergePolicySets } from "./definition-COokGikL.js";
-import { $ as AuditRecord, A as DetachedEffectTarget, Et as structuralCodec, F as PreEffectReceipt, G as AlarmDetachedEffectDriver, J as DetachedEffectDeliveryPort, L as ReceiptCodec, Ot as AdmittedInvocationItem, P as AttemptReceipt, Q as ItemClaimCodec, Z as ItemClaim, at as EffectAttemptCodec, ct as InvocationContinuationCodec, d as ReplayOperationInvocationPort, f as CanonicalBatchInvocationPort, i as PreparedInvocationCodec, it as EffectAttempt, k as AttemptCancellationObservation, mt as requireArray$1, ot as AuthorityAdmissionReference, r as PreparedInvocation, s as InvocationPublicationDrainer, u as OperationPin, ut as ApprovalCodec, vt as requireExactObject, wt as requireString$1, x as InvocationLedger, yt as requireNonnegativeInteger } from "./invocations-Cpv8tzSW.js";
-import { n as FacetRuntimeHost, y as OperationGatewayHost } from "./operations-BcSnYjIs.js";
-import { g as requireOperationTime, p as contentOwnerKey, u as ContentOwnerEdge } from "./content-DYlOXpyu.js";
-import { O as CommandCallerPolicy, a as AuthorityPermitIssuanceRequest, i as AuthorityPermitIssuanceReply } from "./public-B8XBKjQB.js";
-import "./protocol-COrEPSqG.js";
-import "./slates-BgbXLeOj.js";
+import { lt as evaluatePolicy, ut as mergePolicySets } from "./definition-v-bZG98F.js";
+import { $ as AuditRecord, A as DetachedEffectTarget, Et as structuralCodec, F as PreEffectReceipt, G as AlarmDetachedEffectDriver, J as DetachedEffectDeliveryPort, L as ReceiptCodec, Ot as AdmittedInvocationItem, P as AttemptReceipt, Q as ItemClaimCodec, Z as ItemClaim, at as EffectAttemptCodec, ct as InvocationContinuationCodec, d as ReplayOperationInvocationPort, f as CanonicalBatchInvocationPort, i as PreparedInvocationCodec, it as EffectAttempt, k as AttemptCancellationObservation, mt as requireArray$1, ot as AuthorityAdmissionReference, r as PreparedInvocation, s as InvocationPublicationDrainer, u as OperationPin, ut as ApprovalCodec, vt as requireExactObject, wt as requireString$1, x as InvocationLedger, yt as requireNonnegativeInteger } from "./invocations-CQ3BhsZE.js";
+import { n as FacetRuntimeHost, y as OperationGatewayHost } from "./operations-CtwQDrOA.js";
+import { g as requireOperationTime, p as contentOwnerKey, u as ContentOwnerEdge } from "./content-BC5qOQ4P.js";
+import { O as CommandCallerPolicy, a as AuthorityPermitIssuanceRequest, i as AuthorityPermitIssuanceReply } from "./public-Bw0UfPon.js";
+import "./protocol-Br_F24EA.js";
+import "./slates-_qbdCQI3.js";
 import "fast-json-patch";
 //#region src/composition/authority.ts
 /**
@@ -1265,9 +1265,6 @@ var ViewPosition = class {
 	}
 	static get platformVoice() {
 		return platformVoicePosition;
-	}
-	equals(other) {
-		return this === other;
 	}
 };
 var DataPosition = class extends ViewPosition {
@@ -4264,4 +4261,4 @@ async function activateTargetPermitMediation(init) {
 //#endregion
 export { ResolutionStamp as C, MediatedAuthorityIntent as S, DELETABLE_WORKSPACE_RECORD_KINDS as _, leaseToken as a, validateWorkspacePointerAdvance as b, sameLeaseReference as c, StoredProjectedTargetLeaseEvidence as d, TargetAuthorityPermitAuthenticationPort as f, authorityPermitReferenceCodec as g, TargetLeaseEvidenceTransport as h, leaseReference as i, AuthorityPermitIssuanceTransport as l, TargetLeaseEvidenceProjectionTransport as m, activateTargetPermitMediation as n, mediationInvocationCodecs as o, TargetAuthorityPermitDenialPort as p, MediatedOperationPipeline as r, mediationPreparedCodecs as s, TargetPermitMediationAggregate as t, IssuedAuthorityPermitPort as u, WORKSPACE_RECORD_KINDS as v, ResolvedOperationAuthority as w, validateWorkspaceUnique as x, validateStoredWorkspaceRecord as y };
 
-//# sourceMappingURL=composition-CxmTB6HT.js.map
+//# sourceMappingURL=composition-ttL2Zhkn.js.map

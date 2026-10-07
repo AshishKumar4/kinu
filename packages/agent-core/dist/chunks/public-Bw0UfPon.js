@@ -1,12 +1,12 @@
 import { D as encodeCanonicalJson, E as decodeCanonicalJson, F as isJsonString, L as isObjectRecord, M as hasExactJsonKeys, N as hasExactKeys, R as jsonDataParser, _ as ContentRef, b as decodeBase64, d as CodecDeclaration, f as RecordCodec, g as Revision, h as SecretRef, i as SemVer, j as TextId, k as AgentCoreError, x as encodeBase64, y as Digest } from "./core-BjYGo1CC.js";
 import { a as MemoryActorStore, d as ActorRef, f as ActorId, l as isActorActivationStore, n as ActorCommitUnknownError, o as requireSynchronousResult, r as ACTOR_STATE_SNAPSHOT, t as Actor } from "./actors-DJsP1nFM.js";
-import { F as PackagePin, I as PackageId, at as FacetPackageId, ct as OperationName, lt as OperationRef, nt as BindingName, ot as FacetRef, s as ProtectionDomain } from "./runtime-z1yMP0an.js";
-import { c as ItemClaimId, i as TurnId, o as ClaimWorkerId, r as RunId, u as WriteRecordId } from "./facets-D01bKQBL.js";
-import { B as WorkspaceId, C as PrincipalRef, F as ProjectId, P as PrincipalId, R as TeamId, v as GuestVerificationScheme, w as ScopeRef, z as TenantId } from "./identity-CoqhjOFj.js";
-import { A as Binding, C as AuthorityCheckRequest, I as GrantId, M as BindingLifecycle, O as PathEpochEvidence, S as AuthorityCheckEvidence, T as AuthorityPermitExpectation, b as TargetLeaseEvidenceKey, j as BindingCredentialCustody, k as ScopeEpoch, o as MemoryTenantControlStore, u as BindingValidationEvidence, v as TargetAuthorityPermitRequest, w as AuthorityPermit, x as TargetLeaseEvidenceReference } from "./authority-BbHaDuhf.js";
+import { F as PackagePin, I as PackageId, at as FacetPackageId, ct as OperationName, lt as OperationRef, nt as BindingName, ot as FacetRef, s as ProtectionDomain } from "./runtime-RV2NCfR2.js";
+import { c as ItemClaimId, i as TurnId, o as ClaimWorkerId, r as RunId, u as WriteRecordId } from "./facets-ftoqxDdS.js";
+import { B as WorkspaceId, C as PrincipalRef, F as ProjectId, P as PrincipalId, R as TeamId, v as GuestVerificationScheme, w as ScopeRef, z as TenantId } from "./identity-Bq_lzdgu.js";
+import { A as Binding, C as AuthorityCheckRequest, I as GrantId, M as BindingLifecycle, O as PathEpochEvidence, S as AuthorityCheckEvidence, T as AuthorityPermitExpectation, b as TargetLeaseEvidenceKey, j as BindingCredentialCustody, k as ScopeEpoch, o as MemoryTenantControlStore, u as BindingValidationEvidence, v as TargetAuthorityPermitRequest, w as AuthorityPermit, x as TargetLeaseEvidenceReference } from "./authority-CWNYeNXi.js";
 import { i as InvocationId, n as CorrelationId, t as AuditRecordId } from "./interaction-references-D9spp037.js";
-import { H as MaterializationPlan } from "./definition-COokGikL.js";
-import { $ as AuditRecord, et as AuditRecordCodec, nt as validateAuditAppend, rt as validateStoredAuditLinkage, tt as auditEvidenceIdentity } from "./invocations-Cpv8tzSW.js";
+import { H as MaterializationPlan } from "./definition-v-bZG98F.js";
+import { $ as AuditRecord, et as AuditRecordCodec, nt as validateAuditAppend, rt as validateStoredAuditLinkage, tt as auditEvidenceIdentity } from "./invocations-CQ3BhsZE.js";
 //#region src/protocol/payload.ts
 var CommandPayloadMalformedError = class extends AgentCoreError {
 	constructor(message = "Command payload is malformed") {
@@ -2220,4 +2220,4 @@ function callerIsTarget(caller, target) {
 //#endregion
 export { TenantBootstrapAnchorRecord as C, requireObject as D, requireNonnegativeInteger as E, CommandCallerPolicy as O, CommandEnvelopeCodec as S, tenantBootstrapPayload as T, CommandPreparationUnavailableError as _, AuthorityPermitIssuanceRequest as a, CommandAuthenticator as b, MemoryProtocolPersistence as c, ProtocolRecordStorage as d, protocolIdentityProjection as f, CommandDispatcher as g, CommandCommitUnknownError as h, AuthorityPermitIssuanceReply as i, PayloadLeaseBinding as k, MemoryProtocolRecords as l, CommandIngress as m, MaterializationApplyLocalCommand as n, MemoryTenantBootstrap as o, protocolIdentityProjectionsEqual as p, MaterializationCommandPayload as r, createMemoryTenantBootstrap as s, MATERIALIZATION_COMMANDS as t, ProtocolPersistenceAdapter as u, WriteRecord as v, createTenantBootstrapCommand as w, CommandEnvelope as x, WriteRecordCodec as y };
 
-//# sourceMappingURL=public-B8XBKjQB.js.map
+//# sourceMappingURL=public-Bw0UfPon.js.map

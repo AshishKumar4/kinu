@@ -1,4 +1,4 @@
-import { _ as ContentRef, f as RecordCodec, g as Revision, j as TextId, k as AgentCoreError, y as Digest } from "./core-BjYGo1CC.js";
+import { T as compareCanonicalText, _ as ContentRef, f as RecordCodec, g as Revision, j as TextId, k as AgentCoreError, y as Digest } from "./core-BjYGo1CC.js";
 import { _ as requireOptionalString, c as EnvironmentSessionId, d as ProviderId, f as advanceRevision, g as requireObject, h as requireInstance, i as ProviderDescriptor, l as EnvironmentSnapshotId, m as requireExact, p as increment, s as EnvironmentId, u as PortExposureId, v as requireSafeInteger, y as requireString } from "./provider-DK9Ak8da.js";
 //#region src/environments/environment.ts
 var EnvironmentCodecV1 = class extends RecordCodec {
@@ -527,5 +527,117 @@ function freezeState(state) {
 	return state;
 }
 //#endregion
+//#region src/environments/tree-checkpoint.ts
+var PATH_SEPARATOR = "/";
+var RELATIVE_SEGMENTS = [".", ".."];
+/**
+* One file of a tree checkpoint: the canonical relative path it stands at and the content
+* address of its bytes. A path is the one spelling of its location — nonempty `/`-separated
+* segments with no `.` or `..` — because a tree merge compares paths by value (§5.2.1), and
+* two spellings of one location would let a change on each side escape as two unrelated paths.
+*/
+var TreeCheckpointEntry = class TreeCheckpointEntry {
+	path;
+	content;
+	constructor(path, content) {
+		this.path = requireTreePath(path);
+		if (!(content instanceof ContentRef)) throw new TypeError("Tree checkpoint entry content must be a ContentRef");
+		this.content = content;
+		Object.freeze(this);
+	}
+	toData() {
+		return {
+			content: this.content.value,
+			path: this.path
+		};
+	}
+	static fromData(value) {
+		const object = requireObject(value, "Tree checkpoint entry");
+		requireExact(object, ["content", "path"], "Tree checkpoint entry");
+		return new TreeCheckpointEntry(requireString(object["path"], "Tree checkpoint path"), new ContentRef(requireString(object["content"], "Tree checkpoint entry content")));
+	}
+};
+/**
+* A tree checkpoint (§5.4): the filesystem state of an Environment as a content-addressed
+* snapshot, one entry per file in canonical path order. It is the record the bytes a
+* RunCommit's `treeCheckpoint` names decode to, so a merge reads which content stands at which
+* path off the snapshot itself rather than off a host's description of it.
+*/
+var TreeCheckpoint = class TreeCheckpoint {
+	static get codec() {
+		return treeCheckpointCodecInstance;
+	}
+	entries;
+	constructor(entries) {
+		const ordered = entries.map((entry) => {
+			if (!(entry instanceof TreeCheckpointEntry)) throw new TypeError("Tree checkpoint entries must be TreeCheckpointEntry");
+			return entry;
+		}).sort((left, right) => compareCanonicalText(left.path, right.path));
+		if (ordered.some((entry, index) => index > 0 && ordered[index - 1]?.path === entry.path)) throw new TypeError("Tree checkpoint paths must be unique");
+		this.entries = Object.freeze(ordered);
+		Object.freeze(this);
+	}
+	static encode(checkpoint) {
+		return TreeCheckpoint.codec.encode(checkpoint);
+	}
+	static decode(bytes) {
+		return TreeCheckpoint.codec.decode(bytes);
+	}
+	/** The content standing at `path`, or nothing where the tree has no file there. */
+	content(path) {
+		let low = 0;
+		let high = this.entries.length - 1;
+		while (low <= high) {
+			const middle = low + high >>> 1;
+			const entry = this.entries[middle];
+			if (entry === void 0) break;
+			const order = compareCanonicalText(entry.path, path);
+			if (order === 0) return entry.content;
+			if (order < 0) low = middle + 1;
+			else high = middle - 1;
+		}
+	}
+	equals(other) {
+		return this.entries.length === other.entries.length && this.entries.every((entry) => other.content(entry.path)?.equals(entry.content) === true);
+	}
+	toData() {
+		return { entries: this.entries.map((entry) => entry.toData()) };
+	}
+	static fromData(value) {
+		const object = requireObject(value, "Tree checkpoint");
+		requireExact(object, ["entries"], "Tree checkpoint");
+		const entries = object["entries"];
+		if (!Array.isArray(entries)) throw new TypeError("Tree checkpoint entries must be an array");
+		return new TreeCheckpoint(entries.map((entry) => TreeCheckpointEntry.fromData(entry)));
+	}
+};
+var TreeCheckpointCodecV1 = class extends RecordCodec {
+	constructor() {
+		super([
+			TreeCheckpoint,
+			TreeCheckpointEntry,
+			ContentRef,
+			Digest,
+			TextId
+		], "environment.tree-checkpoint", {
+			major: 1,
+			minor: 0
+		});
+	}
+	encodePayload(checkpoint) {
+		return checkpoint.toData();
+	}
+	decodePayload(payload) {
+		return TreeCheckpoint.fromData(payload);
+	}
+};
+var treeCheckpointCodecInstance = new TreeCheckpointCodecV1();
+function requireTreePath(path) {
+	if (path.includes("\0")) throw new TypeError("Tree checkpoint path must be a string without NUL");
+	if (path.split(PATH_SEPARATOR).some((segment) => segment.length === 0 || RELATIVE_SEGMENTS.includes(segment))) throw new TypeError("Tree checkpoint path must be nonempty relative segments without . or ..");
+	return path;
+}
+//#endregion
+export { TreeCheckpointEntry as n, TreeCheckpoint as t };
 
-//# sourceMappingURL=environments-CZCvxj-D.js.map
+//# sourceMappingURL=environments-DCPgAUnY.js.map

@@ -1,6 +1,6 @@
 import { C as canonicalJsonEqual, R as jsonDataParser, T as compareCanonicalText, c as isStringArray, f as RecordCodec, g as Revision, h as SecretRef, j as TextId, k as AgentCoreError, l as requireNonempty, w as canonicalTupleKey, y as Digest } from "./core-BjYGo1CC.js";
-import { J as CapabilitySpec, Y as isCapabilityEffect } from "./runtime-z1yMP0an.js";
-import "./facets-D01bKQBL.js";
+import { J as CapabilitySpec, Y as isCapabilityEffect } from "./runtime-RV2NCfR2.js";
+import "./facets-ftoqxDdS.js";
 //#region src/identity/id.ts
 var PrincipalId = class extends TextId {
 	constructor(value) {
@@ -1786,4 +1786,4 @@ function isStoredIdentityRecord(value) {
 //#endregion
 export { Tenant as A, WorkspaceId as B, PrincipalRef as C, scopePath as D, encodeScopeRef as E, ProjectId as F, RoleName as I, ShareOfferId as L, GuestTrustId as M, MembershipId as N, Project as O, PrincipalId as P, TeamId as R, requireSubjectTenant as S, decodeScopeRef as T, findBuiltInRole as _, ShareOffer as a, decodeSubjectRef as b, ShareOfferRedemptionOutcome as c, BUILT_IN_ROLES as d, EDITOR_ROLE as f, RoleRule as g, Role as h, GuestTrust as i, Principal as j, Team as k, shareOfferHolderKey as l, READER_ROLE as m, MemoryIdentityRepository as n, ShareOfferRedemption as o, OWNER_ROLE as p, Workspace as r, ShareOfferRedemptionDenied as s, IdentityRepository as t, Membership as u, GuestVerificationScheme as v, ScopeRef as w, encodeSubjectRef as x, SubjectRef as y, TenantId as z };
 
-//# sourceMappingURL=identity-CoqhjOFj.js.map
+//# sourceMappingURL=identity-Bq_lzdgu.js.map
