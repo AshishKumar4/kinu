@@ -195,7 +195,7 @@ describe('describeProviderError', () => {
       const failure = toProviderError({
         doing: 'calling the model',
         provider: 'openai',
-        cause: { message: `unauthorized: ${key} is invalid`, code: 'invalid_api_key', status: 401 },
+        cause: { message: `unauthorized: ${key} is invalid; password="${'opaque'}-token-1234"`, code: 'invalid_api_key', status: 401 },
       });
 
       expect(failure.code).toBe('denied');
@@ -207,7 +207,9 @@ describe('describeProviderError', () => {
 
       const emitted = lines.find((line) => line.includes('provider.request_failed'));
       expect(emitted).toBeDefined();
+      expect(lines.map((line) => JSON.parse(line))).toHaveLength(lines.length);
       expect(lines.join('\n')).not.toContain(key);
+      expect(lines.join('\n')).not.toContain('opaque-token-1234');
       expect(emitted).toContain('invalid_api_key');
       expect(emitted).toContain('unauthorized');
     } finally {

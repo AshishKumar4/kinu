@@ -81,15 +81,19 @@ interface LogLine {
 
 /** A logger over any line sink: the JSON envelope is this file's, the destination the caller's. */
 export function createLineLogger(write: (line: string) => void): Logger {
-  // Provider and tool text reaches fields and causes verbatim; the line leaving the process is where a key is masked.
-  const emit = (line: LogLine): void => write(redactSecrets(JSON.stringify(line)));
+  // Provider and tool text reaches fields and causes verbatim. Each string is masked before serialization, where the
+  // patterns still see its own quotes; the line leaving the process carries no key.
+  const masked = (fields: LogFields | undefined): LogFields => Object.fromEntries(Object.entries(fields ?? {})
+    .map(([name, value]) => [name, typeof value === 'string' ? redactSecrets(value) : value]));
 
   return {
     event(name: LogEventName, fields?: LogFields): void {
-      emit({ event: name, fields: fields ?? {} });
+      write(JSON.stringify({ event: name, fields: masked(fields) } satisfies LogLine));
     },
     failure(name: LogEventName, error: KinuError, fields?: LogFields): void {
-      emit({ event: name, code: error.code, cause: renderCauseChain(error), fields: fields ?? {} });
+      write(JSON.stringify({
+        event: name, code: error.code, cause: redactSecrets(renderCauseChain(error)), fields: masked(fields),
+      } satisfies LogLine));
     },
   };
 }
