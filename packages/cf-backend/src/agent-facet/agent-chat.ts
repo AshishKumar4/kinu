@@ -3,6 +3,7 @@ import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   assembleActorTurn, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork, planHandoffStillOwed, projectJsonValue,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
+  bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type ChatTurnInput, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
   type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode,
@@ -182,7 +183,7 @@ export class FacetChat {
         ...subordinateTerminalEffects({
           orchestrator: actor.session.orchestrator,
           hireAdvisor: (advisor) => workspace.hireAdvisor(advisor),
-          applyTitle: (subject) => workspace.autoTitle(subject),
+          applyTitle: (subject) => this.applyTitle(subject),
           sendReport: (report) => workspace.parentReport(report),
         }),
       },
@@ -211,7 +212,6 @@ export class FacetChat {
   wake(): Promise<AgentOwed> {
     return settle(attempt({ doing: "resuming what an agent's isolate owed", otherwise: 'unavailable' }, async () => {
       this.session.reclaimStrandedEventDeliveries();
-      await this.terminal.releaseParked();
       await this.terminal.replayOwedAndRearm();
       await this.session.flushPendingDrains();
     }).pipe(
@@ -235,6 +235,40 @@ export class FacetChat {
       effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)).map((effect) => ({ effect, actor: name })),
       now: Date.now(),
     });
+  }
+
+  /** The stand-in lands first, as every actor's does: the model's name may be refused, and parks here. */
+  private async applyTitle(subject: string): Promise<void> {
+    const { actor, workspace } = this.deps;
+    const { config } = actor.stores;
+    const plan = planWorkspaceTitle({ slug: actor.record.name, displayName: config.getDisplayName(), nameOrigin: config.getNameOrigin(), mission: subject });
+
+    if (plan === null) return;
+
+    if (plan.provisional !== null) await workspace.autoTitle(subject, null);
+    await workspace.autoTitle(subject, await this.suggestTitle(plan.mission));
+  }
+
+  /** Down the fast tier's chain on the agent's own models, as every actor's title is named. */
+  private async suggestTitle(mission: string): Promise<string | null> {
+    const { actor, workspace, providers } = this.deps;
+    const workMode = actor.session.workMode;
+    const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false });
+    const { sources } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title' });
+    const inputs = await sources.profileInputs();
+    const profile = resolveAgentTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
+    const route = resolveModelRoute('fast', profile);
+    const { routed } = sources.models;
+
+    return await suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
+      llm: (resolution) => routedLlm((serving) => bindRoute(sources.models, serving), resolution, { report: this.spend.report, operations: this.spend.operations }, system),
+      ...(routed !== undefined && { credentialOf: (spec: string) => routed.credentialFor(spec) }),
+    }, prompt), mission);
+  }
+
+  /** The workspace's model settings changed. */
+  async modelSettingsChanged(): Promise<void> {
+    await this.terminal.modelSettingsChanged();
   }
 
   /** A turn running or queued, or effects still closing, is looked at again a lap later. */

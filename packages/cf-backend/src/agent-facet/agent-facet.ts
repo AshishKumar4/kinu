@@ -79,6 +79,8 @@ export interface AgentFacetCalls {
   interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]>;
   /** What a reset left owed is taken up; answers the next instant the agent owes and the turn its chat holds. */
   wake(snapshot: AgentSnapshot): Promise<AgentOwed>;
+  /** A refusal only the owner could fix, parked in the agent's own ledger, may answer now. */
+  modelSettingsChanged(snapshot: AgentSnapshot): Promise<void>;
   owed(snapshot: AgentSnapshot): Promise<boolean>;
   /** Its own turns and effects still owed, as the workspace's work read reports them. */
   owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]>;
@@ -196,6 +198,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async wake(snapshot: AgentSnapshot): Promise<AgentOwed> {
     return await (await this.chatOf(snapshot)).wake();
+  }
+
+  async modelSettingsChanged(snapshot: AgentSnapshot): Promise<void> {
+    await (await this.chatOf(snapshot)).modelSettingsChanged();
   }
 
   async owed(snapshot: AgentSnapshot): Promise<boolean> {

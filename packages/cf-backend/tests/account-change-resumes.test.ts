@@ -14,7 +14,7 @@ import type { AuthIdentity } from '../src/auth/session';
 import { serveFamily } from './helpers/api';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import { catalogTurn, gatewayWorkspace, until, workspaceMainActor } from './helpers/actor-harness';
+import { catalogTurn, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, until, workspaceMainActor, type StartedHarness } from './helpers/actor-harness';
 import { chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
 
 afterEach(() => { setSystemTime(); });
@@ -23,6 +23,11 @@ const IDENTITY: AuthIdentity = { userId: '0123456789abcdef0123456789abcdef', ema
 
 /** What the fast tier answers once the account can pay: one durable fact. */
 const UPDATE = { upserts: [{ key: 'deploy.region', value: 'eu-west', confidence: 0.9, rationale: 'the owner said so twice' }], decay: [] };
+
+/** The sleep-time compute's owed rows, and the fact its answer writes. */
+const computeOf = (db: StartedHarness['db']) => db.query<{ status: string }, []>(`SELECT status FROM terminal_effects WHERE effect_name = 'sleep_time'`).all().map((row) => row.status);
+
+const factOf = (db: StartedHarness['db']) => db.query<{ value: string }, []>(`SELECT value_json AS value FROM agent_facts WHERE key = 'deploy.region'`).get()?.value ?? null;
 
 /** The owner's account changes, each through its own route; `parks` names the one the account refuses. */
 interface AccountChange {
@@ -60,8 +65,8 @@ test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the own
 
   // On, as it is for an owner: the harness keeps it off unless a suite asks.
   workspaceMainActor(workspace.db).config.setSleepTimeComputeEnabled(true);
-  const effect = () => workspace.db.query<{ status: string }, []>(`SELECT status FROM terminal_effects WHERE effect_name = 'sleep_time'`).all().map((row) => row.status);
-  const fact = () => workspace.db.query<{ value: string }, []>(`SELECT value_json AS value FROM agent_facts WHERE key = 'deploy.region'`).get()?.value ?? null;
+  const effect = () => computeOf(workspace.db);
+  const fact = () => factOf(workspace.db);
 
   // Three settled turns make the compute due; its fast-tier call is refused for funds, and the effect parks.
   for (const words of ['we deploy to eu-west', 'remember: eu-west only', 'ship the build']) await catalogTurn(workspace.agent, words);
@@ -124,4 +129,47 @@ test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the own
   await until(() => fact() !== null, 'the released compute answered');
   expect({ status: answered?.status, effect: effect(), fact: v.parse(v.string(), JSON.parse(fact() ?? 'null')) })
     .toEqual({ status: 200, effect: [], fact: 'eu-west' });
+});
+
+test('a parked compute survives a lap and a reopened workspace, and the next settled turn releases it', async () => {
+  const computing = { asked: 0, funded: false };
+
+  const gateway = stubAiBinding((run) => {
+    if (!openingOf(run).startsWith(SLEEP_TIME_PROMPT_OPENING)) return chatCompletion(run, 'noted');
+    computing.asked += 1;
+
+    return computing.funded
+      ? chatCompletion(run, JSON.stringify(UPDATE))
+      : Response.json({ error: { message: 'Upstream request failed: Insufficient account funds', type: 'server_error' } }, { status: 402 });
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+  const config = workspaceMainActor(workspace.db).config;
+  config.setSleepTimeComputeEnabled(true);
+  const effect = () => computeOf(workspace.db);
+  const fact = () => factOf(workspace.db);
+
+  for (const words of ['we deploy to eu-west', 'remember: eu-west only', 'ship the build']) await catalogTurn(workspace.agent, words);
+  await workspace.agent.terminalRetryPass();
+  await until(() => effect().includes('parked'), 'the sleep-time compute parked');
+  const asked = computing.asked;
+
+  // Neither a lap nor a new activation is the owner's fix, so neither asks again.
+  await workspace.agent.terminalRetryPass();
+
+  const reopened = await reactivateOrchestratorHarness(workspace.db, undefined, {
+    world: { aiGateway: gateway },
+    beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
+  });
+
+  config.setSleepTimeComputeEnabled(true);
+
+  await reopened.agent.terminalRetryPass();
+  expect({ asked: computing.asked, effect: effect() }).toEqual({ asked, effect: ['parked'] });
+
+  computing.funded = true;
+  await catalogTurn(reopened.agent, 'one more thing');
+  await reopened.agent.terminalRetryPass();
+  await until(() => fact() !== null, 'the released compute answered');
+  expect(effect()).toEqual([]);
 });
