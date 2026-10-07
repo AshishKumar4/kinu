@@ -1405,11 +1405,14 @@ interface PlanTasksVerdict {
   readonly unlinked: readonly string[];
 }
 
-const PLAN_CARDS = `[...document.querySelectorAll('[data-plan-card]')].map((card) => [...card.querySelectorAll('[data-task-depth]')]
-  .map((row) => [row.querySelector('.p-row-text')?.firstChild?.textContent ?? '', Number(row.getAttribute('data-task-depth'))]))`;
+const TASK_TITLE = `(row) => row.querySelector('.p-row-text')?.firstChild?.textContent ?? ''`;
 
-const PLANLESS_TASKS = `[...document.querySelectorAll('[data-task-depth]')].filter((row) => row.closest('[data-plan-card]') === null)
-  .map((row) => row.querySelector('.p-row-text')?.firstChild?.textContent ?? '')`;
+const PLAN_CARDS = `[...document.querySelectorAll('[data-plan-card]')].map((card) => [...card.querySelectorAll('[data-task-depth]')]
+  .map((row) => [(${TASK_TITLE})(row), Number(row.getAttribute('data-task-depth'))]))`;
+
+/** Now lists every open task, a plan's too, so the planless ones are those no plan card holds. */
+const PLANLESS_TASKS = `((planned) => [...document.querySelectorAll('[data-task-depth]')].filter((row) => row.closest('[data-plan-card]') === null)
+  .map(${TASK_TITLE}).filter((title) => !planned.has(title)))(new Set([...document.querySelectorAll('[data-plan-card] [data-task-depth]')].map(${TASK_TITLE})))`;
 
 /** Presses the button showing `words` among those `buttons` selects. */
 async function pressButton(page: Page, buttons: string, words: string): Promise<void> {
@@ -1429,7 +1432,13 @@ async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Pr
   try {
     await sendInChat(page, PLAN_TASKS_CHORE);
     await until(page, 'the chore turn to end', TURN_ANSWERED);
-    await pressButton(page, '#chat [aria-label="Turn mode"] button', 'Plan');
+    // The modes hold still while the composer is busy, and a turn can open between the offer and a press, which is
+    // then lost: Plan is pressed each time it is offered until it holds.
+    await until(page, 'Plan chosen', `((plan) => {
+      if (plan instanceof HTMLButtonElement && !plan.disabled && plan.getAttribute('aria-pressed') !== 'true') plan.click();
+
+      return plan?.getAttribute('aria-pressed') === 'true';
+    })([...document.querySelectorAll('#chat [aria-label="Turn mode"] button')].find((button) => button.textContent?.trim() === 'Plan'))`);
     await sendInChat(page, PLAN_TASKS_PLAN);
     await until(page, "the plan's decisions", `[...document.querySelectorAll('[data-plan-decisions] button')].some((button) => /approve/iu.test(button.textContent ?? '') && !button.disabled)`);
     await page.$$eval('[data-plan-decisions] button', (buttons) => {

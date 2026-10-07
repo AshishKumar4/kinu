@@ -135,6 +135,11 @@ export class AgentTurns {
     return this.chats.size > 0 || [...this.open.values()].some((turn) => turn.request.run !== undefined);
   }
 
+  /** Handed out by this activation and not yet over. */
+  holds(turnId: string): boolean {
+    return this.open.has(turnId);
+  }
+
   inFlight(actorId: string): boolean {
     return this.running(actorId) !== null || (this.handing.get(actorId) ?? 0) > 0;
   }

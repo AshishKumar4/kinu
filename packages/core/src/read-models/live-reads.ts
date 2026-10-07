@@ -4,7 +4,7 @@ import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
   'getMemoryContent', 'getExecutors', 'listBackgroundJobs', 'getWorkspaceTabPresence', 'getActivePlanReview',
-  'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates', 'getQuality', 'getWorkspaceGitHub',
+  'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates', 'getQuality', 'getWorkspaceGitHub', 'inspectWork',
 ] as const;
 
 export type LiveRead = typeof LIVE_READS[number];
@@ -51,7 +51,9 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['agent_tasks', WORK],
   ['actor_subordinates', ROSTER_READS],
   ['actor_config', ROSTER_READS],
-  ['actor_turn_claims', AGENTS],
+  ['actor_turn_claims', [...AGENTS, 'inspectWork']],
+  ['terminal_effects', ['inspectWork']],
+  ['agent_open_turns', ['inspectWork']],
   ['agent_log', AGENTS],
   ['head_journal', AGENTS],
   ['head_runs', AGENTS],

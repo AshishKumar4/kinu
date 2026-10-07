@@ -2982,6 +2982,40 @@ describe('the live indicator follows the root claim', () => {
   });
 });
 
+/** Now's owed rows in order, each as its kind and phase. */
+function owedRows(page: Page): Promise<string[]> {
+  return page.$$eval('[data-inspected]', (rows) => rows.map((row) => `${row.getAttribute('data-inspected') ?? ''} ${row.getAttribute('data-phase') ?? ''}`));
+}
+
+/**
+ * Work → Now lists every turn and effect still owed as the workspace's one work read reports it: blocked first, since
+ * nothing in flight will move it, then what runs, then what waits. Recovering the stranded turn settles its claim, and
+ * that write moves the read, so the row leaves without a reload.
+ */
+describe('Now lists what is still owed, by the phase its store records', () => {
+  test('blocked, then running, then waiting; recovering the stranded turn takes it off', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&owed=all`, { waitUntil: 'networkidle0' });
+      await page.click('.p-tabstrip button[aria-label="Work"]');
+      // The frame's plan awaits review, so the tab opens on it.
+      await page.click('[data-back-to-work]');
+      await page.waitForSelector('[data-inspected]');
+      const owed = ['effect blocked', 'turn running', 'effect running', 'effect waiting', 'effect waiting'];
+
+      expect(await owedRows(page)).toEqual(['turn blocked', ...owed]);
+
+      await claimIs(page, { kind: 'stranded', turnId: 'turn-stranded', claimedAt: 1 });
+      await page.click('[data-composer-root] button[aria-label="Recover this turn"]');
+      await page.waitForFunction((left) => document.querySelectorAll('[data-inspected]').length === left, {}, owed.length);
+
+      expect(await owedRows(page)).toEqual(owed);
+      await page.close();
+    });
+  });
+});
+
 /** What the running job's card prints, a line per row, with the name it goes by above it. */
 function latestOutput(page: Page): Promise<{ name: string; lines: string[] }> {
   return page.$eval('[aria-label="Latest output"]', (output) => ({

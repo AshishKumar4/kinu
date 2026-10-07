@@ -30,6 +30,12 @@ export class AgentOpenTurns {
     void this.sql`DELETE FROM agent_open_turns WHERE actor_id = ${turn.actorId} AND turn_id = ${turn.turnId}`;
   }
 
+  /** Every turn out at an agent's own isolate whose end has not reached this workspace, oldest first. */
+  all(): readonly AgentOpenTurn[] {
+    return this.sql<{ actor_id: string; turn_id: string }>`SELECT actor_id, turn_id FROM agent_open_turns ORDER BY opened_at`
+      .map((row) => ({ actorId: row.actor_id, turnId: row.turn_id }));
+  }
+
   /** Opened before `before`: an earlier activation handed them out, and no end reached this one. */
   openedBefore(before: number): readonly AgentOpenTurn[] {
     return this.sql<{ actor_id: string; turn_id: string }>`

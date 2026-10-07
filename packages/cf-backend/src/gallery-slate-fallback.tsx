@@ -63,6 +63,7 @@ export function SlateFallbackFrame({ rpc }: { rpc: Rpc }) {
           executorOutputs={new Map()}
           onExecute={async () => ({})}
           backgroundJobs={[]}
+          inspectedWork={[]}
           onRefreshJobs={() => {}}
           pendingActions={[]}
           slates={slates}
