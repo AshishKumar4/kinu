@@ -2,10 +2,19 @@ import { describe, test, expect, mock } from 'bun:test';
 import { generateText } from 'ai';
 import { writeFileSync } from 'node:fs';
 import { scratchPath } from '@kinu.run/test-utils';
-import { asFetchFunction, JsonObjectSchema } from '@kinu.run/core';
+import { asFetchFunction, createProviderRegistry, JsonObjectSchema, type ModelCallDeps } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createOpenCodeProvider, OPENCODE_PROVIDER_ID } from '../src/opencode-provider';
 import type { OpenCodeSpawn, SpawnedOpenCode, OpenCodeProviderOptions } from '../src/opencode-provider';
+
+/** A model as the registry resolves it: the provider's, inside the one stack, on the provider's own lane. */
+function throughStack(provider: ReturnType<typeof createOpenCodeProvider>, modelId: string, deps: ModelCallDeps) {
+  const registry = createProviderRegistry();
+
+  registry.register(provider);
+
+  return registry.resolve(`${OPENCODE_PROVIDER_ID}/${modelId}`, deps);
+}
 
 function makeSpawn(output: string, exitCode = 0): OpenCodeSpawn {
   return (_args: string[], _opts: { signal?: AbortSignal }) => {
@@ -345,7 +354,7 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
 
-    const model = provider.createModel('openai/gpt-5.6-sol', {
+    const model = throughStack(provider, 'openai/gpt-5.6-sol', {
       env: {},
       sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
     });
@@ -385,8 +394,8 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl, spawn: makeSpawn(listed) }));
     const deps = { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
 
-    await expect(generateText({ model: provider.createModel('opencode-go/glm-5', deps), prompt: 'hi', maxRetries: 0 })).rejects.toThrow(/rate-limited until/);
-    const zen = await generateText({ model: provider.createModel('opencode/glm-5', deps), prompt: 'hi', maxRetries: 0 });
+    await expect(generateText({ model: throughStack(provider, 'opencode-go/glm-5', deps), prompt: 'hi', maxRetries: 0 })).rejects.toThrow(/rate-limited until/);
+    const zen = await generateText({ model: throughStack(provider, 'opencode/glm-5', deps), prompt: 'hi', maxRetries: 0 });
 
     expect({ text: zen.text, served }).toEqual({
       text: 'ok',

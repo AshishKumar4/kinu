@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { generateText } from 'ai';
+import { generateText, wrapLanguageModel } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { PROVIDER_RETRIES_HEADER, withRateLimitRetry } from '../src/providers/rate-limit-retry';
+import { callRetries, retryMiddleware, type RetryPolicy } from '../src/providers/middleware/retry';
 import { DEFAULT_PROVIDER_RETRIES } from '../src/types/profile';
 import { ProviderPacer } from '../src/providers/pacing';
 import { statedRetryAfterMs } from '../src/providers/fallback-cooldown';
@@ -10,14 +10,39 @@ import { describeProviderError, toProviderError } from '../src/providers/util';
 import { classifyErrorCode } from '../src/obs/index';
 import type { JsonValue } from '../src/utils/json';
 
+const LANE = 'example@main';
+
+/** A chat completion that answers `text`: what a provider sends once it stops refusing. */
+function answer(text = 'ok'): Response {
+  return new Response(JSON.stringify({
+    id: 'c', object: 'chat.completion', created: 0, model: 'm',
+    choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+  }), { headers: { 'content-type': 'application/json' } });
+}
+
+/** The SDK's own provider over `fetchImpl`, called through the one retry layer every model gets. */
+function stacked(fetchImpl: typeof globalThis.fetch, policy: Partial<RetryPolicy> = {}) {
+  const model = createOpenAICompatible({ name: 'example', baseURL: 'https://api.example.com/v1', fetch: fetchImpl }).chatModel('m');
+
+  return wrapLanguageModel({ model, middleware: retryMiddleware({ provider: 'example', lane: LANE, warn: () => {}, ...policy }) });
+}
+
+/** One call, its retries the caller's; the SDK's own retries are left at their default to show the layer owns them. */
+async function called(model: ReturnType<typeof stacked>, retries?: number, signal?: AbortSignal): Promise<string> {
+  const result = await generateText({
+    model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES,
+    ...(retries !== undefined && { providerOptions: callRetries(retries) }),
+    ...(signal !== undefined && { abortSignal: signal }),
+  });
+
+  return result.text;
+}
+
 /**
  * The layer under test on a clock the suite owns. The pacer must share it: it holds requests until declared
  * deadlines pass on its own clock, so two clocks would make the layer wait twice.
  */
-function retryHarness(
-  responses: Response[],
-  overrides: Parameters<typeof withRateLimitRetry>[1] = {},
-) {
+function retryHarness(responses: Response[], overrides: Partial<RetryPolicy> = {}) {
   let nowMs = 1_000_000;
   let calls = 0;
   const waits: number[] = [];
@@ -31,7 +56,7 @@ function retryHarness(
 
   const fetchImpl = asFetchFunction(async () => responses[Math.min(calls++, responses.length - 1)]);
 
-  const wrapped = withRateLimitRetry(fetchImpl, {
+  const model = stacked(fetchImpl, {
     now,
     random: () => 0.5,
     sleep,
@@ -41,27 +66,25 @@ function retryHarness(
     ...overrides,
   });
 
-  return { wrapped, waits, warnings, calls: () => calls };
+  return { call: (retries?: number) => called(model, retries), waits, warnings, calls: () => calls };
 }
 
-describe('withRateLimitRetry', () => {
+describe('the model stack retries every call once, in one place', () => {
   test('honors Retry-After seconds', async () => {
     const harness = retryHarness([
       new Response('limited', { status: 429, headers: { 'Retry-After': '30' } }),
-      new Response('ok'),
+      answer(),
     ]);
 
-    const response = await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
-
-    expect(await response.text()).toBe('ok');
+    expect(await harness.call()).toBe('ok');
     expect(harness.waits).toEqual([30_000]);
   });
 
   test('honors retry-after-ms, as the fallback cooldown reads the same answer', async () => {
     const limited = new Response('limited', { status: 429, headers: { 'retry-after-ms': '1500' } });
-    const harness = retryHarness([limited, new Response('ok')]);
+    const harness = retryHarness([limited, answer()]);
 
-    await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
+    await harness.call();
 
     expect(harness.waits).toEqual([1_500]);
     expect(statedRetryAfterMs({ cause: { responseHeaders: Object.fromEntries(limited.headers) } })).toBe(1_500);
@@ -75,27 +98,24 @@ describe('withRateLimitRetry', () => {
 
     const pacer = new ProviderPacer({ now: () => nowMs, sleep });
 
-    pacer.declareWait('api.example.com', 1_000);
+    pacer.declareWait(LANE, 1_000);
 
-    const wrapped = withRateLimitRetry(asFetchFunction(async () => {
+    const model = stacked(asFetchFunction(async () => {
       sent += 1;
 
-      return sent <= limited ? new Response('limited', { status: 429 }) : new Response('ok');
-    }), { now: () => nowMs, sleep, pacer, random: () => 0, warn: () => {} });
+      return sent <= limited ? new Response('limited', { status: 429 }) : answer();
+    }), { now: () => nowMs, sleep, pacer, random: () => 0 });
 
-    const answered = await Promise.allSettled([
-      wrapped('https://api.example.com/v1/chat', { body: '{}', headers: { [PROVIDER_RETRIES_HEADER]: String(retries) } }),
-    ]);
+    const [answered] = await Promise.allSettled([called(model, retries)]);
 
-    return { sent, answered: answered[0] };
+    return { sent, answered };
   }
 
   test('a sibling\'s cooldown is waited out without spending this call\'s retries', async () => {
     // Staging 85a438698: jury calls joined each other's waits and stopped at attempt 2 of 3.
     const { sent, answered } = await behindSibling(DEFAULT_PROVIDER_RETRIES, DEFAULT_PROVIDER_RETRIES);
 
-    expect({ sent, status: answered.status === 'fulfilled' ? answered.value.status : null })
-      .toEqual({ sent: DEFAULT_PROVIDER_RETRIES + 1, status: 200 });
+    expect({ sent, answered: answered.status === 'fulfilled' ? answered.value : null }).toEqual({ sent: DEFAULT_PROVIDER_RETRIES + 1, answered: 'ok' });
   });
 
   test('a call with no retries, a chain entry behind it, hands over at a sibling\'s cooldown without asking', async () => {
@@ -109,48 +129,44 @@ describe('withRateLimitRetry', () => {
     let clock = 1_000_000;
     let calls = 0;
     const limited = () => new Response('limited', { status: 429, headers: { 'retry-after': '1' } });
-    const answers = [limited(), limited(), new Response('ok')];
+    const answers = [limited(), limited(), answer()];
 
-    // The pacer reads its clock a millisecond after the wrapper read its own, and waiting passes no time here.
-    const wrapped = withRateLimitRetry(asFetchFunction(async () => answers[calls++]), {
+    // The pacer reads its clock a millisecond after the layer read its own, and waiting passes no time here.
+    const model = stacked(asFetchFunction(async () => answers[calls++]), {
       now: () => clock - 1,
       sleep: async () => {},
       pacer: new ProviderPacer({ now: () => clock, sleep: async (ms) => { clock += ms; } }),
-      warn: () => {},
     });
 
-    expect(await (await wrapped('https://api.example.com/v1/chat', { body: '{}' })).text()).toBe('ok');
+    expect(await called(model)).toBe('ok');
     expect(calls).toBe(3);
   });
 
   test('honors Retry-After HTTP dates against the injected clock', async () => {
     const retryAt = new Date(1_005_000).toUTCString();
 
-    const harness = retryHarness([
-      new Response('limited', { status: 429, headers: { 'Retry-After': retryAt } }),
-      new Response('ok'),
-    ]);
+    const harness = retryHarness([new Response('limited', { status: 429, headers: { 'Retry-After': retryAt } }), answer()]);
 
-    await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
+    await harness.call();
 
     expect(harness.waits).toEqual([5_000]);
   });
 
   test('a negative Retry-After is no stated wait, so the backoff applies', async () => {
-    const harness = retryHarness([new Response('limited', { status: 429, headers: { 'Retry-After': '-1' } }), new Response('ok')], { random: () => 0.999 });
+    const harness = retryHarness([new Response('limited', { status: 429, headers: { 'Retry-After': '-1' } }), answer()], { random: () => 0.999 });
 
-    await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
+    await harness.call();
 
     expect(harness.waits).toEqual([1_998]);
   });
 
   test('uses exponential full jitter bounded by the per-wait cap', async () => {
     const harness = retryHarness(
-      [...Array.from({ length: 8 }, () => new Response('limited', { status: 429 })), new Response('ok')],
+      [...Array.from({ length: 8 }, () => new Response('limited', { status: 429 })), answer()],
       { random: () => 0.999 },
     );
 
-    await harness.wrapped('https://api.example.com/v1/chat', { body: '{}', headers: { [PROVIDER_RETRIES_HEADER]: '8' } });
+    await harness.call(8);
 
     expect(harness.waits).toEqual([1_998, 3_996, 7_992, 15_984, 31_968, 59_940, 59_940, 59_940]);
     expect(harness.waits.every((wait) => wait <= 60_000)).toBe(true);
@@ -159,7 +175,7 @@ describe('withRateLimitRetry', () => {
   test('waits out at most the owner\u2019s retries, then fails with the limit instead of sleeping on', async () => {
     const harness = retryHarness(Array.from({ length: 6 }, () => new Response('limited', { status: 429, headers: { 'Retry-After': '1' } })));
 
-    await expect(harness.wrapped('https://api.example.com/v1/chat', { body: '{}' })).rejects.toThrow('rate-limiting this account (HTTP 429)');
+    await expect(harness.call()).rejects.toThrow('rate-limiting this account (HTTP 429)');
     expect(harness.calls()).toBe(4);
     expect(harness.waits).toEqual([1_000, 1_000, 1_000]);
   });
@@ -168,31 +184,20 @@ describe('withRateLimitRetry', () => {
     const harness = retryHarness([
       new Response('first', { status: 429, headers: { 'Retry-After': '60' } }),
       new Response('second', { status: 429, headers: { 'Retry-After': '60' } }),
-      new Response('ok'),
+      answer(),
     ]);
 
-    const response = await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
-
-    expect(await response.text()).toBe('ok');
+    expect(await harness.call()).toBe('ok');
     expect(harness.calls()).toBe(3);
     expect(harness.waits).toEqual([60_000, 60_000]);
   });
 
   test.each([
     ['default', undefined, 3], ['none', 0, 0], ['one', 1, 1],
-  ] as const)('SDK and transport share the %s retry budget', async (_label, requested, retries) => {
-    const harness = retryHarness([new Response('limited', {
-      status: 429, headers: { 'Retry-After': '1' },
-    })]);
+  ] as const)('the call\'s %s retry budget is spent once, the SDK retrying nothing on top', async (_label, requested, retries) => {
+    const harness = retryHarness([new Response('limited', { status: 429, headers: { 'Retry-After': '1' } })]);
 
-    const model = createOpenAICompatible({ name: 'stacked-retries', baseURL: 'https://api.example.com/v1', fetch: harness.wrapped }).chatModel('m');
-    const headers: Record<string, string> = {};
-
-    if (requested !== undefined) headers[PROVIDER_RETRIES_HEADER] = String(requested);
-
-    await expect(generateText({
-      model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES, headers,
-    })).rejects.toThrow('rate-limiting this account');
+    await expect(harness.call(requested)).rejects.toThrow('rate-limiting this account');
 
     expect(harness.calls()).toBe(retries + 1);
     expect(harness.waits).toHaveLength(retries);
@@ -202,60 +207,40 @@ describe('withRateLimitRetry', () => {
     const controller = new AbortController();
     const reason = new Error('cancelled by user');
 
-    const wrapped = withRateLimitRetry(
-      asFetchFunction(async () => new Response('limited', { status: 429 })),
-      {
-        sleep: async () => { controller.abort(reason); },
-        pacer: new ProviderPacer({ sleep: async () => {} }),
-        warn: () => {},
-      },
-    );
+    const model = stacked(asFetchFunction(async () => new Response('limited', { status: 429 })), {
+      sleep: async () => { controller.abort(reason); },
+      pacer: new ProviderPacer({ sleep: async () => {} }),
+    });
 
-    await expect(wrapped('https://api.example.com/v1/chat', {
-      body: '{}',
-      signal: controller.signal,
-    })).rejects.toBe(reason);
-  });
-
-  test('passes non-string request bodies through without retrying', async () => {
-    const harness = retryHarness([new Response('limited', { status: 429 })]);
-    const body = new FormData();
-    body.set('file', 'contents');
-
-    const response = await harness.wrapped('https://api.example.com/v1/chat', { method: 'POST', body });
-
-    expect(response.status).toBe(429);
-    expect(harness.calls()).toBe(1);
-    expect(harness.waits).toEqual([]);
+    await expect(called(model, undefined, controller.signal)).rejects.toBe(reason);
   });
 
   test('returns success after two rate-limited responses', async () => {
-    const harness = retryHarness([
-      new Response('limited', { status: 429 }),
-      new Response('limited', { status: 429 }),
-      new Response('ok', { status: 200 }),
-    ]);
+    const harness = retryHarness([new Response('limited', { status: 429 }), new Response('limited', { status: 429 }), answer()]);
 
-    const response = await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
-
-    expect(response.status).toBe(200);
+    expect(await harness.call()).toBe('ok');
     expect(harness.calls()).toBe(3);
     expect(harness.waits).toEqual([1_000, 2_000]);
   });
 
-  test('retries 529 and overloaded 503 responses but not generic 503 responses', async () => {
+  test('529 and an overloaded 503 are waited as limits; any other retryable failure backs off without cooling the lane', async () => {
     const retrying = retryHarness([
       new Response('capacity unavailable', { status: 529 }),
       new Response(JSON.stringify({ error: { type: 'overloaded_error' } }), { status: 503 }),
-      new Response('ok'),
+      answer(),
     ]);
 
-    expect((await retrying.wrapped('https://api.example.com/v1/chat', { body: '{}' })).status).toBe(200);
+    expect(await retrying.call()).toBe('ok');
     expect(retrying.calls()).toBe(3);
 
-    const generic = retryHarness([new Response('maintenance', { status: 503 })]);
-    expect((await generic.wrapped('https://api.example.com/v1/chat', { body: '{}' })).status).toBe(503);
-    expect(generic.calls()).toBe(1);
+    let nowMs = 1_000_000;
+    const pacer = new ProviderPacer({ now: () => nowMs, sleep: async (ms) => { nowMs += ms; } });
+    const answers = [new Response('maintenance', { status: 503 }), answer()];
+    let calls = 0;
+    const model = stacked(asFetchFunction(async () => answers[calls++]), { now: () => nowMs, sleep: async () => {}, pacer, random: () => 0.5 });
+
+    expect(await called(model)).toBe('ok');
+    expect({ calls, declared: pacer.declareWait(LANE, 1) !== null }).toEqual({ calls: 2, declared: true });
   });
 
   /** Each provider's documented "allowance exhausted" 429 body: waiting cannot clear any of them. */
@@ -290,12 +275,9 @@ describe('withRateLimitRetry', () => {
 
   test('a 429 naming an exhausted quota or spend limit fails once, classified, with the provider text', async () => {
     for (const [provider, body] of EXHAUSTED_BODIES) {
-      const harness = retryHarness([
-        new Response(body, { status: 429, headers: { 'content-type': 'application/json' } }),
-        new Response('ok'),
-      ]);
+      const harness = retryHarness([new Response(body, { status: 429, headers: { 'content-type': 'application/json' } }), answer()]);
 
-      const failure = await rejectionOf(() => harness.wrapped('https://api.example.com/v1/chat', { body: '{}' }));
+      const failure = await rejectionOf(() => harness.call());
 
       expect({ provider, calls: harness.calls(), waits: harness.waits }).toEqual({ provider, calls: 1, waits: [] });
       expect({ provider, code: classifyErrorCode({ cause: failure }) }).toEqual({ provider, code: 'budget' });
@@ -304,8 +286,8 @@ describe('withRateLimitRetry', () => {
   });
 
   test('a quota 429 keeps the provider message and code for the user', async () => {
-    const harness = retryHarness([new Response(OPENAI_QUOTA, { status: 429 }), new Response('ok')]);
-    const failure = await rejectionOf(() => harness.wrapped('https://api.example.com/v1/chat', { body: '{}' }));
+    const harness = retryHarness([new Response(OPENAI_QUOTA, { status: 429 }), answer()]);
+    const failure = await rejectionOf(() => harness.call());
 
     expect(describeProviderError({ cause: failure })).toBe(
       'You exceeded your current quota, please check your plan and billing details. (HTTP 429, insufficient_quota)',
@@ -324,10 +306,9 @@ describe('withRateLimitRetry', () => {
     ];
 
     for (const [provider, body] of limits) {
-      const harness = retryHarness([new Response(body, { status: 429 }), new Response('ok')]);
-      const response = await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
+      const harness = retryHarness([new Response(body, { status: 429 }), answer()]);
 
-      expect({ provider, status: response.status, calls: harness.calls() }).toEqual({ provider, status: 200, calls: 2 });
+      expect({ provider, text: await harness.call(), calls: harness.calls() }).toEqual({ provider, text: 'ok', calls: 2 });
     }
   });
 
@@ -336,11 +317,11 @@ describe('withRateLimitRetry', () => {
 
   test('a Retry-After past the longest wait ends the call as spent, naming the provider, reset time and message', async () => {
     const harness = retryHarness(
-      [new Response(SPENT_WINDOW_BODY, { status: 429, headers: { 'Retry-After': '729883' } }), new Response('ok')],
+      [new Response(SPENT_WINDOW_BODY, { status: 429, headers: { 'Retry-After': '729883' } }), answer()],
       { provider: 'opencode-go' },
     );
 
-    const failure = await rejectionOf(() => harness.wrapped('https://opencode.ai/zen/go/v1/chat/completions', { body: '{}' }));
+    const failure = await rejectionOf(() => harness.call());
     const described = describeProviderError({ cause: failure });
 
     expect({ calls: harness.calls(), waits: harness.waits }).toEqual({ calls: 1, waits: [] });
@@ -355,20 +336,16 @@ describe('withRateLimitRetry', () => {
 
     const far = retryHarness([
       new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': new Date(1_000_000 + 3 * DAY_MS).toUTCString() } }),
-      new Response('ok'),
+      answer(),
     ]);
 
-    const failure = await rejectionOf(() => far.wrapped('https://api.example.com/v1/chat', { body: '{}' }));
+    const failure = await rejectionOf(() => far.call());
 
-    expect({ calls: far.calls(), waits: far.waits, code: classifyErrorCode({ cause: failure }) })
-      .toEqual({ calls: 1, waits: [], code: 'budget' });
+    expect({ calls: far.calls(), waits: far.waits, code: classifyErrorCode({ cause: failure }) }).toEqual({ calls: 1, waits: [], code: 'budget' });
 
-    const edge = retryHarness([
-      new Response('limited', { status: 529, headers: { 'Retry-After': new Date(1_060_000).toUTCString() } }),
-      new Response('ok'),
-    ]);
+    const edge = retryHarness([new Response('limited', { status: 529, headers: { 'Retry-After': new Date(1_060_000).toUTCString() } }), answer()]);
 
-    expect((await edge.wrapped('https://api.example.com/v1/chat', { body: '{}' })).status).toBe(200);
+    expect(await edge.call()).toBe('ok');
     expect(edge.waits).toEqual([60_000]);
   });
 
@@ -379,16 +356,14 @@ describe('withRateLimitRetry', () => {
     const pacer = new ProviderPacer({ now, sleep: async (ms) => { parked.push(ms); nowMs += ms; } });
     let sent = 0;
 
-    const wrapped = withRateLimitRetry(asFetchFunction(async () => {
+    const model = stacked(asFetchFunction(async () => {
       sent++;
 
-      return sent === 1
-        ? new Response(SPENT_WINDOW_BODY, { status: 429, headers: { 'Retry-After': '729883' } })
-        : new Response('ok');
-    }), { now, pacer, provider: 'opencode-go', sleep: async (ms) => { parked.push(ms); }, warn: () => {} });
+      return sent === 1 ? new Response(SPENT_WINDOW_BODY, { status: 429, headers: { 'Retry-After': '729883' } }) : answer();
+    }), { now, pacer, provider: 'opencode-go', sleep: async (ms) => { parked.push(ms); } });
 
-    await rejectionOf(() => wrapped('https://opencode.ai/zen/go/v1/chat/completions', { body: '{}' }));
-    const sibling = await rejectionOf(() => wrapped('https://opencode.ai/zen/go/v1/chat/completions', { body: '{}' }));
+    await rejectionOf(() => called(model));
+    const sibling = await rejectionOf(() => called(model));
 
     expect({ sent, parked, code: classifyErrorCode({ cause: sibling }) }).toEqual({ sent: 1, parked: [], code: 'budget' });
     expect(describeProviderError({ cause: sibling })).toContain('Monthly usage limit reached.');
@@ -397,21 +372,13 @@ describe('withRateLimitRetry', () => {
   test('the SDK neither retries a quota 429 nor loses its class on the way to the caller', async () => {
     let requests = 0;
 
-    const completion = {
-      id: 'c', object: 'chat.completion', created: 0, model: 'm',
-      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-    };
-
-    const fetchImpl = withRateLimitRetry(asFetchFunction(async () => {
+    const model = stacked(asFetchFunction(async () => {
       requests++;
 
-      return requests === 1
-        ? new Response(OPENAI_QUOTA, { status: 429, headers: { 'content-type': 'application/json' } })
-        : new Response(JSON.stringify(completion), { headers: { 'content-type': 'application/json' } });
-    }), { pacer: new ProviderPacer({ sleep: async () => {} }), sleep: async () => {}, warn: () => {} });
+      return requests === 1 ? new Response(OPENAI_QUOTA, { status: 429, headers: { 'content-type': 'application/json' } }) : answer();
+    }), { pacer: new ProviderPacer({ sleep: async () => {} }), sleep: async () => {} });
 
-    const model = createOpenAICompatible({ name: 'quota-probe', baseURL: 'https://api.example.com/v1', fetch: fetchImpl }).chatModel('m');
-    const failure = await rejectionOf(() => generateText({ model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES }));
+    const failure = await rejectionOf(() => called(model));
 
     expect(requests).toBe(1);
     expect(toProviderError({ doing: 'calling the model', cause: failure }).code).toBe('budget');

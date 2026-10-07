@@ -3,7 +3,7 @@
 
 import { Cause, Effect } from 'effect';
 import {
-  asFetchFunction, createWireModel, deferredModel, JsonObjectSchema, sdkWire, withRateLimitRetry, type WireProtocol,
+  asFetchFunction, createWireModel, deferredModel, JsonObjectSchema, sdkWire, type WireProtocol,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@kinu.run/core';
@@ -287,6 +287,8 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
     get defaultModel() {
       return undefined; // resolved lazily via loadConfig in setup
     },
+    // Its own lane per route: opencode.ai serves Zen and Go, and a spent Go window must not cool Zen.
+    laneOf: (modelId) => `${OPENCODE_PROVIDER_ID}:${modelId.slice(0, modelId.indexOf('/'))}`,
     createModel(modelId: string): LanguageModel {
       return settleSync(Effect.gen(function* () {
         if (!modelId.includes('/')) return yield* Effect.die(new Error(`Invalid opencode model id: ${modelId}`));
@@ -319,8 +321,6 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): ReturnType<typeof createW
   const upstreamModel = modelId.slice(slash + 1);
 
   const placeholder = 'https://opencode.invalid';
-  // Own lane per route: opencode.ai serves Zen and Go, and a spent Go window must not cool Zen.
-  const modelFetch = withRateLimitRetry(fetchImpl, { provider: providerId, modelId: upstreamModel, lane: providerId });
 
   const customFetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const config = await resolveConfig();
@@ -343,27 +343,7 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): ReturnType<typeof createW
     }
 
     headers.set('content-type', 'application/json');
-
-    let body = init?.body;
-    const textBody = v.safeParse(v.string(), body);
-
-    if (textBody.success) {
-      // An unparsed body leaves the model id unmapped: a 404 far from the cause.
-      const parsed = v.parse(JsonObjectSchema, JSON.parse(textBody.output));
-      parsed.model = upstreamModel;
-
-      // OpenAI Chat Completions uses max_completion_tokens instead of max_tokens.
-      const maxTokens = v.safeParse(v.number(), parsed.max_tokens);
-
-      if (protocol === 'chat-completions' && providerId === 'openai' && maxTokens.success) {
-        parsed.max_completion_tokens = maxTokens.output;
-        delete parsed.max_tokens;
-      }
-
-      body = JSON.stringify(parsed);
-    }
-
-    const response = await modelFetch(url, { ...init, headers, body, signal: init?.signal });
+    const response = await fetchImpl(url, { ...init, headers, body: routeBody(init?.body, protocol === 'chat-completions' && providerId === 'openai') });
 
     // Drop cache on auth failure so the next request re-reads auth.json.
     if (response.status === 401 || response.status === 403) {
@@ -382,7 +362,17 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): ReturnType<typeof createW
     });
   });
 
-  return createWireModel({ name: OPENCODE_PROVIDER_ID, modelId, baseURL: placeholder, fetch: customFetch, protocol, reasoning });
+  return createWireModel({ name: OPENCODE_PROVIDER_ID, modelId: upstreamModel, baseURL: placeholder, fetch: customFetch, protocol, reasoning });
+}
+
+/** OpenAI's Chat Completions route takes `max_completion_tokens`, which the compatible SDK names `max_tokens`. */
+function routeBody(body: BodyInit | null | undefined, openaiChat: boolean): BodyInit | null | undefined {
+  const text = v.safeParse(v.string(), body);
+
+  if (!openaiChat || !text.success) return body;
+  const { max_tokens: maxTokens, ...rest } = v.parse(JsonObjectSchema, JSON.parse(text.output));
+
+  return JSON.stringify(maxTokens === undefined ? rest : { ...rest, max_completion_tokens: maxTokens });
 }
 
 function discoverModels(spawnFn: OpenCodeSpawn): Effect.Effect<OpenCodeModelInfo[]> {

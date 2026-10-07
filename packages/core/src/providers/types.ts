@@ -172,6 +172,9 @@ export interface ModelProvider {
 
   createModel(modelId: string, deps: ModelCallDeps): LanguageModel;
 
+  /** Where a model's waits are shared, beside its account; the provider by default. */
+  laneOf?(modelId: string): string;
+
   /** Pre-request token count via the provider's documented endpoint; absent means none.
    *  Report `unsupported` rather than drop an unrepresentable part. */
   countInputTokens?(

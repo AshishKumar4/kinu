@@ -13,7 +13,7 @@ import {
   DEFAULT_TOOL_RESULT_MAX_CHARS,
   TOOL_OUTPUT_DIR,
 } from '../src/tools/clamp';
-import { estimateTokens } from '../src/llm';
+import { estimateTokens } from '../src/token-estimate';
 import { TurnContextBudget } from '../src/context-budget';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime, conversationsFor } from './helpers';

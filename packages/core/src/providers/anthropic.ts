@@ -46,7 +46,6 @@ export function createAnthropicProvider(): ModelProvider {
     createModel(modelId, deps): LanguageModel {
       const customFetch = createAuthedFetch(deps, {
         provider: 'anthropic',
-        modelId,
         credKey: ANTHROPIC_CRED_KEY,
         missingCredentialError: 'Anthropic API key not configured',
       });

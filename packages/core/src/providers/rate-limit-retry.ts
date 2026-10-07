@@ -21,28 +21,10 @@ const MAX_DELAY_MS = 60_000;
 const MAX_RETRY_DELAY_MS = 60_000;
 
 /** This call's retries; never sent upstream. */
-export const PROVIDER_RETRIES_HEADER = 'x-kinu-retries';
+const PROVIDER_RETRIES_HEADER = 'x-kinu-retries';
 
 /** Set by the call that streams, so the silence bound applies without parsing the request; never sent upstream. */
-export const PROVIDER_STREAM_HEADER = 'x-kinu-stream';
-
-/** What a provider that rebuilds a request keeps of the caller's: its retry allowance and its cancel. */
-export interface TransportControls {
-  readonly headers: Readonly<Record<string, string>>;
-  readonly signal: AbortSignal | null;
-}
-
-export function transportControls(requested: Pick<RequestInit, 'headers' | 'signal'> | undefined): TransportControls {
-  const given = copyHeaders(requested?.headers);
-
-  const kept = [PROVIDER_RETRIES_HEADER, PROVIDER_STREAM_HEADER].flatMap((name) => {
-    const value = given.get(name);
-
-    return value === null ? [] : [[name, value] as const];
-  });
-
-  return { headers: Object.fromEntries(kept), signal: requested?.signal ?? null };
-}
+const PROVIDER_STREAM_HEADER = 'x-kinu-stream';
 
 export interface RateLimitRetryOptions {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;

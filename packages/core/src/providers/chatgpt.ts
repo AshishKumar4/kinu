@@ -10,7 +10,6 @@ import { attempt, diagnostics, KinuError, settle, tolerate, type ErrorCode } fro
 import { chatgptCatalogRows, shownCatalogRows } from './codex';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
-import { withRateLimitRetry } from './rate-limit-retry';
 import type { AuthRequest, AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { StaleModelList, statelessResponses } from './util';
 import { JsonObjectSchema } from '../utils/json';
@@ -384,18 +383,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         const url = requestUrl(input);
         const route = await relayed(deps);
 
-        const send = withRateLimitRetry(asFetchFunction(async (target, sent) => {
-          const res = await (route?.fetch ?? deps.fetch ?? fetch)(target, sent);
-
-          if (res.status === 401 || res.status === 503) return res;
-
-          return settle(Effect.flatMap(refusalOf(res, requestUrl(target)), (refusal) => (refusal === null ? Effect.succeed(res) : Effect.die(refusal))));
-        }), {
-          provider: 'chatgpt',
-          modelId,
-          lane: CHATGPT_CRED_KEY,
-          ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
-        });
+        const send = route?.fetch ?? deps.fetch ?? fetch;
 
         // A device's own sign-in renews nowhere from here: its 401 is the answer.
         const deviceLogin = async (_key: string, request?: AuthRequest): Promise<AuthResolution | null> => (request === undefined ? { headers: {} } : null);
@@ -416,7 +404,8 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
 
           if (answer.kind === 'absent') return yield* Effect.fail(new KinuError('missing', 'No ChatGPT sign-in with plan usage on this machine'));
           const res = answer.response;
-          const refusal = yield* refusalOf(res, url);
+          // A 503 is the model stack's to wait out and ask again; every other refusal is the plan's answer.
+          const refusal = res.status === 503 ? null : yield* refusalOf(res, url);
 
           if (refusal !== null) return yield* Effect.die(refusal);
           const answered = withCallAccount(res, 'chatgpt', CHATGPT_CRED_KEY);

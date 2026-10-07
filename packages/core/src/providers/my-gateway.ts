@@ -110,8 +110,6 @@ export function createMyGatewayProvider(): ModelProvider {
         getAuth: deps.getAuth,
         fetch: deps.fetch,
         provider: MY_GATEWAY_PROVIDER_ID,
-        modelId,
-        onProviderWait: deps.onProviderWait,
         placeholder,
         missingCredentialMessage: 'Connect Cloudflare and select an AI Gateway in User settings before using my-gateway models.',
         mapError: (res, resolved) => mapGatewayError(res, modelId, resolved.headers['cf-aig-gateway-id']),

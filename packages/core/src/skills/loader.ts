@@ -11,7 +11,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  * and a pointer; unnamed index entries are counted in the trailer.
  */
 
-import { estimateTokens } from '../llm';
+import { estimateTokens } from '../token-estimate';
 import { Effect, Result } from 'effect';
 import { attempt, diagnostics, settle } from '../obs/index';
 import {

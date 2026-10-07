@@ -5,7 +5,7 @@ import type { OwnerCapabilityEnv, ProviderEnv } from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
 import { MY_GATEWAY_PROVIDER_ID, SESSION_AFFINITY_HEADER, sessionAffinityOf, workersAiSpec, DECISION_MODELS, USER_AI_RUN_PATH, decodeJsonValue } from '@kinu.run/core';
-import { createDirectWorkersAIFetch, transportControls } from '@kinu.run/core';
+import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import { json } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
@@ -108,7 +108,6 @@ function proxyCompletion<Id>(
     const aiFetch = createCloudflareAIFetch({
       credKey: workersAI ? CLOUDFLARE_OAUTH_CRED_KEY : CLOUDFLARE_AI_GATEWAY_CRED_KEY,
       provider: workersAI ? 'workers-ai' : 'my-gateway',
-      modelId: model,
       getAuth: createUserDOAuthResolver({ stub: userDO, caller: yield* Effect.promise(() => ownerCaller(env)) }),
       placeholder: PROXY_PLACEHOLDER,
       missingCredentialMessage: workersAI
@@ -118,13 +117,11 @@ function proxyCompletion<Id>(
       mapError: (res, resolved) => mapGatewayError(res, model, resolved.headers['cf-aig-gateway-id']),
     });
 
-    const controls = transportControls(request);
-
     return yield* Effect.promise(() => aiFetch(`${PROXY_PLACEHOLDER}/${endpoint}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...controls.headers },
+      headers: { 'content-type': 'application/json' },
       body,
-      signal: controls.signal,
+      signal: request.signal,
     }));
   });
 }

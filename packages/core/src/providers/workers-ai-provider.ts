@@ -49,8 +49,6 @@ export function createWorkersAIProvider(deploymentBinding?: Parameters<typeof cr
         getAuth: deps.getAuth,
         fetch: deps.fetch,
         provider: 'workers-ai',
-        modelId,
-        onProviderWait: deps.onProviderWait,
         placeholder,
         missingCredentialMessage: 'Cloudflare login is required before using Workers AI models.',
         // Without replica pinning the prefix cache never hits.

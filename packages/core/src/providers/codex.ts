@@ -4,7 +4,6 @@ import { APICallError, wrapLanguageModel, type LanguageModel } from 'ai';
 import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { authenticatedSend } from './authenticated-send';
-import { withRateLimitRetry } from './rate-limit-retry';
 import { authCacheKey, cloneModelInfos, positiveInteger, StaleModelList, statelessResponses } from './util';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
@@ -114,12 +113,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     },
 
     createModel(modelId, deps): LanguageModel {
-      const retrying = (lane: string): typeof fetch => withRateLimitRetry(opts.egress ?? deps.fetch ?? fetch, {
-        provider: 'codex',
-        modelId,
-        lane,
-        ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
-      });
+      const transport = opts.egress ?? deps.fetch ?? fetch;
 
       const customFetch = asFetchFunction((input, init) => settle(Effect.gen(function* () {
         // A refused renewal keeps the SDK's 401 remedy.
@@ -142,7 +136,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
           for (const [name, value] of Object.entries(auth.headers)) merged.set(name, value);
 
-          return retrying(auth.credentialKey ?? CODEX_CRED_KEY)(input, { ...requestInit, headers: merged });
+          return transport(input, { ...requestInit, headers: merged });
         };
 
         const answer = yield* Effect.promise(() => authenticatedSend({ key: CODEX_CRED_KEY, getAuth: deps.getAuth, send }));

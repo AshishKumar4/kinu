@@ -1,5 +1,5 @@
 // ProviderRegistry: resolves "<provider>/<modelId>" synchronously; static providers win.
-import { withToolResultImages } from './tool-result-images';
+import { withModelStack } from './wire-model';
 import type { LanguageModel } from 'ai';
 import type {
   AuthResolution, ModelCallDeps, ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
@@ -271,7 +271,15 @@ export function createProviderRegistry(): ProviderRegistry {
       const provider = providerFor(parsed.provider);
 
       return settleSync(provider
-        ? Effect.sync(() => withToolResultImages(provider.createModel(parsed.modelId, accountDeps(deps, parsed.provider, parsed.account))))
+        ? Effect.sync(() => {
+          const own = accountDeps(deps, parsed.provider, parsed.account);
+          const account = parsed.account ?? deps.accountFor?.(parsed.provider) ?? MAIN_ACCOUNT;
+
+          return withModelStack(provider.createModel(parsed.modelId, own), {
+            provider: parsed.provider, modelId: parsed.modelId, lane: `${provider.laneOf?.(parsed.modelId) ?? parsed.provider}@${account}`,
+            ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
+          });
+        })
         : Effect.die(new Error(`Unknown provider ${JSON.stringify(parsed.provider)} (registered: ${Array.from(byId.keys()).join(', ') || 'none'}).`)));
     },
 

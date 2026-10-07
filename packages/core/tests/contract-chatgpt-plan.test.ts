@@ -8,6 +8,7 @@ import {
   type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { KinuError, createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { withModelStack } from '../src/providers/wire-model';
 
 interface Sent {
   readonly url: string;
@@ -229,7 +230,8 @@ describe('what the plan route answers', () => {
 
   test.each(['subscription_sharing_usage_unavailable', 'subscription_sharing_user_unavailable'])('%s backs off and asks again', async (code) => {
     const api = openai(refusal(503, code), answered());
-    const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
+    // As the registry resolves it: the one stack, which waits the refusal out.
+    const model = withModelStack(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), { provider: 'chatgpt', lane: 'chatgpt@main', sleep: async () => {} });
 
     expect((await generateText({ model, prompt: 'hello', maxRetries: 0 })).text).toBe('ok');
     expect(api.sent).toHaveLength(2);

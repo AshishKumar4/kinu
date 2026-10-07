@@ -9,7 +9,7 @@ import { tolerateAsync } from '../obs/effect';
 
 
 import type { ExecutorProvider } from '../execution/types';
-import { admissionBytes } from '../llm';
+import { admissionBytes } from '../token-estimate';
 import { stepContextLimit, type ModelWindow } from '../context-window';
 import type {
   InstructionTrustResolver, VerifiedInstructionTrust,

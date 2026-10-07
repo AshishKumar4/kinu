@@ -91,7 +91,7 @@ function chatToolResults(prompt: readonly LanguageModelV4Message[], moveImages: 
 }
 
 /** `accepts` undefined: the caller does not know the model's media, so only an image-carrying API sends one. */
-function toolImages(accepts: ReadonlySet<ModelInputModality> | undefined): LanguageModelMiddleware {
+export function toolImages(accepts: ReadonlySet<ModelInputModality> | undefined): LanguageModelMiddleware {
   return {
     specificationVersion: 'v4',
     transformParams: async ({ params, model }) => {

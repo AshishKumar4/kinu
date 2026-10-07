@@ -63,6 +63,19 @@ export class ProviderPacer {
     }));
   }
 
+  /** The lane's cooldown still to wait, or null: what a caller decides on before it waits. */
+  cooling(host: string): { readonly waitMs: number; readonly untilMs: number; readonly reason: string | undefined } | null {
+    const cooldown = this.cooldowns.get(host);
+    const waitMs = (cooldown?.untilMs ?? 0) - this.now();
+
+    return cooldown === undefined || waitMs <= 0 ? null : { waitMs, untilMs: cooldown.untilMs, reason: cooldown.reason };
+  }
+
+  /** Waits `ms` on this pacer's clock. */
+  pause(ms: number, signal?: AbortSignal): Promise<void> {
+    return this.sleep(ms, signal);
+  }
+
   /** Record a cooldown of `ms`; its deadline, null if a later one holds. */
   declareWait(host: string, ms: number, reason?: string): number | null {
     if (!(ms > 0)) return null;

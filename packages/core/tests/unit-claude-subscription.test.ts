@@ -20,7 +20,8 @@ import { asFetchFunction } from '../src/providers/fetch-shim';
 import { parseJsonObject, type JsonObject } from '../src/utils/json';
 import { callAccountOf, quotaWindowText } from '../src/providers/quota';
 import { claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn } from '../src/providers/claude-oauth';
-import { PROVIDER_RETRIES_HEADER } from '../src/providers/rate-limit-retry';
+import { callRetries } from '../src/providers/middleware/retry';
+import { withModelStack } from '../src/providers/wire-model';
 
 interface Sent {
   readonly url: string;
@@ -124,11 +125,14 @@ const HISTORY: ModelMessage[] = [
 ];
 
 /** One streamed turn; a failed call rejects with the error the stream carried, as a turn shows it. */
-async function turn(provider: ReturnType<typeof createClaudeProvider>, providerDeps: ModelCallDeps, controls: { maxRetries?: number; headers?: Record<string, string> } = {}) {
+async function turn(provider: ReturnType<typeof createClaudeProvider>, providerDeps: ModelCallDeps, controls: { maxRetries?: number; providerOptions?: ReturnType<typeof callRetries> } = {}) {
   let failure: unknown;
 
   const result = streamText({
-    model: provider.createModel('claude-opus-4-7', providerDeps),
+    // As the registry resolves it: the one stack around the provider's model.
+    model: withModelStack(provider.createModel('claude-opus-4-7', providerDeps), {
+      provider: 'claude', lane: 'claude@main', sleep: async () => {}, ...(providerDeps.onProviderWait !== undefined && { onWait: providerDeps.onProviderWait }),
+    }),
     instructions: cacheableSystem('You are Kinu.', resolvePromptCacheStrategy('claude')),
     messages: HISTORY,
     tools: { read: READ },
@@ -166,11 +170,11 @@ function billing(firstUserMessage: string, version: string, cch: string): string
 }
 
 describe('the Claude subscription wire', () => {
-  test('Claude spends only the caller retry allowance at the HTTP endpoint', async () => {
-    const sent: Array<string | null> = [];
+  test('Claude spends only the caller retry allowance at the HTTP endpoint, and Kinu\'s own options never reach it', async () => {
+    const sent: Array<boolean> = [];
 
-    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
-      sent.push(request.headers.get(PROVIDER_RETRIES_HEADER));
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      sent.push((await request.text()).includes('kinu'));
 
       return new Response('limited', { status: 429, headers: { 'retry-after': '0' } });
     } });
@@ -181,9 +185,9 @@ describe('the Claude subscription wire', () => {
       for (const retries of [0, 1]) {
         sent.length = 0;
         await expect(turn(createClaudeProvider(), deps(transport, [login('sk-ant-oat01-retries')]), {
-          maxRetries: 0, headers: { [PROVIDER_RETRIES_HEADER]: String(retries) },
+          maxRetries: 0, providerOptions: callRetries(retries),
         })).rejects.toThrow('is rate-limiting this account');
-        expect(sent).toEqual(Array.from({ length: retries + 1 }, () => null));
+        expect(sent).toEqual(Array.from({ length: retries + 1 }, () => false));
       }
     } finally {
       await server.stop(true);

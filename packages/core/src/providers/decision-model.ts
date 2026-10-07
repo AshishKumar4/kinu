@@ -10,7 +10,7 @@ import type { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
 import { asFetchFunction } from './fetch-shim';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 import { WORKERS_AI_PROVIDER_ID } from './workers-ai';
-import type { AuthResolver, ProviderWaitInfo } from './types';
+import type { AuthResolver } from './types';
 import { KinuError, settle, tolerate, toKinuError } from '../obs/index';
 import { readJsonObjectText, type JsonObject } from '../utils/json';
 import type { ModelCallSink } from '../events/model-call';
@@ -146,7 +146,6 @@ const ErrorBodySchema = v.object({
 export function restDecisionRun(opts: {
   readonly getAuth: AuthResolver;
   readonly fetch?: typeof fetch;
-  readonly onProviderWait?: (info: ProviderWaitInfo) => void;
 }): DecisionRun {
   const transport = opts.fetch ?? fetch;
   const resolved = asFetchFunction((input, init) => transport(new URL(input instanceof Request ? input.url : input), init));
@@ -157,8 +156,6 @@ export function restDecisionRun(opts: {
       getAuth: opts.getAuth,
       fetch: resolved,
       provider: WORKERS_AI_PROVIDER_ID,
-      modelId,
-      ...(opts.onProviderWait !== undefined && { onProviderWait: opts.onProviderWait }),
       placeholder: PLACEHOLDER,
       missingCredentialMessage: 'Connect Cloudflare before the decision model can rate turns.',
     });

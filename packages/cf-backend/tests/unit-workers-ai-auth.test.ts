@@ -174,9 +174,12 @@ describe('Workers AI credential refresh', () => {
   test('a 401 that SURVIVES the refresh says what to do, not the word "Unauthorized"', async () => {
     // Cloudflare answers a rejected credential with plain-text `Unauthorized`, and `workers-ai.ts` supplies no
     // `mapError`, so the owner must get the actionable sentence instead of the raw body.
+    // Each read rotates the token, as a forced refresh does; Cloudflare refuses every one.
+    let issued = 0;
+
     const stub = userCredentialSource({
       getAuthHeaders: async (key: string) => (
-        key === 'cloudflare.oauth' ? { authorization: 'Bearer cf-dead' } : null
+        key === 'cloudflare.oauth' ? { authorization: `Bearer cf-dead-${String(++issued)}` } : null
       ),
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
       getCredentialBaseURL: async (key: string) => (key === 'cloudflare.oauth' ? ACCOUNT_BASE_URL : null),

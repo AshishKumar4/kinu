@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import { asFetchFunction, modelTestText, testModel, withRateLimitRetry, ProviderPacer, type ModelCallReport } from '../src/index';
+import { asFetchFunction, modelTestText, testModel, ProviderPacer, type ModelCallReport } from '../src/index';
+import { withModelStack } from '../src/providers/wire-model';
 
 const SSE = { 'content-type': 'text/event-stream' };
 
@@ -14,13 +15,15 @@ const answer = (): Response => new Response([
 ].join(''), { headers: SSE });
 
 function modelAnswering(reply: () => Response | Promise<Response>, sent: { count: number }): (spec: string) => LanguageModel {
-  const fetchImpl = withRateLimitRetry(asFetchFunction(async () => {
+  const fetchImpl = asFetchFunction(async () => {
     sent.count++;
 
     return reply();
-  }), { provider: 'probe', pacer: new ProviderPacer({ sleep: async () => {} }), sleep: async () => {}, warn: () => {} });
+  });
 
-  return () => createOpenAICompatible({ name: 'probe', baseURL: 'https://probe.test/v1', fetch: fetchImpl }).chatModel('m');
+  return () => withModelStack(createOpenAICompatible({ name: 'probe', baseURL: 'https://probe.test/v1', fetch: fetchImpl }).chatModel('m'), {
+    provider: 'probe', lane: 'probe@main', pacer: new ProviderPacer({ sleep: async () => {} }), sleep: async () => {}, warn: () => {},
+  });
 }
 
 describe('testModel', () => {

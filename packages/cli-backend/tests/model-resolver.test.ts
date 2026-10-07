@@ -8,7 +8,7 @@ import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } f
 import { createFileOAuthStore } from '../src/oauth-store';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { asFetchFunction, requestUrl } from '@kinu.run/core';
+import { asFetchFunction, callRetries, requestUrl } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend, WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
@@ -19,11 +19,11 @@ import { LocalAgentSession } from '../src/local-session';
 const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
 describe('createLocalModelResolver', () => {
-  test('a cloud model relays the retry allowance without consuming it on the CLI', async () => {
-    const received: Array<string | null> = [];
+  test('a cloud model spends its retries once, on this machine; each relayed request carries none of Kinu\'s options', async () => {
+    const received: boolean[] = [];
 
-    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
-      received.push(request.headers.get('x-kinu-retries'));
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      received.push((await request.text()).includes('kinu') || request.headers.has('x-kinu-retries'));
 
       return Response.json({ error: { message: 'limited' } }, { status: 429, headers: { 'retry-after': '0' } });
     } });
@@ -35,9 +35,9 @@ describe('createLocalModelResolver', () => {
         received.length = 0;
         await expect(generateText({
           model: resolver.resolveModel('workers-ai/@cf/test/relay', 'relay'), prompt: 'test',
-          maxRetries: 0, headers: { 'x-kinu-retries': String(retries) },
+          maxRetries: 0, providerOptions: callRetries(retries),
         })).rejects.toThrow();
-        expect(received).toEqual([String(retries)]);
+        expect(received).toEqual(Array.from({ length: retries + 1 }, () => false));
       }
     } finally {
       await server.stop(true);

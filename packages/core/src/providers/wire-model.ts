@@ -3,7 +3,10 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
-import { wrapLanguageModel } from 'ai';
+import { wrapLanguageModel, type LanguageModel } from 'ai';
+import * as v from 'valibot';
+import { retryMiddleware, type RetryPolicy } from './middleware/retry';
+import { toolImages } from './tool-result-images';
 import { statelessResponses } from './util';
 
 export type WireProtocol = 'responses' | 'messages' | 'chat-completions';
@@ -52,11 +55,12 @@ export interface WireModelInput {
   readonly headers?: Record<string, string>;
 }
 
+/** The SDK model a wire protocol speaks; the registry wraps it in the one stack. */
 export function createWireModel(input: WireModelInput): LanguageModelV4 {
   const { name, modelId, baseURL, headers } = input;
   const fetched = input.fetch === undefined ? {} : { fetch: input.fetch };
 
-  if (input.protocol === 'messages') return createAnthropic({ name, baseURL, authToken: 'placeholder', headers, ...fetched })(modelId);
+  if (input.protocol === 'messages') return createAnthropic({ name, baseURL, ...anthropicAuth(headers ?? {}), ...fetched })(modelId);
 
   return input.protocol === 'responses'
     ? wrapLanguageModel({
@@ -64,6 +68,26 @@ export function createWireModel(input: WireModelInput): LanguageModelV4 {
       middleware: statelessResponses(input.reasoning),
     })
     : createOpenAICompatible({ name, baseURL, headers, ...fetched }).chatModel(modelId);
+}
+
+/** The one stack every model is called through, applied where it is resolved (`registry.resolve`). */
+export function withModelStack(model: LanguageModel, policy: RetryPolicy): LanguageModel {
+  if (v.is(v.string(), model) || model.specificationVersion === 'v2') return model;
+
+  return wrapLanguageModel({ model, middleware: [retryMiddleware(policy), toolImages(undefined)] });
+}
+
+/** Anthropic's SDK sends a key as `x-api-key` and a token as a bearer: a given header is moved into its setting, and
+ *  without one a transport that injects the login stands behind a placeholder. */
+function anthropicAuth(given: Readonly<Record<string, string>>) {
+  const headers = Object.fromEntries(Object.entries(given).filter(([key]) => !['x-api-key', 'authorization'].includes(key.toLowerCase())));
+  const read = (wanted: string): string | undefined => Object.entries(given).find(([key]) => key.toLowerCase() === wanted)?.[1];
+  const apiKey = read('x-api-key');
+  const bearer = /^Bearer\s+(.+)$/iu.exec(read('authorization') ?? '')?.[1]?.trim();
+
+  if (apiKey !== undefined && apiKey !== '') return { apiKey, headers };
+
+  return { authToken: bearer === undefined || bearer === '' ? 'placeholder' : bearer, headers };
 }
 
 /** `createModel` is synchronous and the wire is read from the catalog: resolved per call. */

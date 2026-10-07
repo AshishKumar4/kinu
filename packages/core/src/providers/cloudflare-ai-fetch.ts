@@ -1,8 +1,7 @@
 // Shared wire path to the user's Cloudflare AI endpoint (workers-ai, my-gateway, /api/user/ai/v1 proxy).
 import { authenticatedSend } from './authenticated-send';
-import type { AuthResolution, AuthResolver, ProviderWaitInfo } from './types';
+import type { AuthResolution, AuthResolver } from './types';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
-import { withRateLimitRetry } from './rate-limit-retry';
 import { diagnostics, tolerate, toKinuError } from '../obs/index';
 import { repairSseCachedUsage } from './stream-usage-repair';
 import * as v from 'valibot';
@@ -25,12 +24,8 @@ export interface CloudflareAIFetchOptions {
   credKey: string;
   getAuth: AuthResolver;
   fetch?: typeof fetch;
-  /** Provider id the model resolved under; named in wait notices. */
+  /** Provider id the model resolved under; named in refusal diagnostics. */
   provider: string;
-  /** The model the requests are for — carried into the same notices. */
-  modelId?: string;
-  /** The rate-limit wait listener (ProviderDeps.onProviderWait). */
-  onProviderWait?: (info: ProviderWaitInfo) => void;
   /** Placeholder base URL, rewritten per request because the credential can rotate mid-session. */
   placeholder: string;
   /** 401 message when the credential is missing or unusable. */
@@ -46,12 +41,7 @@ const DEAD_CLOUDFLARE_LOGIN =
   'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.';
 
 export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof globalThis.fetch {
-  // Retry before auth/error/stream processing so usage repair sees only the final response.
-  const baseFetch = withRateLimitRetry(opts.fetch ?? fetch, {
-    provider: opts.provider,
-    ...(opts.modelId !== undefined && { modelId: opts.modelId }),
-    ...(opts.onProviderWait !== undefined && { onWait: opts.onProviderWait }),
-  });
+  const baseFetch = opts.fetch ?? fetch;
 
   return asFetchFunction(async (input, init) => {
     const auth = await opts.getAuth(opts.credKey);

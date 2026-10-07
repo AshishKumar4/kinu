@@ -326,7 +326,7 @@ describe('AI proxy model → upstream selection', () => {
     expect(message).not.toContain('never-replayed');
   });
 
-  test('the REST route spends the caller\'s retry allowance and carries its cancel', async () => {
+  test('the REST route answers each request once, the caller\'s model stack retrying, and carries its cancel', async () => {
     const { env } = setupEnv({ token: 'cf-user-token' });
     const signals: Array<AbortSignal | null | undefined> = [];
     let sent = 0;
@@ -344,7 +344,7 @@ describe('AI proxy model → upstream selection', () => {
       const request = chatRequest(SESSION_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }, { 'x-kinu-retries': String(retries) });
       await aiProxy(new Request(request, { signal: cancel.signal }), env);
 
-      expect(sent).toBe(retries + 1);
+      expect(sent).toBe(1);
       cancel.abort();
       expect(signals.at(-1)?.aborted).toBe(true);
     }

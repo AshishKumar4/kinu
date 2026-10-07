@@ -3,7 +3,7 @@ import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
  * Skill discovery over the roots `/skills` views, merged by `SKILL_ROOTS`. Malformed files are
  * skipped; reads stay under the `admissionBytes` ceiling and the budget's file count.
  */
-import { admissionBytes, estimateTokens } from '../llm';
+import { admissionBytes, estimateTokens } from '../token-estimate';
 import { Effect, Result } from 'effect';
 import { classify, diagnostics, renderThrownChain, settle, toKinuError } from '../obs/index';
 
