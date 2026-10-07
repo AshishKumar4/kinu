@@ -167,8 +167,10 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * 398. Parking owner-fixable refusals rides the claim's one statement and loads an actor's notices once (T1-T3).
  * agents 0.26 records a fiber's outcome on its `cf_agents_runs` row before deleting it (+1 a fiber), and the MCP warm,
  * whose recovery only drops it, left its fiber for `keepAliveWhile` (-4): 396, measured at d240dd3b8 against 400.
+ * 393 once an absent SOUL.md is one lookup on the namespace, not three on the bundle plane, and a missing skills
+ * root one, not the namespace's two (-3; the bun harness turn 314 -> 311, the same vfs tables CI counted).
  */
-const TURN_STATEMENTS = 396;
+const TURN_STATEMENTS = 393;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

@@ -1,4 +1,4 @@
-import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // SOUL.md is an ordinary file of the workspace, and the only copy of the soul: every agent edits it, the owner
 // too, and the next turn reads what it holds.
 
@@ -120,11 +120,9 @@ export function summarizeSoul(markdown: string | null | undefined, maxLength = 2
 /** The workspace's SOUL.md: main's home holds it, wherever the reader's own home is. */
 export const SOUL_FILE = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
 
-/** Null when absent, blank, or a link; asked, not caught. */
+/** Null when absent, blank, or anything but a file (a link is not followed); one lookup when absent, as every turn asks. */
 export async function readSoul(vfs: VFS): Promise<string | null> {
-  if (!await exists(vfs, SOUL_FILE)) return null;
-
-  if ((await vfs.stat(SOUL_FILE, { follow: false }))?.type === 'symlink') return null;
+  if ((await vfs.stat(SOUL_FILE, { follow: false }))?.type !== 'file') return null;
   const text = v.parse(v.string(), await readText(vfs, SOUL_FILE));
 
   return text.trim() ? text : null;
