@@ -21,16 +21,17 @@ import { resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, his
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
   const { db, rt } = workspaceRuntime();
-  await writeText(rt.storage.vfs, 'identical.txt', 'same result');
+
+  for (const id of ['call-A', 'call-B']) await writeText(rt.storage.vfs, `${id}.txt`, 'same result');
   rt.actor.config.setDisplayNameOrigin('Identity pin', 'user');
   const first = Promise.withResolvers<void>();
   const plane: VFS = rt.toolFiles;
   const readRange = plane.readRange?.bind(plane);
 
   if (readRange === undefined) throw new Error('the workspace file plane reads by range');
-  let reads = 0;
+  // Both calls return the same bytes, but only A owns the gate: stat completion need not follow SDK call order.
   plane.readRange = async (...args) => {
-    if (args[0] === 'identical.txt' && reads++ === 0) await first.promise;
+    if (args[0] === 'call-A.txt') await first.promise;
 
     return await readRange.apply(plane, args);
   };
@@ -42,7 +43,7 @@ test('parallel native calls retain their SDK identities after reverse completion
 
     return {
       content: calls ? ['call-A', 'call-B'].map((toolCallId) => ({
-        type: 'tool-call' as const, toolCallId, toolName: 'file', input: JSON.stringify({ action: 'read', path: 'identical.txt' }),
+        type: 'tool-call' as const, toolCallId, toolName: 'file', input: JSON.stringify({ action: 'read', path: `${toolCallId}.txt` }),
       })) : [{ type: 'text', text: 'done' }],
       finishReason: { unified: calls ? 'tool-calls' : 'stop', raw: undefined },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
