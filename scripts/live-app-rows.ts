@@ -1420,9 +1420,11 @@ const PLANLESS_TASKS = `((planned) => [...document.querySelectorAll('[data-task-
 interface SlateUiVerdict {
   readonly drawn: readonly string[];
   readonly shown: Readonly<Record<string, string>>;
-  /** What the first page read through `workspace`, and whether its click reached the agent as a slate event. */
+  /** What the first page read through `workspace`, whether its click reached the agent as a slate event, and whether
+   *  the page the person clicked is still the one drawn once that turn has ended. */
   readonly read: string;
   readonly heard: boolean;
+  readonly kept: boolean;
   /** What the first page shows once its card's open control brought it up in the work surface. */
   readonly opened: string;
   readonly redrawn: readonly string[];
@@ -1495,17 +1497,23 @@ async function slateUiFrames(page: Page): Promise<{ drawn: string[]; shown: Reco
 
 /** The first page's frame, once it has read the file through `workspace`: what it read, and whether its click then
  *  reaches the agent. */
-async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Promise<{ read: string; heard: boolean }> {
+async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Promise<{ read: string; heard: boolean; kept: boolean }> {
   const src = await page.$eval('[data-slate-ui="first"] iframe', (frame) => frame.getAttribute('src') ?? '');
   const frame = await page.waitForFrame((each) => each.url().startsWith(new URL(src).origin));
 
   await named("the first page's read", () => frame.waitForFunction(() => (document.getElementById('read')?.textContent ?? '') !== ''));
   const read = await frame.evaluate(() => document.getElementById('read')?.textContent ?? '');
 
+  // The page's own state, which a page drawn again from scratch would not have.
+  await frame.evaluate(() => { document.body.dataset['clicked'] = 'yes'; });
   await frame.click('#send');
   const request = await waitOn(page, 'the click reaching the agent', heard);
 
-  return { read, heard: request.userTexts.some((text) => text.includes(SLATE_UI_SENT)) };
+  await until(page, 'the click turn to end', `!(${STOP_OFFERED})`);
+  // A page drawn again is a new frame, and the one clicked is detached.
+  const kept = !frame.detached && await frame.evaluate(() => document.body.dataset['clicked'] === 'yes');
+
+  return { read, heard: request.userTexts.some((text) => text.includes(SLATE_UI_SENT)), kept };
 }
 
 /** The first page, opened from its card in the work surface: what the work surface's frame of it shows. */
@@ -1535,7 +1543,6 @@ async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard
     const reach = await firstPageReach(page, heard);
     const opened = await openedInWorkSurface(page);
 
-    await until(page, 'the click turn to end', `!(${STOP_OFFERED})`);
     await named('the reload', () => page.reload({ waitUntil: 'load' }));
     await until(page, 'both blocks drawn again', SLATE_UI_DRAWN);
     const again = await slateUiFrames(page);
