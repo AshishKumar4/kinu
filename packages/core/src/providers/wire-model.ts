@@ -10,6 +10,8 @@ import { retryMiddleware, type RetryPolicy } from './middleware/retry';
 import { usageRepairMiddleware } from './middleware/usage-repair';
 import { toolImages } from './tool-result-images';
 import { statelessResponses } from './util';
+import { heardFetch } from './middleware/attempt';
+import { asFetchFunction } from './fetch-shim';
 
 export type WireProtocol = 'responses' | 'messages' | 'chat-completions';
 
@@ -57,10 +59,13 @@ export interface WireModelInput {
   readonly headers?: Record<string, string>;
 }
 
+/** The global fetch as it is when called: a caller may replace it after the model is built. */
+const globalFetch = asFetchFunction((input, init) => fetch(input, init));
+
 /** The SDK model a wire protocol speaks; the registry wraps it in the one stack. */
 export function createWireModel(input: WireModelInput): LanguageModelV4 {
   const { name, modelId, baseURL, headers } = input;
-  const fetched = input.fetch === undefined ? {} : { fetch: input.fetch };
+  const fetched = { fetch: heardFetch(input.fetch ?? globalFetch) };
 
   if (input.protocol === 'messages') return createAnthropic({ name, baseURL, ...anthropicAuth(headers ?? {}), ...fetched })(modelId);
 

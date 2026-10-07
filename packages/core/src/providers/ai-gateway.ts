@@ -13,6 +13,7 @@ import { mapModelList } from './util';
 import {
   WORKERS_AI_PREFERRED_MODEL_IDS,
 } from './workers-ai-catalog';
+import { heardFetch } from './middleware/attempt';
 
 const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
 
@@ -65,7 +66,7 @@ export function createAIGatewayProvider(): ModelProvider {
           name: AI_GATEWAY_PROVIDER_ID,
           // Never fetched: the transport parses the URL into the binding's {gateway, provider, endpoint}.
           baseURL: String(deps.env.AI_GATEWAY_URL),
-          fetch: createGatewayBindingFetch(resolved),
+          fetch: heardFetch(createGatewayBindingFetch(resolved)),
         }).chatModel(modelId)));
     },
   };

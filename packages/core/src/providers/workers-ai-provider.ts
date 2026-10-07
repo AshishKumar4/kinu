@@ -11,6 +11,7 @@ import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
 import { WORKERS_AI_PREFERRED_MODEL_IDS } from './workers-ai-catalog';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 import { toolCallIdMiddleware } from './middleware/tool-call-id';
+import { heardBinding } from './middleware/attempt';
 
 /** `env.AI` as the provider takes it: `Ai` where workers-types are loaded. */
 type WorkersAIChatBinding = NonNullable<WorkersAISettings['binding']>;
@@ -34,7 +35,7 @@ export function createWorkersAIProvider(deploymentBinding?: WorkersAIChatBinding
     createModel(modelId, deps): LanguageModel {
       // Without replica pinning the prefix cache never hits.
       const model = deploymentBinding
-        ? createWorkersAI({ binding: deploymentBinding }).chat(modelId, { sessionAffinity: deps.sessionAffinity })
+        ? createWorkersAI({ binding: heardBinding(deploymentBinding) }).chat(modelId, { sessionAffinity: deps.sessionAffinity })
         : userAccountModel(modelId, deps);
 
       return wrapLanguageModel({ model, middleware: toolCallIdMiddleware() });
