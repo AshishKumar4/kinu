@@ -178,6 +178,12 @@ interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
   revoke(deviceId: string): Promise<{ ok: boolean; unstoppedCommands?: number }>;
   requests(): Promise<Array<{ requestId: string; turnId: string | null; outcome: string | null; claim: string | null }>>;
   unstoppedSince(deviceId: string): Promise<number | null>;
+  hostWorkspace(workspace: string, deviceId: string): Promise<void>;
+  startParkedTurn(workspace: string, text: string): Promise<void>;
+  releaseTurn(): Promise<void>;
+  runOnMachine(workspace: string, command: string): Promise<string>;
+  stopWork(workspace: string): Promise<Array<{ requestId?: string; outcome: string; detail?: string }>>;
+  pendingConsents(workspace: string): Promise<number>;
 }
 
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
