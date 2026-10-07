@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { failureRationale, type EvalRunOutput } from './task';
 
-const metrics = { modelTurns: 3, toolCalls: 2, toolErrors: 0, providerWaits: 0, providerWaitMs: 0 };
+const metrics = { modelTurns: 3, toolCalls: 2, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 };
 
 /** A run of a turn that passed its check, then one that ended `outcome`, as the harness records it. */
 function run(outcome: EvalRunOutput['turns'][number]['outcome'], checks: EvalRunOutput['turns'][number]['checks'] = []): EvalRunOutput {

@@ -89,9 +89,13 @@ export type EvalTurnResult = {
 /**
  * What a trial cost the agent, off the run ledger. `providerWaits` and `providerWaitMs` are the
  * product waiting out the model provider (429 backoff, a retry-after, a shared cooldown): the eval
- * account's rate limit, not the agent's work, reported as infrastructure.
+ * account's rate limit, not the agent's work, reported as infrastructure. Of the tool errors,
+ * `badInputCalls` were refused as bad input (arguments the tool's schema or its own rules reject:
+ * a call malformed or misused) and `unknownToolCalls` named no tool the product offers.
  */
-export type EvalMetrics = { modelTurns: number; toolCalls: number; toolErrors: number; providerWaits: number; providerWaitMs: number };
+export type EvalMetrics = {
+  modelTurns: number; toolCalls: number; toolErrors: number; badInputCalls: number; unknownToolCalls: number; providerWaits: number; providerWaitMs: number;
+};
 
 export type EvalRunOutput = { success: boolean; turns: EvalTurnResult[]; metrics: EvalMetrics };
 

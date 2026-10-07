@@ -397,10 +397,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const result = {
         output: {
           success, turns,
-          metrics: {
-            modelTurns: metrics.modelTurns, toolCalls: metrics.toolCalls, toolErrors: metrics.toolErrors,
-            providerWaits: metrics.providerWaits, providerWaitMs: metrics.providerWaitMs,
-          },
+          metrics,
         },
         events: transcript,
         usage: {
