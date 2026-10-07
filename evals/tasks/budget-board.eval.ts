@@ -429,7 +429,9 @@ how far over budget the team is, in dollars, and which of its expenses that mont
 
           await board.until(TEAMS, (seen) => (seen.regions.design ?? []).some((region) => region.controls.some((label) => ASK.test(label))));
 
-          return verifier.reach(() => board.press(TEAMS, { name: 'design', label: ASK.source }));
+          const reach = await verifier.reach(() => board.press(TEAMS, { name: 'design', label: ASK.source }));
+
+          return { ...reach, faults: await board.faults() };
         });
 
         const written = await verifier.readFile(note);

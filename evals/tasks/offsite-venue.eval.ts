@@ -87,7 +87,11 @@ date, the headcount and the total.`,
         const reached = await verifier.browse(async (browser) => {
           const card = (await readAnswer(browser, 1, NAMES, offersTheVenuesThatFit)).find((reading) => reading.held);
 
-          return verifier.reach(async () => card !== undefined && card.view.press(NAMES, { name: PICK.name, label: null }));
+          if (card === undefined) return { acted: false, runs: [] };
+          const reach = await verifier.reach(() => card.view.press(NAMES, { name: PICK.name, label: null }));
+
+          // What the page said of the click: a send it could not make fails there, out of the agent's sight.
+          return { ...reach, faults: await card.view.faults() };
         });
 
         const booking = await verifier.readFile(BOOKING_PATH);

@@ -91,11 +91,14 @@ export class SlateView {
     return v.parse(Faults, await this.frame.evaluate(DOCUMENT_FAULTS));
   }
 
-  /** A picture of the frame as the person sees it, for a judge to look at. */
+  /** A picture of the frame as the person sees it, for a judge to look at, once the chat has scrolled it into view:
+   *  the chat lays out only what is near the screen, and a frame it has not laid out has no box to picture. */
   async picture(): Promise<Uint8Array<ArrayBuffer>> {
     const element = await this.frame.frameElement();
 
     if (element === null) throw new Error('the slate frame is no longer on the page');
+    await element.evaluate((frame) => { frame.scrollIntoView({ block: 'center' }); });
+    await element.evaluate(() => new Promise((painted) => { requestAnimationFrame(() => { requestAnimationFrame(painted); }); }));
 
     return new Uint8Array(await element.screenshot({ type: 'png' }));
   }

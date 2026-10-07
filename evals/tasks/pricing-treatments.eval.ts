@@ -39,15 +39,12 @@ function showsEveryPrice(sight: Sight): boolean {
     && shows(sight.text, plan.monthlyUsd) && shows(sight.text, yearlyUsd(plan)));
 }
 
-/** A fresh chat page draws the answer's slates, at least three, each showing every price; and what each looks like. */
-async function everyTreatment(verifier: EvalVerifier): Promise<{ outcome: EvalCheckOutcome; pictures: Uint8Array<ArrayBuffer>[] }> {
+/** A fresh chat page draws the answer's slates, at least three, each showing every price. */
+function everyTreatment(verifier: EvalVerifier): Promise<EvalCheckOutcome> {
   return verifier.browse(async (browser) => {
     const readings = await readAnswer(browser, 3, [], showsEveryPrice);
 
-    return {
-      outcome: { pass: readings.length >= 3 && readings.every((reading) => reading.held), evidence: readings.map(readingEvidence) },
-      pictures: await Promise.all(readings.map((reading) => reading.view.picture())),
-    };
+    return { pass: readings.length >= 3 && readings.every((reading) => reading.held), evidence: readings.map(readingEvidence) };
   });
 }
 
@@ -63,24 +60,22 @@ yearly price with the annual discount taken off.`,
       await answersWithSlates(verifier, 3);
       await madeNoApp(verifier);
 
-      let pictures: Uint8Array<ArrayBuffer>[] = [];
+      await verifier.check('each-treatment-shows-every-price', () => everyTreatment(verifier));
 
-      await verifier.check('each-treatment-shows-every-price', async () => {
-        const drawn = await everyTreatment(verifier);
+      // Pictured in a browser of its own, so a picture that cannot be taken fails this check alone.
+      await verifier.check('the-treatments-look-different', () => verifier.browse(async (browser) => {
+        const views = await browser.answerSlates(await browser.open(), 3);
+        const pictures: Uint8Array<ArrayBuffer>[] = [];
 
-        pictures = drawn.pictures;
+        // One at a time: each is scrolled into view to be pictured.
+        for (const view of views) pictures.push(await view.picture());
 
-        return drawn.outcome;
-      });
-
-      await verifier.check('the-treatments-look-different', async () => {
-        if (pictures.length < 3) return { pass: false, evidence: { treatments: pictures.length } };
         const judged = await verifier.judgement(DIFFERENT_DESIGNS, pictures);
 
-        return { pass: judged.verdict === true, evidence: { judged, treatments: pictures.length } };
-      });
+        return { pass: views.length >= 3 && judged.verdict === true, evidence: { judged, treatments: views.length } };
+      }));
 
-      await verifier.check('a-reload-shows-the-same', async () => (await everyTreatment(verifier)).outcome);
+      await verifier.check('a-reload-shows-the-same', () => everyTreatment(verifier));
     },
   }],
 });
