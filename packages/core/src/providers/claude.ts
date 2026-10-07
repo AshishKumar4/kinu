@@ -14,6 +14,7 @@ import { diagnostics, KinuError, settle, settleSync, tolerate } from '../obs/ind
 import { sha256Hex } from '../safety/argument-digest';
 import { JsonObjectSchema, JsonValueSchema, parseJsonObject, parseJsonValue } from '../utils/json';
 import { xxHash64 } from '../utils/xxhash64';
+import { heardFetch } from './middleware/attempt';
 
 export const CLAUDE_CRED_KEY = 'claude.oauth';
 
@@ -527,7 +528,7 @@ export function createClaudeProvider(): ModelProvider {
             }))),
           };
 
-          const provider = createAnthropic({ apiKey: 'oauth-placeholder', fetch: asFetchFunction((_input, init) => settle(claudeCall(call, init ?? {}))) });
+          const provider = createAnthropic({ apiKey: 'oauth-placeholder', fetch: heardFetch(asFetchFunction((_input, init) => settle(claudeCall(call, init ?? {})))) });
 
           return provider.languageModel(modelId);
         }));

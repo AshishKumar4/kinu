@@ -10,6 +10,7 @@ import { APICallError, streamText } from 'ai';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { callRetries } from '../src/providers/middleware/retry';
 import { withModelStack } from '../src/providers/wire-model';
+import { createWorkersAIProvider } from '../src/providers/workers-ai-provider';
 import type { ProviderWaitInfo } from '../src/providers/types';
 import { fmtSpan } from '../src/utils/format';
 
@@ -310,5 +311,124 @@ describe('a provider whose stream opens with its error', () => {
 
     expect(String(answered.errors.at(-1))).toContain('Upstream error from Inception');
     expect(provider.calls()).toBe(2);
+  });
+});
+
+describe('keepalives reach the bound on every transport a model answers through', () => {
+  /** Comment-only keepalives for three bounds, then the answer, over a transport the test feeds. */
+  async function thinkingThenAnswering(body: ScriptedStream, frames: { readonly answer: Uint8Array[]; readonly comment: Uint8Array }): Promise<void> {
+    for (let comment = 0; comment < 3; comment++) {
+      const controller = await body.next();
+
+      await advance(IDLE_MS - 1);
+      controller.enqueue(frames.comment);
+    }
+
+    for (const chunk of frames.answer) (await body.next()).enqueue(chunk);
+    (await body.next()).close();
+  }
+
+  test('a wire model built with its own fetch, outside the registry', async () => {
+    jest.useFakeTimers();
+    const body = scriptedStream();
+    const fetch = asFetchFunction(async () => new Response(body.body, { headers: { 'content-type': 'text/event-stream' } }));
+
+    const model = withModelStack(
+      createChatModel({ kind: 'openai-compat', name: 'stub', baseURL: 'https://stub.invalid/v1', headers: {}, modelId: 'm', fetch }),
+      { provider: 'stub', lane: 'stub|' },
+    );
+
+    const result = streamText({ model, prompt: 'go', maxRetries: 0 });
+    const fed = thinkingThenAnswering(body, { comment: encoder.encode(': OPENROUTER PROCESSING\n\n'), answer: [delta('thought it through'), ...finish] });
+
+    expect(await result.text).toBe('thought it through');
+    await fed;
+  });
+
+  test('the deployment\'s Workers AI binding', async () => {
+    jest.useFakeTimers();
+    const body = scriptedStream();
+    let runs = 0;
+
+    const binding = {
+      run: async () => {
+        runs += 1;
+
+        return new Response(body.body, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    };
+
+    const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false };
+    const model = withModelStack(createWorkersAIProvider(Object.create(binding)).createModel('@cf/stub/model', deps), { provider: 'workers-ai', lane: 'workers-ai|' });
+    const result = streamText({ model, prompt: 'go', maxRetries: 0 });
+
+    const fed = thinkingThenAnswering(body, {
+      comment: encoder.encode(': keepalive\n\n'),
+      answer: [frame(JSON.stringify({ response: 'thought it through' })), frame(JSON.stringify({ response: '', usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } })), frame('[DONE]')],
+    });
+
+    expect({ text: await result.text, runs }).toEqual({ text: 'thought it through', runs: 1 });
+    await fed;
+  });
+});
+
+describe('an attempt the provider refuses before answering', () => {
+  test('leaves no watchdog behind', async () => {
+    jest.useFakeTimers();
+    const fetch = asFetchFunction(async () => Response.json({ error: { message: 'bad request' } }, { status: 400 }));
+
+    const model = withModelStack(
+      createChatModel({ kind: 'openai-compat', name: 'stub', baseURL: 'https://stub.invalid/v1', headers: {}, modelId: 'm', fetch }),
+      { provider: 'stub', lane: 'stub|' },
+    );
+
+    const errors: unknown[] = [];
+
+    await streamText({ model, prompt: 'go', maxRetries: 0, onError: ({ error }) => { errors.push(error); } }).consumeStream();
+
+    expect({ failed: errors.length, timers: jest.getTimerCount() }).toEqual({ failed: 1, timers: 0 });
+  });
+});
+
+describe('a side request inside the attempt', () => {
+  test('does not take the inference stream\'s keepalives', async () => {
+    jest.useFakeTimers();
+    const body = scriptedStream();
+
+    // A transport that renews something first, through the same `deps.fetch`, as a login refresh or a catalog read does.
+    const fetch = asFetchFunction(async (input) => {
+      const url = input instanceof Request ? input.url : input.toString();
+
+      return url.includes('side.test') ? Response.json({ renewed: true }) : new Response(body.body, { headers: { 'content-type': 'text/event-stream' } });
+    });
+
+    const registry = createProviderRegistry();
+
+    registry.register({
+      id: 'side', isAvailable: () => true, listModels: () => [],
+      createModel: (modelId, deps) => createChatModel({
+        kind: 'openai-compat', name: 'side', baseURL: 'https://stub.invalid/v1', headers: {}, modelId,
+        fetch: asFetchFunction(async (input, init) => {
+          await (deps.fetch ?? fetch)('https://side.test/refresh');
+
+          return await (deps.fetch ?? fetch)(input, init);
+        }),
+      }),
+    });
+
+    const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false, fetch };
+    const result = streamText({ model: registry.resolve('side/m', deps), prompt: 'go', maxRetries: 0 });
+
+    for (let comment = 0; comment < 3; comment++) {
+      const controller = await body.next();
+
+      await advance(IDLE_MS - 1);
+      controller.enqueue(encoder.encode(': OPENROUTER PROCESSING\n\n'));
+    }
+
+    for (const chunk of [delta('thought it through'), ...finish]) (await body.next()).enqueue(chunk);
+    (await body.next()).close();
+
+    expect(await result.text).toBe('thought it through');
   });
 });

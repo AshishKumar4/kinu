@@ -169,6 +169,23 @@ interface CodexEgressRecordsRpc extends Rpc.WorkerEntrypointBranded {
   read(id: string): ProbeRecords;
 }
 
+/** The production UserDO's device chokepoint, with the identities a test cannot mint from outside. */
+interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
+  fetch(input: string, init?: RequestInit): Promise<Response>;
+  pair(label: string): Promise<{ deviceId: string; ticket: string }>;
+  bindWorkspace(workspace: string, deviceId: string): Promise<void>;
+  admit(requestId: string, deviceId: string, workspace: string, turnId: string): Promise<void>;
+  run(workspace: string, requestId: string, turnId: string, command: string): Promise<string | undefined>;
+  cancelOwn(workspace: string, requestId: string): Promise<string | undefined>;
+  stopTurn(workspace: string, turnId: string): Promise<Array<{ requestId?: string; outcome: string; detail?: string }>>;
+  acknowledge(workspace: string, requestId: string): Promise<void>;
+  withdrawConsent(workspace: string, deviceId: string): Promise<{ ok: boolean }>;
+  answerConsent(workspace: string, decision: 'once' | 'always' | 'deny'): Promise<void>;
+  revoke(deviceId: string): Promise<{ ok: boolean; unstoppedCommands?: number }>;
+  requests(): Promise<Array<{ requestId: string; turnId: string | null; outcome: string | null; claim: string | null }>>;
+  unstoppedSince(deviceId: string): Promise<number | null>;
+}
+
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
   setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
   releaseChild(): Promise<void>;
@@ -417,6 +434,7 @@ declare global {
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       DELETE_ALL_PROBE: DurableObjectNamespace<import('./delete-all-probe').DeleteAllProbeDO>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
+      DEVICE_USER_PROBE: DurableObjectNamespace<DeviceUserProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;
       AGENT_FACET_PROBE: DurableObjectNamespace<AgentFacetProbeRpc>;

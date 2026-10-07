@@ -74,7 +74,10 @@ function kinuOptions(params: LanguageModelV4CallOptions): KinuOptions {
 
 type Opened<T> =
   | { readonly kind: 'answer'; readonly value: T }
+  /** Final: no retry reads it again. */
   | { readonly kind: 'failed'; readonly error: unknown }
+  /** The provider refused before answering, a failure the retry classifies. */
+  | { readonly kind: 'refused'; readonly error: unknown }
   | { readonly kind: 'stall' | 'backoff' };
 
 /** One call to the provider; `last` once no retry is left. */
@@ -151,13 +154,13 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       if (checked !== null) yield* cooledDown({ policy, pacer, lane: checked, owned, retries, now, signal, reportWait });
 
       const [opened] = yield* Effect.promise(() => Promise.allSettled([open(waits >= retries)]));
+      const outcome: Opened<T> = opened.status === 'fulfilled' ? opened.value : { kind: 'refused', error: opened.reason };
 
-      if (opened.status === 'fulfilled') {
-        const outcome = opened.value;
+      if (outcome.kind === 'answer') return outcome.value;
 
-        if (outcome.kind === 'answer') return outcome.value;
+      if (outcome.kind === 'failed') return yield* Effect.die(outcome.error);
 
-        if (outcome.kind === 'failed') return yield* Effect.die(outcome.error);
+      if (outcome.kind !== 'refused') {
         yield* spendRetry(() => stalled(policy.provider));
         const waitMs = Math.floor(random() * backoffCeiling(attemptNumber));
 
@@ -166,7 +169,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
         continue;
       }
 
-      const failure: unknown = opened.reason;
+      const failure: unknown = outcome.error;
 
       if (!APICallError.isInstance(failure) || !failure.isRetryable) return yield* Effect.die(failure);
       const limit = rateLimitOf(failure);
@@ -287,8 +290,18 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
   const started = Date.now();
   const silent = Promise.withResolvers<null>();
   const bound = new SilenceBound(attempt.provider, attempt.caller, async () => { silent.resolve(null); });
-  const opening = Promise.resolve(inAttempt(bound.attempt, attempt.start));
-  const opened = await Promise.race([opening, silent.promise]);
+  // Started a microtask on, so a provider that throws as it is called rejects the opening instead of escaping it.
+  const opening = Promise.resolve().then(() => inAttempt(bound.attempt, attempt.start));
+  const [first] = await Promise.allSettled([Promise.race([opening, silent.promise])]);
+
+  // A refusal before any answer ends the attempt: its watchdog and its hold on the caller's cancel go with it.
+  if (first.status === 'rejected') {
+    bound.stop();
+
+    return { kind: 'refused', error: first.reason };
+  }
+
+  const opened = first.value;
 
   if (opened === null) {
     await abandoned(opening.then((late) => late.stream.cancel()));
