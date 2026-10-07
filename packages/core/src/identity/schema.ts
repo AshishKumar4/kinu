@@ -84,25 +84,20 @@ const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     head_source_name                TEXT    NOT NULL DEFAULT '',
     head_cut_message_id             TEXT    NOT NULL DEFAULT '',
     head_cut_created_at             INTEGER NOT NULL DEFAULT 0,
-    staged_agent_config             INTEGER NOT NULL DEFAULT 0,
-    staged_crafted_tools            INTEGER NOT NULL DEFAULT 0,
-    staged_session_messages         INTEGER NOT NULL DEFAULT 0,
-    staged_conversation_entries     INTEGER NOT NULL DEFAULT 0,
-    staged_conversation_entry_parts INTEGER NOT NULL DEFAULT 0,
-    staged_context_members          INTEGER NOT NULL DEFAULT 0,
     transfer_id                     TEXT,
     expected_seq                    INTEGER NOT NULL DEFAULT 0,
     section_cursor                  INTEGER NOT NULL DEFAULT 0,
     stream                          TEXT    NOT NULL DEFAULT '',
     import_path                     TEXT,
-    want_agent_config               INTEGER NOT NULL DEFAULT 0,
-    want_crafted_tools              INTEGER NOT NULL DEFAULT 0,
-    want_session_messages           INTEGER NOT NULL DEFAULT 0,
-    want_conversation_entries       INTEGER NOT NULL DEFAULT 0,
-    want_conversation_entry_parts   INTEGER NOT NULL DEFAULT 0,
-    want_context_members            INTEGER NOT NULL DEFAULT 0,
     want_files                      INTEGER NOT NULL DEFAULT 0,
     published                       INTEGER NOT NULL DEFAULT 0
+  )`;
+
+/** Each row section's rows the source declared, and how many the target has taken (fork-sections.ts names them). */
+const FORK_TRANSFER_COUNTS_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer_counts (
+    section  TEXT    PRIMARY KEY,
+    declared INTEGER NOT NULL DEFAULT 0,
+    staged   INTEGER NOT NULL DEFAULT 0
   )`;
 
 /** What an unpublished transfer placed (SOUL.md and each import's destination); a replacement `begin` removes exactly these. */
@@ -118,6 +113,7 @@ export function initWorkspaceOwnershipTables(execRaw: RawSqlExec): void {
   execRaw(WORKSPACE_IDENTITY_DDL);
   execRaw(FORK_LINEAGE_DDL);
   execRaw(FORK_TRANSFER_DDL);
+  execRaw(FORK_TRANSFER_COUNTS_DDL);
   execRaw(FORK_STAGED_FILES_DDL);
 }
 

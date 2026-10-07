@@ -11,18 +11,12 @@ import { invalidateConversationSearchIndex } from '../memory/conversation-search
 import { openWorkspaceMainActor, WorkspaceActorDirectory } from './workspace-actors';
 import { KinuError } from '../obs/error';
 import { forkArtifactPath } from './fork-plan';
-import type {
-  ForkConfigRow,
-  ForkContextMemberRow,
-  ForkConversationEntryPartRow,
-  ForkConversationEntryRow,
-  ForkCraftedToolRow,
-  ForkSessionMessageRow,
-  ForkSnapshotHead,
-} from './fork-rows';
+import type { ForkSnapshotHead } from './fork-rows';
+import { FORK_FAMILIES, type ForkReset } from './fork-policy';
+import { FORK_CONTEXT_REVISION, FORK_SECTIONS, perSection, type ForkRows, type ForkRowSection, type ForkSectionTarget } from './fork-sections';
 
-/** Revision of the target's fresh context: a restoration of the cut membership, not a continuation. */
-const FORK_CONTEXT_REVISION = 1;
+/** What the write empties before it stages, in the order that keeps every foreign key satisfied (fork-policy.ts). */
+const FORK_WRITE_RESETS: readonly ForkReset[] = Object.values(FORK_FAMILIES).flatMap((family) => family.resets ?? []);
 
 export interface ForkResult {
   forkPointMs: number;
@@ -43,16 +37,9 @@ export interface ForkWriteTarget {
   transaction?: (rows: () => void) => void;
 }
 
-/** How much a source declares it sends, and a writer has taken; checked against each other before publishing. */
-export const ForkSectionCountsSchema = v.object({
-  agentConfig: v.number(),
-  craftedTools: v.number(),
-  sessionMessages: v.number(),
-  conversationEntries: v.number(),
-  conversationEntryParts: v.number(),
-  contextMembers: v.number(),
-  files: v.number(),
-});
+/** How much a source declares it sends, and a writer has taken: each section's rows, and the files. Checked against
+ *  each other before publishing. */
+export const ForkSectionCountsSchema = v.object({ ...perSection(() => v.number()), files: v.number() });
 
 export type ForkStagedCounts = v.InferOutput<typeof ForkSectionCountsSchema>;
 
@@ -102,116 +89,32 @@ export class ForkTargetWriter {
   }
 
   /**
-     * Delete every row this write owns so a retry self-heals; children first.
-     * `workspace_identity` is kept: a hosted target's file namespace derives from its owner row.
-     */
+   * Empty what an abandoned attempt left, so a retry self-heals: every table the fork's families reset
+   * (fork-policy.ts), children first. `workspace_identity` stays: a hosted target's file namespace derives from it.
+   */
   clearStagedRows(): void {
     const actorId = this.actorId;
-    void this.target`DELETE FROM crafted_tools`;
+
+    for (const reset of FORK_WRITE_RESETS) emptied(this.target, reset, actorId);
+
     markStoreChanged(this.target);
-    void this.target`DELETE FROM memory_note_chunks_fts`;
-    void this.target`DELETE FROM memory_note_chunks`;
-    void this.target`DELETE FROM memory_note_files`;
-    void this.target`DELETE FROM actor_config WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM fork_lineage`;
-    void this.target`DELETE FROM conversation_entry_parts WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM conversation_entries WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM context_memberships WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM actor_context_selection WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM context_revisions WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM actor_contexts WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM stream_parts WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM session_messages WHERE actor_id = ${actorId}`;
   }
 
-  stageAgentConfig(rows: readonly ForkConfigRow[]): void {
-    const config = openWorkspaceMainActor(this.target).config;
-
-    for (const row of rows) config.set(row.key, row.value);
-    this.staging.count({ agentConfig: rows.length });
+  /** One batch of one section, where the section's declaration lands it. */
+  stage<K extends ForkRowSection>(kind: K, rows: readonly ForkRows[K][]): void {
+    FORK_SECTIONS[kind].stage(this.sectionTarget, rows);
+    this.staging.count(kind, rows.length);
   }
 
-  stageCraftedTools(rows: readonly ForkCraftedToolRow[]): void {
-    for (const t of rows) {
-      void this.target`
-        INSERT OR REPLACE INTO crafted_tools
-        (name, description, code, created_at, updated_at)
-        VALUES (${t.name}, ${t.description}, ${t.code}, ${t.created_at}, ${t.updated_at})
-      `;
-      markStoreChanged(this.target);
-    }
-
-    this.staging.count({ craftedTools: rows.length });
-  }
-
-  /** Carried messages under this target's actor; request, output slot and ingress id do not cross. */
-  stageSessionMessages(rows: readonly ForkSessionMessageRow[]): void {
+  private get sectionTarget(): ForkSectionTarget {
     const actorId = this.actorId;
 
-    for (const row of rows) {
-      void this.target`
-        INSERT INTO session_messages
-        (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id,
-         envelope_json, sealed_at, content_json, content_path, content_digest)
-        VALUES (${actorId}, ${row.message_id}, ${row.role}, ${row.native_content_kind}, ${row.origin},
-                ${null}, ${null}, ${null},
-                ${row.envelope_json}, ${row.sealed_at}, ${row.content_json},
-                ${row.content_path === null ? null : this.artifactPath(row.content_path)}, ${row.content_digest})
-      `;
-    }
-
-    this.staging.count({ sessionMessages: rows.length });
-  }
-
-  /** The public chat, oldest first; context columns stay null until publication. */
-  stageConversationEntries(rows: readonly ForkConversationEntryRow[]): void {
-    const actorId = this.actorId;
-
-    for (const row of rows) {
-      void this.target`
-        INSERT INTO conversation_entries
-        (actor_id, session_id, id, position, role, turn_id, run_id,
-         metadata_json, metadata_path, metadata_digest, recorded_at, context_id, context_revision)
-        VALUES (${actorId}, ${CHAT_SESSION_ID}, ${row.id}, ${row.position}, ${row.role},
-                ${row.turn_id}, ${row.run_id}, ${row.metadata_json},
-                ${row.metadata_path === null ? null : this.artifactPath(row.metadata_path)},
-                ${row.metadata_digest}, ${row.recorded_at}, ${null}, ${null})
-      `;
-    }
-
-    this.staging.count({ conversationEntries: rows.length });
-  }
-
-  stageConversationEntryParts(rows: readonly ForkConversationEntryPartRow[]): void {
-    const actorId = this.actorId;
-
-    for (const row of rows) {
-      void this.target`
-        INSERT INTO conversation_entry_parts
-        (actor_id, session_id, entry_id, position, message_id, part_no, text_start, text_length)
-        VALUES (${actorId}, ${CHAT_SESSION_ID}, ${row.entry_id}, ${row.position}, ${row.message_id},
-                ${row.part_no}, ${row.text_start}, ${row.text_length})
-      `;
-    }
-
-    this.staging.count({ conversationEntryParts: rows.length });
-  }
-
-  /** The restored working context: one revision of a fresh context with the cut revision's membership. */
-  stageContextMembers(rows: readonly ForkContextMemberRow[]): void {
-    const actorId = this.actorId;
-    const contextId = this.forkContext(actorId);
-
-    for (const row of rows) {
-      void this.target`
-        INSERT INTO context_memberships
-        (actor_id, context_id, entry_id, from_revision, to_revision, position, message_id)
-        VALUES (${actorId}, ${contextId}, ${row.entry_id}, ${FORK_CONTEXT_REVISION}, ${null},
-                ${row.position}, ${row.message_id})
-      `;
-    }
-
-    this.staging.count({ contextMembers: rows.length });
+    return {
+      sql: this.target,
+      actorId,
+      artifactPath: (relative) => this.artifactPath(relative),
+      context: () => this.forkContext(actorId),
+    };
   }
 
   publish(): Promise<ForkResult> {
@@ -329,6 +232,14 @@ export class ForkTargetWriter {
 
     return contextId;
   }
+}
+
+/** Empties one declared table. A table name cannot be bound, so it is written into the statement: the declaration's
+ *  name, never a frame's. */
+function emptied(sql: SqlExecutor, { table, scope }: ForkReset, actorId: string): void {
+  const strings = scope === 'actor' ? [`DELETE FROM ${table} WHERE actor_id = `, ''] : [`DELETE FROM ${table}`];
+
+  sql(Object.assign(strings, { raw: strings }), ...(scope === 'actor' ? [actorId] : []));
 }
 
 /** One transfer's result from stored state; returned at publication and for every re-delivered frame. */

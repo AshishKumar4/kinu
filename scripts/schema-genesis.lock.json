@@ -640,6 +640,11 @@
   "fork_staged_files@packages/core/src/identity/schema.ts": [
     "path TEXT PRIMARY KEY"
   ],
+  "fork_transfer_counts@packages/core/src/identity/schema.ts": [
+    "section TEXT PRIMARY KEY",
+    "declared INTEGER NOT NULL DEFAULT 0",
+    "staged INTEGER NOT NULL DEFAULT 0"
+  ],
   "fork_transfer@packages/core/src/identity/schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "head_declared INTEGER NOT NULL DEFAULT 0",
@@ -647,23 +652,11 @@
     "head_source_name TEXT NOT NULL DEFAULT ''",
     "head_cut_message_id TEXT NOT NULL DEFAULT ''",
     "head_cut_created_at INTEGER NOT NULL DEFAULT 0",
-    "staged_agent_config INTEGER NOT NULL DEFAULT 0",
-    "staged_crafted_tools INTEGER NOT NULL DEFAULT 0",
-    "staged_session_messages INTEGER NOT NULL DEFAULT 0",
-    "staged_conversation_entries INTEGER NOT NULL DEFAULT 0",
-    "staged_conversation_entry_parts INTEGER NOT NULL DEFAULT 0",
-    "staged_context_members INTEGER NOT NULL DEFAULT 0",
     "transfer_id TEXT",
     "expected_seq INTEGER NOT NULL DEFAULT 0",
     "section_cursor INTEGER NOT NULL DEFAULT 0",
     "stream TEXT NOT NULL DEFAULT ''",
     "import_path TEXT",
-    "want_agent_config INTEGER NOT NULL DEFAULT 0",
-    "want_crafted_tools INTEGER NOT NULL DEFAULT 0",
-    "want_session_messages INTEGER NOT NULL DEFAULT 0",
-    "want_conversation_entries INTEGER NOT NULL DEFAULT 0",
-    "want_conversation_entry_parts INTEGER NOT NULL DEFAULT 0",
-    "want_context_members INTEGER NOT NULL DEFAULT 0",
     "want_files INTEGER NOT NULL DEFAULT 0",
     "published INTEGER NOT NULL DEFAULT 0"
   ],

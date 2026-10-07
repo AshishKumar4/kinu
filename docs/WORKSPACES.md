@@ -252,6 +252,19 @@ A workspace holds the state. Agents are the actors that work inside it.
   frames and `ForkTransferReceiver` lands them; `deliverCloudFork`
   (`packages/cf-backend/src/user/workspace-fork.ts`) is the hosted entry point.
 
+  What a fork takes is declared once per family of state in
+  `packages/core/src/identity/fork-policy.ts`, and every table a workspace holds
+  names its family there (`unit-fork-policy` fails otherwise): **as of the cut**
+  (the chat, the model messages it references, the cut's working context),
+  **current** (settings without the shell-approval authority, crafted tools),
+  **fresh** (identity, lineage, the scaffold, the memory index, rebuilt from the
+  carried notes) or **not copied** (turns and runs, jobs and schedules,
+  approvals, what the source learned, exploration, slates, GitHub activity, the
+  `db` tool's tables). The row sections that carry a family
+  (`fork-sections.ts`) and the tables the write empties before a retry stages,
+  children first, are derived from it. A frame can name only a path inside the
+  target's own artifact directory or home; any other is refused on arrival.
+
   On the hosted path the source and the target are two Durable Objects. One
   serialized RPC argument is capped at 32 MiB (`do.facet.rpc_bytes`) and a
   workspace's history is not, so the snapshot crosses as frames: a `begin` that

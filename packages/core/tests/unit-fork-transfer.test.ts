@@ -7,7 +7,7 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import {
   readForkLineage, SOUL_PATH, createWorkspaceForkSink, workspaceSoul,
-  ForkTargetWriter, ForkTransferReceiver, forkTransferFrames, sealForkFrame,
+  ForkStagingState, ForkTargetWriter, ForkTransferReceiver, forkTransferFrames, sealForkFrame,
   FORK_TRANSFER_VERSION, FORK_STREAM_SEED, foldForkStream,
   type ForkFileSink, type ForkFileSource, type ForkFrameReply,
   type ForkSectionCounts, type ForkFrame, type ForkWriteTarget, type UnsealedForkFrame,
@@ -338,6 +338,36 @@ describe('fork transfer receiver', () => {
         .rejects.toThrow(/does not carry/);
       expect(await exists(tgt.vfs, name)).toBe(before);
       expect(isFork(tgt)).toBe(false);
+    }
+  });
+
+  // A fork lands only in the target's own artifacts and home: a frame naming anywhere else is no frame of this protocol.
+  test("an import naming a path outside the target's artifacts or home is refused before it opens anything", async () => {
+    const src = await source({ spill: true });
+    const frames = framesFor(await sourceFrames(src, 'm2'));
+    const page = frames.find((frame) => frame.kind === 'page' && frame.target.in === 'artifacts');
+
+    if (page?.kind !== 'page') throw new Error('expected a page of a carried payload');
+
+    const elsewhere = [
+      { in: 'artifacts', path: '../other-workspace/artifacts/m1.json' },
+      { in: 'artifacts', path: 'm1/../../../other-workspace/m1.json' },
+      { in: 'artifacts', path: '/home/other-workspace/m1.json' },
+      { in: 'home', name: '..' },
+      { in: 'home', name: 'notes/../../other-workspace' },
+    ] as const;
+
+    for (const target of elsewhere) {
+      const tgt = fresh();
+      const receiver = receiverFor(tgt);
+
+      await drain(receiver, frames.slice(0, frames.indexOf(page)));
+      const before = new ForkStagingState(tgt.sql).read();
+
+      await expect(receiver.accept({ ...page, target })).rejects.toThrow(/not valid for protocol version/);
+      // Refused on arrival: the transfer stands where it stood, the target is not a fork, and nothing reached elsewhere.
+      expect([target, new ForkStagingState(tgt.sql).read(), isFork(tgt)]).toEqual([target, before, false]);
+      expect(await exists(tgt.vfs, '/home/other-workspace')).toBe(false);
     }
   });
 

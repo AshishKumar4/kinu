@@ -137,7 +137,6 @@
   "packages/core/src/heads/reconcile.ts#FORK_INTERRUPTED_REASON (unreached-export)",
   "packages/core/src/heads/reconcile.ts#FORK_INTERRUPTED_SIGNAL (unreached-export)",
   "packages/core/src/identity/archive.ts#writeWorkspaceArchive (unreached-export)",
-  "packages/core/src/identity/fork-transfer.ts#FORK_ROW_SECTIONS (unreached-export)",
   "packages/core/src/identity/fork-transfer.ts#FORK_STREAM_SEED (unreached-export)",
   "packages/core/src/identity/fork-transfer.ts#FORK_TRANSFER_VERSION (unreached-export)",
   "packages/core/src/identity/fork-transfer.ts#foldForkStream (unreached-export)",
@@ -275,12 +274,11 @@
   "packages/core/src/vfs/agent-home.ts#SESSION_UID (unreached-export)",
   "packages/core/src/web/provider.ts#DefaultWebSearchProviderDeps.htmlToMarkdown (unsupplied-field)",
   "packages/core/src/workspace-birth.ts#WorkspaceBirthConfig.scaffold (unsupplied-field)",
-
   "packages/devbox/src/incidents.ts#INCIDENT_LEDGER_MAX_ROWS (unreached-export)",
   "packages/devbox/src/incidents.ts#reapDeliveredIncidents (unreached-export)",
   "packages/devbox/src/lifecycle.ts#INCIDENT_STAGES (unreached-export)",
-  "packages/devbox/src/operation-lanes.ts#canonicalPath (unreached-export)",
   "packages/devbox/src/lifecycle.ts#healthProbeCommand (unreached-export)",
+  "packages/devbox/src/operation-lanes.ts#canonicalPath (unreached-export)",
   "packages/devbox/src/operation-lanes.ts#scopesOverlap (unreached-export)",
   "packages/devbox/src/storage.ts#ATTACH_OUTCOME_KINDS (unreached-export)"
 ]
