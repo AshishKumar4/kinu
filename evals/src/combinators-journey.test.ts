@@ -1,12 +1,12 @@
 import { describe, expect, test, spyOn } from 'bun:test';
 import { basename } from 'node:path';
 import * as v from 'valibot';
-import { JsonValueSchema, packZip, type ZipEntry } from '@kinu.run/core';
+import { JsonValueSchema, packZip, type ZipEntry, WORKSPACE_ROOT } from '@kinu.run/core';
 import { combinatorsJourney, summaryOf, type ReportSummary } from '../tasks/combinators-journey';
 import { EvalVerifier, type VerifierSession } from './verifier';
 import type { EvalCheck, EvalTurn } from './task';
 
-const DESK = '/home/user/combinators';
+const DESK = `${WORKSPACE_ROOT}/combinators`;
 
 const CHECKOUT = '/workspace/true-myth';
 

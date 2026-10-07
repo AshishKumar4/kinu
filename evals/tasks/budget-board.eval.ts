@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import type { JsonValue } from '@kinu.run/core';
+import { WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
 import { shows, sightEvidence, type Sight } from '../src/sight';
 import { defineEvalTask, type EvidenceCall } from '../src/task';
@@ -16,11 +16,11 @@ const MISSION = "Northwind Studio's operations workspace. We track what each tea
 
 const TEAMS = ['design', 'growth', 'platform', 'support'];
 
-const RATES_PATH = '/home/user/fx/rates.json';
+const RATES_PATH = `${WORKSPACE_ROOT}/fx/rates.json`;
 
 const QUESTION_MONTH = '2027-03';
 
-const NOTES = '/home/user/budget/notes';
+const NOTES = `${WORKSPACE_ROOT}/budget/notes`;
 
 /** Recorded by the checker while the page is open, after the page was built: growth stays within budget. */
 const LATE_EXPENSE = { id: 'x-341', team: 'growth', amountCents: 1_234, category: 'software', dateIso: '2027-03-26' };

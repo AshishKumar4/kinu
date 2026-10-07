@@ -1,4 +1,5 @@
 // Advisory: malformed or incomplete diagnoses exit non-zero before writing a comment.
+import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -12,7 +13,7 @@ import { askOnce, resolveEvalTarget } from '../src/target';
 import { renderTrajectories } from '../src/trajectories';
 import { diffBetween } from './git';
 
-const REVIEW = '/home/user/review';
+const REVIEW = `${WORKSPACE_ROOT}/review`;
 
 const TASKS = join(import.meta.dirname, '../tasks');
 

@@ -1,3 +1,4 @@
+import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { shows, sightEvidence, type Sight } from '../src/sight';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
@@ -11,9 +12,9 @@ import { answerShows, answersWithSlates, madeNoApp, readAnswer } from './ephemer
 
 const MISSION = "Brightline's people-ops workspace: offsites, travel and team events.";
 
-const VENUES_PATH = '/home/user/offsite/venues.json';
+const VENUES_PATH = `${WORKSPACE_ROOT}/offsite/venues.json`;
 
-const BOOKING_PATH = '/home/user/offsite/booking.md';
+const BOOKING_PATH = `${WORKSPACE_ROOT}/offsite/booking.md`;
 
 const HEADCOUNT = 14;
 

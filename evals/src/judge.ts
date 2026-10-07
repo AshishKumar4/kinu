@@ -4,10 +4,11 @@
  * back. `evals/scripts/calibrate-judge.ts` measures how often it agrees with renders whose answer is known; a check that
  * asks it cites that agreement.
  */
+import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { DEFAULT_MODELS } from './config';
 import { askOnce, type EvalTarget } from './target';
 
-const PICTURES = '/home/user/judge';
+const PICTURES = `${WORKSPACE_ROOT}/judge`;
 
 /** Whether pictures of one table are different designs of it, which `calibrate-judge.ts` measures the judge on. */
 export const DIFFERENT_DESIGNS = 'Does each of these pictures show a visibly different design of the same pricing table: a '

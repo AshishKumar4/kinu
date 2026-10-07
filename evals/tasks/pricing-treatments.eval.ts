@@ -1,3 +1,4 @@
+import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { shows, type Sight } from '../src/sight';
 import { defineTaskEval } from '../src/eval';
 import { DIFFERENT_DESIGNS } from '../src/judge';
@@ -12,7 +13,7 @@ import { answersWithSlates, madeNoApp, readAnswer, readingEvidence } from './eph
 
 const MISSION = "Lumen Notes' product workspace: pricing, packaging and the marketing site.";
 
-const PLANS_PATH = '/home/user/pricing/plans.csv';
+const PLANS_PATH = `${WORKSPACE_ROOT}/pricing/plans.csv`;
 
 const PLANS = [
   { plan: 'Starter', monthlyUsd: 19, discountPct: 10, seats: 3, storageGb: 50, support: 'Email' },

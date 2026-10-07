@@ -1,3 +1,4 @@
+import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { shows, type Sight } from '../src/sight';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
@@ -12,7 +13,7 @@ import { Seeded } from './seeded';
 
 const MISSION = "Atlas Payments' API on-call workspace.";
 
-const LOG_PATH = '/home/user/logs/api.jsonl';
+const LOG_PATH = `${WORKSPACE_ROOT}/logs/api.jsonl`;
 
 const DAY = '2027-06-02';
 
