@@ -392,6 +392,8 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
         KINU_DEV_PREVIEW_PORT: String(previewPort),
         // And no Workers inspector, whose default port every boot would race for (vite.config.ts).
         KINU_DEV_INSPECTOR: 'off',
+        // Nor any binding proxied to Cloudflare, which needs an account the boot does not hold (vite.config.ts).
+        KINU_DEV_REMOTE_BINDINGS: 'off',
       },
       // setsid, so vite leads its own process group: teardown can signal the
       // workerd children with it rather than orphaning them to systemd
