@@ -5,7 +5,7 @@
 
 import { Cause, Effect } from 'effect';
 import { settleSync } from '@kinu.run/core/obs';
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -156,6 +156,8 @@ export function releaseOnSignals(): void {
  * Release is registered by the preload's `afterAll`: under `bun test` 1.3.14 `process.on('exit')`/`beforeExit` never fire.
  */
 export function scratchDir(label: string, parent = tmpdir()): string {
+  // A repo-local parent such as `bench-artifacts` is ignored by git, so a fresh checkout has none.
+  mkdirSync(parent, { recursive: true });
   const dir = mkdtempSync(join(parent, `${SCRATCH_ROOT_PREFIX}${label}-`));
   minted.add(dir);
 

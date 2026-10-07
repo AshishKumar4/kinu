@@ -562,6 +562,16 @@ Source CI (`ci.yml`) runs the ladder's CI tier on pushes to `main` and `integrat
 
 `scripts/release-config.test.ts` (required gate) holds these properties. Every workflow declares its token permissions. Every credential-bearing job names an environment. No pull request can start a credential-bearing job. No workflow pipes a download into a shell. No action is used from a moving ref.
 
+### The container CI runner
+
+`armada run <commit|worktree>` (armada, the owner's mapped compute on Cloudflare Containers, kept outside this repository) runs the same CI tier for any commit, pushed or not. It reads `.armada.json` from the commit and prints every red row with the tail of its output. It exits 0 when every planned row ran once and passed, 1 when one was red, and 2 when the run could not grade the commit. A worktree must be committed first. The release gate stays GitHub CI: `deploy.sh` reads GitHub's verdict for the pushed SHA. The runner keeps each graded verdict file, in the schema `scripts/ci-verdicts.ts` reads, so switching the gate later changes only where it is read from.
+
+What this repository supplies:
+
+- `.armada.json` names the environment recipe. Armada's own layer gives every recipe what a GitHub runner has and a stock container lacks: git 2.53, iproute2, strace and a compiler. `scripts/armada/setup.sh` adds Google Chrome, bubblewrap, ffmpeg and the squashfs tools. `scripts/armada/install.sh` runs the locked install. The lock, the workspaces' manifests, the patches, the vendored SDK and both scripts' text key the environment, which is prepared once and snapshotted. Every container starts from that snapshot and only checks out its commit, with its whole history as a `fetch-depth: 0` checkout has it.
+- `ladder.ts --ci-plan --ci-costs=<timings>` prints one task per CI unit. These are the units GitHub's parts pack. Each task names the row it must report and every file a split suite must time, the same coverage `collectVerdicts` and `checkFileCoverage` hold GitHub's parts to. Each task carries its measured seconds, so the longest start first. A pool of `standard-4` containers on the `durable_object` scheduling policy pulls task after task, each running `ladder.ts --tier=ci --ci-row=<command> --verdicts=<file>` as an unprivileged user.
+- Weights are the runner's own timings, the median of each row's last five green runs, laid over `scripts/ci-cost.json`.
+
 ### Eval preflight
 
 Before an eval spends, I check that kinu.run runs the revision I am measuring:
