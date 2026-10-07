@@ -565,6 +565,7 @@ GitHub runs no source CI: the ladder's CI tier runs on armada (§ CI on armada).
 armada, the owner's mapped compute on Cloudflare Containers, is CI (L25). It is pinned as a dev dependency, so `bunx armada` is this checkout's. `bunx armada run <commit|worktree>` runs the CI tier for any commit, pushed or not: it reads `.armada.json` from the commit, prints every red row with the tail of its output, and exits 0 when every planned row ran once and passed, 1 when one was red, and 2 when the run could not grade the commit. A graded run of the whole tier stores its verdict under the commit, and `bunx armada verdict <commit>` reads it back. A worktree must be committed first. The connection is `~/.config/armada/connection.json`.
 
 - A push to `main` or `integration/**` is proved there (`.githooks/pre-push`): the hook takes the verdict armada stored for the pushed commit, or runs `armada run` when it has none, and refuses the push unless every row is green. A stored red is not run again; it is fixed in a new commit. Moving `main` to a commit integration already proved only moves the pointer. Any other push runs the `local` tier as before.
+- A commit, or a merge commit, runs only oxlint on the files it touches (`.githooks/pre-commit`). The `local` tier's rows (typecheck, whole-tree lint, structural gates) are ci rows, so the push above proves them.
 - A deploy reads the same verdict (step 1 above), and a promotion takes staging's record, which only a deploy past that gate wrote.
 
 What this repository supplies:

@@ -3,7 +3,7 @@
 Self-evolving agent framework: swarm tree-search exploration, mutable scaffolding, durable skill evolution. Two backends over one core: Cloudflare Workers (`cf-backend`, Agents SDK DOs) and local CLI (`cli-backend`, bun:sqlite). Bun workspaces under `packages/*`.
 
 ## Commands
-`bun install` · `bun run check` (strict lint + typecheck; all anti-slop rules are errors, warnings fail) · `bun test --cwd packages/core` · `bun run dev` · `bun run layergate` · `bun run deploy` (the only deploy path; never bare `wrangler deploy`) · `bash scripts/setup-worktree.sh` (once per fresh worktree; matching dependencies are linked per entry, a different lock gets a real install; never symlink the primary's whole `node_modules`). Hooks use the exact Bun installed in this checkout's `node_modules/.bin`, never the shared global. Do not install over borrowed dependency links: the scanner refuses before writing through them.
+`bun install` · `bun run check` (strict lint + typecheck; all anti-slop rules are errors, warnings fail) · `bun test --cwd packages/core` · `bun run dev` · `bun run layergate` · `bun run deploy` (the only deploy path; never bare `wrangler deploy`) · `bash scripts/setup-worktree.sh` (once per fresh worktree; matching dependencies are linked per entry, a different lock gets a real install; never symlink the primary's whole `node_modules`). Hooks use the exact Bun installed in this checkout's `node_modules/.bin`, never the shared global. A commit runs oxlint on its touched files; a push to integration/** or main runs the whole ci tier on armada. Do not install over borrowed dependency links: the scanner refuses before writing through them.
 
 ## Gates
 - A gate governs exactly the set it measures; read the corpus through `scripts/sources.ts`, never a hand list. Prove a gate red in every direction it claims before trusting it green; print its blind spots on the green path.
@@ -15,6 +15,7 @@ Self-evolving agent framework: swarm tree-search exploration, mutable scaffoldin
 - Locks keyed by path (`schema-genesis`, `wired`, `complexity`, `pattern-inventory`, `test-clocks`) are re-keyed on the path half only when a file moves; values stay byte-identical.
 - `gate:core-layering`: `packages/core` is platform (`obs utils types identity vfs execution events memory safety slates session providers config credentials checkpoints`, plus root files by name), tools (`tools craft web`), harness (everything else). Imports point down or sideways, never up; the lock shrinks only.
 - `gate:client-graph`: no path from a client entry reaches `@agent-core/core` or `bun:sqlite`.
+- The `local` tier (typecheck, whole-tree lint, structural gates) runs inside armada's ci tier at push, not at commit; `bun scripts/ladder.ts --tier=local` runs it here on demand.
 
 ## Testing judgment
 - Tests earn their maintenance cost by catching meaningful failures. Before adding one, name the failure and check existing coverage. A changed line, a minor UI tweak, or a higher test count is not justification.

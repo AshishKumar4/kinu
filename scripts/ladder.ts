@@ -592,7 +592,8 @@ export const LADDER: readonly Gate[] = [
     // day (`stepPruneBatchTokens`, `SlateSummary.port`, a lazy default export,
     // `MOVIE_ASK`) plus `PLAN_MESSAGES` here, every one authored by a lane whose
     // own acceptance was green because `bun run check` does not contain this
-    // gate. Here it cannot be handed on: the commit hook runs this tier.
+    // gate. It is in the ci tier, which proves every push to integration/**
+    // on armada, so a merge cannot hand it on to main.
     // 15.2s measured 2026-09-10 on this tree, against the 7s declared when two
     // knip runs were the whole cost.
     tier: 'commit',
