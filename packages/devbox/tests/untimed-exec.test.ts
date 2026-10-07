@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { DEFAULT_DEVBOX_POLICY } from '../src/lifecycle';
 import { devboxFailure } from '../src/errors';
 import { collectExecRecords } from '../src/exec-stream';
-import { CONTAINER_TRUST_ENV } from '../src/processes';
 import { gate, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec as localExec } from './support/native-process';
@@ -56,7 +55,7 @@ describe('an untimed command on the runtime\'s exec', () => {
     const env = { REQUESTS_CA_BUNDLE: join(cwd, 'bundle.pem') };
 
     expect(await box.execUntimed('printf "%s %s" "$REQUESTS_CA_BUNDLE" "$NODE_EXTRA_CA_CERTS"', { cwd, execId: 'env', env }))
-      .toEqual({ stdout: `${env.REQUESTS_CA_BUNDLE} ${CONTAINER_TRUST_ENV.NODE_EXTRA_CA_CERTS}`, stderr: '', exitCode: 0 });
+      .toEqual({ stdout: `${env.REQUESTS_CA_BUNDLE} /etc/cloudflare/certs/cloudflare-containers-ca.crt`, stderr: '', exitCode: 0 });
   });
 
   test('ending it ends what it started, and a command already gone is not ended again', async () => {
@@ -149,9 +148,9 @@ describe('one launch per id', () => {
     const command = 'echo ran >> effects; echo done';
     const effects = () => readFileSync(join(cwd, 'effects'), 'utf8');
 
-    const first = await box.execUntimed(command, { cwd, execId: 'once' });
+    expect(await box.execUntimed(command, { cwd, execId: 'once' })).toEqual({ stdout: 'done\n', stderr: '', exitCode: 0 });
 
-    expect(await box.execUntimed(command, { cwd, execId: 'once' })).toEqual(first);
+    expect(await box.execUntimed(command, { cwd, execId: 'once' })).toEqual({ stdout: 'done\n', stderr: '', exitCode: 0 });
     expect(effects()).toBe('ran\n');
 
     await collectExecRecords(await box.execUntimedStream(command, { cwd, execId: 'streamed' }), () => {});

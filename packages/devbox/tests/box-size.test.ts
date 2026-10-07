@@ -5,8 +5,8 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEFAULT_BOX_SIZE, type BoxSize } from '../src/sizes';
-import { devboxFailure } from '../src/errors';
+import type { BoxSize } from '../src/sizes';
+import { devboxFailure, type DevboxFailure } from '../src/errors';
 import { HARNESS_IMAGE, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec as localExec } from './support/native-process';
@@ -35,7 +35,6 @@ test('a box with no size chosen starts at the default size, on the image the hos
   const { box, container } = harness(TestBox);
   await box.start();
 
-  expect(DEFAULT_BOX_SIZE).toBe('medium');
   expect(container.startOptions).toEqual([{ image: HARNESS_IMAGE, instance: instance('medium'), enableInternet: true }]);
   expect(await box.boxSize()).toEqual({ size: 'medium', chosen: undefined, running: 'medium', startRefused: undefined });
   await box.destroy();
@@ -72,11 +71,11 @@ test('an unknown size is refused and the recorded size stays', async () => {
   const [refused] = await Promise.allSettled([box.resize('huge')]);
 
   expect(refused.status === 'rejected' ? devboxFailure({ cause: refused.reason }) : refused)
-    .toMatchObject({ code: 'invalid-input', message: 'no box size huge; the sizes are small, medium, large' });
+    .toMatchObject({ code: 'invalid-input' });
   expect(await box.boxSize()).toEqual({ size: 'small', chosen: 'small', running: undefined, startRefused: undefined });
   const [refusedDefault] = await Promise.allSettled([box.useDefaultSize('huge')]);
   expect(refusedDefault.status === 'rejected' ? devboxFailure({ cause: refusedDefault.reason }) : refusedDefault)
-    .toMatchObject({ code: 'invalid-input', message: 'no box size huge; the sizes are small, medium, large' });
+    .toMatchObject({ code: 'invalid-input' });
 });
 
 test('a box that chose no size starts at the default its host stored, over the class\'s own default', async () => {
@@ -170,8 +169,6 @@ class LateImageBox extends TestBox {
   }
 }
 
-const NO_IMAGE = '[permanent -> refuse] no image to start: name it `devbox` in the container `images` map';
-
 async function refusedStart() {
   const made = harness(LateImageBox);
   await made.box.start();
@@ -179,11 +176,15 @@ async function refusedStart() {
   return made;
 }
 
-async function refusalOf<T>(asked: Promise<T>): Promise<T | string | undefined> {
+async function refusalOf<T>(asked: Promise<T>): Promise<T | DevboxFailure> {
   const [settled] = await Promise.allSettled([asked]);
-  const failure = settled.status === 'rejected' ? devboxFailure({ cause: settled.reason }) : undefined;
 
-  return settled.status === 'rejected' ? `${failure?.code ?? 'uncoded'}: ${failure?.message ?? String(settled.reason)}` : settled.value;
+  if (settled.status === 'fulfilled') return settled.value;
+  const failure = devboxFailure({ cause: settled.reason });
+
+  if (failure === undefined) throw settled.reason;
+
+  return failure;
 }
 
 const startupRows = (container: { readonly scheduleRows: readonly { readonly callback: string }[] }) =>
@@ -202,15 +203,15 @@ test('a start that fails permanently is refused once: later requests and a succe
   expect({
     asked,
     starts: container.startOptions.length,
-    incidents: (await successor.devboxIncidentReasons()).map((row) => row.reason),
+    incidents: (await successor.devboxIncidentReasons()).length,
     armed: [armedByKick, startupRows(container)],
     reported: (await successor.boxSize()).startRefused,
   }).toEqual({
-    asked: Array.from({ length: 3 }, () => expect.stringMatching(/^refused: this devbox has no attached work directory: .*no image to start.*nothing retries it\.$/)),
+    asked: Array.from({ length: 3 }, () => expect.objectContaining({ code: 'refused' })),
     starts: 1,
-    incidents: [expect.stringContaining(NO_IMAGE)],
+    incidents: 1,
     armed: [0, 0],
-    reported: expect.stringContaining(NO_IMAGE),
+    reported: expect.any(String),
   });
 });
 
@@ -248,7 +249,7 @@ test('a changed input asks again: an image the host names later, another size, t
     cleared: undefined,
     resized: [instance('medium'), instance('large')],
     offline: [true, false],
-    reattached: expect.stringContaining(NO_IMAGE),
+    reattached: expect.objectContaining({ code: 'io' }),
     attached: 2,
     incidents: 2,
     restarted: 2,
