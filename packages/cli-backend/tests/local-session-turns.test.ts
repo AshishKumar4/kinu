@@ -1,7 +1,7 @@
 import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: a user turn end to end.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, present, scratchDir, scratchPath, scriptedAdvisorPort, scriptedTurnModel } from '@kinu.run/test-utils';
+import { AwaitedList, present, scratchDir, scratchPath, scriptedAdvisorPort, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -21,16 +21,17 @@ import { resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, his
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
   const { db, rt } = workspaceRuntime();
-  await writeText(rt.storage.vfs, 'identical.txt', 'same result');
+
+  for (const id of ['call-A', 'call-B']) await writeText(rt.storage.vfs, `${id}.txt`, 'same result');
   rt.actor.config.setDisplayNameOrigin('Identity pin', 'user');
   const first = Promise.withResolvers<void>();
   const plane: VFS = rt.toolFiles;
   const readRange = plane.readRange?.bind(plane);
 
   if (readRange === undefined) throw new Error('the workspace file plane reads by range');
-  let reads = 0;
+  // Both calls return the same bytes, but only A owns the gate: stat completion need not follow SDK call order.
   plane.readRange = async (...args) => {
-    if (args[0] === 'identical.txt' && reads++ === 0) await first.promise;
+    if (args[0] === 'call-A.txt') await first.promise;
 
     return await readRange.apply(plane, args);
   };
@@ -42,7 +43,7 @@ test('parallel native calls retain their SDK identities after reverse completion
 
     return {
       content: calls ? ['call-A', 'call-B'].map((toolCallId) => ({
-        type: 'tool-call' as const, toolCallId, toolName: 'file', input: JSON.stringify({ action: 'read', path: 'identical.txt' }),
+        type: 'tool-call' as const, toolCallId, toolName: 'file', input: JSON.stringify({ action: 'read', path: `${toolCallId}.txt` }),
       })) : [{ type: 'text', text: 'done' }],
       finishReason: { unified: calls ? 'tool-calls' : 'stop', raw: undefined },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -477,7 +478,7 @@ describe('LocalAgentSession.send — a user turn', () => {
 
   test('a placed workspace is told it is the machine, with no device row', async () => {
     let observed: PromptMessage[] = [];
-    const db = new Database(scratchPath('local-session-placed-prompt', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('local-session-placed-prompt', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('local-session-placed-prompt') });
     const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }), { rt, db });

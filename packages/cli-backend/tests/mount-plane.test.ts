@@ -2,7 +2,6 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Local environments and the mount table: a directory-bound session works on the real bytes through one `workspace`
 // executor, with no `/pc` or `/sandbox` mount.
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
@@ -10,12 +9,10 @@ import { localFilePlane } from '../src/host-mount';
 import * as v from 'valibot';
 import { type ExecutionRouter } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { present, scratchDir, scratchPath } from '@kinu.run/test-utils';
+import { present, scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 
 function freshRuntime(cwd = scratchDir('mount-plane-folder')) {
-  const db = new Database(scratchPath('mount-plane', 'agent.db'), { create: true });
-  // As `kinu create` publishes one: in WAL a commit waits on no fsync.
-  db.exec('PRAGMA journal_mode = WAL');
+  const db = workspaceDatabase(scratchPath('mount-plane', 'agent.db'), { create: true });
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' }, cwd,

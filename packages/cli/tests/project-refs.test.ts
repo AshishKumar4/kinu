@@ -1,8 +1,8 @@
 // Project-scoped local refs are metadata only: `~/.kinu/<name>/agent.db` stays the one state path, so a
 // virtual workspace groups agents and never nests them, and a relabel moves nothing.
+import { workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { mkdirSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -95,7 +95,7 @@ function bareWorkspace(name: string, identityId: string): string {
   mkdirSync(agentDir(name), { recursive: true });
   workspaces.push(name);
   const dbPath = agentDbPath(name);
-  const db = new Database(dbPath, { create: true });
+  const db = workspaceDatabase(dbPath, { create: true });
 
   try {
     db.exec('CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL)');
@@ -270,7 +270,7 @@ describe('a backend is stated, not inferred from a file', () => {
     const cwd = project();
     const created = await create('placed-shell', cwd);
     const local = resolveLocalAgent('placed-shell');
-    const db = new Database(createdDbPath(created));
+    const db = workspaceDatabase(createdDbPath(created));
 
     try {
       const { rt } = await openWorkspaceCLI(db, createdDbPath(created), { llm: null, cwd: local.cwd });
@@ -300,7 +300,7 @@ describe('a local workspace works in the folder its ref records', () => {
     const original = loadConfigFile().agents?.recycled?.identityId;
 
     if (original === undefined) throw new Error('creation recorded no identity');
-    const db = new Database(createdDbPath(created));
+    const db = workspaceDatabase(createdDbPath(created));
 
     try {
       db.query('UPDATE workspace_identity SET id = ?').run('ws-replacement');

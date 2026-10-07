@@ -1,5 +1,5 @@
 import { scratchDir } from '../../test-utils/src/scratch';
-import { AwaitedList, present, readTranscriptRows } from '@kinu.run/test-utils';
+import { AwaitedList, present, readTranscriptRows, workspaceDatabase } from '@kinu.run/test-utils';
 import { existsSync } from 'node:fs';
 
 import { join } from 'node:path';
@@ -210,7 +210,7 @@ function gateSizes(client: LocalAgentClient): number[] {
 function setup(model: LanguageModel, profileAuthority: CliProfileSource = async () => null) {
   const home = scratchDir('client');
   const dbPath = join(home, 'agent.db');
-  const db = new Database(dbPath, { create: true });
+  const db = workspaceDatabase(dbPath, { create: true });
   // The production initializer, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('client-folder') });
@@ -247,7 +247,7 @@ function openPersistentClient(
   transcriptOptions: CliSessionOptions,
 ): LocalAgentClient {
   const dbPath = join(home, 'agent.db');
-  const db = new Database(dbPath);
+  const db = workspaceDatabase(dbPath);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('client-folder') });
   rt.actor.config.setLearning(false);
@@ -332,7 +332,7 @@ describe('LocalAgentClient', () => {
     expect(recorded.cliSession.mode).toBe('record');
     await recorded.close();
 
-    const db = new Database(join(home, 'agent.db'));
+    const db = workspaceDatabase(join(home, 'agent.db'));
     const sql = makeSql(db);
     const actorId = openWorkspaceMainActor(sql).actorId;
 

@@ -11,7 +11,7 @@ import type { AgentRuntime, DeferredApprovalChannel, LLMProviderConfig, ShellApp
 import { ConversationSearchStore, buildBuiltinTools, discoverSkills, initWorkspaceSchema, reviewCommand, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { present, scratchDir, spawnTest, toolExecute } from '@kinu.run/test-utils';
+import { present, scratchDir, spawnTest, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import {
   createCLIRuntime, createHostShell, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
   type CLIRuntime, workspaceHome, soulIn,
@@ -45,14 +45,6 @@ function roots(label: string) {
 
 type LocalAgent = CLIRuntime & { readonly db: Database; readonly dbPath: string };
 
-/** A workspace's database as `kinu create` publishes it: in WAL a commit waits on no fsync. */
-function published(dbPath: string): Database {
-  const db = new Database(dbPath);
-  db.exec('PRAGMA journal_mode = WAL');
-
-  return db;
-}
-
 function agentRuntime(state: string, name: string, cwd: string): LocalAgent {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -61,7 +53,7 @@ function agentRuntime(state: string, name: string, cwd: string): LocalAgent {
     llm: DUMMY_LLM, agentName: name, cwd,
   };
 
-  const db = published(dbPath);
+  const db = workspaceDatabase(dbPath);
 
   return Object.assign(createCLIRuntime(db, config), { db, dbPath });
 }
@@ -70,7 +62,7 @@ function agentRuntime(state: string, name: string, cwd: string): LocalAgent {
 async function openedWorkspace(state: string, name: string, cwd: string) {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
-  const db = published(dbPath);
+  const db = workspaceDatabase(dbPath);
   await createWorkspace(db, { name, purpose: `Test agent ${name}`, llm: DUMMY_LLM, home: workspaceHome(db) });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
@@ -849,7 +841,7 @@ describe('SOUL.md is the workspace\'s own file', () => {
     const { state, project } = roots('soul-owner');
     const dbPath = join(state, 'jarvis', 'agent.db');
     mkdirSync(dirname(dbPath), { recursive: true });
-    const db = published(dbPath);
+    const db = workspaceDatabase(dbPath);
     await createWorkspace(db, { name: 'jarvis', purpose: 'Test agent jarvis', llm: DUMMY_LLM, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });

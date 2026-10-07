@@ -9,7 +9,7 @@ import { initWorkspaceSchema } from '@kinu.run/core';
 import { CRAFT_NEUTRAL_PRIOR } from '@kinu.run/core';
 import { createCLIRuntime, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { present, scratchPath, scratchDir } from '@kinu.run/test-utils';
+import { present, scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -55,7 +55,7 @@ function scriptedEpisode(blocks: readonly string[]): LanguageModel {
 }
 
 function episode(blocks: readonly string[]) {
-  const db = new Database(scratchPath('in-episode-craft', 'agent.db'), { create: true });
+  const db = workspaceDatabase(scratchPath('in-episode-craft', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const rt = createCLIRuntime(db, {
@@ -160,7 +160,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     await session.end();
 
     const off = (() => {
-      const dbOff = new Database(scratchPath('in-episode-craft-off', 'agent.db'), { create: true });
+      const dbOff = workspaceDatabase(scratchPath('in-episode-craft-off', 'agent.db'), { create: true });
       initWorkspaceSchema(makeWorkspaceSchemaSql(dbOff));
 
       const rt = createCLIRuntime(dbOff, {

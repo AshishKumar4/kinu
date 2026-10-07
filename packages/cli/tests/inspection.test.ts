@@ -1,5 +1,5 @@
 import { workspaceHome } from '@kinu.run/cli-backend';
-import { childEnv, runToExit } from '@kinu.run/test-utils';
+import { childEnv, runToExit, workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { placeLocalWorkspace } from './helpers/local-refs';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -103,7 +103,7 @@ async function createLocalAgent(home: string, name: string): Promise<string> {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
   const folder = placeLocalWorkspace(home, name);
-  const db = new Database(join(dir, "agent.db"));
+  const db = workspaceDatabase(join(dir, "agent.db"));
 
   try {
     const rt = await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM, home: workspaceHome(db) });
@@ -369,7 +369,7 @@ describe("CLI inspection commands", () => {
     const home = scratchDir("cli-spend");
     await createLocalAgent(home, "localtest");
 
-    const db = new Database(join(home, "localtest", "agent.db"));
+    const db = workspaceDatabase(join(home, "localtest", "agent.db"));
 
     try {
       const actorId = openWorkspaceMainActor(makeSql(db)).actorId;

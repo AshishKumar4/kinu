@@ -1,5 +1,6 @@
 // The two-process race leg lives in `agent-host.test.ts` and `packages/cli/tests/driver-lease-surfaces.test.ts`.
 // No test waits: the lease carries no timestamp, and that is the property under test.
+import { workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -17,8 +18,7 @@ import { leaseHolder } from './driver-lease-probe';
 
 function workspace() {
   const dir = scratchDir('lease');
-  const db = new Database(join(dir, 'agent.db'));
-  db.exec('PRAGMA journal_mode = WAL');
+  const db = workspaceDatabase(join(dir, 'agent.db'));
 
   return { db, dir };
 }

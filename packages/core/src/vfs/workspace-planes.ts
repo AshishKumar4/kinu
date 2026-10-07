@@ -15,9 +15,9 @@ import type { CredentialedVfs, SqliteVFS, VfsExportPage, VfsStat } from '@nimbus
 
 type FileSessionSource = { session(): Promise<Pick<WorkspaceSession, 'vfs' | 'sql'>> };
 
-/** SOUL.md as the workspace's agents left it: what the next turn's prompt carries. */
-export async function workspaceSoul(bundle: Pick<WorkspaceBundle, 'vfs'>): Promise<string | null> {
-  return await readSoul(bundle.vfs);
+/** SOUL.md as the workspace's agents left it, read on the namespace: what the next turn's prompt carries. */
+export async function workspaceSoul(bundle: Pick<WorkspaceBundle, 'namespace'>): Promise<string | null> {
+  return await readSoul(await bundle.namespace());
 }
 
 /** SOUL.md written whole, as birth, a restore and the owner's Settings write it, and left editable by every agent. */

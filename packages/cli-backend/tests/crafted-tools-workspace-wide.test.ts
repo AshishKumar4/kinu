@@ -1,10 +1,9 @@
 // Crafted tools are workspace-wide (`crafted_tools` has no actor): a node's `eval` reads main's rows and scores, as on
 // cf (workerd/agent-facet.test.ts). The node is seated, and its `eval` built, the way the session's swarm does.
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema, toolsInWorkMode, type JsonValue, type LLMProviderConfig } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
-import { scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
+import { scratchDir, scratchPath, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 import { hostedCodemodeTool } from '../src/head-runtime';
@@ -14,7 +13,7 @@ const DUMMY_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:
 
 describe('a crafted tool belongs to the workspace', () => {
   test("a tool main crafted is callable from a swarm node's eval, and main's score retires it there too", async () => {
-    const db = new Database(scratchPath('crafted-workspace-wide', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('crafted-workspace-wide', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
 

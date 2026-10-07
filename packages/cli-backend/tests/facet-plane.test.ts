@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { actorHomeName, codemodeSurface, narrowToolSurface, type JsonValue } from '@kinu.run/core';
-import { scratchDir, toolExecute } from '@kinu.run/test-utils';
+import { scratchDir, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { cleanupFacetScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { registerLocalActor } from '@kinu.run/core';
@@ -18,7 +18,7 @@ interface LocalRoot {
 function rootRuntime(state: string, cwd = scratchDir('facet-plane-folder')): LocalRoot {
   const dbPath = join(state, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
+  const db = workspaceDatabase(dbPath);
 
   return { rt: createCLIRuntime(db, { llm: null, cwd, agentName: 'parent' }), db, dbPath };
 }

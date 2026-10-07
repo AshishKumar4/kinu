@@ -1,7 +1,6 @@
 /** The ledger's `tool_call_end` row carries `durationMs`, read back off `run_events` through `LocalAgentSession`. */
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { scratchPath, scratchDir } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
@@ -54,7 +53,7 @@ function searchingModel(): TestLanguageModelV2 {
 
 describe('tool_call_end', () => {
   test('carries the call\'s duration on the shared loop', async () => {
-    const db = new Database(scratchPath('tool-duration-row', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('tool-duration-row', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     rt.actor.config.setLearning(false);

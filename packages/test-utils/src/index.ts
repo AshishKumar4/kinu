@@ -5,6 +5,8 @@ export * from './actors';
 
 export * from './scratch';
 
+export * from './database';
+
 export * from './vfs';
 
 export * from './llm';

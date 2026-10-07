@@ -18,7 +18,7 @@ import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/co
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { stampSchemaGenesis } from '@kinu.run/cli-backend';
-import { createMemoryVfs } from '@kinu.run/test-utils';
+import { createMemoryVfs, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -56,7 +56,7 @@ function entryText(db: Database, id: string): string {
 }
 
 function seedWorkspace(path: string): void {
-  const db = new Database(path, { create: true });
+  const db = workspaceDatabase(path, { create: true });
 
   // One transaction: a commit per row is a disk sync per row, which took this suite past eight minutes on a busy disk.
   db.transaction(() => {
@@ -343,7 +343,7 @@ describe('kinu export / import', () => {
       // Locally every file is a real one: its own-space files and its agent state land in the own space.
       expect(readFileSync(join(home, 'after-restart', 'home', 'main', 'version.txt'), 'utf8')).toBe('after restart');
       expect(readFileSync(join(home, 'after-restart', 'home', 'main', 'memory', 'MEMORY.md'), 'utf8')).toBe('- kept as agent state');
-      const restored = new Database(join(home, 'after-restart', 'agent.db'));
+      const restored = workspaceDatabase(join(home, 'after-restart', 'agent.db'));
       const { vfs } = createInlineWorkspace(restored);
 
       expect([await exists(vfs, 'memory/MEMORY.md'), await exists(vfs, 'version.txt')]).toEqual([false, false]);
@@ -417,10 +417,10 @@ describe('kinu export / import', () => {
 
     const older = join(out, 'older.agent.db');
     seedWorkspace(older);
-    const aged = new Database(older);
+    const aged = workspaceDatabase(older);
     aged.exec('PRAGMA user_version = 0');
     aged.close();
-    const agedHere = new Database(current);
+    const agedHere = workspaceDatabase(current);
     agedHere.exec('PRAGMA user_version = 0');
     agedHere.close();
 

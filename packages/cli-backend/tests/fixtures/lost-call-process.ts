@@ -1,6 +1,6 @@
 // The process that dies: a CLI session whose turn calls the marker MCP tool through `eval`, the tool marks a file and
 // never answers, and the test kills this process there. Arguments: the database path, the marks file, the workspace.
-import { Database } from 'bun:sqlite';
+import { workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, mcpToolKey, type LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../../src/runtime';
 import { LocalAgentSession } from '../../src/local-session';
@@ -10,7 +10,7 @@ const [dbPath = '', marks = '', cwd = ''] = process.argv.slice(2);
 
 const DUMMY_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' };
 
-const db = new Database(dbPath);
+const db = workspaceDatabase(dbPath);
 
 initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 

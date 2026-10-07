@@ -47,8 +47,8 @@ async function scenario(body: string): Promise<JsonObject> {
     mkdirSync(dir, { recursive: true });
     const dbPath = join(dir, 'agent.db');
     {
-      const seed = new Database(dbPath);
-      seed.exec('PRAGMA journal_mode = WAL');
+      const { workspaceDatabase } = await import('@kinu.run/test-utils');
+      const seed = workspaceDatabase(dbPath);
       await createWorkspace(seed, { name: 'leasebot', purpose: 'lease', llm: resolveLLMConfig(), home: workspaceHome(seed) });
       initWorkspaceSchema(makeWorkspaceSchemaSql(seed));
       seed.close();

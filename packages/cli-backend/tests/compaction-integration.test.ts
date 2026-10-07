@@ -4,7 +4,6 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { isStepCount, type LanguageModel, type ModelMessage } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
@@ -24,7 +23,7 @@ import {
   type Logger,
 } from '@kinu.run/compaction';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
-import { scratchPath, scratchDir } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const SESSION = 'kinu-itest:default';
@@ -114,7 +113,7 @@ function ephemeralBlocks(prompt: PromptMessage[]): number[] {
 
 describe('default compaction over the real storage plane', () => {
   test('rewrite → VFS transcript read-back → durable replay → ledger reset on non-replay', async () => {
-    const db = new Database(scratchPath('compaction-integration', 'agent.db'), { create: true });
+    const db = workspaceDatabase(scratchPath('compaction-integration', 'agent.db'), { create: true });
 
     const rt = createCLIRuntime(db, {
       cwd: scratchDir('workspace-folder'),
@@ -277,7 +276,7 @@ describe('default compaction over the real storage plane', () => {
     // Forced compaction folded only down to the ladder's target (35% of the window), so on a long-window model
     // /compact changed nothing until the conversation was already near full.
     const prompted = async (kind: 'force' | 'user'): Promise<string> => {
-      const db = new Database(scratchPath(`compaction-${kind}`, 'agent.db'), { create: true });
+      const db = workspaceDatabase(scratchPath(`compaction-${kind}`, 'agent.db'), { create: true });
 
       const rt = createCLIRuntime(db, {
         cwd: scratchDir('workspace-folder'),
@@ -329,7 +328,7 @@ describe('default compaction over the real storage plane', () => {
   });
 
   test('the first rung: superseded ephemeral blocks survive every unpressured turn and go first under pressure', async () => {
-    const db = new Database(scratchPath('compaction-integration-rung', 'agent.db'), { create: true });
+    const db = workspaceDatabase(scratchPath('compaction-integration-rung', 'agent.db'), { create: true });
 
     const rt = createCLIRuntime(db, {
       cwd: scratchDir('workspace-folder'),
