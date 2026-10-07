@@ -274,18 +274,14 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    *  and as a page's `workspace` call: `ok`, or the refusal's reason. */
   async answerSlates(agent: string): Promise<AgentSlateUi> {
     const reason = (result: SlateCallResult) => (result.ok ? 'ok' : result.reason);
+    // A page's own binding call resolves its source first, so a block that resolves is refused only for what is bound.
+    const call = async (id: string) => reason(await this.slateBindingCallAs(ROOT_SLATE_CALLER, id, 'workspace', { member: 'exists', args: ['/home'], invocation: null }));
     const { items } = await this.agentStores(agent).historyPage({});
     const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
     const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
     const ids = { answered: `${agent}/${answer}/card`, fromUser: `${agent}/${ask}/card`, asWorkspace: `${answer}/card` };
-    const bound = await this.slateBindingCallAs(ROOT_SLATE_CALLER, ids.answered, 'workspace', { member: 'exists', args: ['/home'], invocation: null });
 
-    return {
-      answered: reason(await this.previewSlate(ids.answered)),
-      fromUser: reason(await this.previewSlate(ids.fromUser)),
-      asWorkspace: reason(await this.previewSlate(ids.asWorkspace)),
-      bound: reason(bound),
-    };
+    return { answered: await call(ids.answered), fromUser: await call(ids.fromUser), asWorkspace: await call(ids.asWorkspace) };
   }
 
   /** `done` once a transition closed; an open one answers that it resumed. */

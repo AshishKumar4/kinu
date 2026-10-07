@@ -366,13 +366,12 @@ export interface ClaimUnderRecovery {
   readonly settledWork: readonly OwedWorkRow[];
 }
 
-/** A hired agent's answer with a `<slate-ui>` block, as the workspace resolves it: its own id previews, a user message's
- *  id and the same answer named as the workspace's do not, and nothing is bound to its page. */
+/** A hired agent's answer with a `<slate-ui>` block, as a page's `workspace` call resolves it: under its own id the
+ *  block is found and nothing is bound to it; a user message's id and the answer named as the workspace's hold none. */
 export interface AgentSlateUi {
   readonly answered: string;
   readonly fromUser: string;
   readonly asWorkspace: string;
-  readonly bound: string;
 }
 
 /** The work read while a hired agent's own turn is held at the model, and the agent's name. */
