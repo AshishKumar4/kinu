@@ -187,6 +187,22 @@ describe('two real turns over the HTTP model seam', () => {
     expect([settled === null, settled === 'missing', settled === 'indeterminate']).toEqual([false, false, false]);
   });
 
+  // A dead activation left two replies owed. After a real eviction, the alarm's recovery dispatches the answer that
+  // reached the transcript and closes its lease, closes the reply's open transition, and frees the unanswered event
+  // to be asked again.
+  it('after an eviction, recovery sends the reply that was answered and re-asks only the one that was not', async () => {
+    const workspace = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).seedOwedReplyWorkspace();
+
+    await abortAllDurableObjects();
+    const done = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).recoverOwedReplies(workspace);
+
+    expect(done.leases).toEqual({
+      'ev-answered': { turnId: 'evt-answered', consumedAt: null },
+      'ev-unanswered': { turnId: null, consumedAt: null },
+    });
+    expect(done.transition).toBe('done');
+  });
+
   it('a Changes-tab send the loop refuses to drive takes its card row with it', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-refused-driver'));
 

@@ -63,8 +63,9 @@ import {
   type WakeDriveResult,
   type WakeRows,
 } from './two-turn-shapes';
-import { changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type SessionTranscript, type WorkMode } from '@kinu.run/core';
+import { CHAT_SESSION_ID, changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type SessionTranscript, type WorkMode } from '@kinu.run/core';
 import { renderThrownChain, type Refusal } from '@kinu.run/core/obs';
+import { seedTranscriptEntry } from '@kinu.run/test-utils';
 import type { ToolSet } from 'ai';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
@@ -158,7 +159,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'owedSends');
     Reflect.deleteProperty(this, 'latestClaimOutcome');
     Reflect.deleteProperty(this, 'recoveryPass');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass']);
+    Reflect.deleteProperty(this, 'seedOwedReplies');
+    Reflect.deleteProperty(this, 'replyLeases');
+    Reflect.deleteProperty(this, 'transitionState');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState']);
   }
 
   /** What the loop's driver gate answers once refused, as when another activation holds the lease. */
@@ -198,6 +202,42 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** The alarm's recovery pass, run now. */
   async recoveryPass(): Promise<void> {
     await this.terminalRetryPass();
+  }
+
+  /**
+   * What a dead activation left owed: two events bound to drain turns whose leases it took long ago, one turn whose
+   * answer reached the transcript and one that never answered, and the open transition of the answered reply.
+   */
+  async seedOwedReplies(): Promise<void> {
+    const actorId = this.actorHandle().actorId;
+
+    for (const turn of ['answered', 'unanswered']) {
+      this.unmetered(`INSERT INTO agent_log
+          (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at, dedupe_key, consumed_at)
+        VALUES (?, ?, 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook', 'authenticated', 'normal', 'full',
+          '{"webhook_id":"w1","http_method":"POST","http_headers":{},"body":{"x":1},"delivery_id":"d1"}', 1, NULL, 5)`, actorId, `ev-${turn}`, `evt-${turn}`);
+      await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
+        id: `u-evt-${turn}`, origin: 'input', message: { role: 'user', content: '1 event arrived while you were idle.' },
+        metadata: { kinuEvent: 'event_drain', drainTurnId: `evt-${turn}` },
+      });
+    }
+
+    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, { id: 'a-evt-answered', origin: 'output', message: { role: 'assistant', content: 'the build passed' } });
+    this.terminal.begin({ turnId: 'u-owed', messageId: 'a-1' });
+  }
+
+  /** Each seeded event's lease: the drain turn it is bound to and when that took it. */
+  async replyLeases(): Promise<Record<string, { readonly turnId: string | null; readonly consumedAt: number | null }>> {
+    const rows = this.unmetered("SELECT id, turn_id, consumed_at FROM agent_log WHERE id IN ('ev-answered', 'ev-unanswered')").toArray();
+
+    return Object.fromEntries(rows.map((row) => [textColumn(row.id), {
+      turnId: row.turn_id === null ? null : textColumn(row.turn_id), consumedAt: row.consumed_at === null ? null : Number(row.consumed_at),
+    }]));
+  }
+
+  /** `done` once a transition closed; an open one answers that it resumed. */
+  async transitionState(turnId: string): Promise<string> {
+    return this.terminal.begin({ turnId, messageId: 'a-1' });
   }
 
   /** The closed-tab sleep-time wake, run now: the tab closed past its grace, then a timer tick. */
@@ -592,7 +632,8 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
-  & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -844,7 +885,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1280,6 +1321,25 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await awaitSettled(target);
 
     return { held, settled: await target.latestClaimOutcome() };
+  }
+
+  /** Owed replies seeded in a workspace whose activation then dies; returns the workspace to read after the eviction. */
+  async seedOwedReplyWorkspace(): Promise<string> {
+    const { target, workspace } = await this.claimQueueWorkspace('replies');
+
+    await target.seedOwedReplies();
+
+    return workspace;
+  }
+
+  /** After the eviction: the alarm's recovery pass on the fresh activation, then what it left. */
+  async recoverOwedReplies(workspace: string): Promise<{ readonly leases: Record<string, { readonly turnId: string | null; readonly consumedAt: number | null }>; readonly transition: string }> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    await target.recoveryPass();
+    await awaitSettled(target);
+
+    return { leases: await target.replyLeases(), transition: await target.transitionState('u-owed') };
   }
 
   /** A send the loop refuses to drive takes its card row with it. */
