@@ -1334,6 +1334,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const { target, workspace } = await this.claimQueueWorkspace('replies');
 
     await target.seedOwedReplies();
+    // From here on, everything the model is asked is recovery's: the eviction's alarm may wake the object first.
+    await this.httpReset();
 
     return workspace;
   }
@@ -1342,7 +1344,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   async recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
-    await this.httpReset();
     await target.recoveryPass();
     await awaitSettled(target);
 
