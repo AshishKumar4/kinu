@@ -29,7 +29,7 @@ import { uncheckpointedSentence } from '../execution/exec-result';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
 import { rasterImage } from '../utils/raster-image';
 import { bytesToBase64 } from '../utils/base64';
-import { imageModelOutput } from './image-results';
+import { imageCarrier, imageModelOutput } from './image-results';
 
 /** Most names one `list` returns; matches `tools/db-codemode.ts` SELECT_LIMIT_MAX. */
 const FILE_LIST_MAX_ENTRIES = 1_000;
@@ -257,7 +257,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     const output = `${referenceOf(path)}: ${image.mediaType} ${image.width}x${image.height}, ${bytes.byteLength} bytes`;
     budget.admit(output.length);
 
-    return { output, images: [{ mediaType: image.mediaType, data: bytesToBase64(bytes) }] };
+    return imageCarrier(output, [{ mediaType: image.mediaType, data: bytesToBase64(bytes) }]);
   };
 
   /** A text read reads every byte (the ledger keys on the whole-content fingerprint) but retains only this window and the running hash. */

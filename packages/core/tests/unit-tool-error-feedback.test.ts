@@ -8,7 +8,7 @@ import { KinuError } from '../src/obs/error';
 import { FileRefusalError } from '../src/types/file-edits';
 import { McpToolError } from '../src/tools/mcp-error';
 import type { JsonValue } from '../src/utils/json';
-import { imageModelOutput } from '../src/tools/image-results';
+import { imageCarrier, imageModelOutput } from '../src/tools/image-results';
 
 async function drive(results: readonly (Error | JsonValue)[], history: ModelMessage[] = []) {
   let step = 0;
@@ -121,7 +121,7 @@ test('a re-drive sends the recorded failed, successful and image tool messages b
   const tools = {
     failed: tool({ inputSchema: z.object({}), execute: async (): Promise<JsonValue> => { throw new KinuError('missing', 'the note is absent'); } }),
     succeeded: tool({ inputSchema: z.object({}), execute: async () => ({ found: 7 }) }),
-    image: tool({ inputSchema: z.object({}), execute: async () => ({ output: 'the screenshot', images: [{ data: image, mediaType: 'image/png' }] }), toModelOutput: imageModelOutput }),
+    image: tool({ inputSchema: z.object({}), execute: async () => imageCarrier('the screenshot', [{ data: image, mediaType: 'image/png' }]), toModelOutput: imageModelOutput }),
   };
 
   const abort = new AbortController();
