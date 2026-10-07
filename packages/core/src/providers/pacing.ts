@@ -43,26 +43,6 @@ export class ProviderPacer {
     this.sleep = opts.sleep ?? abortableSleep;
   }
 
-  /** Waits out the host's cooldown, re-read after each sleep as a sibling may extend it. `onCooldown` gets the
-   *  deadline so a caller can skip announcing its own. */
-  admit(
-    host: string,
-    signal?: AbortSignal,
-    opts?: { onCooldown?: (waitMs: number, untilMs: number, reason: string | undefined) => void },
-  ): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      for (;;) {
-        if (signal?.aborted) return yield* Effect.die(abortCause(signal));
-        const cooldown = this.cooldowns.get(host);
-        const cooling = (cooldown?.untilMs ?? 0) - this.now();
-
-        if (cooldown === undefined || cooling <= 0) return;
-        opts?.onCooldown?.(cooling, cooldown.untilMs, cooldown.reason);
-        yield* Effect.promise(() => this.sleep(cooling, signal));
-      }
-    }));
-  }
-
   /** The lane's cooldown still to wait, or null: what a caller decides on before it waits. */
   cooling(host: string): { readonly waitMs: number; readonly untilMs: number; readonly reason: string | undefined } | null {
     const cooldown = this.cooldowns.get(host);

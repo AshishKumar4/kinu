@@ -15,48 +15,35 @@ function fixedClock(startMs = 1_000_000) {
 const HOST = 'api.cloudflare.com';
 
 describe('a wait one caller was told to take holds its siblings', () => {
-  test('a declared wait is honoured before the call goes out', async () => {
+  test('a declared wait is what every sibling waits out before the call goes out', async () => {
     const clock = fixedClock();
-    const slept: number[] = [];
-
-    const pacer = new ProviderPacer({
-      now: clock.now,
-      sleep: async (ms) => { slept.push(ms); clock.advance(ms); },
-    });
+    const pacer = new ProviderPacer({ now: clock.now, sleep: async (ms) => { clock.advance(ms); } });
 
     // B had an instruction it could not see.
     pacer.declareWait(HOST, 30_000);
-    await pacer.admit(HOST);
+    expect(pacer.cooling(HOST)?.waitMs).toBe(30_000);
+    await pacer.pause(30_000);
 
-    expect(slept).toEqual([30_000]);
+    expect(pacer.cooling(HOST)).toBeNull();
   });
 
-  test('a longer wait already in force is never shortened by a peer\'s smaller one', async () => {
+  test('a longer wait already in force is never shortened by a peer\'s smaller one', () => {
     // Taking the newest `Retry-After` would converge the fan-out on the smallest value any member received.
-    const clock = fixedClock();
-    const slept: number[] = [];
-
-    const pacer = new ProviderPacer({
-      now: clock.now,
-      sleep: async (ms) => { slept.push(ms); clock.advance(ms); },
-    });
+    const pacer = new ProviderPacer({ now: fixedClock().now });
 
     pacer.declareWait(HOST, 60_000);
     pacer.declareWait(HOST, 5_000);
-    await pacer.admit(HOST);
 
-    expect(slept).toEqual([60_000]);
+    expect(pacer.cooling(HOST)?.waitMs).toBe(60_000);
   });
 
-  test('another host\'s cooldown holds nobody here', async () => {
+  test('another host\'s cooldown holds nobody here', () => {
     // Limits are per account per provider: a fast provider held behind a rate-limited one would stall.
-    const slept: number[] = [];
-    const pacer = new ProviderPacer({ sleep: async (ms) => { slept.push(ms); } });
+    const pacer = new ProviderPacer();
 
     pacer.declareWait(HOST, 30_000);
-    await pacer.admit('api.openai.com');
 
-    expect(slept).toEqual([]);
+    expect(pacer.cooling('api.openai.com')).toBeNull();
   });
 });
 
@@ -65,17 +52,10 @@ describe('a cancelled caller stops waiting', () => {
     const pacer = new ProviderPacer();
     pacer.declareWait(HOST, 30_000);
     const controller = new AbortController();
-    const waiting = pacer.admit(HOST, controller.signal);
+    const waiting = pacer.pause(pacer.cooling(HOST)?.waitMs ?? 0, controller.signal);
 
     controller.abort(new Error('stop pressed'));
     await expect(waiting).rejects.toThrow('stop pressed');
-  });
-
-  test('an already-aborted caller is refused before the call goes out', async () => {
-    const pacer = new ProviderPacer();
-    const controller = new AbortController();
-    controller.abort(new Error('already gone'));
-    await expect(pacer.admit(HOST, controller.signal)).rejects.toThrow('already gone');
   });
 });
 

@@ -7,7 +7,7 @@ import type { LanguageModelV4CallOptions, LanguageModelV4StreamPart, LanguageMod
 import { APICallError, type LanguageModelMiddleware } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { diagnostics, KinuError, settle, tolerate, toKinuError } from '../../obs/index';
+import { detach, diagnostics, KinuError, settle, tolerate, toKinuError } from '../../obs/index';
 import { silenceBoundMs } from '../../platform-catalog';
 import { DEFAULT_PROVIDER_RETRIES } from '../../types/profile';
 import { fmtSpan } from '../../utils/format';
@@ -201,9 +201,11 @@ interface StreamAttempt {
  *  under the bound. Silence before it is a stall: an attempt silent before its answer is abandoned, and its stream
  *  cancelled if it ever arrives (a middleware cannot re-sign a call with an abort of its own). */
 async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV4StreamResult>> {
-  const bound = new SilenceBound(() => stalled(attempt.provider));
+  const started = Date.now();
   const opening = Promise.resolve(attempt.opening);
-  const opened = await bound.within(opening);
+  const silent = Promise.withResolvers<null>();
+  const bound = new SilenceBound(attempt.provider, async () => { silent.resolve(null); });
+  const opened = await Promise.race([opening, silent.promise]);
 
   if (opened === null) {
     await abandoned(opening.then((late) => late.stream.cancel()));
@@ -211,25 +213,22 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
     return { kind: 'stall' };
   }
 
+  // The answer's headers are in: its body is the provider's to send.
+  diagnostics.event('provider.stream_opened', { provider: attempt.provider, ms: Date.now() - started });
   const parts = partsOf(opened.stream);
   const held: LanguageModelV4StreamPart[] = [];
 
-  const answer = (ended: Ended): Opened<LanguageModelV4StreamResult> => ({
-    kind: 'answer', value: { ...opened, stream: liveStream({ bound, parts, held, keepRaw: attempt.keepRaw, ended }) },
-  });
+  bound.onSilence(() => parts.cancel());
 
   for (;;) {
-    const [read] = await bound.within(Promise.allSettled([parts.read()])) ?? [];
+    const [read] = await Promise.allSettled([parts.read()]);
 
-    if (read === undefined) {
-      await abandoned(parts.cancel());
+    if (bound.fired) return { kind: 'stall' };
+    bound.hear();
 
-      return { kind: 'stall' };
-    }
+    if (read.status === 'rejected') return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: { reason: read.reason } });
 
-    if (read.status === 'rejected') return answer({ reason: read.reason });
-
-    if (read.value === 'end') return answer('closed');
+    if (read.value === 'end') return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: 'closed' });
     const part = read.value;
 
     held.push(part);
@@ -237,12 +236,13 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
     if (part.type === 'stream-start' || part.type === 'raw') continue;
 
     if (part.type === 'error' && !attempt.last) {
+      bound.stop();
       await abandoned(parts.cancel());
 
       return { kind: 'backoff' };
     }
 
-    return answer(null);
+    return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: null });
   }
 }
 
@@ -280,45 +280,92 @@ interface LiveStream {
   readonly ended: Ended;
 }
 
-/** The answer's parts, the held ones first, raw events dropped unless the caller asked for them. */
-function liveStream({ bound, parts, held, keepRaw, ended }: LiveStream): ReadableStream<LanguageModelV4StreamPart> {
+/** The answer's parts, the held ones first, raw events dropped unless the caller asked for them; a silence past the
+ *  bound errors it and cancels the provider's stream. */
+function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened<LanguageModelV4StreamResult> {
+  const { bound, parts, held, keepRaw, ended } = live;
   const shown = (part: LanguageModelV4StreamPart): boolean => keepRaw || part.type !== 'raw';
 
-  return new ReadableStream<LanguageModelV4StreamPart>({
+  const stream = new ReadableStream<LanguageModelV4StreamPart>({
     start: (controller) => {
+      bound.onSilence(async () => {
+        controller.error(bound.failure);
+        await parts.cancel();
+      });
+
       for (const part of held.filter(shown)) controller.enqueue(part);
+
+      if (ended !== null) bound.stop();
 
       if (ended === 'closed') controller.close();
       else if (ended !== null) controller.error(ended.reason);
     },
     pull: async (controller) => {
       for (;;) {
-        const next = await bound.within(parts.read());
+        const next = await parts.read();
 
-        if (next === null) {
-          controller.error(bound.failure());
+        if (bound.fired) return;
+        bound.hear();
 
-          return await abandoned(parts.cancel());
+        if (next === 'end') {
+          bound.stop();
+
+          return controller.close();
         }
-
-        if (next === 'end') return controller.close();
 
         if (shown(next)) return controller.enqueue(next);
       }
     },
-    cancel: () => parts.cancel(),
+    cancel: () => {
+      bound.stop();
+
+      return parts.cancel();
+    },
   });
+
+  return { kind: 'answer', value: { ...opened, stream } };
 }
 
+/** One timer per attempt, not one per event: each event only moves `heard`, and the timer, when it fires, waits again
+ *  for what is left of the bound or declares the silence. */
 class SilenceBound {
-  constructor(readonly failure: () => APICallError) {}
+  fired = false;
+  readonly failure: APICallError;
+  private heard = Date.now();
+  private silenced: () => Promise<void>;
+  private timer: ReturnType<typeof setTimeout>;
 
-  /** Null once silent past the bound. */
-  within<T>(work: Promise<T>): Promise<T | null> {
-    const stall = Promise.withResolvers<null>();
-    const timer = setTimeout(() => { stall.resolve(null); }, silenceBoundMs('provider.stream.idle_ms'));
+  constructor(provider: string, silenced: () => Promise<void>) {
+    this.silenced = silenced;
+    this.failure = stalled(provider);
+    this.timer = this.arm(silenceBoundMs('provider.stream.idle_ms'));
+  }
 
-    return Promise.race([work, stall.promise]).finally(() => { clearTimeout(timer); });
+  hear(): void {
+    this.heard = Date.now();
+  }
+
+  onSilence(silenced: () => Promise<void>): void {
+    this.silenced = silenced;
+  }
+
+  stop(): void {
+    clearTimeout(this.timer);
+  }
+
+  private arm(ms: number): ReturnType<typeof setTimeout> {
+    return setTimeout(() => {
+      const left = this.heard + silenceBoundMs('provider.stream.idle_ms') - Date.now();
+
+      if (left > 0) {
+        this.timer = this.arm(left);
+
+        return;
+      }
+
+      this.fired = true;
+      detach(Effect.promise(() => this.silenced()));
+    }, ms);
   }
 }
 

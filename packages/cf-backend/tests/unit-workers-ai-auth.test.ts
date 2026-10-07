@@ -5,9 +5,9 @@ import { userCredentialSource } from './helpers/user-credentials';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { OAuthTokenError, refreshCloudflareCredential } from '@kinu.run/core';
-import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObject, type AuthRequest } from '@kinu.run/core';
+import { asFetchFunction, reasoningEffortOptions, type AuthRequest } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createDirectWorkersAIFetch } from '@kinu.run/core';
+import { bindingModel } from './helpers/workers-ai-model';
 import { requestUrl } from '@kinu.run/core';
 
 import { present } from '@kinu.run/test-utils';
@@ -33,24 +33,12 @@ function chatCompletionResponse(): Response {
 }
 
 test('configured effort reaches the native Workers AI binding through its SDK transport', async () => {
-  const inputs: JsonObject[] = [];
-
-  const binding = { async run(_model: string, input: JsonObject) {
-    inputs.push(input);
-
-    return chatCompletionResponse();
-  } };
-
-  // SAFETY: this constructed fixture provides Ai.run, and the adapter calls no other member of the binding.
-  const fetch = createDirectWorkersAIFetch(binding);
-
-  const model = createChatModel({ kind: 'openai-compat', name: 'workers-ai',
-    modelId: '@cf/moonshotai/kimi-k2.6', baseURL: 'https://fixture.invalid/v1', headers: {}, fetch });
+  const { model, runs } = bindingModel(() => chatCompletionResponse());
 
   await generateText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('high', 'workers-ai') });
-  expect(inputs[0]?.reasoning_effort).toBe('high');
-  expect(inputs[0]?.reasoningEffort).toBeUndefined();
-  expect(inputs[0]?.providerOptions).toBeUndefined();
+  expect(runs[0]?.inputs.reasoning_effort).toBe('high');
+  expect(runs[0]?.inputs.reasoningEffort).toBeUndefined();
+  expect(runs[0]?.inputs.providerOptions).toBeUndefined();
 });
 
 describe('Workers AI credential refresh', () => {

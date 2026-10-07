@@ -1,16 +1,22 @@
 // Workers AI provider, billed to the user's Cloudflare OAuth account, or to the deployment's through its binding.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import type { LanguageModel } from 'ai';
-import { type ModelProvider, type ModelInfo } from './types';
+import { wrapLanguageModel, type LanguageModel } from 'ai';
+import { createWorkersAI, type WorkersAISettings } from 'workers-ai-provider';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
+import type { ModelCallDeps, ModelInfo, ModelProvider } from './types';
 
 import { DEFAULT_WORKERS_AI_MODEL_ID, SESSION_AFFINITY_HEADER } from './workers-ai';
 import { listModelsDevProviderModels } from './models-dev';
 import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
-import { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
 import { WORKERS_AI_PREFERRED_MODEL_IDS } from './workers-ai-catalog';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
+import { usageRepairMiddleware } from './middleware/usage-repair';
+import { toolCallIdMiddleware } from './middleware/tool-call-id';
 
-export function createWorkersAIProvider(deploymentBinding?: Parameters<typeof createDirectWorkersAIFetch>[0]): ModelProvider {
+/** `env.AI` as the provider takes it: `Ai` where workers-types are loaded. */
+type WorkersAIChatBinding = NonNullable<WorkersAISettings['binding']>;
+
+export function createWorkersAIProvider(deploymentBinding?: WorkersAIChatBinding): ModelProvider {
   return {
     id: 'workers-ai',
     label: 'Cloudflare Workers AI',
@@ -27,39 +33,32 @@ export function createWorkersAIProvider(deploymentBinding?: Parameters<typeof cr
       preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
     }),
     createModel(modelId, deps): LanguageModel {
-      const requestHeaders = { [SESSION_AFFINITY_HEADER]: deps.sessionAffinity };
+      // Without replica pinning the prefix cache never hits.
+      const model = deploymentBinding
+        ? createWorkersAI({ binding: deploymentBinding }).chat(modelId, { sessionAffinity: deps.sessionAffinity })
+        : userAccountModel(modelId, deps);
 
-      if (deploymentBinding) {
-        return createOpenAICompatible({
-          name: 'workers-ai',
-          baseURL: 'https://kinu-direct-workers-ai.invalid',
-          headers: requestHeaders,
-          fetch: createDirectWorkersAIFetch(deploymentBinding, {
-            provider: 'workers-ai',
-            modelId,
-            ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
-          }),
-        }).chatModel(modelId);
-      }
-
-      const placeholder = 'https://kinu-workers-ai.invalid';
-
-      const customFetch = createCloudflareAIFetch({
-        credKey: CLOUDFLARE_OAUTH_CRED_KEY,
-        getAuth: deps.getAuth,
-        fetch: deps.fetch,
-        provider: 'workers-ai',
-        placeholder,
-        missingCredentialMessage: 'Cloudflare login is required before using Workers AI models.',
-        // Without replica pinning the prefix cache never hits.
-        requestHeaders,
-      });
-
-      return createOpenAICompatible({
-        name: 'workers-ai',
-        baseURL: placeholder,
-        fetch: customFetch,
-      }).chatModel(modelId);
+      return wrapLanguageModel({ model, middleware: [usageRepairMiddleware(), toolCallIdMiddleware()] });
     },
   };
+}
+
+function userAccountModel(modelId: string, deps: ModelCallDeps): LanguageModelV4 {
+  const placeholder = 'https://kinu-workers-ai.invalid';
+
+  const customFetch = createCloudflareAIFetch({
+    credKey: CLOUDFLARE_OAUTH_CRED_KEY,
+    getAuth: deps.getAuth,
+    fetch: deps.fetch,
+    provider: 'workers-ai',
+    placeholder,
+    missingCredentialMessage: 'Cloudflare login is required before using Workers AI models.',
+    requestHeaders: { [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
+  });
+
+  return createOpenAICompatible({
+    name: 'workers-ai',
+    baseURL: placeholder,
+    fetch: customFetch,
+  }).chatModel(modelId);
 }

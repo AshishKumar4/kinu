@@ -3,7 +3,6 @@ import { authenticatedSend } from './authenticated-send';
 import type { AuthResolution, AuthResolver } from './types';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { diagnostics, tolerate, toKinuError } from '../obs/index';
-import { repairSseCachedUsage } from './stream-usage-repair';
 import * as v from 'valibot';
 
 interface GatewayErrorDetail { code: number | null; message: string | null }
@@ -87,8 +86,7 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
       }), { provider: opts.credKey, source: String(res.status) });
     }
 
-    // Repair the endpoint's trailing duplicate usage chunk, which can zero cached_tokens.
-    if (res.ok) return repairSseCachedUsage(res);
+    if (res.ok) return res;
 
     if (opts.mapError) return inProviderWords(await opts.mapError(res, resolved));
 

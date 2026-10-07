@@ -6,7 +6,7 @@
 import { Cause, Data, Effect } from 'effect';
 import { settleSync, settle } from '@kinu.run/core/obs';
 import {
-  addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
+  addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage, withModelStack,
   RunEventRecorder, USER_AI_PROXY_PATH, usageReported, workspaceSpend, WORKSPACE_RUN_ID,
   type ActorHandle, type LLMProviderConfig, type ModelCallSink, type SqlExecutor, type Usage,
   type WorkspaceSpend,
@@ -260,15 +260,15 @@ export const UNCONFIGURED_LLM: LLMProviderConfig = {
   model: DEFAULT_WORKERS_AI_MODEL_ID,
 };
 
-/** The AI SDK model for a config, via core's `createChatModel` (inherits `withRateLimitRetry`). */
+/** The AI SDK model for a config, via core's `createChatModel`, inside the one stack a resolved model has. */
 export function liveChatModel(llm: LLMProviderConfig): LanguageModel {
-  return createChatModel({
+  return withModelStack(createChatModel({
     kind: 'openai-compat',
     name: llm.name,
     baseURL: llm.baseURL,
     headers: llm.headers,
     modelId: llm.model,
-  });
+  }), { provider: llm.name, modelId: llm.model, lane: llm.name });
 }
 
 /**

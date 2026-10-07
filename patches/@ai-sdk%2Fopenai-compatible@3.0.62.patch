@@ -1,0 +1,13 @@
+diff --git a/dist/index.js b/dist/index.js
+index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..fd4e5030bb1a9bc1ade03fbe38f70e92073729f9 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -820,7 +820,7 @@ const chunkBaseSchema = z.looseObject({
+ 			})).nullish()
+ 		}).nullish(),
+ 		finish_reason: z.string().nullish()
+-	})),
++	})).default([]),
+ 	usage: openaiCompatibleTokenUsageSchema
+ });
+ const createOpenAICompatibleChatChunkSchema = (errorSchema) => z.union([chunkBaseSchema, errorSchema]);

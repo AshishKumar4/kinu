@@ -117,6 +117,17 @@ export interface WorkersAIBinding {
   };
 }
 
+export interface WorkersAIRunOptions {
+  signal?: AbortSignal;
+  extraHeaders?: Record<string, string>;
+  returnRawResponse?: boolean;
+}
+
+/** Structural `env.AI.run`. The answer's shape depends on binding state a concurrent call also writes, so every arm is reachable. */
+export interface WorkersAIRunBinding {
+  run(model: string, inputs: JsonObject, options?: WorkersAIRunOptions): Promise<Response | ReadableStream<Uint8Array> | JsonObject>;
+}
+
 /** Structurally compatible with wrangler-generated `Env` types. */
 export interface ProviderEnv {
   AI?: WorkersAIBinding;

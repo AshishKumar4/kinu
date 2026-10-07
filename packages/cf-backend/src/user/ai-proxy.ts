@@ -1,11 +1,10 @@
 /** OpenAI-compatible proxy for CLI clients: `@cf/...` via Workers AI (direct under `WORKERS_AI_VIA_BINDING`), `{author}/{model}` via the user's gateway. */
 import { Hono } from 'hono';
 import { createUserDOAuthResolver, decisionRunOf, type UserCredentialClient } from '../providers/agent-registry';
-import type { OwnerCapabilityEnv, ProviderEnv } from '@kinu.run/core';
+import type { OwnerCapabilityEnv, ProviderEnv, WorkersAIRunBinding } from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
 import { MY_GATEWAY_PROVIDER_ID, SESSION_AFFINITY_HEADER, sessionAffinityOf, workersAiSpec, DECISION_MODELS, USER_AI_RUN_PATH, decodeJsonValue } from '@kinu.run/core';
-import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import { json } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
@@ -16,6 +15,7 @@ import { beneath, type FamilyEnv } from '../api/context';
 import { inferenceProxyGate, type CliBearerEnv, type CliBearerVariables } from '../api/cli-bearer';
 import type { CliAuthAuthority } from '../cli/auth-store';
 import * as v from 'valibot';
+import { bindingCompletion } from './binding-completions';
 
 const PROXY_PLACEHOLDER = 'https://kinu-user-ai-proxy.invalid';
 
@@ -25,7 +25,7 @@ const ChatCompletionRouteSchema = v.object({
 
 /** The deployment's direct transport calls `run` on the same binding the gateway path uses. */
 export interface UserAIProxyEnv<Id> extends AvailableModelsEnv<Id>, OwnerCapabilityEnv {
-  AI?: NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createDirectWorkersAIFetch>[0]>;
+  AI?: NonNullable<ProviderEnv['AI']> & WorkersAIRunBinding;
 }
 
 type ProxyAuthority = CliAuthAuthority & UserCredentialClient;
@@ -80,10 +80,11 @@ function proxyCompletion<Id>(
   return Effect.gen(function* () {
     const body = yield* Effect.promise(() => request.text());
 
-    const routed = yield* tolerated(Effect.sync(() => v.parse(ChatCompletionRouteSchema, v.parse(JsonObjectSchema, JSON.parse(body))).model), 'malformed-input');
+    const parsed = yield* tolerated(Effect.sync(() => v.parse(JsonObjectSchema, JSON.parse(body))), 'malformed-input');
+    const routed = v.safeParse(ChatCompletionRouteSchema, parsed);
 
-    if (routed === undefined) return errorResponse(400, 'Body must be JSON with a non-empty model.');
-    const model = routed;
+    if (parsed === undefined || !routed.success) return errorResponse(400, 'Body must be JSON with a non-empty model.');
+    const model = routed.output.model;
 
     const workersAI = model.startsWith('@cf/');
 
@@ -95,14 +96,7 @@ function proxyCompletion<Id>(
     if (workersAI && endpoint === 'chat/completions' && env.WORKERS_AI_VIA_BINDING === 'on') {
       if (!env.AI) return errorResponse(503, 'Workers AI binding unavailable.');
 
-      const ai = env.AI;
-
-      return yield* Effect.promise(() => createDirectWorkersAIFetch(ai)(request.url, {
-        method: request.method,
-        headers: request.headers,
-        body,
-        signal: request.signal,
-      }));
+      return yield* bindingCompletion(env.AI, { model, body: parsed, request });
     }
 
     const aiFetch = createCloudflareAIFetch({

@@ -12,7 +12,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from '@kinu.run/core';
-import type { AccessTokenScope, AuthRequest, AuthResolution, UserCaller } from '@kinu.run/core';
+import type { AccessTokenScope, AuthRequest, AuthResolution, UserCaller, WorkersAIRunOptions } from '@kinu.run/core';
 import * as v from 'valibot';
 import { requestUrl } from '@kinu.run/core';
 
@@ -68,6 +68,8 @@ function setupEnv(opts: {
   directStream?: string;
   /** A model that will not stream: the adapter refuses it. */
   directRefusal?: JsonObject;
+  /** The binding's raw refusal, status and headers included. */
+  directFailure?: () => Response;
 } = {}) {
   const gatewayId = opts.gatewayId === undefined ? 'my-gw' : opts.gatewayId;
   const token = opts.token ?? 'cf-user';
@@ -109,6 +111,7 @@ function setupEnv(opts: {
   });
 
   const directRuns: Array<{ model: string; inputs: JsonObject }> = [];
+  const directOptions: Array<WorkersAIRunOptions | undefined> = [];
 
   const env: CliRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => userDO },
@@ -124,8 +127,11 @@ function setupEnv(opts: {
 
     env.AI = {
       gateway: () => ({ run: () => { throw new Error('AI.gateway: not reachable in this test'); } }),
-      async run(model: string, inputs: JsonObject) {
+      async run(model: string, inputs: JsonObject, options?: WorkersAIRunOptions) {
         directRuns.push({ model, inputs });
+        directOptions.push(options);
+
+        if (opts.directFailure) return opts.directFailure();
 
         if (inputs.stream !== true) {
           return opts.directOutput ?? {
@@ -143,7 +149,7 @@ function setupEnv(opts: {
     };
   }
 
-  return { env, directRuns };
+  return { env, directRuns, directOptions };
 }
 
 function chatRequest(token: string | null, body: JsonValue, extraHeaders: Record<string, string> = {}) {
@@ -247,7 +253,7 @@ describe('AI proxy model → upstream selection', () => {
   });
 
   test('the eval identity streams over the direct Workers AI binding', async () => {
-    const { env, directRuns } = setupEnv({ evalService: true });
+    const { env, directRuns, directOptions } = setupEnv({ evalService: true });
 
     const res = await aiProxy(chatRequest(AI_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
@@ -271,6 +277,89 @@ describe('AI proxy model → upstream selection', () => {
         stream_options: { include_usage: true },
       },
     }]);
+    // The raw answer keeps a refusal's status for the CLI's retry; the replica pin rides the binding's headers.
+    expect(directOptions[0]?.returnRawResponse).toBe(true);
+    expect(directOptions[0]?.extraHeaders).toEqual({ 'x-session-affinity': 'eval-run' });
+  });
+
+  test('a binding stream held open after [DONE] still ends', async () => {
+    const encoder = new TextEncoder();
+
+    const held = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(DIRECT_SSE));
+      },
+    });
+
+    const { env } = setupEnv({ evalService: true });
+
+    if (env.AI === undefined) throw new Error('the binding fixture is missing');
+    env.AI = { ...env.AI, run: async () => new Response(held, { headers: { 'content-type': 'text/event-stream' } }) };
+
+    const res = await aiProxy(chatRequest(AI_TOKEN, {
+      model: '@cf/moonshotai/kimi-k2.6', messages: [{ role: 'user', content: 'ping' }], stream: true,
+    }), env);
+
+    expect((await handled(res).text()).trimEnd().endsWith('data: [DONE]')).toBe(true);
+  });
+
+  test('a native whole completion reaches the client as an OpenAI completion, tool calls included', async () => {
+    const { env } = setupEnv({
+      evalService: true,
+      directOutput: {
+        response: 'done',
+        tool_calls: [{ name: 'shell', arguments: { cmd: 'ls' } }],
+        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      },
+    });
+
+    const res = await aiProxy(chatRequest(AI_TOKEN, { model: '@cf/meta/llama-4-scout-17b-16e-instruct', messages: [{ role: 'user', content: 'ping' }] }), env);
+
+    const completion = v.parse(v.object({
+      choices: v.tuple([v.object({
+        message: v.object({ content: v.string(), tool_calls: v.array(v.object({ id: v.string(), function: v.object({ name: v.string(), arguments: v.string() }) })) }),
+        finish_reason: v.string(),
+      })]),
+      usage: v.object({ prompt_tokens: v.number() }),
+    }), await handled(res).json());
+
+    expect(completion.choices[0].message.content).toBe('done');
+    expect(completion.choices[0].message.tool_calls[0]?.function).toEqual({ name: 'shell', arguments: '{"cmd":"ls"}' });
+    expect(completion.choices[0].finish_reason).toBe('tool_calls');
+    expect(completion.usage.prompt_tokens).toBe(3);
+  });
+
+  test('a tool-only assistant turn reaches the binding with string content', async () => {
+    // KINU-085: the binding refuses `content: null` beside `tool_calls`, which the CLI's SDK sends.
+    const { env, directRuns } = setupEnv({ evalService: true });
+
+    await aiProxy(chatRequest(AI_TOKEN, {
+      model: '@cf/moonshotai/kimi-k2.6',
+      messages: [
+        { role: 'user', content: 'add' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'add', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'call-1', content: '2' },
+      ],
+    }), env);
+
+    expect(v.parse(v.array(v.looseObject({ content: v.string() })), directRuns[0]?.inputs.messages)[1]?.content).toBe('');
+  });
+
+  test('a binding refusal keeps its status, its Retry-After and its own words, for the CLI\'s retry', async () => {
+    const { env, directRuns } = setupEnv({
+      evalService: true,
+      directFailure: () => new Response(JSON.stringify({ errors: [{ code: 3040, message: 'Out of capacity' }] }), {
+        status: 429, headers: { 'content-type': 'application/json', 'retry-after': '7' },
+      }),
+    });
+
+    const res = handled(await aiProxy(chatRequest(AI_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }), env));
+
+    // No retry here: the caller's model stack owns it.
+    expect(directRuns).toHaveLength(1);
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toBe('7');
+    expect(v.parse(MessageErrorSchema, await res.json()).error.message).toBe('3040: Out of capacity');
   });
 
   test('OpenAI-shaped binding chunks reach the client unchanged', async () => {
