@@ -7,7 +7,8 @@
  */
 
 import { Cause, Effect, Result } from 'effect';
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { getAgentByName } from "agents";
 import { Hono } from "hono";
@@ -88,10 +89,7 @@ function mcpToolFailure(failure: { tool: string; cause: unknown }): string {
 
 type McpAnswering = <A>(tool: string, work: () => Promise<A>, failed: (failure: string) => A) => Promise<A>;
 
-/** The SDK's server, imported by the request it answers: no other route or turn compiles it. */
-async function buildServer(resolveAgent: McpResolver, agentName: string, answer: McpAnswering): Promise<McpServer> {
-  const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-
+function buildServer(resolveAgent: McpResolver, agentName: string, answer: McpAnswering): McpServer {
   const server = new McpServer({
     name: `kinu-${agentName}`,
     version: "1.0.0",
@@ -414,9 +412,8 @@ function serveMcp<Id>(request: Request, env: McpEnv<Id>, resolveAgent: McpResolv
 
     return yield* Effect.tryPromise({
       try: async () => {
-        const { WebStandardStreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
         const transport = new WebStandardStreamableHTTPServerTransport();
-        const server = await buildServer(resolveAgent, agentName, answer);
+        const server = buildServer(resolveAgent, agentName, answer);
         await server.connect(transport);
 
         return withCors(await transport.handleRequest(request));
