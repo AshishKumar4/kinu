@@ -65,6 +65,7 @@ async function drain(model: LanguageModel, tools: ToolSet = {}): Promise<ChatEve
   const events: ChatEvent[] = [];
 
   for await (const ev of runChat({
+    modelSpec: 'test/model',
     model,
     system: 'sys',
     history: [{ role: 'user', content: 'write the long thing' }] satisfies ModelMessage[],

@@ -33,11 +33,12 @@ describe('request-owned chat inputs', () => {
 
     if (turn === null) throw new Error('no root turn was admitted');
     // Genuinely idle: the run closed and the reservation spent, as commit and loop would leave them, so only the
-    // claim is left unverified (an open run would be re-opened, a reserved send rerun).
+    // claim is left (an open run would be re-opened, a reserved send rerun).
     warm.db.query('DELETE FROM pending_steers').run();
     new RunEventRecorder(makeSql(warm.db), workspaceMainActor(warm.db))
       .emit(turn.runId, { type: 'run_end', reason: 'error', error: 'the process died before the claim settled' });
-    const cold = await reactivateOrchestratorHarness(warm.db);
+    // Unverified: admitted by a host that stamped no build, recovered by one that does, so nothing names its program.
+    const cold = await reactivateOrchestratorHarness(warm.db, undefined, { world: { versionId: 'build-after-admission' } });
     await cold.agent.terminalRetryPass();
     expect(claims(cold).read(turn.turnId)).toMatchObject({ status: 'settled', outcome: 'indeterminate' });
   });

@@ -1,14 +1,15 @@
 /**
  * The CLI process a terminal-transition test kills: it SIGKILLs itself at a named durable instant
- * (`before-settle`, `inside-claim`, `inside-title`, `after-record`, `inside-close`), so no teardown runs.
+ * (`before-settle`, `inside-claim`, `inside-title`, `after-record`, `inside-close`, `mid-cancel`, `mid-program`), so no
+ * teardown runs.
  * Run as `bun <this file> <dbPath> <mode>`; the stdout marker proves the kill point was reached.
  */
 import type { SqlExecutor, SqlValue, TerminalEffectFault } from '@kinu.run/core';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { LocalAgentSession } from '../src/local-session';
-import { openTerminalWorkspace, scriptedModel } from './terminal-workspace';
+import { DELEGATING_PROGRAM, installProgram, openTerminalWorkspace, scriptedModel } from './terminal-workspace';
 
-const MODES = ['before-settle', 'inside-claim', 'inside-title', 'after-record', 'inside-close'] as const;
+const MODES = ['before-settle', 'inside-claim', 'inside-title', 'after-record', 'inside-close', 'mid-cancel', 'mid-program'] as const;
 
 const [dbPath, rawMode] = process.argv.slice(2);
 
@@ -53,9 +54,20 @@ if (mode === 'inside-close') {
   });
 }
 
-const modelOptions = mode === 'inside-title'
-  ? { onGenerate: () => die('inside-title') }
-  : {};
+/** The turn's model call has begun and will never answer: the instant a stop lands mid-turn. */
+const streaming = Promise.withResolvers<void>();
+
+// The turn runs a promoted program, version 1, and dies inside its model call.
+if (mode === 'mid-program') await installProgram(rt, 1, DELEGATING_PROGRAM);
+
+/** Where each mode's model call cuts the process, if it does. */
+const MODEL_CUTS: Partial<Record<typeof mode, Parameters<typeof scriptedModel>[1]>> = {
+  'inside-title': { onGenerate: () => die('inside-title') },
+  'mid-cancel': { onStream: async () => { streaming.resolve(); await Promise.withResolvers<never>().promise; } },
+  'mid-program': { onStream: () => die('mid-program') },
+};
+
+const modelOptions = MODEL_CUTS[mode] ?? {};
 
 const { model } = scriptedModel('the parser is fixed', modelOptions);
 
@@ -75,6 +87,15 @@ const session = new KillSession({
     }
   },
 });
+
+if (mode === 'mid-cancel') {
+  // Never settles: the process dies first.
+  const sent = session.send('refactor the parser', { id: crypto.randomUUID() });
+  await Promise.race([sent, streaming.promise]);
+  // The owner's stop is acknowledged once this returns; the death comes before the turn has settled anything.
+  session.interrupt();
+  die('mid-cancel');
+}
 
 await session.send('refactor the parser', { id: crypto.randomUUID() });
 

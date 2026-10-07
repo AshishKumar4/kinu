@@ -404,6 +404,7 @@ const ControlPathSchema = v.tuple([v.literal(''), v.literal('hire'), v.pipe(v.st
 const JobWatchStateSchema = v.object({
   incarnation: v.string(),
   terminalRetry: v.boolean(),
+  agentWakes: v.number(),
   fibers: v.number(),
   wakes: v.number(),
   started: v.boolean(),

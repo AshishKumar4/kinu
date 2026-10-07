@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
-import { actorConnectionTag } from '@kinu.run/core';
+import { actorConnectionTag, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { gatewayWorkspace, storedChat, workspaceFiles, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
@@ -162,7 +162,8 @@ describe('Retry on a failed turn', () => {
     const workspace = gatewayWorkspace(stubAiBinding((run) => {
       const sent = requestOf(run).messages;
 
-      if (!JSON.stringify(sent).includes(ASK)) return chatCompletion(run, '{"title":"Deploy notes"}');
+      // The agent names itself after the ask on its own models.
+      if (!JSON.stringify(sent).includes(ASK) || JSON.stringify(sent).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) return chatCompletion(run, '{"title":"Deploy notes"}');
       prompts.push(JSON.stringify(sent));
 
       if (!sent.some((message) => message.role === 'tool')) {
