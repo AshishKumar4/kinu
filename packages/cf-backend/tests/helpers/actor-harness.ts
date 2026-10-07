@@ -1519,9 +1519,10 @@ export interface HarnessActorWorld {
   /** The platform AI binding the gateway provider calls; a recording stub by default. */
   aiGateway?: StubbedAiBinding;
   turnExtensions?: readonly KinuExtension[];
-  /** The deployed build's version id at `env.CF_VERSION_METADATA`: a claim on the built-in program names it, and
-   *  recovery holds a claim with no build as unverifiable. Unset, the object runs on no named build. */
-  versionId?: string;
+  /** The deployed build's version id at `env.CF_VERSION_METADATA`: a claim on the built-in program names it. Unset,
+   *  the object runs on {@link HARNESS_BUILD}, as every deployed object runs on a named build; null runs it on none,
+   *  for a test about a host that stamps no build. */
+  versionId?: string | null;
   /** The `send_email` binding at `env.EMAIL`; unset, the workspace has no mail route. */
   email?: SendEmail;
   /** The Analytics Engine datasets the object's turns, tools and jobs write rows to (`helpers/analytics-engine.ts`). */
@@ -1567,6 +1568,9 @@ interface HarnessParentNamespace {
 }
 
 /** Env with refusing defaults; the world records live calls and `parent` binds the parent hop. */
+/** The build a harness object runs on unless its test names another, or none. */
+export const HARNESS_BUILD = 'harness-build';
+
 export function makeEnv(
   parent?: HarnessOrchestratorAgent,
   userPlane?: RecordedUserPlaneCalls,
@@ -1578,7 +1582,7 @@ export function makeEnv(
     LOADER: inProcessWorkerLoader(),
     // The platform gateway is the harness's model provider, over a recording AI binding.
     ...platformGatewayEnv(world?.aiGateway),
-    ...(world?.versionId !== undefined && { CF_VERSION_METADATA: { id: world.versionId, tag: '', timestamp: '' } }),
+    ...(world?.versionId !== null && { CF_VERSION_METADATA: { id: world?.versionId ?? HARNESS_BUILD, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
     ...world?.analytics,
     ...(world?.previewHostSuffix !== undefined && { PREVIEW_HOST_SUFFIX: world.previewHostSuffix }),

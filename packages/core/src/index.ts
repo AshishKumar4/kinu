@@ -4,6 +4,8 @@ export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateI
 
 export { AgentOpenTurns, AgentWakes, type AgentOpenTurn } from './subordinates/open-turns';
 
+export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
+
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
 export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';

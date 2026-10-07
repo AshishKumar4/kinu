@@ -21,6 +21,9 @@ import {
 
 const BRIEF = 'Summarise the release notes.';
 
+/** The deployed build a production reset leaves running on both sides of it. */
+const BUILD = 'build-liveness';
+
 test('an assignment leased by a dead activation runs after the next activation, with nothing else arriving', async () => {
   const gateway = answeringGateway('summarised');
   const workspace = gatewayWorkspace(gateway);
@@ -130,7 +133,7 @@ test('a turn cut off after its report-tool answer, mid-turn, is not run again an
     return new Promise<Response>(() => {});
   });
 
-  const workspace = gatewayWorkspace(gateway);
+  const workspace = gatewayWorkspace(gateway, { versionId: BUILD });
   const actorId = await hire(workspace, 'task');
 
   await wakeForDelegatedTask(workspace, actorId, BRIEF);
@@ -139,8 +142,8 @@ test('a turn cut off after its report-tool answer, mid-turn, is not run again an
 
   abandonHarnessFibers();
   cut = false;
-  // Admitted by a host that stamped no build, recovered by one that does: nothing names the program it ran.
-  await nextActivation(workspace, gateway, 'build-after-admission');
+  // The same build both times, as a reset in production: the program is verified, so the report is what ends it.
+  await nextActivation(workspace, gateway, BUILD);
 
   expect(asked(gateway) - first).toBe(0);
   // The hire's turn claim is in its own database.
