@@ -162,7 +162,7 @@ store per call, and code defines new ones through `workspace.createTool`.
 `eval` itself is not nested. Reviewed 2026-09-13 against
 `tools/sandbox-contract.ts`, `cf-backend/src/codemode-sandbox.ts`,
 `cli-backend/src/codemode-tool-factory.ts`; pinned by `unit-tool-reach`,
-`unit-agents-codemode`, `unit-crafted-codemode-schema`.
+`unit-crafted-codemode-schema` and the workerd `codemode-sandbox` journey.
 
 M2. Binding failures resolve to `{ success: false, reason, error, execution? }`,
 using the native `ToolOutcome` discriminant and reason vocabulary. Successful

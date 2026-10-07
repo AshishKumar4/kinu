@@ -23,6 +23,7 @@
     "./decorated-agent.test.ts",
     "./plan-announce-probe.ts",
     "./slate-durability-probe.ts",
+    "./device-user-probe.ts",
     "./account-reset-probe.ts",
     "./store-reset-probe.ts",
     "./addressed-name-probe.ts",

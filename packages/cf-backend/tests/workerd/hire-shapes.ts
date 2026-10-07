@@ -50,6 +50,15 @@ export interface JobRow {
   readonly status: string;
 }
 
+export interface JobWatchState {
+  readonly incarnation: string;
+  readonly terminalRetry: boolean;
+  readonly fibers: number;
+  readonly wakes: number;
+  readonly started: boolean;
+  readonly jobs: readonly JobRow[];
+}
+
 export interface LogRow {
   readonly actorId: string;
   readonly id: string;

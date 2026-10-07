@@ -377,7 +377,7 @@ async function setDefaultFallbacks(machine: Machine, fallbacks: readonly string[
   expect(run.exitCode, run.stderr).toBe(0);
 }
 
-const TimelineRowSchema = v.looseObject({ kind: v.string(), payload: v.unknown() });
+const TimelineSpanSchema = v.looseObject({ rawType: v.optional(v.string()), label: v.string(), detail: v.optional(v.string()) });
 
 describe("a tier's fallback chain", () => {
   test('a refused model hands its turn to the fallback, and the run says which model answered and why', async () => {
@@ -399,8 +399,8 @@ describe("a tier's fallback chain", () => {
     expect(printed).toContain('openai-compat/beta-model took over from openai-compat/alpha-model');
     expect(printed).toContain('insufficient credits for alpha-model (HTTP 402)');
 
-    const timeline = v.parse(v.array(TimelineRowSchema), JSON.parse(await mustRun(machine, ['timeline', 'chained', '--json'])));
-    expect(timeline.find((row) => row.kind === 'run:model_fallback')?.payload)
-      .toMatchObject({ from: 'openai-compat/alpha-model', to: 'openai-compat/beta-model' });
+    const timeline = v.parse(v.array(TimelineSpanSchema), JSON.parse(await mustRun(machine, ['timeline', 'chained', '--json'])));
+    expect(timeline.find((span) => span.rawType === 'model_fallback')?.label)
+      .toBe('openai-compat/beta-model took over from openai-compat/alpha-model');
   });
 });

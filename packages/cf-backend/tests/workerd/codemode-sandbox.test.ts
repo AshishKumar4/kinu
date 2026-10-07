@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { admitCraftedSource, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, WORKSPACE_ROOT, type ToolOutcome, type JsonValue } from '@kinu.run/core';
+import { admitCraftedSource, cloudPlanes, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, WORKSPACE_ROOT, type ToolOutcome, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createCodeTool } from '@cloudflare/codemode/ai';
 import { generateText, isStepCount, tool, jsonSchema } from 'ai';
@@ -50,14 +50,14 @@ const workspace = {
   },
 };
 
-function toolsProvider(crafted: Array<{ name: string; code: string; description: string }>) {
+function toolsProvider(crafted: Array<{ name: string; code: string; description: string }>, cwd = WORKSPACE_ROOT) {
   return {
     name: 'tools',
     fns: {
       ...Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute])),
       file: async (...args: unknown[]) => ({ echoed: decodeJsonValue({ value: args[0] }) }),
     },
-    prelude: renderToolsPrelude(crafted, { cwd: WORKSPACE_ROOT, workspace: 'probe' }),
+    prelude: renderToolsPrelude(crafted, { cwd, workspace: 'probe' }),
   };
 }
 
@@ -322,7 +322,7 @@ describe('the eval sandbox under workerd', () => {
   });
 
   test('a module import names the workspace binding, and a crafted body reads and writes files through it', async () => {
-    // The live eval's first and corrected attempts at `report_totals` (packages/cli-backend/tests/crafted-file-capability.test.ts).
+    // The live eval's first and corrected attempts at `report_totals` (packages/cli-backend/tests/crafting-flow.test.ts).
     const imported = await executor.execute("// read with node:fs\nconst fs = await import('fs');\nreturn fs.readFileSync('notes.md');", [toolsProvider([]), workspace]);
     expect(imported.error).toContain('No such module "node:fs"');
     expect(imported.error).toContain('`await workspace.readFile(path)`');
@@ -340,6 +340,123 @@ describe('the eval sandbox under workerd', () => {
 
     expect(copied.error).toBeUndefined();
     expect(copied.result).toBe('HELLO FROM THE WORKSPACE');
+  });
+
+  test("child_process, fs and path are Node's over the workspace: output is text, only a refusal fails a call", async () => {
+    // Members answer as the binding delivers them: output as text, a failed command as a refusal carrying its exit.
+    const read: string[] = [];
+
+    const shell = {
+      name: 'workspace',
+      fns: {
+        exec: async (...args: unknown[]) => {
+          const command = text(args, 0);
+
+          if (command.startsWith('false')) return { success: false, reason: 'io', error: 'Error (exit 1)\n--- stderr ---\nnope', execution: { exitCode: 1 } };
+
+          return command.startsWith('printf') ? 'Error (exit 3)\n--- stderr ---\nprinted, not failed' : `ran: ${command}`;
+        },
+        readFile: async (...args: unknown[]) => {
+          read.push(text(args, 0));
+
+          return '{"reason":"io","error":"a saved API error"}';
+        },
+      },
+    };
+
+    const program = [
+      '// Node builtins over the workspace binding',
+      "const { exec } = require('child_process');",
+      "const fs = require('fs/promises');",
+      "const ran = await exec('ls -la');",
+      "const failed = await exec('false').then(() => null, (error) => ({ code: error.code, stderr: error.stderr, message: error.message }));",
+      "const viaCallback = await new Promise((resolve) => exec('echo hi', (error, stdout) => resolve(error ? error.message : stdout)));",
+      "const looksFailed = await exec('printf x');",
+      "const saved = await fs.readFile('saved.json', 'utf8');",
+      "await fs.readFile('vfs://notes/a.md', 'utf8'); await fs.readFile('local://src/b.ts', 'utf8');",
+      "let missing = null; try { require('left-pad'); } catch (error) { missing = error.message; }",
+      "return { ran, failed, viaCallback, looksFailed, saved, joined: require('path').join('a', 'b'), prefixed: require('node:path') === require('path'), missing, available: require.available };",
+    ].join('\n');
+
+    const result = await executor.execute(program, [toolsProvider([]), shell]);
+
+    expect(result.error).toBeUndefined();
+    const ran = v.parse(v.record(v.string(), v.unknown()), result.result);
+
+    expect(ran.ran).toEqual({ stdout: 'ran: ls -la', stderr: '' });
+    expect(ran.failed).toMatchObject({ code: 1, stderr: 'nope', message: expect.stringContaining('Command failed: false') });
+    expect(ran.viaCallback).toBe('ran: echo hi');
+    expect(ran.looksFailed).toEqual({ stdout: 'Error (exit 3)', stderr: 'printed, not failed' });
+    expect(ran.saved).toBe('{"reason":"io","error":"a saved API error"}');
+    expect([ran.joined, ran.prefixed]).toEqual(['a/b', true]);
+    expect(ran.missing).toContain("Cannot find module 'left-pad'");
+    // The shim's own modules beside the platform's nodejs_compat builtins.
+    expect(ran.available).toEqual(expect.arrayContaining(['buffer', 'child_process', 'fs', 'fs/promises', 'path']));
+    // A prefixed path reaches the host's resolver as written; a relative one joins the working directory.
+    expect(read).toEqual([`${WORKSPACE_ROOT}/saved.json`, 'vfs://notes/a.md', 'local://src/b.ts']);
+  });
+
+  test("a crafted body that raises, or throws while it loads, or awaits what is not there, breaks only its own name", async () => {
+    const crafted = [
+      { name: 'boom', code: 'async () => { throw new Error("inner"); }', description: '' },
+      { name: 'dead', code: '(() => { throw new Error("no such helper"); })()', description: '' },
+      { name: 'waiter', code: 'await foo()', description: '' },
+      { name: 'fine', code: 'async () => 2', description: '' },
+    ];
+
+    const program = [
+      '// Each broken tool fails by its own name; its sibling still runs',
+      'const failures = {};',
+      "for (const name of ['boom', 'dead', 'waiter']) { const refused = await tools[name](); failures[name] = refused.success === false ? refused.error : refused; }",
+      'return { fine: await tools.fine(), failures };',
+    ].join('\n');
+
+    const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.result).toMatchObject({
+      fine: 2,
+      failures: {
+        boom: expect.stringContaining('[crafted:boom] inner'),
+        dead: expect.stringContaining('[crafted:dead] failed to load: no such helper'),
+        waiter: expect.stringContaining('foo is not defined'),
+      },
+    });
+  });
+
+  // Release review, 2026-10-04: every program's `process` started in the workspace root, so a hosted actor's
+  // relative paths missed its own home.
+  test("a hosted actor's program starts in its own home, where a relative path lands", async () => {
+    const home = cloudPlanes('/home/sub-hosted').cwd;
+
+    files.set(`${home}/plan.md`, 'the hire\'s own plan');
+
+    const program = "// read a relative path\nconst fs = require('fs/promises');\nreturn { cwd: process.cwd(), plan: await fs.readFile('plan.md', 'utf8') };";
+    const result = await executor.execute(program, [toolsProvider([], home), stateProvider, workspace]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.result).toEqual({ cwd: '/home/sub-hosted', plan: 'the hire\'s own plan' });
+  });
+
+  test("agents.swarm's typed caps cross the sandbox boundary as numbers", async () => {
+    // A number dropped or stringified on the crossing would fall back to the preset's defaults, not refuse.
+    const received: unknown[] = [];
+
+    const swarm = async (...args: unknown[]) => {
+      received.push(args[0]);
+
+      return { ok: true };
+    };
+
+    const agents = { name: 'agents', fns: { swarm } };
+
+    const result = await executor.execute(
+      "// ask for a small swarm\nreturn await agents.swarm({ task: 'review the diff', preset: 'ideate', branches: 2, depth: 1 });",
+      [toolsProvider([]), agents],
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(received).toEqual([{ task: 'review the diff', preset: 'ideate', branches: 2, depth: 1 }]);
   });
 
   test('a bare native tool name is corrected toward tools.<name>', async () => {

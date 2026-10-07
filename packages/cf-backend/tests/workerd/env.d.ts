@@ -35,7 +35,7 @@ import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
-  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared,
+  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered,
 } from './two-turn-shapes';
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
@@ -64,6 +64,9 @@ interface SurfaceControlRpc extends Rpc.WorkerEntrypointBranded {
   holdQueuedModel(): Promise<void>;
   modelCalledWith(marker: string): Promise<void>;
   releaseQueuedModel(): Promise<void>;
+  holdParityModel(parkAt: 'first' | 'partial'): Promise<void>;
+  parityParked(): Promise<void>;
+  releaseParityModel(): Promise<void>;
   mintCliBearer(): Promise<string>;
 }
 
@@ -102,6 +105,8 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   completeChangeNotes(workspace: string): Promise<ChangeNotesCompleted>;
   refusedChangeNotes(): Promise<{ readonly sent: boolean; readonly owed: { readonly sends: number; readonly cards: number } }>;
   claimUnderRecovery(): Promise<{ readonly held: string | null; readonly settled: string | null }>;
+  seedOwedReplyWorkspace(): Promise<string>;
+  recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered>;
   hostedActorTab(): Promise<{ name: string; snapshot: string; jobs: string; frames: number }>;
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
@@ -113,8 +118,8 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
 
 /** The shipped root, sealed as the product seals it: the call `getAgentByName` makes on every stub, which it answers,
  *  and the inherited members it must refuse (`tests/helpers/rpc-denied.ts`), declared so a test can make each call. */
-interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded {
-  __unsafe_ensureInitialized(): Promise<void>;
+/** The inherited members every sealed object must refuse, each called with no arguments. */
+interface DeniedRpc {
   sql(): Promise<void>;
   destroy(): Promise<void>;
   setState(): Promise<void>;
@@ -128,6 +133,33 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded {
   keepAlive(): Promise<void>;
 }
 
+/** The account object: its own internals, and two listed reads asked with no caller. */
+interface SealedUserDoRpc extends Rpc.DurableObjectBranded, DeniedRpc {
+  __unsafe_ensureInitialized(): Promise<void>;
+  sqlx(): Promise<void>;
+  readCredential(): Promise<void>;
+  writeCredential(): Promise<void>;
+  requireTier(): Promise<void>;
+  ensureInit(): Promise<void>;
+  createMcpOAuthProvider(): Promise<void>;
+  listWorkspaces(): Promise<void>;
+  listCredentials(): Promise<void>;
+}
+
+interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
+  __unsafe_ensureInitialized(): Promise<void>;
+  hostedWorkspace(): Promise<void>;
+  loadSoulText(): Promise<void>;
+  currentProfile(): Promise<void>;
+  startExecutorFileDownload(): Promise<void>;
+  abortExecutorFileDownload(): Promise<void>;
+  writeExecutorFileChunk(): Promise<void>;
+  readExecutorFileChunk(): Promise<void>;
+  abortExecutorFileWrite(): Promise<void>;
+  prepareTerminal(): Promise<void>;
+  openDeviceTerminal(): Promise<void>;
+}
+
 interface CodexEgressProbeRpc extends Rpc.DurableObjectBranded, HostileCalls {
   forward(ownerUserId: string, callId: string, request: Request): Promise<Response>;
   cancel(callId: string): void;
@@ -137,10 +169,29 @@ interface CodexEgressRecordsRpc extends Rpc.WorkerEntrypointBranded {
   read(id: string): ProbeRecords;
 }
 
+/** The production UserDO's device chokepoint, with the identities a test cannot mint from outside. */
+interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
+  fetch(input: string, init?: RequestInit): Promise<Response>;
+  pair(label: string): Promise<{ deviceId: string; ticket: string }>;
+  bindWorkspace(workspace: string, deviceId: string): Promise<void>;
+  admit(requestId: string, deviceId: string, workspace: string, turnId: string): Promise<void>;
+  run(workspace: string, requestId: string, turnId: string, command: string): Promise<string | undefined>;
+  cancelOwn(workspace: string, requestId: string): Promise<string | undefined>;
+  stopTurn(workspace: string, turnId: string): Promise<Array<{ requestId?: string; outcome: string; detail?: string }>>;
+  acknowledge(workspace: string, requestId: string): Promise<void>;
+  withdrawConsent(workspace: string, deviceId: string): Promise<{ ok: boolean }>;
+  answerConsent(workspace: string, decision: 'once' | 'always' | 'deny'): Promise<void>;
+  revoke(deviceId: string): Promise<{ ok: boolean; unstoppedCommands?: number }>;
+  requests(): Promise<Array<{ requestId: string; turnId: string | null; outcome: string | null; claim: string | null }>>;
+  unstoppedSince(deviceId: string): Promise<number | null>;
+}
+
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
   setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
+  modelSaw(workspace: string, texts: readonly string[]): Promise<void>;
+  restartAlarm(workspace: string, exclude: string): Promise<import('./hire-shapes').JobWatchState>;
   callerObserved(): Promise<void>;
   openHire(workspace: string, prompt: string): Promise<void>;
   reenter(workspace: string): Promise<void>;
@@ -157,7 +208,8 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   outrunJobWindow(workspace: string): Promise<void>;
   openJobGate(workspace: string): Promise<void>;
   redeliverJobWake(workspace: string, jobId: string): Promise<void>;
-  loseJobFiber(workspace: string, jobId: string): Promise<number>;
+  ageJobFiber(workspace: string, jobId: string): Promise<number>;
+  jobWatchState(workspace: string): Promise<import('./hire-shapes').JobWatchState>;
   jobRows(workspace: string): Promise<import('./hire-shapes').JobRow[]>;
 }
 
@@ -253,6 +305,9 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
     | { ok: true; frames: string[]; output: string }
     | { ok: false; error: string }
   >;
+  reattachTerminal(workspace: string): Promise<{ frames: string[]; output: string }>;
+  shellCalls(workspace: string, owner: string, calls: Array<{ command: string; cwd?: string; name?: string }>): Promise<string[]>;
+  refusedTerminalFrame(workspace: string, frame: string): Promise<{ code: number; reason: string }>;
 }
 
 
@@ -379,11 +434,13 @@ declare global {
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       DELETE_ALL_PROBE: DurableObjectNamespace<import('./delete-all-probe').DeleteAllProbeDO>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
+      DEVICE_USER_PROBE: DurableObjectNamespace<DeviceUserProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;
       AGENT_FACET_PROBE: DurableObjectNamespace<AgentFacetProbeRpc>;
       ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
       SEALED_ORCHESTRATOR: DurableObjectNamespace<SealedOrchestratorRpc>;
+      SEALED_USER_DO: DurableObjectNamespace<SealedUserDoRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
       LOADER: WorkerLoader;
       /** The production Worker entry hosted by `public-surface-probe`, WebSocket upgrades included. */

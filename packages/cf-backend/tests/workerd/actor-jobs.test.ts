@@ -133,27 +133,35 @@ describe("a hired agent's job", () => {
     expect((await probe(workspace).jobRows(workspace)).find((row) => row.id === job.id)?.status).toBe('cancelled');
   });
 
-  it("is settled, and its auditor woken, after a restart that lost the job's fiber", async () => {
-    const workspace = 'hire-job-restart';
-    const { hire, pane, job } = await hiredJob(workspace);
+  it.each(['retained', 'expired'] as const)("is settled, and its auditor woken without a client, after a restart with a %s fiber", async (fiberKind) => {
+    const workspace = `hire-job-restart-${fiberKind}`;
+    const { pane, job } = await hiredJob(workspace);
 
     pane.close();
-    // The restart lands where the job's row was written but its fiber row was not.
-    expect(await probe(workspace).loseJobFiber(workspace, job.id)).toBe(1);
+    await probe(workspace).settled(workspace);
+    const before = await probe(workspace).jobWatchState(workspace);
+    expect(before).toMatchObject({ terminalRetry: false, fibers: 1 });
+
+    // No row is deleted by the fixture: the installed SDK's max-age policy expires it on activation.
+    if (fiberKind === 'expired') expect(await probe(workspace).ageJobFiber(workspace, job.id)).toBe(1);
+
     await abortAllDurableObjects();
-    const reopened = await hirePane(workspace, hire);
 
-    try {
-      // The restarted workspace's own maintenance settles it; the turn that wakes the auditor ends on its pane.
-      await probe(workspace).reenter(workspace);
-      expect((await probe(workspace).jobRows(workspace)).find((row) => row.id === job.id)?.status).toBe('failed');
-      await reopened.turnEnded(1);
+    // A passive witness outside the workspace reads what its first restarted alarm returned after
+    // expiry and after any recovery wake ended. Neither observer addresses the workspace.
+    if (fiberKind === 'retained') await probe(workspace).modelSaw(workspace, [job.id, 'failed']);
 
-      expect((await chat(workspace)).filter((line) => line.startsWith('user:') && line.includes(job.id)))
-        .toEqual([expect.stringContaining('failed')]);
-    } finally {
-      reopened.close();
-    }
+    const watch = fiberKind === 'expired'
+      ? await probe(workspace).restartAlarm(workspace, before.incarnation)
+      : await probe(workspace).jobWatchState(workspace);
+
+    const row = watch.jobs.find((entry) => entry.id === job.id);
+
+    console.log('orphan-job.restart', JSON.stringify({ watch, row }));
+    expect(row?.status).toBe('failed');
+    await probe(workspace).modelSaw(workspace, [job.id, 'failed']);
+
+    if (fiberKind === 'expired') expect(watch).toMatchObject({ terminalRetry: false, fibers: 0, started: true });
   });
 });
 

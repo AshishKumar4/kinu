@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
@@ -346,4 +346,12 @@ export interface ChangeNotesCompleted {
   readonly cards: readonly { readonly role: string; readonly notes: readonly string[]; readonly author: string | null }[];
   readonly kept: number;
   readonly owed: { readonly sends: number; readonly cards: number };
+}
+
+/** What the alarm's recovery left after an eviction: each seeded event's lease, the reply's transition, and the
+ *  last thing each model request asked. */
+export interface OwedRepliesRecovered {
+  readonly leases: Record<string, { readonly turnId: string | null; readonly consumedAt: number | null }>;
+  readonly transition: string;
+  readonly asked: readonly string[];
 }

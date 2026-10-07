@@ -26,9 +26,9 @@ const PLATFORM_RPC_SURFACE: readonly string[] = [
 ] as const;
 
 /**
- * The agents-SDK `_cf_` facet protocol, invoked on the root object's stub. `unit-rpc-surface.test.ts`
- * derives this list from `agents/dist`. `_cf_invokeSubAgent*`/`_cf_invokeAgentPath` stay sealed: they call
- * a method by NAME and would re-open everything this module closes.
+ * The agents-SDK `_cf_` facet protocol, invoked on the root object's stub; the workerd facet journeys call it across
+ * real stubs. `_cf_invokeSubAgent*`/`_cf_invokeAgentPath` stay sealed: they call a method by NAME and would re-open
+ * everything this module closes (`workerd/orchestrator-seal.test.ts` calls each).
  */
 const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
   '_cf_acquireFacetKeepAlive',
@@ -52,7 +52,7 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
 ] as const;
 
 /** Every prototype-chain member below `Object.prototype` not shadowed by an own property; the rule
- * workerd implements, pinned by unit-rpc-surface.test.ts. */
+ * workerd implements, measured over real stubs by workerd/orchestrator-seal.test.ts. */
 function rpcReachableNames(target: RpcSurfaceSubject): string[] {
   const own = new Set(Object.getOwnPropertyNames(target));
   const reachable = new Set<string>();

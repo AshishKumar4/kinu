@@ -2,7 +2,8 @@
  * The workspace shell, as the agent's shell tool reaches it: every call is a fresh shell starting at its `cwd` or the
  * agent's home, side by side with any other; a `name` keeps its directory and exported variables, one call at a time.
  * Staging, 2026-10-02 (PassiveGull, live sandbox hang): the agent's one durable shell queued an `echo` 6,032 s behind
- * a `find`, and a `cd` from one call steered every later one.
+ * a `find`, and a `cd` from one call steered every later one. Fresh and named shells are the workerd slate-durability
+ * journey's; a long command held open, on the job clock this harness moves, is this file's.
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -39,33 +40,6 @@ function answered(gateway: ReturnType<typeof shellModel>, asked: string): readon
 
   return last === undefined ? [] : sinceAsked(last).answers.map((answer) => v.parse(v.string(), JSON.parse(answer)));
 }
-
-test('an unnamed call keeps nothing and says where it started; a name keeps its directory and exports, past `exit 3`', async () => {
-  const gateway = shellModel({
-    calls: [
-      { command: `mkdir -p ${WORKSPACE_ROOT}/sub && cd ${WORKSPACE_ROOT}/sub && export LEFT=1 && pwd` },
-      { command: 'pwd; echo "left=$LEFT"' },
-      { command: 'pwd', cwd: 'sub' },
-      { command: `cd ${WORKSPACE_ROOT}/sub && export TOKEN=s3 && exit 3`, name: 'build' },
-      { command: 'pwd; echo "token=$TOKEN"', name: 'build' },
-      { command: 'pwd; echo "token=$TOKEN"', name: 'other' },
-    ],
-  });
-
-  const workspace = gatewayWorkspace(gateway);
-
-  await catalogTurn(workspace.agent, 'calls');
-  const [first, second, third, failed, named, other] = answered(gateway, 'calls');
-
-  // The `cd` and `export` of the first call did not reach the second.
-  expect(second).toContain(`${WORKSPACE_ROOT}\nleft=\n`);
-  expect(first).toBe(`cwd: ${WORKSPACE_ROOT}\n${WORKSPACE_ROOT}/sub\n`);
-  expect(second).toBe(`cwd: ${WORKSPACE_ROOT}\n${WORKSPACE_ROOT}\nleft=\n`);
-  expect(third).toBe(`cwd: ${WORKSPACE_ROOT}/sub\n${WORKSPACE_ROOT}/sub\n`);
-  expect(failed).toContain('exit 3');
-  expect(named).toBe(`cwd: ${WORKSPACE_ROOT}/sub\n${WORKSPACE_ROOT}/sub\ntoken=s3\n`);
-  expect(other).toBe(`cwd: ${WORKSPACE_ROOT}\n${WORKSPACE_ROOT}\ntoken=\n`);
-});
 
 /** A process `ps` lists as still running; an entry's command can span lines, each entry opening on its pid. */
 const runningLine = (ps: string, command: string): boolean => ps.split(/\n(?=\s+\d+\s)/).some((entry) => entry.includes(command) && entry.includes('running'));

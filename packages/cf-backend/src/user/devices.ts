@@ -1,8 +1,8 @@
 import { Effect } from 'effect';
 import {
-  DEVICE_PTY_OPEN_METHOD, type DeviceExecOutput, NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_TOKEN_ROTATION, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, SANDBOX_UNAVAILABLE, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  DEVICE_PTY_OPEN_METHOD, type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_TOKEN_ROTATION, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, SANDBOX_UNAVAILABLE, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
-import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
+import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserObjectHost } from './user-host';
 
@@ -164,18 +164,6 @@ function readSandboxColumns(row: SandboxColumns | undefined): SandboxVerdict & P
     reason: parseSandboxReason(row?.sandbox_reason),
     detail: row?.sandbox_detail ?? null,
     gpu: v.parse(v.array(v.string()), JSON.parse(row?.sandbox_gpu ?? '[]')),
-  };
-}
-
-function watchedOutput(opts: { readonly onOutput?: (output: DeviceExecOutput) => void | Promise<void> } | undefined) {
-  const onOutput = opts?.onOutput;
-
-  if (onOutput === undefined) return {};
-
-  return {
-    onOutput: (output: DeviceExecOutput) => settleLogged('device.output_unsent', {
-      doing: "handing a running command's output to its workspace", otherwise: 'unavailable',
-    }, async () => { await onOutput(output); }),
   };
 }
 

@@ -1,12 +1,11 @@
-import { runToExit, workspaceDatabase } from '@kinu.run/test-utils';
+import { createTestActorsOver, runToExit, workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { mkdirSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
-import { initRunEventTables, parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { makeSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
-import { createTestActor } from '../../core/tests/helpers';
+import { initWorkspaceSchema, parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { makeWorkspaceSchemaSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -14,11 +13,10 @@ async function readLocal(expression: string): Promise<JsonValue> {
   const home = scratchDir('run-events');
   mkdirSync(join(home, 'jarvis'), { recursive: true });
   const db = workspaceDatabase(join(home, 'jarvis', 'agent.db'));
-  const execRaw = (ddl: string) => { db.exec(ddl); };
 
-  initRunEventTables(execRaw);
-  // `run_events` is scoped by the store's main actor, so the seed registers a real workspace identity.
-  const actor = createTestActor(makeSql(db), execRaw, 'run-events-workspace', 'jarvis');
+  // A workspace as `kinu create` leaves one: the whole schema, and `run_events` scoped by its main actor.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+  const actor = createTestActorsOver(db, { name: 'jarvis' }).main;
   stampSchemaGenesis(db);
 
   const row = (index: number, type: string, extra: JsonObject = {}) => {
@@ -62,8 +60,12 @@ describe('local run-event readers', () => {
       .toEqual(['run_end']);
   });
 
-  test('the local timeline leads with the durable run events', async () => {
-    expect(await readLocal(`m.listLocalTimeline('jarvis').map(r => r.kind)`))
-      .toEqual(['run:run_end', 'run:tool_call_end', 'run:run_start']);
+  // The cloud's shape (core's `getRunTimeline`): one span per event, oldest first, each labelled.
+  test('the local timeline is the run\'s durable events as spans, oldest first', async () => {
+    expect(await readLocal(`m.listLocalTimeline('jarvis').map(r => [r.rawType, r.kind, r.label])`)).toEqual([
+      ['run_start', 'trigger', expect.stringContaining('Run started')],
+      ['tool_call_end', 'runtime-exec', 'shell'],
+      ['run_end', 'other', 'Run ended (completed)'],
+    ]);
   });
 });
