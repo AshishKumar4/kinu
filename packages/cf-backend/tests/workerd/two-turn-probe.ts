@@ -1023,7 +1023,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'close'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1498,12 +1498,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /** A real first turn whose isolate stops after recording the turn and before recording that it did; the workspace to
-   *  read after the eviction, and what it stored then. */
-  async cutRecordingWorkspace(): Promise<{ readonly workspace: string; readonly cut: TerminalState }> {
-    const { target, workspace } = await this.claimQueueWorkspace('terminal-cut');
+  /** A real first turn whose isolate stops at its turn recording, `phase` the recording; the workspace to read after
+   *  the eviction, and what it stored then. */
+  async cutRecordingWorkspace(phase: TerminalEffectPhase): Promise<{ readonly workspace: string; readonly cut: TerminalState }> {
+    const { target, workspace } = await this.claimQueueWorkspace(phase === 'after' ? 'terminal-cut' : 'terminal-stuck');
 
-    await target.cutTerminal('turn_record', 'after');
+    await target.cutTerminal('turn_record', phase);
 
     if (!(await target.beginGenesisTurn()).started) throw new Error('the terminal-cut probe genesis did not start');
     await awaitSettled(target);
@@ -1511,10 +1511,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     return { workspace, cut: await target.terminalState() };
   }
 
-  /** After the eviction: the alarm's recovery pass on the fresh activation, then what it stored. */
-  async recoverRecording(workspace: string): Promise<TerminalState> {
+  /** After the eviction: the alarm's recovery pass on the fresh activation, then what it stored. With `cut`, that
+   *  activation dies at the same point too. */
+  async recoverRecording(workspace: string, cut?: { readonly name: TerminalEffectName; readonly phase: TerminalEffectPhase }): Promise<TerminalState> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
+    if (cut !== undefined) await target.cutTerminal(cut.name, cut.phase);
     await target.recoveryPass();
     await awaitSettled(target);
 

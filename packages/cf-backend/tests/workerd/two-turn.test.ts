@@ -205,7 +205,7 @@ describe('two real turns over the HTTP model seam', () => {
   // recovery replays it once, and the transition closes.
   it('a turn recording cut before its mark rolls back, and recovery after an eviction records it once', async () => {
     const driver = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('terminal-cut-driver'));
-    const { workspace, cut } = await driver.cutRecordingWorkspace();
+    const { workspace, cut } = await driver.cutRecordingWorkspace('after');
 
     expect(cut.recorded, JSON.stringify(cut)).toBe(0);
     expect(cut.owed.find((row) => row.name === 'turn_record')).toEqual({ name: 'turn_record', status: 'pending', attempts: 0 });
@@ -215,6 +215,25 @@ describe('two real turns over the HTTP model seam', () => {
     const recovered = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('terminal-cut-driver')).recoverRecording(workspace);
 
     expect(recovered).toEqual({ owed: [], open: 0, recorded: 1 });
+  });
+
+  // An effect nobody can finish is never abandoned: through recoveries that die at it too, it stays owed and holds its
+  // transition open. The first pass that is not cut finishes it and closes the transition.
+  it('an effect every recovery dies at stays owed, and the first pass that lives finishes it', async () => {
+    const driver = () => env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('terminal-stuck-driver'));
+    const { workspace, cut } = await driver().cutRecordingWorkspace('before');
+    const stuck = { owed: [{ name: 'turn_record', status: 'pending', attempts: 0 }], open: 1, recorded: 0 };
+
+    expect({ ...cut, owed: cut.owed.filter((row) => row.name === 'turn_record') }, JSON.stringify(cut)).toEqual(stuck);
+
+    for (let eviction = 0; eviction < 2; eviction += 1) {
+      await abortAllDurableObjects();
+      const again = await driver().recoverRecording(workspace, { name: 'turn_record', phase: 'before' });
+
+      expect({ ...again, owed: again.owed.filter((row) => row.name === 'turn_record') }, JSON.stringify(again)).toEqual(stuck);
+    }
+
+    expect(await driver().recoverRecording(workspace)).toEqual({ owed: [], open: 0, recorded: 1 });
   });
 
   // A row a build with another effect set left owed is blocked by its name, never guessed at or dropped: it still

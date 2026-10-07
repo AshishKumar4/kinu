@@ -110,8 +110,8 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   agentHeldWork(): Promise<AgentHeldWork>;
   agentSlateUi(): Promise<AgentSlateUi>;
   answerPageModesIn(): Promise<AnswerPageModes>;
-  cutRecordingWorkspace(): Promise<{ readonly workspace: string; readonly cut: TerminalState }>;
-  recoverRecording(workspace: string): Promise<TerminalState>;
+  cutRecordingWorkspace(phase: 'before' | 'after'): Promise<{ readonly workspace: string; readonly cut: TerminalState }>;
+  recoverRecording(workspace: string, cut?: { readonly name: 'turn_record'; readonly phase: 'before' | 'after' }): Promise<TerminalState>;
   alienEffectIn(): Promise<AlienEffect>;
   seedOwedReplyWorkspace(): Promise<string>;
   recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered>;
