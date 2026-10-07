@@ -233,6 +233,28 @@ describe('two real turns over the HTTP model seam', () => {
     expect(done.asked.filter((words) => words.includes('event arrived while you were idle'))).toHaveLength(1);
   });
 
+  it('an eviction while a settled turn closes leaves the close to recovery, which finishes it once', async () => {
+    const driver = () => env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('close-driver'));
+    const held = await driver().heldCloseWorkspace();
+
+    // The answer is in and the inline effects ran; the close is held on the logo, still in flight.
+    expect(held.parkedLogo).toBe(true);
+    expect(held.answers).toBe(1);
+    expect(held.busy).toContain('a terminal close');
+    expect(held.effects.filter((effect) => effect.status !== 'completed').map((effect) => effect.effectName)).toContain('workspace_logo');
+
+    await abortAllDurableObjects();
+    const done = await driver().recoverHeldClose(held.workspace);
+
+    // Recovery finished the close: the logo was drawn once more, the turn was not asked again, and nothing is owed.
+    expect(done.effects).toEqual([]);
+    expect(done.busy).toEqual([]);
+    expect(done.logoCalls).toBe(1);
+    expect(done.turnCalls).toBe(0);
+    expect(done.answers).toBe(1);
+    expect(done.runEnds).toEqual([{ runId: expect.any(String), reason: 'completed' }]);
+  });
+
   it('a Changes-tab send the loop refuses to drive takes its card row with it', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-refused-driver'));
 

@@ -8,7 +8,7 @@ import { abortAllDurableObjects } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { FORK_ROW_SECTIONS } from '@kinu.run/core';
 import {
-  PROBE_CUT_MESSAGE_ID, PROBE_CUT_RECORDED_AT, PROBE_SOUL_MISSION, PROBE_SOURCE_NAME,
+  PROBE_CUT_MESSAGE_ID, PROBE_CUT_RECORDED_AT, PROBE_LEDGER_ROWS, PROBE_SOUL_MISSION, PROBE_SOURCE_NAME,
 } from './fork-probe';
 
 /** A stub held across a reset is broken by it; the id survives. */
@@ -38,6 +38,10 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(staged.entries).toBe(3);
     expect(staged.contextMembers).toBe(3);
     expect(staged.craftedTools).toBe(1);
+    // Lessons as of the cut; the fact and the `db` table as they stand, the rows the target's main actor's own.
+    expect(staged.lessons).toEqual(['Read before writing.']);
+    expect(staged.facts).toEqual(['editor']);
+    expect(staged.tables).toEqual([{ name: 'ledger', rows: PROBE_LEDGER_ROWS }]);
     expect(staged.lineage).toBeNull();
     expect(staged.markers).toBe(0);
     expect(staged.displayName).toBeNull();
@@ -93,6 +97,8 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(published.messages).toBe(3);
     expect(published.contextMembers).toBe(3);
     expect(published.files).toEqual(inherited);
+    expect({ lessons: published.lessons, facts: published.facts, tables: published.tables })
+      .toEqual({ lessons: staged.lessons, facts: staged.facts, tables: staged.tables });
 
     const redrive = await source(name).deliver({ target: name, from: commitAt - 1, stop: 'end' });
     expect(redrive.refusal).toBeNull();

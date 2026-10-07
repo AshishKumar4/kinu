@@ -1,7 +1,9 @@
 /**
  * The production UserDO's device chokepoint in workerd, against a machine the test plays over a real socket: the
  * account pairs the machine and binds a workspace to it, and each call below is the production method a workspace or
- * the owner reaches. The probe adds only the identities a test cannot mint from outside and the ledger reads.
+ * the owner reaches. The probe adds only the identities a test cannot mint from outside and the ledger reads. A hosted
+ * workspace is the production one, its turn parked at its model call on the fake's queue hold, so a Stop meets a turn
+ * that is really running. Bound as this script's `UserDO`, so that workspace reaches this very object.
  */
 import { getAgentByName, type AgentContext } from 'agents';
 import * as v from 'valibot';
@@ -10,6 +12,7 @@ import {
   type DeviceConsentAnswer, type SqlExec, type SqlValue, type UserCaller,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../../src/orchestrator';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { USER_DO_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import type { DeviceCancellationOutcome } from '../../src/user/devices';
 import { UserDO } from '../../src/user/user-do';
@@ -18,15 +21,22 @@ export * from '../../src/server';
 
 const PROBE_METHODS = [
   'pair', 'bindWorkspace', 'admit', 'run', 'cancelOwn', 'stopTurn', 'acknowledge', 'withdrawConsent', 'answerConsent', 'revoke', 'requests',
-  'unstoppedSince',
+  'unstoppedSince', 'hostWorkspace', 'startParkedTurn', 'runOnMachine', 'stopWork', 'pendingConsents', 'releaseTurn',
 ];
+
+/** The fake models' control host and the credential that routes a pinned model to them (`http-model-fake.ts`). */
+const MODEL_CONTROL = 'http://probe-control.invalid';
+
+const FIXTURE_CREDENTIAL = { kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key' } as const;
 
 /** Each look at the workspace's prompts is an RPC hop, never a clock; this many and the prompt never came. */
 const CONSENT_LOOKS = 10_000;
 
 type ProbeEnv = ConstructorParameters<typeof UserDO>[1];
 
-type ConsentTarget = Pick<OrchestratorAgent, 'claimOwner' | 'listPendingConsents' | 'resolveDeviceConsent'>;
+type ConsentTarget = Pick<OrchestratorAgent,
+  'claimOwner' | 'listPendingConsents' | 'resolveDeviceConsent' | 'setModel' | 'runTaskFromMcp' | 'executeInExecutor' | 'cancelCurrentWork'
+  | 'onModelSettingsChanged'>;
 
 export interface InflightRow {
   readonly requestId: string;
@@ -35,9 +45,23 @@ export interface InflightRow {
   readonly claim: string | null;
 }
 
+/** Null once `call` has answered, or how it failed. */
+async function settled(call: Promise<unknown>): Promise<string | null> {
+  try {
+    await call;
+
+    return null;
+  } catch (cause) {
+    return renderThrownChain({ cause });
+  }
+}
+
 export class DeviceUserProbeDO extends UserDO {
   /** Each bound workspace's own identity, as the workspace holds it; one activation per test. */
   private readonly callers = new Map<string, UserCaller>();
+
+  /** The parked turn's whole run: an MCP task's call answers only once its turn has ended. */
+  private parked: Promise<string | null> | null = null;
 
   constructor(ctx: AgentContext, env: ConstructorParameters<typeof UserDO>[1]) {
     super(ctx, env);
@@ -68,6 +92,60 @@ export class DeviceUserProbeDO extends UserDO {
     this.ctx.storage.sql.exec(
       `INSERT INTO device_consent (agent_name, device_id, policy, updated_at) VALUES (?, ?, 'allow', ?)`, workspace, deviceId, Date.now(),
     );
+  }
+
+  /** A production workspace this account owns, holding the identity the account issued it, on the fake's held model. */
+  async hostWorkspace(workspace: string, deviceId: string): Promise<void> {
+    const owner = await ownerCaller(this.env);
+    const target = await this.workspaceTarget(workspace);
+
+    await this.setCredential(owner, 'openai-compat.default', FIXTURE_CREDENTIAL);
+    await this.registerWorkspace(owner, workspace, workspace);
+    const claim = await target.claimOwner(this.name);
+
+    await this.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    // As the credential route tells a live workspace, so its next model read sees the fake's models.
+    await target.onModelSettingsChanged();
+    const pinned = await target.setModel('openai-compat/probe-queue');
+
+    if (!pinned.ok) throw new Error(`the workspace refused the held model: ${JSON.stringify(pinned)}`);
+    this.ctx.storage.sql.exec(
+      `INSERT INTO device_consent (agent_name, device_id, policy, updated_at) VALUES (?, ?, 'allow', ?)`, workspace, deviceId, Date.now(),
+    );
+  }
+
+  /** Opens a turn on `workspace` and answers once its model was asked `text`, the call the hold parks. */
+  async startParkedTurn(workspace: string, text: string): Promise<void> {
+    await this.control('/queue/hold', 'POST');
+    const target = await this.workspaceTarget(workspace);
+
+    // Not awaited here: the task's call settles with its turn, which the hold keeps open.
+    this.parked = settled(target.runTaskFromMcp(text));
+    await this.control(`/log/until?marker=${encodeURIComponent(text)}`, 'GET');
+  }
+
+  /** Lets the parked turn answer, and answers once it has ended. */
+  async releaseTurn(): Promise<void> {
+    await this.control('/queue/release', 'POST');
+    const ended = await this.parked;
+
+    this.parked = null;
+
+    if (ended !== null && ended !== undefined) throw new Error(`the parked turn failed: ${ended}`);
+  }
+
+  /** A command the workspace runs on the owner's machine, as its executor route reaches it. */
+  async runOnMachine(workspace: string, command: string): Promise<string> {
+    return JSON.stringify(await (await this.workspaceTarget(workspace)).executeInExecutor('device', command));
+  }
+
+  /** The composer's Stop on the workspace: what it reports of each command on the machine. */
+  async stopWork(workspace: string): Promise<Array<{ requestId?: string; outcome: string; detail?: string }>> {
+    return [...(await (await this.workspaceTarget(workspace)).cancelCurrentWork()).deviceCommands];
+  }
+
+  async pendingConsents(workspace: string): Promise<number> {
+    return (await (await this.workspaceTarget(workspace)).listPendingConsents()).length;
   }
 
   /** A command row as a dispatch leaves it, with no call behind it: what a far end's misanswer is tested against. */
@@ -141,6 +219,12 @@ export class DeviceUserProbeDO extends UserDO {
     return row === undefined ? null : v.parse(v.nullable(v.number()), row.unstopped_at);
   }
 
+  private async control(path: string, method: 'GET' | 'POST'): Promise<void> {
+    const response = await fetch(`${MODEL_CONTROL}${path}`, { method });
+
+    if (!response.ok) throw new Error(`probe-control refused ${path}: ${String(response.status)}`);
+  }
+
   private workspaceTarget(workspace: string): Promise<ConsentTarget> {
     return getAgentByName<ProbeEnv, OrchestratorAgent>(this.env.OrchestratorAgent, workspace);
   }
@@ -162,3 +246,5 @@ export class DeviceUserProbeDO extends UserDO {
     },
   };
 }
+
+export { DeviceUserProbeDO as UserDO };

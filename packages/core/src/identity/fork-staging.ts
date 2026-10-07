@@ -7,6 +7,7 @@ import type { SqlExecutor } from '../types/primitives';
 // Type-only, so this module has no runtime edge back to the two that use it.
 import type { ForkSnapshotHead } from './fork-rows';
 import type { ForkStagedCounts } from './fork-writer';
+import { FORK_ROW_SECTIONS, perSection, type ForkRowSection } from './fork-sections';
 
 export interface ForkStaging {
   /** Declared by the `begin` frame; null until then, so a publication without a head is impossible. */
@@ -29,24 +30,12 @@ interface ForkStagingRow {
   head_source_name: string;
   head_cut_message_id: string;
   head_cut_created_at: number;
-  staged_agent_config: number;
-  staged_crafted_tools: number;
-  staged_session_messages: number;
-  staged_conversation_entries: number;
-  staged_conversation_entry_parts: number;
-  staged_context_members: number;
   staged_files: number;
   transfer_id: string | null;
   expected_seq: number;
   section_cursor: number;
   stream: string;
   import_path: string | null;
-  want_agent_config: number;
-  want_crafted_tools: number;
-  want_session_messages: number;
-  want_conversation_entries: number;
-  want_conversation_entry_parts: number;
-  want_context_members: number;
   want_files: number;
   published: number;
 }
@@ -61,56 +50,37 @@ export class ForkStagingState {
   /** The staged transfer, or null on a workspace that is not mid-fork. */
   read(): ForkStaging | null {
     const row = this.sql<ForkStagingRow>`
-      SELECT head_declared, head_source_id, head_source_name,
-             head_cut_message_id, head_cut_created_at,
-             staged_agent_config, staged_crafted_tools,
-             staged_session_messages,
-             staged_conversation_entries, staged_conversation_entry_parts, staged_context_members,
+      SELECT head_declared, head_source_id, head_source_name, head_cut_message_id, head_cut_created_at,
              (SELECT COUNT(*) FROM fork_staged_files) AS staged_files,
-             transfer_id, expected_seq, section_cursor, stream, import_path,
-             want_agent_config, want_crafted_tools,
-             want_session_messages,
-             want_conversation_entries, want_conversation_entry_parts, want_context_members,
-             want_files, published
+             transfer_id, expected_seq, section_cursor, stream, import_path, want_files, published
       FROM fork_transfer WHERE id = 1 LIMIT 1
     `[0];
 
     if (row === undefined) return null;
+
+    const counts = new Map(this.sql<{ section: string; declared: number; staged: number }>`
+      SELECT section, declared, staged FROM fork_transfer_counts
+    `.map((count) => [count.section, count] as const));
 
     return {
       head: row.head_declared === 0 ? null : {
         source: { workspaceId: row.head_source_id, workspaceName: row.head_source_name },
         cut: { messageId: row.head_cut_message_id, createdAtMs: row.head_cut_created_at },
       },
-      staged: {
-        agentConfig: row.staged_agent_config,
-        craftedTools: row.staged_crafted_tools,
-        sessionMessages: row.staged_session_messages,
-        conversationEntries: row.staged_conversation_entries,
-        conversationEntryParts: row.staged_conversation_entry_parts,
-        contextMembers: row.staged_context_members,
-        files: row.staged_files,
-      },
+      staged: { ...perSection((section) => counts.get(section)?.staged ?? 0), files: row.staged_files },
       transferId: row.transfer_id,
       expectedSeq: row.expected_seq,
       sectionCursor: row.section_cursor,
       stream: row.stream,
       importing: row.import_path,
-      declared: {
-        agentConfig: row.want_agent_config,
-        craftedTools: row.want_crafted_tools,
-        sessionMessages: row.want_session_messages,
-        conversationEntries: row.want_conversation_entries,
-        conversationEntryParts: row.want_conversation_entry_parts,
-        contextMembers: row.want_context_members,
-        files: row.want_files,
-      },
+      declared: { ...perSection((section) => counts.get(section)?.declared ?? 0), files: row.want_files },
       published: row.published === 1,
     };
   }
 
   /** Claim the row for this fork; every other column (including the publication flag) resets to its default. */
   begin(head: ForkSnapshotHead): void {
+    void this.sql`DELETE FROM fork_transfer_counts`;
     void this.sql`INSERT OR REPLACE INTO fork_transfer
       (id, head_declared, head_source_id, head_source_name, head_cut_message_id, head_cut_created_at)
       VALUES (1, 1, ${head.source.workspaceId}, ${head.source.workspaceName},
@@ -121,13 +91,15 @@ export class ForkStagingState {
   declare(input: { transferId: string; declared: ForkStagedCounts; expectedSeq: number; stream: string }): void {
     void this.sql`UPDATE fork_transfer SET
       transfer_id = ${input.transferId}, expected_seq = ${input.expectedSeq}, stream = ${input.stream},
-      want_agent_config = ${input.declared.agentConfig}, want_crafted_tools = ${input.declared.craftedTools},
-      want_session_messages = ${input.declared.sessionMessages},
-      want_conversation_entries = ${input.declared.conversationEntries},
-      want_conversation_entry_parts = ${input.declared.conversationEntryParts},
-      want_context_members = ${input.declared.contextMembers},
       want_files = ${input.declared.files}
       WHERE id = 1`;
+
+    for (const section of FORK_ROW_SECTIONS) {
+      void this.sql`
+        INSERT INTO fork_transfer_counts (section, declared) VALUES (${section}, ${input.declared[section]})
+        ON CONFLICT (section) DO UPDATE SET declared = excluded.declared
+      `;
+    }
   }
 
   advance(input: { expectedSeq: number; sectionCursor: number; stream: string }): void {
@@ -141,16 +113,12 @@ export class ForkStagingState {
     void this.sql`UPDATE fork_transfer SET import_path = ${dst} WHERE id = 1`;
   }
 
-  /** Add taken rows for every section in one statement (a column name cannot be bound). */
-  count(delta: Partial<Omit<ForkStagedCounts, 'files'>>): void {
-    void this.sql`UPDATE fork_transfer SET
-      staged_agent_config             = staged_agent_config             + ${delta.agentConfig ?? 0},
-      staged_crafted_tools            = staged_crafted_tools            + ${delta.craftedTools ?? 0},
-      staged_session_messages         = staged_session_messages         + ${delta.sessionMessages ?? 0},
-      staged_conversation_entries     = staged_conversation_entries     + ${delta.conversationEntries ?? 0},
-      staged_conversation_entry_parts = staged_conversation_entry_parts + ${delta.conversationEntryParts ?? 0},
-      staged_context_members          = staged_context_members          + ${delta.contextMembers ?? 0}
-      WHERE id = 1`;
+  /** Add rows a section took. */
+  count(section: ForkRowSection, rows: number): void {
+    void this.sql`
+      INSERT INTO fork_transfer_counts (section, staged) VALUES (${section}, ${rows})
+      ON CONFLICT (section) DO UPDATE SET staged = staged + excluded.staged
+    `;
   }
 
   /** The transfer landed. The row outlives publication to answer a frame re-delivered after a lost reply. */

@@ -29,6 +29,9 @@ import type {
   ClaimUnderRecovery,
   AgentHeldWork,
   StrandedWork,
+  EffectStatus,
+  HeldClose,
+  HeldCloseRecovered,
   DriveOnceInput,
   DriveOnceResult,
   ExerciseResult,
@@ -649,6 +652,10 @@ type ExerciseTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'settleState'>;
 
 /** A new workspace's logo is drawn by its own model; a count of what was asked leaves that call out. */
+function effectStatuses(rows: ParityRows): EffectStatus[] {
+  return rows.terminalEffects.map(({ effectName, status }) => ({ effectName, status }));
+}
+
 function drawsLogoCall(call: HttpCall): boolean {
   return call.users.some((message) => message.startsWith('Design the logo'));
 }
@@ -919,7 +926,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'close'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1415,6 +1422,49 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     return {
       leases: await target.replyLeases(), transition: await target.transitionState('u-owed'),
       asked: (await this.httpCalls()).filter((call) => !drawsLogoCall(call)).map((call) => call.users.at(-1) ?? ''),
+    };
+  }
+
+  /**
+   * A fresh workspace's genesis answers, then its terminal close is held open: the logo, a detached effect drawn by the
+   * turn's own model, is the second call and parks. Read just before the activation dies.
+   */
+  async heldCloseWorkspace(): Promise<HeldClose> {
+    const { target, workspace } = await this.claimQueueWorkspace('close');
+
+    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 2 }) });
+
+    if (!(await target.beginGenesisTurn()).started) throw new Error('close probe genesis did not start');
+    await fetch('http://probe-control.invalid/queue/arrived');
+    const parked = (await this.probeLog()).calls.at(-1);
+
+    return {
+      workspace,
+      parkedLogo: parked !== undefined && drawsLogoCall(parked),
+      busy: (await target.settleState()).busy,
+      effects: effectStatuses(await target.parityRows()),
+      answers: (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').length,
+    };
+  }
+
+  /** After the eviction: the parked call is let go (its gate is this module's), then the fresh activation's recovery. */
+  async recoverHeldClose(workspace: string): Promise<HeldCloseRecovered> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+    // From here on, everything the model is asked is recovery's.
+    await this.httpReset();
+    await target.recoveryPass();
+    await awaitSettled(target);
+    const calls = (await this.probeLog()).calls;
+
+    return {
+      effects: effectStatuses(await target.parityRows()),
+      busy: (await target.settleState()).busy,
+      logoCalls: calls.filter(drawsLogoCall).length,
+      turnCalls: calls.filter((call) => !drawsLogoCall(call)).length,
+      answers: (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').length,
+      runEnds: await target.runEnds(),
     };
   }
 

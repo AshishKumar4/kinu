@@ -12,12 +12,19 @@
  * consent before their first command. No deployed row let the agent reach for
  * a machine that was not there, or let the agent's own call raise the card.
  *
+ * THE SANDBOX SWITCH (unit-device-consent.test.ts, carried here). The card
+ * names the exact command it asks for; an answer of `once` binds nothing; the
+ * owner's Sandbox switch on Settings → Devices turns off and on and reads back,
+ * refuses a tier outside its vocabulary, answers 404 for a machine it does not
+ * know, and the per-workspace consent-tier route is gone.
+ *
  * NO CLOCK. The card is awaited on the broadcast the chat renders it from, and
  * each turn settles on its own done frame.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
-import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
+import { infraBoundary, scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
+import { webHeaders } from '../../evals/src/session';
 import { ORCHESTRATOR_AGENT_SLUG, type JsonValue, type RunEvent } from '../../packages/core/src/index';
 import type { DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, type AttachedMachine } from './daemon';
@@ -77,6 +84,55 @@ function firstTurnDetail(prompted: readonly ToolCallEnd[], events: readonly RunE
   const calls = events.filter(isToolCallEnd).map((call) => `${call.name} ${(call.error ?? textOf(call.result)).slice(0, 80)}`);
 
   return `no call in the first turn named ${CONNECT_PROMPT}: ${calls.join('; ') || 'no tool call'}`;
+}
+
+const DeviceTiersSchema = v.array(v.looseObject({ id: v.string(), sandbox: v.looseObject({ tier: v.string() }) }));
+
+const ConsentRowsSchema = v.array(v.looseObject({ agentName: v.string(), deviceId: v.string(), policy: v.string() }));
+
+/** One call of the owner's Settings → Devices routes: its status and its body. */
+async function userRoute(account: DeviceAccount, path: string, method = 'GET', body?: JsonValue): Promise<{ status: number; body: string }> {
+  return infraBoundary(`${method} ${account.origin}/api/user${path}`, async () => {
+    const headers = { ...webHeaders(account.identity), 'content-type': 'application/json' };
+    const init: RequestInit = body === undefined ? { method, headers } : { method, headers, body: JSON.stringify(body) };
+    const response = await fetch(`${account.origin}/api/user${path}`, init);
+
+    return { status: response.status, body: await response.text() };
+  });
+}
+
+/** The Sandbox switch of `deviceId` as the Devices page reads it, or what the read answered instead. */
+async function sandboxTier(account: DeviceAccount, deviceId: string): Promise<string> {
+  const read = await userRoute(account, '/devices');
+  const rows = read.status === 200 ? v.safeParse(DeviceTiersSchema, JSON.parse(read.body)) : null;
+
+  return rows?.success === true ? rows.output.find((row) => row.id === deviceId)?.sandbox.tier ?? 'unlisted' : `HTTP ${String(read.status)}`;
+}
+
+/** The switch turned off and on and read back each time, a bad tier and an unknown machine refused, the tier route gone. */
+async function sandboxSwitch(account: DeviceAccount, deviceId: string, workspace: string): Promise<EvalSubgoal[]> {
+  const path = `/devices/${encodeURIComponent(deviceId)}/sandbox`;
+  const off = await userRoute(account, path, 'PUT', { tier: 'raw' });
+  const readOff = await sandboxTier(account, deviceId);
+  const on = await userRoute(account, path, 'PUT', { tier: 'sandboxed' });
+  const readOn = await sandboxTier(account, deviceId);
+  const refused = await Promise.all(['files_only', 'root_of_everything', ''].map(async (tier) => (await userRoute(account, path, 'PUT', { tier })).status));
+  const kept = await sandboxTier(account, deviceId);
+  const unknown = await userRoute(account, '/devices/dev-nope/sandbox', 'PUT', { tier: 'raw' });
+  const tierRoute = await userRoute(account, `/devices/${encodeURIComponent(deviceId)}/consent`, 'PUT', { agentName: workspace, scope: 'full_filesystem' });
+
+  return [
+    {
+      what: 'sandbox-switch-reads-back',
+      reached: off.status === 200 && readOff === 'raw' && on.status === 200 && readOn === 'sandboxed',
+      detail: `off ${String(off.status)} read ${readOff}; on ${String(on.status)} read ${readOn}`,
+    },
+    {
+      what: 'sandbox-switch-refuses-what-it-does-not-know',
+      reached: refused.every((status) => status === 400) && kept === 'sandboxed' && unknown.status === 404 && tierRoute.status === 404,
+      detail: `bad tiers ${refused.join(',')} kept ${kept}; unknown machine ${String(unknown.status)}; consent-tier route ${String(tierRoute.status)}`,
+    },
+  ];
 }
 
 /** What this case connected and must put away. */
@@ -142,6 +198,25 @@ describe(SUITE, () => {
                 ? `the second turn ${cardShown ? 'raised a card for no connected machine' : 'ended without a consent card'}`
                 : `card ${card.consentId} for ${machine.name} answered once: ${JSON.stringify(decided)}`,
             });
+
+            // The card names the command itself, so the owner consents to what will run, not to a tool name.
+            subgoals.push({
+              what: 'card-names-the-command',
+              reached: card !== undefined && card.method === 'exec' && machine.execLog().some((ran) => card.command.includes(ran) || ran.includes(card.command)),
+              detail: card === undefined ? 'no card' : `card asked to ${card.method} \`${card.command}\`; the machine ran ${JSON.stringify(machine.execLog())}`,
+            });
+
+            // `once` lets this call through and remembers nothing: the Devices page lists no binding for it.
+            const consents = await userRoute(account, '/devices/consents');
+            const bound = consents.status === 200 ? v.safeParse(ConsentRowsSchema, JSON.parse(consents.body)) : null;
+            const binding = bound?.success === true ? bound.output.filter((row) => row.agentName === session.workspace) : null;
+
+            subgoals.push({
+              what: 'once-binds-nothing',
+              reached: binding !== null && binding.length === 0,
+              detail: binding === null ? `the consent listing answered ${String(consents.status)}: ${consents.body.slice(0, 200)}` : `${String(binding.length)} binding(s) for ${session.workspace}`,
+            });
+            subgoals.push(...await sandboxSwitch(account, machine.deviceId, session.workspace));
 
             const after = (await session.runEvents()).slice(before.length);
             const again = connectPrompts(after);

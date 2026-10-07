@@ -16,7 +16,7 @@ import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
-  agentCred, bindActorHandle, initWorkspaceSchema, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY,
+  agentCred, bindActorHandle, initWorkspaceSchema, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
@@ -30,12 +30,42 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 
 export * from '../../src/server';
 
-/** Every other binding kind the probe slate declares surfaces as a `problem` row. */
+/** The owner's connections as a graph reads them: one MCP server with a read-only tool and one that writes. */
 const CATALOG = {
   executors: [{ namespace: 'workspace', members: ['readFile', 'writeFile'] }],
-  mcp: [],
+  mcp: [{ server: 'connection-id', title: 'github', tools: [{ name: 'read_issue', readOnly: true }, { name: 'create_issue', readOnly: false }] }],
   tools: [],
   tiers: [],
+};
+
+/** A slate with every grant-relevant binding kind, and the `digest` its PEER hops into, which hops back. */
+const ISSUES = {
+  issues: {
+    name: 'issues', main: 'server.ts',
+    slate: { title: 'Issue triage', runtime: 'worker', bindings: {
+      GITHUB: { kind: 'mcp', server: 'connection-id', tools: ['read_issue', 'create_issue'] },
+      FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] },
+      NOTES: { kind: 'memory', members: ['recall', 'remember'] },
+      ASK: { kind: 'agent' },
+      PEER: { kind: 'app', id: 'triage-digest' },
+    } },
+  },
+  'triage-digest': {
+    name: 'triage-digest', main: 'server.ts',
+    slate: { title: 'Digest', runtime: 'worker', bindings: {
+      DIGEST_FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile'] },
+      BACK: { kind: 'app', id: 'issues' },
+    } },
+  },
+  // What a slate may never hold: control of its calling agent, or its eval and hiring tools.
+  overreach: {
+    name: 'overreach', main: 'server.ts',
+    slate: { title: 'Overreach', runtime: 'worker', bindings: {
+      CONTROL: { kind: 'namespace', namespace: 'agents' },
+      TOOLS: { kind: 'tool', name: 'eval' },
+      HIRE: { kind: 'tool', name: 'agents' },
+    } },
+  },
 };
 
 const refusedText = async (call: Promise<JsonValue>): Promise<string> => {
@@ -200,6 +230,31 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const removed = await this.host.operation(hire, { op: 'remove', id: 'widgets' });
 
     return { preview, removed, left: this.vfs.as(CRED_KERNEL).exists(dir) };
+  }
+
+  /** The triage slates (`ISSUES`), as an owner authors them where slates live. */
+  async authorTriage(): Promise<void> {
+    const files = this.vfs.as(CRED_KERNEL);
+
+    for (const [id, manifest] of Object.entries(ISSUES)) {
+      files.mkdir(`/slates/${id}`, { recursive: true });
+      files.writeFile(`/slates/${id}/package.json`, JSON.stringify(manifest));
+      files.writeFile(`/slates/${id}/server.ts`, 'import { SlateObject } from "kinu:slate";\nexport class Slate extends SlateObject {}\n');
+    }
+  }
+
+  /** One operation as `as` asks it: the owner at the root, the owner in Plan mode, or a hired agent. */
+  async operationAs(as: 'root' | 'plan' | 'hire', input: JsonValue): Promise<SlateCallResult> {
+    const callers: Record<typeof as, SlateCaller> = {
+      root: ROOT_SLATE_CALLER, plan: { ...ROOT_SLATE_CALLER, workMode: 'plan' }, hire: { ...ROOT_SLATE_CALLER, path: [{ name: 'helper' }] },
+    };
+
+    return this.host.operation(callers[as], v.parse(SlateOperationSchema, input));
+  }
+
+  /** A call a share's viewer makes with no invocation: the share must name the running call it rides. */
+  async unnamedShareCall(share: string): Promise<SlateCallResult> {
+    return this.host.bindingCall({ ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'FILES', { member: 'readFile', args: ['/x'], invocation: null });
   }
 
   /** `approved` names members granted beyond the graph's read members. */

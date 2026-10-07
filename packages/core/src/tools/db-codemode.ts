@@ -16,9 +16,10 @@ import type { DeferredRunEvent, RunEventRecorder } from '../events/recorder';
 import { KinuError, refusalOf, renderCauseChain } from '../obs/error';
 import { settle, settleSync } from '../obs/effect';
 import { currentWorkMode, workModeRefusal } from '../execution/work-mode';
-import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { APP_TABLE_SCOPES, type AppTableScope, type DbOpRecord } from '../types/app-store';
+import type { ForkAppData } from '../identity/fork-sections';
 
 export {
   APP_MUTATIONS, APP_TABLE_SCOPES,
@@ -201,6 +202,8 @@ export interface AppOpResult {
 }
 
 export interface AppDataStore {
+  /** The store as a workspace fork reads and lands it. */
+  readonly fork: ForkAppData;
   /** Idempotent for an identical declaration; a different shape is `denied`. */
   createTable(spec: AppTableSpec): AppTableRecord;
   /** Refused while another actor holds rows in it. */
@@ -509,6 +512,10 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     createdAt: row.created_at,
   });
 
+  const catalogRows = (doing: string): Effect.Effect<AppTableRecord[], KinuError> => Effect.map(execute<CatalogRow>(
+    sql, new Statement().text(`SELECT name, scope, columns, created_by, created_at FROM ${catalog} ORDER BY created_at ASC, name ASC`), doing,
+  ), (rows) => rows.map(recordOf));
+
   const resolve = (name: string): Effect.Effect<Resolved, KinuError> => Effect.gen(function* () {
     yield* authorized();
     const logical = yield* parseInput(TableNameSchema, { value: name, where: 'table name' });
@@ -658,13 +665,15 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
     const rows = yield* execute<Record<string, StoredValue>>(sql, statement, doing);
 
-    return yield* Effect.forEach(rows, (row) => Effect.gen(function* () {
-      const decoded: AppRow = {};
+    return yield* Effect.forEach(rows, (row) => decodedRow(columns, row));
+  });
 
-      for (const column of columns) decoded[column.name] = yield* decodeValue(column, row[column.name]);
+  const decodedRow = (columns: readonly AppColumn[], row: Readonly<Record<string, StoredValue>>): Effect.Effect<AppRow, KinuError> => Effect.gen(function* () {
+    const decoded: AppRow = {};
 
-      return decoded;
-    }));
+    for (const column of columns) decoded[column.name] = yield* decodeValue(column, row[column.name]);
+
+    return decoded;
   });
 
   /** One INSERT per consecutive run of same-signature rows; preserves rowid order. */
@@ -781,6 +790,41 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     return result;
   });
 
+  /** Never adopt an uncatalogued physical object as agent data. */
+  const unclaimed = (physical: string, doing: string): Effect.Effect<void, KinuError> => Effect.gen(function* () {
+    const claimed = yield* execute<{ name: string }>(
+      sql,
+      new Statement()
+        .text(`SELECT name FROM sqlite_master WHERE type IN ('table', 'view', 'index', 'trigger') AND name = `)
+        .value(physical),
+      doing,
+    );
+
+    if (claimed.length > 0) {
+      return yield* new KinuError('denied', `\`${physical}\` already exists in this database outside the agent-data catalogue, so it is not agent data and this will not adopt it as such`);
+    }
+  });
+
+  /** A declared table's DDL and catalogue row, inside the caller's transaction. */
+  const landed = (record: AppTableRecord, doing: string): Effect.Effect<void, KinuError> => Effect.gen(function* () {
+    const physical = `${APP_TABLE_PREFIX}${record.name}`;
+    yield* runDdl(yield* createTableDdl(record, physical), doing);
+    const index = yield* ownerIndexDdl(record, physical);
+
+    if (index !== null) yield* runDdl(index, doing);
+    yield* runStatement(
+      sql,
+      new Statement()
+        .text(`INSERT INTO ${catalog} (name, scope, columns, created_by, created_at) VALUES (`)
+        .value(record.name).text(', ')
+        .value(record.scope).text(', ')
+        .value(JSON.stringify(record.columns)).text(', ')
+        .value(record.createdBy).text(', ')
+        .value(record.createdAt).text(')'),
+      doing,
+    );
+  });
+
   const createdTable = (spec: AppTableSpec): Effect.Effect<AppTableRecord, KinuError> => Effect.gen(function* () {
     yield* authorized();
     const declared = yield* parseInput(TableSpecSchema, { value: spec, where: 'db.createTable(spec)' });
@@ -815,37 +859,11 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
       return yield* new KinuError('denied', `this workspace already holds ${tables} agent tables, which is the maximum; drop one before declaring another`);
     }
 
-    const claimed = yield* execute<{ name: string }>(
-      sql,
-      new Statement()
-        .text(`SELECT name FROM sqlite_master WHERE type IN ('table', 'view', 'index', 'trigger') AND name = `)
-        .value(physical),
-      doing,
-    );
-
-    if (claimed.length > 0) {
-      // Never adopt an uncatalogued physical object as agent data.
-      return yield* new KinuError('denied', `\`${physical}\` already exists in this database outside the agent-data catalogue, so it is not agent data and this will not adopt it as such`);
-    }
-
+    yield* unclaimed(physical, doing);
     const record: AppTableRecord = { ...declared, createdBy: actorId, createdAt: Date.now() };
 
     return yield* commit((record_) => Effect.gen(function* () {
-      yield* runDdl(yield* createTableDdl(record, physical), doing);
-      const index = yield* ownerIndexDdl(record, physical);
-
-      if (index !== null) yield* runDdl(index, doing);
-      yield* runStatement(
-        sql,
-        new Statement()
-          .text(`INSERT INTO ${catalog} (name, scope, columns, created_by, created_at) VALUES (`)
-          .value(record.name).text(', ')
-          .value(record.scope).text(', ')
-          .value(JSON.stringify(record.columns)).text(', ')
-          .value(record.createdBy).text(', ')
-          .value(record.createdAt).text(')'),
-        doing,
-      );
+      yield* landed(record, doing);
       record_({ op: 'createTable', table: record.name, scope: record.scope, rowsAffected: 0, batch: null });
 
       return record;
@@ -920,7 +938,54 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     return results;
   })));
 
+  const fork: ForkAppData = {
+    tables: () => settleSync(Effect.map(catalogRows('read the agent-data catalogue'), (records) => records.map(({ name, scope, columns, createdAt }) => ({
+      declaration: JSON.stringify({ name, scope, columns }), createdAt,
+    })))),
+    page: (table, after, limit) => settleSync(Effect.gen(function* () {
+      const resolved = yield* resolve(table);
+      const doing = `export ${resolved.record.name}`;
+      const columns = resolved.record.columns;
+
+      // `_rowid_` and `_fork_rowid` are no declarable names (the grammar requires a leading letter), so neither is a
+      // column's; a declared `rowid` would shadow SQLite's own. An integer key aliases it, so a row may be at or below 0.
+      const statement = new Statement()
+        .text(`SELECT _rowid_ AS _fork_rowid, ${yield* quotedAll(columns.map((column) => column.name))} FROM ${yield* quoted(resolved.physical)}`);
+
+      const unscoped = yield* compileScope(resolved, statement);
+
+      if (after !== null) statement.text(unscoped ? ' WHERE ' : ' AND ').text('_rowid_ > ').value(after);
+      statement.text(' ORDER BY _rowid_ LIMIT ').value(limit);
+      const rows = yield* execute<Record<string, StoredValue> & { _fork_rowid: number }>(sql, statement, doing);
+
+      return {
+        rows: yield* Effect.forEach(rows, (row) => decodedRow(columns, row)),
+        next: rows.length === limit ? rows.at(-1)?._fork_rowid ?? null : null,
+      };
+    })),
+    count: (table) => settleSync(counted(table, undefined)),
+    create: (declaration, createdAt) => settleSync(Effect.gen(function* () {
+      const declared = yield* parseInput(TableSpecSchema, { value: parseJsonValue(declaration), where: 'a forked table' });
+      const doing = `fork ${declared.name}`;
+      yield* unclaimed(`${APP_TABLE_PREFIX}${declared.name}`, doing);
+
+      transactionSync(() => settleSync(landed({ ...declared, createdBy: actorId, createdAt }, doing)));
+    })),
+    insert: (table, rows) => settleSync(Effect.gen(function* () {
+      const resolved = yield* resolve(table);
+
+      transactionSync(() => settleSync(insertRows(resolved, rows, `fork ${resolved.record.name}`)));
+    })),
+    clear: () => settleSync(Effect.gen(function* () {
+      const declared = yield* execute<{ name: string }>(sql, new Statement().text(`SELECT name FROM ${catalog}`), 'read the agent-data catalogue');
+
+      for (const { name } of declared) yield* runDdl(`DROP TABLE IF EXISTS ${yield* quoted(`${APP_TABLE_PREFIX}${name}`)}`, `clear ${name}`);
+      yield* runStatement(sql, new Statement().text(`DELETE FROM ${catalog}`), 'clear the agent-data catalogue');
+    })),
+  };
+
   return {
+    fork,
     createTable(spec) {
       return settleSync(createdTable(spec));
     },
@@ -930,11 +995,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     },
 
     listTables() {
-      return settleSync(Effect.flatMap(authorized(), () => Effect.map(execute<CatalogRow>(
-        sql,
-        new Statement().text(`SELECT name, scope, columns, created_by, created_at FROM ${catalog} ORDER BY created_at ASC, name ASC`),
-        'db.listTables()',
-      ), (rows) => rows.map(recordOf))));
+      return settleSync(Effect.flatMap(authorized(), () => catalogRows('db.listTables()')));
     },
 
     schema(name) {

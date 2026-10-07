@@ -1,6 +1,7 @@
 /** Workspace fork row shapes; queries live in fork-plan, fork-transfer and fork-writer. */
 
 import * as v from 'valibot';
+import { JsonValueSchema } from '../utils/json';
 
 // Canonical declaration: TS types and the fork-transfer frame union derive from these schemas. All JSON-serializable.
 
@@ -57,8 +58,6 @@ export const ForkContextMemberRowSchema = v.object({
   message_id: v.string(),
 });
 
-/** One row of the FTS content table behind memory search. */
-
 /** One crafted tool, snapshotted; the fork evolves it independently. */
 export const ForkCraftedToolRowSchema = v.object({
   name: v.string(),
@@ -68,8 +67,49 @@ export const ForkCraftedToolRowSchema = v.object({
   updated_at: v.number(),
 });
 
-/** One actor_config row; shell-approval keys are withheld at the source's read (fork-transfer.ts). */
+/** One actor_config row; shell-approval keys are withheld at the source's read (fork-sections.ts). */
 export const ForkConfigRowSchema = v.object({ key: v.string(), value: v.string() });
+
+/** One lesson as it stood at the cut: one corroborated after it crosses provisional. Its turns are cited by id. */
+export const ForkLessonRowSchema = v.object({
+  id: v.string(),
+  turn_ids: v.string(),
+  text: v.string(),
+  source: v.string(),
+  status: v.picklist(['provisional', 'corroborated']),
+  created_at: v.number(),
+  corroborated_at: v.nullable(v.number()),
+});
+
+/** One tool lesson at its current revision: the store keeps no earlier one. */
+export const ForkToolLessonRowSchema = v.object({
+  id: v.string(),
+  tool: v.string(),
+  text: v.string(),
+  revision: v.number(),
+  helpful: v.number(),
+  harmful: v.number(),
+  turn_ids: v.string(),
+  status: v.picklist(['active', 'retired']),
+  created_at: v.number(),
+  updated_at: v.number(),
+});
+
+/** One memory fact as last observed: the store keeps no earlier value. */
+export const ForkFactRowSchema = v.object({
+  key: v.string(),
+  value_json: v.string(),
+  confidence: v.number(),
+  source: v.nullable(v.string()),
+  last_observed_at: v.number(),
+});
+
+/** One of the `db` tool's tables, as its declaration's JSON text (the store checks it as it checks any declaration),
+ *  and when the source declared it, which orders the fork's listing as it ordered the source's. */
+export const ForkAppTableRowSchema = v.object({ declaration: v.string(), created_at: v.number() });
+
+/** One row of one of the `db` tool's tables, in the store's own codec (a blob as base64, JSON decoded). */
+export const ForkAppRowSchema = v.object({ table: v.string(), row: v.record(v.string(), JsonValueSchema) });
 
 export type ForkSnapshotHead = v.InferOutput<typeof ForkSnapshotHeadSchema>;
 
@@ -85,3 +125,13 @@ export type ForkContextMemberRow = v.InferOutput<typeof ForkContextMemberRowSche
 export type ForkCraftedToolRow = v.InferOutput<typeof ForkCraftedToolRowSchema>;
 
 export type ForkConfigRow = v.InferOutput<typeof ForkConfigRowSchema>;
+
+export type ForkLessonRow = v.InferOutput<typeof ForkLessonRowSchema>;
+
+export type ForkToolLessonRow = v.InferOutput<typeof ForkToolLessonRowSchema>;
+
+export type ForkFactRow = v.InferOutput<typeof ForkFactRowSchema>;
+
+export type ForkAppRow = v.InferOutput<typeof ForkAppRowSchema>;
+
+export type ForkAppTableRow = v.InferOutput<typeof ForkAppTableRowSchema>;

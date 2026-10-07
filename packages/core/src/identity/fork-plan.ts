@@ -1,6 +1,6 @@
 /**
- * Workspace fork: which rows one cut selects (every entry up to the cut's position),
- * and the readers both the in-process snapshot and the wire use.
+ * Workspace fork: which rows one cut selects (every entry up to the cut's position), and the readers the conversation
+ * sections select with (fork-sections.ts).
  */
 
 import { Effect } from 'effect';
@@ -33,14 +33,6 @@ export interface ForkConversationPlan {
   readonly members: readonly ForkContextMemberRow[];
   /** Referenced payload files, relative to the source artifact directory, deduplicated. */
   readonly artifacts: readonly string[];
-}
-
-/** Rows per conversation section, declared by the source and checked against what the target took. */
-export interface ForkConversationCounts {
-  sessionMessages: number;
-  conversationEntries: number;
-  conversationEntryParts: number;
-  contextMembers: number;
 }
 
 interface ForkChainEntryRow {
@@ -252,25 +244,4 @@ export function forkConversationEntryPartRows(
     WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND entry_id = ${entryId}
     ORDER BY position
   `.map((row) => v.parse(ForkConversationEntryPartRowSchema, row));
-}
-
-/** Per-section counts over the readers' own predicates, so declaration and stream cannot disagree. */
-export function forkConversationCounts(
-  sql: SqlExecutor, actorId: string, plan: ForkConversationPlan,
-): ForkConversationCounts {
-  let conversationEntryParts = 0;
-
-  for (const entryId of plan.entryIds) {
-    conversationEntryParts += sql<{ total: number }>`
-      SELECT COUNT(*) AS total FROM conversation_entry_parts
-      WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND entry_id = ${entryId}
-    `[0]?.total ?? 0;
-  }
-
-  return {
-    sessionMessages: plan.messageIds.length,
-    conversationEntries: plan.entryIds.length,
-    conversationEntryParts,
-    contextMembers: plan.members.length,
-  };
 }
