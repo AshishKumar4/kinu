@@ -216,18 +216,21 @@ function frameName(node: ProfileNode): string {
   return `${functionName === '' ? '(anonymous)' : functionName} ${url.split('/').slice(-2).join('/')}:${String(lineNumber + 1)}`;
 }
 
-/** Every sampled allocation by the function that made it and its caller, collected or not: the churn, not what stays. */
+/** Every sampled allocation by the function that made it and the five nearest distinct callers (a library's own
+ *  recursion collapses), collected or not: the churn, not what stays. */
 function allocationSites(head: ProfileNode): Allocations {
   const bySite = new Map<string, number>();
-  const pending: { node: ProfileNode; caller: string }[] = [{ node: head, caller: '' }];
+  const pending: { node: ProfileNode; callers: readonly string[] }[] = [{ node: head, callers: [] }];
   let total = 0;
 
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const name = frameName(next.node);
-    const site = next.caller === '' ? name : `${name}  <-  ${next.caller}`;
+    const outer = next.callers.filter((caller) => caller !== name).slice(-5).reverse();
+    const site = outer.length === 0 ? name : `${name}  <-  ${outer.join('  <-  ')}`;
     bySite.set(site, (bySite.get(site) ?? 0) + next.node.selfSize);
     total += next.node.selfSize;
-    pending.push(...next.node.children.map((node) => ({ node, caller: name })));
+    const callers = next.callers.at(-1) === name ? next.callers : [...next.callers, name];
+    pending.push(...next.node.children.map((node) => ({ node, callers })));
   }
 
   const sites = [...bySite].map(([site, bytes]) => ({ site, bytes })).sort((a, b) => b.bytes - a.bytes).slice(0, 25);
