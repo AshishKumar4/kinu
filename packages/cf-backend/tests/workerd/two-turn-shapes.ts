@@ -406,6 +406,8 @@ export interface AgentHeldWork {
 /** The work read over what a dead activation and an older build left, then what the person's Recover did and left. */
 export interface StrandedWork {
   readonly stranded: readonly OwedWorkRow[];
+  /** Whether Work is shown while they are blocked: they need a person, so they are Work's own content. */
+  readonly shown: boolean;
   readonly recovered: string;
   readonly after: readonly OwedWorkRow[];
 }

@@ -275,9 +275,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       VALUES (?, 'seq-retired', 'retired', 'no_such_effect', '', 0, '{}', 'pending')`, actorId);
     this.unmetered("INSERT INTO agent_open_turns (actor_id, turn_id, opened_at) VALUES (?, 'agent-turn', ?)", agentId, Date.now());
     const stranded = await this.inspectWork();
+    const { work: shown } = await this.getWorkspaceTabPresence();
     const { recovered } = await this.recoverStrandedTurn();
 
-    return { stranded, recovered, after: await this.inspectWork() };
+    return { stranded, shown, recovered, after: await this.inspectWork() };
   }
 
   /** How the agent's last answer's block, its last ask and the answer named as the workspace's resolve, as a preview

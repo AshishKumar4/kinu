@@ -4809,17 +4809,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return heads.length >= ORPHAN_SEAL_MAX_ROWS;
   }
 
-  /**
-   * Whether Work → Now has a row, read from this object's own stores with no agent asked: a turn claimed and not run
-   * here (a live turn alone is not content), an effect owed, or an agent that says it holds owed work.
-   */
-  private owesWorkNow(): boolean {
-    const running = this._inFlight || this.actorSession.turnOpen;
-    const stranded = this.actorHost().resumable().some((turn) => turn.record.actorId !== this.actorHandle().actorId || !running);
-
-    return stranded || this.terminal.ledger.pendingSequences().length > 0 || new AgentOwedWork(this.boundSql).all().length > 0;
-  }
-
   /** Asks each lane's own read path at limit 1, since presence is a boolean. */
   @callable() async getWorkspaceTabPresence(): Promise<TabPresence> {
     // Same reads the Work tab mounts. A live turn is not content: streaming with
@@ -4835,7 +4824,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       work: hasWorkspaceWork({
         work: workspaceWork, pending: pendingActions, jobs,
-        changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''), owed: this.owesWorkNow(),
+        changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''), owed: await this.inspectWork(),
       }),
       // Hidden with swarms off.
       explorations: await this.readAccountSwarms() && listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,

@@ -274,6 +274,7 @@ describe('two real turns over the HTTP model seam', () => {
 
     expect(brief(work.stranded), JSON.stringify(work)).toEqual([{ kind: 'turn', id: 'turn-stranded', phase: 'blocked', attempt: 2 }, ...left]);
     expect(work.stranded.map((row) => row.blocked === null)).toEqual([false, false, false]);
+    expect(work.shown).toBe(true);
     expect(work.recovered).not.toBe('none');
     expect(brief(work.after)).toEqual(left);
   });
