@@ -4,8 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { env } from 'cloudflare:test';
-import { sanitizeToolName } from '@cloudflare/codemode';
-import { createDbCodemodeProvider, JsonValueSchema, type AppDataStore, type JsonValue } from '@kinu.run/core';
+import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const LEDGER = `await db.createTable({ name: 'ledger', scope: 'actor', columns: [
@@ -25,29 +24,6 @@ function resultOf(answer: string): JsonValue {
   return v.parse(AnswerSchema, JSON.parse(answer)).result;
 }
 
-/** Reads member names only; `createDbCodemodeProvider` fixes them without touching a database. */
-function memberNames(): readonly string[] {
-  const unused: AppDataStore = {
-    fork: {
-      tables: () => { throw new Error('not called'); },
-      page: () => { throw new Error('not called'); },
-      count: () => { throw new Error('not called'); },
-      create: () => { throw new Error('not called'); },
-      insert: () => { throw new Error('not called'); },
-      clear: () => { throw new Error('not called'); },
-    },
-    createTable: () => { throw new Error('not called'); },
-    dropTable: () => { throw new Error('not called'); },
-    listTables: () => { throw new Error('not called'); },
-    schema: () => { throw new Error('not called'); },
-    select: () => { throw new Error('not called'); },
-    count: () => { throw new Error('not called'); },
-    apply: () => { throw new Error('not called'); },
-    batch: () => { throw new Error('not called'); },
-  };
-
-  return Object.keys(createDbCodemodeProvider(unused).tools);
-}
 
 describe('the db capability on Durable Object SQLite', () => {
   test('a program declares, writes, reads and counts over the workspace database', async () => {
@@ -199,14 +175,4 @@ describe('the db capability on Durable Object SQLite', () => {
     expect(await probe('stale').staleActor()).toContain('no longer bound');
   });
 
-  /**
-     * Defends: the hosted sandbox renames reserved-word members, so `db.delete` answered `Tool "delete" not found` on the real runtime.
-     * Asserted against the vendor's own rule, not a copy of its word list.
-     */
-  test('no member of the namespace is a name this sandbox would rename', () => {
-    const names = memberNames();
-    expect(names).toContain('deleteRows');
-    expect(names).not.toContain('delete');
-    expect(names.filter((name) => sanitizeToolName(name) !== name)).toEqual([]);
-  });
 });

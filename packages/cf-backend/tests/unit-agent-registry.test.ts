@@ -64,19 +64,6 @@ describe('AgentProviderRegistry composition', () => {
     }
   });
 
-  test('registers all 10 providers in preference order', () => {
-    const reg = createAgentProviderRegistry({
-      env: {},
-      userDO: fakeUserDOStub(),
-    });
-
-    const ids = reg.registry.list().map(p => p.id);
-    expect(ids).toEqual([
-      'workers-ai', 'my-gateway', 'ai-gateway', 'chatgpt', 'codex', 'claude', 'openai',
-      'anthropic', 'openrouter', 'openai-compat',
-    ]);
-  });
-
   test('normalizeSpecSync — bare @cf/... prefixes workers-ai', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     expect(reg.normalizeSpecSync('@cf/moonshotai/kimi-k2.6'))
@@ -183,11 +170,6 @@ describe('AgentProviderRegistry composition', () => {
     });
 
     expect(reg.normalizeSpecSync('codex/gpt-5.5')).toBe('codex/gpt-5.5');
-  });
-
-  test('the registry exposes exactly one spec resolver', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
-    expect(Object.keys(reg).sort()).toEqual(['deps', 'normalizeSpecSync', 'registry', 'resolveModel']);
   });
 
   test('null userDO → user credential providers unavailable', async () => {

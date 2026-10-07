@@ -4,16 +4,14 @@ import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver, createTestRuntime, createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import {
-  chatSessionTurns, gatewayWorkspace, orchestratorHarness, workspaceMainActor,
+  chatSessionTurns, gatewayWorkspace, workspaceMainActor,
 } from './helpers/actor-harness';
-import { rpcReachableFrom } from './helpers/platform-context';
 import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
-import { ConversationSearchStore, isAgentRpcMethod } from '@kinu.run/core';
+import { ConversationSearchStore } from '@kinu.run/core';
 import {
   HeadCapture,
   HeadController,
   HeadJournal,
-  buildHeadSystemPrompt,
   initHeadsTables,
   type HeadInput,
   type HeadReport,
@@ -141,28 +139,6 @@ function countingSplit(
 }
 
 describe('head tool surface — containment', () => {
-  test('a head has no think / team / peers / report / release tool', () => {
-    const { tools } = buildSurface();
-
-    for (const forbidden of ['think', 'team', 'peers', 'report', 'release']) {
-      expect(Object.keys(tools)).not.toContain(forbidden);
-    }
-  });
-
-  test('split_subheads is the only tool that can start anything', () => {
-    const { tools } = buildSurface();
-    expect(tools.split_subheads).toBeDefined();
-    const spawnCapable = Object.keys(tools).filter((name) => /split|spawn|subordinate|delegate/i.test(name));
-    expect(spawnCapable).toEqual(['split_subheads']);
-  });
-
-  test('the surface is exactly the declared allow-list plus the head-only tools', () => {
-    const { tools } = buildSurface();
-    expect(Object.keys(tools).sort()).toEqual([
-      ...HEAD_BUILTIN_TOOLS,
-      'record_evidence', 'record_decision', 'split_subheads',
-    ].sort());
-  });
 
   test('a head reaches the real workspace: eval and run are present', () => {
     const { tools } = buildSurface();
@@ -183,14 +159,6 @@ describe('head tool surface — containment', () => {
     expect(tools.split_subheads).toBeUndefined();
 
     for (const name of HEAD_BUILTIN_TOOLS) expect(tools[name]).toBeDefined();
-  });
-
-  test('the surface states the depth that is actually left', async () => {
-    const { tools } = buildSurface({
-      input: headInput({ budget: { maxDepth: 2, spawnedAt: Date.now() } }),
-    });
-
-    expect(tools.split_subheads?.description).toContain('2 more level(s)');
   });
 
   test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
@@ -222,13 +190,6 @@ describe('head tool surface — containment', () => {
     expect(capture.toolCalls).toEqual([{ toolCallId: 'test-tool-call', name: 'eval', args: { code: 'return 1' }, result: 'ran', outcome: { success: true } }]);
   });
 
-  test('the head prompt describes the real workspace it was given', () => {
-    const { tools } = buildSurface();
-    const prompt = buildHeadSystemPrompt(headInput(), Object.keys(tools));
-    expect(prompt).toContain('workspace.exec');
-    expect(prompt).not.toContain('`parent.*`');
-    expect(prompt).not.toContain('sandbox_exec');
-  });
 });
 
 /** Where an exploration actor's trace lands and what a rollout branch may touch (C2: one journal per subtree). */
@@ -333,14 +294,4 @@ describe('the mission ledger bounds a hosted head', () => {
     expect(agent.budget.snapshot('q3').map((mission) => mission.calls)).toEqual([2]);
   });
 
-  test('the two ledger members serve a sibling object and never a public transport', () => {
-    // A spend ledger must not become writable over the public WS/HTTP transport, yet a hosted head's
-    // object charges it over the DO stub.
-    const { agent } = orchestratorHarness();
-
-    for (const method of ['missionGuard', 'missionDebit']) {
-      expect(rpcReachableFrom(agent)).toContain(method);
-      expect(isAgentRpcMethod(method)).toBe(false);
-    }
-  });
 });

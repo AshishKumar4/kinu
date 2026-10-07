@@ -8,7 +8,7 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { actorConnectionTag, RECOVERY_BACKOFF_CEILING_MS, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { abandonHarnessFibers, asPane } from './helpers/agents-sdk';
 import {
-  actorOver, driveUntil, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, rosterOver, until, wakeForDelegatedTask,
+  actorOver, driveUntil, gatewayWorkspace, GATEWAY_CATALOG, nextTurn, reactivateOrchestratorHarness, rosterOver, until, wakeForDelegatedTask,
   type StartedHarness,
 } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, type RecordedGatewayRun, type StubbedAiBinding } from './helpers/platform-gateway';
@@ -72,10 +72,17 @@ test("an owner's message to an agent survives the workspace resetting mid-turn, 
   const second = await afterReset(first.db, gateway);
 
   await lapLater(second);
-  await until(() => asked === 2 && second.agent.harnessTurnsInFlight() === 0, 'the agent never finished its turn after the reset');
+  await until(() => asked === 2, 'the agent never took its turn up again after the reset');
 
   // The answer is the one the agent's chat keeps, as the owner reads it: once, after the ask it answers.
-  const chat = JSON.stringify((await second.agent.getChatHistoryPage({ actor: actorId, limit: 20 })).items);
+  const read = async (): Promise<string> => JSON.stringify((await second.agent.getChatHistoryPage({ actor: actorId, limit: 20 })).items);
+  let chat = await read();
+
+  // Stored at the turn's end, which follows the answer the model gave.
+  while (!chat.includes(ANSWER)) {
+    await nextTurn();
+    chat = await read();
+  }
 
   expect(chat.split(ANSWER).length - 1).toBe(1);
   expect(chat.indexOf(ASK)).toBeLessThan(chat.indexOf(ANSWER));

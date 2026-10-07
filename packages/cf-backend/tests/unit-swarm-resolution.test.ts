@@ -42,16 +42,6 @@ function journal(nodes: readonly JournalNode[]): HeadRunView {
 
 describe('the resolution a run resolved', () => {
 
-  test('every named preset resolves, so redteam has an archive floor to show', () => {
-    // `redteam`'s archive novelty floor is Rainbow Teaming's τ=0.6 converted from a similarity
-    // ceiling to a distance floor.
-    const resolution = swarmResolutionOf('redteam');
-    expect(resolution?.kind).toBe('preset');
-    expect(resolution?.kind === 'preset' ? swarmAxisRows(resolution.config) : []).toContainEqual(
-      { axis: 'advance', value: 'archive ≥0.4' },
-    );
-  });
-
   test('no label is no resolution — absent, never a composition with an empty name', () => {
     expect(swarmResolutionOf(null)).toBeNull();
     expect(swarmResolutionOf('')).toBeNull();

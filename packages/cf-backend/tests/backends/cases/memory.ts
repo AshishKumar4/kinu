@@ -12,7 +12,6 @@ function facts(sql: SqlExecutor, actor: ActorHandle): { key: string; value: stri
 export const MEMORY_CASES: readonly SharedCase[] = [
   {
     title: 'the third completed turn compresses the conversation into facts, never the first two',
-    covers: [],
     async run({ surface, sleepTime, settled, sql, actor }) {
       const prompts = sleepTime(ONE_FACT, true);
 
@@ -32,7 +31,6 @@ export const MEMORY_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a lane switched off makes no model call and learns nothing',
-    covers: [],
     async run({ surface, sleepTime, settled, sql, actor }) {
       const prompts = sleepTime(ONE_FACT, false);
 

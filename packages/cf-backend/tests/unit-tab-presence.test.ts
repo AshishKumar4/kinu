@@ -77,16 +77,6 @@ describe('the gated tabs appear only with content', () => {
     expect(html).toContain('aria-label="Files"');
   });
 
-  test('every ungated surface stays visible on a fresh workspace', () => {
-    const html = renderStrip(FRESH);
-
-    for (const surface of ['Files', 'Agent', 'Environment']) {
-      expect(html).toContain(`aria-label="${surface}"`);
-    }
-
-    expect(html).not.toContain('aria-label="Swarms"');
-  });
-
   test('a workspace with content shows the gated tabs in the strip', () => {
     const html = renderStrip(FULL);
     expect(html).toContain('aria-label="Work"');

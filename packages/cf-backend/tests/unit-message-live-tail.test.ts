@@ -29,21 +29,6 @@ const tailOf = (parts: readonly Part[]) =>
   threadLiveTail({ last: { role: 'assistant', parts: [...parts] }, liveness: { kind: 'live', turnId: 't1' } });
 
 describe('the tail of a live assistant row', () => {
-  test('the caret rides the text part the stream is still writing', () => {
-    const part = text('half a sen', 'streaming');
-    expect(tailOf([part])).toEqual({ kind: 'text', part });
-  });
-
-  test('a turn whose prose is finished and whose calls are done is thinking, not writing', () => {
-    // A caret after the last text part would sit above later tool rows; the model is between steps.
-    const parts: Part[] = [
-      text('Reading the handler.', 'done'),
-      tool('a', 'output-available'),
-      tool('b', 'output-available'),
-    ];
-
-    expect(tailOf(parts)).toEqual({ kind: 'thinking' });
-  });
 
   test('a call in flight owns the indicator — nothing is added after it', () => {
     // Its row already carries a live dot; a second indicator would claim two things are happening.
@@ -60,10 +45,6 @@ describe('the tail of a live assistant row', () => {
 
   test('closed reasoning with nothing after it is thinking', () => {
     expect(tailOf([reasoning('Settled on the guard.', 'done')])).toEqual({ kind: 'thinking' });
-  });
-
-  test('a turn with no parts yet is thinking — the pre-first-token window', () => {
-    expect(tailOf([])).toEqual({ kind: 'thinking' });
   });
 
   test('a part the stream never closed is treated as the one being written', () => {

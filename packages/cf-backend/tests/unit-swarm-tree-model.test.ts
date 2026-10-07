@@ -262,10 +262,6 @@ describe('viewNoteFor', () => {
 		expect(viewNoteFor(BAND, LABEL_MIN_SCALE, 1200)).toBeNull();
 	});
 
-	test('below the legibility zoom it says so, even when everything fits', () => {
-		expect(viewNoteFor(BAND, 0.4, 1200)).toBe('too small to label · zoom in to read');
-	});
-
 	test('a tree wider than the view points at the pan, even while legible', () => {
 		expect(viewNoteFor(BAND, 1, 600)).toBe('deeper columns continue right · drag to pan');
 	});

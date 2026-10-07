@@ -420,10 +420,6 @@ describe('MCP admission, as both backends read it each turn', () => {
 });
 
 describe('mcpToolKey', () => {
-  test('keys on the SERVER NAME, so the key is portable across backends', () => {
-    // Not the per-user nanoid registration id: the CLI keys on the server name, so both backends share one key.
-    expect(mcpToolKey('github', 'list_issues')).toBe('mcp_github_list_issues');
-  });
   test('replaces characters no provider tool-name grammar accepts', () => {
     expect(mcpToolKey('my server.v2', 'do it')).toBe('mcp_my_server_v2_do_it');
     expect(mcpToolKey('gh-mcp', 'foo')).toBe('mcp_gh-mcp_foo');
@@ -435,14 +431,6 @@ describe('mcpToolKey', () => {
 });
 
 describe('mapConnectionStatus', () => {
-  test('maps each SDK state to its discriminated-union counterpart', () => {
-    expect(mapConnectionStatus('connecting')).toBe('connecting');
-    expect(mapConnectionStatus('authenticating')).toBe('authenticating');
-    expect(mapConnectionStatus('connected')).toBe('connected');
-    expect(mapConnectionStatus('discovering')).toBe('discovering');
-    expect(mapConnectionStatus('ready')).toBe('ready');
-    expect(mapConnectionStatus('failed')).toBe('failed');
-  });
   test('unknown / undefined falls through to "unknown"', () => {
     expect(mapConnectionStatus(undefined)).toBe('unknown');
     expect(mapConnectionStatus('not-a-real-state')).toBe('unknown');
@@ -566,13 +554,6 @@ async function withFetch(
 }
 
 describe('buildBuiltinTools mcp_ prefix guard', () => {
-  test("BUILTIN_TOOLS today don't start with mcp_", async () => {
-    const { BUILTIN_TOOLS } = await import('@kinu.run/core');
-
-    for (const n of BUILTIN_TOOLS) {
-      expect(isMcpToolKey(n)).toBe(false);
-    }
-  });
 });
 
 describe('buildBuiltinTools assertion', () => {

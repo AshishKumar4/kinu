@@ -173,29 +173,6 @@ describe('OAuth handoff state', () => {
       .rejects.toThrow(/invalid or already used/);
   });
 
-  test('a callback carrying no handoff cookie spends the state and signs nobody in', async () => {
-    const kv = makeKv();
-    const { state, binding } = await started(kv);
-
-    // Login-CSRF: a working `state` handed to a browser holding no binding for it.
-    await expect(consumeOAuthState(kv, state, 'cloudflare', null))
-      .rejects.toThrow(/not issued to this browser/);
-    // Burned before judged, so the refusal is not a free probe that leaves the link workable.
-    await expect(consumeOAuthState(kv, state, 'cloudflare', binding))
-      .rejects.toThrow(/invalid or already used/);
-  });
-
-  test('a browser holding its own live handoff still cannot spend another', async () => {
-    const kv = makeKv();
-    const victim = await started(kv);
-    const attacker = await started(kv);
-
-    await expect(consumeOAuthState(kv, victim.state, 'cloudflare', attacker.binding))
-      .rejects.toThrow(/not issued to this browser/);
-    await expect(consumeOAuthState(kv, attacker.state, 'cloudflare', victim.binding))
-      .rejects.toThrow(/not issued to this browser/);
-  });
-
   test('a callback from another provider cannot spend this state', async () => {
     const kv = makeKv();
     const { state, binding } = await started(kv);

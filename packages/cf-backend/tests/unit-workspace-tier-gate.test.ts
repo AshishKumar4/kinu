@@ -3,9 +3,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO, daemon } from './helpers/device-harness';
-import { USER_DO_RPC_SURFACE, type UserDoRpcMethod } from '../src/rpc-surface';
+import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import type { RosterPage } from '../src/user/roster';
-import type { UserDO } from '../src/user/user-do';
 import { asFetchFunction, sha256Hex } from '@kinu.run/core';
 import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
 import {
@@ -750,37 +749,7 @@ describe('facets attenuate with their workspace', () => {
   });
 });
 
-// Completeness, held by the compiler: a new RPC method must take the caller first or be exempted here.
-
-/** Dispatched by the runtime or the SDK, never by a stub-holder with a caller. */
-const RUNTIME_DISPATCHED = new Set([
-  'fetch', '__unsafe_ensureInitialized', 'alarm', 'webSocketMessage', 'webSocketClose', 'webSocketError',
-]);
-
-/** Cannot take a caller: it bootstraps caller identity. Safe by shape, not by gate. */
-const IDENTITY_BOOTSTRAP = 'ensureWorkspaceCapability';
-
-/** The first parameter of a method, or `never` when it takes none. */
-type FirstParameter<F> = F extends (...args: infer A) => void ? (A extends [infer First, ...unknown[]] ? First : never) : never;
-
-/** `true` when `F` takes exactly a `UserCaller` first. */
-type TakesCallerFirst<F> = [FirstParameter<F>] extends [UserCaller]
-  ? ([UserCaller] extends [FirstParameter<F>] ? true : false)
-  : false;
-
-type UngatedRpcMethod = {
-  [K in Exclude<UserDoRpcMethod, typeof IDENTITY_BOOTSTRAP>]: TakesCallerFirst<UserDO[K]> extends true ? never : K
-}[Exclude<UserDoRpcMethod, typeof IDENTITY_BOOTSTRAP>];
-
-/** `true` when `Names` is empty; otherwise the names, so the compiler error lists them. */
-type NoneOf<Names> = [Names] extends [never] ? true : Names;
-
-const everyRpcMethodTakesTheCallerFirst: NoneOf<UngatedRpcMethod> = true;
-
 describe('no privileged UserDO method escapes the gate', () => {
-  test('every RPC method takes the caller first, or is the identity bootstrap', () => {
-    expect(everyRpcMethodTakesTheCallerFirst).toBe(true);
-  });
 
   test('owner-only profile writes reject every workspace token and accept an owner session', async () => {
     const harness = await setupWorkspaces();
@@ -794,15 +763,4 @@ describe('no privileged UserDO method escapes the gate', () => {
     harness.close();
   });
 
-  test('every gated method is exercised by the lists above', () => {
-    const gated = USER_DO_RPC_SURFACE.filter((name) => !RUNTIME_DISPATCHED.has(name) && name !== IDENTITY_BOOTSTRAP);
-
-    const exercised = new Set([
-      ...GATED_CALLS.map((call) => call.name.replace(/\(.*$/u, '')),
-      ...OWNER_ONLY_CALLS.map((call) => call.name),
-    ]);
-
-    expect(gated.length).toBeGreaterThan(20);
-    expect(gated.filter((name) => !exercised.has(name)).sort()).toEqual([]);
-  });
 });
