@@ -546,8 +546,6 @@ export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } f
 
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 
-export { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from './tools/tool-schema';
-
 export {
   describeMcpTool, toolSurfaceTokens, omitEmptyOptionalArgs,
   buildMcpToolSet, listMcpToolsLeniently,

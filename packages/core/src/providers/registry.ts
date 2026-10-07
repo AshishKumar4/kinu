@@ -1,6 +1,8 @@
 // ProviderRegistry: resolves "<provider>/<modelId>" synchronously; static providers win.
 import { withToolResultImages } from './tool-result-images';
-import type { LanguageModel } from 'ai';
+import { wrapLanguageModel, type LanguageModel } from 'ai';
+import * as v from 'valibot';
+import { toolSchemaDialect } from './middleware/tool-schema-dialect';
 import type {
   AuthResolution, ModelCallDeps, ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
 } from './types';
@@ -119,6 +121,10 @@ export function accountDeps<Deps extends ProviderDeps>(deps: Deps, providerId: s
       }));
     },
   };
+}
+
+function withToolSchemaDialect(model: LanguageModel): LanguageModel {
+  return v.is(v.string(), model) ? model : wrapLanguageModel({ model, middleware: toolSchemaDialect });
 }
 
 /** The whole cause chain, never empty. */
@@ -271,7 +277,7 @@ export function createProviderRegistry(): ProviderRegistry {
       const provider = providerFor(parsed.provider);
 
       return settleSync(provider
-        ? Effect.sync(() => withToolResultImages(provider.createModel(parsed.modelId, accountDeps(deps, parsed.provider, parsed.account))))
+        ? Effect.sync(() => withToolResultImages(withToolSchemaDialect(provider.createModel(parsed.modelId, accountDeps(deps, parsed.provider, parsed.account)))))
         : Effect.die(new Error(`Unknown provider ${JSON.stringify(parsed.provider)} (registered: ${Array.from(byId.keys()).join(', ') || 'none'}).`)));
     },
 

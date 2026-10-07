@@ -54,7 +54,7 @@ import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
 import { diagnostics, renderThrownChain, toKinuError, type TurnTrace } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
-import { invalidToolCallRefusal, toolSchemaDialect, withToolSchemaDialect } from './tools/tool-schema';
+import { invalidToolCallRefusal } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
 import { StepSpans, traceTools } from './turn-trace';
 
@@ -655,11 +655,6 @@ function turnText(streamed: string, steps: readonly StepResult<ToolSet>[], answe
   return allText;
 }
 
-/** The serving model as `provider/model`, which the tool-schema dialect reads. */
-function dialectSpec(current: { readonly spec: string; readonly provider: string | undefined }): string {
-  return current.spec.includes('/') || current.provider === undefined ? current.spec : `${current.provider}/${current.spec}`;
-}
-
 /** One chat turn; callers append its response messages to history. A cut turn yields `done`, then throws
  *  {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`. */
 function* admittedEvent(tokens: number | undefined, contextWindow: number | null): Generator<ChatEvent> {
@@ -704,7 +699,7 @@ async function admitRequest(opts: ChatOptions) {
   // Pre-submission admission; turn-context.ts owns the policy. The tools are counted as the first call sends them.
   assembly.admission = {
     count: opts.countInputTokens,
-    tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(primary))),
+    tools,
     instructions: opts.dynamicContext?.instructions,
     activated: opts.dynamicContext?.activated,
     limits: window,
@@ -869,7 +864,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       instructions: attempt.system,
       maxRetries: route.callRetries,
       messages: await narrowedFor(request),
-      tools: withToolSchemaDialect(attempt.tools, toolSchemaDialect(dialectSpec(current))),
+      tools: attempt.tools,
       ...offeredTools,
       stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.stepFailure !== null],
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
