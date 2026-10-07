@@ -996,6 +996,9 @@ export class ChatSession {
     await this.ports.armTurnWake(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
 
     try {
+      // A run a dead process left goes on only if recovery says so; any other ends here as a Stop ends it.
+      if (item.continuation !== undefined) await this.actorSession.resumeOrClose(lease);
+
       await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, lease)));
 
       return null;

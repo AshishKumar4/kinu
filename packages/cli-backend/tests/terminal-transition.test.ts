@@ -18,7 +18,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 import { soulIn, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import {
-  openTerminalWorkspace, scriptedModel,
+  installProgram, openTerminalWorkspace, scriptedModel,
 } from './terminal-workspace';
 import { fakeModel, toolSequenceModel, type PromptMessage } from './helpers/local-session';
 
@@ -301,7 +301,7 @@ test('a managed context edit reaches the local request', async () => {
 describe('a killed CLI process is recovered by the next start', () => {
   /** Run the child to its kill point, and answer the marker it printed. */
   async function killAt(
-    dbPath: string, mode: 'before-settle' | 'inside-claim' | 'inside-title' | 'after-record' | 'inside-close',
+    dbPath: string, mode: 'before-settle' | 'inside-claim' | 'inside-title' | 'after-record' | 'inside-close' | 'mid-cancel' | 'mid-program',
   ): Promise<string> {
     const child = spawnTest(['bun', new URL('./terminal-death-probe.ts', import.meta.url).pathname, dbPath, mode],
     { cwd: new URL('../../..', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe' },);
@@ -421,6 +421,50 @@ describe('a killed CLI process is recovered by the next start', () => {
     await next.end();
     db.close();
   });
+  test('a death after the owner\'s stop landed is not resumed: the next start ends the turn as the stop did', async () => {
+    const dbPath = scratchPath('terminal-death-mid-cancel', 'agent.db');
+    expect(await killAt(dbPath, 'mid-cancel')).toBe('KILLED mid-cancel');
+
+    const { db, rt } = openTerminalWorkspace(dbPath);
+    const turnId = rt.storage.sql<{ id: string }>`SELECT id FROM pending_steers`[0]?.id;
+    let asked = 0;
+    const { model } = scriptedModel('the stopped turn ran again', { onStream: async () => { asked += 1; } });
+    const next = await restart({ rt, db, model, events: [] });
+
+    // The model is never asked again, the run closes as the stop closes it, and the owner's words stay theirs.
+    expect(asked).toBe(0);
+    expect(claimOf(rt, turnId)).toEqual({ outcome: 'aborted', epoch: 1 });
+    expect(runEnds(rt)).toEqual(['aborted']);
+    expect(rt.storage.sql`SELECT id FROM pending_steers`).toEqual([]);
+    expect(rt.storage.sql`SELECT role FROM conversation_entries WHERE id = ${turnId ?? ''}`).toEqual([{ role: 'user' }]);
+    expect(assistantRows(rt)).toBe(0);
+    await next.end();
+    db.close();
+  });
+
+  test('a turn whose program changed while its process was dead is not run again under the new one', async () => {
+    const dbPath = scratchPath('terminal-death-mid-program', 'agent.db');
+    expect(await killAt(dbPath, 'mid-program')).toBe('KILLED mid-program');
+
+    const { db, rt } = openTerminalWorkspace(dbPath);
+    const turnId = rt.storage.sql<{ id: string }>`SELECT id FROM pending_steers`[0]?.id;
+    // Version 1's bytes are not the bytes the turn was admitted under.
+    await installProgram(rt, 1, 'async function run() { await host.emit({ type: "text_delta", text: "a changed program" }); }');
+    let asked = 0;
+    const { model } = scriptedModel('the turn ran again', { onStream: async () => { asked += 1; } });
+    const events: SessionEvent[] = [];
+    const next = await restart({ rt, db, model, events });
+
+    expect(asked).toBe(0);
+    expect(JSON.stringify(events)).not.toContain('a changed program');
+    expect(claimOf(rt, turnId)).toEqual({ outcome: 'indeterminate', epoch: 1 });
+    expect(runEnds(rt)).toEqual(['aborted']);
+    expect(rt.storage.sql`SELECT id FROM pending_steers`).toEqual([]);
+    await next.end();
+    db.close();
+  });
+
+
 });
 
 /** Who may re-drive an interrupted lane, which gate state its verdict was earned under, and whose auto-evolution
@@ -711,6 +755,13 @@ describe('an owed follow-up turn waits for its own row', () => {
 
 const assistantRows = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM conversation_entries WHERE actor_id = ${rt.actor.actorId} AND role = 'assistant'`[0]?.n ?? 0;
+
+const claimOf = (rt: CLIRuntime, turnId: string | undefined) =>
+  rt.storage.sql<{ outcome: string | null; epoch: number }>`SELECT outcome, epoch FROM actor_turn_claims WHERE turn_id = ${turnId ?? ''}`[0] ?? null;
+
+/** Each run's close, by its reason, in the order they were written. */
+const runEnds = (rt: CLIRuntime) => rt.storage.sql<{ payload: string }>`SELECT payload FROM run_events WHERE type = 'run_end' ORDER BY rowid`
+  .map((row) => v.parse(v.object({ reason: v.string() }), JSON.parse(row.payload)).reason);
 
 const displayName = (rt: CLIRuntime) =>
   rt.storage.sql<{ value: string }>`SELECT value FROM actor_config WHERE key = 'display_name'`[0]?.value ?? null;
