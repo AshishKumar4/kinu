@@ -31,7 +31,7 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe,
+  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
@@ -1437,8 +1437,13 @@ async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Pr
 
       if (approve instanceof HTMLElement) approve.click();
     });
-    await page.click('.p-tabstrip button[aria-label="Work"]');
-    await until(page, "the approved plan's last step", `(${PLAN_CARDS}).flat().some(([title]) => title === ${JSON.stringify(PLAN_TASK_TITLES.programmed)})`);
+    // The handoff turn runs on its own; the row reads the Work list once it has answered, whatever it shows.
+    await until(page, "the approved plan's turn to end", `(${ANSWER_BLOCKS}).at(-1) === 'P:Implemented the approved plan.' && !(${STOP_OFFERED})`);
+    await page.click('#inspector .p-tabstrip button[aria-label="Work"]');
+    await until(page, "the Work tab's list or its plan's review", `document.querySelector('[data-work-plans], [data-back-to-work]') !== null`);
+
+    if (await page.$('[data-back-to-work]') !== null) await page.click('[data-back-to-work]');
+    await until(page, "the Work tab's plans", `document.querySelector('[data-work-plans]') !== null`);
     await painted(page);
 
     return {
