@@ -10,7 +10,7 @@ import { attempt, diagnostics, KinuError, settle, tolerate, type ErrorCode } fro
 import { chatgptCatalogRows, shownCatalogRows } from './codex';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
-import { withRateLimitRetry } from './rate-limit-retry';
+import { PROVIDER_STREAM_HEADER, withRateLimitRetry } from './rate-limit-retry';
 import type { AuthRequest, AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { StaleModelList, statelessResponses } from './util';
 import { JsonObjectSchema } from '../utils/json';
@@ -404,6 +404,8 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
           const merged = copyHeaders(init?.headers);
 
           for (const [name, value] of Object.entries(auth.headers)) merged.set(name, value);
+          // planRequest streams every call on the wire, a generate included, so the silence bound applies to all of them.
+          merged.set(PROVIDER_STREAM_HEADER, '1');
 
           return send(input, { ...init, headers: merged });
         };

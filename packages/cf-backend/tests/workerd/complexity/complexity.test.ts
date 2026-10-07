@@ -154,8 +154,10 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * lookups because its tree lives in SQL instead of an in-memory inode map: 398. 397 as measured in every run since
  * eec3dad1e8 (CI at eec3dad1e8, drained and release, same tables): one statement left the turn after c82a2a0e15 set
  * 398. Parking owner-fixable refusals rides the claim's one statement and loads an actor's notices once (T1-T3).
+ * agents 0.26 records a fiber's outcome on its `cf_agents_runs` row before deleting it (+1 a fiber), and the MCP warm,
+ * whose recovery only drops it, left its fiber for `keepAliveWhile` (-4): 396, measured at d240dd3b8 against 400.
  */
-const TURN_STATEMENTS = 397;
+const TURN_STATEMENTS = 396;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

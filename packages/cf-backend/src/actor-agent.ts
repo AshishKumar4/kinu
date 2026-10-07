@@ -182,7 +182,7 @@ import {
   type HostedActorSeams,
 } from "./hosted-actors";
 import {
-  classifyRecoveredFiber, EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
+  classifyRecoveredFiber, EVOLUTION_LANE_FIBER,
   TERMINAL_LANE_FIBER,
   // Recovery budget this backend declares to the SDK, applied before the framework allocates.
   sweepUnrecoverableFibers, fiberRowStore,
@@ -2084,22 +2084,18 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * Warm this user's MCP connections for the next turn, detached on a durable fiber, via
-   * `userMcp_warmConnections`. Covers alarm/email/post-eviction turns the HTTP warmup misses.
-   * Failures are dropped; the next settled turn retries.
+   * Warm this user's MCP connections for the next turn, detached, via `userMcp_warmConnections`. Covers
+   * alarm/email/post-eviction turns the HTTP warmup misses. Failures are dropped and a warm lost to eviction is not
+   * resumed: the next settled turn warms again, so it is held by `keepAliveWhile`, not a `cf_agents_runs` row.
    */
   protected _mcpWarmTask: AsyncTaskOwner | null = null;
 
   protected warmUserMcpInBackground(): void {
-    if (!this.getOwnerUserId() || this._mcpWarmTask !== null) return;
+    // Same gate as `buildUserMcpTools`: no capability token yet is an ordinary state, not a failure.
+    if (!this.getOwnerUserId() || !this.workspaceCapabilityToken() || this._mcpWarmTask !== null) return;
     const owner: AsyncTaskOwner = { promise: null };
     this._mcpWarmTask = owner;
-    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.runFiber(MCP_WARM_LANE_FIBER, async (ctx) => {
-      ctx.stash({ lane: MCP_WARM_LANE_FIBER });
-
-      // Same gate as `buildUserMcpTools`: no capability token yet is an ordinary state, not a failure.
-      // Checked rather than caught so real read failures still propagate.
-      if (!this.workspaceCapabilityToken()) return;
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.keepAliveWhile(async () => {
       const { stub, caller } = await this.userHub();
       await stub.userMcp_warmConnections(caller);
     })), recording({ doing: 'establishing the user MCP connections after a settled turn', otherwise: 'unavailable' }, (failure) => {
