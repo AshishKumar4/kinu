@@ -97,9 +97,11 @@ The workspace is the container's own disk (D55). Two copies keep it:
 - The disk chain (`src/disk-chain.ts`) is the R2 backup. The first save
   streams the work directory as one squashfs base (D57, D58). Each later save
   finds what changed since the last save by comparing file inventories and
-  publishes those files, with whiteouts for deletions, as one more layer. A
-  rest compacts the chain into a new base once the deltas outgrow a quarter of
-  the base or reach eight layers.
+  publishes those files, with whiteouts for deletions, as one more layer. The
+  layers count as a binary counter (D77): a save takes in each newest layer no
+  larger than what it has gathered, re-cut from the boundary below them, so n
+  saves are held in at most floor(log2 n) + 1 deltas. A rest compacts the
+  chain into a new base once the deltas outgrow a quarter of the base.
 
 An image start with a chain record recovers lazily inside the start gate: the
 layers mount through `squashfuse` under one `fuse-overlayfs` with a writable
