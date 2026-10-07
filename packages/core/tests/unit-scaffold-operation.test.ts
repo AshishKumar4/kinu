@@ -16,7 +16,7 @@ function composed(profile: ResolvedTurnProfile, model: MockLanguageModelV3): () 
     sessionKey: 'scaffold-operation',
     execution: {
       loopVersion: 1, extensions: [], instructions: null,
-      chat: { model, system: 'the turn system prompt', tools: {} },
+      chat: { model, modelSpec: profile.tier.model, system: 'the turn system prompt', tools: {} },
       dynamic: () => ({ runtime: { backend: 'cf', model: { id: profile.tier.model }, date: '2026-10-03' } }),
     },
   });
@@ -53,7 +53,7 @@ function fixture(failure?: Error) {
     }),
   });
 
-  const stream = createScaffoldLLMStream({ model, tools: () => ({}),
+  const stream = createScaffoldLLMStream({ model, spec: 'test/model', tools: () => ({}),
     spend: { source: 'scaffold', report: report => reports.push(report), operations: event => operations.push(event) },
   })({ system: 'Answer the question.', messages: [{ role: 'user', content: 'Question' }] });
 

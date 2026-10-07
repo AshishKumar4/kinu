@@ -16,7 +16,7 @@ const HISTORY: ModelMessage[] = [
 ];
 
 function base() {
-  return { system: 'SYS', history: HISTORY, sessionKey: 'k', contextWindow: 200_000, trigger: 'auto' as const };
+  return { system: 'SYS', history: HISTORY, sessionKey: 'k', contextWindow: 200_000, model: 'test/model', trigger: 'auto' as const };
 }
 
 describe('assembleTurnMessages', () => {

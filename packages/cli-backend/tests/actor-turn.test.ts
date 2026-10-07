@@ -46,7 +46,7 @@ async function fixture() {
       outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
   }) });
 
-  return { rt, files, chat: { model: chatModel, system: 'sys', history: [{ role: 'user', content: 'go' } satisfies ModelMessage], tools: {} }, chatModel };
+  return { rt, files, chat: { model: chatModel, modelSpec: 'test/model', system: 'sys', history: [{ role: 'user', content: 'go' } satisfies ModelMessage], tools: {} }, chatModel };
 }
 
 async function text(events: AsyncIterable<ChatEvent>): Promise<string> {

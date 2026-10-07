@@ -1,5 +1,6 @@
 /** Shared fixtures: ModelMessage builders and in-memory engine ports. */
 
+import { deflateSync } from 'node:zlib';
 import type { AssistantModelMessage, ModelMessage, ToolCallPart, ToolModelMessage, ToolResultPart } from 'ai';
 import * as v from 'valibot';
 import type { PathPlanes, Storage } from '@kinu.run/core';
@@ -137,13 +138,54 @@ export function validSummary(tag: string): string {
   ].join('\n');
 }
 
-/** A 1280x800 PNG as a screenshot tool returns it: a real header, then 40 KB of its own pixels. */
-export function screenshot(n: number): string {
-  const bytes = new Uint8Array(40_000).map((_, index) => (index * 31 + n * 7) % 251);
-  const header = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0x05, 0x00, 0, 0, 0x03, 0x20];
-  bytes.set(header);
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
 
-  return Buffer.from(bytes).toString('base64');
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+
+  return c >>> 0;
+});
+
+function pngChunk(type: string, data: Uint8Array): Buffer {
+  const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+  let crc = 0xffffffff;
+
+  for (const byte of body) crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
+
+  const framed = Buffer.alloc(body.length + 8);
+  framed.writeUInt32BE(data.length, 0);
+  body.copy(framed, 4);
+  framed.writeUInt32BE((crc ^ 0xffffffff) >>> 0, body.length + 4);
+
+  return framed;
+}
+
+const SCREENSHOTS = new Map<number, string>();
+
+/** A real 1280x800 PNG as a screenshot tool returns it, base64: one flat palette colour per `n`, so each is its own
+ *  file, and a few hundred bytes, so only its pixels can make it expensive. */
+export function screenshot(n: number): string {
+  const held = SCREENSHOTS.get(n);
+
+  if (held !== undefined) return held;
+  const [width, height] = [1280, 800];
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([1, 3, 0, 0, 0], 8);
+  const palette = Uint8Array.from([(n * 37) % 256, (n * 91 + 40) % 256, (n * 53 + 80) % 256]);
+  const pixels = deflateSync(Buffer.alloc(height * (1 + width / 8)));
+
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', header), pngChunk('PLTE', palette), pngChunk('IDAT', pixels), pngChunk('IEND', new Uint8Array()),
+  ]);
+
+  const encoded = png.toString('base64');
+
+  SCREENSHOTS.set(n, encoded);
+
+  return encoded;
 }
 
 function screenshotResult(n: number): ToolResultPart {
@@ -192,12 +234,11 @@ export async function compactedScreenshots(rt: { readonly storage: Pick<Storage,
   const extension = createCompactionExtension({
     ports, archive: memoryArchive(), ephemeral: { dropSuperseded: () => 0 },
     summarize: () => { throw new Error('the rung needs no summary'); },
-    model: () => model,
     attachments: { files: () => rt },
   });
 
   const compacted = await extension.transformContext?.({
-    sessionKey: 'screenshots', messages: screenshotRun(), system: 'system prompt', contextWindow: 30_000, trigger: 'auto',
+    sessionKey: 'screenshots', messages: screenshotRun(), system: 'system prompt', contextWindow: 30_000, model, trigger: 'auto',
   });
 
   const screens = sentScreens(compacted ?? []);
