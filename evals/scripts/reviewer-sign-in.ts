@@ -6,14 +6,14 @@
  * `GET /api/user/credentials` does not list, this starts the sign-in for that account, prints where to approve it and
  * the code, and waits while the owner approves it in a browser. One the deployment holds is left alone, so a deploy asks
  * only after a reset wiped it. With no terminal to ask at, it asks nothing and says which login is missing. Then it reads
- * whether the deployment lists the reviewer's model on each login, which `REVIEW_MODELS` tries first. It prints
+ * whether the reviewer's model answers a real call on each login, which `REVIEW_MODELS` tries first. It prints
  * outcomes and ChatGPT account ids, never a token; whatever is missing is a notice in the deploy's report and the exit
  * is 1.
  *   bun evals/scripts/reviewer-sign-in.ts <origin>
  */
 import { setTimeout as sleep } from 'node:timers/promises';
 import * as v from 'valibot';
-import { accountCredentialKey, CODEX_CRED_KEY, DEV_IDENTITY_HEADER } from '@kinu.run/core';
+import { accountCredentialKey, CODEX_CRED_KEY, DEV_IDENTITY_HEADER, ModelTestResultSchema } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
 import { codexReviewModel, REVIEW_ACCOUNTS } from '../src/config';
 import { recordNotice } from '../../scripts/deploy-report';
@@ -23,8 +23,6 @@ const CredentialsSchema = v.array(v.looseObject({ key: v.string() }));
 const StartSchema = v.object({ userCode: v.string(), portalURL: v.string(), pollIntervalSec: v.number() });
 
 const PollSchema = v.object({ connected: v.boolean(), accountId: v.optional(v.string()), error: v.optional(v.string()) });
-
-const ModelsSchema = v.looseObject({ models: v.array(v.looseObject({ spec: v.string() })) });
 
 /** One call to the deployment as eval-service, its answer parsed by `schema`; a refusal throws in the deployment's words. */
 async function answered<Schema extends v.GenericSchema>(schema: Schema, origin: string, path: string, init: RequestInit): Promise<v.InferOutput<Schema>> {
@@ -103,13 +101,17 @@ if (import.meta.main) {
     if (missing !== null) findings.push(missing);
   }
 
-  const listed = new Set((await answered(ModelsSchema, origin, '/api/user/models', { headers })).models.map((model) => model.spec));
-
+  // A real call, as the reviewer will make it: the menu lists no account-qualified spec, and refuses a provider whose
+  // several accounts have no default, so a listing cannot say whether `codex@<account>/…` answers.
   for (const account of REVIEW_ACCOUNTS) {
     const spec = codexReviewModel(account);
 
-    if (listed.has(spec)) console.log(`reviewer-sign-in: ${origin} lists ${spec} for eval-service`);
-    else findings.push(`${origin} lists no ${spec} for eval-service`);
+    const tested = await answered(ModelTestResultSchema, origin, '/api/user/models/test', {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ spec }),
+    });
+
+    if (tested.ok) console.log(`reviewer-sign-in: ${spec} answers at ${origin}, first token in ${String(tested.firstTokenMs)} ms`);
+    else findings.push(`${spec} does not answer at ${origin}: ${tested.message}`);
   }
 
   const report = process.env['KINU_DEPLOY_REPORT'] ?? '';
