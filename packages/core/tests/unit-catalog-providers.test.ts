@@ -7,7 +7,9 @@ import {
   asFetchFunction,
   createProviderRegistry,
   createModelsDevCatalogSource,
+  createOpenAICompatProvider,
   catalogCredKey,
+  KINU_USER_AGENT,
   getModelsDevProvider,
   listModelsDevProviders,
   modelsDevCompatBaseURL,
@@ -304,6 +306,24 @@ describe('registry with dynamic catalog source', () => {
 
     const sent = mock.requests.find((request) => request.url.includes('/chat/completions'));
     expect(JSON.parse(sent?.body ?? '{}')).toMatchObject({ reasoning_effort: 'high' });
+    // OpenCode's documented client contract: its routing headers on every model request.
+    expect({ session: sent?.headers['x-opencode-session'], agent: sent?.headers['user-agent'] }).toEqual({ session: deps.sessionAffinity, agent: KINU_USER_AGENT });
+  });
+
+  test('a bring-your-own endpoint is spoken to at its credential\'s base URL, and refused without one', async () => {
+    const mock = createMockFetch([{ match: 'https://groq.example/v1/chat/completions', respond: { status: 200, body: CHAT_COMPLETION_BODY } }]);
+
+    const keyed = makeDeps({ 'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://groq.example/v1/' } }, mock.fetch);
+
+    await generateText({ model: createOpenAICompatProvider().createModel('llama-4', keyed), prompt: 'hello', maxRetries: 0 });
+    expect(mock.requests.map((request) => request.url)).toEqual(['https://groq.example/v1/chat/completions']);
+
+    const keyOnly = makeDeps({ 'openai-compat.default': { headers: { Authorization: 'Bearer k' } } }, mock.fetch);
+
+    const [refused] = await Promise.allSettled([generateText({ model: createOpenAICompatProvider().createModel('llama-4', keyOnly), prompt: 'hello', maxRetries: 0 })]);
+
+    expect(refused.status === 'rejected' ? describeProviderError({ cause: refused.reason }) : null).toContain('baseURL required');
+    expect(mock.requests).toHaveLength(1);
   });
 
   test('a Responses catalog model preserves streaming text and native tool calls', async () => {

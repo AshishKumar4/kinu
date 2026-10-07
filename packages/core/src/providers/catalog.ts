@@ -1,9 +1,11 @@
-// Dynamic models.dev source for providers usable with a stored `<id>.bearer` key.
+// Dynamic models.dev source for providers usable with a stored `<id>.bearer` key, and the one model a keyed endpoint
+// is spoken to through.
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
 import type { DynamicProviderSource } from './registry';
-import type { ModelProvider, ProviderDeps } from './types';
+import type { ModelCallDeps, ModelProvider, ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
-import { createWireModel, deferredModel } from './wire-model';
+import { createWireModel, deferredModel, type WireProtocol } from './wire-model';
 import { KINU_USER_AGENT } from '../utils/user-agent';
 import { baseCredentialKey } from '../credentials/accounts';
 import {
@@ -12,6 +14,40 @@ import {
   listModelsDevProviderModels,
   modelsDevCompatBaseURL,
 } from './models-dev';
+
+export interface KeyedEndpoint {
+  readonly providerId: string;
+  readonly credKey: string;
+  readonly modelId: string;
+  readonly deps: ModelCallDeps;
+  /** Where the model is spoken to; a credential's own base URL replaces this one per request. */
+  readonly endpoint: { readonly baseURL: string; readonly protocol: WireProtocol; readonly reasoning: boolean };
+  readonly missingCredentialError: string;
+  /** A credential without a base URL is refused (a bring-your-own endpoint has no other). */
+  readonly requireBaseURL?: boolean;
+  readonly headers?: Readonly<Record<string, string>>;
+}
+
+/** A keyed endpoint's model: the catalog's providers and a bring-your-own OpenAI-compatible endpoint alike. */
+export function keyedEndpointModel(spec: KeyedEndpoint): LanguageModelV4 {
+  const baseURL = spec.endpoint.baseURL.replace(/\/+$/, '');
+
+  const customFetch = createAuthedFetch(spec.deps, {
+    provider: spec.providerId,
+    credKey: spec.credKey,
+    missingCredentialError: spec.missingCredentialError,
+    ...(spec.requireBaseURL === true && { requireBaseURL: true }),
+    mutate: ({ url, auth, headers }) => {
+      for (const [name, value] of Object.entries(spec.headers ?? {})) headers.set(name, value);
+
+      return auth.baseURL && url.startsWith(baseURL) ? auth.baseURL.replace(/\/+$/, '') + url.slice(baseURL.length) : url;
+    },
+  });
+
+  return createWireModel({
+    name: spec.providerId, modelId: spec.modelId, baseURL, fetch: customFetch, protocol: spec.endpoint.protocol, reasoning: spec.endpoint.reasoning,
+  });
+}
 
 /** Must look like a models.dev id; rejects malformed specs early. */
 const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
@@ -98,26 +134,14 @@ function createCatalogProvider(providerId: string): ModelProvider {
           throw new Error(`Model ${providerId}/${modelId} has no supported models.dev API endpoint.`);
         }
 
-        const baseURL = endpoint.baseURL.replace(/\/+$/, '');
-
-        const customFetch = createAuthedFetch(deps, {
-          provider: providerId,
-          credKey,
+        return keyedEndpointModel({
+          providerId, credKey, modelId, deps, endpoint,
           missingCredentialError: `No API key for ${providerId} (cred key: ${credKey})`,
-          mutate: ({ url, auth, headers }) => {
-            // OpenCode Go's documented client contract requires these routing headers.
-            if (providerId === 'opencode' || providerId === 'opencode-go') {
-              headers.set('user-agent', KINU_USER_AGENT);
-              headers.set('x-opencode-session', deps.sessionAffinity);
-            }
-
-            return auth.baseURL && url.startsWith(baseURL)
-              ? auth.baseURL.replace(/\/+$/, '') + url.slice(baseURL.length)
-              : url;
-          },
+          // OpenCode Go's documented client contract requires these routing headers.
+          ...((providerId === 'opencode' || providerId === 'opencode-go') && {
+            headers: { 'user-agent': KINU_USER_AGENT, 'x-opencode-session': deps.sessionAffinity },
+          }),
         });
-
-        return createWireModel({ name: providerId, modelId, baseURL, fetch: customFetch, protocol: endpoint.protocol, reasoning: endpoint.reasoning });
       });
     },
   };

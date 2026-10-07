@@ -7,6 +7,7 @@ import { wrapLanguageModel, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { attemptBound } from './middleware/attempt';
 import { retryMiddleware, type RetryPolicy } from './middleware/retry';
+import { toolSchemaDialect } from './middleware/tool-schema-dialect';
 import { usageRepairMiddleware } from './middleware/usage-repair';
 import { toolImages } from './tool-result-images';
 import { statelessResponses } from './util';
@@ -83,7 +84,7 @@ export function withModelStack(model: LanguageModel, policy: RetryPolicy): Langu
 
   const v4 = model.specificationVersion === 'v4' ? model : wrapLanguageModel({ model, middleware: [] });
 
-  return wrapLanguageModel({ model: attemptBound(v4), middleware: [retryMiddleware(policy), usageRepairMiddleware(), toolImages(undefined)] });
+  return wrapLanguageModel({ model: attemptBound(v4), middleware: [retryMiddleware(policy), usageRepairMiddleware(), toolSchemaDialect, toolImages(undefined)] });
 }
 
 /** Anthropic's SDK sends a key as `x-api-key` and a token as a bearer: a given header is moved into its setting, and

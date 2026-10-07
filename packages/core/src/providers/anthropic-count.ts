@@ -16,6 +16,7 @@ import { createAuthedFetch } from './util';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { untagged } from '../utils/file-data';
 import { toolDescription } from '../utils/tool-description';
+import { fitToolSchema } from './middleware/tool-schema-dialect';
 
 /** The AI SDK Anthropic package's wire version, so raw POSTs (count, warm) share its API contract. */
 export const ANTHROPIC_VERSION = '2023-06-01';
@@ -261,7 +262,7 @@ function toCountBody(modelId: string, request: CountableRequest): Converted<Coun
 
       const entry: NonNullable<CountBody['tools']>[number] = {
         name,
-        input_schema: yield* Effect.promise(async () => asSchema(tool.inputSchema).jsonSchema),
+        input_schema: fitToolSchema(yield* Effect.promise(async () => asSchema(tool.inputSchema).jsonSchema), false),
       };
 
       const description = toolDescription(tool);
