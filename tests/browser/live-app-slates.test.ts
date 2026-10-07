@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { SLATE_UI_PAGES } from '../../scripts/scripted-model';
+import { SLATE_UI_FILE, SLATE_UI_PAGES } from '../../scripts/scripted-model';
 import { liveRows } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-slates', ['slate-ui']);
@@ -18,6 +18,13 @@ describe("an answer's slate-ui blocks are drawn in place", () => {
 
     expect(drawn).toEqual(Object.keys(SLATE_UI_PAGES));
     expect(shown).toEqual(SLATE_UI_PAGES);
+  });
+
+  // The page runs with its author's reach: it reads the file the agent wrote, and its click reaches the agent.
+  test("a page reads through `workspace` as its author, and a click reaches the agent", () => {
+    const { read, heard } = verdictOf(observed.slateUi, 'slate-ui');
+
+    expect({ read, heard }).toEqual({ read: SLATE_UI_FILE.content, heard: true });
   });
 
   test('a reload draws them again from the stored answer', () => {

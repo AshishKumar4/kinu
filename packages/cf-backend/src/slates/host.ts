@@ -20,7 +20,7 @@ import {
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
   type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
   type MissionGovernor, type WorkspaceOverviewShare, slateCapabilityGraph, type SlateCapabilityGraph,
-  addressedBlock, ephemeralSlateAddress, sha256Hex, type EphemeralSlateAddress,
+  addressedBlock, ephemeralBindings, ephemeralSlateAddress, sha256Hex, type EphemeralSlateAddress,
 } from '@kinu.run/core';
 import { SLATES_ROOT } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
@@ -166,7 +166,7 @@ export class SlateHost {
 
     return {
       kind: 'message', root: `${EPHEMERAL_ROOT}/${address.messageId}/${address.name}`, html: block.html, author: block.author,
-      project: parseSlateProject({ name: address.name, browser: PAGE_ENTRY, slate: { title: address.name } }),
+      project: parseSlateProject({ name: address.name, browser: PAGE_ENTRY, slate: { title: address.name, bindings: ephemeralBindings() } }),
     };
   }
 

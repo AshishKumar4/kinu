@@ -245,7 +245,7 @@ export type * from './types/evaluation';
 // Slate stores live in `@kinu.run/core/slates`: they touch `node:util`, and client
 // code value-imports this barrel. Keep worker-only modules off it.
 export {
-  parseSlateProject, describeBindings, credentialedBindings,
+  parseSlateProject, describeBindings, credentialedBindings, ephemeralBindings,
   type SlateProject, type SlateBinding, type SlateBindingKind, type SlateBindingDeclaration,
 } from './slates/project';
 
