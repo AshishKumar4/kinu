@@ -22,8 +22,9 @@ import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
 import {
-  GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness, type HarnessOrchestratorAgent, type StartedHarness,
+  alarmDue, GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness, type HarnessOrchestratorAgent, type StartedHarness,
 } from './helpers/actor-harness';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 import { answeringGateway, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { socketConnection } from './helpers/bindings';
 
@@ -431,6 +432,48 @@ test("a person's open tab redials into each re-drive across two restarts and dra
     afterTwo: ['echo 1: output-available', 'echo 2: output-available', 'echo 3: output-available', 'echo 4: output-available'],
   });
   await view.close();
+});
+
+test('a turn cut at the same step in two activations is settled, not run a third time', async () => {
+  const first = firstActivation();
+  await first.started;
+  const sent = new AwaitedList<Frame>();
+  const sender = socketOn(first.agent, 'first-socket', (raw) => { sent.push(v.parse(FrameSchema, JSON.parse(raw))); });
+
+  await first.agent.onConnect(sender, CONNECT);
+  // Its request is answered only when the turn ends, which no activation here reaches.
+  const answered = Promise.resolve(first.agent.onMessage(sender, chatRequest('req-stall'))).then(() => 'answered');
+  const streamed = sent.until((frames) => counted(frames, 'finish-step') === 2).then(() => 'two steps streamed');
+
+  expect(await Promise.race([answered, streamed])).toBe('two steps streamed');
+
+  // The re-drive reaches the very call the first activation ended inside, and ends inside it again.
+  const reached = Promise.withResolvers<void>();
+
+  const again = stubAiBinding((run) => {
+    const step = requestOf(run).messages.filter((message) => message.role === 'tool').length;
+
+    if (step < 2) return toolCallCompletion(run, { tool: 'shell', args: { command: `echo ${String(step + 1)}` } }, `call_${String(step)}`);
+    reached.resolve();
+
+    return new Promise<Response>(() => {});
+  });
+
+  const second = await nextActivation(first, again);
+  await second.agent.terminalRetryPass();
+  await reached.promise;
+
+  const third = answeringGateway('Three, and done.');
+  const last = await nextActivation(second, third);
+  await last.agent.terminalRetryPass();
+
+  if (alarmDue(last.db)) await last.agent.alarm();
+  await joinHarnessFibers();
+
+  // Two runs ended at one step: the turn is closed rather than handed the same cut a third time.
+  expect(third.runs.length).toBe(0);
+  expect(last.db.query<{ outcome: string | null; epoch: number }, []>(`SELECT outcome, epoch FROM actor_turn_claims WHERE turn_id = 'req-stall'`).all())
+    .toEqual([{ outcome: 'error', epoch: 2 }]);
 });
 
 test("a person's tab opened during the re-drive draws the steps before the restart, then the rest, while it streams", async () => {
