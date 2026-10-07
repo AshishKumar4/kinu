@@ -9,6 +9,37 @@ export const DEFAULT_MODELS: readonly [string, ...string[]] = [
   'opencode-go/muse-spark-1.3-contributor',
 ];
 
+/**
+ * The owner's ChatGPT Pro logins the reviewer runs on (2026-10-07), first to last, each the eval identity's own Codex
+ * sign-in on a deployment, asked of the owner only when the deployment lacks it (`evals/scripts/reviewer-sign-in.ts`).
+ */
+export const REVIEW_ACCOUNTS = ['ashishkmr472', 'aksnip4284'] as const;
+
+/** GPT 6.1 Sol through Codex on one of {@link REVIEW_ACCOUNTS}. */
+export function codexReviewModel(account: (typeof REVIEW_ACCOUNTS)[number]): string {
+  return `codex@${account}/gpt-6.1-sol`;
+}
+
+/**
+ * GPT 6.1 Sol through the `openrouter.bearer` key every eval account holds (`scripts/eval-provider-keys.ts`, which
+ * requires it listed): the reviewer's last resort, when neither Codex login is held. Staging listed it on 2026-10-07.
+ */
+export const REVIEW_KEYED_MODEL = 'openrouter/openai/gpt-6.1-sol';
+
+/**
+ * The model that reads a run rather than being measured by it, the owner's choice (2026-10-07): the diagnosis, the
+ * trajectory review and the judge of what no check computes. GPT 6.1 Sol, first choice first; a review runs on the
+ * first its deployment lists for the eval identity, and falls back to the others it lists (`reviewerModels`).
+ */
+export const REVIEW_MODELS: readonly string[] = [...REVIEW_ACCOUNTS.map(codexReviewModel), REVIEW_KEYED_MODEL];
+
+/** A reviewer `KINU_EVAL_REVIEW_MODEL` names in place of {@link REVIEW_MODELS}, or null. */
+export function reviewModelOverride(env: Env): string | null {
+  const named = env.KINU_EVAL_REVIEW_MODEL?.trim() ?? '';
+
+  return named === '' ? null : named;
+}
+
 /** The product as deployed, with no workspace setting changed. */
 export const DEFAULT_ARM = 'product';
 

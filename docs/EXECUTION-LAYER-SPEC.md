@@ -262,10 +262,10 @@ workspace. `executeInExecutor` found `git` 2.34.1, `npm` 10.9.8, `node`
 v22.23.2, `bun`, `sh`, `bash`, `jq`, `curl` present; `python3`, `python`,
 `ruby`, `clang`, `gcc`, `make`, `tsc`, `docker` absent at exit 127. A local
 pull was byte-identical. The inventory comment lives in
-`core/src/execution/sandbox.ts`. The container image is now
-`kinu-devbox-block-layer`, built on `cloudflare/sandbox:0.12.8`
-(`packages/devbox/block-lower/upstream.json`, dated 2026-09-13): re-probe
-before trusting a version string.
+`core/src/execution/sandbox.ts`. A devbox now starts from
+`cloudflare/debian-trixie` with the pinned tools tarball
+(`packages/devbox/block-lower/upstream.json`, D78): re-probe before trusting a
+version string.
 
 Escalate only for structural needs:
 

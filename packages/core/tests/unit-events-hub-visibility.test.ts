@@ -5,8 +5,9 @@ import { createMemoryVfs, createTestActorsOver, present } from '@kinu.run/test-u
 import * as v from 'valibot';
 import {
   EVENT_BRIEF_MAX_CHARS, EventLog, applyVisibilityForStorage, eventContentPath, initEventsHubTables,
-  redactPayload, redactSecrets, renderForLLM, spillEventContent,
+  redactPayload, renderForLLM, spillEventContent,
 } from '../src/events/hub/index';
+import { redactSecrets } from '../src/safety/secret-patterns';
 import type { BaseEvent } from '../src/events/hub/index';
 import { receivePeerMessage } from '../src/events/ingress/peer';
 import { acceptContainerEvent } from '../src/events/ingress/container';

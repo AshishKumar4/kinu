@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { JsonValueSchema, type JsonValue, WORKSPACE_ROOT } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask, type SeedFile } from '../src/task';
 import { finishedWork, matchesReference, type EvalVerifier, type HelperWork, type Script, type SlateClient } from '../src/verifier';
@@ -14,9 +14,9 @@ import { Seeded } from './seeded';
 
 const MISSION = "Paperwing Studio's workspace. We make a notes app and launch it on Friday, 12 March 2027.";
 
-const LAUNCH_DIR = '/home/user/launch';
+const LAUNCH_DIR = `${WORKSPACE_ROOT}/launch`;
 
-const REPORTS_DIR = '/home/user/reports';
+const REPORTS_DIR = `${WORKSPACE_ROOT}/reports`;
 
 const COUNTRY_REPORT = `${REPORTS_DIR}/signups-by-country.json`;
 

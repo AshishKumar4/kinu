@@ -1,3 +1,4 @@
+import { WORKSPACE_ROOT } from '@kinu.run/core';
 import type { EvalVerifier } from '../src/verifier';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
@@ -12,7 +13,7 @@ const MISSION = "Paperwing Studio's workspace. We keep our marketing site's sour
 
 const REPOSITORY = 'https://github.com/octocat/Spoon-Knife';
 
-const SITE_DIR = '/home/user/site';
+const SITE_DIR = `${WORKSPACE_ROOT}/site`;
 
 /** Spoon-Knife has served this page unchanged since 2014 (d0dd1f61, read 2026-09-30). */
 const PAGE_TITLE = '<title>Spoon-Knife</title>';

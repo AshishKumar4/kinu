@@ -165,6 +165,7 @@
     "@types/node": "^25.9.1",
     "@vitest/coverage-istanbul": "^4.1.11",
     "agents": "^0.26.0",
+    "armada": "github:AshishKumar4/armada#1d6e30c5cfb228f432fce450899888836df2a90a",
     "aws4fetch": "^1.0.20",
     "bun": "canary",
     "chess.js": "^1.4.0",

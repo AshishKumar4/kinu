@@ -67,7 +67,7 @@ finish
       evals: [{ status: 'failed', duration: 1_600_000, meta: { harness: { run: {
         session: { metadata: { taskId: 'chess', taskVersion: 'v1', evalCommit: META.sha, productSha: META.sha, arm: 'product', trial: 1 }, events: [] },
         usage: { model: 'muse', metadata: { steps: [] } }, errors: [],
-        output: { metrics: { modelTurns: 0, toolCalls: 0, toolErrors: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
+        output: { metrics: { modelTurns: 0, toolCalls: 0, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
       } } } } satisfies Assertion],
     });
 
@@ -88,7 +88,7 @@ finish
         usage: { model: 'muse', ...measurePromptUsage([{ actor: 'main', events: [{
           type: 'step_finish', runId: 'run', eventIndex: 0, stepIndex: 1, timestamp: '2026-10-02T19:00:00Z', usage: { input, cacheRead, output },
         }] }]) }, errors: [],
-        output: { metrics: { modelTurns: 1, toolCalls: 0, toolErrors: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
+        output: { metrics: { modelTurns: 1, toolCalls: 0, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 }, turns: [] },
       } } },
     });
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison, validateEvalResults, whyIncomplete } from './comparison';
+import { mannWhitney } from './shifts';
 
 /**
  * `infra`: the deployment ended the turn in error. `refused`: it answered the turn's request with this failure.
@@ -10,6 +11,7 @@ type Trial = {
   pass: boolean; infra?: boolean; refused?: string; reset?: string; hung?: string; cancelled?: string; heldBy?: string[]; productSha?: string;
   taskVersion?: string; failed?: string; trial?: number;
   inputTokens?: number; cacheReadTokens?: number; costUsd?: number; model?: string; durationMs?: number; harnessInfra?: boolean;
+  badInputCalls?: number;
 };
 
 function outcomeOf(trial: Trial) {
@@ -45,7 +47,10 @@ function fileResult(taskId: string, trials: readonly Trial[], side: { productSha
             metadata: { cacheReadTokens: trial.cacheReadTokens, costUsd: trial.costUsd },
           },
           output: {
-            metrics: { modelTurns: 4, toolCalls: 6, toolErrors: 0, providerWaits: 2, providerWaitMs: 30_000 },
+            metrics: {
+              modelTurns: 4, toolCalls: 6, toolErrors: trial.badInputCalls ?? 0, badInputCalls: trial.badInputCalls ?? 0, unknownToolCalls: 0,
+              providerWaits: 2, providerWaitMs: 30_000,
+            },
             turns: [{
               outcome: outcomeOf(trial),
               checks: trial.refused === undefined && trial.reset === undefined && trial.hung === undefined && trial.cancelled === undefined
@@ -82,7 +87,37 @@ describe('fisherExact', () => {
   });
 });
 
+describe('mannWhitney', () => {
+  test('is two-sided and exact, ties sharing their rank', () => {
+    // Of the 20 ways to split six trials in two, one puts the three smallest first and one the three largest.
+    expect(mannWhitney([1, 2, 3], [4, 5, 6])).toBeCloseTo(0.1, 10);
+    expect(mannWhitney([3, 3, 3], [3, 3, 3])).toBe(1);
+    expect(mannWhitney([0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [2, 3, 2, 4, 3, 2, 5, 3, 2, 4])).toBeLessThan(0.001);
+  });
+});
+
 describe('compareEvalResults', () => {
+  test('a measure that moved beyond noise is named for its task, and moves no verdict', () => {
+    const before = trialsOf(9, 10);
+    const after = trialsOf(9, 10).map((trial, index) => ({ ...trial, badInputCalls: [2, 3, 2, 4, 3, 2, 5, 3, 2, 4][index] }));
+    const comparison = compareEvalResults(report('budget-board', before, BASE), report('budget-board', after, NEXT));
+    const row = comparison.rows[0];
+
+    expect(comparison.verdict).toBe('unchanged');
+    expect(row?.reason === null ? row.shifts.find((shift) => shift.measure === 'badInputCalls')?.pValue : null).toBeLessThan(0.05);
+    expect(row?.reason === null ? row.shifts.find((shift) => shift.measure === 'modelSteps')?.pValue : null).toBe(1);
+    expect(renderEvalComparison(comparison)).toContain('calls refused as bad input 0.0 [0.0\u20130.0] \u2192 3.0 [2.0\u20133.8]');
+  });
+
+  test('every check attempted is compared by its own pass rate', () => {
+    const comparison = compareEvalResults(report('t', trialsOf(10, 10), BASE), report('t', trialsOf(3, 10), NEXT));
+    const row = comparison.rows[0];
+
+    expect(row?.reason === null ? row.checks : null).toEqual([
+      { check: 't1 builds', baseline: { attempted: 10, passed: 10 }, candidate: { attempted: 10, passed: 3 }, pValue: fisherExact({ passed: 10, trials: 10 }, { passed: 3, trials: 10 }) },
+    ]);
+  });
+
   test('a significant fall on any task is a regression, whatever else rose', () => {
     const comparison = compareEvalResults(report('order-book', trialsOf(9, 10), BASE), report('order-book', trialsOf(2, 10), NEXT));
 

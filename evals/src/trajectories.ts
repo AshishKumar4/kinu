@@ -5,7 +5,7 @@ import { basename } from 'node:path';
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
 import { redact } from './redact';
-import { parseResults, trials, type HarnessRun, type StepUsage, type TranscriptEntry } from './results';
+import { parseResults, trials, type Assertion, type HarnessRun, type StepUsage, type TranscriptEntry } from './results';
 
 const LINE_LIMIT = 1_900;
 
@@ -110,11 +110,16 @@ export function renderTrajectories(text: string, only: 'all' | 'failed' = 'all')
     ? [`## ${basename(file.name)} ran no trials\n\n${value(file.message ?? 'no message')}`]
     : []);
 
-  for (const assertion of trials(files)) {
-    if (only === 'all' || assertion.status === 'failed') {
-      sections.push(renderTrial(assertion.meta.harness.run, { status: assertion.status, durationMs: assertion.duration }));
-    }
-  }
+  sections.push(...trials(files).filter((assertion) => only === 'all' || assertion.status === 'failed').map(trialSection));
 
   return `# Eval trajectories\n\n${sections.join('\n\n---\n\n')}\n`;
+}
+
+function trialSection(assertion: Assertion): string {
+  return renderTrial(assertion.meta.harness.run, { status: assertion.status, durationMs: assertion.duration });
+}
+
+/** One leg's trials of one task, passing and failing, as the change review reads them beside the other leg's. */
+export function renderLeg(title: string, assertions: readonly Assertion[]): string {
+  return `# ${title}\n\n${assertions.map(trialSection).join('\n\n---\n\n')}\n`;
 }

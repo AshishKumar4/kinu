@@ -1,12 +1,12 @@
 import { describe, expect, test, spyOn } from 'bun:test';
 import { basename } from 'node:path';
 import * as v from 'valibot';
-import { JsonValueSchema, packZip, type ZipEntry } from '@kinu.run/core';
+import { JsonValueSchema, packZip, type ZipEntry, WORKSPACE_ROOT } from '@kinu.run/core';
 import { combinatorsJourney, summaryOf, type ReportSummary } from '../tasks/combinators-journey';
 import { EvalVerifier, type VerifierSession } from './verifier';
 import type { EvalCheck, EvalTurn } from './task';
 
-const DESK = '/home/user/combinators';
+const DESK = `${WORKSPACE_ROOT}/combinators`;
 
 const CHECKOUT = '/workspace/true-myth';
 
@@ -117,6 +117,8 @@ function desk(defect?: Defect) {
   const titles = ['src/maybe.ts', 'src/result.ts', 'src/task.ts', 'src/toolbelt.ts', 'test-results', 'release-review', 'previews', 'boundary-review', 'release-provenance', 'export'];
 
   const session: VerifierSession = {
+    web: { origin: 'http://127.0.0.1:8787', identity: { kind: 'loopback' }, workspace: 'eval-journey' },
+    listSlates: () => Promise.resolve({ slates: [], problems: [] }),
     readFile: (path) => Promise.resolve(read(path)),
     readBytes: (path) => {
       const bytes = files.get(path);
@@ -257,7 +259,8 @@ async function grade(index: number, defect?: Defect): Promise<EvalCheck[]> {
 
     if (index === 3) fixture.exportArchive();
 
-    return await new EvalVerifier(fixture.session, fixture.replies, 100).collect(turn.verify);
+    // The journey's checks act on no page, so nothing is left to settle.
+    return await new EvalVerifier(fixture.session, fixture.replies, 100, () => Promise.resolve()).collect(turn.verify);
   } finally {
     registry.mockRestore();
     await fixture.close();
