@@ -88,6 +88,7 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     retry: (...args) => settle(through((isolate) => isolate.retry(...args))),
     interruptChat: (...args) => settle(through((isolate) => isolate.interruptChat(...args))),
     wake: (...args) => settle(through((isolate) => isolate.wake(...args))),
+    modelSettingsChanged: (...args) => settle(through((isolate) => isolate.modelSettingsChanged(...args))),
     owed: (...args) => settle(through((isolate) => isolate.owed(...args))),
     idle: (...args) => settle(through((isolate) => isolate.idle(...args))),
     history: (...args) => settle(through((isolate) => isolate.history(...args))),

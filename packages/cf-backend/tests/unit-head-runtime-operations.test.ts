@@ -78,7 +78,6 @@ const neverHost: HostedActorSeams = {
   roster() { throw new Error('mergeLLM read a roster'); },
   conversations() { throw new Error('mergeLLM read a conversation'); },
   vfs() { throw new Error('mergeLLM read the file plane'); },
-  suggestTitle() { throw new Error('mergeLLM asked for a title'); },
   taskProfile() { throw new Error('mergeLLM built a hire profile'); },
   announce() { throw new Error('mergeLLM announced a roster change'); },
   scheduleDrain() { throw new Error('mergeLLM scheduled a drain'); },

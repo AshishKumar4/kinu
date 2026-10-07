@@ -2,6 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Process-death recovery for the terminal transition: cut at a named effect and phase (TerminalEffectInterrupt),
 // reopen a second session over the same database, and check every effect ran exactly once.
 import { describe, test, expect } from 'bun:test';
+import { APICallError } from 'ai';
 import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
 import { spawnTest, AwaitedList, handClock, scratchPath, scriptedAdvisorPort, type ScriptedAdvisorPort } from '@kinu.run/test-utils'
@@ -845,3 +846,66 @@ describe('a turn\'s lessons are one owed terminal effect', () => {
   });
 });
 
+// AGENTS.md, 2026-09-30 (T1-T3): a refusal only the owner can fix parks with no wake until their model settings change
+// or new work settles. Opening a session is neither.
+describe('a title refused for funds parks until the owner acts or new work settles', () => {
+  const MISSION = 'Audit the OAuth callback flow';
+
+  /** A workspace born with its mission, whose naming call the provider refuses until the account is funded. */
+  async function refusedTitle() {
+    const { db, rt } = workspace();
+    const titling = { funded: false };
+
+    await writeText(rt.ownFiles, '/home/main/SOUL.md', `# Kinu\n\n## Mission\n\n${MISSION}\n`);
+    rt.actor.config.setDisplayNameOrigin(MISSION, 'auto');
+
+    const { model, state } = scriptedModel('found two issues', {
+      onGenerate: () => {
+        if (!titling.funded) throw new APICallError({ message: 'payment required', url: 'https://x.example/v1', requestBodyValues: {}, statusCode: 402, isRetryable: false });
+      },
+    });
+
+    const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
+    const title = () => stillOwed(rt).filter((row) => row.effect_name === 'auto_title').map((row) => row.status);
+
+    await session.send('start', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+    expect(title()).toEqual(['parked']);
+
+    return { db, rt, model, state, titling, session, title };
+  }
+
+  test("it survives a retry pass and a restart, and the owner's settings change releases it", async () => {
+    const { db, rt, model, state, titling, session, title } = await refusedTitle();
+    const asked = state.titleCalls;
+
+    session.skipBackoff();
+    await session.recoverTerminalTransitions();
+    await session.end();
+    const reopened = await restart({ rt, db, model, events: [] });
+
+    expect({ asked: state.titleCalls, title: title() }).toEqual({ asked, title: ['parked'] });
+
+    titling.funded = true;
+    reopened.setProviderAccount('openai', 'work');
+    await reopened.settleBackgroundWork();
+    // The wake the release armed.
+    await reopened.recoverTerminalTransitions();
+    await reopened.settleBackgroundWork();
+    expect({ title: title(), name: rt.actor.config.getDisplayName() }).toEqual({ title: [], name: 'Parser Work' });
+    await reopened.end();
+  });
+
+  test('the next settled turn releases it', async () => {
+    const { rt, titling, session, title } = await refusedTitle();
+
+    titling.funded = true;
+    await session.send('and the refresh path?', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+    // The wake the release armed.
+    await session.recoverTerminalTransitions();
+    await session.settleBackgroundWork();
+    expect({ title: title(), name: rt.actor.config.getDisplayName() }).toEqual({ title: [], name: 'Parser Work' });
+    await session.end();
+  });
+});

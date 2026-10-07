@@ -3368,10 +3368,11 @@ export abstract class ActorAgent extends Agent<Env> {
   }
   @callable()
   async setModel(spec: string) {
-    return setModel(this.modelSetting(this.config, () => {
-      this.invalidateModelCaches();
-      this.chatLoop.reviseContext({ counted: true });
-    }), spec);
+    const set = setModel(this.modelSetting(this.config, () => { this.chatLoop.reviseContext({ counted: true }); }), spec);
+
+    await this.modelSettingsChanged();
+
+    return set;
   }
 
   /** How a model pin is set on `config`: this workspace's registry normalizes the spec. */
@@ -3563,7 +3564,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this.modelSettingsChanges += 1;
     this._accountSwarms = null;
     this.invalidateModelCaches();
-    await this.terminal.releaseParked();
+    await this.terminal.modelSettingsChanged();
   }
 
   /**
