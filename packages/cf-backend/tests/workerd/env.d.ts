@@ -64,6 +64,9 @@ interface SurfaceControlRpc extends Rpc.WorkerEntrypointBranded {
   holdQueuedModel(): Promise<void>;
   modelCalledWith(marker: string): Promise<void>;
   releaseQueuedModel(): Promise<void>;
+  holdParityModel(parkAt: 'first' | 'partial'): Promise<void>;
+  parityParked(): Promise<void>;
+  releaseParityModel(): Promise<void>;
   mintCliBearer(): Promise<string>;
 }
 
