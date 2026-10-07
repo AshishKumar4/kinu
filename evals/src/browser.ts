@@ -10,13 +10,13 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ElementHandle, type Browser, type Frame, type Page } from 'puppeteer';
 import * as v from 'valibot';
+import { SLATE_UI_ATTRIBUTE } from '@kinu.run/core';
 
 import { declaredSettings } from '../../scripts/browser-declarations';
 import { DOCUMENT_FAULTS, recordScriptFailures } from '../../scripts/script-failures';
 import { launchTestChrome, type TestChrome } from '../../scripts/test-chrome';
 import { webHeaders, type PublicWebIdentity, type WorkspaceWeb } from './session';
 import { look, type Press, type Sight } from './sight';
-import { SLATE_UI_ATTRIBUTE } from './slate-ui';
 
 /** Chrome, with the pointer and colour scheme declared (`declaredSettings`), as
  *  the gallery and live-app harnesses launch it: it ends with the row's runner. */

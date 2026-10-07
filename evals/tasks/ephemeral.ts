@@ -1,4 +1,4 @@
-import type { JsonValue } from '@kinu.run/core';
+import { slateUiSegments, type JsonValue } from '@kinu.run/core';
 import type { SlateView, WorkspaceBrowser } from '../src/browser';
 import { sightEvidence, type Sight } from '../src/sight';
 import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
@@ -6,12 +6,16 @@ import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
 // What every task that expects an ephemeral answer checks the same way: that the chat draws the answer's
 // `<slate-ui>` blocks, that no file slate was made for a one-off view, and how each block reads once drawn.
 
-/** The answer holds at least `least` ephemeral slates that a fresh chat page draws: a view, not only words. */
+/**
+ * The answer holds at least `least` ephemeral slates, and a fresh chat page draws every one its text holds: a view, not
+ * only words. The text is the answer's last part (`repliesTo`), so the frames drawn are what count at the least.
+ */
 export async function answersWithSlates(verifier: EvalVerifier, least: number): Promise<void> {
   await verifier.check('answers-with-ephemeral-slates', () => verifier.browse(async (browser) => {
-    const drawn = (await browser.answerSlates(await browser.open(), least)).length;
+    const blocks = verifier.replies.flatMap(slateUiSegments).flatMap((segment) => segment.kind === 'slate' ? [segment.name] : []);
+    const drawn = (await browser.answerSlates(await browser.open(), Math.max(least, blocks.length))).length;
 
-    return { pass: drawn >= least, evidence: { drawn, least } };
+    return { pass: drawn >= least && drawn >= blocks.length, evidence: { blocks, drawn, least } };
   }));
 }
 
