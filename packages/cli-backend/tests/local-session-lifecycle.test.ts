@@ -1,7 +1,7 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
+import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
 import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -111,7 +111,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const project = scratchDir('local-session-placed');
     mkdirSync(join(project, 'build'));
     mkdirSync(join(project, 'dist'));
-    const db = new Database(scratchPath('local-session-placed', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('local-session-placed', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: project });
     rt.actor.config.setLearning(false);
@@ -1448,7 +1448,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
     reads: 'accepted' | 'corrected',
     opts: { oneShot?: boolean; model?: LanguageModel } = {},
   ) {
-    const db = new Database(scratchPath('local-session-review', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('local-session-review', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
     // The rating rides rt.decide and the reflection rt.llm.complete; both are stubbed so the review runs offline.

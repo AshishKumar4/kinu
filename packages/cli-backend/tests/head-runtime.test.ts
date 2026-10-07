@@ -19,7 +19,7 @@ import {
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
   mergePolicyProfile, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, createTestActorsOver,
-  type ScriptedTurnResult,
+  type ScriptedTurnResult, workspaceDatabase,
 } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
@@ -60,7 +60,7 @@ function routerOf(rt: AgentRuntime): ExecutionRouter {
 
 function makeParent(cwd = scratchDir('head-runtime-folder')): LocalParent {
   const dbPath = scratchPath('head-runtime-parent', 'parent.db');
-  const db = new Database(dbPath);
+  const db = workspaceDatabase(dbPath);
   // Production initializer first: hosted heads take claimed turns, which need tables `createCLIRuntime` does not create.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 

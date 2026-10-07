@@ -1,7 +1,7 @@
 import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: a user turn end to end.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, present, scratchDir, scratchPath, scriptedAdvisorPort, scriptedTurnModel } from '@kinu.run/test-utils';
+import { AwaitedList, present, scratchDir, scratchPath, scriptedAdvisorPort, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -477,7 +477,7 @@ describe('LocalAgentSession.send — a user turn', () => {
 
   test('a placed workspace is told it is the machine, with no device row', async () => {
     let observed: PromptMessage[] = [];
-    const db = new Database(scratchPath('local-session-placed-prompt', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('local-session-placed-prompt', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('local-session-placed-prompt') });
     const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }), { rt, db });

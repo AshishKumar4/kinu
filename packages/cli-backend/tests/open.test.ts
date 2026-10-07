@@ -1,7 +1,7 @@
 // openWorkspaceCLI: the local resume path, reading a workspace's identity and SOUL.md.
 import { workspaceHome } from '../src/runtime';
 import { scratchDir } from '../../test-utils/src/scratch';
-import { spawnTest } from '@kinu.run/test-utils';
+import { spawnTest, workspaceDatabase } from '@kinu.run/test-utils';
 
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
@@ -18,7 +18,7 @@ describe('openWorkspaceCLI', () => {
   test('reads the soul out of the workspace filesystem, and its mission onto the identity row', async () => {
     const dir = scratchDir('open');
     const dbPath = join(dir, 'agent.db');
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
     await createWorkspace(db, { name: 'jarvis', purpose: 'Run the household and the lab.', llm: DUMMY_LLM, home: workspaceHome(db) });
 
     const { info } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
@@ -31,7 +31,7 @@ describe('openWorkspaceCLI', () => {
   test('opening waits out another process\'s write instead of failing on the lock', async () => {
     const dir = scratchDir('open-locked');
     const dbPath = join(dir, 'agent.db');
-    const made = new Database(dbPath);
+    const made = workspaceDatabase(dbPath);
     await createWorkspace(made, { name: 'jarvis', purpose: 'Run the lab.', llm: DUMMY_LLM, home: workspaceHome(made) });
     made.close();
 
@@ -47,7 +47,7 @@ describe('openWorkspaceCLI', () => {
 
     const reader = holder.stdout.getReader();
     await reader.read();
-    const db = new Database(dbPath);
+    const db = workspaceDatabase(dbPath);
 
     expect((await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM })).info.purpose).toBe('Run the lab.');
     db.close();

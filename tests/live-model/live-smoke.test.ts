@@ -40,7 +40,6 @@ import { readText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 import { describe, test, expect, afterAll } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
@@ -59,7 +58,7 @@ import { launchTestChrome } from '../../scripts/test-chrome';
 import {
   evalWorkspaceName, infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode,
   recordWorkspaceSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
-  workerSession,
+  workerSession, workspaceDatabase,
 } from '@kinu.run/test-utils';
 
 /** One row of `GET /api/cli/devices`, exactly as `UserDO.listDevices` declares
@@ -491,8 +490,7 @@ describe('Live Smoke — one real turn per backend', () => {
 
   liveTest('cli backend: one real turn through the local session spine', async () => {
     const dbPath = join(TEST_DIR, 'smoke.db');
-    const db = new Database(dbPath);
-    db.exec('PRAGMA journal_mode = WAL');
+    const db = workspaceDatabase(dbPath);
     let session: LocalAgentSession | null = null;
 
     try {

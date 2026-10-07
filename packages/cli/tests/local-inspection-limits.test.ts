@@ -3,11 +3,10 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { RUN_TIMELINE_MAX, initWorkspaceSchema } from '@kinu.run/core';
 import { makeWorkspaceSchemaSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestActorsOver, workspaceDatabase } from '@kinu.run/test-utils';
 import { agentDir } from '../src/config';
 import { listLocalTimeline, searchLocalMemory } from '../src/local-inspection';
 
@@ -23,7 +22,7 @@ const DB_PATH = join(AGENT_DIR, 'agent.db');
 function seed(rows: number, notes = false): void {
   rmSync(AGENT_DIR, { recursive: true, force: true });
   mkdirSync(AGENT_DIR, { recursive: true });
-  const db = new Database(DB_PATH);
+  const db = workspaceDatabase(DB_PATH);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const { actorId } = createTestActorsOver(db, { name: AGENT }).main;
   stampSchemaGenesis(db);

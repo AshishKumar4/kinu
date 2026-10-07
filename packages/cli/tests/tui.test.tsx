@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import { runToExit } from '@kinu.run/test-utils';
+import { runToExit, workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 
@@ -1260,7 +1260,7 @@ async function runHomeScreen(options: {
   for (const name of options.workspaces ?? []) {
     mkdirSync(resolve(home, name));
     // A real database with a title: the navigator reads its label there, and an unnamed one shows "Untitled workspace".
-    const db = new Database(resolve(home, name, 'agent.db'), { create: true });
+    const db = workspaceDatabase(resolve(home, name, 'agent.db'), { create: true });
 
     try {
       createCLIRuntime(db, { llm: null, agentName: name, cwd: project }).actor.config.setDisplayName(workspaceTitle(name));

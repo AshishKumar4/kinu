@@ -1,3 +1,4 @@
+import { workspaceDatabase } from '@kinu.run/test-utils';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // A workspace opened without a LocalAgentSession still routes its model lanes (`kinu evolve` via `openWorkspaceCLI`).
 // The lanes are the ones the MCTS engine reads: `explorer: rt.llm` and `judge: rt.judgeModel`.
@@ -34,7 +35,7 @@ function recordRoutes(rt: CLIRuntime) {
 async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: string }> {
   const dir = scratchDir('sessionless');
   const dbPath = join(dir, 'agent.db');
-  const db = new Database(dbPath);
+  const db = workspaceDatabase(dbPath);
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM, agentName: 'jarvis' });
   // SOUL.md where the workspace keeps it, a real file of its own space.
   await writeText(workspaceHome(db), 'SOUL.md', '# jarvis\n\n## Mission\n\nRun the lab.');

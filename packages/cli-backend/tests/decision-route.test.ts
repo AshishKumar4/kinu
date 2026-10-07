@@ -1,9 +1,8 @@
 // The CLI rates turns through the Workers AI endpoint its resolver routes a chat model to, as CL-Bench configures it
 // (`KINU_BASE_URL` / `KINU_AUTH`), with no `kinu login` session: the decision model runs at `/ai/run` beside it.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { initWorkspaceSchema } from '@kinu.run/core';
-import { scratchPath, scratchDir } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 import { fakeModel } from './helpers/local-session';
@@ -38,7 +37,7 @@ function endpoint(base = '/api/user/ai/v1') {
 describe('the CLI decision route', () => {
   test('a KINU_BASE_URL Workers AI endpoint rates an answered turn, with no signed-in session', async () => {
     const { baseURL, seen } = endpoint();
-    const db = new Database(scratchPath('decision-route', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('decision-route', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
     const rt = createCLIRuntime(db, {
@@ -63,7 +62,7 @@ describe('the CLI decision route', () => {
 
   test('a Workers AI endpoint with no `/ai/v1` base, as an AI Gateway serves one, is asked no rating', async () => {
     const { baseURL, seen } = endpoint('/v1/acct/gateway/workers-ai/v1');
-    const db = new Database(scratchPath('decision-route-gateway', 'agent.db'));
+    const db = workspaceDatabase(scratchPath('decision-route-gateway', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
     const rt = createCLIRuntime(db, {

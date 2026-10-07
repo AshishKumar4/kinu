@@ -5,12 +5,11 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  * runs one, unset runs both. Each adapter maps a shared operation onto that backend's public method
  * and does nothing else, so a behaviour one backend changes on its own fails in that backend, by name.
  */
-import { Database } from 'bun:sqlite';
 import { copyFileSync, cpSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
 import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { scratchDir, scratchPath, scriptedTurnModel, sqlOver, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { scratchDir, scratchPath, scriptedTurnModel, sqlOver, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
 import {
   historyOver, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
@@ -261,8 +260,7 @@ let born: Promise<string> | null = null;
 function bornWorkspace(): Promise<string> {
   born ??= (async () => {
     const path = scratchPath('shared-backend-born', 'agent.db');
-    const db = new Database(path);
-    db.exec('PRAGMA journal_mode = WAL');
+    const db = workspaceDatabase(path);
     await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT, home: workspaceHome(db) });
     db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
     db.close();
@@ -280,7 +278,7 @@ async function cli(): Promise<SharedBackend> {
   copyFileSync(original, dbPath);
   // Main's home (SOUL.md, memory notes, the scaffold) is files of the space beside the database: the copy takes them.
   cpSync(join(dirname(original), 'home'), join(dirname(dbPath), 'home'), { recursive: true });
-  const db = new Database(dbPath);
+  const db = workspaceDatabase(dbPath);
   const { rt } = await openWorkspaceCLI(db, dbPath, { llm: NO_ENDPOINT, cwd: scratchDir('shared-backend-folder') });
   const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
   rt.checkpoints = checkpoints;

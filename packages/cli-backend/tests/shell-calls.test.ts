@@ -3,18 +3,17 @@
  * `cd` or `export` ends with its call. The workspace's own shell keeps no names; a directory's host shell keeps them.
  */
 import { expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolExecutionOptions } from 'ai';
 import { codemodeSurface, DEVICE_REQUEST_OPTION, DeviceRequestOwnership } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
-import { scratchDir } from '@kinu.run/test-utils';
+import { scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { createCLIRuntime } from '../src/runtime';
 
 function runtimeOf(cwd = scratchDir('cli-shell-calls-folder')) {
-  const db = new Database(join(scratchDir('cli-shell-calls'), 'agent.db'));
+  const db = workspaceDatabase(join(scratchDir('cli-shell-calls'), 'agent.db'));
 
   return createCLIRuntime(db, { llm: null, agentName: 'calls', cwd });
 }
