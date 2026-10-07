@@ -474,7 +474,8 @@ const DeferredApprovalSchema = v.object({
  *  workspace's first call on a machine raises (`core/src/safety/
  *  device-consent.ts`), narrowed to what a caller answers on: which machine
  *  asks, and the id the answer is addressed to. */
-const PendingConsentsSchema = v.array(v.object({ consentId: v.string(), deviceId: v.string() }));
+/** A card as the chat paints it: which machine, and the exact call the owner is asked to let through. */
+const PendingConsentsSchema = v.array(v.object({ consentId: v.string(), deviceId: v.string(), method: v.string(), command: v.string() }));
 
 const ResolveConsentSchema = v.object({ ok: v.boolean() });
 
@@ -1248,7 +1249,7 @@ export class KinuPublicSession {
    *  device hub until one of these is answered, so a caller that needs the
    *  call's result must answer the card rather than out-wait it.
    */
-  async pendingConsents(): Promise<readonly Pick<PendingDeviceConsent, 'consentId' | 'deviceId'>[]> {
+  async pendingConsents(): Promise<readonly Pick<PendingDeviceConsent, 'consentId' | 'deviceId' | 'method' | 'command'>[]> {
     const rows = await this.boundary(
       `listPendingConsents on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('listPendingConsents', []),

@@ -75,6 +75,7 @@ const CUT: FrameBody = {
 const COUNTS = {
   agentConfig: 0, craftedTools: 0,
   sessionMessages: 0, conversationEntries: 1, conversationEntryParts: 0, contextMembers: 0,
+  lessons: 0, toolLessons: 0, facts: 0, appTables: 0, appRows: 0,
   files: 1,
 };
 

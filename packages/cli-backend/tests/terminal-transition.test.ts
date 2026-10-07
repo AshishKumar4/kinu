@@ -302,7 +302,7 @@ test('a managed context edit reaches the local request', async () => {
 describe('a killed CLI process is recovered by the next start', () => {
   /** Run the child to its kill point, and answer the marker it printed. */
   async function killAt(
-    dbPath: string, mode: 'before-settle' | 'inside-claim' | 'inside-title' | 'after-record',
+    dbPath: string, mode: 'before-settle' | 'inside-claim' | 'inside-title' | 'after-record' | 'inside-close',
   ): Promise<string> {
     const child = spawnTest(['bun', new URL('./terminal-death-probe.ts', import.meta.url).pathname, dbPath, mode],
     { cwd: new URL('../../..', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe' },);
@@ -395,6 +395,30 @@ describe('a killed CLI process is recovered by the next start', () => {
     expect(displayName(rt)).toBe('Parser Work');
     expect(completedTurns(rt)).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
+    await next.end();
+    db.close();
+  });
+
+  test('a death inside the close, once every effect ran, leaves the whole close to the next start', async () => {
+    const dbPath = scratchPath('terminal-death-inside-close', 'agent.db');
+    expect(await killAt(dbPath, 'inside-close')).toBe('KILLED inside-close');
+
+    const { db, rt } = openTerminalWorkspace(dbPath);
+    // Cut after the outer claim's disposition was written: the close is one write, so the kill took all of it back.
+    expect(completedTurns(rt)).toBe(1);
+    expect(displayName(rt)).toBe('Parser Work');
+    expect(stillOwed(rt)).toEqual([]);
+    expect(openTerminalClaims(rt)).toBe(1);
+
+    const { model, state } = scriptedModel('recovered');
+    const next = await restart({ rt, db, model, events: [] });
+
+    // The next start closes it: nothing runs twice, and nothing of the sequence is left behind.
+    expect(state.titleCalls).toBe(0);
+    expect(completedTurns(rt)).toBe(1);
+    expect(assistantRows(rt)).toBe(1);
+    expect(openTerminalClaims(rt)).toBe(0);
+    expect(rt.storage.sql`SELECT effect_name FROM terminal_effects`).toEqual([]);
     await next.end();
     db.close();
   });

@@ -170,9 +170,20 @@ export class TerminalTransitions {
     this.hold(transition, async () => {
       await run.reported;
       this.end(transition);
-
-      if (this.nextRetryAt() === null) await this.deps.settled();
+      await this.closed();
     });
+  }
+
+  /**
+   * Once a close has ended, the wake goes to what is still owed, or the host is told nothing is. Read only now: until
+   * the close left, its own sequence was deferred as in flight, so a wake armed meanwhile (a recovery pass re-arming
+   * after its replay) may have put it at the ceiling.
+   */
+  private async closed(): Promise<void> {
+    const next = this.nextRetryAt();
+
+    if (next === null) await this.deps.settled();
+    else await this.deps.scheduleRetry(next);
   }
 
   /** Whether a settled turn's detached effects are still closing here. */
@@ -202,41 +213,45 @@ export class TerminalTransitions {
     return this.ledger.nextRetryAt(this.inFlight);
   }
 
-  /** Records completion only once every effect is terminal; must never move into a `finally`. */
+  /** Records completion only once every effect is terminal; must never move into a `finally`. One write: a death
+   *  between the disposition and the prune would leave the claim settled, so nothing would ever prune its rows. */
   end(transition: TerminalTransition): void {
     this.leave(transition);
     const sequenceId = this.sequenceId(transition);
-    const owed = this.ledger.owed(sequenceId);
 
-    if (owed.length > 0) {
-      diagnostics.event('turn.terminal_effects_owed', {
-        sequence: sequenceId, owed: owed.map((row) => row.key).join(','),
-      });
+    this.deps.transaction(() => {
+      const owed = this.ledger.owed(sequenceId);
 
-      return;
-    }
+      if (owed.length > 0) {
+        diagnostics.event('turn.terminal_effects_owed', {
+          sequence: sequenceId, owed: owed.map((row) => row.key).join(','),
+        });
 
-    // Disposition first, release second.
-    if (settleToolEffect(this.deps.sql, this.deps.actor, this.key(transition), TERMINAL_TRANSITION_SETTLED)) {
-      diagnostics.event('turn.terminal_effects_settled', { sequence: sequenceId });
-    }
+        return;
+      }
 
-    // Tool claims are released only when no response of this turn can still be settling; open terminal rows
-    // are the witness.
-    const openResponses = this.deps.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM tool_effect_claims
-      WHERE actor_id = ${this.deps.actor.actorId} AND turn_id = ${transition.turnId}
-        AND normalized_call_id LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}
-        AND result_json IS NULL`[0]?.n ?? 0;
+      // Disposition first, release second.
+      if (settleToolEffect(this.deps.sql, this.deps.actor, this.key(transition), TERMINAL_TRANSITION_SETTLED)) {
+        diagnostics.event('turn.terminal_effects_settled', { sequence: sequenceId });
+      }
 
-    // A live turn may be mid-continuation with no terminal claim yet, so zero open claims is not enough.
-    if (openResponses === 0 && !this.deps.turnIsLive(transition.turnId)) {
-      void this.deps.sql`DELETE FROM tool_effect_claims
+      // Tool claims are released only when no response of this turn can still be settling; open terminal rows
+      // are the witness.
+      const openResponses = this.deps.sql<{ n: number }>`
+        SELECT COUNT(*) AS n FROM tool_effect_claims
         WHERE actor_id = ${this.deps.actor.actorId} AND turn_id = ${transition.turnId}
-          AND normalized_call_id NOT LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}`;
-    }
+          AND normalized_call_id LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}
+          AND result_json IS NULL`[0]?.n ?? 0;
 
-    this.ledger.prune(sequenceId);
+      // A live turn may be mid-continuation with no terminal claim yet, so zero open claims is not enough.
+      if (openResponses === 0 && !this.deps.turnIsLive(transition.turnId)) {
+        void this.deps.sql`DELETE FROM tool_effect_claims
+          WHERE actor_id = ${this.deps.actor.actorId} AND turn_id = ${transition.turnId}
+            AND normalized_call_id NOT LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}`;
+      }
+
+      this.ledger.prune(sequenceId);
+    });
   }
 
   /** Claimed and never settled; the message id comes back off the call-id suffix. Reads the unsettled claims alone
@@ -275,6 +290,7 @@ export class TerminalTransitions {
     this.hold(transition, async () => {
       await run.reported;
       this.end(transition);
+      await this.closed();
     });
   }
 

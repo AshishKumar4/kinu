@@ -3,8 +3,12 @@
  *
  * THE ASK. Every user-facing surface has a deployed row. The workspace's
  * settings page names it, writes its SOUL.md, picks how shell commands are
- * approved, tunes the advisor, and exports the whole workspace as the archive
- * `kinu import` reads. This row does each of those over the workspace's own
+ * approved, tunes the advisor, sizes its sandbox, and exports the whole
+ * workspace as the archive `kinu import` reads. The sandbox size starts at the
+ * owner's account default, which User settings writes through
+ * `/api/user/config/sandbox_size`; this row writes a size there, sees the
+ * workspace's Environment card read it, sizes this workspace's stopped box
+ * apart from it, and puts the account's own choice back. This row does each of those over the workspace's own
  * socket, with the RPCs the page calls, and reads every write back the way
  * the page hydrates it.
  *
@@ -23,6 +27,7 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
+import { webHeaders, type PublicWebIdentity } from '../../evals/src/session';
 
 const SUITE = 'First-run · workspace-settings';
 
@@ -45,6 +50,39 @@ const ModeSchema = v.object({ mode: v.picklist(['strict', 'allow_all', 'deny_all
 const EvolutionSchema = v.looseObject({ advisorEnabled: v.boolean() });
 
 const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(JsonValueSchema) });
+
+const SIZES = ['small', 'medium', 'large'] as const;
+
+const SizeSchema = v.picklist(SIZES);
+
+/** What the Environment card reads (`getSandboxSize`); a deployment with no sandbox answers null. */
+const SandboxSizeSchema = v.nullable(v.object({
+  account: v.nullable(SizeSchema), chosen: v.nullable(SizeSchema), size: SizeSchema, running: v.nullable(SizeSchema), startRefused: v.nullable(v.string()),
+}));
+
+const AccountSizeSchema = v.object({ key: v.literal('sandbox_size'), value: v.nullable(v.string()) });
+
+/** The account default as User settings reads and writes it; each answer is its status and its body. */
+function accountSize(origin: string, identity: PublicWebIdentity, signal: AbortSignal) {
+  const at = `${origin}/api/user/config/sandbox_size`;
+  const headers = webHeaders(identity);
+  const said = async (response: Response) => ({ status: response.status, body: (await response.text()).slice(0, 240) });
+
+  return {
+    read: async () => said(await fetch(at, { headers, signal })),
+    write: async (value: string) => said(await fetch(at, {
+      method: 'PUT', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ value }), signal,
+    })),
+  };
+}
+
+/** The account's stored size, or null when the read failed or holds none. */
+function storedSize(answer: { readonly status: number; readonly body: string }): string | null {
+  if (answer.status !== 200) return null;
+  const parsed = v.safeParse(AccountSizeSchema, JSON.parse(answer.body));
+
+  return parsed.success ? parsed.output.value : null;
+}
 
 /** The archive's records a cloud export carries the workspace in (`identity/archive.ts`): its rows, then its store's
  *  trees, each page of files followed by the chunks those files name. */
@@ -110,6 +148,44 @@ async function read<S extends v.GenericSchema>(
   return parsed !== null && parsed.success
     ? { value: parsed.output, detail: `${method} answered ${JSON.stringify(answer.ok ? answer.value : null).slice(0, 200)}` }
     : { value: null, detail: rpcDetail({ rpc: method, answer, refusal: 'refused', said: null }) };
+}
+
+/**
+ * The sandbox size: a size the table does not name is refused; one it names becomes the account default the workspace's
+ * Environment card reads; this workspace's stopped box takes a size of its own and gives it back; the account's own
+ * choice is put back. A choice never made reads as Medium, the default, so that is what goes back for it.
+ */
+async function sandboxSizeSubgoals(socket: PublicSocket, account: ReturnType<typeof accountSize>): Promise<EvalSubgoal[]> {
+  const prior = storedSize(await account.read());
+  const probe = prior === 'small' ? 'medium' : 'small';
+  const own = probe === 'small' ? 'medium' : 'small';
+  const refused = await account.write('huge');
+  const written = await account.write(probe);
+  const reread = await account.read();
+  const followed = await read(socket, SandboxSizeSchema, 'getSandboxSize', []);
+  const chosen = await read(socket, SandboxSizeSchema, 'resizeSandbox', [own]);
+  const cleared = await read(socket, SandboxSizeSchema, 'resizeSandbox', [null]);
+  const restored = await account.write(prior ?? 'medium');
+
+  return [
+    {
+      what: 'account-size-persisted',
+      reached: refused.status === 400 && written.status === 200 && storedSize(reread) === probe,
+      detail: `PUT huge answered ${String(refused.status)} ${refused.body}; PUT ${probe} answered ${String(written.status)}; then read ${reread.body}`,
+    },
+    {
+      what: 'workspace-reads-account-size',
+      reached: followed.value?.account === probe && followed.value.chosen === null && followed.value.size === probe,
+      detail: followed.detail,
+    },
+    {
+      what: 'stopped-box-sized-apart',
+      reached: chosen.value?.chosen === own && chosen.value.size === own && chosen.value.running === null
+        && cleared.value?.chosen === null && cleared.value.size === probe,
+      detail: `resizeSandbox(${own}): ${chosen.detail}; resizeSandbox(null): ${cleared.detail}`,
+    },
+    { what: 'account-size-restored', reached: restored.status === 200, detail: `PUT ${prior ?? 'medium'} answered ${String(restored.status)} ${restored.body}` },
+  ];
 }
 
 describe(SUITE, () => {
@@ -190,6 +266,7 @@ describe(SUITE, () => {
           }
 
           subgoals.push(archiveSubgoal(lines, soul, detail));
+          subgoals.push(...await sandboxSizeSubgoals(socket, accountSize(plan.origin, plan.identity, budget)));
 
           return subgoals;
         } finally {

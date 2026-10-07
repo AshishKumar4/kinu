@@ -1,6 +1,6 @@
 import { forkTransferFrames, nanoid, FORK_FRAME_BYTES } from '@kinu.run/core';
 import type { ForkFrame, ForkFrameReply } from '@kinu.run/core';
-import type { SqlExecutor, ForkFileSource, ActorHandle } from '@kinu.run/core';
+import type { SqlExecutor, ForkAppData, ForkFileSource, ActorHandle } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import type { WorkspaceEntry } from './workspaces';
 import { Cause, Effect } from 'effect';
@@ -45,6 +45,8 @@ export interface CloudForkSource {
   /** Where that actor's payload files live: the carried conversation references
    *  them by absolute path, and the frames carry them relative to it. */
   artifactDirectory: string;
+  /** The `db` tool's store as that actor reads it. */
+  appData: ForkAppData;
 }
 
 /**

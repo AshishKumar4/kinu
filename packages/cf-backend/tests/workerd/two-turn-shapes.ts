@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'close';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
@@ -370,6 +370,31 @@ export interface StrandedWork {
   readonly stranded: readonly OwedWorkRow[];
   readonly recovered: string;
   readonly after: readonly OwedWorkRow[];
+}
+
+/** A settled turn's terminal effects by name and status, in ledger order. */
+export interface EffectStatus {
+  readonly effectName: string;
+  readonly status: string;
+}
+
+/** A genesis turn answered and its close held open on the parked logo call, read just before the activation dies. */
+export interface HeldClose {
+  readonly workspace: string;
+  readonly parkedLogo: boolean;
+  readonly busy: readonly string[];
+  readonly effects: readonly EffectStatus[];
+  readonly answers: number;
+}
+
+/** What the fresh activation's recovery left of that close: the ledger, what the model was asked again, and the turn. */
+export interface HeldCloseRecovered {
+  readonly effects: readonly EffectStatus[];
+  readonly busy: readonly string[];
+  readonly logoCalls: number;
+  readonly turnCalls: number;
+  readonly answers: number;
+  readonly runEnds: ReadonlyArray<{ readonly runId: string; readonly reason: string }>;
 }
 
 /** What the alarm's recovery left after an eviction: each seeded event's lease, the reply's transition, and the

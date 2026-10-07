@@ -3,19 +3,36 @@
  * as DO RPC clones it into a `ForkTransferReceiver` over the target's writer, each answer passed back into the stream.
  */
 
+import type { Database } from 'bun:sqlite';
 import {
   createWorkspaceForkSink, FORK_FRAME_BYTES, ForkTargetWriter, ForkTransferReceiver, forkTransferFrames,
   type ForkFileSource, type ForkFrame, type ForkFrameReply, type ForkResult, type ForkWriteTarget,
 } from '../../src/index';
 import type { SqlExecutor } from '../../src/types/primitives';
 import { openWorkspaceMainActor } from '../../src/identity/workspace-actors';
+import { createAppDataStore, type AppDataStore } from '../../src/tools/db-codemode';
+import { RunEventRecorder } from '../../src/events/recorder';
 import { createTestWorkspace, type TestWorkspace } from '../helpers';
 import { SOURCE_ARTIFACTS } from './fork-conversation';
 
 /** The store a fork reads from or lands in. */
 interface ForkStore {
   readonly sql: SqlExecutor;
+  readonly db: Database;
   readonly forkSource: ForkFileSource;
+}
+
+/** A target's write options; the writer is handed the target's own `db` store. */
+export type ForkTargetOptions = Omit<ForkWriteTarget, 'appData'>;
+
+/** The `db` tool's store as `workspace`'s main actor uses it. */
+export function appDataOf(workspace: Pick<ForkStore, 'sql' | 'db'>): AppDataStore {
+  const actor = openWorkspaceMainActor(workspace.sql);
+
+  return createAppDataStore({
+    sql: workspace.sql, actor, transactionSync: (write) => workspace.db.transaction(write)(),
+    events: () => new RunEventRecorder(workspace.sql, actor), runId: () => 'run-fork',
+  });
 }
 
 interface Cut {
@@ -25,8 +42,12 @@ interface Cut {
   readonly frameBytes?: number;
 }
 
-export function receiverFor(tgt: TestWorkspace, target: ForkWriteTarget): ForkTransferReceiver {
-  return new ForkTransferReceiver(new ForkTargetWriter(tgt.sql, target), createWorkspaceForkSink(tgt.bundle));
+export function receiverFor(tgt: TestWorkspace, target: ForkTargetOptions): ForkTransferReceiver {
+  return new ForkTransferReceiver(writerFor(tgt, target), createWorkspaceForkSink(tgt.bundle));
+}
+
+export function writerFor(tgt: TestWorkspace, target: ForkTargetOptions): ForkTargetWriter {
+  return new ForkTargetWriter(tgt.sql, { ...target, appData: () => appDataOf(tgt).fork });
 }
 
 /** Run one transfer into `receiver`: every frame that crossed, and the fork the commit published (null if none). */
@@ -35,6 +56,7 @@ export async function transfer(
 ): Promise<{ frames: ForkFrame[]; result: ForkResult | null }> {
   const stream = forkTransferFrames({
     sql: src.sql, actor: openWorkspaceMainActor(src.sql), vfs: src.forkSource, untilMessageId: cut.untilMessageId,
+    appData: appDataOf(src).fork,
     artifactDirectory: cut.artifactDirectory ?? SOURCE_ARTIFACTS,
     transferId: cut.transferId ?? 'tx-1',
     frameBytes: cut.frameBytes ?? FORK_FRAME_BYTES,
@@ -135,6 +157,11 @@ export function reassemble(frames: readonly ForkFrame[]) {
     conversationEntries: frames.flatMap((frame) => (frame.kind === 'conversationEntries' ? frame.rows : [])),
     conversationEntryParts: frames.flatMap((frame) => (frame.kind === 'conversationEntryParts' ? frame.rows : [])),
     contextMembers: frames.flatMap((frame) => (frame.kind === 'contextMembers' ? frame.rows : [])),
+    lessons: frames.flatMap((frame) => (frame.kind === 'lessons' ? frame.rows : [])),
+    toolLessons: frames.flatMap((frame) => (frame.kind === 'toolLessons' ? frame.rows : [])),
+    facts: frames.flatMap((frame) => (frame.kind === 'facts' ? frame.rows : [])),
+    appTables: frames.flatMap((frame) => (frame.kind === 'appTables' ? frame.rows : [])),
+    appRows: frames.flatMap((frame) => (frame.kind === 'appRows' ? frame.rows : [])),
     files: decode(files),
     artifacts: decode(artifacts),
     directories,
@@ -160,7 +187,7 @@ export async function deliver(receiver: ForkTransferReceiver, frames: readonly F
 }
 
 /** Fork `src` at `cut.untilMessageId` into `tgt` over the production stream. */
-export async function streamFork(src: ForkStore, tgt: TestWorkspace, target: ForkWriteTarget, cut: Cut): Promise<ForkResult> {
+export async function streamFork(src: ForkStore, tgt: TestWorkspace, target: ForkTargetOptions, cut: Cut): Promise<ForkResult> {
   const { result } = await transfer(src, receiverFor(tgt, target), cut);
 
   if (result === null) throw new Error('the transfer never published');

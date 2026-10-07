@@ -5410,7 +5410,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           // Must be this object's own fenced handle (the one `forkWorkspace` checked against),
           // never a fresh handle or a name off the wire: rows are keyed per actor, so another would
           // snapshot a sibling.
-          source: { ...snapshot, actor: this.actorHandle() },
+          source: { ...snapshot, actor: this.actorHandle(), appData: this.stores.appData.fork },
           ownerUserId,
         });
       },
@@ -5431,6 +5431,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The target's own payload plane: carried payloads are re-rooted so the fork never reads its source.
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
+      appData: () => this.stores.appData.fork,
     });
 
     const receiver = new ForkTransferReceiver(
