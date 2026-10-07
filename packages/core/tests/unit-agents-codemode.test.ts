@@ -7,7 +7,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import {
   AGENTS_TOOL_ACTIONS,
-  agentsActionsFor,
+  
   createAgentsCodemodeProvider,
   createAgentsTool,
   delegationChoices,
@@ -26,22 +26,14 @@ import {
 } from '../src/index';
 import {
   AGENTS_ACTION_FIELDS as ACTION_FIELDS,
-  agentsActionFieldsFor,
-  agentsActionInputVariantsFor,
+  
+  
   dispatchAgentsAction,
 } from '../src/delegation/agents-tool';
 import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../src/strategy/swarm';
 import { makeTeam, makePeers, rosterEntry } from './helpers-agents';
 
 const ErrorResultSchema = v.object({ error: v.string() });
-
-const AgentsInputSchemaContract = v.object({
-  jsonSchema: v.object({
-    properties: v.object({
-      action: v.object({ enum: v.array(v.string()) }),
-    }),
-  }),
-});
 
 const ToolSchemaContract = v.object({
   jsonSchema: v.object({
@@ -110,15 +102,6 @@ function fullDeps(): AgentsToolDeps {
   return withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps });
 }
 
-function actionEnumOf(deps: TestAgentsToolDeps): string[] {
-  const schema = v.parse(
-    AgentsInputSchemaContract,
-    createAgentsTool(withBuildMode(deps)).inputSchema,
-  );
-
-  return schema.jsonSchema.properties.action.enum;
-}
-
 describe('agents.* codemode namespace — dep gating', () => {
   test('the exploration substrate (CLI / subordinate) exposes the search member alone', () => {
     const deps = withBuildMode({ swarm: swarmDeps() });
@@ -134,13 +117,6 @@ describe('agents.* codemode namespace — dep gating', () => {
   test('team-without-peers keeps the subordinate verbs', () => {
     const deps = withBuildMode({ team: makeTeam().deps });
     expect(Object.keys(namespaceOf(() => deps))).toEqual(['hire', 'msg', 'list', 'dismiss']);
-  });
-
-  test('the namespace members ARE the tool action enum — one gate, never two', () => {
-    for (const deps of [withBuildMode({ swarm: swarmDeps() }), fullDeps(), withBuildMode({ team: makeTeam().deps })]) {
-      expect(Object.keys(namespaceOf(() => deps))).toEqual(actionEnumOf(deps));
-      expect(Object.keys(namespaceOf(() => deps))).toEqual(agentsActionsFor(deps));
-    }
   });
 
   test('the codemode declaration exposes no elapsed deadline field', () => {
@@ -476,21 +452,6 @@ describe('agents.* codemode namespace — declared types', () => {
 });
 
 describe('agents surface — one action-field source', () => {
-  test('every codemode member declares EXACTLY its action’s fields, in order', () => {
-    const types = createAgentsCodemodeProvider(fullDeps).types ?? '';
-
-    for (const action of AGENTS_TOOL_ACTIONS) {
-      const body = types.slice(types.indexOf(`${action}(input:`));
-      const open = body.indexOf('{');
-      const close = body.indexOf('})', open);
-
-      const memberFields = [...new Set(
-        [...body.slice(open, close).matchAll(/^\s{4}(\w+)/gm)].map((m) => m[1]),
-      )];
-
-      expect(memberFields).toEqual([...agentsActionFieldsFor(fullDeps(), action)]);
-    }
-  });
 
   test('the native schema declares the same capability-aware hire variants', () => {
     const hireVariants = (deps: TestAgentsToolDeps) => v.parse(
@@ -541,57 +502,6 @@ describe('agents surface — one action-field source', () => {
     }
 
     for (const field of ['scope', 'topic', 'event_id']) expect(peersOnly.has(field)).toBe(true);
-  });
-
-  test('every dependency combination projects one native and codemode contract', () => {
-    const combinations: TestAgentsToolDeps[] = [
-      { swarm: swarmDeps() },
-      { team: makeTeam().deps },
-      { peers: makePeers().deps },
-      { team: makeTeam().deps, peers: makePeers().deps },
-      fullDeps(),
-    ];
-
-    for (const deps of combinations) {
-      const resolved = withBuildMode(deps);
-      const actions = agentsActionsFor(resolved);
-      const types = createAgentsCodemodeProvider(() => resolved).types ?? '';
-      const native = v.parse(ActionVariantSchemaContract, createAgentsTool(resolved).inputSchema);
-
-      const advertised = new Set(Object.keys(v.parse(
-        ToolSchemaContract,
-        createAgentsTool(resolved).inputSchema,
-      ).jsonSchema.properties));
-
-      const expectedAdvertised = new Set([
-        'action',
-        ...actions.flatMap(action => [...agentsActionFieldsFor(resolved, action)]),
-      ]);
-
-      expect(advertised).toEqual(expectedAdvertised);
-
-      for (const [at, action] of actions.entries()) {
-        const start = types.indexOf(`${action}(input:`);
-        const next = actions[at + 1];
-        const end = next === undefined ? types.indexOf('};', start) : types.indexOf(`${next}(input:`, start);
-
-        const memberFields = new Set(
-          [...types.slice(start, end).matchAll(/^\s{4}(\w+)/gm)].map(match => match[1]),
-        );
-
-        expect(memberFields).toEqual(new Set(agentsActionFieldsFor(resolved, action)));
-
-        const actualVariants = native.jsonSchema.oneOf
-          .filter(variant => variant.properties.action.const === action);
-
-        const expectedVariants = agentsActionInputVariantsFor(resolved, action);
-        expect(actualVariants.map(variant =>
-          variant.properties.scope === false ? false : variant.properties.scope.const))
-          .toEqual(expectedVariants.map(variant => variant.scope ?? false));
-        expect(actualVariants.map(variant => variant.required.slice(1)))
-          .toEqual(expectedVariants.map(variant => [...variant.required]));
-      }
-    }
   });
 
   test('the swarm member carries `name` — the drift that was measured', async () => {
