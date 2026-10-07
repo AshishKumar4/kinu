@@ -235,6 +235,43 @@ describe('which account a call spends', () => {
     expect(sent).toBe(2);
   });
 
+  test('a refusal whose account cannot be looked up fails in the lookup\'s words, and declares no wait on a guessed account', async () => {
+    const KEYED = 'blind.bearer';
+    let sent = 0;
+
+    const fetch = asFetchFunction(async () => {
+      sent += 1;
+
+      return new Response('limited', { status: 429, headers: { 'retry-after': '30' } });
+    });
+
+    const registry = createProviderRegistry();
+
+    registry.register({
+      id: 'blind', credentialKey: KEYED, isAvailable: () => true, listModels: () => [],
+      createModel: (modelId) => createChatModel({ kind: 'openai-compat', name: 'blind', baseURL: 'https://blind.invalid/v1', headers: {}, modelId, fetch }),
+    });
+
+    let readable = false;
+
+    const deps: ModelCallDeps = {
+      env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null,
+      hasCredential: async (key) => {
+        if (!readable) throw new Error('the credential store did not answer');
+
+        return key === KEYED;
+      },
+    };
+
+    const call = () => Promise.allSettled([generateText({ model: registry.resolve('blind/m', deps), prompt: 'hi', maxRetries: 0, providerOptions: callRetries(0) })]);
+    const [blind] = await call();
+
+    readable = true;
+    await call();
+
+    expect({ blind: blind.status === 'rejected' && String(blind.reason).includes('the credential store did not answer'), sent }).toEqual({ blind: true, sent: 2 });
+  });
+
   test('the spec\'s own account wins over the caller\'s choice', async () => {
     const { spend } = registryWith(['alpha.bearer@home', 'alpha.bearer@work'], () => 'work');
     expect(await spend('alpha@home/m')).toBe('alpha.bearer@home');

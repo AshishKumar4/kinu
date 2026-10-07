@@ -8,7 +8,7 @@ import type {
 import { parseModelSpec } from './types';
 import { StaleModelList } from './util';
 import { Effect, Result } from 'effect';
-import { diagnostics, KinuError, renderThrownChain, settle, settleSync, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
 
 export interface DynamicProviderSource {
@@ -278,17 +278,11 @@ export function createProviderRegistry(): ProviderRegistry {
           const key = provider.credentialKey;
 
           // A wait is the credential's: aliases of one stored login share it, as `credentialFor` resolves them. Asked
-          // per call, as authentication asks, so a default changed since this model resolved names the new account.
+          // per call, as authentication asks, so a default changed since this model resolved names the new account. A
+          // lookup that fails fails the call in its own words: a wait on a guessed account parks another's calls.
           const lane: LaneLookup | string = key === undefined ? `${route}|` : {
             route,
-            billed: async () => {
-              const [chosen] = await Promise.allSettled([chosenCredentialKey(deps, parsed.provider, key, parsed.account)]);
-
-              if (chosen.status === 'fulfilled') return `${route}|${chosen.value ?? key}`;
-              diagnostics.failure('provider.lane_lookup_failed', toKinuError({ doing: `finding the ${parsed.provider} account a wait belongs to`, cause: chosen.reason, otherwise: 'unavailable' }));
-
-              return `${route}|${key}`;
-            },
+            billed: async () => `${route}|${await chosenCredentialKey(deps, parsed.provider, key, parsed.account) ?? key}`,
           };
 
           return withModelStack(provider.createModel(parsed.modelId, own), {
