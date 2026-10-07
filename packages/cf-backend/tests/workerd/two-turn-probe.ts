@@ -294,8 +294,16 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return { answered: await call(ids.answered), fromUser: await call(ids.fromUser), asWorkspace: await call(ids.asWorkspace) };
   }
 
+  /** Set by a cut: this activation is to die at it, so it arms no retry of its own, as a dead isolate arms none. */
+  private dying = false;
+
+  protected override scheduleTerminalRetry(atMs: number, pace?: Parameters<ProductionOrchestrator['scheduleTerminalRetry']>[1]): Promise<void> {
+    return this.dying ? Promise.resolve() : super.scheduleTerminalRetry(atMs, pace);
+  }
+
   /** The isolate stops once at `name`, `phase` its side effect, as an eviction would stop it there. */
   async cutTerminal(name: TerminalEffectName, phase: TerminalEffectPhase): Promise<void> {
+    this.dying = true;
     this.terminalEffectFault = (atPhase, atName, atScope) => {
       if (atName !== name || atPhase !== phase) return;
       this.terminalEffectFault = null;
