@@ -212,7 +212,8 @@ export async function diskContract(kind: DiskContract, input: {
     case 'parallel-mounts': {
       await sh(`echo a >${WD}/a`); await save();
 
-      for (const file of ['b', 'c', 'd']) { await sh(`echo ${file} >${WD}/${file}`); await save(); }
+      // Seven saves over the base are three deltas (D77): four layers to mount.
+      for (const file of ['b', 'c', 'd', 'e', 'f', 'g', 'h']) { await sh(`echo ${file} >${WD}/${file}`); await save(); }
 
       const expected = await sh(TREE);
       await reset();
