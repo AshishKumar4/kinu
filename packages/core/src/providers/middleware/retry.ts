@@ -441,13 +441,7 @@ class SilenceBound {
 
   constructor(private readonly provider: string, private readonly caller: AbortSignal | undefined, silenced: () => Promise<void>) {
     this.silenced = silenced;
-    let claimed = false;
-
-    this.attempt = {
-      signal: this.cut.signal,
-      heard: () => { this.hear(); },
-      claim: () => !claimed && (claimed = true),
-    };
+    this.attempt = { signal: this.cut.signal, heard: () => { this.hear(); } };
     this.forward = () => { this.cut.abort(caller?.reason); };
 
     if (caller?.aborted === true) this.forward();

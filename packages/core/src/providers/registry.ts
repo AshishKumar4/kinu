@@ -1,5 +1,4 @@
 // ProviderRegistry: resolves "<provider>/<modelId>" synchronously; static providers win.
-import { heardFetch } from './middleware/attempt';
 import type { LaneLookup } from './middleware/retry';
 import { withModelStack } from './wire-model';
 import type { LanguageModel } from 'ai';
@@ -274,8 +273,7 @@ export function createProviderRegistry(): ProviderRegistry {
 
       return settleSync(provider
         ? Effect.sync(() => {
-          // The transport reports its bytes to the attempt in flight, so the stack's silence bound hears keepalives.
-          const own = { ...accountDeps(deps, parsed.provider, parsed.account), fetch: heardFetch(deps.fetch ?? fetch) };
+          const own = accountDeps(deps, parsed.provider, parsed.account);
           const route = provider.laneOf?.(parsed.modelId) ?? parsed.provider;
           const key = provider.credentialKey;
           let billed: Promise<string> | undefined;

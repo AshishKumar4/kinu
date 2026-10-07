@@ -389,3 +389,46 @@ describe('an attempt the provider refuses before answering', () => {
     expect({ failed: errors.length, timers: jest.getTimerCount() }).toEqual({ failed: 1, timers: 0 });
   });
 });
+
+describe('a side request inside the attempt', () => {
+  test('does not take the inference stream\'s keepalives', async () => {
+    jest.useFakeTimers();
+    const body = scriptedStream();
+
+    // A transport that renews something first, through the same `deps.fetch`, as a login refresh or a catalog read does.
+    const fetch = asFetchFunction(async (input) => {
+      const url = input instanceof Request ? input.url : input.toString();
+
+      return url.includes('side.test') ? Response.json({ renewed: true }) : new Response(body.body, { headers: { 'content-type': 'text/event-stream' } });
+    });
+
+    const registry = createProviderRegistry();
+
+    registry.register({
+      id: 'side', isAvailable: () => true, listModels: () => [],
+      createModel: (modelId, deps) => createChatModel({
+        kind: 'openai-compat', name: 'side', baseURL: 'https://stub.invalid/v1', headers: {}, modelId,
+        fetch: asFetchFunction(async (input, init) => {
+          await (deps.fetch ?? fetch)('https://side.test/refresh');
+
+          return await (deps.fetch ?? fetch)(input, init);
+        }),
+      }),
+    });
+
+    const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false, fetch };
+    const result = streamText({ model: registry.resolve('side/m', deps), prompt: 'go', maxRetries: 0 });
+
+    for (let comment = 0; comment < 3; comment++) {
+      const controller = await body.next();
+
+      await advance(IDLE_MS - 1);
+      controller.enqueue(encoder.encode(': OPENROUTER PROCESSING\n\n'));
+    }
+
+    for (const chunk of [delta('thought it through'), ...finish]) (await body.next()).enqueue(chunk);
+    (await body.next()).close();
+
+    expect(await result.text).toBe('thought it through');
+  });
+});
