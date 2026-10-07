@@ -121,7 +121,9 @@ export default defineConfig(({ command }) => ({
 
           return {
             vars: jwtSecret === undefined ? vars : { ...vars, JWT_SECRET: jwtSecret },
-            ...(offline && { dev: { ...worker.dev, enable_containers: false } }),
+            // Offline, Workers AI and Vectorize are unbound rather than left to hang on a remote that is never reached:
+            // memory falls back to its full-text index (runtime.ts), and the turns run on the scripted model.
+            ...(offline && { dev: { ...worker.dev, enable_containers: false }, ai: undefined, vectorize: [] }),
           };
         }
         : undefined,
