@@ -63,8 +63,100 @@ const MAIN_MODULE = 'runner.js';
 
 const APPLICATION_MODULE = 'application.js';
 
-/** The generated `runner.js`; exported because its contract (a re-created instance starts before it serves) is asserted on the text. */
-export function slateRunnerSource(assets: readonly { readonly path: string; readonly contents: string }[], shell: string | undefined): string {
+const CLASS_BOOT: readonly string[] = [
+  '    // The authored module is imported here, not at the top: a static import',
+  '    // evaluates during worker boot, where a throw in authored source (say a',
+  '    // missing SlateObject import) surfaces as an io fault instead of the',
+  '    // bad_input refusal startProcess is built to return.',
+  '    let slateModule;',
+  '    try {',
+  '      slateModule = await import("./application.js");',
+  '    }',
+  '    catch (cause) {',
+  '      return { ok: false, error: "package.json main threw at evaluation: " + errorText(cause) };',
+  '    }',
+  '    // Either export shape satisfies the contract: the named Slate the skill',
+  '    // documents, or the class carried as the module\'s default export.',
+  '    const Slate = typeof slateModule.Slate === "function" && slateModule.Slate.prototype?.[Symbol.for("kinu.slate")] === true',
+  '      ? slateModule.Slate',
+  '      : slateModule.default;',
+  '    // The contract check is authored-input refusal, not a fault: it crosses',
+  '    // as data so the promise never logs as an uncaught rejection.',
+  '    if (typeof Slate !== "function" || Slate.prototype?.[Symbol.for("kinu.slate")] !== true) {',
+  '      const found = Object.keys(slateModule)',
+  '        .map((name) => name + ": " + describeExport(slateModule[name]))',
+  '        .join(", ");',
+  '      return { ok: false, error: "package.json main must export class Slate extends SlateObject from kinu:slate (the Slate export or the default export); found " + (found === "" ? "no exports at all" : found) };',
+  '    }',
+  // `__storage` and `__host` are reserved; string env values (`PORT`, `NIMBUS_APP`) are not bindings.
+  '    const env = {};',
+  '    for (const [name, stub] of Object.entries(this.env)) {',
+  '      if (name === "__storage" || name === "__host" || typeof stub !== "object") continue;',
+  '      env[name] = bindingProxy(name, stub, true);',
+  '    }',
+  '    const slate = new Slate({',
+  '      storage: this.ctx.storage,',
+  '      kv: storageProxy(this.env.__storage),',
+  '      waitUntil: (work) => this.ctx.waitUntil(work),',
+  '    }, Object.freeze(env));',
+  '    // The callable surface: prototype methods between the instance and',
+  '    // SlateObject (exclusive) whose name passes the host\'s own method rule.',
+  '    // Own properties never appear: a closure assigned in the constructor',
+  '    // stays private, and `fetch` serves HTTP, not RPC.',
+  '    const allowed = new Set();',
+  '    for (let proto = Object.getPrototypeOf(slate); proto !== null && !Object.hasOwn(proto, Symbol.for("kinu.slate")); proto = Object.getPrototypeOf(proto)) {',
+  '      for (const name of Object.getOwnPropertyNames(proto)) {',
+  '        const descriptor = Object.getOwnPropertyDescriptor(proto, name);',
+  '        if (name === "fetch" || !METHOD_RE.test(name) || name === "constructor" || name.startsWith("_") || typeof descriptor?.value !== "function") continue;',
+  '        allowed.add(name);',
+  '      }',
+  '    }',
+  '    this.#slate = slate;',
+  '    this.#forwarder = new Proxy(new RpcTarget(), {',
+  '      get(target, member) {',
+  '        // Symbols and the promise surface pass through to the RpcTarget so',
+  '        // capnweb introspection never sees a throwing function.',
+  '        if (typeof member !== "string" || member === "then" || member === "toJSON") return Reflect.get(target, member);',
+  '        if (!allowed.has(member)) {',
+  '          // A member the slate never published refuses at call time, not',
+  '          // at lookup: capnweb dispatches on the value.',
+  '          if (!(member in target)) return () => { throw new Error("Slate has no method " + member); };',
+  '          return Reflect.get(target, member);',
+  '        }',
+  '        // One hop keeps the invocation of the REQUEST that carries it;',
+  '        // outside one (the browser socket) the root lineage applies.',
+  '        return (...args) => invocations.run(invocations.getStore() ?? null, () => slate[member](...args));',
+  '      },',
+  '    });',
+  '    return { ok: true, methods: [...allowed] };',
+];
+
+/** No class: the socket serves each binding under its own name, and no method is published for an actor to call. */
+const BINDINGS_BOOT: readonly string[] = [
+  '    const bindings = {};',
+  '    for (const [name, stub] of Object.entries(this.env)) {',
+  '      if (name === "__storage" || name === "__host" || typeof stub !== "object") continue;',
+  '      bindings[name] = bindingTarget(bindingProxy(name, stub, true));',
+  '    }',
+  '    this.#forwarder = new Proxy(new RpcTarget(), {',
+  '      get(target, name) {',
+  '        if (typeof name !== "string" || name === "then" || name === "toJSON") return Reflect.get(target, name);',
+  '        if (!Object.hasOwn(bindings, name)) return () => { throw new Error("Slate has no binding " + name); };',
+  '        return bindings[name];',
+  '      },',
+  '    });',
+  // Nothing of its own answers HTTP: a path no asset serves is the runner's `no-fetch`.
+  '    this.#slate = {};',
+  '    return { ok: true, methods: [] };',
+];
+
+/**
+ * The generated `runner.js`; exported because its contract (a re-created instance starts before it serves) is asserted on the text.
+ * With no class of its own, a slate is served its bindings on the socket where a class's methods would be.
+ */
+export function slateRunnerSource(
+  assets: readonly { readonly path: string; readonly contents: string }[], shell: string | undefined, served: 'class' | 'bindings',
+): string {
   const raw: Record<string, { body: string; immutable: boolean }> = {};
 
   for (const asset of assets) raw[asset.path] = { body: asset.contents, immutable: false };
@@ -123,6 +215,15 @@ export function slateRunnerSource(assets: readonly { readonly path: string; read
     '    },',
     '  });',
     '}',
+    // A binding as the page's socket sees it: each member call runs the binding under the socket's invocation.
+    'function bindingTarget(proxy) {',
+    '  return new Proxy(new RpcTarget(), {',
+    '    get(target, member) {',
+    '      if (typeof member !== "string" || member === "then" || member === "toJSON") return Reflect.get(target, member);',
+    '      return (...args) => proxy[member](...args);',
+    '    },',
+    '  });',
+    '}',
     // `__storage` needs no lineage, so it always passes the root invocation.
     'function storageProxy(stub) {',
     '  return Object.freeze({',
@@ -168,71 +269,7 @@ export function slateRunnerSource(assets: readonly { readonly path: string; read
     '    return this.#started;',
     '  }',
     '  async #bootProcess() {',
-    '    // The authored module is imported here, not at the top: a static import',
-    '    // evaluates during worker boot, where a throw in authored source (say a',
-    '    // missing SlateObject import) surfaces as an io fault instead of the',
-    '    // bad_input refusal startProcess is built to return.',
-    '    let slateModule;',
-    '    try {',
-    '      slateModule = await import("./application.js");',
-    '    }',
-    '    catch (cause) {',
-    '      return { ok: false, error: "package.json main threw at evaluation: " + errorText(cause) };',
-    '    }',
-    '    // Either export shape satisfies the contract: the named Slate the skill',
-    '    // documents, or the class carried as the module\'s default export.',
-    '    const Slate = typeof slateModule.Slate === "function" && slateModule.Slate.prototype?.[Symbol.for("kinu.slate")] === true',
-    '      ? slateModule.Slate',
-    '      : slateModule.default;',
-    '    // The contract check is authored-input refusal, not a fault: it crosses',
-    '    // as data so the promise never logs as an uncaught rejection.',
-    '    if (typeof Slate !== "function" || Slate.prototype?.[Symbol.for("kinu.slate")] !== true) {',
-    '      const found = Object.keys(slateModule)',
-    '        .map((name) => name + ": " + describeExport(slateModule[name]))',
-    '        .join(", ");',
-    '      return { ok: false, error: "package.json main must export class Slate extends SlateObject from kinu:slate (the Slate export or the default export); found " + (found === "" ? "no exports at all" : found) };',
-    '    }',
-    // `__storage` and `__host` are reserved; string env values (`PORT`, `NIMBUS_APP`) are not bindings.
-    '    const env = {};',
-    '    for (const [name, stub] of Object.entries(this.env)) {',
-    '      if (name === "__storage" || name === "__host" || typeof stub !== "object") continue;',
-    '      env[name] = bindingProxy(name, stub, true);',
-    '    }',
-    '    const slate = new Slate({',
-    '      storage: this.ctx.storage,',
-    '      kv: storageProxy(this.env.__storage),',
-    '      waitUntil: (work) => this.ctx.waitUntil(work),',
-    '    }, Object.freeze(env));',
-    '    // The callable surface: prototype methods between the instance and',
-    '    // SlateObject (exclusive) whose name passes the host\'s own method rule.',
-    '    // Own properties never appear: a closure assigned in the constructor',
-    '    // stays private, and `fetch` serves HTTP, not RPC.',
-    '    const allowed = new Set();',
-    '    for (let proto = Object.getPrototypeOf(slate); proto !== null && !Object.hasOwn(proto, Symbol.for("kinu.slate")); proto = Object.getPrototypeOf(proto)) {',
-    '      for (const name of Object.getOwnPropertyNames(proto)) {',
-    '        const descriptor = Object.getOwnPropertyDescriptor(proto, name);',
-    '        if (name === "fetch" || !METHOD_RE.test(name) || name === "constructor" || name.startsWith("_") || typeof descriptor?.value !== "function") continue;',
-    '        allowed.add(name);',
-    '      }',
-    '    }',
-    '    this.#slate = slate;',
-    '    this.#forwarder = new Proxy(new RpcTarget(), {',
-    '      get(target, member) {',
-    '        // Symbols and the promise surface pass through to the RpcTarget so',
-    '        // capnweb introspection never sees a throwing function.',
-    '        if (typeof member !== "string" || member === "then" || member === "toJSON") return Reflect.get(target, member);',
-    '        if (!allowed.has(member)) {',
-    '          // A member the slate never published refuses at call time, not',
-    '          // at lookup: capnweb dispatches on the value.',
-    '          if (!(member in target)) return () => { throw new Error("Slate has no method " + member); };',
-    '          return Reflect.get(target, member);',
-    '        }',
-    '        // One hop keeps the invocation of the REQUEST that carries it;',
-    '        // outside one (the browser socket) the root lineage applies.',
-    '        return (...args) => invocations.run(invocations.getStore() ?? null, () => slate[member](...args));',
-    '      },',
-    '    });',
-    '    return { ok: true, methods: [...allowed] };',
+    ...(served === 'class' ? CLASS_BOOT : BINDINGS_BOOT),
     '  }',
     '  async fetch(request) { return this.handleHttpRequest(request); }',
     '  async handleHttpRequest(request) {',
@@ -287,6 +324,39 @@ export function slateRunnerSource(assets: readonly { readonly path: string; read
   ].join('\n');
 }
 
+/** Where a page's bare specifiers resolve: every module the runner serves under `/__kinu/`. */
+const IMPORT_MAP = `<script type="importmap">${JSON.stringify({ imports: {
+  'react': '/__kinu/react.js',
+  'react-dom/client': '/__kinu/react.js',
+  'react/jsx-runtime': '/__kinu/react.js',
+  'capnweb': '/__kinu/capnweb.js',
+  'kinu:slate': '/__kinu/slate.js',
+} })}</script>`;
+
+/** A slate with no class still runs as a module whose import nothing reads. */
+const NO_APPLICATION = 'export {};\n';
+
+function isPageEntry(browser: string): boolean {
+  return browser.endsWith('.html');
+}
+
+const PAGE_PREAMBLE = `${IMPORT_MAP}<script type="module">import { fit } from "kinu:slate"; fit();</script>`;
+
+/** The page as written, opened with the import map and kinu:slate's `fit`, so it takes the host's theme and height. A
+ *  fragment with no `<html>` is opened in front. */
+async function slatePage(html: string): Promise<string> {
+  let opened = false;
+
+  const page = await new HTMLRewriter().on('html', {
+    element(element) {
+      opened = true;
+      element.prepend(PAGE_PREAMBLE, { html: true });
+    },
+  }).transform(new Response(html)).text();
+
+  return opened ? page : PAGE_PREAMBLE + page;
+}
+
 function escapeHtml(text: string): string {
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
@@ -304,17 +374,7 @@ function slateShell(input: { readonly title: string; readonly assets: readonly {
     '  <meta charset="utf-8">',
     '  <meta name="viewport" content="width=device-width, initial-scale=1">',
     `  <title>${escapeHtml(input.title)}</title>`,
-    '  <script type="importmap">',
-    '    {',
-    '      "imports": {',
-    '        "react": "/__kinu/react.js",',
-    '        "react-dom/client": "/__kinu/react.js",',
-    '        "react/jsx-runtime": "/__kinu/react.js",',
-    '        "capnweb": "/__kinu/capnweb.js",',
-    '        "kinu:slate": "/__kinu/slate.js"',
-    '      }',
-    '    }',
-    '  </script>',
+    `  ${IMPORT_MAP}`,
     styles,
     '</head>',
     '<body>',
@@ -379,6 +439,71 @@ function rewriteModuleSpecifiers(source: string): string {
     .replace(DYNAMIC_SPECIFIER, (_match, quote: string, specifier: string) => `import(${quote}${mappedModulePath(specifier)}${quote})`);
 }
 
+/** Where a boot compiles: its bundler, the authored root, and the runtime directory its generated entries go in. */
+interface SlateBuild {
+  readonly bundler: EsbuildService;
+  readonly root: string;
+  readonly entries: string;
+  readonly provision: (name: string, contents: string) => void;
+}
+
+const COMPILED_JSX = JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } });
+
+/** The class's module, compiled; a slate with no class runs an empty one. */
+function serverModule(build: SlateBuild, project: SlateProject): Effect.Effect<string, KinuError> {
+  return Effect.gen(function* () {
+    const { main, browser } = project;
+
+    if (main === undefined) return NO_APPLICATION;
+
+    // Re-export only the class so the file's client half never reaches the server bundle.
+    if (browser === main) build.provision('server.js', `export { Slate } from "${build.root}/${main}";\n`);
+
+    const server = yield* compileSlate(build.bundler, browser === main ? `${build.entries}/server.js` : `${build.root}/${main}`, {
+      bundle: true, format: 'esm', platform: 'neutral', outfile: '/application.js',
+      // Not `alias`: the nimbus-vfs resolver sees a specifier before esbuild applies it.
+      external: ['cloudflare:*', 'node:*', 'capnweb', 'kinu:slate', 'react', 'react-dom/client', 'react/jsx-runtime'],
+      tsconfigRaw: COMPILED_JSX,
+    });
+
+    if (server.errors.length !== 0) return yield* new KinuError('bad_input', server.errors.map((error) => error.text).join('\n'));
+    const compiled = server.outputFiles.find((file) => file.path === '/application.js');
+
+    if (compiled === undefined) return yield* new KinuError('io', 'Slate compiler did not produce the server module');
+
+    return rewriteModuleSpecifiers(compiled.contents);
+  });
+}
+
+interface BrowserSurface {
+  readonly assets: readonly { readonly path: string; readonly contents: string }[];
+  readonly shell: string | undefined;
+}
+
+/** What the page is served: an HTML entry as written, needing no build; a component compiled into the shell; or none. */
+function browserSurface(build: SlateBuild, project: SlateProject, read: (entry: string) => string): Effect.Effect<BrowserSurface, KinuError> {
+  return Effect.gen(function* () {
+    const { browser } = project;
+
+    if (browser === undefined) return { assets: [], shell: undefined };
+
+    if (isPageEntry(browser)) return { assets: [], shell: yield* Effect.promise(() => slatePage(read(browser))) };
+    const clientEntry = `${build.entries}/client.js`;
+
+    build.provision('client.js', `import App from "${build.root}/${browser}";\nimport { mount } from "kinu:slate";\nmount(App);\nexport default App;\n`);
+
+    const client = yield* compileSlate(build.bundler, clientEntry, {
+      bundle: true, format: 'esm', platform: 'browser', outfile: '/__kinu/client.js',
+      external: ['react', 'react-dom/client', 'react/jsx-runtime', 'capnweb', 'kinu:slate'],
+      tsconfigRaw: COMPILED_JSX,
+    });
+
+    if (client.errors.length !== 0) return yield* new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
+
+    return { assets: client.outputFiles, shell: slateShell({ title: project.slate.title ?? project.name ?? 'slate', assets: client.outputFiles }) };
+  });
+}
+
 export class ResidentSlateProcesses {
   private readonly bundlers = new Map<string, EsbuildService>();
   /** Image digests per pid that a sweep must keep; a manager-driven restart reads these paths again. */
@@ -391,11 +516,6 @@ export class ResidentSlateProcesses {
       const session = yield* Effect.promise(async () => this.deps.session());
       const main = input.project.main;
       const browser = input.project.browser;
-
-      if (main === undefined) {
-        return yield* new KinuError('bad_input', 'package.json main must name the module that exports class Slate extends SlateObject from kinu:slate');
-      }
-
       const authored = session.vfs.as(input.cred);
 
       for (const [field, entry] of [['main', main], ['browser', browser]] as const) {
@@ -430,50 +550,13 @@ export class ResidentSlateProcesses {
         }
       };
 
-      let serverEntry = `${input.root}/${main}`;
-
-      if (browser === main) {
-        // Re-export only the class so the file's client half never reaches the server bundle.
-        serverEntry = `${entriesDir}/server.js`;
-        provision('server.js', `export { Slate } from "${input.root}/${main}";\n`);
-      }
-
-      let clientEntry: string | undefined;
-
-      if (browser !== undefined) {
-        clientEntry = `${entriesDir}/client.js`;
-        provision('client.js', `import App from "${input.root}/${browser}";\nimport { mount } from "kinu:slate";\nmount(App);\nexport default App;\n`);
-      }
-
-      const server = yield* compileSlate(bundler, serverEntry, {
-        bundle: true, format: 'esm', platform: 'neutral', outfile: '/application.js',
-        // Not `alias`: the nimbus-vfs resolver sees a specifier before esbuild applies it.
-        external: ['cloudflare:*', 'node:*', 'capnweb', 'kinu:slate', 'react', 'react-dom/client', 'react/jsx-runtime'],
-        tsconfigRaw: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } }),
-      });
-
-      if (server.errors.length !== 0) return yield* new KinuError('bad_input', server.errors.map((error) => error.text).join('\n'));
-      const application = server.outputFiles.find((file) => file.path === '/application.js');
-
-      if (application === undefined) return yield* new KinuError('io', 'Slate compiler did not produce the server module');
-      let assets: typeof server.outputFiles = [];
-      let shell: string | undefined;
-
-      if (clientEntry !== undefined) {
-        const client = yield* compileSlate(bundler, clientEntry, {
-          bundle: true, format: 'esm', platform: 'browser', outfile: '/__kinu/client.js',
-          external: ['react', 'react-dom/client', 'react/jsx-runtime', 'capnweb', 'kinu:slate'],
-          tsconfigRaw: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } }),
-        });
-
-        if (client.errors.length !== 0) return yield* new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
-        assets = client.outputFiles;
-        shell = slateShell({ title: input.project.slate.title ?? input.project.name ?? 'slate', assets });
-      }
+      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision };
+      const application = yield* serverModule(build, input.project);
+      const { assets, shell } = yield* browserSurface(build, input.project, (entry) => authored.readFileString(`${input.root}/${entry}`));
 
       const modules = {
-        [MAIN_MODULE]: slateRunnerSource(assets, shell),
-        [APPLICATION_MODULE]: rewriteModuleSpecifiers(application.contents),
+        [MAIN_MODULE]: slateRunnerSource(assets, shell, main === undefined ? 'bindings' : 'class'),
+        [APPLICATION_MODULE]: application,
         'capnweb.js': slateVendor.capnwebWorkers,
         'server.js': SLATE_SERVER_MODULE,
         'react-stub.js': slateVendor.reactStub,

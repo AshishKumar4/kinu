@@ -248,7 +248,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   /** The minted id retires when the socket closes: session lineage never outlives its call. */
-  async socket(method: string, args: JsonValue[] = []): Promise<{ ok?: boolean; value?: string; error?: string }> {
+  /** `binding` names the binding a slate with no class serves under that name. */
+  async socket(method: string, args: JsonValue[] = [], binding?: string): Promise<{ ok?: boolean; value?: string; error?: string }> {
     const process = this.started();
     const invocation = crypto.randomUUID();
     SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain: [] });
@@ -264,10 +265,11 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
       if (socket === null || socket === undefined) return { error: `upgrade refused: ${response.status}` };
       socket.accept();
-      const stub = newWebSocketRpcSession<Record<string, (...input: JsonValue[]) => Promise<JsonValue>>>(socket);
 
       try {
-        const raw = await stub[method](...args);
+        const raw = binding === undefined
+          ? await newWebSocketRpcSession<Record<string, (...input: JsonValue[]) => Promise<JsonValue>>>(socket)[method](...args)
+          : await newWebSocketRpcSession<Record<string, Record<string, (...input: JsonValue[]) => Promise<JsonValue>>>>(socket)[binding][method](...args);
 
         return { ok: true, value: v.is(v.string(), raw) ? raw : JSON.stringify(raw) };
       } catch (cause) { return { ok: false, error: renderThrownChain({ cause }) }; }

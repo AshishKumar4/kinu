@@ -71,10 +71,6 @@ export function slateProject(input: PackageDocument): Effect.Effect<SlateProject
   if (!parsed.success) return Effect.fail(new KinuError('bad_input', `package.json: ${renderIssues(parsed.issues)}`));
   const project = parsed.output;
 
-  if (project.slate.runtime === 'worker' && project.main === undefined) {
-    return Effect.fail(new KinuError('bad_input', 'package.json main must name the module that exports class Slate extends SlateObject from kinu:slate'));
-  }
-
   if (project.slate.runtime === 'node') {
     if (project.slate.port === undefined) return Effect.fail(new KinuError('bad_input', 'package.json slate.port must name the server port'));
 
