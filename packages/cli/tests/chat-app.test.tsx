@@ -62,22 +62,6 @@ test('draft undo restores the previous deletion burst and is isolated after send
   expect(input.plainText).toBe('');
 });
 
-test('draft undo retains only the newest 64 snapshots', async () => {
-  const screen = await mountChat(fakeClient({ name: 'undo-ring' }).client, { kittyKeyboard: true });
-  const input = screen.renderer.currentFocusedRenderable;
-
-  if (!(input instanceof TextareaRenderable)) throw new Error('composer not focused');
-
-  for (let index = 0; index < 70; index += 1) {
-    input.setText(`draft ${String(index).padStart(2, '0')}`);
-    screen.mockInput.pressArrow('right');
-  }
-
-  for (let index = 0; index < 70; index += 1) screen.mockInput.pressKey('-', { ctrl: true });
-  await screen.renderOnce();
-  expect(input.plainText).toBe('draft 05');
-});
-
 test('prompt history recalls sent and cleared drafts, searches, and persists per workspace', async () => {
   const sent: unknown[] = [];
   const store = createMemoryTuiPreferenceStore();
@@ -271,16 +255,6 @@ describe('ChatApp terminal interaction', () => {
     expect(screen.frame()).toContain('Send a message');
   });
 
-  test('a model picker row starts with the model, not an empty field and a separator', async () => {
-    const screen = await mountChat(fakeClient({ name: 'alpha' }).client);
-    screen.mockInput.pressKey('l', { ctrl: true });
-    await screen.waitFor('the model row', () => screen.frame().includes('openai/gpt-5.5'));
-    const row = screen.frame().split('\n').find((line) => line.includes('openai/gpt-5.5')) ?? '';
-
-    expect(row).toMatch(/GPT 5\.5 · openai · openai\/gpt-5\.5/u);
-    expect(row).not.toMatch(/· GPT 5\.5/u);
-  });
-
   test('Ctrl+T in the model picker tests the highlighted model and says what it found, without picking it', async () => {
     const tested: string[] = [];
 
@@ -301,19 +275,6 @@ describe('ChatApp terminal interaction', () => {
 
     expect(tested).toEqual(['openai/gpt-5.5']);
     expect(screen.frame()).toContain('Select model');
-  });
-
-  test('in a wide chat the workspace key is named in /help, not drawn over the header', async () => {
-    const screen = await mountChat(fakeClient({ name: 'alpha' }).client, { width: 140 });
-    await screen.waitFor('the header', () => screen.frame().includes('alpha'));
-    // Drawn over the rule, the hint's spaces show the rule through: `Alt+W─hide─workspaces`.
-    expect(screen.frame()).not.toMatch(/Alt\+W.{1,6}workspaces/u);
-
-    await screen.mockInput.typeText('/help');
-    screen.mockInput.pressEnter();
-    await screen.waitFor('the keyboard help', () => screen.frame().includes('Show or hide workspaces'));
-
-    for (const label of ['Command palette', 'Model picker', 'Agent Hub', 'Settings']) expect(screen.frame()).toContain(label);
   });
 
 

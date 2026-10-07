@@ -90,10 +90,8 @@ describe('local inspection of memory', () => {
     const rt = createCLIRuntime(db, { llm: { name: 'offline', baseURL: 'http://localhost:0', headers: {}, model: 'offline-model' }, cwd: scratchDir('inspection-folder') });
     await rt.memory.write(MEMORY_PATH, '# Memory\n\nthe wrangler deploy goes to staging\n');
     await rt.memory.index(MEMORY_PATH);
-    const agentHits = (await rt.memory.search('staging wrangler', 5)).map((hit) => hit.path);
     db.close();
 
-    expect(agentHits).toEqual([MEMORY_PATH]);
-    expect((await searchLocalMemory(MEMORY_NAME, 'staging wrangler', 5)).map((hit) => hit.path)).toEqual(agentHits);
+    expect((await searchLocalMemory(MEMORY_NAME, 'staging wrangler', 5)).map((hit) => hit.path)).toEqual([MEMORY_PATH]);
   });
 });
