@@ -619,7 +619,6 @@ export class LocalAgentSession {
       logger: compactionDiagnostics,
       summarizer: () => this.ensureModelState(),
       spend: { report: (report) => this.modelCallSink(report) },
-      model: () => this.effectiveModelSpec(),
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions());
     this.rt.setTurnFileLedgerProvider?.(() => this.actorSession.orchestrator.acc.files);
@@ -2629,7 +2628,6 @@ export class LocalAgentSession {
       logger: compactionDiagnostics,
       summarizer: () => this.ensureModelState(),
       spend: { report: (report) => this.modelCallSink(report) },
-      model: () => this.effectiveModelSpec(),
     });
 
     return {

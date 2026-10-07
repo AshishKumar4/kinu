@@ -26,6 +26,8 @@ export const useSlate = clientOnly("useSlate");
 export const useHostContext = clientOnly("useHostContext");
 export const resize = clientOnly("resize");
 export const mount = clientOnly("mount");
+export const fit = clientOnly("fit");
+export const workspace = clientOnly("workspace");
 `;
 
 /** React and capnweb resolve through the same import map, so this module keeps the singletons shared with the host frame. */
@@ -73,7 +75,8 @@ window.addEventListener("message", (event) => {
 
 function applyContext() {
   const root = document.documentElement;
-  if (context && context.theme !== undefined) root.dataset.mode = context.theme;
+  // The frame is transparent over the chat; a scheme other than the host's paints an opaque canvas.
+  if (context && context.theme !== undefined) { root.dataset.mode = context.theme; root.style.colorScheme = context.theme; }
   const variables = context && context.styles ? context.styles.variables : undefined;
   if (variables && typeof variables === "object") {
     for (const [name, value] of Object.entries(variables)) root.style.setProperty(name, String(value));
@@ -101,6 +104,21 @@ export const slate = new Proxy(Object.create(null), {
   },
 });
 
+/** What a slate with no class of its own is served: every binding under its name, the workspace's own members at the
+ *  top, so workspace.readFile(path) and workspace.agent.send({ text }) both read as they would in a program. */
+export const workspace = new Proxy(Object.create(null), {
+  get(_target, name) {
+    if (typeof name !== "string" || name === "then") return undefined;
+    return new Proxy(function () {}, {
+      apply(_fn, _self, args) { return session().workspace[name](...args); },
+      get(_fn, member) {
+        if (typeof member !== "string" || member === "then") return undefined;
+        return (...args) => session()[name][member](...args);
+      },
+    });
+  },
+});
+
 export function useSlate() {
   return useMemo(() => slate, []);
 }
@@ -119,13 +137,8 @@ export function resize(height) {
 
 let resizeQueued = false;
 
-export function mount(App) {
-  let element = document.getElementById("root");
-  if (element === null) {
-    element = document.createElement("div");
-    element.id = "root";
-    document.body.appendChild(element);
-  }
+/** The host's theme now and as it changes, and the page's height as it grows: what every slate page needs of its host. */
+export function fit() {
   applyContext();
   new ResizeObserver(() => {
     if (resizeQueued) return;
@@ -135,6 +148,16 @@ export function mount(App) {
       resize(document.documentElement.scrollHeight);
     });
   }).observe(document.documentElement);
+}
+
+export function mount(App) {
+  let element = document.getElementById("root");
+  if (element === null) {
+    element = document.createElement("div");
+    element.id = "root";
+    document.body.appendChild(element);
+  }
+  fit();
   createRoot(element).render(createElement(App));
 }
 

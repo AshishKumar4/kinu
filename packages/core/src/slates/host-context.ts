@@ -3,11 +3,12 @@
 import * as v from 'valibot';
 import { SlateDirectoryName } from './rpc';
 
-/** Mirrored onto the iframe document so a slate matches the workspace theme. */
+/** Mirrored onto the iframe document so a slate matches the workspace theme and the chat's type. */
 export const SLATE_THEME_TOKENS = [
   '--c-bg', '--c-text', '--c-text-2', '--c-text-3', '--c-accent', '--c-accent-fg',
   '--c-border', '--c-surface', '--c-fill', '--c-elevated', '--c-recessed',
   '--c-danger', '--c-success', '--c-warning', '--c-info',
+  '--font-ui', '--font-display', '--font-serif', '--font-mono',
 ] as const;
 
 export interface SlateHostContext {

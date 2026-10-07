@@ -14,7 +14,6 @@ export interface ActorCompactionDeps {
   readonly logger: EnginePorts['logger'];
   readonly summarizer: () => LanguageModel;
   readonly spend: Omit<ModelCallSpend, 'source'>;
-  readonly model: () => string;
 }
 
 export const compactionDiagnostics: EnginePorts['logger'] = {
@@ -34,7 +33,6 @@ export function createActorCompaction(deps: ActorCompactionDeps): CompactionExte
     onOutcome: ({ outcome }) => {
       if (outcome !== 'replayed') deps.ledger.reset();
     },
-    model: deps.model,
     attachments: { files: deps.files },
   });
 }

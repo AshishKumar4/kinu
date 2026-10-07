@@ -45,7 +45,7 @@ async function loadRunner(dir: string, application: string): Promise<RunnerClass
   writeFileSync(join(dir, 'server.js'), SLATE_SERVER_MODULE);
   writeFileSync(join(dir, 'application.js'), application);
   writeFileSync(join(dir, 'runner.js'),
-    slateRunnerSource([], undefined).replace('"cloudflare:workers"', '"./cf-stub.js"'));
+    slateRunnerSource([], undefined, 'class').replace('"cloudflare:workers"', '"./cf-stub.js"'));
 
   const mod: { NimbusProcess?: RunnerClass } = await import(join(dir, 'runner.js'));
 

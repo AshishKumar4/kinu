@@ -553,6 +553,10 @@
     "key TEXT NOT NULL",
     "PRIMARY KEY (actor_id, scope, key)"
   ],
+  "ephemeral_slates@packages/core/src/slates/ephemeral.ts": [
+    "id TEXT PRIMARY KEY",
+    "drawn_at INTEGER NOT NULL"
+  ],
   "evolution_events@packages/core/src/identity/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL DEFAULT (lower(hex(randomblob(9))))",

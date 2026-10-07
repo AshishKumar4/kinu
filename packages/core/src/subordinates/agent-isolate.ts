@@ -130,3 +130,10 @@ export interface TurnRequestAt {
 export interface AgentRecovery {
   readonly stalled: readonly { readonly turnId: string; readonly runs: number; readonly workMode: WorkMode }[];
 }
+
+/** One answer of an agent's, as its `<slate-ui>` blocks are read from it: its text parts, and the mode the agent last
+ *  ran in, which its pages run in. */
+export interface AgentAnswerTexts {
+  readonly texts: readonly string[];
+  readonly workMode: WorkMode;
+}

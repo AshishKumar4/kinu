@@ -43,8 +43,13 @@ export class AdviceJobs extends LifecycleCapability {
   }
 
   /** A delivery that failed every retry comes back later; the answer is still stored. */
-  readonly onJobError: NonNullable<DurableObjectCapability['onJobError']> = ({ job }, cause) => {
-    diagnostics.failure('advisor.answer_job_failed', toKinuError({ doing: 'delivering an advisor answer', cause, otherwise: 'io' }), { job: job.id });
+  readonly onJobError = retriedLater('delivering an advisor answer');
+}
+
+/** A job that failed every retry comes back a lap later rather than ending: what it was for is still stored. */
+export function retriedLater(doing: string): NonNullable<DurableObjectCapability['onJobError']> {
+  return ({ job }, cause) => {
+    diagnostics.failure('schedule.job_failed', toKinuError({ doing, cause, otherwise: 'io' }), { job: job.id });
 
     return { rescheduleAt: Date.now() + RECOVERY_BACKOFF_CEILING_MS };
   };

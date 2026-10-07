@@ -31,7 +31,7 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe,
+  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
@@ -200,6 +200,7 @@ export interface TierVerdicts {
   droppedFile: DroppedFileVerdict | null;
   cleared: ClearedVerdict | null;
   planTasks: PlanTasksVerdict | null;
+  slateUi: SlateUiVerdict | null;
   state: StateVerdict | null;
 }
 
@@ -1414,6 +1415,137 @@ const PLAN_CARDS = `[...document.querySelectorAll('[data-plan-card]')].map((card
 const PLANLESS_TASKS = `((planned) => [...document.querySelectorAll('[data-task-depth]')].filter((row) => row.closest('[data-plan-card]') === null)
   .map(${TASK_TITLE}).filter((title) => !planned.has(title)))(new Set([...document.querySelectorAll('[data-plan-card] [data-task-depth]')].map(${TASK_TITLE})))`;
 
+/** An answer's `<slate-ui>` blocks: the names the chat drew, what each frame's page shows, and the same once the
+ *  page is reloaded and the answer is read back. */
+interface SlateUiVerdict {
+  readonly drawn: readonly string[];
+  readonly shown: Readonly<Record<string, string>>;
+  /** What the first page read through `workspace`, and whether its click reached the agent as a slate event. */
+  readonly read: string;
+  readonly heard: boolean;
+  /** What the first page shows once its card's open control brought it up in the work surface. */
+  readonly opened: string;
+  readonly redrawn: readonly string[];
+  readonly reshown: Readonly<Record<string, string>>;
+  /** After a browser sent a block of its own: the blocks the chat draws, and what a preview of each forged id answered. */
+  readonly forged: {
+    readonly drawn: readonly string[];
+    /** The browser's own message, named as a block. */
+    readonly sent: string;
+    /** The agent's answer, under a name it holds no block of. */
+    readonly renamed: string;
+    /** The agent's answer under a block it wrote, which does preview. */
+    readonly answered: string;
+  };
+}
+
+const HistoryEntriesSchema = v.object({ items: v.array(v.object({ id: v.string(), role: v.string(), content: v.string() })) });
+
+/** What a preview of `id` answered: `ok`, or the refusal's reason. */
+async function previewAnswer(socket: ReturnType<typeof openPublicSocket>, id: string): Promise<string> {
+  const answered = v.parse(v.looseObject({ ok: v.boolean(), reason: v.optional(v.string()) }), await socket.rpc('previewSlate', [id]));
+
+  return answered.ok ? 'ok' : answered.reason ?? 'refused';
+}
+
+/** A browser's own block draws nothing and previews nothing; an answer's id previews only the blocks the answer wrote. */
+async function forgedBlocks(page: Page, origin: string, workspace: string): Promise<SlateUiVerdict['forged']> {
+  const socket = openPublicSocket(origin, { kind: 'loopback' }, `/agents/orchestrator-agent/${workspace}`, new AbortController().signal);
+
+  if (!(await socket.opened)) throw new Error('the forging socket did not open');
+
+  try {
+    await socket.chat(SLATE_UI_FORGED);
+    await until(page, 'the forged message in the chat', `(document.querySelector('#chat')?.textContent ?? '').includes('slate-ui name="forged"') && !(${STOP_OFFERED})`);
+    const { items } = v.parse(HistoryEntriesSchema, await socket.rpc('getChatHistoryPage', [{}]));
+    const sent = items.find((item) => item.role === 'user' && item.content.includes('name="forged"'))?.id ?? 'none';
+    const answer = items.find((item) => item.role === 'assistant' && item.content.includes('<slate-ui name="first">'))?.id ?? 'none';
+
+    return {
+      drawn: await page.$$eval('[data-slate-ui]', (found) => found.map((card) => card.getAttribute('data-slate-ui') ?? '')),
+      sent: await previewAnswer(socket, `${sent}/forged`),
+      renamed: await previewAnswer(socket, `${answer}/forged`),
+      answered: await previewAnswer(socket, `${answer}/first`),
+    };
+  } finally {
+    socket.close('forged');
+  }
+}
+
+const SLATE_UI_DRAWN = `document.querySelectorAll('[data-slate-ui] iframe[src]').length === ${String(Object.keys(SLATE_UI_PAGES).length)}`;
+
+/** Each drawn block's name and the text its frame's page shows, once it shows any. */
+async function slateUiFrames(page: Page): Promise<{ drawn: string[]; shown: Record<string, string> }> {
+  const cards = await page.$$eval('[data-slate-ui]', (found) => found.map((card) => ({
+    name: card.getAttribute('data-slate-ui') ?? '', src: card.querySelector('iframe')?.getAttribute('src') ?? '',
+  })));
+
+  const shown: Record<string, string> = {};
+
+  for (const { name, src } of cards) {
+    const origin = new URL(src).origin;
+    const frame = await named(`the ${name} frame`, () => page.waitForFrame((each) => each.url().startsWith(origin)));
+
+    await named(`the ${name} page's words`, () => frame.waitForFunction(() => document.querySelector('[data-words]') !== null));
+    shown[name] = await frame.evaluate(() => document.querySelector('[data-words]')?.textContent ?? '');
+  }
+
+  return { drawn: cards.map((card) => card.name), shown };
+}
+
+/** The first page's frame, once it has read the file through `workspace`: what it read, and whether its click then
+ *  reaches the agent. */
+async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Promise<{ read: string; heard: boolean }> {
+  const src = await page.$eval('[data-slate-ui="first"] iframe', (frame) => frame.getAttribute('src') ?? '');
+  const frame = await page.waitForFrame((each) => each.url().startsWith(new URL(src).origin));
+
+  await named("the first page's read", () => frame.waitForFunction(() => (document.getElementById('read')?.textContent ?? '') !== ''));
+  const read = await frame.evaluate(() => document.getElementById('read')?.textContent ?? '');
+
+  await frame.click('#send');
+  const request = await waitOn(page, 'the click reaching the agent', heard);
+
+  return { read, heard: request.userTexts.some((text) => text.includes(SLATE_UI_SENT)) };
+}
+
+/** The first page, opened from its card in the work surface: what the work surface's frame of it shows. */
+async function openedInWorkSurface(page: Page): Promise<string> {
+  await page.$eval('[data-slate-ui="first"] button[aria-label="Open first in the work surface"]', (open) => {
+    if (open instanceof HTMLElement) open.click();
+  });
+
+  const pane = await named('the first page in the work surface', () => page.waitForSelector('#inspector iframe[title$="/first"]'));
+  const frame = await named("the work surface frame's document", async () => await pane?.contentFrame() ?? null);
+
+  if (frame === null) throw new Error('the work surface frame has no document');
+  await named("the work surface page's words", () => frame.waitForFunction(() => document.querySelector('[data-words]') !== null));
+
+  return await frame.evaluate(() => document.querySelector('[data-words]')?.textContent ?? '');
+}
+
+/** An answer with two blocks is drawn as two slates, each its own page, and a reload draws them again from the stored answer. */
+async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard: Promise<ScriptedRequest>): Promise<SlateUiVerdict> {
+  const workspace = await createWorkspace(origin, { name: `live-row-slate-ui-${RUN_ID}`, purpose: 'slate ui probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openRecorded(newPage, origin, workspace);
+
+  try {
+    await sendInChat(page, SLATE_UI_ASK);
+    await until(page, 'both blocks drawn', `${SLATE_UI_DRAWN} && !(${STOP_OFFERED})`);
+    const first = await slateUiFrames(page);
+    const reach = await firstPageReach(page, heard);
+    const opened = await openedInWorkSurface(page);
+
+    await until(page, 'the click turn to end', `!(${STOP_OFFERED})`);
+    await named('the reload', () => page.reload({ waitUntil: 'load' }));
+    await until(page, 'both blocks drawn again', SLATE_UI_DRAWN);
+    const again = await slateUiFrames(page);
+
+    return { ...reach, opened, drawn: first.drawn, shown: first.shown, redrawn: again.drawn, reshown: again.shown, forged: await forgedBlocks(page, origin, workspace) };
+  } finally {
+    await page.close();
+  }
+}
+
 /** Presses the button showing `words` among those `buttons` selects. */
 async function pressButton(page: Page, buttons: string, words: string): Promise<void> {
   await page.$$eval(buttons, (found, label) => {
@@ -1555,7 +1687,8 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 /** A row a file can run, by the name its log line carries, in the order the suite ran them. */
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
-  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks', 'state',
+  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
+  'slate-ui', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -1577,7 +1710,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null, planTabs: null, geometry: null,
-    controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, state: null,
+    controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -1597,6 +1730,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const unsentHeld = heldCall();
     const clearedHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
+    const slateHeard = Promise.withResolvers<ScriptedRequest>();
 
     // The watched turn follows the answered one in its conversation, so it is matched first, by the latest ask.
     const model = await startScriptedModel((request) => droppedFileTurn(request) ?? toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
@@ -1605,7 +1739,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
       ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
-      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? planWalkthrough(request));
+      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? slateUiTurn(request, slateHeard.resolve) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
       const { newPage, origin } = app;
@@ -1636,6 +1770,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'dropped-file': async () => { observed.droppedFile = await attempt('dropped-file', () => measureDroppedFile(newPage, origin)); },
         'cleared': async () => { observed.cleared = await attempt('cleared', () => measureCleared(newPage, origin, clearedHeld)); },
         'plan-tasks': async () => { observed.planTasks = await attempt('plan-tasks', () => measurePlanTasks(newPage, origin)); },
+        'slate-ui': async () => { observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
       };
 

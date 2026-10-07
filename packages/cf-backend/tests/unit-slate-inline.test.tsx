@@ -15,7 +15,7 @@ import { SLATES_CHANGED_METADATA_KEY } from '@kinu.run/core';
 const noopRpc = async (): Promise<never> => { throw new Error('no rpc in the static renderer'); };
 
 describe('the inline slate card', () => {
-  test('renders as the transcript block with its header, through the context', () => {
+  test('renders as a card in the transcript block, through the context', () => {
     const html = renderToStaticMarkup(createElement(
       SlateInlineContext.Provider,
       { value: { rpc: noopRpc, openSlate: () => {} } },
@@ -25,7 +25,6 @@ describe('the inline slate card', () => {
     ));
 
     expect(html).toContain('data-slate-inline="deploy-choice"');
-    expect(html).toContain('>deploy-choice<');
     expect(html).not.toContain('href="slate://deploy-choice"');
     // The card sits inside the paragraph: not one <div> may appear in it.
     expect(html).not.toContain('<div');

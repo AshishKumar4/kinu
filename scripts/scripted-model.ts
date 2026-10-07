@@ -367,6 +367,56 @@ export function toldBackTurn(request: ScriptedRequest, heard: (request: Scripted
   return { text: TOLD_BACK_ANSWER };
 }
 
+/* ── Slates in an answer ───────────────────────────────────────────────── */
+
+/** The slate-ui row's ask, and the words each block's page shows. */
+export const SLATE_UI_ASK = 'Slate UI probe: draw two inline slates.';
+
+export const SLATE_UI_PAGES = { first: 'first-slate-page-3c1a', second: 'second-slate-page-8e02' } as const;
+
+/** The file the first page reads through `workspace`, what it holds, and what its button sends the agent. */
+export const SLATE_UI_FILE = { path: '/home/main/slate-ui-probe.txt', content: 'read-through-workspace-94d2' } as const;
+
+export const SLATE_UI_SENT = 'slate-ui-click-5e7d';
+
+/** The first page reads the file and sends on a click, as the agent that wrote it; the second only shows its words. */
+function slateUiPage(name: string, words: string): string {
+  const reach = name !== 'first' ? '' : [
+    '<p id="read"></p><button id="send">Send</button><script type="module">',
+    'import { workspace } from "kinu:slate";',
+    `document.getElementById("read").textContent = await workspace.readFile(${JSON.stringify(SLATE_UI_FILE.path)});`,
+    `document.getElementById("send").onclick = () => workspace.agent.send({ text: ${JSON.stringify(SLATE_UI_SENT)} });`,
+    '</script>',
+  ].join('');
+
+  return `<!doctype html><html><head><title>${name}</title></head><body><p data-words>${words}</p>${reach}</body></html>`;
+}
+
+/** What a browser sends to forge a block: a page of its own, in its own words, under a name the answer does not use. */
+export const SLATE_UI_FORGED = '<slate-ui name="forged">\n<!doctype html><html><body><p>forged-page-71b0</p></body></html>\n</slate-ui>';
+
+/** The file the first page reads, then an answer that writes both blocks, each a page of its own. A click on the
+ *  first page reaches the agent as a slate event, which `heard` is told of. */
+export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedRequest) => void): ScriptedAnswer | null {
+  if (request.available.length === 0) return null;
+
+  if (request.userTexts.at(-1)?.includes(SLATE_UI_SENT) === true) {
+    heard(request);
+
+    return { text: 'Done.' };
+  }
+
+  if (request.userTexts.at(-1) !== SLATE_UI_ASK) return null;
+
+  if (request.turn.every((call) => call.name !== 'file')) {
+    return { toolCall: { name: 'file', arguments: { action: 'write', path: SLATE_UI_FILE.path, content: SLATE_UI_FILE.content } } };
+  }
+
+  return {
+    text: ['Here are both.', ...Object.entries(SLATE_UI_PAGES).flatMap(([name, words]) => ['', `<slate-ui name="${name}">`, slateUiPage(name, words), '</slate-ui>'])].join('\n'),
+  };
+}
+
 /* ── The plan's own tasks ──────────────────────────────────────────────── */
 
 /** The handoff an approval enqueues names the approved plan; only a decision puts it in the conversation. */

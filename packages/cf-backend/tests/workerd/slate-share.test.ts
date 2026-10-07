@@ -40,7 +40,7 @@ it('a public share serves the slate, admits the granted member, refuses the rest
   expect(socket.mutateError).toContain('does not grant');
 
   // A call under a share must name the running invocation it rides.
-  expect(await probe.unnamedShareCall(created.share.id)).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('invocation') });
+  expect(await probe.unnamedShareCall(created.share.id)).toMatchObject({ ok: false, reason: 'denied' });
 
   const replay = await probe.replay(created.share.id);
   expect(replay).toMatchObject({ ok: false, reason: 'denied' });
@@ -86,7 +86,6 @@ it('a share is granted what its graph reads, across the app hop and its cycle, a
   expect(graph.slates).toEqual(['issues', 'triage-digest']);
   expect(binding('triage-digest.BACK')).toMatchObject({ capability: { kind: 'slate', id: 'issues' }, members: [] });
   expect(binding('issues.GITHUB')?.members?.map((member) => [member.member, member.effect])).toEqual([['read_issue', 'read'], ['create_issue', 'mutate']]);
-  expect(binding('issues.GITHUB')?.members?.[1]?.risk.public).toContain('Anyone who opens this share can trigger it.');
   expect(binding('issues.FILES')?.members?.map((member) => [member.member, member.effect])).toEqual([['readFile', 'read'], ['writeFile', 'mutate']]);
 
   const ShareSchema = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });

@@ -22,7 +22,7 @@ import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
-import { MarkdownContent, CodeBlock, SlateLink } from "@/components/surfaces/shared";
+import { AnswerText, MarkdownContent, CodeBlock, SlateLink, type AnswerChat } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { extractPreviewUrl } from "@kinu.run/core";
 import {
@@ -481,7 +481,7 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
 // referential identity and skips re-rendering.
 export const MessageView = memo(function MessageView({
   message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
-  signalState, steers, onOpenChangeNote,
+  signalState, steers, onOpenChangeNote, answerSlates,
 }: {
   message: UIMessage;
   /** Resolved once by the thread owner (`threadLiveTail`), passed to the last row only; null means history. */
@@ -496,6 +496,8 @@ export const MessageView = memo(function MessageView({
   takesChip?: ReactNode;
   steers?: readonly PlacedSteer[];
   onOpenChangeNote?: (source: string, anchor: DiffAnchor | undefined) => void;
+  /** The chat an answer's `<slate-ui>` blocks resolve in; absent, a transcript shows their source. */
+  answerSlates?: AnswerChat | undefined;
 }) {
   const isUser = message.role === "user";
   const isLive = tail !== null;
@@ -591,7 +593,7 @@ export const MessageView = memo(function MessageView({
       return (
         <div key={key} {...(isTailPart ? { "data-live-indicator": "text" } : {})}
           className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
-          <MarkdownContent content={t} />
+          <AnswerText text={t} place={{ messageId: message.id, stored: tail === null, chat: answerSlates }} />
         </div>
       );
     }

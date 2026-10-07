@@ -1673,6 +1673,7 @@ describe('the ledger and its instruction copies through real runChat turns', () 
       history.push({ role: 'user', content: userText });
 
       for await (const ev of runChat({
+        modelSpec: 'test/model',
         model,
         system: 'sys',
         history,
@@ -1708,6 +1709,7 @@ describe('the ledger and its instruction copies through real runChat turns', () 
       history.push({ role: 'user', content: userText });
 
       for await (const ev of runChat({
+        modelSpec: 'test/model',
         model,
         system: 'sys',
         history,
@@ -1740,6 +1742,7 @@ describe('the ledger and its instruction copies through real runChat turns', () 
     ];
 
     for await (const _ of runChat({
+      modelSpec: 'test/model',
       model,
       system: 'sys',
       history,
@@ -1805,6 +1808,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     const ledger = new DynamicContextLedger();
 
     for await (const _ of runChat({
+      modelSpec: 'test/model',
       model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
@@ -1831,6 +1835,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     let step = 0;
 
     for await (const _ of runChat({
+      modelSpec: 'test/model',
       model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
@@ -1870,6 +1875,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     let step = 0;
 
     for await (const _ of runChat({
+      modelSpec: 'test/model',
       model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],

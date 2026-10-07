@@ -311,7 +311,7 @@ function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, helpers, o
         )}
         {inspected.length > 0 && (
           <div className="space-y-1">
-            {inspected.map((owed) => <InspectedRow key={`${owed.kind}:${owed.id}`} work={owed} now={now} />)}
+            {inspected.map((owed) => <InspectedRow key={`${owed.actor ?? ""}:${owed.kind}:${owed.id}`} work={owed} now={now} />)}
           </div>
         )}
         {runningJobs.length > 0 && (

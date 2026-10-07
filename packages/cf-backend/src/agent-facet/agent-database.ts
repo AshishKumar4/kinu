@@ -19,7 +19,7 @@ import { attempt, detach, diagnostics, KinuError, settle, settleSync } from '@ki
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentTurnActivity, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
+import type { AgentAnswerTexts, AgentTurnActivity, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
 import type { AgentWorkspace } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
@@ -326,6 +326,19 @@ export class AgentDatabase {
 
   async historyPage(page: PositionPageRequest): Promise<ChatHistoryPage> {
     return await getChatHistoryPage(this.readable().transcript, page);
+  }
+
+  /** An answer's text parts and the mode its agent last ran in; null when the id names no answer of this agent's. */
+  async answerTexts(messageId: string): Promise<AgentAnswerTexts | null> {
+    const bound = this.actorHost().bindStores(this.reference());
+    const answer = await bound.stores.history.transcript(CHAT_SESSION_ID).message(messageId);
+
+    if (answer?.role !== 'assistant') return null;
+
+    return {
+      texts: answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])),
+      workMode: bound.stores.claims.latestTurn()?.workMode ?? 'plan',
+    };
   }
 
   messageCount(): number {

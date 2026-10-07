@@ -82,6 +82,7 @@ async function interruptedTurn(
 
   try {
     for await (const ev of runChat({
+      modelSpec: 'test/model',
       model, system: 'sys', history, tools, stopWhen: isStepCount(20), signal: abort.signal,
     })) {
       events.push(ev);
@@ -111,6 +112,7 @@ describe('a turn interrupted between a tool call and its result', () => {
       const replies: string[] = [];
 
       for await (const ev of runChat({
+        modelSpec: 'test/model',
         model: provider.model, system: 'sys', history: first.persisted, tools, stopWhen: isStepCount(20),
       })) {
         if (ev.type === 'done') replies.push(ev.text);
@@ -158,6 +160,7 @@ describe('a turn interrupted between a tool call and its result', () => {
 
       const cutTurn = async (): Promise<void> => {
         for await (const ev of runChat({
+          modelSpec: 'test/model',
           model: provider.model, system: 'sys', history: [...persisted], tools, stopWhen: isStepCount(20),
           signal: abort.signal,
         })) {
@@ -203,6 +206,7 @@ describe('a history that already holds an orphaned call', () => {
       const replies: string[] = [];
 
       for await (const ev of runChat({
+        modelSpec: 'test/model',
         model: provider.model, system: 'sys', history: bricked, tools, stopWhen: isStepCount(20),
       })) {
         if (ev.type === 'done') replies.push(ev.text);
@@ -221,6 +225,7 @@ describe('a history that already holds an orphaned call', () => {
 
     try {
       for await (const _ of runChat({
+        modelSpec: 'test/model',
         model: provider.model, system: 'sys', history: bricked, tools, stopWhen: isStepCount(20),
       })) { /* drain */ }
 

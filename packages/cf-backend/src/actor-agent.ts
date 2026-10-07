@@ -1271,11 +1271,13 @@ export abstract class ActorAgent extends Agent<Env> {
       // has its own terminal claim.
       turnIsLive: (turnId) => this.chatLoop.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
-      settled: () => this.restWhenIdle(),
-      // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber.
+      settled: async () => {},
+      // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber. Rests
+      // once the close has left the held set, so of a close's end and a quiet pump, whichever comes last rests the actor.
       hold: (close) => this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
         ctx.stash({ lane: TERMINAL_LANE_FIBER });
         await close();
+        await this.restWhenIdle();
       }).finally(() => { this.overviewChanged(); }),
     });
 
@@ -1459,7 +1461,6 @@ export abstract class ActorAgent extends Agent<Env> {
       logger: this.compactionLogger,
       summarizer: () => this.getModel(),
       spend: { report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-      model: () => this.effectiveModelSpec(),
     });
 
     return this._compaction;
@@ -1697,7 +1698,9 @@ export abstract class ActorAgent extends Agent<Env> {
             this.liveReadsMoved(['listWorkspaceAgents']);
             this.chatTransport.quiet();
             this.overviewChanged();
-            this.detachOwned(Effect.promise(() => this.restWhenIdle()));
+
+            // A close still held rests the actor as it ends.
+            if (!this.terminal.closing) this.detachOwned(Effect.promise(() => this.restWhenIdle()));
           },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
@@ -2570,7 +2573,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.stores.config;
   }
 
-  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext: NonNullable<AgentsSwarmDeps['originContext']>, compactShared?: AgentsSwarmDeps['compactShared']): AgentsSwarmDeps {
+  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: AgentsSwarmDeps['model'], originContext: NonNullable<AgentsSwarmDeps['originContext']>, compactShared: NonNullable<AgentsSwarmDeps['compactShared']>): AgentsSwarmDeps {
     const seams = this.hostedSeams();
 
     return {
@@ -4065,6 +4068,7 @@ export abstract class ActorAgent extends Agent<Env> {
         routed: routedModelReads(providers),
       },
       profileInputs: async () => reads.profileInputs,
+      choices: reads.choices,
       toolset: (mode) => (mode === input.requestedWorkMode ? input.tools : this.actorToolsets(mode).turn),
       // MCP tools were admitted against the request's model in `readTurnInputs`.
       externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),

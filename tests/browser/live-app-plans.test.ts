@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
 import { INSPECTOR_SHUT_PX } from '../../scripts/product-flows';
-import { PLAN_TASK_TITLES, SLATE_TITLE } from '../../scripts/scripted-model';
+import { PLAN_TASK_TITLES, SLATE_TITLE, SLATE_UI_FILE, SLATE_UI_PAGES } from '../../scripts/scripted-model';
 import { liveRows } from '../../scripts/live-app-rows';
 
-const { observed, verdictOf, boot } = liveRows('live-app-plans', ['plan-tabs', 'walkthrough', 'kept-tab', 'chat-scroll', 'plan-tasks', 'state']);
+const { observed, verdictOf, boot } = liveRows('live-app-plans', ['plan-tabs', 'walkthrough', 'kept-tab', 'chat-scroll', 'plan-tasks', 'slate-ui', 'state']);
 
 beforeAll(boot);
 
@@ -97,5 +97,42 @@ describe('the approved plan owns the tasks its turn adds', () => {
 
     expect(plans).toEqual([[[PLAN_TASK_TITLES.step, 0], [PLAN_TASK_TITLES.sub, 1], [PLAN_TASK_TITLES.programmed, 0]]]);
     expect(unlinked).toEqual([PLAN_TASK_TITLES.chore]);
+  });
+});
+
+// An agent writes a page into its answer as a <slate-ui> block. The chat draws each block in place as a slate of its
+// own, whose page is read from the stored answer, so a reload draws the same pages again.
+describe("an answer's slate-ui blocks are drawn in place", () => {
+  test('two blocks are two slates, each showing its own page', () => {
+    const { drawn, shown } = verdictOf(observed.slateUi, 'slate-ui');
+
+    expect(drawn).toEqual(Object.keys(SLATE_UI_PAGES));
+    expect(shown).toEqual(SLATE_UI_PAGES);
+  });
+
+  // The page runs with its author's reach: it reads the file the agent wrote, and its click reaches the agent.
+  test("a page reads through `workspace` as its author, and a click reaches the agent", () => {
+    const { read, heard } = verdictOf(observed.slateUi, 'slate-ui');
+
+    expect({ read, heard }).toEqual({ read: SLATE_UI_FILE.content, heard: true });
+  });
+
+  test("a page's open control shows it in the work surface", () => {
+    expect(verdictOf(observed.slateUi, 'slate-ui').opened).toBe(SLATE_UI_PAGES.first);
+  });
+
+  test('a reload draws them again from the stored answer', () => {
+    const { redrawn, reshown } = verdictOf(observed.slateUi, 'slate-ui');
+
+    expect(redrawn).toEqual(Object.keys(SLATE_UI_PAGES));
+    expect(reshown).toEqual(SLATE_UI_PAGES);
+  });
+
+  // A page runs with its author's authority, so only an answer the agent wrote can name one: a block a browser sends
+  // is never drawn, and neither its message nor an answer under a name the agent never wrote previews.
+  test('a block a browser forges is not drawn and does not preview', () => {
+    const { forged } = verdictOf(observed.slateUi, 'slate-ui');
+
+    expect(forged).toEqual({ drawn: Object.keys(SLATE_UI_PAGES), sent: 'missing', renamed: 'missing', answered: 'ok' });
   });
 });

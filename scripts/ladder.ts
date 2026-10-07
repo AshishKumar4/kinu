@@ -2292,8 +2292,9 @@ export const LADDER: readonly Gate[] = [
     catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
       + 'Its rows: a long chat opens at its newest message and pages older history only when the reader scrolls '
       + 'for it, one page per scroll; the plan review flow runs from submission to the turn that implements it; at '
-      + 'most one plan-bearing tab or filter stands in the inspector, so plans have one owner; and the inspector '
-      + 'never moves its selection on its own.',
+      + 'most one plan-bearing tab or filter stands in the inspector, so plans have one owner; the inspector '
+      + 'never moves its selection on its own; and an answer\'s <slate-ui> blocks are drawn in place, read a file '
+      + 'and reach the agent as their author, are drawn again after a reload, and a block a browser forges is not.',
     blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
       + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
       + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
