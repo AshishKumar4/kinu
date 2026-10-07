@@ -26,6 +26,8 @@ import type {
   ChangeNotesCompleted,
   ChangeNotesPrepared,
   OwedRepliesRecovered,
+  ClaimUnderRecovery,
+  StrandedWork,
   DriveOnceInput,
   DriveOnceResult,
   ExerciseResult,
@@ -163,7 +165,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'seedOwedReplies');
     Reflect.deleteProperty(this, 'replyLeases');
     Reflect.deleteProperty(this, 'transitionState');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState']);
+    Reflect.deleteProperty(this, 'strandedWork');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork']);
   }
 
   /** What the loop's driver gate answers once refused, as when another activation holds the lease. */
@@ -238,6 +241,23 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return Object.fromEntries(rows.map((row) => [textColumn(row.id), {
       turnId: row.turn_id === null ? null : textColumn(row.turn_id), consumedAt: row.consumed_at === null ? null : Number(row.consumed_at),
     }]));
+  }
+
+  /**
+   * What a dead activation and an older build left: a root turn no activation runs, and an effect this build cannot
+   * run. Seeded and read in one call, so no wake recovers the turn in between; then the person's Recover.
+   */
+  async strandedWork(): Promise<StrandedWork> {
+    const actorId = this.actorHandle().actorId;
+
+    this.unmetered(`INSERT INTO actor_turn_claims (actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version, claimed_at)
+      VALUES (?, 'turn-stranded', 'run-stranded', 2, 'build', 'builtin', 1, ?)`, actorId, Date.now());
+    this.unmetered(`INSERT INTO terminal_effects (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status)
+      VALUES (?, 'seq-retired', 'retired', 'no_such_effect', '', 0, '{}', 'pending')`, actorId);
+    const stranded = await this.inspectWork();
+    const { recovered } = await this.recoverStrandedTurn();
+
+    return { stranded, recovered, after: await this.inspectWork() };
   }
 
   /** `done` once a transition closed; an open one answers that it resumed. */
@@ -643,7 +663,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   | 'createSubordinateAgent'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -895,7 +915,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1316,7 +1336,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
    * The root's turn claim under the alarm's real recovery pass: once while the genesis turn is held, and again while
    * its response settles. Each time the claim stays its foreground owner's, so it settles with its own outcome.
    */
-  async claimUnderRecovery(): Promise<{ readonly held: string | null; readonly settled: string | null }> {
+  async claimUnderRecovery(): Promise<ClaimUnderRecovery> {
     const { target } = await this.claimQueueWorkspace('claims');
 
     await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 1 }) });
@@ -1325,12 +1345,19 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await fetch('http://probe-control.invalid/queue/arrived');
     await target.recoveryPass();
     const held = await target.latestClaimOutcome();
+    const heldWork = await target.inspectWork();
 
     await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
     await Promise.all([target.recoveryPass(), awaitSettled(target)]);
     await awaitSettled(target);
 
-    return { held, settled: await target.latestClaimOutcome() };
+    return { held, settled: await target.latestClaimOutcome(), heldWork, settledWork: await target.inspectWork() };
+  }
+
+  async strandedWork(): Promise<StrandedWork> {
+    const { target } = await this.claimQueueWorkspace('stranded');
+
+    return await target.strandedWork();
   }
 
   /** Owed replies seeded in a workspace whose activation then dies; returns the workspace to read after the eviction. */

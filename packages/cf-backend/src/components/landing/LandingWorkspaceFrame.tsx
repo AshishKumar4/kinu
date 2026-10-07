@@ -511,7 +511,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                   snapshot={{ status: 'loading' }} onRetryLoad={() => {}} memory={[]} memoryContent="" onSearchMemory={() => {}}
                   mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={isMovie ? streaming : kind === 'checkout'}
                   executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-                  backgroundJobs={isMovie ? [] : work.jobs()} onRefreshJobs={() => setWorkVersion((version) => version + 1)}
+                  backgroundJobs={isMovie ? [] : work.jobs()} inspectedWork={[]} onRefreshJobs={() => setWorkVersion((version) => version + 1)}
                   pendingActions={isMovie ? [] : work.pending()}
                   slates={slates} slateBody={slateBody}
                   tabPresence={LANDING_TAB_PRESENCE}

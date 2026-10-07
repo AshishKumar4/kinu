@@ -8,7 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
-import { jobName, lastOutputLines, shortJobId, timeAgo } from "@kinu.run/core";
+import { jobName, jobPhase, lastOutputLines, shortJobId, timeAgo, type InspectedWork } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 
 function statusMeta(status: BackgroundJob["status"]) {
@@ -50,6 +50,22 @@ function timeUntil(ms: number): string {
   return `in ${Math.ceil(seconds / 60)}m`;
 }
 
+/** A turn or effect still owed, as its own store records it: what it is, how it stands, and why or until when. */
+export function InspectedRow({ work, now }: { work: InspectedWork; now: number }) {
+  const notes = [
+    work.phase,
+    work.attempt > 1 ? `attempt ${String(work.attempt)}` : null,
+    work.blocked,
+    work.until !== null && work.until > now ? `next try ${timeUntil(work.until - now)}` : null,
+  ].filter((note) => note !== null);
+
+  return (
+    <div className="flex items-start gap-2 py-1" data-inspected={work.kind} data-phase={work.phase}>
+      <span className="p-row-text">{work.label} <span className="p-text-3">· {notes.join(" · ")}</span></span>
+    </div>
+  );
+}
+
 export interface JobCardProps {
   job: BackgroundJob;
   grouped?: boolean;
@@ -88,7 +104,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
 
   const m = statusMeta(job.status);
   const Icon = m.icon;
-  const live = job.status === "running" || job.status === "serving";
+  const live = jobPhase(job, Date.now()) !== "settled";
   const detail = job.status === "completed" ? job.result : job.error;
   const printed = live ? lastOutput(job.output) : null;
   const name = jobName(job);

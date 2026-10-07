@@ -2191,6 +2191,8 @@ export {
   turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,
 } from './read-models/turn-liveness';
 
+export { inspectWork, jobPhase, type InspectedWork } from './read-models/work-inspection';
+
 export {
   breakdownView, shareOfMeasured,
   type BreakdownRow, type BreakdownPlane, type BreakdownView,

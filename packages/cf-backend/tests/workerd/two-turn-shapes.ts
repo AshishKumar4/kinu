@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
@@ -346,6 +346,30 @@ export interface ChangeNotesCompleted {
   readonly cards: readonly { readonly role: string; readonly notes: readonly string[]; readonly author: string | null }[];
   readonly kept: number;
   readonly owed: { readonly sends: number; readonly cards: number };
+}
+
+/** One unit of owed work as the workspace's work read reports it. */
+export interface OwedWorkRow {
+  readonly kind: string;
+  readonly id: string;
+  readonly phase: string;
+  readonly attempt: number;
+  readonly blocked: string | null;
+}
+
+/** A held turn's claim under the alarm's recovery, and the work read while it is held and once it has settled. */
+export interface ClaimUnderRecovery {
+  readonly held: string | null;
+  readonly settled: string | null;
+  readonly heldWork: readonly OwedWorkRow[];
+  readonly settledWork: readonly OwedWorkRow[];
+}
+
+/** The work read over what a dead activation and an older build left, then what the person's Recover did and left. */
+export interface StrandedWork {
+  readonly stranded: readonly OwedWorkRow[];
+  readonly recovered: string;
+  readonly after: readonly OwedWorkRow[];
 }
 
 /** What the alarm's recovery left after an eviction: each seeded event's lease, the reply's transition, and the

@@ -181,10 +181,27 @@ describe('two real turns over the HTTP model seam', () => {
   // Alarm recovery runs while the root's turn is held and again while it settles: the claim stays its foreground
   // owner's throughout, so it is never sealed as indeterminate under a live owner.
   it('the alarm\'s recovery leaves a held turn\'s claim with its owner, and a settling one settles with its own outcome', async () => {
-    const { held, settled } = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('claims-driver')).claimUnderRecovery();
+    const { held, settled, heldWork, settledWork } = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('claims-driver')).claimUnderRecovery();
 
     expect(held).toBeNull();
     expect([settled === null, settled === 'missing', settled === 'indeterminate']).toEqual([false, false, false]);
+    // The work read follows the same claim: running while this activation holds it, and owed no more once settled.
+    expect(heldWork.map(({ kind, phase, attempt, blocked }) => ({ kind, phase, attempt, blocked })))
+      .toEqual([{ kind: 'turn', phase: 'running', attempt: 1, blocked: null }]);
+    expect(settledWork).toEqual([]);
+  });
+
+  // A dead activation left a root turn nothing runs, and an older build an effect this one cannot run. The work read
+  // reports both blocked, each with why; the person's Recover settles the turn, and only the effect is still owed.
+  it('the work read reports a stranded turn and an effect this build cannot run, and Recover leaves only the effect', async () => {
+    const work = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('stranded-driver')).strandedWork();
+    const effect = { kind: 'effect', id: 'retired', phase: 'blocked', attempt: 0 };
+    const brief = (rows: typeof work.after) => rows.map(({ kind, id, phase, attempt }) => ({ kind, id, phase, attempt }));
+
+    expect(brief(work.stranded), JSON.stringify(work)).toEqual([{ kind: 'turn', id: 'turn-stranded', phase: 'blocked', attempt: 2 }, effect]);
+    expect(work.stranded.map((row) => row.blocked === null)).toEqual([false, false]);
+    expect(work.recovered).not.toBe('none');
+    expect(brief(work.after)).toEqual([effect]);
   });
 
   // A dead activation left two replies owed. After a real eviction, the alarm's recovery dispatches the answer that

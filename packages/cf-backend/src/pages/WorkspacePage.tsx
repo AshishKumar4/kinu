@@ -1282,6 +1282,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             lastActiveExecutor={state.lastActiveExecutor}
             onExecute={state.executeInExecutor}
             backgroundJobs={state.backgroundJobs}
+            inspectedWork={state.inspectedWork}
             onRefreshJobs={(...args: Parameters<typeof state.refreshBackgroundJobs>) => detach(Effect.promise(async () => state.refreshBackgroundJobs(...args)))}
             pendingActions={state.pendingActions}
             onRefreshQueue={(...args: Parameters<typeof state.refreshPendingActions>) => detach(Effect.promise(async () => state.refreshPendingActions(...args)))}

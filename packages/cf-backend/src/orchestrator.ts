@@ -132,7 +132,7 @@ import {
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
-  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
+  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork,
   readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -2794,6 +2794,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.actorHandle(),
       this.workspaceActors().list({ retired: true }),
     );
+  }
+
+  /**
+   * Every turn the workspace's actors still owe and every effect the root's settled turns still owe, by the phase
+   * each store records. A claim no live session here is running is stranded: nothing else will settle it.
+   */
+  @callable()
+  async inspectWork(): Promise<readonly InspectedWork[]> {
+    const host = this.actorHost();
+    const rootActorId = this.actorHandle().actorId;
+    const turns = host.resumable();
+
+    const running = (turn: (typeof turns)[number]) => turn.record.actorId === rootActorId
+      ? this._inFlight || this.actorSession.turnOpen
+      : host.hosted(turn.reference)?.session.turnOpen === true;
+
+    const { ledger } = this.terminal;
+
+    return inspectWork({
+      turns: turns.map((turn) => turn.claim),
+      executing: new Set(turns.filter(running).map((turn) => turn.claim.turnId)),
+      effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)),
+      now: Date.now(),
+    });
   }
 
   protected override onWorkCancelled({ abortedTools }: Omit<CancelWorkOutcome, 'ok'>): void {
