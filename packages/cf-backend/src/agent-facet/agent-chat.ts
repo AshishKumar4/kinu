@@ -1,7 +1,7 @@
 /** A non-main agent's chat in its own isolate (D9). */
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
-  assembleActorTurn, chatTerminalEffects, chatTurnParts, declareTerminalRoster, planHandoffStillOwed, projectJsonValue,
+  announcementOf, assembleActorTurn, chatTerminalEffects, chatTurnParts, declareTerminalRoster, planHandoffStillOwed, projectJsonValue,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type ChatTurnInput, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -163,7 +163,8 @@ export class FacetChat {
         parentReport: {
           text: report.content,
           status: report.status,
-          sequenceId: `${this.deps.actor.record.actorId}:turn-end:${input.messageId}`,
+          // An assignment's turn is keyed by it, so a re-run after a reset answers it once.
+          sequenceId: this.parentDriven ? announcementOf(this.session.currentTurnId ?? '') : `${this.deps.actor.record.actorId}:turn-end:${input.messageId}`,
           ...(report.quiet === true && { quiet: true as const }),
         },
       }),
