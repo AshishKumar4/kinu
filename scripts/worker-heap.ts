@@ -34,8 +34,9 @@ export const GATE = 'worker-heap';
 
 /** Measured 2026-10-07: 45.4 MB used on b0de8580f, where 15 dependents each bundled their own zod; 35.7-36.5 MB over 3
  *  runs on lane/memory-gap 9875bab49 with one; 26.4-26.5 MB on 871e789f1, where a module compiles when first imported
- *  (`new_module_registry`) and the slate vendor waits for a slate. Plus 4 MB of room for the product to grow. */
-export const HEAP_AFTER_SETUP_BOUND_BYTES = 30_500_000;
+ *  (`new_module_registry`) and the slate vendor waits for a slate; 25.5-25.6 MB on a21347229, where a provider SDK
+ *  loads with its first model. Plus 4 MB of room for the product to grow. */
+export const HEAP_AFTER_SETUP_BOUND_BYTES = 29_500_000;
 
 /** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
@@ -87,8 +88,9 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = 8_500_000;
 
 /** Measured 2026-10-07 at {@link LONG_TURN}, sampled from its start to its settlement: 491-499 MB over 3 runs on
  *  b0de8580f, 351-362 MB on lane/memory-gap 9875bab49 once a tool's JSON Schema is built once and only a decode walks the
- *  SDK's message schema. The sampler's own spread is about 10 MB; past this row, a per-step rebuild came back. */
-export const LONG_TURN_ALLOCATED_BOUND_BYTES = 400_000_000;
+ *  SDK's message schema, 347-348 MB on a21347229 once a sealed step's own message skips it too, 360 MB in a whole-tier
+ *  run. The sampler's spread is about 15 MB; past this row, a per-step rebuild came back. */
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 385_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on
