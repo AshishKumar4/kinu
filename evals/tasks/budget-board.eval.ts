@@ -331,12 +331,12 @@ const ASK = /\bask\b/i;
 
 /**
  * How a reading of the board's page differs from `rows`: each team with a budget shows its budget, spending and what
- * remains in a part of the page that names it alone and fits across it, and has Cover and Ask Kinu buttons exactly
- * when it is over budget. Nothing when the page shows the month.
+ * remains in a part of the page that names it alone, and has Cover and Ask Kinu buttons exactly when it is over budget.
+ * Nothing when the page shows the month.
  */
 function misreadings(sight: Sight, rows: readonly StatusRow[]): string[] {
   return rows.flatMap((row) => {
-    const regions = (sight.regions[row.team] ?? []).filter((region) => !region.clipped);
+    const regions = sight.regions[row.team] ?? [];
     const amounts = [row.budgetCents, row.spentCents, row.remainingCents].map((cents) => cents / 100);
     const pressable = (label: RegExp): boolean => regions.some((region) => region.controls.some((control) => label.test(control)));
 

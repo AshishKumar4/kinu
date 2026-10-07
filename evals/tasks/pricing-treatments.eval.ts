@@ -23,23 +23,25 @@ const PLANS = [
 const CSV = `plan,monthly_usd,annual_discount_pct,seats,storage_gb,support\n${PLANS.map((plan) =>
   [plan.plan, plan.monthlyUsd, plan.discountPct, plan.seats, plan.storageGb, plan.support].join(',')).join('\n')}\n`;
 
-const NAMES = PLANS.map((plan) => plan.plan);
-
 /** Twelve months at the plan's price with its annual discount taken off: $205.20, $499.80 and $1,238.40. */
 function yearlyUsd(plan: (typeof PLANS)[number]): number {
   return Math.round(plan.monthlyUsd * 12 * (100 - plan.discountPct)) / 100;
 }
 
-/** Every plan shows its monthly and yearly price, together, in a part of the page of its own that fits across it. */
+/**
+ * The treatment names every plan and shows its monthly and yearly price, all within the chat's width. Read over the
+ * whole treatment, not plan by plan: pricing copy names other plans ("everything in Team, plus"), so no part of a card
+ * names one plan alone.
+ */
 function showsEveryPrice(sight: Sight): boolean {
-  return PLANS.every((plan) => (sight.regions[plan.plan] ?? []).some((region) => !region.clipped
-    && shows(region.text, plan.monthlyUsd) && shows(region.text, yearlyUsd(plan))));
+  return PLANS.every((plan) => sight.text.toLowerCase().includes(plan.plan.toLowerCase())
+    && shows(sight.text, plan.monthlyUsd) && shows(sight.text, yearlyUsd(plan)));
 }
 
 /** A fresh chat page draws the answer's slates, at least three, each showing every price; and what each looks like. */
 async function everyTreatment(verifier: EvalVerifier): Promise<{ outcome: EvalCheckOutcome; pictures: Uint8Array<ArrayBuffer>[] }> {
   return verifier.browse(async (browser) => {
-    const readings = await readAnswer(browser, 3, NAMES, showsEveryPrice);
+    const readings = await readAnswer(browser, 3, [], showsEveryPrice);
 
     return {
       outcome: { pass: readings.length >= 3 && readings.every((reading) => reading.held), evidence: readings.map(readingEvidence) },

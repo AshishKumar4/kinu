@@ -2,15 +2,14 @@ import type { JsonValue } from '@kinu.run/core';
 
 /**
  * What a person sees of a page an agent built, read without leaning on its markup: the visible text, and for each of
- * a set of names (teams, venues, plans) the part of the page that names it and no other, with the controls a person
- * could press there. A table row, a card, a list item and a chart's labelled bar all read the same way. A layout that
- * never sets one name apart from the rest (a transposed table) has no part for it, which a check reports as the name
- * not shown. Text drawn on a canvas is not text and is not read.
+ * a set of names (teams, venues, plans) the parts of the page that name it and no other, with the controls a person
+ * could press there. A part is read across, as a table row, a card or a list item is, and down, as a grid's column is
+ * under its heading. Text no style hides but that lies past the page's sides is not seen: at chat width a person sees
+ * it only by scrolling across. Text drawn on a canvas is not text and is not read.
  */
 
-/** The part of a page that names one name and no other: what it says, the labels of the controls in it, and whether
- *  it runs past the page's sides, where a person cannot see all of it without scrolling across. */
-export type Region = { readonly text: string; readonly controls: readonly string[]; readonly clipped: boolean };
+/** A part of a page that names one name and no other: what it says, and the labels of the controls in it. */
+export type Region = { readonly text: string; readonly controls: readonly string[] };
 
 /** A page as read once: all its visible text, and every region for each name asked about. */
 export type Sight = { readonly text: string; readonly regions: Readonly<Record<string, readonly Region[]>> };
@@ -24,83 +23,105 @@ export type Press = { readonly name: string; readonly label: string | null };
 
 /**
  * Runs in the page, so it is whole: nothing it uses is defined outside it. Visible text is every text node no style
- * hides, outside scripts and a select's closed list, plus what text fields hold. A name is matched whole and in any
- * case. Its region grows from each text node that names it alone, up to the widest element that still names no
- * other: a row is found from its cell, a card from its heading. A control is what a person can press: an interactive
- * element, or the outermost element showing a pointer. `control` is the one `press` names, null when none or more
- * than one would do.
+ * hides and that lies within the page's sides, outside scripts and a select's closed list, plus what text fields hold.
+ * A name is matched whole and in any case. From each text node that names it alone, its row is the widest element
+ * that names no other, and its column what lies below it within the sides of the block that holds it, when that names
+ * no other. A control is what a person can press: an interactive element, or the outermost element showing a pointer;
+ * one inside another is the one pressed, the click reaching both. `control` is the one `press` names, null when none or
+ * more than one would do.
  */
 export function look(names: readonly string[], press: Press | null): Looked {
-  const shown = (element: Element): boolean => element.closest('script,style,noscript,template,select,option,datalist') === null
-    && element.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+  const sides = document.documentElement.clientWidth;
+  const hidden = 'script,style,noscript,template,select,option,datalist';
+  const interactive = 'button,a[href],input:not([type=hidden]),textarea,label,summary,[role=button],[role=link],[role=radio],[role=option],[role=checkbox],[role=menuitem],[role=tab],[tabindex]:not([tabindex="-1"])';
+  const boxes = new Map<Node, DOMRect>();
 
-  const textOf = (root: Element): string => {
-    const parts: string[] = [];
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  // Seen: no style hides it, it takes room, and it lies within the page's sides. `styled` is the element whose style
+  // decides, the node itself or a text's parent.
+  const seen = (node: Element | Text, styled: Element): boolean => {
+    const range = document.createRange();
 
-    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-      const text = node.textContent?.trim() ?? '';
+    range.selectNodeContents(node);
+    const box = node instanceof Element ? node.getBoundingClientRect() : range.getBoundingClientRect();
 
-      if (text !== '' && node.parentElement !== null && shown(node.parentElement)) parts.push(text);
-    }
+    boxes.set(node, box);
 
-    for (const field of root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input:not([type]),input[type=text],input[type=number],textarea')) {
-      if (field.value !== '' && shown(field)) parts.push(field.value);
-    }
-
-    return parts.join(' ');
+    return styled.closest(hidden) === null && styled.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+      && box.width > 0 && box.left >= -1 && box.right <= sides + 1;
   };
 
+  const texts: (Text | HTMLInputElement | HTMLTextAreaElement)[] = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    if (node instanceof Text && (node.textContent ?? '').trim() !== '' && node.parentElement !== null && seen(node, node.parentElement)) texts.push(node);
+  }
+
+  for (const field of document.body.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input:not([type]),input[type=text],input[type=number],textarea')) {
+    if (field.value !== '' && seen(field, field)) texts.push(field);
+  }
+
+  const pressable = [...document.body.querySelectorAll('*')].filter((element) => seen(element, element) && (element.matches(interactive)
+    || (getComputedStyle(element).cursor === 'pointer' && (element.parentElement === null || getComputedStyle(element.parentElement).cursor !== 'pointer'))));
+
+  const controls = pressable.filter((element) => !pressable.some((other) => other !== element && element.contains(other))).map((element) => ({
+    element,
+    label: (element.getAttribute('aria-label') ?? (element instanceof HTMLElement ? element.innerText : '')).trim()
+      || (element instanceof HTMLInputElement ? element.value : '') || (element.getAttribute('title') ?? ''),
+  }));
+
+  const said = (node: Text | HTMLInputElement | HTMLTextAreaElement): string => (node instanceof Text ? node.textContent ?? '' : node.value).trim();
+  const textWhere = (inside: (node: Node) => boolean): string => texts.filter(inside).map(said).join(' ');
   const patterns = new Map(names.map((name) => [name, new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'iu')]));
   const others = (name: string, text: string): boolean => names.some((other) => other !== name && (patterns.get(other)?.test(text) ?? false));
-  const interactive = 'button,a[href],input:not([type=hidden]),textarea,label,summary,[role=button],[role=link],[role=radio],[role=option],[role=checkbox],[role=menuitem],[role=tab],[tabindex]:not([tabindex="-1"])';
   const regions: Record<string, Region[]> = {};
-  const pressing: Element[] = [];
+  const pressing = new Set<Element>();
+
+  const below = (cell: Element) => (each: Node): boolean => {
+    const column = cell.getBoundingClientRect();
+    const box = boxes.get(each);
+
+    return box !== undefined && box.left + box.width / 2 >= column.left && box.left + box.width / 2 <= column.right && box.top >= column.top - 1;
+  };
 
   for (const name of names) {
-    const found = new Set<Element>();
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const rows = new Set<Element>();
+    const columns = new Set<Element>();
 
-    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-      const text = node.textContent ?? '';
-      let region = node.parentElement;
+    for (const node of texts) {
+      const start = node instanceof Text ? node.parentElement : node;
 
-      if (region === null || !shown(region) || !(patterns.get(name)?.test(text) ?? false) || others(name, text)) continue;
+      if (start === null || !(patterns.get(name)?.test(said(node)) ?? false) || others(name, said(node))) continue;
+      let row = start;
 
-      while (region.parentElement !== null && region.parentElement !== document.body && !others(name, textOf(region.parentElement))) {
-        region = region.parentElement;
+      while (row.parentElement !== null && row.parentElement !== document.body && !others(name, textWhere((each) => row.parentElement?.contains(each) ?? false))) {
+        row = row.parentElement;
       }
 
-      found.add(region);
+      rows.add(row);
+      let cell = start;
+
+      while (cell.parentElement !== null && ['inline', 'contents'].includes(getComputedStyle(cell).display)) cell = cell.parentElement;
+      columns.add(cell);
     }
 
-    regions[name] = [...found].map((region) => {
-      const controls = [region, ...region.querySelectorAll('*')]
-        .filter((element) => shown(element) && (element.matches(interactive) || (getComputedStyle(element).cursor === 'pointer'
-          && (element.parentElement === null || getComputedStyle(element.parentElement).cursor !== 'pointer'))))
-        // A label and the field it wraps are one control.
-        .filter((element, _, all) => !all.some((other) => other !== element && other.matches('label') && other.contains(element)))
-        .map((element) => ({
-          element,
-          label: (element.getAttribute('aria-label') ?? (element instanceof HTMLElement ? element.innerText : '')).trim()
-            || (element instanceof HTMLInputElement ? element.value : '') || (element.getAttribute('title') ?? ''),
-        }));
+    const parts = [...[...rows].map((row) => (each: Node) => row.contains(each)), ...[...columns].map(below)];
+
+    regions[name] = parts.flatMap((inside) => {
+      const text = textWhere(inside);
+
+      if (others(name, text)) return [];
+      const held = controls.filter((control) => inside(control.element));
 
       if (press !== null && press.name === name) {
-        pressing.push(...controls.filter((control) => press.label === null ? controls.length === 1 : new RegExp(press.label, 'i').test(control.label))
-          .map((control) => control.element));
+        for (const control of held) if (press.label === null ? held.length === 1 : new RegExp(press.label, 'i').test(control.label)) pressing.add(control.element);
       }
 
-      const box = region.getBoundingClientRect();
-
-      return {
-        text: textOf(region), controls: controls.map((control) => control.label),
-        clipped: box.left < -1 || box.right > document.documentElement.clientWidth + 1,
-      };
+      return [{ text, controls: held.map((control) => control.label) }];
     });
   }
 
-  return { sight: { text: textOf(document.body), regions }, control: pressing.length === 1 ? pressing[0] ?? null : null };
+  return { sight: { text: textWhere(() => true), regions }, control: pressing.size === 1 ? [...pressing][0] ?? null : null };
 }
 
 /** A reading as a check's evidence: its text and each name's parts, cut short. */
@@ -108,7 +129,7 @@ export function sightEvidence(sight: Sight): JsonValue {
   return {
     text: sight.text.slice(0, 600),
     regions: Object.fromEntries(Object.entries(sight.regions).map(([name, regions]) => [name, regions.map((region) => ({
-      text: region.text.slice(0, 300), controls: [...region.controls], clipped: region.clipped,
+      text: region.text.slice(0, 300), controls: [...region.controls],
     }))])),
   };
 }
