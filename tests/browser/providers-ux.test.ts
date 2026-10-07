@@ -120,6 +120,7 @@ describe('the providers list', () => {
       // Disconnected after its warning, the key and the model go together.
       await page.keyboard.press('Escape');
       await page.click('[data-settings-section="providers"]');
+      await page.waitForSelector('[data-provider="Groq"] button[aria-label="Disconnect Groq"]');
       await page.click('[data-provider="Groq"] button[aria-label="Disconnect Groq"]');
       await page.waitForSelector('[role="dialog"]');
       await page.$$eval('[role="dialog"] button', (buttons) => {
