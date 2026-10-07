@@ -188,7 +188,7 @@ export class FacetChat {
       },
       now: () => Date.now(),
       transaction: (body) => storage.transactionSync(body),
-      turnIsLive: (turnId) => this.session.pumping && this.session.currentTurnId === turnId,
+      turnIsLive: (turnId) => this.session.turnMayStillRun(turnId),
       scheduleRetry: (atMs) => workspace.armWake(atMs),
       settled: async () => {},
       // An eviction leaves the effects owed; the workspace's wake re-drives them.

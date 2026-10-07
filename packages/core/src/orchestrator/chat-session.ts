@@ -381,6 +381,13 @@ export class ChatSession {
     return [...new Set([this.runId, this.reopenedRunId].filter((runId): runId is string => runId !== null))];
   }
   get currentTurnId(): string | null { return this.turnId; }
+
+  /** Whether another response of this turn may still run: the live one, or a run the ledger holds open, which a
+   *  restart re-opens as a continuation (the settling response's own run is already closed). */
+  turnMayStillRun(turnId: string): boolean {
+    return (this.pumping && this.turnId === turnId) || this.eventRecorder.openTurn()?.turn.turnId === turnId;
+  }
+
   /** The owner's teardown calls this first. */
   close(): void {
     this.ended = true;

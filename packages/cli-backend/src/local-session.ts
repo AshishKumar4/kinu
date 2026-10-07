@@ -1869,7 +1869,7 @@ export class LocalAgentSession {
         transaction: <T,>(body: () => T): T => writeTransaction(this.db, body),
         // A re-announced turn keeps its id, so two responses can share a `turnId`; without this a close
         // deleted the live claim.
-        turnIsLive: (turnId) => this.chat.pumping && this.chat.currentTurnId === turnId,
+        turnIsLive: (turnId) => this.chat.turnMayStillRun(turnId),
       scheduleRetry: (atMs) => this.scheduleTerminalRetry(atMs),
       // The timer also wakes a deferred job; it goes only when neither ledger owes it.
       settled: () => {

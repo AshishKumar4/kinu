@@ -1268,8 +1268,8 @@ export abstract class ActorAgent extends Agent<Env> {
       // regardless of what core later puts between them.
       transaction: (body) => this.ctx.storage.transactionSync(body),
       // Release must not run while an auto-continuation is calling tools under this turn before it
-      // has its own terminal claim; see {@link turnMayStillRun}.
-      turnIsLive: (turnId) => this.turnMayStillRun(turnId),
+      // has its own terminal claim.
+      turnIsLive: (turnId) => this.chatLoop.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
       settled: () => this.restWhenIdle(),
       // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber.
@@ -1280,18 +1280,6 @@ export abstract class ActorAgent extends Agent<Env> {
     });
 
     return this._terminalTransitions;
-  }
-
-  /**
-   * Whether another response of this turn may still run. `_inFlight` misses a fresh activation
-   * after isolate death, and `durableTurnId` alone outlives its turn.
-   */
-  private turnMayStillRun(turnId: string): boolean {
-    if (this._inFlight && this.durableTurnId() === turnId) return true;
-
-    // A ledger-open run for this turn will be re-opened as a continuation on restart; the settling
-    // response's own run is already closed.
-    return this.eventRecorder.openTurn()?.turn.turnId === turnId;
   }
 
   /** Set by the last maintenance pass. */
