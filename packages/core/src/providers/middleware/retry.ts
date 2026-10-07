@@ -46,9 +46,8 @@ export interface RetryPolicy {
   readonly pacer?: ProviderPacer;
 }
 
-/** Kinu's own call options, which no provider reads: `retries` is the call's, `raw` whether its caller asked for raw
- *  events, which this layer always asks for so that silence is measured per event. */
-const KinuOptionsSchema = v.looseObject({ kinu: v.optional(v.looseObject({ retries: v.optional(v.number()), raw: v.optional(v.boolean()) })) });
+/** Kinu's own call options, read here and never passed to the provider. */
+const KinuOptionsSchema = v.looseObject({ kinu: v.optional(v.looseObject({ retries: v.optional(v.number()) })) });
 
 /** A call's own retries, as `providerOptions`; a chain entry takes a call with none. */
 export function callRetries(retries: number): SharedV4ProviderOptions {
@@ -60,11 +59,11 @@ interface KinuOptions {
   readonly raw: boolean;
 }
 
-function kinuOptions(params: LanguageModelV4CallOptions): KinuOptions {
-  const stated = v.safeParse(KinuOptionsSchema, params.providerOptions ?? {});
-  const kinu = stated.success ? stated.output.kinu : undefined;
+/** Each provider call's own options, read off the call before it reaches the provider and kept by the call it became. */
+const callOptions = new WeakMap<LanguageModelV4CallOptions, KinuOptions>();
 
-  return { retries: kinu?.retries ?? DEFAULT_PROVIDER_RETRIES, raw: kinu?.raw ?? false };
+function kinuOptions(params: LanguageModelV4CallOptions): KinuOptions {
+  return callOptions.get(params) ?? { retries: DEFAULT_PROVIDER_RETRIES, raw: false };
 }
 
 type Opened<T> =
@@ -78,11 +77,18 @@ type Open<T> = (last: boolean) => Promise<Opened<T>>;
 export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
   return {
     specificationVersion: 'v4',
-    transformParams: async ({ params }) => ({
-      ...params,
-      includeRawChunks: true,
-      providerOptions: { ...params.providerOptions, kinu: { ...params.providerOptions?.kinu, raw: params.includeRawChunks === true } },
-    }),
+    transformParams: async ({ params }) => {
+      const { kinu: _kinu, ...providerOptions } = params.providerOptions ?? {};
+      const stated = v.safeParse(KinuOptionsSchema, params.providerOptions ?? {});
+      const call: LanguageModelV4CallOptions = { ...params, includeRawChunks: true, providerOptions };
+
+      callOptions.set(call, {
+        retries: (stated.success ? stated.output.kinu?.retries : undefined) ?? DEFAULT_PROVIDER_RETRIES,
+        raw: params.includeRawChunks === true,
+      });
+
+      return call;
+    },
     wrapGenerate: ({ doGenerate, doStream, params }) => settle(retrying(policy, params, policy.generateByStream === true
       ? async (last) => {
         const opened = await openStream({ provider: policy.provider, opening: doStream(), last, keepRaw: false });
