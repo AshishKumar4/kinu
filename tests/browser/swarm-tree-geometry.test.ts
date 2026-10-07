@@ -996,3 +996,55 @@ test('a run shows the preset or composition it resolved, and counts each node by
     await page.close();
   });
 });
+
+/** The step a running head is still writing, as the open transcript shows it; empty when there is none. */
+const arrivingStep = (page: Page): Promise<string> => page.evaluate(() => document.querySelector('[data-node-pending-step]')?.textContent ?? '');
+
+/** Has the workspace's server send `frames` on the open socket, in order. */
+async function headFrames(page: Page, frames: Record<string, string>[]): Promise<void> {
+  await page.evaluate((all) => {
+    for (const detail of all) window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail }));
+  }, frames);
+}
+
+/**
+ * A head's step paints as it arrives, from the provider's own deltas: its thinking first, then its prose, each
+ * verbatim and in order, and never another head's. Once the step lands in the journal the paint goes, so the step is
+ * never shown twice, and the head's next step starts clean.
+ */
+test('a running head paints its arriving step, only its own, until the step lands', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setViewport({ width: 1920, height: 1100 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('button[title="Swarms"]');
+    await page.click('button[title="Swarms"]');
+    await page.waitForSelector('[data-run-node="lv003"]');
+    // The node list may sit in a panel this layout keeps folded; the row is what opens the head, not its geometry.
+    await page.$eval('[data-run-node="lv003"]', (row) => { if (row instanceof HTMLElement) row.click(); });
+    await page.waitForFunction(() => document.body.textContent?.includes('the guard may have moved rather than gone') === true);
+    expect(await arrivingStep(page)).toBe('');
+
+    await headFrames(page, [{ type: 'head_stream', headId: 'lv003', kind: 'reasoning', delta: 'Weighing the two readers.' }]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]')?.textContent?.includes('Weighing the two readers.') === true);
+
+    await headFrames(page, [
+      { type: 'head_stream', headId: 'lv004', kind: 'text', delta: 'Another head entirely.' },
+      { type: 'head_stream', headId: 'lv003', kind: 'text', delta: 'Two readers' },
+      { type: 'head_stream', headId: 'lv003', kind: 'text', delta: ' skip the guard.' },
+    ]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]')?.textContent?.includes('Two readers skip the guard.') === true);
+    const painted = await arrivingStep(page);
+
+    expect(painted).toContain('Weighing the two readers.');
+    expect(painted).not.toContain('Another head entirely.');
+
+    await headFrames(page, [{ type: 'head_activity', headId: 'lv003' }]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]') === null);
+
+    await headFrames(page, [{ type: 'head_stream', headId: 'lv003', kind: 'text', delta: 'Next step.' }]);
+    await page.waitForFunction(() => document.querySelector('[data-node-pending-step]') !== null);
+    expect(await arrivingStep(page)).toBe('Next step.');
+    await page.close();
+  });
+});
