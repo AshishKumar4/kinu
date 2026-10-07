@@ -69,7 +69,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.answers.parentReport(report); }
   autoTitle(subject: string, title: string | null) { return this.answers.autoTitle(subject, title); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.answers.hireAdvisor(advisor); }
-  owes(next: number | null) { return this.answers.owes(next); }
+  owes(next: number | null, holds: boolean) { return this.answers.owes(next, holds); }
   birthContext(drainTurnId: string) { return this.answers.birthContext(drainTurnId); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.answers.steerSkills(text, alreadyActive); }
   getAuth(key: string, opts?: AuthRequest) { return this.answers.getAuth(key, opts); }
@@ -143,7 +143,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return relayedAnswer(this.host().parentReport(report)); }
   autoTitle(subject: string, title: string | null) { return relayedAnswer(this.host().autoTitle(subject, title)); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return relayedAnswer(this.host().hireAdvisor(advisor)); }
-  owes(next: number | null) { return relayedAnswer(this.host().owes(next)); }
+  owes(next: number | null, holds: boolean) { return relayedAnswer(this.host().owes(next, holds)); }
   birthContext(drainTurnId: string) { return relayedAnswer(this.host().birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return relayedAnswer(this.host().steerSkills(text, alreadyActive)); }
   getAuth(key: string, opts?: AuthRequest) { return relayedAnswer(this.host().getAuth(key, opts)); }

@@ -122,14 +122,17 @@ export function readWorkspaceWork(
 }
 
 /** Settled jobs count (the record is the content); a live turn with nothing renderable does not. */
-export function hasWorkspaceWork({ work, pending, jobs, changes, notes }: {
+export function hasWorkspaceWork({ work, pending, jobs, changes, notes, owed }: {
   work: WorkspaceWork | null;
   pending: readonly PendingAction[];
   jobs: readonly Pick<BackgroundJob, 'id'>[];
   changes: readonly ChangelogEntry[];
   notes: readonly MemoryNote[];
+  /** Turns or effects still owed that Work → Now lists (`inspectWork`). */
+  owed: boolean;
 }): boolean {
-  return (work?.plans.length ?? 0) > 0
+  return owed
+    || (work?.plans.length ?? 0) > 0
     || (work?.tasks.some((row) => row.tasks.length > 0) ?? false)
     || pending.length > 0
     || jobs.length > 0

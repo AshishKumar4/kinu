@@ -62,6 +62,11 @@ test("an agent's refused title waits with no wake through laps and a reset isola
   const asked = titling.asked;
 
   await until(() => agentWakes(workspace.db).length === 0, 'the parked agent let its wake go');
+  // Owed with no wake, it is still the workspace's owed work: Work → Now lists it under the agent, and Work is shown.
+  const owed = (await workspace.agent.inspectWork()).filter((row) => row.actor !== null);
+
+  expect(owed.map(({ kind, label, phase }) => ({ kind, label, phase }))).toEqual([{ kind: 'effect', label: 'auto_title', phase: 'waiting' }]);
+  expect((await workspace.agent.getWorkspaceTabPresence()).work).toBe(true);
   await lapLater(workspace);
   workspace.agent.harnessResetAgentIsolate(workspace.agent.agentOf(actorId).storageKey);
   await lapLater(workspace);
