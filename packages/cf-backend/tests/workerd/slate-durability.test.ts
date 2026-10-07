@@ -176,6 +176,21 @@ it('the workspace terminal is the runtime shell: a typed line runs and its outpu
   expect(drive.frames).toContain('ready');
   expect(drive.frames).not.toContain('other');
   expect(drive.output).toContain('shell-23');
+
+  // A pane that attaches after the first left is shown the screen, then told the terminal is ready.
+  const again = await subject().reattachTerminal(workspace);
+
+  expect(again.output).toContain('shell-23');
+  expect(again.frames.at(-1)).toBe('ready');
+  expect(again.frames).not.toContain('other');
+
+  // A frame that is no terminal frame closes its socket as a policy violation; the shell never runs it.
+  for (const frame of [JSON.stringify({ type: 'rpc', id: '1', method: 'exportWorkspaceArchive' }), 'not json']) {
+    const refused = await subject().refusedTerminalFrame(workspace, frame);
+
+    expect(refused.code).toBe(1008);
+    expect(refused.reason).toContain('terminal frame refused');
+  }
 });
 
 it('a node run leaves its log janitor as an alarm the object sleeps on, not a timer it stays awake for', async () => {

@@ -1,89 +1,17 @@
 /**
- * The workspace shell at its runtime and actor seams, tied by the terminal socket tag.
- * The workerd tier (slate-durability.test.ts) drives one real socket through both.
+ * The actor's seam of the workspace terminal: which sockets reach the shell, and that broadcasts skip them. The workerd
+ * tier (slate-durability.test.ts) drives real sockets: a typed line, a reattach's replay, a refused frame.
  */
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { describe, expect, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
 import type { Connection } from 'agents';
-import { AwaitedList } from '@kinu.run/test-utils';
-import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
-import { programmaticHostOver } from './helpers/programmatic-host';
 import { orchestratorHarness } from './helpers/actor-harness';
-import { WORKSPACE_TERMINAL_TAG, WorkspaceTerminalOutputSchema } from '@kinu.run/core';
+import { WORKSPACE_TERMINAL_TAG } from '@kinu.run/core';
 import type { TerminalSocket, WorkspaceTerminal } from '../src/workspace-host';
 import { socketConnection } from './helpers/bindings';
-import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 
 // After the harness registers the SDK mock: a static import would bind it to the real `agents` Agent.
 const { ActorAgent } = await import('../src/actor-agent');
-
-const databases: Database[] = [];
-
-afterEach(() => {
-  for (const database of databases.splice(0)) database.close();
-});
-
-async function openRuntimeTerminal(): Promise<WorkspaceTerminal> {
-  const database = new Database(':memory:');
-  databases.push(database);
-
-  const { sql, transactions } = inlineWorkspaceStorage(database);
-
-  const workspace = await NimbusWorkspace.create({
-    sql,
-    transactions,
-    generation: 1,
-    processes: new SessionProcessSupervisor(),
-  });
-
-  return await programmaticHostOver(workspace).runtime();
-}
-
-interface PaneSocket {
-  readonly ws: TerminalSocket;
-  readonly frames: Array<v.InferOutput<typeof WorkspaceTerminalOutputSchema>>;
-  readonly painted: (text: string) => Promise<void>;
-  readonly output: () => string;
-}
-
-function paneSocket(): PaneSocket {
-  const raw = new AwaitedList<string>();
-  const frames: PaneSocket['frames'] = [];
-  const output = () => frames.flatMap((frame) => frame.type === 'output' ? [frame.data] : []).join('');
-
-  const ws: TerminalSocket = {
-    send: (data: string) => {
-      const parsed = v.safeParse(WorkspaceTerminalOutputSchema, JSON.parse(data));
-
-      if (parsed.success) frames.push(parsed.output);
-      raw.push(data);
-    },
-  };
-
-  return { ws, frames, output, painted: (text) => raw.until(() => output().includes(text)) };
-}
-
-describe('the runtime terminal speaks the frames the pane paints', () => {
-  test('attach says ready, a typed line runs, and a reattach replays the screen', async () => {
-    const terminal = await openRuntimeTerminal();
-    const first = paneSocket();
-
-    await terminal.attachTerminal(first.ws);
-    expect(first.frames.map((frame) => frame.type)).toContain('ready');
-
-    await terminal.terminalFrame(first.ws, JSON.stringify({ type: 'resize', cols: 100, rows: 30 }));
-    await terminal.terminalFrame(first.ws, JSON.stringify({ type: 'input', data: 'echo shell-$((20+3))\r' }));
-    await first.painted('shell-23');
-    terminal.terminalClose(first.ws);
-
-    const second = paneSocket();
-    await terminal.attachTerminal(second.ws);
-    expect(second.output()).toContain('shell-23');
-    expect(second.frames.at(-1)?.type).toBe('ready');
-  });
-});
 
 interface RecordedTerminal {
   readonly terminal: WorkspaceTerminal;
@@ -158,19 +86,6 @@ describe('the actor hands a terminal socket to the runtime shell', () => {
       'close:pane',
     ]);
     expect(pane.closed).toEqual([]);
-  });
-
-  test('a frame of the wrong shape closes the socket, and the shell never sees it', async () => {
-    const { gate, recorded } = await activated();
-    const pane = connection('pane', [WORKSPACE_TERMINAL_TAG]);
-
-    await gate(pane.wire, JSON.stringify({ type: 'rpc', id: '1', method: 'exportWorkspaceArchive' }));
-    await gate(pane.wire, 'not json');
-    await gate(pane.wire, new ArrayBuffer(4));
-
-    expect(recorded.calls).toEqual([]);
-    expect(pane.closed.map((close) => close.code)).toEqual([1008, 1008, 1008]);
-    expect(pane.closed[0]?.reason).toContain('terminal frame refused');
   });
 
   test('a socket without the tag is a chat socket: the shell is never reached', async () => {
