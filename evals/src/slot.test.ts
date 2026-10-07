@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { DEV_IDENTITY_ACCOUNT_HEADER, parseEvalAccount } from '@kinu.run/core';
+import { DEV_IDENTITY_ACCOUNT_HEADER, inheritedRows, parseEvalAccount } from '@kinu.run/core';
 import { WORKSPACE_LEASE_MS } from './session';
-import { claimTrialAccount, inheritedRows, prepareTrialAccount, sharedAccounts, trialAccountsAt, trialSlot } from './slot';
+import { claimTrialAccount, prepareTrialAccount, sharedAccounts, trialAccountsAt, trialSlot } from './slot';
 import type { EvalTarget } from './target';
 
 const TASK_FILES = ['budget-board.eval.ts', 'chess.eval.ts', 'launch-prep.eval.ts', 'order-book.eval.ts'];

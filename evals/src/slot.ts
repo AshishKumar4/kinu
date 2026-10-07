@@ -8,7 +8,7 @@
 // and a row the trial could inherit stops it, named. A deployment that predates trial accounts runs its trials on
 // eval-service, as before, and the report says so.
 import * as v from 'valibot';
-import { EVAL_TRIAL_ACCOUNTS, parseEvalAccount, type EvalAccount } from '@kinu.run/core';
+import { EVAL_TRIAL_ACCOUNTS, inheritedRows, parseEvalAccount, type EvalAccount } from '@kinu.run/core';
 import { deleteWorkspace, listWorkspaces, webHeaders, WORKSPACE_LEASE_MS } from './session';
 import type { EvalMatrix } from './config';
 import type { EvalTarget } from './target';
@@ -45,23 +45,6 @@ export function trialSlot(place: TrialPlace): EvalAccount {
 export function trialAccounts(taskFiles: readonly string[], matrix: TrialPlace['matrix']): EvalAccount[] {
   return [...taskFiles].sort().flatMap((file) => matrix.models.flatMap((model) => matrix.arms.flatMap((arm) =>
     Array.from({ length: matrix.trials }, (_, at) => trialSlot({ taskFiles, task: file.replace(/\.eval\.ts$/u, ''), matrix, model, arm, trial: at + 1 })))));
-}
-
-/**
- * The tables a trial account may hold rows in when its trial opens: its provider keys and what keeps them (the
- * revision counters, grants a disconnect could not revoke), and the account's own bookkeeping (its profile, onboarding,
- * schema version, token generation, and the agents SDK's state row, which the account never writes). A device-status
- * watcher names the workspace that registered it, which the account keeps after the workspace is deleted until a
- * device moves: no later trial opens a workspace of that name.
- */
-const KEEPS: ReadonlySet<string> = new Set([
-  'user_credentials', 'user_credential_revisions', 'user_credentials_revision', 'user_unrevoked_grants',
-  'user_schema_meta', 'user_profile', 'user_onboarding', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
-]);
-
-/** Of an account's rows by table, the ones a trial would inherit from the trial before it in the slot. */
-export function inheritedRows(held: Readonly<Record<string, number>>): Record<string, number> {
-  return Object.fromEntries(Object.entries(held).filter(([table, rows]) => rows > 0 && !KEEPS.has(table)));
 }
 
 export type TrialAccounts = { readonly kind: 'trial' } | { readonly kind: 'shared'; readonly why: string };
