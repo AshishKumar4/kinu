@@ -357,8 +357,15 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
       id: 'u-plan', origin: 'input', message: { role: 'user', content: 'Plan it first.' }, metadata: { kinuMode: 'plan' },
     });
+    const plan = await write();
 
-    return { auto, plan: await write() };
+    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, { id: 'u-auto', origin: 'input', message: { role: 'user', content: 'Go ahead.' } });
+    const autoAgain = await write();
+
+    // A planner's role holds every call to Plan, whatever its last ask asked for.
+    await this.setRole('planner');
+
+    return { auto, plan, autoAgain, planner: await write() };
   }
 
   /** `done` once a transition closed; an open one answers that it resumed. */

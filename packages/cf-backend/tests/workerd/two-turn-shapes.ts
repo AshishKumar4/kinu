@@ -380,10 +380,13 @@ export interface AlienEffect {
   readonly transition: string;
 }
 
-/** An answer's page writing a file through `workspace`, in Auto, and again after the owner's next ask is a Plan one. */
+/** An answer's page writing a file through `workspace`: in Auto, after a Plan ask, after an Auto ask again, and
+ *  once the author's role is planner. */
 export interface AnswerPageModes {
   readonly auto: string;
   readonly plan: string;
+  readonly autoAgain: string;
+  readonly planner: string;
 }
 
 /** A hired agent's answer with a `<slate-ui>` block, as a page's `workspace` call resolves it: under its own id the
