@@ -114,7 +114,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     },
 
     createModel(modelId, deps): LanguageModel {
-      const transport = heardFetch(opts.egress ?? deps.fetch ?? fetch);
+      const transport = opts.egress ?? deps.fetch ?? fetch;
 
       const customFetch = asFetchFunction((input, init) => settle(Effect.gen(function* () {
         // A refused renewal keeps the SDK's 401 remedy.
@@ -178,7 +178,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         return withCallAccount(res, 'codex', answer.auth.credentialKey ?? CODEX_CRED_KEY);
       })));
 
-      const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });
+      const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: heardFetch(customFetch) });
 
       return wrapLanguageModel({ model: provider.responses(modelId), middleware: statelessResponses(true) });
     },

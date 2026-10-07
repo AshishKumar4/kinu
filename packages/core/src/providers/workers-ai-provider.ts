@@ -11,7 +11,7 @@ import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
 import { WORKERS_AI_PREFERRED_MODEL_IDS } from './workers-ai-catalog';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 import { toolCallIdMiddleware } from './middleware/tool-call-id';
-import { heardBinding } from './middleware/attempt';
+import { heardBinding, heardFetch } from './middleware/attempt';
 
 /** `env.AI` as the provider takes it: `Ai` where workers-types are loaded. */
 type WorkersAIChatBinding = NonNullable<WorkersAISettings['binding']>;
@@ -59,6 +59,6 @@ function userAccountModel(modelId: string, deps: ModelCallDeps): LanguageModelV4
   return createOpenAICompatible({
     name: 'workers-ai',
     baseURL: placeholder,
-    fetch: customFetch,
+    fetch: heardFetch(customFetch),
   }).chatModel(modelId);
 }

@@ -338,6 +338,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         const url = requestUrl(input);
         const route = await relayed(deps);
 
+        // The raw answer reports its keepalives: `guardedStream` re-reads it and drops comments.
         const send = heardFetch(route?.fetch ?? deps.fetch ?? fetch);
 
         // A device's own sign-in renews nowhere from here: its 401 is the answer.

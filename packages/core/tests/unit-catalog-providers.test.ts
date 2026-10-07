@@ -1,9 +1,10 @@
 // models.dev catalog widening: a catalog provider with a stored `<id>.bearer` key resolves via
 // openai-compat, while bespoke static providers stay authoritative for their ids.
-import { describe, test, expect } from 'bun:test';
+import { afterEach, describe, test, expect, jest } from 'bun:test';
 import { generateText, jsonSchema, streamText, tool } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
+  asFetchFunction,
   createProviderRegistry,
   createModelsDevCatalogSource,
   catalogCredKey,
@@ -11,7 +12,8 @@ import {
   listModelsDevProviders,
   modelsDevCompatBaseURL,
   reasoningEffortOptions,
-  type ModelCallDeps, type AuthResolution, type ModelProvider,
+  silenceBoundMs,
+  type ModelCallDeps, type AuthResolution, type JsonObject, type ModelProvider,
 } from '../src/index';
 import { describeProviderError } from '../src/providers/util';
 import { getModelsDevModelEndpoint } from '../src/providers/models-dev';
@@ -443,5 +445,61 @@ describe('registry with dynamic catalog source', () => {
     }
 
     expect(detail).toContain('models.dev');
+  });
+});
+
+describe('a catalog model whose models.dev read lands inside its first call', () => {
+  afterEach(() => { jest.useRealTimers(); });
+
+  test('the inference stream, not the catalog read, reports keepalives to the silence bound', async () => {
+    jest.useFakeTimers();
+    const encoder = new TextEncoder();
+    let pulls = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
+    const body = new ReadableStream<Uint8Array>({ pull(controller) { pulls.resolve(controller); } }, { highWaterMark: 0 });
+
+    const next = async (): Promise<ReadableStreamDefaultController<Uint8Array>> => {
+      const controller = await pulls.promise;
+
+      pulls = Promise.withResolvers();
+
+      return controller;
+    };
+
+    const asked: string[] = [];
+
+    // A fetch of its own: the catalog cache is cold, so the model resolves its endpoint inside the attempt.
+    const fetchFn = asFetchFunction(async (input) => {
+      const url = input instanceof Request ? input.url : input.toString();
+
+      asked.push(url.includes('models.dev') ? 'models.dev' : 'inference');
+
+      return url.includes('models.dev')
+        ? Response.json({ thinking: { id: 'thinking', npm: '@ai-sdk/openai-compatible', api: 'https://thinking.test/v1', models: { m: { id: 'm', tool_call: true } } } })
+        : new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+    });
+
+    const registry = createProviderRegistry();
+
+    registry.registerDynamic(createModelsDevCatalogSource());
+    const deps = makeDeps({ 'thinking.bearer': { headers: { Authorization: 'Bearer key' } } }, fetchFn);
+    const result = streamText({ model: registry.resolve('thinking/m', deps), prompt: 'hello', maxRetries: 0 });
+    const IDLE_MS = silenceBoundMs('provider.stream.idle_ms');
+
+    for (let comment = 0; comment < 3; comment++) {
+      const controller = await next();
+
+      for (let turn = 0; turn < 100; turn++) await Promise.resolve();
+      jest.advanceTimersByTime(IDLE_MS - 1);
+      controller.enqueue(encoder.encode(': OPENROUTER PROCESSING\n\n'));
+    }
+
+    const frame = (event: JsonObject) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+
+    (await next()).enqueue(frame({ choices: [{ delta: { content: 'thought it through' } }] }));
+    (await next()).enqueue(frame({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } }));
+    (await next()).enqueue(encoder.encode('data: [DONE]\n\n'));
+    (await next()).close();
+
+    expect({ text: await result.text, asked }).toEqual({ text: 'thought it through', asked: ['models.dev', 'inference'] });
   });
 });

@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import type { ModelProvider, ModelInfo } from './types';
 import { authCacheKey, createAuthedFetch } from './util';
 import { knownReasoningEfforts } from './reasoning-effort';
+import { heardFetch } from './middleware/attempt';
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -94,7 +95,7 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
       return createOpenAICompatible({
         name: 'openrouter',
         baseURL: OPENROUTER_BASE_URL,
-        fetch: customFetch,
+        fetch: heardFetch(customFetch),
       }).chatModel(modelId);
     },
   };

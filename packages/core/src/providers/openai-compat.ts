@@ -7,6 +7,7 @@ import { baseCredentialKey } from '../credentials/accounts';
 import type { DynamicProviderSource } from './registry';
 import type { AuthResolution, ModelInfo, ModelProvider } from './types';
 import { createAuthedFetch, positiveInteger } from './util';
+import { heardFetch } from './middleware/attempt';
 
 const ModelListSchema = v.object({
   data: v.array(v.object({
@@ -90,7 +91,7 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
       return createOpenAICompatible({
         name: providerId,
         baseURL: placeholder,
-        fetch: customFetch,
+        fetch: heardFetch(customFetch),
       }).chatModel(modelId);
     },
   };

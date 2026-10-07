@@ -1,9 +1,9 @@
 /**
  * One provider attempt's reach below the model stack: its own cancel, which the retry layer fires when the attempt goes
  * silent, and its wire's activity, which a transport reports as bytes arrive. SSE comments are activity no stream part
- * carries (OpenRouter's `: OPENROUTER PROCESSING` while a model thinks). Every transport a model can answer through is
- * decorated where it is chosen: `deps.fetch` in `registry.resolve`, each wire model's fetch (`createWireModel`), and
- * the routes that bypass both (a device relay, an egress, a binding); the first to answer within an attempt reports.
+ * carries (OpenRouter's `: OPENROUTER PROCESSING` while a model thinks). The decorated transport is the inference
+ * request's own, the fetch each SDK provider is built with (ChatGPT's raw send, before its stream is re-read): a side
+ * request inside the attempt (a models.dev refresh, a login renewal) reports nothing.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { LanguageModelV4, LanguageModelV4CallOptions } from '@ai-sdk/provider';
@@ -14,9 +14,6 @@ export interface Attempt {
   /** Aborted when the attempt is abandoned or its caller cancels. */
   readonly signal: AbortSignal;
   readonly heard: () => void;
-  /** True once per attempt: the innermost decorated transport to receive an answer reports, the ones wrapped around it do
-   *  not. */
-  readonly claim: () => boolean;
 }
 
 const current = new AsyncLocalStorage<Attempt>();
@@ -52,8 +49,7 @@ export function attemptBound(model: LanguageModelV4): LanguageModelV4 {
 export function heardFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
   return asFetchFunction(async (input, init) => {
     const response = await fetch(input, init);
-    // A refusal is read whole, and a renewed login asks again within the attempt: only an answer claims it.
-    const body = response.ok ? heardBody(response.body) : null;
+    const body = heardBody(response.body);
 
     return body === null ? response : new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
   });
@@ -71,7 +67,7 @@ export function heardBinding<Binding extends object>(binding: Binding & { run(..
 
 function heardAnswer(answer: BindingAnswer): BindingAnswer {
   if (answer instanceof Response) {
-    const body = answer.ok ? heardBody(answer.body) : null;
+    const body = heardBody(answer.body);
 
     return body === null ? answer : new Response(body, { status: answer.status, statusText: answer.statusText, headers: answer.headers });
   }
@@ -79,11 +75,11 @@ function heardAnswer(answer: BindingAnswer): BindingAnswer {
   return answer instanceof ReadableStream ? heardBody(answer) ?? answer : answer;
 }
 
-/** The body re-read through the attempt's activity report, or null when no attempt is listening or another reports. */
+/** The body re-read through the attempt's activity report, or null when no attempt is listening. */
 function heardBody(body: ReadableStream<Uint8Array> | null): ReadableStream<Uint8Array> | null {
   const attempt = current.getStore();
 
-  if (attempt === undefined || body === null || !attempt.claim()) return null;
+  if (attempt === undefined || body === null) return null;
 
   return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
