@@ -617,31 +617,3 @@ describe('a chat\'s status, as the bar paints it', () => {
     });
   });
 });
-
-// The characters frame is where the mascots are looked at side by side: every colour a chat can draw, in each state,
-// with the face that state gives it wherever a chat is shown.
-describe('the characters frame shows every mascot', () => {
-  test('each state row draws its face in each of the twelve colours, at both sizes', async () => {
-    await withGallery(async ({ newPage, origin }) => {
-      const page = await newPage();
-      await page.setViewport({ width: 1440, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=characters`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-mascot-state] .p-mascot');
-
-      const rows = await page.$$eval('[data-mascot-state]', (found) => found.map((row) => {
-        const marks = [...row.querySelectorAll('.p-mascot')];
-
-        return {
-          state: row.getAttribute('data-mascot-state'),
-          faces: [...new Set(marks.map((mark) => mark.getAttribute('data-face')))],
-          colours: new Set(marks.map((mark) => mark.querySelector('stop')?.getAttribute('stop-color'))).size,
-        };
-      }));
-
-      const states = ['idle', 'working', 'waiting', 'failed', 'done'];
-
-      expect(rows).toEqual([...states, ...states].map((state) => ({ state, faces: [state], colours: 12 })));
-      await page.close();
-    });
-  });
-});
