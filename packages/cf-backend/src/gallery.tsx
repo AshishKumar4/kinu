@@ -24,7 +24,7 @@ import {
 import "virtual:kinu-theme.css";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
+import { hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { AlternateTakeSet, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import {
@@ -80,7 +80,7 @@ import UserSettingsPage from "@/pages/UserSettingsPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
-  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, TURN_CLAIM_FRAME, workspaceGenesisSignal,
+  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, inspectWork, TURN_CLAIM_FRAME, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
@@ -1892,6 +1892,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
   }),
   listPendingConsents: galleryConsents,
+  inspectWork: galleryOwedWork,
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
   listFileCheckpoints: () => REVERT_LISTING,
@@ -2288,8 +2289,39 @@ async function galleryRecoverTurn(): Promise<JsonValue> {
 
   root.galleryRecoveries = String(Number(root.galleryRecoveries ?? "0") + 1);
   galleryServerPush(JSON.stringify({ type: TURN_CLAIM_FRAME, claim: { kind: "settled" } }));
+  // The settling write names the reads it moves, as the server's statement does.
+  galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: readsWrittenBy("UPDATE actor_turn_claims SET outcome = ?") }));
 
   return null;
+}
+
+const OWED_CLAIM = {
+  actorId: "root", runId: "run-1", workMode: "build", status: "admitted", outcome: null, claimedAt: NOW - 60e3,
+  program: { kind: "builtin", version: 1, digest: null, build: null },
+} as const;
+
+const OWED_EFFECT = { name: null, scope: "turn", seq: 0, input: "{}", blocked: null } as const;
+
+const OWED_TURNS = [{ ...OWED_CLAIM, turnId: "turn-live", epoch: 1 }, { ...OWED_CLAIM, turnId: "turn-stranded", epoch: 3 }];
+
+/** `&owed=all`'s work read: one turn this activation runs and one it stranded on its third attempt until a recovery
+ *  settles it, and effects owed each way, folded by core's own projection as the workspace's read folds its stores. */
+function galleryOwedWork(): JsonValue {
+  if (new URLSearchParams(location.search).get("owed") !== "all") return [];
+  const recovered = document.documentElement.dataset.galleryRecoveries !== undefined;
+
+  return v.parse(JsonValueSchema, inspectWork({
+    turns: OWED_TURNS.filter((claim) => !recovered || claim.turnId !== "turn-stranded"),
+    agentTurns: [],
+    executing: new Set(["turn-live"]),
+    effects: [
+      { ...OWED_EFFECT, key: "e-due", rawName: "turn_record", status: "pending", attempts: 1, nextAttemptAt: NOW - 1e3 },
+      { ...OWED_EFFECT, key: "e-backoff", rawName: "follow_up_turn", status: "pending", attempts: 2, nextAttemptAt: NOW + 90e3 },
+      { ...OWED_EFFECT, key: "e-parked", rawName: "drain", status: "parked", attempts: 1, nextAttemptAt: NOW },
+      { ...OWED_EFFECT, key: "e-blocked", rawName: "retired_effect", status: "blocked", attempts: 4, nextAttemptAt: NOW, blocked: "this build does not implement retired_effect" },
+    ],
+    now: NOW,
+  }));
 }
 
 /** What went to the running turn rather than opening one. */
@@ -3495,7 +3527,7 @@ function Shell(
                 surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}}
                 memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} headActivity={headActivity} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-                backgroundJobs={backgroundJobs} onRefreshJobs={() => {}} pendingActions={pendingActions}
+                backgroundJobs={backgroundJobs} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={pendingActions}
                 rpc={rpc}
               />
             </div>
@@ -4867,7 +4899,7 @@ function WorkFrame() {
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={lane.memory} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-          backgroundJobs={jobs} onRefreshJobs={() => {}} pendingActions={lane.queue}
+          backgroundJobs={jobs} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={lane.queue}
           tabPresence={{ explorations: true, work: true }}
           rpc={lane.rpc}
         />
@@ -4923,7 +4955,7 @@ function ApprovalsFrame() {
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={PARKED_ONLY}
+          backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={PARKED_ONLY}
           rpc={approvalsRpc}
         />
         <StandingApprovalsCard rpc={approvalsRpc} />
@@ -4951,7 +4983,7 @@ function WorkEmptyFrame() {
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
+          backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={[]}
           tabPresence={{ explorations: false, work: false }}
           rpc={settledEmptyRpc}
         />
@@ -5213,7 +5245,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={executors} executorOutputs={executorOutputs}
           onExecute={runCommand} lastActiveExecutor="workspace"
-          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
+          backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={[]}
           rpc={filesRpc}
         />
       </div>
