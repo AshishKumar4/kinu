@@ -26,4 +26,12 @@ describe("an answer's slate-ui blocks are drawn in place", () => {
     expect(redrawn).toEqual(Object.keys(SLATE_UI_PAGES));
     expect(reshown).toEqual(SLATE_UI_PAGES);
   });
+
+  // A page runs with its author's authority, so only an answer the agent wrote can name one: a block a browser sends
+  // is never drawn, and neither its message nor an answer under a name the agent never wrote previews.
+  test('a block a browser forges is not drawn and does not preview', () => {
+    const { forged } = verdictOf(observed.slateUi, 'slate-ui');
+
+    expect(forged).toEqual({ drawn: Object.keys(SLATE_UI_PAGES), sent: 'missing', renamed: 'missing', answered: 'ok' });
+  });
 });

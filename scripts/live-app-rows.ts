@@ -31,7 +31,7 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_UI_ASK, SLATE_UI_PAGES, slateUiTurn,
+  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, slateUiTurn,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
@@ -1422,6 +1422,49 @@ interface SlateUiVerdict {
   readonly shown: Readonly<Record<string, string>>;
   readonly redrawn: readonly string[];
   readonly reshown: Readonly<Record<string, string>>;
+  /** After a browser sent a block of its own: the blocks the chat draws, and what a preview of each forged id answered. */
+  readonly forged: {
+    readonly drawn: readonly string[];
+    /** The browser's own message, named as a block. */
+    readonly sent: string;
+    /** The agent's answer, under a name it holds no block of. */
+    readonly renamed: string;
+    /** The agent's answer under a block it wrote, which does preview. */
+    readonly answered: string;
+  };
+}
+
+const HistoryEntriesSchema = v.object({ items: v.array(v.object({ id: v.string(), role: v.string(), content: v.string() })) });
+
+/** What a preview of `id` answered: `ok`, or the refusal's reason. */
+async function previewAnswer(socket: ReturnType<typeof openPublicSocket>, id: string): Promise<string> {
+  const answered = v.parse(v.looseObject({ ok: v.boolean(), reason: v.optional(v.string()) }), await socket.rpc('previewSlate', [id]));
+
+  return answered.ok ? 'ok' : answered.reason ?? 'refused';
+}
+
+/** A browser's own block draws nothing and previews nothing; an answer's id previews only the blocks the answer wrote. */
+async function forgedBlocks(page: Page, origin: string, workspace: string): Promise<SlateUiVerdict['forged']> {
+  const socket = openPublicSocket(origin, { kind: 'loopback' }, `/agents/orchestrator-agent/${workspace}`, new AbortController().signal);
+
+  if (!(await socket.opened)) throw new Error('the forging socket did not open');
+
+  try {
+    await socket.chat(SLATE_UI_FORGED);
+    await until(page, 'the forged message in the chat', `(document.querySelector('#chat')?.textContent ?? '').includes('slate-ui name="forged"') && !(${STOP_OFFERED})`);
+    const { items } = v.parse(HistoryEntriesSchema, await socket.rpc('getChatHistoryPage', [{}]));
+    const sent = items.find((item) => item.role === 'user' && item.content.includes('name="forged"'))?.id ?? 'none';
+    const answer = items.find((item) => item.role === 'assistant' && item.content.includes('<slate-ui name="first">'))?.id ?? 'none';
+
+    return {
+      drawn: await page.$$eval('[data-slate-ui]', (found) => found.map((card) => card.getAttribute('data-slate-ui') ?? '')),
+      sent: await previewAnswer(socket, `${sent}/forged`),
+      renamed: await previewAnswer(socket, `${answer}/forged`),
+      answered: await previewAnswer(socket, `${answer}/first`),
+    };
+  } finally {
+    socket.close('forged');
+  }
 }
 
 const SLATE_UI_DRAWN = `document.querySelectorAll('[data-slate-ui] iframe[src]').length === ${String(Object.keys(SLATE_UI_PAGES).length)}`;
@@ -1459,7 +1502,7 @@ async function measureSlateUi(newPage: LiveApp['newPage'], origin: string): Prom
     await until(page, 'both blocks drawn again', SLATE_UI_DRAWN);
     const again = await slateUiFrames(page);
 
-    return { drawn: first.drawn, shown: first.shown, redrawn: again.drawn, reshown: again.shown };
+    return { drawn: first.drawn, shown: first.shown, redrawn: again.drawn, reshown: again.shown, forged: await forgedBlocks(page, origin, workspace) };
   } finally {
     await page.close();
   }
