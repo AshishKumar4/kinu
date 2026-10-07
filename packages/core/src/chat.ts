@@ -55,7 +55,7 @@ import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
 import { diagnostics, renderThrownChain, toKinuError, type TurnTrace } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
-import { invalidToolCallRefusal } from './tools/tool-schema';
+import { invalidToolCallRefusal, withStableSchemas } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
 import { StepSpans, traceTools } from './turn-trace';
 
@@ -660,7 +660,7 @@ async function admitRequest(opts: ChatOptions) {
   const extensions = opts.extensions;
 
   // Extension tools never shadow a caller tool of the same name.
-  const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
+  const tools = traceTools(opts.trace, withStableSchemas(extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools));
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
   const window = modelWindow(opts.modelContext);
   const { contextWindow } = window;
