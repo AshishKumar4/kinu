@@ -242,7 +242,6 @@ export function facetTurnSources(turn: {
     logger: compactionDiagnostics,
     summarizer: () => registry.resolveModel(prepared.sources.model, affinity),
     spend,
-    model: () => prepared.sources.model,
   });
 
   const sources = turnSourcesFromBundle(prepared.sources, {

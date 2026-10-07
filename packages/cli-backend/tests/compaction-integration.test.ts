@@ -135,6 +135,7 @@ describe('default compaction over the real storage plane', () => {
       },
       archive: state.archive,
       ephemeral: ledger,
+      attachments: { files: () => rt },
       summarize: async () => {
         summarizeCalls++;
 
@@ -164,6 +165,7 @@ describe('default compaction over the real storage plane', () => {
 
     const drive = async (messages: ModelMessage[], transformTrigger?: CompactionTrigger) => {
       const options: ChatOptions = {
+        modelSpec: 'fake/fake-model',
         model,
         modelContext: { id: 'fake/fake-model', contextWindow: 10_000 },
         system: 'system prompt',
@@ -290,6 +292,7 @@ describe('default compaction over the real storage plane', () => {
         ports: { transcripts: createVfsTranscriptStore(() => rt.storage.vfs), plans: state.plans, logger: silentLogger },
         archive: state.archive,
         ephemeral: new DynamicContextLedger(),
+        attachments: { files: () => rt },
         summarize: async () => '## Decisions\n- the plan runs in order',
       });
 
@@ -299,6 +302,7 @@ describe('default compaction over the real storage plane', () => {
       const trigger = kind === 'force' && !state.takeArmedCompaction(SESSION) ? undefined : kind;
 
       const options: ChatOptions = {
+        modelSpec: 'fake/fake-model',
         model,
         modelContext: { id: 'fake/fake-model', contextWindow: 100_000 },
         system: 'system prompt',
@@ -348,6 +352,7 @@ describe('default compaction over the real storage plane', () => {
       },
       archive: state.archive,
       ephemeral: ledger,
+      attachments: { files: () => rt },
       summarize: async () => { throw new Error('no summary should be needed'); },
       onOutcome: (event) => {
         outcomes.push(event);
@@ -362,6 +367,7 @@ describe('default compaction over the real storage plane', () => {
 
     const drive = (providerReportedTokens?: number) => (async () => {
       const options: ChatOptions = {
+        modelSpec: 'fake/fake-model',
         model,
         modelContext: { id: 'fake/fake-model', contextWindow: 10_000 },
         system: 'system prompt',

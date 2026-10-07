@@ -147,6 +147,7 @@ describe('exact turn admission', () => {
     const counter = scriptedCounter([LIMIT]);
 
     const { messages: out } = await assembleTurnMessages({
+      model: 'test/model',
       ...base(),
       extensions,
       trigger: 'auto',
@@ -163,6 +164,7 @@ describe('exact turn admission', () => {
     const counter = scriptedCounter([LIMIT + 1, LIMIT]);
 
     const { messages: out } = await assembleTurnMessages({
+      model: 'test/model',
       ...base(),
       extensions,
       trigger: 'auto',
@@ -180,6 +182,7 @@ describe('exact turn admission', () => {
     const counter = scriptedCounter([LIMIT + 50_000, LIMIT + 1]);
 
     const failure = await refusalOf(assembleTurnMessages({
+      model: 'test/model',
       ...base(),
       extensions,
       trigger: 'auto',
@@ -200,6 +203,7 @@ describe('exact turn admission', () => {
     const counter = scriptedCounter([LIMIT + 1, LIMIT + 1]);
 
     const failure = await refusalOf(assembleTurnMessages({
+      model: 'test/model',
       ...base(), extensions, trigger: 'auto',
       admission: { count: counter.count, limits: LIMITS },
     }));
@@ -220,6 +224,7 @@ describe('exact turn admission', () => {
     const counter = scriptedCounter([LIMIT + 1]);
 
     const failure = await refusalOf(assembleTurnMessages({
+      model: 'test/model',
       ...base(),
       extensions,
       trigger: 'force',
@@ -236,6 +241,7 @@ describe('exact turn admission', () => {
     let asked = 0;
 
     const { messages: out } = await assembleTurnMessages({
+      model: 'test/model',
       ...base(),
       extensions,
       trigger: 'auto',
@@ -260,6 +266,7 @@ describe('exact turn admission', () => {
     const tight = { contextWindow: 48, modelOutputLimit: 20 };
 
     const { messages: out } = await assembleTurnMessages({
+      model: 'test/model',
       ...base(),
       extensions,
       trigger: 'auto',
@@ -275,6 +282,7 @@ describe('exact turn admission', () => {
     const tight = { contextWindow: 8, modelOutputLimit: 4 };
 
     const failure = await refusalOf(assembleTurnMessages({
+      model: 'test/model',
       ...base(),
       extensions,
       trigger: 'force',
@@ -296,6 +304,7 @@ describe('exact turn admission', () => {
     const request: ModelMessage = { role: 'user', content: 'the request' };
 
     await assembleTurnMessages({
+      model: 'test/model',
       ...base(),
       history: [...HISTORY, request],
       extensions,
@@ -477,6 +486,7 @@ describe('provider count support', () => {
     // One turn: its admission counts the request, then its call sends it; both go through runChat.
     try {
       for await (const _event of runChat({
+        modelSpec: 'test/model',
         model, system, history, tools,
         countInputTokens: (request) => countRequestInputTokens(provider, 'claude-opus-4-7', countDeps, request),
       })) { /* the request is the observation */ }

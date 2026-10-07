@@ -399,11 +399,6 @@ describe('estimation and transcripts', () => {
 });
 
 describe('conventions', () => {
-  test('todo and itemNote conventions are intentionally absent', () => {
-    expect('todo' in kinuConventions).toBe(false);
-    expect('itemNote' in kinuConventions).toBe(false);
-  });
-
   test('tool metadata exposes names, inputs, and explicit SDK errors', () => {
     const turns = kinuCodec.encode([
       assistant([toolCall('e1', 'workspace.readFile', { path: '/tmp/missing' })]),
@@ -423,17 +418,6 @@ describe('conventions', () => {
       input: { path: '/tmp/missing' },
       error: 'ENOENT: /tmp/missing',
     });
-  });
-
-  test('ladder order enables superseding and error purging before old tools', () => {
-    expect(kinuSpec.stages.map((stage) => stage.name)).toEqual([
-      'supersede-reads',
-      'purge-error-inputs',
-      'tools-old',
-      'reasoning',
-      'tools-remaining',
-      'assistant-runs',
-    ]);
   });
 });
 

@@ -192,12 +192,11 @@ export async function compactedScreenshots(rt: { readonly storage: Pick<Storage,
   const extension = createCompactionExtension({
     ports, archive: memoryArchive(), ephemeral: { dropSuperseded: () => 0 },
     summarize: () => { throw new Error('the rung needs no summary'); },
-    model: () => model,
     attachments: { files: () => rt },
   });
 
   const compacted = await extension.transformContext?.({
-    sessionKey: 'screenshots', messages: screenshotRun(), system: 'system prompt', contextWindow: 30_000, trigger: 'auto',
+    sessionKey: 'screenshots', messages: screenshotRun(), system: 'system prompt', contextWindow: 30_000, model, trigger: 'auto',
   });
 
   const screens = sentScreens(compacted ?? []);

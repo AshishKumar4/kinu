@@ -68,6 +68,7 @@ async function driveTurn(
 
   try {
     for await (const ev of runChat({
+      modelSpec: 'test/model',
       model, system: 'sys', history: [{ role: 'user', content: 'go' }],
       tools,
       stopWhen: opts.stopWhen,

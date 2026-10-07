@@ -261,6 +261,7 @@ describe('what a call tells the ledger about its account', () => {
 
     try {
       for await (const event of runChat({
+        modelSpec: 'test/model',
         model: registry.resolve('openai-compat/m', deps), system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
       })) {
         if (event.type === 'step-finish') steps.push(event.account);
@@ -298,7 +299,7 @@ describe('what a call tells the ledger about its account', () => {
       async listCredentialKeys() { return Object.keys(stored); },
     };
 
-    for await (const event of runChat({ model: registry.resolve(spec, deps), system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {} })) {
+    for await (const event of runChat({ modelSpec: 'test/model', model: registry.resolve(spec, deps), system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {} })) {
       if (event.type === 'step-finish') return event.account;
     }
 

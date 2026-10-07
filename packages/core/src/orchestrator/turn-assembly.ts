@@ -211,6 +211,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
 
   const chat: ActorExecutionInput['chat'] = {
     model: models.resolve(spec),
+    modelSpec: spec,
     // Without `modelOutputLimit` the whole window reads as the answer's allowance.
     modelContext: { id: spec, contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit },
     system: buildSystemPromptSync(sources.rt, prompt),
@@ -245,7 +246,6 @@ function routedChat(models: TurnModelSources, spec: string, profile: ResolvedTur
   if (routed === undefined) return {};
 
   return {
-    modelSpec: spec,
     credentialOf: (fallback: string) => routed.credentialFor(fallback),
     countInputTokens: (counted: CountableRequest) => routed.countInputTokens(spec, counted),
     retries: profile.retries,

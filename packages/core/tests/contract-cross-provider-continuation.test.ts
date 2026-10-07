@@ -237,6 +237,7 @@ async function truncatedAnthropicTurn(tools: ToolSet): Promise<{
   }, mock.fetch);
 
   const events = await drain({
+    modelSpec: 'test/model',
     model: createAnthropicProvider().createModel('claude-opus-4-7', deps),
     system: 'sys',
     history: [{ role: 'user', content: 'what is the answer' }],
@@ -269,6 +270,7 @@ async function replayOnCompat(
   }, mock.fetch);
 
   let options: Parameters<typeof drain>[0] = {
+    modelSpec: 'test/model',
     model: createOpenAICompatProvider().createModel('llama-4', deps),
     system: 'sys',
     history: [...history, { role: 'user', content: 'are you sure' }],
@@ -305,6 +307,7 @@ async function reasonedCompatTurn(tools: ToolSet): Promise<{
   }, mock.fetch);
 
   const done = doneOf(await drain({
+    modelSpec: 'test/model',
     model: createOpenAICompatProvider().createModel('llama-4', deps),
     system: 'sys',
     history: [{ role: 'user', content: 'what is the answer' }],
@@ -334,6 +337,7 @@ async function replayOnAnthropic(
   }, mock.fetch);
 
   await drain({
+    modelSpec: 'test/model',
     model: createAnthropicProvider().createModel('claude-opus-4-7', deps),
     system: 'sys',
     history: [...history, { role: 'user', content: 'are you sure' }],
@@ -501,6 +505,7 @@ describe('a search the provider ran itself, replayed', () => {
     }, mock.fetch);
 
     const first = doneOf(await drain({
+      modelSpec: 'test/model',
       model: createAnthropicProvider().createModel('claude-opus-4-7', deps),
       system: 'sys',
       history: [{ role: 'user', content: 'when does it ship' }],

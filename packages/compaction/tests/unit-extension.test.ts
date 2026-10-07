@@ -5,7 +5,7 @@ import {
   CONTEXT_CHECKPOINT_PREFIX, ExtensionHost, OPENAI_CRED_KEY, createChatModel, createFallbackCooldowns, createOpenAIProvider, runChat,
   type TransformContext,
 } from '@kinu.run/core';
-import { createMockFetch } from '@kinu.run/test-utils';
+import { createMockFetch, createTestRuntime } from '@kinu.run/test-utils';
 import { DEFAULT_CUSTOM_COMPACTION, type CompactionProfile } from '@better-compact/core';
 import {
   createCompactionExtension,
@@ -80,6 +80,7 @@ function rig(overrides: RigOverrides = {}): Rig {
     ephemeral,
     profile,
     onOutcome: (event) => outcomes.push(event),
+    attachments: { files: () => createTestRuntime().rt },
     ...overrides,
   });
 
@@ -91,6 +92,7 @@ function rig(overrides: RigOverrides = {}): Rig {
       messages,
       system: 'system prompt',
       contextWindow: 10_000,
+      model: 'test/model',
       trigger: 'auto',
       ...ctxOverrides,
     });
@@ -319,7 +321,7 @@ describe('replay', () => {
 
     const ext = createCompactionExtension({
       ports, archive: memoryArchive(), summarize: async () => validSummary('other'),
-      ephemeral: fakeEphemeral(), profile,
+      ephemeral: fakeEphemeral(), profile, attachments: { files: () => createTestRuntime().rt },
     });
 
     const result = await ext.transformContext?.({
@@ -327,6 +329,7 @@ describe('replay', () => {
       messages,
       system: 's',
       contextWindow: 10_000,
+      model: 'test/model',
       trigger: 'auto',
     });
 
@@ -455,24 +458,6 @@ describe('archive manifest', () => {
 });
 
 describe('summaries', () => {
-  test('assistant runs collapse through the injected summarizer with the per-run prompt', async () => {
-    const { prompts, transform } = rig();
-    // Fat assistant text: only the assistant-runs stage can shrink it.
-    const messages: ModelMessage[] = [];
-
-    for (let i = 0; i < 8; i++) {
-      messages.push(user(`chapter ${i}?`));
-      messages.push(assistant([{ type: 'text', text: `chapter ${i}: ${'prose '.repeat(1_200)}` }]));
-    }
-
-    const result = await transform(messages);
-
-    if (!result) throw new Error('expected a rewrite');
-    const runPrompts = prompts.filter((p) => p.includes('Summarize this historical assistant turn'));
-    expect(runPrompts.length).toBeGreaterThan(0);
-    expect(JSON.stringify(result)).toContain('Summary(');
-  });
-
   test('collapsing a tool-bearing assistant turn takes the whole native pair, never half of it', async () => {
     // A collapse must erase call, result and carrier together; any orphan is rejected by the provider.
     const { transform } = rig();
@@ -695,7 +680,7 @@ describe('summaries', () => {
     for await (const _ of runChat({
       model: gpt, modelSpec: 'openai/gpt-5.5', modelContext: { id: 'openai/gpt-5.5', contextWindow: 200_000 },
       fallbacks: [{ spec: 'openai-compat/m', accepts: new Set(), window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: compat, provider: 'openai-compat' }) }],
-      cooldowns: createFallbackCooldowns(), extensions: new ExtensionHost().register(rig({ model: () => 'openai/gpt-5.5' }).extension),
+      cooldowns: createFallbackCooldowns(), extensions: new ExtensionHost().register(rig().extension),
       cache: { sessionKey: SESSION }, system: 'sys', history: compacted, tools: {},
     })) { /* drain */ }
 

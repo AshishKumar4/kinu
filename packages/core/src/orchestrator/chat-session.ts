@@ -704,7 +704,7 @@ export class ChatSession {
         async (): Promise<CompactOutcome> => {
           const { measured, chat, sessionKey } = await this.measureNextRequest({ counted: true, trigger: 'user' });
 
-          if (serverCompactor(chat.modelSpec ?? chat.modelContext?.id) === null) return 'folded';
+          if (serverCompactor(chat.modelSpec) === null) return 'folded';
 
           if (measured === null || measured.tokens < SERVER_COMPACTION_MIN_TOKENS) return 'nothing';
           this.compactionState.armCompaction(sessionKey);
@@ -1063,7 +1063,7 @@ export class ChatSession {
     return settleExecutionContext({ state: this.compactionState, key: prepared.sessionKey, recorder: this.eventRecorder }, {
       runId: this.runId, failure, turnWasOverflowRetry: item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT,
       lastPromptTokens: this.actorSession.orchestrator.acc.lastPromptTokens, historyLength: prepared.historyLength,
-      contextWindow: prepared.contextWindow, model: chat.modelSpec ?? chat.modelContext?.id,
+      contextWindow: prepared.contextWindow, model: chat.modelSpec,
     });
   }
 
