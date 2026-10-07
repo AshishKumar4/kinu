@@ -11,6 +11,8 @@ export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 /** What a read-only token must not reach is 'interactive' on every transport, never approximated as a read. */
 export const AGENT_RPC_ACCESS = {
   getAgentStatus: 'workspace.read',
+  sendState: 'workspace.read',
+  awaitSend: 'workspace.read',
   getChatHistoryPage: 'workspace.read',
   getExecutors: 'workspace.read',
   getGepaRun: 'workspace.read',
@@ -205,6 +207,8 @@ const HOSTED_WINDOW_RPC = {
   dismissBackgroundJob: (args, actor) => args[1] === actor.name,
   cancelCurrentWork: () => true,
   send: () => true,
+  sendState: () => true,
+  awaitSend: () => true,
   listPendingConsents: () => true,
   resolveDeviceConsent: () => true,
   getToolDescriptions: () => true,

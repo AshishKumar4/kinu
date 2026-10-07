@@ -52,8 +52,8 @@ describe('sleepTimeWakeAt', () => {
 });
 
 describe('sleepTimeWindow', () => {
-  const user = (id: string, content: string): ConversationProjection => ({ id, position: 0, role: 'user', content, toolCalls: [], recordedAt: 0 });
-  const answer = (id: string, content: string, toolCalls: string[] = []): ConversationProjection => ({ id, position: 0, role: 'assistant', content, toolCalls, recordedAt: 0 });
+  const user = (id: string, content: string): ConversationProjection => ({ id, position: 0, role: 'user', turnId: null, content, toolCalls: [], recordedAt: 0 });
+  const answer = (id: string, content: string, toolCalls: string[] = []): ConversationProjection => ({ id, position: 0, role: 'assistant', turnId: null, content, toolCalls, recordedAt: 0 });
   const never = () => false;
 
   test('an empty transcript, and one with only an unanswered opening row', () => {

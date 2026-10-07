@@ -20,7 +20,7 @@ import {
 import type {
   TurnContinuity, FiberCtx,
   LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding,
-  BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
+  BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions, SendState,
   ActiveSkillSet, FactsStore,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
@@ -1119,6 +1119,16 @@ export class LocalAgentSession {
 
       return { accepted: true, branchId: id } satisfies BranchTurnResult;
     }));
+  }
+
+  /** Where a send stands, from its durable facts. */
+  sendState(id: string): Promise<SendState> {
+    return this.chat.sendState(id);
+  }
+
+  /** Its state once settled or none; asked again after any break. */
+  awaitSend(id: string): Promise<SendState> {
+    return this.chat.awaitSend(id);
   }
 
   /** Returns the dropped steer texts. */

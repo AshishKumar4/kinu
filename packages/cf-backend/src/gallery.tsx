@@ -2063,7 +2063,7 @@ function historyRow(index: number): ChatHistoryEntry {
   const id = `hist-${String(index).padStart(5, "0")}`;
   const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
 
-  if (index % 2 === 0) return { id, position: index, role: "user", content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
+  if (index % 2 === 0) return { id, position: index, role: "user", turnId: null, content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
 
   const kind = index % 10;
   let content = `Answer ${index}. The guard now reads the campaign before it writes the cart.`;
@@ -2073,7 +2073,7 @@ function historyRow(index: number): ChatHistoryEntry {
   else if (kind === 5) content += `\n\n![chart ${index}](${HISTORY_PICTURE})`;
   else if (kind === 7) content += "\n\nslate://board";
 
-  return { id, position: index, role: "assistant", content, createdAt };
+  return { id, position: index, role: "assistant", turnId: null, content, createdAt };
 }
 
 function galleryReadFault(flag: string | undefined, message = "Network connection lost"): void {
@@ -3871,6 +3871,7 @@ const STORED_HISTORY: ChatHistoryEntry[] = Array.from(
     id: `h${i + 1}`,
     position: i,
     role: i % 2 === 0 ? "user" as const : "assistant" as const,
+    turnId: null,
     content: `Archived message ${i + 1} of ${HISTORY_PAGE * HISTORY_DEPTH}. `
       + "Long enough to occupy real vertical space, so the scroll anchoring is "
       + "measured against a container that actually overflows.",

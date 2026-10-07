@@ -37,7 +37,7 @@ const TWINS = {
   getActivePlanReview: SHARED, savePlanReviewAnnotations: SHARED, decidePlanReview: SHARED,
   dismissPlanReview: SHARED,
   requestRefinement: SHARED, listRefinements: SHARED, showRefinement: SHARED, decideRefinement: SHARED,
-  send: SHARED, revertConversation: SHARED, clearConversation: SHARED, branchTurn: SHARED,
+  send: SHARED, sendState: SHARED, awaitSend: SHARED, revertConversation: SHARED, clearConversation: SHARED, branchTurn: SHARED,
   checkpointStatus: SHARED, listFileCheckpoints: SHARED, planFileRestore: SHARED, restoreFileCheckpoint: SHARED,
 } as const satisfies Record<PublicTwin, string>;
 
