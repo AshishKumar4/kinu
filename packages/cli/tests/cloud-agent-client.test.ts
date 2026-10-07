@@ -1226,6 +1226,8 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
       send: async () => { throw new Error('the re-drive accepts no second submission'); },
       retry: async () => { throw new Error('the re-drive is not retried'); },
       interrupt: () => { throw new Error('the re-drive is not interrupted'); },
+      sendState: async () => ({ status: 'running', turnId: request.id }),
+      awaitSend: async () => { throw new Error('the re-drive is not awaited'); },
     });
 
     await transport.openTurn({ turnId: request.id, messageId: 'answer', userTurn: true, carried: [], finishedSteps: 1 });

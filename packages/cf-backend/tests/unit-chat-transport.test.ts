@@ -69,6 +69,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
     getConnection: (id) => connections.get(id),
     history: loadHistory ?? (async () => [...history]),
     admitted: async (id) => history.some((row) => row.id === id) || reserved.has(id),
+    sendState: async () => ({ status: 'none' }),
+    awaitSend: async () => ({ status: 'none' }),
     send: (input) => {
       if (isRefusal(landing)) return Promise.reject(landing.fault === true ? new Error(landing.refuse) : new KinuError('bad_input', landing.refuse));
       sent.push(input);

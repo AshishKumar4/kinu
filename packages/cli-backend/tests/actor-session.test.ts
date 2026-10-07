@@ -158,7 +158,7 @@ test('logical actors in one store keep live context, mode and structured tool da
     right.actor.orchestrator.inbox.settle({ completed: true });
     await Promise.resolve();
     expect(right.enqueued).toEqual([expect.objectContaining({
-      origin: 'user', text: 'right-only steer', steerIds: ['right-steer'],
+      origin: 'user', text: 'right-only steer', sends: [{ id: 'right-steer', text: 'right-only steer' }],
     })]);
     expect(left.enqueued).toEqual([]);
     expect(events.find(event => event.type === 'tool-result')).toMatchObject({ success: true });

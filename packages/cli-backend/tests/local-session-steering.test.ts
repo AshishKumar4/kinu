@@ -483,7 +483,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const userTurn = session.enqueueTurn({
       origin: 'user',
       text: 'the operator said this',
-      files: [{ filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }],
+      sends: [{ id: 'steer-1', text: 'the operator said this', files: [{ filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }] }],
     });
 
     release();

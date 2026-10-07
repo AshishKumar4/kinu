@@ -278,6 +278,8 @@ export class ActorSession {
   }
   /** A host settles the claim under the outcome it named. */
   get turnClaim(): ActorTurnClaim | null { return this.active?.claim ?? null; }
+  /** Read, and observed, by whoever asks where a turn stands. */
+  get claims(): ActorClaimStore { return this.options.claims; }
   /** The revision the open turn's input was placed on. */
   get turnContext(): ContextSelection | null { return this.active?.context?.selection ?? null; }
 

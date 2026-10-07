@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
   isSubordinateOrigin, drawnStep, WORKSPACE_ROOT,
 } from '@kinu.run/core';
-import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
@@ -1734,6 +1734,8 @@ export abstract class ActorAgent extends Agent<Env> {
         this.chatLoop.interrupt();
         this.stopSubtree(this.actorHandle().actorId);
       },
+      sendState: async (id) => this.chatLoop.sendState(id),
+      awaitSend: (id) => this.chatLoop.awaitSend(id),
     });
 
     return this._chatTransport;
@@ -3403,6 +3405,28 @@ export abstract class ActorAgent extends Agent<Env> {
 
       yield* Effect.promise(async () => this.chatLoop.admit({ text, files: attachments }, { id, mode: workMode }));
     }));
+  }
+
+  /** Where a send stands in the chat this connection addresses, read from its durable facts: what a client asks after
+   *  any break, instead of inferring its fate from what the stream showed. */
+  @callable()
+  sendState(id: string): Promise<SendState> {
+    return settle(Effect.flatMap(this.addressedChat(), (chat) => Effect.promise(() => chat.sendState(id))));
+  }
+
+  /** Its state once settled or none; a client that lost its connection asks again. */
+  @callable()
+  awaitSend(id: string): Promise<SendState> {
+    return settle(Effect.flatMap(this.addressedChat(), (chat) => Effect.promise(() => chat.awaitSend(id))));
+  }
+
+  private addressedChat(): Effect.Effect<ChatWire, KinuError> {
+    const window = this.addressedActor();
+
+    if (window === null) return Effect.succeed(this.chatTransport.wire);
+    const wire = this.hostedChatWire(window);
+
+    return wire === null ? Effect.fail(new KinuError('missing', `${window} is not an agent of this workspace`)) : Effect.succeed(wire);
   }
 
   /** Aborts the in-flight LLM request first so stop works even if the cancel frame is lost.

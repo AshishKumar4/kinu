@@ -882,6 +882,8 @@ export {
   type LandedSteerRow, type PendingSendRow,
 } from './orchestrator/inbox';
 
+export { type SendState } from './orchestrator/send-state';
+
 export {
   buildTranscript, extendTranscript, sealTranscript, segmentBySteers,
   EMPTY_TRANSCRIPT_FOLD,
