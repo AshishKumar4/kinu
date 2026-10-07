@@ -14,6 +14,7 @@ import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } fr
 import { Effect } from 'effect';
 import { classify, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';
+import { heardFetch } from './middleware/attempt';
 
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 
@@ -113,7 +114,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     },
 
     createModel(modelId, deps): LanguageModel {
-      const transport = opts.egress ?? deps.fetch ?? fetch;
+      const transport = heardFetch(opts.egress ?? deps.fetch ?? fetch);
 
       const customFetch = asFetchFunction((input, init) => settle(Effect.gen(function* () {
         // A refused renewal keeps the SDK's 401 remedy.
