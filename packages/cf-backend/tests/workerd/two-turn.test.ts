@@ -187,6 +187,25 @@ describe('two real turns over the HTTP model seam', () => {
     expect([settled === null, settled === 'missing', settled === 'indeterminate']).toEqual([false, false, false]);
   });
 
+  // A dead activation left two replies owed. After a real eviction, the alarm's recovery dispatches the answer that
+  // reached the transcript and closes its lease and the reply's open transition; the event that was never answered is
+  // freed to be asked again, and the answered one is never asked again.
+  it('after an eviction, recovery sends the reply that was answered and re-asks only the one that was not', async () => {
+    const workspace = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).seedOwedReplyWorkspace();
+
+    await abortAllDurableObjects();
+    const done = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).recoverOwedReplies(workspace);
+
+    // The answered reply's lease closes on its own turn. The unanswered event is drained again by a turn of its own,
+    // the one request the model is asked, and that turn's close releases it.
+    expect(done.leases['ev-answered'], JSON.stringify(done)).toEqual({ turnId: 'evt-answered', consumedAt: null });
+    expect(done.leases['ev-unanswered']?.consumedAt).toBeNull();
+    expect(done.leases['ev-unanswered']?.turnId).toMatch(/^evt-/u);
+    expect(done.leases['ev-unanswered']?.turnId).not.toBe('evt-unanswered');
+    expect(done.transition).toBe('done');
+    expect(done.asked.filter((words) => words.includes('event arrived while you were idle'))).toHaveLength(1);
+  });
+
   it('a Changes-tab send the loop refuses to drive takes its card row with it', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-refused-driver'));
 
