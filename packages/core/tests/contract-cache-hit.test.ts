@@ -2,7 +2,7 @@
  *  models each provider's cache: a request reads only when its addressed prefix continues a stored one byte for byte. */
 
 import { describe, test, expect } from 'bun:test';
-import { isStepCount, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { generateText, isStepCount, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import * as v from 'valibot';
 import {
@@ -633,6 +633,36 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
 
     console.log(`cache-hit gate, per provider:\n${lines.join('\n')}`);
     console.log(`blind spots:\n${BLIND_SPOTS.map((s) => `- ${s}`).join('\n')}`);
+  });
+
+  test('a message edited between two calls goes out as edited; a frozen one is reused, never stale', async () => {
+    const entry = CACHING_PROVIDERS.find((each) => each.label === 'openai-compat');
+
+    if (entry === undefined) throw new Error('the openai-compat case is listed');
+    const sent: string[] = [];
+
+    const mock = createMockFetch([{
+      match: () => true,
+      respond: (req) => {
+        sent.push(JSON.stringify(viewOf(entry, req)));
+
+        return { status: 200, headers: { 'content-type': 'text/event-stream' }, body: sseFor(entry, 0, SILENT_USAGE) };
+      },
+    }]);
+
+    const model = entry.model(makeDeps(entry.credentials, mock.fetch));
+    const mutable: ModelMessage = { role: 'user', content: 'the first words' };
+    const frozen: ModelMessage = Object.freeze({ role: 'user', content: 'a settled question' });
+
+    await generateText({ model, messages: [frozen, mutable] });
+    mutable.content = 'the second words';
+    await generateText({ model, messages: [frozen, mutable] });
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toContain('the first words');
+    expect(sent[1]).toContain('the second words');
+    expect(sent[1]).not.toContain('the first words');
+    expect(sent[1]).toContain('a settled question');
   });
 
   test('an Anthropic turn arms a warm whose request reads the prefix the turn cached', async () => {

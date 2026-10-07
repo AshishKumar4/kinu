@@ -1,21 +1,38 @@
 diff --git a/dist/index.js b/dist/index.js
-index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..ed4da9364c17c940bfc343eb513e87350e2835a2 100644
+index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..0e31dfdb80a8e218a90b345f0226bd7bf996cce0 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -136,9 +136,32 @@ function convertToolContentPart(part) {
+@@ -136,9 +136,50 @@ function convertToolContentPart(part) {
  	if (part.type === "custom") throw new UnsupportedFunctionalityError({ functionality: "custom tool content parts" });
  	return convertToOpenAICompatibleContentPart(part);
  }
 +/**
-+* Kinu patch: each step re-converts the whole history, though only its tail is new. A message converts the same way
-+* for one set of options, so it converts once. Upstream ask: kinu-logs/main/AI-SDK-ASKS.md.
++* Kinu patch: each step re-converts the whole history, though only its tail is new. A prompt message frozen to its
++* leaves converts the same way for one set of options, so it converts once and its wire form is frozen in turn; a
++* mutable one converts every time. Upstream ask: kinu-logs/main/AI-SDK-ASKS.md.
 +*/
 +const convertedChatMessages = /* @__PURE__ */ new WeakMap();
++const frozenPromptTrees = /* @__PURE__ */ new WeakSet();
++function isFrozenPromptTree(value) {
++	if (typeof value !== "object" || value === null || frozenPromptTrees.has(value)) return true;
++	if (!Object.isFrozen(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer || value instanceof URL) return false;
++	for (const item of Object.values(value)) if (!isFrozenPromptTree(item)) return false;
++	frozenPromptTrees.add(value);
++	return true;
++}
++function freezeWireTree(value) {
++	if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
++	for (const item of Object.values(value)) freezeWireTree(item);
++	return Object.freeze(value);
++}
  function convertToOpenAICompatibleChatMessages(prompt, { providerOptionsKey = "google", supportsMultiPartToolContent = false } = {}) {
 +	const key = `${providerOptionsKey}\u0000${supportsMultiPartToolContent}`;
- 	const messages = [];
--	for (const { role, content, ...message } of prompt) {
++	const messages = [];
 +	for (const entry of prompt) {
++		if (!isFrozenPromptTree(entry)) {
++			messages.push(...convertOneChatMessage(entry, providerOptionsKey, supportsMultiPartToolContent));
++			continue;
++		}
 +		let byKey = convertedChatMessages.get(entry);
 +		if (byKey === void 0) {
 +			byKey = /* @__PURE__ */ new Map();
@@ -23,7 +40,7 @@ index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..ed4da9364c17c940bfc343eb513e8735
 +		}
 +		let converted = byKey.get(key);
 +		if (converted === void 0) {
-+			converted = convertOneChatMessage(entry, providerOptionsKey, supportsMultiPartToolContent);
++			converted = freezeWireTree(convertOneChatMessage(entry, providerOptionsKey, supportsMultiPartToolContent));
 +			byKey.set(key, converted);
 +		}
 +		messages.push(...converted);
@@ -31,12 +48,13 @@ index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..ed4da9364c17c940bfc343eb513e8735
 +	return messages;
 +}
 +function convertOneChatMessage({ role, content, ...message }, providerOptionsKey, supportsMultiPartToolContent) {
-+	const messages = [];
+ 	const messages = [];
+-	for (const { role, content, ...message } of prompt) {
 +	{
  		const metadata = getOpenAIMetadata({ ...message });
  		switch (role) {
  			case "system":
-@@ -820,7 +843,7 @@ const chunkBaseSchema = z.looseObject({
+@@ -820,7 +861,7 @@ const chunkBaseSchema = z.looseObject({
  			})).nullish()
  		}).nullish(),
  		finish_reason: z.string().nullish()
