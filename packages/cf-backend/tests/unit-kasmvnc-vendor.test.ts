@@ -16,8 +16,8 @@ test('the vendored client is the pinned files, byte for byte, and nothing else',
   expect(Object.fromEntries(vendored.sort().map((path) => [path, sha256(readFileSync(join(KASMVNC_CLIENT, path)))]))).toEqual(pin.files);
 });
 
-test('the client is from the release the devbox image installs', () => {
-  const dockerfile = readFileSync(join(import.meta.dir, '../../devbox/block-lower/Dockerfile'), 'utf8');
+test('the client is from the release the devbox tools install', () => {
+  const setup = readFileSync(join(import.meta.dir, '../../devbox/block-lower/tools-setup.sh'), 'utf8');
 
-  expect(dockerfile).toContain(`ADD --checksum=sha256:${pin.deb.sha256} ${pin.deb.url} `);
+  expect(setup).toContain(` ${pin.deb.url} ${pin.deb.sha256}\n`);
 });

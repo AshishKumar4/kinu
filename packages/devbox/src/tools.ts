@@ -1,4 +1,4 @@
-// The pinned tools tarball (D65): an offline apt repository and our binaries, from the Dockerfile's `tools` stage.
+// The pinned tools tarball (D65, D78): an offline apt repository and our binaries, built on armada by block-lower's tools-setup.sh and tools-build.sh.
 import { shellPath } from './stream-archive';
 
 export const TOOLS_STAMP = '/usr/local/lib/devbox/tools-installed';

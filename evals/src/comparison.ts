@@ -2,6 +2,7 @@ import { basename } from 'node:path';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { redact } from './redact';
 import { parseResults, trials, type Assertion, type EvalFile, type HarnessRun } from './results';
+import { MEASURE_NAMES, shifts, type Measure, type Shift, type Spread } from './shifts';
 import { HARNESS_ERRORS } from './task';
 
 export type EvalStats = {
@@ -36,12 +37,20 @@ type Cohort = { taskId: string; model: string; arm: string; taskVersion: string;
 
 type Identity = { taskId: string; model: string; arm: string };
 
+/** One check's attempts and passes on one side: a trial that stopped before the check did not attempt it. */
+export type CheckRate = { attempted: number; passed: number };
+
+/** One check, `t<turn> <id>`, on both sides, with the two-sided Fisher exact test on its passes over its attempts. */
+export type CheckShift = { check: string; baseline: CheckRate; candidate: CheckRate; pValue: number };
+
 /**
  * One task/model/arm cohort. `reason` is null exactly when both sides compare, and then `pValue` is the two-sided
- * Fisher exact test on the pass counts and `resetPValue` the same test on the reset counts.
+ * Fisher exact test on the pass counts and `resetPValue` the same test on the reset counts; `shifts` compares every
+ * other measure of a trial, and `checks` every check's pass rate. Only the pass and reset counts decide the verdict: the
+ * rest says where a change moved the work, for whoever fixes it.
  */
 export type EvalComparisonRow = Identity & (
-  | { reason: null; baseline: EvalStats; candidate: EvalStats; pValue: number; resetPValue: number }
+  | { reason: null; baseline: EvalStats; candidate: EvalStats; pValue: number; resetPValue: number; shifts: Shift[]; checks: CheckShift[] }
   | { reason: string; baseline: EvalStats | null; candidate: EvalStats | null }
 );
 
@@ -394,6 +403,35 @@ export function fisherExact(baseline: { passed: number; trials: number }, candid
   return Math.min(1, total);
 }
 
+function checkRates(assertions: readonly Assertion[]): Map<string, CheckRate> {
+  const rates = new Map<string, CheckRate>();
+
+  for (const assertion of assertions) {
+    for (const [index, turn] of assertion.meta.harness.run.output.turns.entries()) {
+      for (const check of turn.checks) {
+        const key = `t${String(index + 1)} ${check.id}`;
+        const sofar = rates.get(key) ?? { attempted: 0, passed: 0 };
+
+        rates.set(key, { attempted: sofar.attempted + 1, passed: sofar.passed + (check.pass ? 1 : 0) });
+      }
+    }
+  }
+
+  return rates;
+}
+
+/** Every check either side attempted, with its pass rate on both. */
+function checkShifts(baseline: readonly Assertion[], candidate: readonly Assertion[]): CheckShift[] {
+  const before = checkRates(baseline), after = checkRates(candidate);
+  const none: CheckRate = { attempted: 0, passed: 0 };
+
+  return [...new Set([...before.keys(), ...after.keys()])].map((check) => {
+    const [was, is] = [before.get(check) ?? none, after.get(check) ?? none];
+
+    return { check, baseline: was, candidate: is, pValue: fisherExact({ passed: was.passed, trials: was.attempted }, { passed: is.passed, trials: is.attempted }) };
+  });
+}
+
 function passRate(side: EvalStats): number {
   return side.passed / side.trials;
 }
@@ -454,6 +492,8 @@ export function compareEvalResults(baselineText: string | null, candidateText: s
       resetPValue: fisherExact(
         { passed: baselineStats.resets, trials: baselineStats.trials }, { passed: candidateStats.resets, trials: candidateStats.trials },
       ),
+      shifts: shifts(before.assertions, after.assertions),
+      checks: checkShifts(before.assertions, after.assertions),
     };
   }).sort((left, right) => left.taskId.localeCompare(right.taskId)
     || left.model.localeCompare(right.model) || left.arm.localeCompare(right.arm));
@@ -671,9 +711,67 @@ const WAITS_NOTE = '_Durations leave out time the product spent waiting on the m
   + 'candidate\u2019s total over all runs: the eval account\u2019s rate limit, infrastructure, never a task failure._';
 
 const METRICS_NOTE = '_Mean wall, mean cost and cache hits show baseline → candidate. Wall time includes provider waits; '
-  + 'cache hits are cache-read tokens / prompt tokens, excluding infrastructure trials. Tokens and cache hits count the lead '
-  + 'agent\u2019s own model calls only; helpers and swarm nodes are not in them yet. Cost is the whole workspace\u2019s spend, '
-  + 'every agent included. A dash means a count is missing, not zero or a rate over a subset._';
+  + 'cache hits are cache-read tokens / prompt tokens, excluding infrastructure trials. Tokens and cache hits count every '
+  + 'agent\u2019s model calls, helpers and swarm nodes included, and cost is the whole workspace\u2019s spend. A dash means a '
+  + 'count is missing, not zero or a rate over a subset._';
+
+const MEASURE_LABEL: Record<Measure, { name: string; value: (amount: number) => string }> = {
+  wallTimeMs: { name: 'wall time', value: seconds },
+  modelSteps: { name: 'model steps', value: (amount) => amount.toFixed(1) },
+  toolCalls: { name: 'tool calls', value: (amount) => amount.toFixed(1) },
+  toolErrors: { name: 'tool errors', value: (amount) => amount.toFixed(1) },
+  badInputCalls: { name: 'calls refused as bad input', value: (amount) => amount.toFixed(1) },
+  unknownToolCalls: { name: 'calls to a tool not offered', value: (amount) => amount.toFixed(1) },
+  inputTokens: { name: 'input tokens', value: tokens },
+  outputTokens: { name: 'output tokens', value: tokens },
+  costUsd: { name: 'cost', value: (amount) => usd(amount) },
+};
+
+/** A side's median, and its middle half in brackets: the spread a move must clear. */
+function spreadOf(measure: Measure, side: Spread): string {
+  const { value } = MEASURE_LABEL[measure];
+
+  return `${value(side.median)} [${value(side.q1)}\u2013${value(side.q3)}]`;
+}
+
+/**
+ * Per compared task, every measure and check that moved beyond noise (p < 0.05), baseline → candidate: where a change
+ * moved the work, the first place to look for its cause. A pass rate that held while calls refused as bad input rose is
+ * a description the model misreads, on its way to a failure.
+ */
+function movedSection(rows: readonly EvalComparisonRow[], shared: Shared): string[] {
+  const moved = rows.flatMap((row) => {
+    if (row.reason !== null) return [];
+
+    const lines = [
+      ...row.shifts.filter((shift) => shift.pValue < SIGNIFICANCE)
+        .map((shift) => `${MEASURE_LABEL[shift.measure].name} ${spreadOf(shift.measure, shift.baseline)} \u2192 ${spreadOf(shift.measure, shift.candidate)} (p = ${shift.pValue.toFixed(2)})`),
+      ...row.checks.filter((check) => check.pValue < SIGNIFICANCE)
+        .map((check) => `\`${check.check}\` passed ${String(check.baseline.passed)}/${String(check.baseline.attempted)} \u2192 `
+          + `${String(check.candidate.passed)}/${String(check.candidate.attempted)} (p = ${check.pValue.toFixed(2)})`),
+    ];
+
+    return lines.length === 0 ? [] : [`- **${rowName(row, shared)}**: ${lines.join('; ')}`];
+  });
+
+  const compared = rows.flatMap((row) => row.reason === null ? [row] : []);
+
+  if (compared.length === 0) return [];
+
+  // A measure a side did not record for every trial was not compared, which is not the same as not having moved.
+  const unrecorded = compared.flatMap((row) => {
+    const missing = MEASURE_NAMES.filter((measure) => !row.shifts.some((shift) => shift.measure === measure));
+
+    return missing.length === 0 ? [] : [`${rowName(row, shared)}: ${missing.map((measure) => MEASURE_LABEL[measure].name).join(', ')}`];
+  });
+
+  return ['### What else moved beyond noise', '',
+    ...moved.length > 0 ? moved : [`Nothing else that was compared moved beyond noise in the ${String(compared.length)} compared tasks, `
+      + 'nor any check\u2019s pass rate.'],
+    ...unrecorded.length > 0 ? ['', `Not compared, as not recorded for every trial on both sides: ${unrecorded.join('; ')}.`] : [],
+    '', '_Medians, the middle half in brackets; a two-sided Mann\u2013Whitney test for the measures and Fisher\u2019s exact test for '
+      + 'the checks. Only the pass and reset rates decide the verdict._', ''];
+}
 
 /** How the agent worked per model, the baseline in parentheses: information for a prompt or tool change. */
 function profileTable(profiled: EvalComparison['profiles']): string[] {
@@ -757,6 +855,7 @@ export function renderEvalComparison(comparison: EvalComparison): string {
     ...totalsTable(comparison.totals), '',
     ...SCORE_TABLE,
     ...comparison.rows.map((row) => scoreRow(row, shared)), '',
+    ...movedSection(comparison.rows, shared),
     WAITS_NOTE, '',
     METRICS_NOTE, '',
     ...profileTable(comparison.profiles), '',

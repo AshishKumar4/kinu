@@ -331,7 +331,7 @@ export {
 // Chat engine
 export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
-  type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
+  type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObserveStream,
 } from './chat';
 
 export { createFallbackCooldowns, type FallbackCooldowns } from './providers/fallback-cooldown';
@@ -1457,6 +1457,7 @@ export {
   scanText,
   countDetections,
   secretSightings,
+  redactSecrets,
   type SecretPattern,
   type SecretFinding,
   type SecretSighting,
@@ -1958,7 +1959,7 @@ export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, Position
 export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
 
 export {
-  restoredRows, rowText, transcriptRole,
+  restoredRows, rowText, transcriptRole, UIMessageSchema,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 

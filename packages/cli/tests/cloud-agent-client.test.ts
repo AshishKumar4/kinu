@@ -1239,7 +1239,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
 
       for (const chunk of chunks) controller.enqueue(chunk);
       controller.close();
-    } }), { index: 0 });
+    } }));
     joined = true;
     await transport.onConnect(connection);
     const ack = await waitFor(() => resumeAcks(mock)[0], 'the re-drive ack');

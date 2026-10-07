@@ -6,7 +6,7 @@
 
 import { generateText, streamText } from 'ai';
 import { Cause, Effect } from 'effect';
-import { settle } from '../obs/effect';
+import { KinuError, settle } from '../obs/index';
 import {
   beginModelOperation, type ModelCallReport, type ModelCallSink, type ModelCallSpend, type ModelOperationKind,
 } from '../events/model-call';
@@ -41,7 +41,8 @@ function reportOf(
   return modelId === undefined || modelId.length === 0 ? report : { ...report, modelId };
 }
 
-/** Files the row before the caller parses the answer: the call was billed either way. */
+/** Files the row before the caller parses the answer: the call was billed either way. An answer stopped at the model's
+ *  output limit is no answer: a one-shot call has no next step to continue it, so it fails rather than reads complete. */
 export function generateReported(
   request: GenerateRequest,
   call: ReportedCall,
@@ -56,6 +57,10 @@ export function generateReported(
     const usage = normalizeUsage(result.usage);
     operation.completed({ usage, modelId: result.response.modelId });
     call.spend.report(reportOf(call, usage, result.response));
+
+    if (result.finishReason === 'length') {
+      return yield* Effect.fail(new KinuError('unavailable', `${result.response.modelId} stopped its answer at its output limit (${result.rawFinishReason ?? 'length'})`));
+    }
 
     return result;
   }));

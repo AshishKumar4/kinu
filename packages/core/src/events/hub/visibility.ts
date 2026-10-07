@@ -5,7 +5,7 @@ import { settleSync } from '../../obs/index';
 import { createHash, createHmac } from 'node:crypto';
 import * as v from 'valibot';
 import { evidenceWindow } from '../../utils/evidence-window';
-import { REDACTION_ONLY_PATTERNS, SECRET_PATTERNS } from '../../safety/secret-patterns';
+import { redactSecrets } from '../../safety/secret-patterns';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS,
   type PayloadPolicy, type KinuEvent, type IngressDescriptor, type SubordinateReportHandoff,
@@ -60,28 +60,6 @@ export function redactPayload(value: JsonValue): JsonValue {
   }
 
   return redacted;
-}
-
-/** Each pattern with a non-global copy, so a match's mask expands its own groups. */
-const REDACTION_PASSES = [...SECRET_PATTERNS, ...REDACTION_ONLY_PATTERNS].map((pattern) => ({
-  pattern,
-  one: new RegExp(pattern.regex.source, pattern.regex.flags.replace('g', '')),
-}));
-
-/** Applies `SECRET_PATTERNS` and `REDACTION_ONLY_PATTERNS` per line (a match that is itself a
- *  pattern's `benign` form stays) and masks with `<redacted>`, the marker `redactErrorText` prints. */
-export function redactSecrets(text: string): string {
-  return text.split('\n').map((line) => {
-    let redacted = line;
-
-    for (const { pattern, one } of REDACTION_PASSES) {
-      // `benign` judges the match, not the line: prose beside a live key never spares it.
-      redacted = redacted.replaceAll(pattern.regex, (match) =>
-        pattern.benign?.test(match) === true ? match : match.replace(one, pattern.mask ?? '<redacted>'));
-    }
-
-    return redacted;
-  }).join('\n');
 }
 
 export interface StorageTransform {

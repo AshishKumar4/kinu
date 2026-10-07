@@ -10,9 +10,10 @@ import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 
 /** Records, on `window.__scriptFailures`, every script element whose load failed, and on `window.__uncaughtErrors`
- *  every error nothing caught. Installed before each document's scripts run, so the scripts the app loads are the
- *  recorded ones. A module a lazy import fails rejects its import and fails no element: the page's error boundary
- *  draws that one, and a boundary's catch is no uncaught error. */
+ *  every error nothing caught, a promise's rejection nothing handled among them. Installed before each document's
+ *  scripts run, in every frame of the page, so the scripts the app and the apps it frames load are the recorded ones.
+ *  A module a lazy import fails rejects its import and fails no element: the page's error boundary draws that one,
+ *  and a boundary's catch is no uncaught error. */
 const RECORD_SCRIPT_FAILURES = `(() => {
   window.__scriptFailures = [];
   window.__uncaughtErrors = [];
@@ -20,6 +21,9 @@ const RECORD_SCRIPT_FAILURES = `(() => {
     if (event.target instanceof HTMLScriptElement) window.__scriptFailures.push(event.target.src || 'an inline script');
     else if (event instanceof ErrorEvent) window.__uncaughtErrors.push(event.message);
   }, true);
+  window.addEventListener('unhandledrejection', (event) => {
+    window.__uncaughtErrors.push('Uncaught (in promise) ' + (event.reason instanceof Error ? event.reason.message : String(event.reason)));
+  });
 })()`;
 
 /** A script request of a page that failed: its URL, why (the browser's error text, or the status a server
@@ -74,6 +78,10 @@ export async function documentScriptFailures(page: Page): Promise<ScriptFailure[
 
   return (scriptFailures.get(page) ?? []).filter((failure) => failure.at >= started);
 }
+
+/** In a page or any frame of it: what {@link RECORD_SCRIPT_FAILURES} recorded in that document, the errors nothing
+ *  caught and the scripts that did not load. */
+export const DOCUMENT_FAULTS = '({ errors: window.__uncaughtErrors ?? [], scripts: window.__scriptFailures ?? [] })';
 
 /** The prefix {@link FAILED_APP_SCRIPT} names a failed app script with. */
 export const SCRIPT_FAILED = 'the app script ';

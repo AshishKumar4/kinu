@@ -1,4 +1,5 @@
 
+import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
@@ -12,7 +13,7 @@ import { published } from './npm';
 
 const MISSION = "Harbor Freight Co-op's workspace. We check every shipping manifest that comes in, with tools we keep for it.";
 
-const DIR = '/home/user/manifests';
+const DIR = `${WORKSPACE_ROOT}/manifests`;
 
 const OCTOBER_DIR = `${DIR}/2027-10`;
 

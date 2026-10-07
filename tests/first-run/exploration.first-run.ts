@@ -26,7 +26,7 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase, type FirstRunSession,
 } from './first-run';
 import { SWARM_ASK as ASK } from './asks';
-import { openBrowser, signedInPage } from './browser';
+import { openBrowser, signedInPage } from '../../evals/src/browser';
 import type { TestChrome } from '../../scripts/test-chrome';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 

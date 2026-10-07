@@ -18,7 +18,7 @@ import {
 } from './workspace-access';
 import type { CloudWorkspaceRegistry } from './workspace-create';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { err, isWorkspaceName, json, safeJson } from '@kinu.run/core';
+import { err, isWorkspaceName, json, safeJson, safeJsonParse } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
@@ -379,9 +379,15 @@ userRoutes.delete('/api/user/codex', async (c) => {
   return json({ body: { ok: true } });
 });
 
+/** An empty body signs in the main account; `{ account }` signs in `codex.oauth@<account>`. */
 userRoutes.post('/api/user/codex/start', (c) => settle(Effect.tryPromise({
   try: async () => {
-    return json({ body: await c.get('stub').startCodexDeviceFlow(c.get('owner')) });
+    const body = await c.req.text();
+    const named = body === '' ? undefined : v.safeParse(v.object({ account: v.string() }), safeJsonParse(body));
+
+    if (named !== undefined && !named.success) return err(400, 'Body must be empty or { account }');
+
+    return json({ body: await c.get('stub').startCodexDeviceFlow(c.get('owner'), named?.output.account) });
   },
   catch: (cause) => toKinuError({ doing: 'starting the Codex sign-in', cause, otherwise: 'unavailable' }),
 })));

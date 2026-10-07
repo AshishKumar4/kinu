@@ -1,9 +1,13 @@
 import * as v from 'valibot';
 import { JsonValueSchema, projectJsonValue, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
-import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSwarmRun, WorkBoard } from './session';
+import { setTimeout as sleep } from 'node:timers/promises';
+import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSlateListing, PublicSwarmRun, WorkBoard, WorkspaceWeb } from './session';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
+import { browsing, DRAW_MS, type WorkspaceBrowser } from './browser';
 import { helperAddress, ROOT, type RosterHelper } from './helper-address';
+import { judge, type Judgement } from './judge';
+import { WorkspaceHeld } from './workspace-completion';
 import { redact, redactJson } from './redact';
 import type { EvalCheck } from './task';
 import { invokedInTurn } from '../tasks/crafted-reuse';
@@ -26,7 +30,9 @@ function lostByThePlatform(call: string, answer: { reason: string; error: string
 
 /** The artifact and public inspector surfaces, including the UI's structured run events. */
 export type VerifierSession = {
+  readonly web: WorkspaceWeb;
   slateOp(operation: JsonValue): Promise<JsonValue>;
+  listSlates(): Promise<PublicSlateListing>;
   readFile(path: string, options?: { allowMissing?: boolean }): Promise<string>;
   readBytes(path: string): Promise<Uint8Array>;
   writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void>;
@@ -55,6 +61,13 @@ export function finishedWork(helpers: readonly HelperWork[], subject: string): s
       && helper.runs.some((run) => run.status === 'completed' && run.startedAt >= assignment.startedAt)))
     .map((helper) => helper.name);
 }
+
+/** The cause the ledger gives a run a slate's page started: cf-backend's slate dispatcher sends the agent a `slate`
+ *  signal, and its kind becomes the run's `caused_by`. */
+const SLATE_CAUSE = 'slate';
+
+/** A run a slate's message started: the tools it called. */
+export type ReachedRun = { readonly tools: readonly string[] };
 
 /** What a check saw: JSON-like data, projected to JSON when it is recorded. */
 export type Evidence = string | number | boolean | null | undefined | readonly Evidence[] | { readonly [key: string]: Evidence };
@@ -149,13 +162,16 @@ export class EvalVerifier {
   readonly replies: readonly string[];
   readonly #session: VerifierSession;
   readonly #startedAt: number;
+  readonly #settled: () => Promise<void>;
   readonly #checks: EvalCheck[] = [];
   readonly #pending: Promise<void>[] = [];
 
-  constructor(session: VerifierSession, replies: readonly string[], startedAt: number) {
+  /** `settled` waits until the workspace has nothing left to do, as the harness waits out a turn. */
+  constructor(session: VerifierSession, replies: readonly string[], startedAt: number, settled: () => Promise<void>) {
     this.#session = session;
     this.replies = replies;
     this.#startedAt = startedAt;
+    this.#settled = settled;
   }
 
   /** A current-turn invocation observation, independent of deferred quality/use review. */
@@ -221,6 +237,57 @@ export class EvalVerifier {
     }
 
     throw new SlateRefusal(answer.reason, answer.error);
+  }
+
+  /** The workspace's slates, as its Slates list shows them. */
+  slates(): Promise<PublicSlateListing> {
+    return this.#session.listSlates();
+  }
+
+  /** The workspace's pages in a browser of their own, signed in as the trial's account, closed after `body`. */
+  browse<T>(body: (browser: WorkspaceBrowser) => Promise<T>): Promise<T> {
+    return browsing(this.#session.web, body);
+  }
+
+  /**
+   * A model's yes or no on what no check can compute, over pictures of what the pages drew (`judge.ts`). Asked as the
+   * eval identity's own account, not the trial's: the reviewer's provider sign-in is that account's alone.
+   */
+  judgement(question: string, pictures: readonly Uint8Array<ArrayBuffer>[]): Promise<Judgement> {
+    const { origin, identity } = this.#session.web;
+
+    return judge({ origin, identity: identity.kind === 'secret' ? { kind: 'secret', secret: identity.secret } : { kind: 'loopback' } }, question, pictures);
+  }
+
+  /**
+   * Do what a person does on a page to reach the agent (`act`, a click; false when the page offered no way to), then
+   * wait for the run a slate's message starts (`SLATE_CAUSE`), up to the page's budget (`DRAW_MS`), and for the
+   * workspace to settle after it, as a prompt's turn is waited out. A workspace still busy when the message lands runs
+   * it once it is free, after the budget, which the settling waits out too (offline, 2026-10-07, one start in three came
+   * later than the budget). Runs anything else started are not counted. The slate runs it started: none when the page
+   * never delivered the message. A page that sends the agent something unasked on load is not told apart from the
+   * click: the checks read what the run then did.
+   */
+  async reach(act: () => Promise<boolean>): Promise<{ acted: boolean; runs: ReachedRun[] }> {
+    const before = new Set((await this.#session.runEvents()).map((event) => event.runId));
+    const due = Date.now() + DRAW_MS;
+
+    const slateStarts = (events: readonly RunEvent[]) => events.filter((event): event is Extract<RunEvent, { type: 'run_start' }> =>
+      event.type === 'run_start' && event.caused_by === SLATE_CAUSE && !before.has(event.runId));
+
+    if (!await act()) return { acted: false, runs: [] };
+
+    while (slateStarts(await this.#session.runEvents()).length === 0 && Date.now() < due) await sleep(1_000);
+
+    await this.#settled();
+    const events = await this.#session.runEvents();
+
+    return {
+      acted: true,
+      runs: slateStarts(events).map((start) => ({
+        tools: events.flatMap((event) => event.type === 'tool_call_end' && event.runId === start.runId ? [event.name] : []),
+      })),
+    };
   }
 
   /** Remove an authored app through the same public slate lifecycle operation. */
@@ -359,8 +426,9 @@ export class EvalVerifier {
     try {
       await verify(this);
     } catch (error) {
-      // The deployment's transport failing (`infraBoundary`, a dropped socket) is nothing the build did.
-      if (renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
+      // The deployment's transport failing (`infraBoundary`, a dropped socket) is nothing the build did, and a workspace
+      // that hung or a run cancelled while a check waited on it (`reach`) ends the turn as the harness ends one.
+      if (error instanceof WorkspaceHeld || renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
       // A throw outside any check is the checker's own failure; it fails the turn and says why.
       this.#checks.push({ id: THREW, pass: false, evidence: truncate(redact(renderThrownChain({ cause: error }))) });
     }
@@ -379,8 +447,9 @@ export class EvalVerifier {
         ? { id, pass: outcome.pass }
         : { id, pass: outcome.pass, evidence: redactJson(projectJsonValue({ value: outcome.evidence })) };
     } catch (error) {
-      // The deployment failing to answer is not the build's failure: the trial fails as infrastructure.
-      if (renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
+      // The deployment failing to answer is not the build's failure: the trial fails as infrastructure. A held
+      // workspace is the turn's outcome, not this check's.
+      if (error instanceof WorkspaceHeld || renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
       // The failure is the check's result: its error is recorded as the evidence.
       this.#checks[index] = { id, pass: false, evidence: truncate(redact(renderThrownChain({ cause: error }))) };
     }

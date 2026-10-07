@@ -677,7 +677,7 @@ describe('the tools tarball is built from this tree', () => {
     const sources = trackedFiles()
       .filter((file) => file.startsWith(`${BLOCK_LOWER}/`))
       .map((file) => file.slice(BLOCK_LOWER.length + 1))
-      .filter((file) => ['Cargo.toml', 'Cargo.lock', 'Dockerfile'].includes(file) || /^src\/[^/]+\.rs$/u.test(file));
+      .filter((file) => ['Cargo.toml', 'Cargo.lock', 'tools-setup.sh', 'tools-build.sh'].includes(file) || /^src\/[^/]+\.rs$/u.test(file));
 
     expect(Object.keys(ARTIFACT.files).sort()).toEqual(sources.sort());
 

@@ -1,9 +1,11 @@
 /**
- * The devbox tools tarball (D65): built by the `tools` stage of packages/devbox/block-lower/Dockerfile and
- * pinned in its upstream.json, the way the image is. A box reads it from its environment's store bucket in
- * parts of at most 256 MiB, `devbox-tools/<sha256>.tgz.0` first, and checks the whole against the pin.
+ * The devbox tools tarball (D65, D78): built on armada from cloudflare/debian-trixie by tools-setup.sh and
+ * tools-build.sh, and pinned in packages/devbox/block-lower/upstream.json, the way the image is. A box reads it from its
+ * environment's store bucket in parts of at most 256 MiB, `devbox-tools/<sha256>.tgz.0` first, and checks the whole
+ * against the pin.
  *
- *   bun scripts/devbox-tools.ts build              builds it and prints the `tools` record for upstream.json
+ *   bun scripts/devbox-tools.ts build [<file>]     builds it, prints the `tools` record for upstream.json, and writes it
+ *                                                   to <file> (for devbox-container-tier.ts --tools)
  *   bun scripts/devbox-tools.ts publish <bucket>   uploads the pinned tarball's parts, built again, unless the bucket holds them
  *   bun scripts/devbox-tools.ts check <bucket>     exits 1, naming the part, when the bucket lacks one
  *
@@ -13,11 +15,13 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { AwsClient } from 'aws4fetch';
+import { cmd, recipe } from 'armada';
 import { deployedConfig } from './infra-manifest';
-import { r2ObjectSize } from './cloudflare-rest';
+import { r2ObjectSize, wranglerSessionToken } from './cloudflare-rest';
+import { trackedFiles } from './sources';
 
 const BLOCK_LOWER = join(import.meta.dir, '..', 'packages/devbox/block-lower');
 
@@ -66,7 +70,7 @@ function partsOf(tools: v.InferOutput<typeof ToolsRecord>): readonly { readonly 
 
 /** The first part the bucket lacks or holds at another size. */
 async function missingPart(bucket: string, tools: v.InferOutput<typeof ToolsRecord>) {
-  const token = sessionToken();
+  const token = wranglerSessionToken();
 
   for (const part of partsOf(tools)) {
     const size = await r2ObjectSize({ accountId: ACCOUNT, bucket, key: part.key, token });
@@ -77,28 +81,56 @@ async function missingPart(bucket: string, tools: v.InferOutput<typeof ToolsReco
   return undefined;
 }
 
-function build() {
-  const out = mkdtempSync(join(tmpdir(), 'kinu-devbox-tools-'));
+/** Where the recipe's install leaves the tarball, in the environment its tasks start from. */
+const BUILD_DIR = '/home/ci/devbox-tools';
 
-  try {
-    const built = spawnSync('docker', ['build', '--network=host', '--target', 'tools', '--output', `type=local,dest=${out}`, BLOCK_LOWER], { encoding: 'utf8' });
+/** What one task hands back: armada keeps an output of 64 MiB and refuses one of 128 (measured, D78). */
+const RETURN_PART_BYTES = 32 * 1024 * 1024;
 
-    if (built.status !== 0) throw new Error(`the tools stage failed:\n${built.stderr.slice(-3000)}`);
-    const bytes = readFileSync(join(out, 'tools.tgz'));
+/** More parts than the tarball's 336 MB fills; a task past its end hands back nothing. */
+const RETURN_PARTS = 16;
 
-    return { bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
-  } finally {
-    rmSync(out, { recursive: true, force: true });
-  }
+/** The block lower's own sources, as release-config.test.ts's A8 pins them: the install unpacks them, so the
+ *  environment's key covers them. */
+function blockLowerSources(): readonly string[] {
+  const under = 'packages/devbox/block-lower/';
+
+  return trackedFiles().filter(file => file.startsWith(under)).map(file => file.slice(under.length))
+    .filter(file => ['Cargo.toml', 'Cargo.lock'].includes(file) || /^src\/[^/]+\.rs$/u.test(file)).sort();
 }
 
-/** The deploy's own credential, the one `wrangler r2 object put` publishes with; an Access-only API token cannot read R2. */
-function sessionToken(): string {
-  const ran = spawnSync(join(import.meta.dir, '..', 'node_modules/.bin/wrangler'), ['auth', 'token', '--json'], { encoding: 'utf8' });
+/**
+ * How armada builds the tarball (D78): cloudflare/debian-trixie with every package from one day of the archive
+ * (tools-setup.sh, as root, once per environment), then this tree's block lower compiled and everything packed
+ * (tools-build.sh, as the user). `smoke` is the recipe's own check; another value keys another environment, which is
+ * how a second build of the same inputs is had.
+ */
+export function toolsRecipe(smoke = 'true') {
+  const unpack = blockLowerSources().map(file => `mkdir -p block-lower/${dirname(file)} && `
+    + `printf %s ${readFileSync(join(BLOCK_LOWER, file)).toString('base64')} | base64 -d > block-lower/${file}`);
 
-  if (ran.status !== 0) throw new Error(`\`wrangler auth token\` failed: ${ran.stderr.slice(-400)}`);
+  return recipe({
+    base: 'cloudflare/debian-trixie', size: 'medium', smoke,
+    setup: readFileSync(join(BLOCK_LOWER, 'tools-setup.sh'), 'utf8'),
+    install: ['set -eu', `rm -rf ${BUILD_DIR} && mkdir -p ${BUILD_DIR} && cd ${BUILD_DIR}`, ...unpack, readFileSync(join(BLOCK_LOWER, 'tools-build.sh'), 'utf8')].join('\n'),
+  });
+}
 
-  return v.parse(v.object({ token: v.pipe(v.string(), v.minLength(1)) }), JSON.parse(ran.stdout)).token;
+/** The tarball an environment of `built` holds, handed back in parts by one map over it. */
+export async function buildTools(built = toolsRecipe()): Promise<{ readonly bytes: Buffer; readonly sha256: string; readonly job: string }> {
+  const part = cmd(built, (index: number) => [
+    'sh', '-c', `dd if=${BUILD_DIR}/tools.tgz of="$ARMADA_OUT" bs=${String(RETURN_PART_BYTES)} skip="$1" count=1 status=none`, 'part', String(index),
+  ], { output: 'bytes', timeout: 900 });
+
+  const job = part.map(Array.from({ length: RETURN_PARTS }, (_, index) => index), { pool: 4, label: 'devbox tools' });
+  const parts = await job.values();
+  // A part past the tarball's end is empty.
+  const end = parts.findIndex(bytes => bytes.byteLength === 0);
+  const bytes = Buffer.concat(end === -1 ? parts : parts.slice(0, end));
+
+  if (bytes.byteLength >= RETURN_PARTS * RETURN_PART_BYTES) throw new Error(`the tarball fills all ${String(RETURN_PARTS)} parts: hand back more`);
+
+  return { bytes, sha256: createHash('sha256').update(bytes).digest('hex'), job: await job.id };
 }
 
 function wrangler(args: readonly string[]) {
@@ -113,8 +145,10 @@ async function main(): Promise<number> {
   const [command, bucket] = process.argv.slice(2);
 
   if (command === 'build') {
-    const { bytes, sha256 } = build();
-    process.stdout.write(`${JSON.stringify({ tools: { sha256, bytes: bytes.byteLength } }, null, 2)}\n`);
+    const { bytes, sha256, job } = await buildTools();
+
+    if (bucket !== undefined) writeFileSync(bucket, bytes);
+    process.stdout.write(`${JSON.stringify({ tools: { sha256, bytes: bytes.byteLength }, job }, null, 2)}\n`);
 
     return 0;
   }
@@ -138,7 +172,7 @@ async function main(): Promise<number> {
       return 0;
     }
 
-    const { bytes, sha256 } = build();
+    const { bytes, sha256 } = await buildTools();
 
     if (sha256 !== pinned.sha256) throw new Error(`the tools stage built ${sha256}, not the pinned ${pinned.sha256}: build and pin again`);
     const dir = mkdtempSync(join(tmpdir(), 'kinu-devbox-tools-'));
@@ -160,7 +194,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  process.stderr.write('usage: bun scripts/devbox-tools.ts build | publish <bucket>\n');
+  process.stderr.write('usage: bun scripts/devbox-tools.ts build [<file>] | check <bucket> | publish <bucket>\n');
 
   return 2;
 }

@@ -105,6 +105,7 @@ export {
   scanText,
   countDetections,
   secretSightings,
+  redactSecrets,
   type SecretPattern,
   type SecretFinding,
   type SecretSighting,

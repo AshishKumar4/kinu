@@ -72,7 +72,10 @@ export const HarnessRunSchema = v.looseObject({
     }), { steps: [] }),
   }),
   output: v.looseObject({
-    metrics: v.object({ modelTurns: Count, toolCalls: Count, toolErrors: Count, providerWaits: Count, providerWaitMs: v.pipe(v.number(), v.minValue(0)) }),
+    metrics: v.object({
+      modelTurns: Count, toolCalls: Count, toolErrors: Count, badInputCalls: Count, unknownToolCalls: Count, providerWaits: Count,
+      providerWaitMs: v.pipe(v.number(), v.minValue(0)),
+    }),
     turns: v.array(v.looseObject({
       outcome: v.looseObject({ status: v.picklist(TURN_OUTCOMES), message: v.optional(v.string()), heldBy: v.optional(v.array(v.string())) }),
       checks: v.optional(v.array(CheckSchema), []),

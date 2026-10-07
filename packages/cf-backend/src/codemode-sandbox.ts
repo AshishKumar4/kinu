@@ -14,7 +14,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from '@kinu.run/core';
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { EGRESS_FAILURE_HEADER, codemodeEgress, type CodemodeEgressProps } from './codemode-egress';
-import { BROWSER_CLIENT_MODULE, BROWSER_CLIENT_SOURCE } from './browser-prelude';
+import { BROWSER_CLIENT_MODULE, browserClientSource } from './browser-prelude';
 
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
 
@@ -81,7 +81,7 @@ export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: Worker
   async run(source: string, providers: ResolvedProvider[]): Promise<ProgramResult> {
     const { kinuNode, egress } = this.ctx.props;
 
-    return await programWorker({ loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode }).execute(source, providers);
+    return await (await programWorker({ loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode })).execute(source, providers);
   }
 }
 
@@ -91,12 +91,12 @@ export function codemodeLauncher(props: CodemodeLauncherProps): ProgramLaunch {
 
 /** No work deadline, where codemode's default is 60 s: a node agent's whole scaffold loop is one program, bounded
  *  by the detach window and the platform CPU limit. */
-function programWorker(input: { readonly loader: WorkerLoader; readonly egress: Fetcher | null; readonly kinuNode: boolean }): DynamicWorkerExecutor {
+async function programWorker(input: { readonly loader: WorkerLoader; readonly egress: Fetcher | null; readonly kinuNode: boolean }): Promise<DynamicWorkerExecutor> {
   return new DynamicWorkerExecutor({
     loader: input.loader,
     timeout: NO_TIMER_DEADLINE_MS,
     globalOutbound: input.egress,
-    modules: input.kinuNode ? { [KINU_NODE_MODULE_NAME]: KINU_NODE_MODULE_SOURCE, [BROWSER_CLIENT_MODULE]: BROWSER_CLIENT_SOURCE } : {},
+    modules: input.kinuNode ? { [KINU_NODE_MODULE_NAME]: KINU_NODE_MODULE_SOURCE, [BROWSER_CLIENT_MODULE]: await browserClientSource() } : {},
   });
 }
 
