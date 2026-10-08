@@ -84,7 +84,7 @@ function routes(harness: TestUserDO) {
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async userMcp_warmConnections() { return { servers: 0 }; },
     async listActiveWorkspaces() { return []; },
-    startChatGptPasteSignIn: (caller: UserCaller) => harness.userDO.startChatGptPasteSignIn(caller),
+    startChatGptPasteSignIn: (caller: UserCaller, account?: string) => harness.userDO.startChatGptPasteSignIn(caller, account),
     finishChatGptPasteSignIn: (caller: UserCaller, url: string) => harness.userDO.finishChatGptPasteSignIn(caller, url),
   });
 
