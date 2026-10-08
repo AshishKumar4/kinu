@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { dirname, join } from 'node:path';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { scratchDir } from '@kinu.run/test-utils';
+import { childrenRunning } from './deadline';
 import {
   checkedProjects,
   programFiles,
@@ -111,9 +112,12 @@ describe('this tree', () => {
       .toEqual([devboxWorkspaceTest]);
   });
 
-  test('has no undeclared or stale script typecheck debt', async () => {
+  test('has no undeclared or stale script typecheck debt, and leaves no compiler running', async () => {
     const programs = await programFiles();
+
     expect(scriptDebtCoverage(scriptTypeScriptFiles(), programs)).toEqual({ undeclared: [], stale: [] });
+    // The compiler's API process outlived its close() and the file that ran it (2026-10-08).
+    expect(childrenRunning(process.pid, '--api')).toEqual([]);
   });
 
   test('keeps the root tests and evals projects on the check path', () => {
