@@ -93,9 +93,11 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = 8_500_000;
  *  run; 316-321 MB on 3e0c5614c once a context revision touches only the entries it changed; 305-319 MB on e0f89081e
  *  once image-free prompts, file-free answers and an append-only step's cache pass untouched; 301.8-303.7 MB on
  *  4a6fee13c once replay normalization resumes per turn and inline payloads skip the runner; 289.0-301.0 MB on ed23aab1c
- *  once written events, render copies, frozen leaves and the context fill stop re-reading what they hold. The sampler's
- *  spread is about 15 MB; past this row, a per-step rebuild came back. */
-export const LONG_TURN_ALLOCATED_BOUND_BYTES = 315_000_000;
+ *  once written events, render copies, frozen leaves and the context fill stop re-reading what they hold; 292.3-299.4 MB
+ *  with the tool catalog (99cda9db0), 274.5-285.5 MB on c5c559cbe once steering, the context head's ids, settling, the
+ *  sanitizer, the codec, the seal check, inline payloads, argument digests, span attributes and the agents sql stop
+ *  copying or re-walking per step. The sampler's spread is about 15 MB; past this row, a per-step rebuild came back. */
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 300_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on

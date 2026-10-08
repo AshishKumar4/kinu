@@ -4,6 +4,7 @@
 import type { ModelMessage } from 'ai';
 import type { ChatEvent, StepRecord } from '../chat';
 import type { ToolCallRecord } from '../evolution/types';
+import { compactToolCall } from '../evolution/tool-call-record';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget';
 import type { ContextComposition } from '../context-meter';
 import { FAILURE_WITHOUT_ERROR, type RunEventInput } from '../events/types';
@@ -67,7 +68,7 @@ function describeToolFailure(input: { error: unknown }): string {
 }
 
 export class TurnAccumulator {
-  toolCalls: Array<ToolCallRecord & { outcome: ToolOutcome }> = [];
+  toolCalls: ToolCallRecord[] = [];
   stepCount = 0;
   /** `{}` means no step reported anything, not zeros. */
   usage: Usage = {};
@@ -195,6 +196,9 @@ export class TurnAccumulator {
 
     const recorded = failure !== null ? { error: failure } : c.output;
     const outcome = v.parse(ToolOutcomeSchema, c);
+    const call = compactToolCall({ toolCallId: c.toolCallId, name: c.toolName, args: c.input ?? {}, result: recorded, outcome });
+    const failed = !c.success;
+    const followUp = citesSpillAddress(c.input);
 
     const dur = c.durationMs != null ? ` (${c.durationMs}ms)` : '';
 
@@ -221,11 +225,11 @@ export class TurnAccumulator {
     this.sinks.onToolCallEvent?.(event);
 
     return () => {
-      if (!c.success) this.hadError = true;
+      if (failed) this.hadError = true;
 
-      if (citesSpillAddress(c.input)) this.context.noteFollowUp();
-      this.sinks.logActivity?.('tool_call_end', `${c.toolName}${dur}`);
-      this.toolCalls.push({ toolCallId: c.toolCallId, name: c.toolName, args: c.input ?? {}, result: recorded, outcome });
+      if (followUp) this.context.noteFollowUp();
+      this.sinks.logActivity?.('tool_call_end', `${call.name}${dur}`);
+      this.toolCalls.push(call);
     };
   }
 

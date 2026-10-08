@@ -4,7 +4,6 @@
  * model rates. A turn nobody answered stays unrated: no rule infers a verdict from tool exits.
  */
 
-import * as v from 'valibot';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -146,21 +145,6 @@ export function takePickRating(delivered: boolean): RatingVerdict {
 
 const ACTIONS_LISTED = 40;
 
-const ACTION_TARGET_CHARS = 80;
-
-const TargetSchema = v.pipe(v.string(), v.trim(), v.nonEmpty());
-
-/** The first line of the argument that says what a call acted on. */
-function actionTarget(args: ToolCallRecord['args']): string {
-  for (const key of ['path', 'op', 'command', 'code']) {
-    const value = v.safeParse(TargetSchema, args[key]);
-
-    if (value.success) return (value.output.split('\n')[0] ?? '').slice(0, ACTION_TARGET_CHARS);
-  }
-
-  return '';
-}
-
 function callStatus(call: ToolCallRecord): string {
   if (call.outcome === undefined) return 'unknown';
 
@@ -170,7 +154,7 @@ function callStatus(call: ToolCallRecord): string {
 /** One line per call with its status: what the agent did, without the bulk of what came back. */
 export function renderActions(calls: readonly ToolCallRecord[]): string {
   const lines = calls.slice(0, ACTIONS_LISTED).map((call) => {
-    const target = actionTarget(call.args);
+    const target = call.target;
 
     return `- ${call.name}${target ? ` ${target}` : ''} -> ${callStatus(call)}`;
   });

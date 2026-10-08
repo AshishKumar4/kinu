@@ -1154,6 +1154,8 @@ describe('pc-agent cancellation racing a command\'s own completion', () => {
     acknowledge(rpcId(272), runId, ws.socket);
     await settled(() => ws.of(rpcId(272))[0], 'the completion ACK');
     expect(ws.of(runId)).toHaveLength(1);
+    // The ACK is answered once the supervisor has removed its directory, which it does before it exits.
+    expect(await gone(supervisor.pid)).toBe(true);
   });
 });
 

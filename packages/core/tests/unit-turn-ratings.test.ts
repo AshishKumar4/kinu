@@ -3,6 +3,7 @@
  * series reads satisfaction per day. The decision model reads Clef's measured answers on both transports, and a
  * refusal only the owner can fix is said once and retried by nothing.
  */
+import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
@@ -45,7 +46,7 @@ const QUESTIONS = {
 function turn(): CompletedTurn {
   return {
     userMessage: 'export the report as CSV', assistantResponse: 'Here it is as JSON.',
-    toolCalls: [{ name: 'shell', args: { command: 'export --json' }, outcome: { success: true } }],
+    toolCalls: [compactToolCall({ name: 'shell', args: { command: 'export --json' }, outcome: { success: true } })],
     durationMs: 1, steps: 1, hadError: false, feedback: null, turnId: 'u-1', sessionId: 'default', origin: 'user',
   };
 }

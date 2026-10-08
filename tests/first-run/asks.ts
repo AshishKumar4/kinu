@@ -123,7 +123,7 @@ export const MOUNT_BYTES = 'export const firstRun = "KINU_SANDBOX_MOUNT_OK";\n';
 export const MOUNT_MARK = 'MOUNT-WRITE-PROBE';
 
 /** sandbox-mount-write: the empty-path namespace listing the failed run made. */
-export const MOUNT_LISTING_PROGRAM = 'const ls = await sandbox.listFiles(\'\'); return ls;';
+export const MOUNT_LISTING_PROGRAM = 'const ls = await sandbox.listFiles({ path: \'\' }); return ls;';
 
 /** One turn that does the whole defect: the listing, the create, the read-back and the empty-path namespace
  *  listing, the same calls the failed run made. */
