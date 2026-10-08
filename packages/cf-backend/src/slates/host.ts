@@ -49,6 +49,8 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   readonly apps: SlateApps;
   catalog(): Promise<SlateSurfaceCatalog>;
   shareUrl(handle: string): Promise<string | null>;
+  /** The app's page a `users` share is entered through, or null where this deployment names no app origin. */
+  shareEntry(share: string): string | null;
   /** Absent means no per-viewer rate bound, as at the edge. */
   kv?: KvStore;
   /** Debits the per-share per-day spend label; absent means no spend bound. */
@@ -237,6 +239,11 @@ export class SlateHost {
     const share = this.live.byHandle(input.handle);
 
     if (share === undefined) return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+
+    // A visitor not yet known signs in at the app, whose ticket brings them back as themselves.
+    const entry = share.visibility === 'users' && input.claim.userId === null ? this.deps.shareEntry(share.id) : null;
+
+    if (entry !== null) return new Response(null, { status: 303, headers: { location: entry, 'cache-control': 'no-store' } });
 
     if (share.visibility === 'users' && (input.claim.userId === null || !this.liveShareAdmitsUser(share.id, input.claim.userId))) {
       return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });

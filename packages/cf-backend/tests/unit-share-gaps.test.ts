@@ -6,8 +6,9 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
+import { matchPath } from 'react-router-dom';
 import {
-  LiveShareRecordSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  APP_ROUTES, LiveShareRecordSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
   type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
@@ -32,6 +33,8 @@ function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, 
 const OWNER_ID = '0123456789abcdef0123456789abcdef';
 
 const VIEWER_ID = 'fedcba9876543210fedcba9876543210';
+
+const APP_ORIGIN = 'https://app.test';
 
 async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
   await files.mkdir('/slates/issues', { recursive: true });
@@ -79,7 +82,7 @@ async function userWorld(
   const agent = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId: userId });
   // Declared before anything touches `slates`: its deps memoize.
   agent.agent.harnessDeclareEnv({
-    AUTH_KV: kv, PREVIEW_HOST_SUFFIX: 'share.test',
+    AUTH_KV: kv, PREVIEW_HOST_SUFFIX: 'share.test', CLI_PUBLIC_ORIGIN: APP_ORIGIN,
     CREDENTIAL_ENCRYPTION_KEY: TEST_USER_ENV.CREDENTIAL_ENCRYPTION_KEY,
   });
   await agent.agent.installWorkspaceCapability(capability);
@@ -238,7 +241,7 @@ test('D3: a credentialed share answers its consent page until the consent cookie
   expect(requests).toHaveLength(1);
 });
 
-test('a users share lets in its owner and the people it names, each opening it as themselves, and no one else', async () => {
+test('a users share link sends each visitor to sign in, then lets in its owner and the people it names as themselves, and no one else', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
@@ -246,8 +249,14 @@ test('a users share lets in its owner and the people it names, each opening it a
   const url = present(created.url, 'the share URL');
   await world.owner.agent.shareLiveWith(created.share.id, [{ userId: VIEWER_ID, email: 'pat@example.test' }]);
 
+  // Each follows the link as a browser does: to the app's page for the share, whose open hands them a ticket.
   const openAs = async (identity: AuthIdentity, ip: string): Promise<number | undefined> => {
-    const opened = await sharedRequest(world.env, identity, post('/api/shared/live/open', { workspace: 'issues-owner', share: created.share.id }));
+    const sent = present(await visit(world, url, ip), 'the first visit');
+    const page = new URL(present(sent.headers.get('location'), 'where the first visit was sent'));
+
+    expect([sent.status, page.origin]).toEqual([303, APP_ORIGIN]);
+    const { params } = present(matchPath(APP_ROUTES.sharedLive, page.pathname), 'the share\'s entry page');
+    const opened = await sharedRequest(world.env, identity, post('/api/shared/live/open', { workspace: params.workspace, share: params.share }));
     const entry = await jsonBody(present(opened, 'the open answer'), v.object({ url: v.string() }));
     const exchanged = await handleSlateShareHostRequest(new Request(entry.url, { headers: { 'cf-connecting-ip': ip } }), world.env);
     const cookie = present(exchanged?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
@@ -258,7 +267,6 @@ test('a users share lets in its owner and the people it names, each opening it a
   expect(await openAs(identityOf(OWNER_ID, 'owner@example.test'), '203.0.113.5')).toBe(200);
   expect(await openAs(identityOf(VIEWER_ID, 'pat@example.test'), '203.0.113.6')).toBe(200);
   expect(await openAs(identityOf('00112233445566778899aabbccddeeff', 'sam@example.test'), '203.0.113.7')).toBe(404);
-  expect((await visit(world, url, '203.0.113.8'))?.status).toBe(404);
 });
 
 test('D1: a live share forks for who it names, refuses who it does not, honors fork:false, and its owner forks it too', async () => {
@@ -470,6 +478,9 @@ test("a named person's Drive holds the share's card from the owner's account, wa
 
   expect(shared.status).toBe(201);
   const created = await jsonBody(shared, LiveShareCreatedSchema);
+
+  // The answer names whom the share was made for, as the share now records them.
+  expect(created.share.users).toEqual(['pat@example.test']);
 
   // Delivered by the owner's account's job, not by the request: until it runs, the Drive holds nothing.
   expect((await library()).received).toEqual([]);

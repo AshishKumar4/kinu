@@ -161,6 +161,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       browserActor: async (caller) => (caller.share === undefined ? PROBE_ACTOR : null),
       catalog: async () => ({ mcp: MCP, slates: Object.keys(await this.host.projects(ROOT_SLATE_CALLER)) }),
       shareUrl: async (handle) => `https://${handle}.share.test/`,
+      shareEntry: () => null,
       // No AUTH_KV binding, as on a deployment without it; the spend bound is real.
       budget: () => this.governor(),
       ownerTitle: async () => ctx.id.name ?? ctx.id.toString(),

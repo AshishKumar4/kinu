@@ -22,6 +22,8 @@ export const APP_ROUTES = {
   driveFolder: '/drive/*',
   shared: '/shared',
   sharedBlueprint: '/shared/blueprint/:id',
+  /** Where a person a live share names enters it: signed in, they are handed the share's ticket. */
+  sharedLive: '/shared/live/:workspace/:share',
   deploy: '/deploy',
   updates: '/updates',
 } as const;

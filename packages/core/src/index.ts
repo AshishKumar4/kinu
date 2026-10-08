@@ -250,7 +250,7 @@ export { parseSlateProject, type SlateProject } from './slates/project';
 
 export {
   SHARE_KINDS, SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH,
-  formatBlueprintId, parseBlueprintId, blueprintPagePath,
+  formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
   ShareGrantSchema, SlateCapabilityGraphSchema, ShareCardSchema,
