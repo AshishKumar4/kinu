@@ -1,13 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir, spawnTest } from '@kinu.run/test-utils';
+import { runToExit, scratchDir, spawnTest } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const REPO = join(import.meta.dirname, '../..');
 
-test('a task file that did not load and a suite whose hook threw are named in the run\'s output, with why', () => {
+test('a task file that did not load and a suite whose hook threw are named in the run\'s output, with why', async () => {
   // On 2026-10-01 the staging pass printed "10 failed" with 24 trials "skipped" and no reason: vitest-evals' reporter
   // drops vitest's "Failed Suites" summary for a run of eval files alone. These two task files fail the same two ways:
   // one does not load (chess.js was missing), one's hook throws before its trial (a sweep was refused). They are
@@ -24,12 +23,14 @@ test('a task file that did not load and a suite whose hook threw are named in th
     '});',
   ].join('\n'));
 
-  const run = spawnSync('bun', ['--bun', join(REPO, 'node_modules/.bin/vitest'), 'run', '--root', dir,
-    '--config', join(dir, 'vitest.config.mjs'), `--reporter=${join(REPO, 'evals/src/reporter.ts')}`], { env: process.env, cwd: REPO, encoding: 'utf8' });
+  // Awaited, never `spawnSync`: the runner spun in it, state R, until the row's silence bound killed it (2026-10-08, on
+  // 78c0615783, f735c55efa and 3b005c2e2; oven-sh/bun#34069), as session.test.ts's did.
+  const run = await runToExit(['bun', '--bun', join(REPO, 'node_modules/.bin/vitest'), 'run', '--root', dir,
+    '--config', join(dir, 'vitest.config.mjs'), `--reporter=${join(REPO, 'evals/src/reporter.ts')}`], { env: process.env, cwd: REPO });
 
   const output = `${run.stdout}${run.stderr}`;
 
-  expect(run.status, output).toBe(1);
+  expect(run.exitCode, output).toBe(1);
   expect(output).toContain('Failed suites 2: their trials did not run');
   expect(output).toContain("import-throws.eval.ts: the task file did not load: Cannot find package 'chess.js'");
   expect(output).toContain('hook-throws.eval.ts > hook-throws: the suite hook failed: no such table: workspace_identity');
