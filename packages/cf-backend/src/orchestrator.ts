@@ -201,6 +201,7 @@ import {
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  planAwaitingReply, planSubmissionReach,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   EVENT_VARIANTS,
   boundEventQuery,
@@ -1211,7 +1212,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * escape the subtree); codemode built last; all calls wrapped into the run's capture.
    */
   private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
-    if (turn.actor.handle.actorId === this.actorHandle().actorId) return await this.mainTaskProfile(turn);
+    if (turn.actor.handle.actorId === this.actorHandle().actorId) {
+      const awaitsReply = await this.hostedPlanAwaitsReply(turn);
+
+      // Asked of main's isolate before its tools are built: whether the owner's sent-back review awaits its answers.
+      this.mainPlanReply = awaitsReply
+        ? { reply: async (comment, text) => await this.hostedPlanReply(turn, comment, text) }
+        : undefined;
+
+      return await this.mainTaskProfile(turn);
+    }
+
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
     // `report` belongs only to a parent-driven turn: an owner chat with this actor carries it neither natively nor in eval.
@@ -1262,8 +1273,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       jobs: this.hireJobs(turn.actor, turn.input.mode),
       slate: (operation) => this.slateAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation),
       ...(report !== undefined && { report }),
-      // The owner's own Plan turn, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
-      ...(turn.input.mode === 'plan' && !turn.parentDriven && { submitPlan: { submit: async (edits) => await this.agentPlanSubmit(turn.actor.handle.actorId, edits, turn.driving) } }),
+      // The owner's own turns, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
+      ...(!turn.parentDriven && planSubmissionReach(turn.input.mode, turn.driving) && { submitPlan: { submit: async (edits) => await this.agentPlanSubmit(turn.actor.handle.actorId, edits, turn.driving) } }),
+      ...(await this.hostedPlanAwaitsReply(turn) && { replyToComment: { reply: async (comment, text) => await this.hostedPlanReply(turn, comment, text) } }),
     };
 
     const built = buildActorTools(deps);
@@ -2421,6 +2433,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return result;
   }
 
+  /** Asked only of an owner-driven turn of an agent that has submitted a plan. */
+  private async hostedPlanAwaitsReply(turn: HostedTaskTurn): Promise<boolean> {
+    if (turn.parentDriven || !turn.actor.stores.config.getHoldsPlans()) return false;
+    const actorId = turn.actor.handle.actorId;
+
+    return planAwaitingReply(await (await this.agentCalls(actorId)).activePlanReview(this.agentSnapshot(actorId)), turn.driving);
+  }
+
+  private async hostedPlanReply(turn: HostedTaskTurn, comment: string, text: string): Promise<PlanReviewResult> {
+    const actorId = turn.actor.handle.actorId;
+
+    return await (await this.agentCalls(actorId)).replyPlanComment(this.agentSnapshot(actorId), comment, text, turn.driving);
+  }
+
   /** Each agent's plans from its own isolate (D9); only an agent that has submitted one is asked, retired ones included. */
   private async hostedPlans(): Promise<Map<string, readonly PlanReview[]>> {
     const holders = this.workspaceActors().list({ retired: true })
@@ -2490,11 +2516,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected actorToolDeps(): ActorToolDeps {
+    const replyToComment = this.planReplyDeps();
+
     return {
       ...this.teamProfile(),
       peers: this.getPeersToolDeps(),
       // Main's plans live in its own isolate, judged by the metadata its turn was admitted under.
       submitPlan: { submit: async (edits) => await this.agentPlanSubmit(this.actorHandle().actorId, edits, this.turnDrivingMetadata()) },
+      ...(replyToComment !== undefined && { replyToComment }),
     };
   }
 

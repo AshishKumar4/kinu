@@ -159,6 +159,8 @@ export interface AgentFacetCalls {
   /** Its plan reviews, in its own store: submitted by its turn, under that turn's author-stamped metadata, and reviewed by
    *  the owner through its window. */
   submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult>;
+  /** Its reply in a comment thread of the review the owner sent back. */
+  replyPlanComment(snapshot: AgentSnapshot, comment: string, text: string, driving: JsonObject | undefined): Promise<PlanReviewResult>;
   activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null>;
   /** Newest first, for Work and the review queue; a retained retired agent answers too. */
   planReviews(snapshot: AgentSnapshot): Promise<readonly PlanReview[]>;
@@ -304,6 +306,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult> {
     return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.submit(edits, driving))));
+  }
+
+  async replyPlanComment(snapshot: AgentSnapshot, comment: string, text: string, driving: JsonObject | undefined): Promise<PlanReviewResult> {
+    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.reply(comment, text, driving))));
   }
 
   async activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null> {

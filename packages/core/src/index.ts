@@ -281,7 +281,7 @@ export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 
 export {
-  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue,
+  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, type SlateReply, isJsonAnswer,
   type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
@@ -484,7 +484,7 @@ export {
   type ToolReach,
   type BuiltinToolName,
   type BuiltinToolSpec,
-  REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
+  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, DEPS_GATED_TOOLS,
 } from './tools/registry';
 
 export {
@@ -900,8 +900,10 @@ export {
 } from './steer-branch';
 
 // Inbox: the one way anything reaches an agent.
+export { TurnReplies } from './orchestrator/turn-replies';
+
 export {
-  Inbox, readSignalId, PromptFileSchema, turnInputMessage,
+  Inbox, readSignalId, signalCardId, PromptFileSchema, turnInputMessage,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   describeLandedSteers, initPendingSendTables, PendingSendStore,
   type UserSteerDeps, type AcceptedSteer,
@@ -1313,6 +1315,10 @@ export {
   PlanReviewStore,
   PlanReviewSchema,
   admitReviewAnnotations,
+  freshNotes,
+  planAwaitingReply,
+  planSubmissionReach,
+  reviewFeedbackText,
   DiffAnchorSchema,
   applyPlanEdits,
   formatPlanWithLineNumbers,
@@ -1329,6 +1335,9 @@ export {
   type PlanAnnotationTextPosition,
   type PlanReview,
   type ReviewAnnotation,
+  type GeneralNote,
+  type NoteReply,
+  type PassageNote,
   type DiffAnchor,
   type DiffSide,
   type PlanReviewDecision,
@@ -1336,6 +1345,7 @@ export {
   type PlanReviewStatus,
   type PlanReviewStoreOptions,
   type SubmitPlanToolDeps,
+  type ReplyToCommentToolDeps,
 } from './plans/index';
 
 export {
@@ -1899,10 +1909,10 @@ export {
 } from './read-models/change-view';
 
 export {
-  ALL_CHANGES_BLOCK, changeNotesCard, initChangeNotesTable, inNoteOrder, readChangeNotes, saveChangeNotes, sendChangeNotes,
+  ALL_CHANGES_BLOCK, changeNoteAnchor, changeNotesCard, initChangeNotesTable, inNoteOrder, readChangeNotes, saveChangeNotes, sendChangeNotes,
 } from './read-models/change-notes';
 
-export type { ChangeNotesCard, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
+export type { ChangeNote, ChangeNotesCard, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
 
 export type {
   ChangeBlock, ChangeBody, ChangePair, ChangeRow, ChangeSet, ChangeSpan, ChangeTreeRow,

@@ -129,7 +129,7 @@ import { ActorSession, type ActorTurnLease,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   createActorHost, defaultLoopOrigin,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
-  PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
+  PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, planSubmissionReach, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
@@ -1690,6 +1690,7 @@ export class LocalAgentSession {
       wiredToolNames: (mode) => [
         ...(this.reportDeps !== null && item.kind === 'programmatic' ? [REPORT_TOOL] : []),
         ...(this.planSubmissionOpen(mode) ? [SUBMIT_PLAN_TOOL] : []),
+        ...(this.planReplyOpen() ? [REPLY_TO_COMMENT_TOOL] : []),
       ],
       codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.codemodeProviders(mode)),
       agentsActions: (mode) => agentsActionsFor(this.agentsToolDeps(mode)),
@@ -2366,9 +2367,14 @@ export class LocalAgentSession {
     return this.reportDeps !== null && this.turnIsParentAssigned;
   }
 
-  /** A root (only its plan has an owner) on a Plan turn. Cloud: `OrchestratorAgent.actorToolDeps`. */
+  /** A root (only its plan has an owner) on a turn core's `planSubmissionReach` offers it. Cloud: `ActorAgent.submitsPlans`. */
   private planSubmissionOpen(mode: WorkMode): boolean {
-    return mode === 'plan' && this.planReviewSurface();
+    return this.planReviewSurface() && planSubmissionReach(mode, this.turnDriving);
+  }
+
+  /** A root whose plan the owner sent back with comments the agent may answer. */
+  private planReplyOpen(): boolean {
+    return this.planReviewSurface() && this.planActions.awaitingReply(this.turnDriving);
   }
 
   /** The typed mode, under core's plan hold. Mirrors the cloud orchestrator's `workModeForMetadata`. */
@@ -2773,6 +2779,10 @@ export class LocalAgentSession {
       deps.submitPlan = { submit: (edits) => this.submitPlanEdits(edits) };
     }
 
+    if (this.planReplyOpen()) {
+      deps.replyToComment = { reply: (comment, text) => this.planActions.reply(comment, text, this.turnDriving) };
+    }
+
     return deps;
   }
 
@@ -2786,9 +2796,9 @@ export class LocalAgentSession {
     this.tools = this.toolSurface(mode);
   }
 
-  /** The tool set this turn's gates (`report`, `submit_plan`) build; rebuilt when they moved, never re-resolving a model. */
+  /** The tool set this turn's gates (`report`, `submit_plan`, `reply_to_comment`) build; rebuilt when they moved, never re-resolving a model. */
   private turnToolSet(mode: WorkMode): ToolSet {
-    const gates = `${String(this.reportGateOpen())}:${String(this.planReviewSurface())}`;
+    const gates = `${String(this.reportGateOpen())}:${String(this.planSubmissionOpen('build'))}:${String(this.planReviewSurface())}:${String(this.planReplyOpen())}`;
 
     if (this.toolSets[mode] === undefined || this.toolSetGates !== gates) {
       this.buildToolSets();
