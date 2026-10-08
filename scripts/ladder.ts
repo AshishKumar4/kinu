@@ -2439,7 +2439,7 @@ export const LADDER: readonly Gate[] = [
     tier: 'deploy',
     // 2026-10-06, dc20261006045352da6d8: 17 contracts and verified cleanup, 370 s whole run (D72).
     seconds: 370,
-    catches: 'tools and FUSE missing from the real golden; lost exec bytes, unsafe process kills or trust; a broken desktop click; '
+    catches: 'tools and FUSE missing from the real golden; lost exec bytes, unsafe process kills or trust; a desktop that opens empty or cannot launch; '
       + 'snapshot and R2 recovery data loss, whole-file deltas, failed compaction, serial mounts and disk-pressure failures.',
     blind: 'long snapshot lifetime, account saturation, the model path, and a product adapter no contract drives. No Docker image is built or started.',
     inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },

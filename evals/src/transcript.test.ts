@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { encodeModelMessageValues, type RunEvent } from '@kinu.run/core';
-import { cutButCompleted, measure, toTranscript } from './transcript';
+import { cutButCompleted, measure, toolFailures, toTranscript } from './transcript';
 
 let index = 0;
 
@@ -85,4 +85,26 @@ test('of the failed calls, those refused as bad input and those to an invented t
     call('read_file', { success: false, reason: null }),
     call('file', { success: true }),
   ])).toMatchObject({ toolCalls: 4, toolErrors: 3, badInputCalls: 1, unknownToolCalls: 1 });
+});
+
+// The run report's failed calls: by the tool, and by why it failed, a binding a program called under its own name.
+test('a failed call counts under its tool and the code it was refused with, an invented name and a bare throw apart', () => {
+  const call = (name: string, outcome: Extract<RunEvent, { type: 'tool_call_end' }>['outcome'], error?: string): RunEvent => ({
+    type: 'tool_call_end', runId: 'run', eventIndex: 1, timestamp: '2026-10-08T00:00:00.000Z', name, toolCallId: name, outcome,
+    ...error !== undefined && { error },
+  });
+
+  expect(toolFailures([
+    call('file', { success: false, reason: 'bad_input' }, 'no such path'),
+    call('file', { success: false, reason: 'bad_input' }, 'no such path'),
+    call('read_file', { success: false, reason: null }, 'no tool'),
+    call('shell', { success: true }, 'it threw'),
+    call('eval', { success: true, failures: [{ success: false, reason: 'denied', error: 'not yours', tool: 'workspace.writeFile', op: null }] }),
+    call('file', { success: true }),
+  ])).toEqual([
+    { tool: 'file', cause: 'bad_input', count: 2 },
+    { tool: 'read_file', cause: 'unknown_tool', count: 1 },
+    { tool: 'shell', cause: 'error', count: 1 },
+    { tool: 'workspace.writeFile', cause: 'denied', count: 1 },
+  ]);
 });

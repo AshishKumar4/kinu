@@ -5,7 +5,7 @@ import { runTurn } from './harness';
 import { LAST_SEGMENTS, reactiveReply, THUMB_RATE, type ArmRun, type SegmentResult } from './reactive';
 import type { KinuPublicSession } from './session';
 import { ARMS, openWorkspace, type EvalTarget } from './target';
-import type { EvalTask, EvalTurn } from './task';
+import { taskTurns, type EvalTask, type EvalTurn } from './task';
 import { TrialTimeline } from './timeline';
 import { measure } from './transcript';
 
@@ -25,7 +25,7 @@ export async function runSegment(session: KinuPublicSession, task: EvalTask, rng
   let thumbs = 0;
   let passed = true;
 
-  for (const turn of task.turns) {
+  for (const { spec: turn } of taskTurns(task)) {
     let ask: EvalTurn = turn;
 
     for (let attempt = 0; ; attempt++) {

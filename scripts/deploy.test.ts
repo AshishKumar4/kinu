@@ -602,6 +602,31 @@ describe("deploy gate", () => {
     expect(run.infraPhase).toBeNull();
   });
 
+  // A plain deploy runs no real-model eval (the owner, 2026-10-08): evals run on a quiet staging, dispatched by hand.
+  test("--evals is an option, and only a deploy given it dispatches evals.yml or starts the soak", () => {
+    expect(runDeploy({ option: "--gates-only", options: ["--evals"] }).status).toBe(0);
+
+    // As TEXT, as the post-deploy phase below is: the fixture's build fails on purpose, so no run reaches a serving build.
+    const lines = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8").split("\n").filter((line) => !line.trimStart().startsWith("#"));
+
+    // The `if` lines still open at `index`, its own line among them.
+    const guardsOf = (index: number) => lines.slice(0, index + 1)
+      .filter((line, at) => /^\s*if /u.test(line) && !lines.slice(at + 1, index + 1).some((later) => /^\s*fi\b/u.test(later)));
+
+    const asked = (index: number) => guardsOf(index).some((guard) => guard.includes('"$KINU_EVALS" = "1"'));
+    const callsOf = (name: string) => lines.flatMap((line, index) => line.includes(name) && !line.includes(`${name}()`) ? [index] : []);
+
+    // KINU_EVAL_KEYS stands for --evals only if it is set nowhere else.
+    const keysAsked = callsOf("KINU_EVAL_KEYS=1").every(asked);
+
+    for (const started of ["dispatch_evals", "start_soak", "provision_eval_keys"]) {
+      const calls = callsOf(started);
+
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.filter((call) => !asked(call) && !(keysAsked && guardsOf(call).some((guard) => guard.includes('"$KINU_EVAL_KEYS" = "1"'))))).toEqual([]);
+    }
+  });
+
   // The rehearsal path: every local phase, no build, no upload, no record.
   test("gates-only runs every local phase and mutates nothing", () => {
     const run = runDeploy({ option: "--gates-only" });

@@ -1,7 +1,12 @@
 import { basename } from 'node:path';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { redact } from './redact';
-import { parseResults, steadyCacheShare, trials, type Assertion, type EvalFile, type HarnessRun } from './results';
+import { rate, seconds, sign, signed, tokens, usd } from './format';
+import { platformByTask, type PlatformReport, type TaskPlatform } from './platform';
+import { renderRunReport } from './run-report';
+import {
+  parseResults, steadyCacheP5, steadyCacheShare, trials, type Assertion, type EvalFile, type HarnessRun, type PlanUsage, type ToolFailure,
+} from './results';
 import { MEASURE_NAMES, shifts, type Measure, type Shift, type Spread } from './shifts';
 import { HARNESS_ERRORS } from './task';
 
@@ -22,6 +27,17 @@ export type EvalStats = {
   meanCostUsd: number | null;
   /** Token-weighted over non-infrastructure trials; null if any of those trials lacks prompt or cache-read counts. */
   cacheHitRate: number | null;
+  /** The same over every request but each actor's first (`steadyCacheShare`), and that requests' own fifth percentile
+   *  (`steadyCacheP5`); null with no such request. */
+  steadyCacheHitRate: number | null;
+  steadyCacheP5: number | null;
+  /** Null when any trial lacks the count. */
+  meanInputTokens: number | null;
+  meanOutputTokens: number | null;
+  /** Failed tool calls by tool and cause over every trial (`ToolFailure`), most first. */
+  toolFailures: ToolFailure[];
+  /** Each plan window over every trial: from the lowest use a trial began at to the highest it ended at. */
+  planUsage: PlanUsage[];
   /** Each failed check as `t<turn> <check id>`, with how many trials failed it and the first evidence. Most frequent first. */
   failedChecks: { check: string; trials: number; evidence: string | null }[];
   /** Tool errors by tool and the first line of their message, most frequent first. */
@@ -92,7 +108,20 @@ export type EvalComparison = {
   totals: { baseline: EvalSuiteTotals | null; candidate: EvalSuiteTotals };
   /** Per model, both sides pooled over every task. */
   profiles: { model: string; baseline: AgentProfile | null; candidate: AgentProfile }[];
+  /** Each side's every trial as one cohort: the run's own measures. */
+  overall: { baseline: EvalStats | null; candidate: EvalStats };
+  /** What Workers Logs said of each task's workspaces on each side; null when neither side was read. */
+  platform: PlatformRows | null;
 };
+
+/** Each task on both sides as the platform saw it, with the Fisher exact test on its trials that saw a bug. */
+export type PlatformRows = {
+  readonly why: { readonly baseline: string | null; readonly candidate: string | null };
+  readonly tasks: readonly { readonly taskId: string; readonly baseline: TaskPlatform | null; readonly candidate: TaskPlatform | null; readonly pValue: number | null }[];
+};
+
+/** The platform logs read beside each side's report (`evals/scripts/platform-bugs.ts`). */
+export type PlatformReads = { readonly baseline: PlatformReport | null; readonly candidate: PlatformReport | null };
 
 /** Questions about two commits that only the caller, holding the repository, can answer. */
 export type CommitQuestions = {
@@ -211,6 +240,33 @@ function cacheHitRate(assertions: readonly Assertion[]): number | null {
   return prompt > 0 ? cached / prompt : null;
 }
 
+/** Failed tool calls summed by tool and cause, most first. */
+export function summedFailures(failures: readonly ToolFailure[]): ToolFailure[] {
+  const summed = new Map<string, ToolFailure>();
+
+  for (const { tool, cause, count } of failures) {
+    const key = `${tool}\u0000${cause}`;
+
+    summed.set(key, { tool, cause, count: (summed.get(key)?.count ?? 0) + count });
+  }
+
+  return [...summed.values()].sort((left, right) => right.count - left.count || left.tool.localeCompare(right.tool) || left.cause.localeCompare(right.cause));
+}
+
+/** Each plan window from the lowest use any trial began at to the highest any ended at. */
+function widestPlanUsage(windows: readonly PlanUsage[]): PlanUsage[] {
+  const widest = new Map<string, PlanUsage>();
+
+  for (const window of windows) {
+    const key = `${window.account}\u0000${window.measure}`;
+    const held = widest.get(key);
+
+    widest.set(key, held === undefined ? window : { ...held, from: Math.min(held.from, window.from), to: Math.max(held.to, window.to) });
+  }
+
+  return [...widest.values()];
+}
+
 function suiteTotals(files: readonly EvalFile[], assertions: readonly Assertion[]): EvalSuiteTotals {
   const costUsd = totalCostUsd(assertions.map((assertion) => assertion.meta.harness.run));
   let first = Infinity, last = -Infinity;
@@ -262,21 +318,24 @@ function infrastructureMessage(assertion: Assertion): string {
   return turn?.outcome.message ?? run.errors[0]?.message.split('\n')[0] ?? 'infrastructure failure';
 }
 
-function stats({ assertions }: Cohort): EvalStats {
+function stats({ assertions }: Pick<Cohort, 'assertions'>): EvalStats {
   const runs = assertions.map((assertion) => assertion.meta.harness.run);
   const metrics = runs.map((run) => run.output.metrics);
   const cost = totalCostUsd(runs);
+  const measured = assertions.filter((assertion) => !hasInfrastructureFailure(assertion)).map((assertion) => assertion.meta.harness.run.usage.metadata.steps);
+  const inputs = runs.flatMap((run) => run.usage.inputTokens === undefined ? [] : [run.usage.inputTokens]);
+  const outputs = runs.flatMap((run) => run.usage.outputTokens === undefined ? [] : [run.usage.outputTokens]);
 
   // A turn the deployment refused, reset or hung failed on the build, so it is listed with the checks, its answer as the
   // evidence; a hang under what held it, so a job left running is not read as a model gone silent.
-  const failedChecks = countBy(runs.flatMap((run) => run.output.turns.flatMap((turn, index) => [
+  const failedChecks = countBy(runs.flatMap((run) => run.output.turns.flatMap((turn) => [
     ...turn.outcome.status === 'refused' || turn.outcome.status === 'reset' || turn.outcome.status === 'hung'
       ? [{ id: `deployment.${turn.outcome.status}${turn.outcome.heldBy === undefined ? '' : ` (held by ${turn.outcome.heldBy.join(', ')})`}`,
         evidence: turn.outcome.message }]
       : [],
     ...turn.checks.filter((check) => !check.pass),
   ].map((check) => ({
-    check: `t${String(index + 1)} ${check.id}`,
+    check: `t${String(turn.turn)} ${check.id}`,
     evidence: check.evidence === undefined ? null : JSON.stringify(check.evidence),
   })))), (failure) => failure.check);
 
@@ -299,6 +358,12 @@ function stats({ assertions }: Cohort): EvalStats {
     meanToolErrors: mean(metrics.map((value) => value.toolErrors)),
     meanCostUsd: cost === null ? null : cost / runs.length,
     cacheHitRate: cacheHitRate(assertions),
+    steadyCacheHitRate: steadyCacheShare(measured),
+    steadyCacheP5: steadyCacheP5(measured),
+    meanInputTokens: inputs.length === runs.length ? mean(inputs) : null,
+    meanOutputTokens: outputs.length === runs.length ? mean(outputs) : null,
+    toolFailures: summedFailures(runs.flatMap((run) => run.output.toolFailures)),
+    planUsage: widestPlanUsage(runs.flatMap((run) => run.usage.metadata.plan)),
     failedChecks: failedChecks.map(({ item, count }) => ({ ...item, trials: count })),
     toolErrors: toolErrors.map(({ item, count }) => ({ ...item, count })),
     infrastructureErrors: infrastructureErrors.map(({ item, count }) => ({ message: item, trials: count })),
@@ -412,9 +477,9 @@ function checkRates(assertions: readonly Assertion[]): Map<string, CheckRate> {
   const rates = new Map<string, CheckRate>();
 
   for (const assertion of assertions) {
-    for (const [index, turn] of assertion.meta.harness.run.output.turns.entries()) {
+    for (const turn of assertion.meta.harness.run.output.turns) {
       for (const check of turn.checks) {
-        const key = `t${String(index + 1)} ${check.id}`;
+        const key = `t${String(turn.turn)} ${check.id}`;
         const sofar = rates.get(key) ?? { attempted: 0, passed: 0 };
 
         rates.set(key, { attempted: sofar.attempted + 1, passed: sofar.passed + (check.pass ? 1 : 0) });
@@ -442,8 +507,8 @@ function passRate(side: EvalStats): number {
 }
 
 /** Measures in which more is worse ("evals show no degradations", the owner): a rise beyond noise in any is a regression,
- *  as a fall in the pass rate is. Wall time and tool counts are the task's, not the build's. */
-const WORSE_HIGHER: ReadonlySet<Measure> = new Set(['modelSteps', 'inputTokens', 'outputTokens', 'badInputCalls', 'unknownToolCalls']);
+ *  as a fall in the pass rate is. Wall time and tool counts are the task's, not the build's; failed calls are the build's. */
+const WORSE_HIGHER: ReadonlySet<Measure> = new Set(['modelSteps', 'inputTokens', 'outputTokens', 'toolErrors', 'badInputCalls', 'unknownToolCalls']);
 
 function worsened(row: ComparedRow): Shift[] {
   return row.shifts.filter((shift) => WORSE_HIGHER.has(shift.measure) && shift.rose && shift.pValue < SIGNIFICANCE);
@@ -464,21 +529,76 @@ function resetMore(row: ComparedRow): boolean {
   return row.resetPValue < SIGNIFICANCE && row.candidate.resets > row.baseline.resets;
 }
 
-function verdictOf(rows: readonly EvalComparisonRow[], profiled: EvalComparison['profiles']): EvalVerdict {
+/** Tasks whose workspaces saw a platform bug in significantly more trials than the baseline's. */
+function buggier(platform: PlatformRows | null): PlatformRows['tasks'] {
+  return (platform?.tasks ?? []).filter(({ baseline, candidate, pValue }) => pValue !== null && pValue < SIGNIFICANCE
+    && baseline !== null && candidate !== null && candidate.bugTrials / candidate.trials > baseline.bugTrials / baseline.trials);
+}
+
+/** A task the candidate passed in no trial while the baseline passed in some: a regression however few trials ran, which
+ *  the exact test alone cannot call below four a side (3/3 against 0/3 is p = 0.10). */
+function collapsed(row: ComparedRow): boolean {
+  return row.candidate.trials > 0 && row.candidate.passed === 0 && row.baseline.passed > 0;
+}
+
+/** Whether a task's trials could show any fall at all: a baseline passing every trial against a candidate passing none
+ *  is the strongest there is. At 3 a side it is p = 0.10, so no fall reaches significance and the run cannot say the
+ *  task held; at 4, p = 0.029; at 5, a fall from 5/5 to 1/5 is p = 0.048 and to 2/5 is p = 0.17. */
+export function canTellAFall(row: Pick<ComparedRow, 'baseline' | 'candidate'>): boolean {
+  return fisherExact({ passed: row.baseline.trials, trials: row.baseline.trials }, { passed: 0, trials: row.candidate.trials }) < SIGNIFICANCE;
+}
+
+function verdictOf(rows: readonly EvalComparisonRow[], profiled: EvalComparison['profiles'], platform: PlatformRows | null): EvalVerdict {
   const compared = rows.flatMap((row) => row.reason === null ? [row] : []);
 
   if (compared.length === 0) return 'inconclusive';
   const moved = compared.filter((row) => row.pValue < SIGNIFICANCE);
 
-  if (moved.some((row) => passRate(row.candidate) < passRate(row.baseline)) || compared.some(resetMore)) return 'regressed';
+  if (moved.some((row) => passRate(row.candidate) < passRate(row.baseline)) || compared.some(resetMore) || compared.some(collapsed)) return 'regressed';
 
-  if (compared.some((row) => worsened(row).length > 0) || belowCacheTarget(profiled).length > 0) return 'regressed';
+  if (compared.some((row) => worsened(row).length > 0) || belowCacheTarget(profiled).length > 0 || buggier(platform).length > 0) return 'regressed';
+
+  // Too few trials to tell a fall from noise is no evidence that nothing fell, and a promotion needs that evidence.
+  if (!compared.every(canTellAFall)) return 'inconclusive';
 
   return moved.length > 0 ? 'improved' : 'unchanged';
 }
 
+/** Why a side's platform logs say nothing, or null when they were read. */
+function unreadWhy(read: PlatformReport | null): string | null {
+  if (read === null) return 'not read';
+
+  return read.measured ? null : read.why;
+}
+
+/** Each task on both sides as the platform logs read it, or null when neither side's logs were read. */
+function platformRows(baseline: readonly Assertion[], candidate: readonly Assertion[], reads: PlatformReads): PlatformRows | null {
+  if (reads.baseline === null && reads.candidate === null) return null;
+
+  const placed = (assertions: readonly Assertion[]) => assertions.map((assertion) => ({
+    task: assertion.meta.harness.run.session.metadata.taskId, workspace: assertion.meta.harness.run.session.metadata.workspace ?? null,
+  }));
+
+  const [before, after] = [platformByTask(placed(baseline), reads.baseline), platformByTask(placed(candidate), reads.candidate)];
+  const tasks = [...new Set([...before?.keys() ?? [], ...after?.keys() ?? []])].sort();
+
+  return {
+    why: { baseline: unreadWhy(reads.baseline), candidate: unreadWhy(reads.candidate) },
+    tasks: tasks.map((taskId) => {
+      const [was, is] = [before?.get(taskId) ?? null, after?.get(taskId) ?? null];
+
+      const pValue = was === null || is === null ? null
+        : fisherExact({ passed: was.bugTrials, trials: was.trials }, { passed: is.bugTrials, trials: is.trials });
+
+      return { taskId, baseline: was, candidate: is, pValue };
+    }),
+  };
+}
+
 /** Compare two reports. With no baseline, every row is the candidate's alone and the verdict is inconclusive. */
-export function compareEvalResults(baselineText: string | null, candidateText: string, questions: CommitQuestions = {}): EvalComparison {
+export function compareEvalResults(
+  baselineText: string | null, candidateText: string, questions: CommitQuestions = {}, reads: PlatformReads = { baseline: null, candidate: null },
+): EvalComparison {
   const candidateFiles = parseResults('candidate', candidateText);
   const candidateAssertions = trials(candidateFiles);
   const candidate = sideOf('candidate', candidateAssertions);
@@ -524,9 +644,10 @@ export function compareEvalResults(baselineText: string | null, candidateText: s
     || left.model.localeCompare(right.model) || left.arm.localeCompare(right.arm));
 
   const profiled = profiles(baselineAssertions, candidateAssertions);
+  const platform = platformRows(baselineAssertions, candidateAssertions, reads);
 
   return {
-    baseline, candidate, verdict: verdictOf(rows, profiled),
+    baseline, candidate, verdict: verdictOf(rows, profiled, platform),
     changedFiles: baseline === null ? [] : questions.changedFiles?.(baseline.productSha, candidate.productSha) ?? [],
     rows,
     totals: {
@@ -534,21 +655,12 @@ export function compareEvalResults(baselineText: string | null, candidateText: s
       candidate: suiteTotals(candidateFiles, candidateAssertions),
     },
     profiles: profiled,
+    overall: { baseline: baselineText === null ? null : stats({ assertions: baselineAssertions }), candidate: stats({ assertions: candidateAssertions }) },
+    platform,
   };
 }
 
 // ── The results comment ─────────────────────────────────────────────
-
-/** A typographic minus for a fall, a plus for a rise, nothing for no change. */
-function sign(value: number): string {
-  if (value === 0) return '';
-
-  return value > 0 ? '+' : '\u2212';
-}
-
-function signed(value: number, digits: number, unit = ''): string {
-  return `${sign(value)}${Math.abs(value).toFixed(digits)}${unit}`;
-}
 
 function costDelta(baseline: EvalStats, candidate: EvalStats): string {
   if (baseline.meanCostUsd === null || candidate.meanCostUsd === null) return '\u2014';
@@ -597,26 +709,8 @@ function passChange(row: ComparedRow): string {
   return `${delta > 0 ? '\u{1F7E2}' : '\u{1F534}'} ${signed(delta, 0, ' pp')} (p = ${row.pValue.toFixed(2)})`;
 }
 
-function tokens(count: number): string {
-  if (count >= 1e6) return `${(count / 1e6).toFixed(1)}M`;
-
-  return count >= 1e3 ? `${(count / 1e3).toFixed(0)}k` : count.toFixed(0);
-}
-
 function minutes(ms: number): string {
   return `${(ms / 60_000).toFixed(0)} min`;
-}
-
-function usd(cost: number | null): string {
-  return cost === null ? '—' : `$${cost.toFixed(4)}`;
-}
-
-function rate(hit: number | null): string {
-  return hit === null ? '—' : `${(hit * 100).toFixed(1)}%`;
-}
-
-function seconds(ms: number): string {
-  return `${(ms / 1000).toFixed(1)} s`;
 }
 
 function totalsTable(totals: EvalComparison['totals']): string[] {
@@ -652,7 +746,8 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
   const change = (row: ComparedRow) => `${rowName(row, shared)} ${String(row.baseline.passed)}/${String(row.baseline.trials)} \u2192 `
     + `${String(row.candidate.passed)}/${String(row.candidate.trials)} (p = ${row.pValue.toFixed(2)})`;
 
-  const falls = moved.filter((row) => passRate(row.candidate) < passRate(row.baseline)).map(change);
+  const compared = comparison.rows.flatMap((row) => row.reason === null ? [row] : []);
+  const falls = compared.filter((row) => (moved.includes(row) ? passRate(row.candidate) < passRate(row.baseline) : collapsed(row))).map(change);
   const rises = moved.filter((row) => passRate(row.candidate) > passRate(row.baseline)).map(change);
 
   const resets = comparison.rows.flatMap((row) => row.reason === null && resetMore(row)
@@ -667,7 +762,17 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
   const uncached = belowCacheTarget(comparison.profiles).map(({ model, candidate }) => `${model} ${rate(candidate.steadyCacheHitRate)}`);
 
   switch (comparison.verdict) {
-    case 'inconclusive': return `No task can be compared: ${[...new Set(comparison.rows.flatMap((row) => row.reason ?? []))].join(', ')}.`;
+    case 'inconclusive': {
+      const reasons = [...new Set(comparison.rows.flatMap((row) => row.reason ?? []))];
+
+      const blind = compared.filter((row) => !canTellAFall(row)).map((row) => rowName(row, shared));
+
+      return [
+        ...reasons.length > 0 ? [`Not compared: ${reasons.join(', ')}.`] : [],
+        ...blind.length > 0 ? [`Too few trials to tell any fall from noise, so not shown to hold: ${blind.join(', ')}.`] : [],
+      ].join(' ') || 'No task can be compared.';
+    }
+
     case 'unchanged': return `No task moved beyond what ${shared.trials === null ? 'these' : String(shared.trials)} runs can tell apart from noise.`;
     case 'improved': return `Rose: ${rises.join(', ')}.`;
     case 'regressed': return [
@@ -896,6 +1001,7 @@ export function renderEvalComparison(comparison: EvalComparison): string {
     WAITS_NOTE, '',
     METRICS_NOTE, '',
     ...profileTable(comparison.profiles), '',
+    ...renderRunReport(comparison),
     ...comparison.rows.flatMap((row) => failureSection(row, shared)),
   ].join('\n');
 }

@@ -41,6 +41,18 @@ const StepUsageSchema = v.object({
 
 export type StepUsage = v.InferOutput<typeof StepUsageSchema>;
 
+/** One tool's failed calls in a trial for one cause: the code the product refused it with, `unknown_tool` for a name
+ *  it does not offer, `error` for a throw it gave no code. A binding a program called counts under its own name. */
+const ToolFailureSchema = v.object({ tool: v.string(), cause: v.string(), count: Count });
+
+export type ToolFailure = v.InferOutput<typeof ToolFailureSchema>;
+
+/** A plan window's use over a trial, as the provider reported it on the trial's calls: `from` on the first, `to` on
+ *  the last, in percent. An account's window is shared by every trial on it, so a delta is an upper bound. */
+const PlanUsageSchema = v.object({ account: v.string(), measure: v.string(), from: v.number(), to: v.number() });
+
+export type PlanUsage = v.InferOutput<typeof PlanUsageSchema>;
+
 const CacheSchema = v.object({
   hitShare: v.nullable(v.number()), ema: v.nullable(v.number()), p95: v.nullable(v.number()),
   p99: v.nullable(v.number()), samples: Count,
@@ -56,6 +68,8 @@ export const HarnessRunSchema = v.looseObject({
       productSha: v.pipe(v.string(), v.minLength(1)),
       arm: v.pipe(v.string(), v.minLength(1)),
       trial: v.pipe(v.number(), v.integer(), v.minValue(1)),
+      /** The workspace the trial ran in, by name: what joins it to the platform's logs. */
+      workspace: v.optional(v.nullable(v.string())),
     }),
     events: v.optional(v.array(TranscriptEventSchema), []),
   }),
@@ -69,14 +83,18 @@ export const HarnessRunSchema = v.looseObject({
       cacheWriteTokens: v.optional(Count),
       cache: v.optional(CacheSchema),
       steps: v.optional(v.array(StepUsageSchema), []),
-    }), { steps: [] }),
+      plan: v.optional(v.array(PlanUsageSchema), []),
+    }), { steps: [], plan: [] }),
   }),
   output: v.looseObject({
     metrics: v.object({
       modelTurns: Count, toolCalls: Count, toolErrors: Count, badInputCalls: Count, unknownToolCalls: Count, providerWaits: Count,
       providerWaitMs: v.pipe(v.number(), v.minValue(0)),
     }),
+    toolFailures: v.optional(v.array(ToolFailureSchema), []),
     turns: v.array(v.looseObject({
+      part: v.pipe(v.string(), v.minLength(1)),
+      turn: v.pipe(v.number(), v.integer(), v.minValue(1)),
       outcome: v.looseObject({ status: v.picklist(TURN_OUTCOMES), message: v.optional(v.string()), heldBy: v.optional(v.array(v.string())) }),
       checks: v.optional(v.array(CheckSchema), []),
     })),
@@ -86,7 +104,7 @@ export const HarnessRunSchema = v.looseObject({
 
 export type HarnessRun = v.InferOutput<typeof HarnessRunSchema>;
 
-export type UsageMetadata = Pick<HarnessRun['usage']['metadata'], 'costUsd' | 'cacheReadTokens' | 'cacheWriteTokens' | 'cache' | 'steps'>;
+export type UsageMetadata = Pick<HarnessRun['usage']['metadata'], 'costUsd' | 'cacheReadTokens' | 'cacheWriteTokens' | 'cache' | 'steps' | 'plan'>;
 
 /** Public run ledgers retain each actor's request identity, including hired agents and swarm nodes. */
 export type ActorLedger = { readonly actor: string; readonly events: readonly RunEvent[] };
@@ -122,26 +140,64 @@ export function summarizePromptUsage(steps: readonly StepUsage[]) {
   };
 }
 
-/** Cache-read over prompt tokens, token-weighted over each run's requests but every actor's first, which nothing can be
- *  cached for; null with no such request reporting both counts. */
-export function steadyCacheShare(runs: readonly (readonly StepUsage[])[]): number | null {
-  let prompt = 0, cached = 0;
-
-  for (const steps of runs) {
+/** Every request of each run but each actor's first, which nothing can be cached for, that reported both counts. */
+function steadySteps(runs: readonly (readonly StepUsage[])[]): { readonly prompt: number; readonly cached: number }[] {
+  return runs.flatMap((steps) => {
     const started = new Set<string>();
 
-    for (const step of steps) {
+    return steps.flatMap((step) => {
       const first = !started.has(step.actor);
 
       started.add(step.actor);
 
-      if (first || step.inputTokens === null || step.cacheReadTokens === null) continue;
-      prompt += step.inputTokens;
-      cached += step.cacheReadTokens;
+      return first || step.inputTokens === null || step.cacheReadTokens === null || step.inputTokens === 0
+        ? [] : [{ prompt: step.inputTokens, cached: step.cacheReadTokens }];
+    });
+  });
+}
+
+/** Cache-read over prompt tokens, token-weighted over the steady requests (`steadySteps`); null with none. */
+export function steadyCacheShare(runs: readonly (readonly StepUsage[])[]): number | null {
+  const steps = steadySteps(runs);
+  const prompt = steps.reduce((sum, step) => sum + step.prompt, 0);
+
+  return prompt > 0 ? steps.reduce((sum, step) => sum + step.cached, 0) / prompt : null;
+}
+
+/** The fifth percentile of the steady requests' own cache rates, nearest rank as Activity reads one: the share that a
+ *  whole request missing drives down, which the token-weighted share hides. Null with no steady request. */
+export function steadyCacheP5(runs: readonly (readonly StepUsage[])[]): number | null {
+  const rates = steadySteps(runs).map((step) => step.cached / step.prompt).sort((left, right) => left - right);
+
+  return rates.length === 0 ? null : rates[Math.max(1, Math.ceil(0.05 * rates.length)) - 1] ?? null;
+}
+
+/** Each plan window's use over a trial, from the quota its calls' answers carried (`PlanUsage`). */
+export function measurePlanUsage(ledgers: readonly ActorLedger[]): PlanUsage[] {
+  const seen = new Map<string, PlanUsage & { readonly firstAt: number; readonly lastAt: number }>();
+
+  for (const { events } of ledgers) {
+    for (const event of events) {
+      if ((event.type !== 'step_finish' && event.type !== 'model_call') || event.account?.quota === undefined) continue;
+      const { provider, name, quota } = event.account;
+
+      for (const window of quota.windows) {
+        if (window.usedPercent === undefined) continue;
+        const account = `${provider}@${name}`;
+        const key = `${account}\u0000${window.measure}`;
+        const held = seen.get(key);
+
+        seen.set(key, {
+          account, measure: window.measure,
+          from: held === undefined || quota.at < held.firstAt ? window.usedPercent : held.from,
+          to: held === undefined || quota.at >= held.lastAt ? window.usedPercent : held.to,
+          firstAt: Math.min(held?.firstAt ?? quota.at, quota.at), lastAt: Math.max(held?.lastAt ?? quota.at, quota.at),
+        });
+      }
     }
   }
 
-  return prompt > 0 ? cached / prompt : null;
+  return [...seen.values()].map(({ account, measure, from, to }) => ({ account, measure, from, to }));
 }
 
 /** Each provider-reported request, oldest first. Missing counts stay unknown, never zero. */
@@ -164,7 +220,7 @@ export function measurePromptUsage(ledgers: readonly ActorLedger[]) {
     || a.runId.localeCompare(b.runId) || a.stepIndex - b.stepIndex);
 
   const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cache } = summarizePromptUsage(steps);
-  const metadata: UsageMetadata = { steps, cache };
+  const metadata: UsageMetadata = { steps, cache, plan: [] };
 
   if (cacheReadTokens !== undefined) metadata.cacheReadTokens = cacheReadTokens;
 

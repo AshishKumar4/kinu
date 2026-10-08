@@ -2,23 +2,26 @@
 // verdict.json:
 //   bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.json>] --out <dir>
 //     [--trials <n>] [--candidate-build <sha>] [--baseline-build <sha>]
+//     [--candidate-platform <platform.json>] [--baseline-platform <platform.json>]
+// The platform files are what Workers Logs said of each leg's workspaces (platform-bugs.ts); a missing one is unread.
 // The two legs ran at once with the same definitions, the candidate's, so they are compared as they stand. Without a
 // baseline the candidate's report stands alone: every row is the candidate's, the verdict inconclusive. Cohorts are
 // not compared when the eval definitions differ between the two reports' eval commits: a scorer change moves the
 // goalposts without touching the product under test. verdict.json says whether the run stands as the candidate's
 // verdict (`evalGateVerdict`), and why: a promote reads it. A leg is complete when it holds every task of this
 // checkout's evals/tasks, every trial, no infrastructure failure, and only the build planned for it.
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { DEFAULT_TRIALS, DEFINITION_PATHS, EXERCISED_PATHS } from '../src/config';
 import { compareEvalResults, evalGateVerdict, renderEvalComparison, whyIncomplete } from '../src/comparison';
+import { parsePlatformReport, type PlatformReport } from '../src/platform';
 import { sharedAccounts } from '../src/slot';
 import { diffBetween, ensureCommit, git } from './git';
 
 const USAGE = 'Usage: bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.json>] --out <dir> '
-  + '[--trials <n>] [--candidate-build <sha>] [--baseline-build <sha>]';
+  + '[--trials <n>] [--candidate-build <sha>] [--baseline-build <sha>] [--candidate-platform <json>] [--baseline-platform <json>]';
 
 function definitionsChanged(baselineCommit: string, candidateCommit: string): boolean {
   ensureCommit(baselineCommit);
@@ -38,8 +41,14 @@ const { values } = parseArgs({
   options: {
     candidate: { type: 'string' }, baseline: { type: 'string' }, out: { type: 'string' }, trials: { type: 'string' },
     'candidate-build': { type: 'string' }, 'baseline-build': { type: 'string' },
+    'candidate-platform': { type: 'string' }, 'baseline-platform': { type: 'string' },
   },
 });
+
+/** A leg's platform read, or null when its file is absent: the leg ran where the logs were not read. */
+function platformOf(path: string | undefined): PlatformReport | null {
+  return path === undefined || !existsSync(path) ? null : parsePlatformReport(readFileSync(path, 'utf8'));
+}
 
 if (values.candidate === undefined || values.out === undefined) throw new Error(USAGE);
 
@@ -65,7 +74,9 @@ let comparison: ReturnType<typeof compareEvalResults> | undefined;
 let refused = '';
 
 try {
-  comparison = compareEvalResults(baseline, candidate, { definitionsChanged, changedFiles });
+  comparison = compareEvalResults(baseline, candidate, { definitionsChanged, changedFiles }, {
+    baseline: platformOf(values['baseline-platform']), candidate: platformOf(values['candidate-platform']),
+  });
 } catch (error) {
   refused = renderThrownChain({ cause: error });
 }

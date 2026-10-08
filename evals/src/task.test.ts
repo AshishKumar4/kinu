@@ -6,8 +6,8 @@ const metrics = { modelTurns: 3, toolCalls: 2, toolErrors: 0, badInputCalls: 0, 
 /** A run of a turn that passed its check, then one that ended `outcome`, as the harness records it. */
 function run(outcome: EvalRunOutput['turns'][number]['outcome'], checks: EvalRunOutput['turns'][number]['checks'] = []): EvalRunOutput {
   return { success: false, metrics, turns: [
-    { outcome: { status: 'completed' }, checks: [{ id: 'board-built', pass: true }], turnWallMs: 60_000, verificationWallMs: 1_000 },
-    { outcome, checks, turnWallMs: 450_000, verificationWallMs: 0 },
+    { part: 'board', turn: 1, outcome: { status: 'completed' }, checks: [{ id: 'board-built', pass: true }], turnWallMs: 60_000, verificationWallMs: 1_000 },
+    { part: 'board', turn: 2, outcome, checks, turnWallMs: 450_000, verificationWallMs: 0 },
   ] };
 }
 

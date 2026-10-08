@@ -1,7 +1,6 @@
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue, WORKSPACE_ROOT } from '@kinu.run/core';
-import { defineTaskEval } from '../src/eval';
-import { defineEvalTask, type SeedFile } from '../src/task';
+import type { EvalPart, SeedFile } from '../src/task';
 import { finishedWork, matchesReference, type EvalVerifier, type HelperWork, type Script, type SlateClient } from '../src/verifier';
 import { Seeded } from './seeded';
 
@@ -12,7 +11,6 @@ import { Seeded } from './seeded';
 // slates and their storage across an eviction. Every answer is the checker's own, computed from the
 // files it seeds.
 
-const MISSION = "Paperwing Studio's workspace. We make a notes app and launch it on Friday, 12 March 2027.";
 
 const LAUNCH_DIR = `${WORKSPACE_ROOT}/launch`;
 
@@ -86,10 +84,10 @@ const TOP_COUNTRY = (() => {
 
 // ── The drafts the proofreader fixes ─────────────────────────────────
 
-type Draft = { file: string; text: string; corrected: string };
+type MisspeltDraft = { file: string; text: string; corrected: string };
 
 /** `template` with each `{word}` spelled as `misspelled` names it: the draft, and the text a proofread leaves. */
-function draft(file: string, template: string, misspelled: Readonly<Record<string, string>>): Draft {
+function draft(file: string, template: string, misspelled: Readonly<Record<string, string>>): MisspeltDraft {
   return {
     file,
     text: template.replace(/\{(\w+)\}/g, (_, word: string) => misspelled[word] ?? word),
@@ -261,9 +259,13 @@ function finishedOn(helper: HelperWork, file: string): number {
 
 // ── The task ─────────────────────────────────────────────────────────
 
-const task = defineEvalTask({
-  id: 'launch-prep',
-  mission: MISSION,
+export const launchPrep: EvalPart = {
+  id: 'launch',
+  objectives: [
+    'Hire two helpers that each tally one file into its report at once, while the lead puts the launch checklist on the task board.',
+    'Build the countdown and waitlist slates to their contracts, and both keep their data across an eviction.',
+    'Name the leading signup country from the report the helper wrote.',
+  ],
   turns: [{
     seed: SEEDS,
     prompt: `Three things at once, please.
@@ -366,7 +368,20 @@ Tell me when all three are done.`,
         return { pass: answer === TOP_COUNTRY, evidence: { answer, expected: TOP_COUNTRY, replies: verifier.recentReplies() } };
       });
     },
-  }, {
+  }],
+  evidence: async (call) => {
+    await call('countdown', 'remaining', { now: '2027-03-12T15:00:00Z' });
+    await call('waitlist', 'count');
+  },
+};
+
+export const proofreading: EvalPart = {
+  id: 'proofreading',
+  objectives: [
+    'Hire one proofreader that stays, give it both drafts one after the other, and dismiss it when both are done.',
+    'Both drafts are corrected for spelling and otherwise unchanged.',
+  ],
+  turns: [{
     seed: [ANNOUNCEMENT, FAQ].map((item) => ({ path: `${LAUNCH_DIR}/${item.file}`, content: item.text })),
     prompt: `Last thing before launch: hire a proofreader who stays on for the week. Have it fix the spelling in
 ${LAUNCH_DIR}/${ANNOUNCEMENT.file} in place, spelling only. When it has, give that same proofreader
@@ -400,10 +415,4 @@ ${LAUNCH_DIR}/${FAQ.file} to fix the same way; don't hire another. Once both are
       }));
     },
   }],
-  evidence: async (call) => {
-    await call('countdown', 'remaining', { now: '2027-03-12T15:00:00Z' });
-    await call('waitlist', 'count');
-  },
-});
-
-defineTaskEval(task);
+};

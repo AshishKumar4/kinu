@@ -16,8 +16,9 @@
  *
  *   bun scripts/promote.ts digest                                   the artifact digest of packages/cf-backend/dist
  *   bun scripts/promote.ts forget                                   staging's deploy, before it builds: HEAD is not verified
- *   bun scripts/promote.ts record <staging version> <evals run> [reset record]
+ *   bun scripts/promote.ts record <staging version> <evals run | ''> [reset record]
  *                                                                   staging's deploy, when every phase passed
+ *   bun scripts/promote.ts evals <evals run>                        HEAD's record names the evals run dispatched after it
  *   bun scripts/promote.ts check                                    before promotion builds: HEAD is verified, staging serves it,
  *                                                                   and its evals run's verdict is green
  *   bun scripts/promote.ts adopt                                    after the production build: downloads, digest, release tarball
@@ -121,8 +122,8 @@ export const VerifiedSchema = v.object({
   stagingVersion: v.string(),
   recordedAt: v.string(),
   downloads: DownloadsSchema,
-  /** The .github/workflows/evals.yml run the staging deploy dispatched against this build, whose verdict a promotion
-   *  waits for. Absent on a record written before the deploy dispatched one. */
+  /** The .github/workflows/evals.yml run dispatched against this build, by its deploy's `--evals` or by hand after it
+   *  (`evals`), whose verdict a promotion waits for. Absent until one is. */
   evalsRun: v.optional(v.pipe(v.number(), v.integer())),
   reset: v.optional(ResetSchema),
 });
@@ -161,23 +162,40 @@ function evalsRunOf(argument: string): number {
   return run;
 }
 
-/** THE STATISTICS GATE PRODUCTION: the ten-trial run the staging deploy of `sha` dispatched, by its verdict job. */
+/** THE STATISTICS GATE PRODUCTION: the five-trial run dispatched against `sha` on staging, by its verdict job. */
 function assertEvalVerdict(sha: string, record: Verified): void {
-  if (record.evalsRun === undefined) throw new Error(`${sha}'s record names no evals run: deploy it to staging again`);
+  if (record.evalsRun === undefined) {
+    throw new Error(`${sha}'s record names no evals run: bun scripts/evals-dispatch.ts ${sha} on a quiet staging, then bun scripts/promote.ts evals <run>`);
+  }
+
   const refusal = evalVerdictRefusal(runJobs(record.evalsRun), `evals run ${String(record.evalsRun)}`);
 
   if (refusal !== undefined) throw new Error(`${sha} cannot be promoted: ${refusal}`);
 }
 
-/** The jobs of eval run `run`, read through the `gh` session of whoever promotes. */
+/** A GitHub API answer, read through the `gh` session of whoever promotes, and parsed by `schema`. */
+function githubApi<Schema extends v.GenericSchema>(schema: Schema, path: string, what: string): v.InferOutput<Schema> {
+  const answer = Bun.spawnSync(['gh', 'api', path], { cwd: REPO, stdout: 'pipe', stderr: 'pipe' });
+
+  if (answer.exitCode !== 0) throw new Error(`reading ${what} failed: ${answer.stderr.toString().trim()}`);
+
+  return v.parse(schema, JSON.parse(answer.stdout.toString()));
+}
+
+/** The jobs of eval run `run`. */
 function runJobs(run: number): readonly RunJob[] {
-  const answer = Bun.spawnSync(['gh', 'api', `repos/{owner}/{repo}/actions/runs/${String(run)}/jobs?per_page=100`], {
-    cwd: REPO, stdout: 'pipe', stderr: 'pipe',
-  });
+  return githubApi(RunJobsSchema, `repos/{owner}/{repo}/actions/runs/${String(run)}/jobs?per_page=100`, `eval run ${String(run)}'s jobs`).jobs;
+}
 
-  if (answer.exitCode !== 0) throw new Error(`reading eval run ${String(run)}'s jobs failed: ${answer.stderr.toString().trim()}`);
+const WorkflowRunSchema = v.looseObject({ path: v.string(), created_at: v.string() });
 
-  return v.parse(RunJobsSchema, JSON.parse(answer.stdout.toString())).jobs;
+/** When evals.yml run `run` started, in epoch ms; a run of another workflow is refused. */
+function evalsRunStart(run: number): number {
+  const { path, created_at: created } = githubApi(WorkflowRunSchema, `repos/{owner}/{repo}/actions/runs/${String(run)}`, `run ${String(run)}`);
+
+  if (!path.startsWith('.github/workflows/evals.yml')) throw new Error(`run ${String(run)} is ${path}, not an evals.yml run`);
+
+  return Date.parse(created);
 }
 
 export const verifiedKey = (sha: string): string => `verified/${sha}.json`;
@@ -505,6 +523,30 @@ export async function downloadsServed(origin: string, fetcher: typeof fetch = fe
   return { sha: stamp.sha, downloads: Object.fromEntries([[STAMP, sha256(stampBytes)], ...hashed]) };
 }
 
+/** What staging's deploy records of HEAD, from `record <staging version> <evals run or ''> [reset record]`. */
+function verifiedRecord(sha: string, [version = '', run = '', reset]: readonly string[]): Verified {
+  const record: Verified = {
+    sha, digest: artifactDigest(DIST), stagingVersion: version, recordedAt: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(reset),
+  };
+
+  // Empty when the deploy ran without `--evals`: `evals` names the run once one is dispatched.
+  if (run !== '') record.evalsRun = evalsRunOf(run);
+
+  return record;
+}
+
+/** `record` naming the evals run `[run]`, which started after it was written. */
+function withEvalsRun(record: Verified, [run = '']: readonly string[]): Verified {
+  const id = evalsRunOf(run);
+  const started = evalsRunStart(id);
+
+  if (started < Date.parse(record.recordedAt)) {
+    throw new Error(`evals run ${run} started ${new Date(started).toISOString()}, before ${record.sha} was verified on staging at ${record.recordedAt}`);
+  }
+
+  return { ...record, evalsRun: id };
+}
+
 async function main(argv: readonly string[], scratch: string): Promise<number> {
   const [command, ...rest] = argv;
   const sha = head();
@@ -527,14 +569,20 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
   }
 
   if (command === 'record' && (rest.length === 2 || rest.length === 3)) {
-    const record: Verified = {
-      sha, digest: artifactDigest(DIST), stagingVersion: rest[0] ?? '', recordedAt: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS),
-      evalsRun: evalsRunOf(rest[1] ?? ''), ...resetIn(rest[2]),
-    };
+    const record = verifiedRecord(sha, rest);
 
     await servedAs(origins.staging, sha, record.downloads);
     staging.put(verifiedKey(sha), JSON.stringify(record), 'application/json');
     console.log(`promote: ${sha} verified on staging (${record.digest}, ${String(Object.keys(record.downloads).length)} downloads)`);
+
+    return 0;
+  }
+
+  if (command === 'evals' && rest.length === 1) {
+    const record = withEvalsRun(verified(buckets.staging, sha), rest);
+
+    staging.put(verifiedKey(sha), JSON.stringify(record), 'application/json');
+    console.log(`promote: ${sha}'s record names evals run ${String(record.evalsRun)}; a promotion waits for its Verdict`);
 
     return 0;
   }
@@ -613,7 +661,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> <evals run> [reset record] | check | adopt '
+  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> <evals run | \'\'> [reset record] | evals <evals run> | check | adopt '
     + '| promoted <version> [reset record] | rollback');
 
   return 2;

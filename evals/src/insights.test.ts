@@ -16,7 +16,7 @@ function facts(rows: readonly (JsonValue | RunEvent)[], result: Assertion = asse
 }
 
 function helperResult(helpers: JsonValue): Assertion {
-  return assertion([{ outcome: { status: 'completed' }, checks: [{ id: 'helpers-finished', pass: false, evidence: { helpers } }] }]);
+  return assertion([{ part: 'build', turn: 1, outcome: { status: 'completed' }, checks: [{ id: 'helpers-finished', pass: false, evidence: { helpers } }] }]);
 }
 
 describe('deterministic trial insights', () => {
@@ -152,8 +152,8 @@ describe('deterministic trial insights', () => {
 
   test('the first failing check follows turn/check order, and links to the actual transcript line', () => {
     // prod-muse-2/order-book-trial-1/transcript.md:5-11, with unrelated passing checks removed.
-    const result = assertion([{ outcome: { status: 'completed' }, checks: [{ id: 'matches-a-day-of-orders', pass: true }] },
-      { outcome: { status: 'completed' }, checks: [{ id: 'resting-orders-survive-the-change', pass: false }, { id: 'later-failure', pass: false }] }]);
+    const result = assertion([{ part: 'build', turn: 1, outcome: { status: 'completed' }, checks: [{ id: 'matches-a-day-of-orders', pass: true }] },
+      { part: 'build', turn: 2, outcome: { status: 'completed' }, checks: [{ id: 'resting-orders-survive-the-change', pass: false }, { id: 'later-failure', pass: false }] }]);
 
     const observed = facts([], result, { transcript: 'Turn 1: completed\nTurn 2: completed\n- FAIL `resting-orders-survive-the-change`' });
     expect(observed.find((fact) => fact.kind === 'first-failing-check')).toMatchObject({

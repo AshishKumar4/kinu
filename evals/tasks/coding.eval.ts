@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { infraBoundary } from '@kinu.run/test-utils';
 import { defineTaskEval } from '../src/eval';
-import { defineEvalTask } from '../src/task';
+import { defineEvalTask, type EvalPart } from '../src/task';
 import { finishedWork, type EvalCheckOutcome, type EvalVerifier } from '../src/verifier';
 import { combinatorsJourney } from './combinators-journey';
 import { boardHolds } from './work-board';
@@ -130,9 +130,12 @@ async function graded(verifier: EvalVerifier, scope: 'without-toolbelt' | 'whole
 
 // ── The task ─────────────────────────────────────────────────────────
 
-const task = defineEvalTask({
-  id: 'true-myth-combinators',
-  mission: MISSION,
+const combinators: EvalPart = {
+  id: 'combinators',
+  objectives: [
+    'Clone true-myth in the sandbox, plan one board task per module, and have three hired helpers each build one module at once; the tests pass and the work is committed.',
+    'Add the cross-type toolbelt, mark it done and commit it; the DeepSWE verifier passes.',
+  ],
   turns: [{
     prompt: `true-myth needs new collection combinators. Build them with three helpers working at once.
 
@@ -181,7 +184,18 @@ Add it to your task board as src/toolbelt.ts, mark it done once it works, and co
 
       await verifier.check('deepswe-verifier-passes', () => graded(verifier, 'whole'));
     },
-  }, ...combinatorsJourney(CHECKOUT), {
+  }],
+};
+
+const release: EvalPart = {
+  id: 'release',
+  objectives: [
+    'Record the live npm provenance on the board, and keep the private handoff in memory, then its correction.',
+    'Run independent review branches as a swarm, keep a report calculator as a tool, and record the boundary review.',
+    'In a fresh conversation, recall the corrected handoff, rerun the tests, reuse the calculator and build the two live views.',
+    'Serve the dashboard from the workspace and the sandbox, hand off a ZIP of the required sources, and name the commit that holds the work.',
+  ],
+  turns: [...combinatorsJourney(CHECKOUT), {
     prompt: 'Which commit holds the finished work? Reply with just its full 40-character sha.',
     verify: async (verifier) => {
       await verifier.check('names-the-commit-that-holds-the-work', async () => {
@@ -193,6 +207,6 @@ Add it to your task board as src/toolbelt.ts, mark it done once it works, and co
       });
     },
   }],
-});
+};
 
-defineTaskEval(task);
+defineTaskEval(defineEvalTask({ id: 'coding', mission: MISSION, parts: [combinators, release] }));

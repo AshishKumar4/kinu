@@ -1,11 +1,9 @@
-import { defineTaskEval } from '../src/eval';
-import { defineEvalTask } from '../src/task';
+import type { EvalPart } from '../src/task';
 
 // Facts an owner hands the agent to keep, one of them corrected a turn later; then the workspace restarts, the chat is
 // cleared, and a new conversation asks for them. Nothing of the first two turns is in that conversation, so the answer
 // comes from what the agent kept in memory, and the corrected fact must replace the old one.
 
-const MISSION = "Juniper Row Bakery's workspace. We run two shops and keep our suppliers, accounts and codes here.";
 
 const CLOSED_ACCOUNT = 'HM-48213';
 
@@ -13,9 +11,12 @@ const ACCOUNT = 'HM-90577';
 
 const ALARM_CODE = '7341';
 
-const task = defineEvalTask({
-  id: 'memory-recall',
-  mission: MISSION,
+export const memoryRecall: EvalPart = {
+  id: 'memory',
+  objectives: [
+    'Keep the supplier account and the alarm code, and replace the account when told it closed.',
+    'In a fresh conversation, recall the corrected account and the alarm code.',
+  ],
   turns: [{
     prompt: `Some things to keep for later, please. Our flour supplier is Hollins Mill and our account number there is
 ${CLOSED_ACCOUNT}. The back-door alarm code at the Elm Street shop is ${ALARM_CODE}. I'll ask for these in a new chat.`,
@@ -38,6 +39,4 @@ ${CLOSED_ACCOUNT} is closed. Keep the new one, not the old.`,
       }));
     },
   }],
-});
-
-defineTaskEval(task);
+};
