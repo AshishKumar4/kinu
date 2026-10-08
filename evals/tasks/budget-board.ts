@@ -416,7 +416,7 @@ Leave both empty when you are done: I will enter the expenses and budgets myself
       await sameAsReference(verifier, 'board-reports-budgets-against-spending', { history: [[recordFebruaryAndMarch, refuseBadExpenses]], script: setBudgets, currency: false });
       await sameAsReference(verifier, 'board-reads-new-expenses-from-the-ledger', { history: [[recordFebruaryAndMarch, refuseBadExpenses, setBudgets]], script: spendMore, currency: false });
 
-      await builtItself(verifier);
+      await builtItself(verifier, ['ledger', 'board']);
 
       for (const id of ['ledger', 'board']) await buildsClean(verifier, { id, names: [], done: () => true });
     },
@@ -509,7 +509,7 @@ how far over budget the team is, in dollars, and which of its expenses that mont
         });
       });
 
-      await slateQuality(verifier, await boardPage(AFTER_PAGE));
+      await slateQuality(verifier, await boardPage(AFTER_PAGE), ['ledger', 'board']);
     },
   }, {
     seed: [{ path: RATES_PATH, content: `${JSON.stringify(FIRST_RATE)}\n` }],
@@ -531,7 +531,7 @@ asked.`,
         });
       });
 
-      await builtItself(verifier);
+      await builtItself(verifier, ['ledger', 'board']);
       await buildsClean(verifier, await boardPage(AFTER_EUROS));
     },
     verifyAfterEviction: async (verifier) => {
@@ -568,7 +568,7 @@ return the following ones, or null on the last page. limit is 1 to 50; answer an
       await sameAsReference(verifier, 'board-still-reports-the-month', { history: AFTER_EUROS, script: readTheMonth, currency: true });
       await verifier.check('the-page-still-shows-the-month', () => pageShows(verifier, AFTER_EUROS));
 
-      await builtItself(verifier);
+      await builtItself(verifier, ['ledger', 'board']);
       await buildsClean(verifier, await boardPage(AFTER_EUROS));
     },
     verifyAfterEviction: async (verifier) => {

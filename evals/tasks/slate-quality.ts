@@ -10,9 +10,6 @@ import { madeNoPrototype } from './ephemeral';
 /** A slate as its turn asked for it: what it shows once drawn, read by name (`sight.ts`). */
 export type DrawnSlate = { readonly id: string; readonly names: readonly string[]; readonly done: (sight: Sight) => boolean };
 
-/** A prototype of a file slate is a page or server outside it, or a browser on one: its own files may be a page. */
-const PROTOTYPE = /(?<!\/slates\/[^"\s]*)\.html\b|\$preview\(|openBrowser|connectBrowser|screenshot|http\.server|npx serve|\bvite\b/;
-
 /** How far the page's background may sit from the workspace's, in light (0 black, 1 white): a dark page on a light
  *  workspace is 0.8 or more apart, one drawn from the theme's own colours a few hundredths. */
 const THEME_DISTANCE = 0.3;
@@ -20,9 +17,10 @@ const THEME_DISTANCE = 0.3;
 /** The share of visible letters drawn at 3:1 or more against what lies under them. */
 const READABLE = 0.9;
 
-/** The turn built what it was asked to itself: no helper hired and no swarm, and no prototype before the slate. */
-export async function builtItself(verifier: EvalVerifier): Promise<void> {
-  await madeNoPrototype(verifier, PROTOTYPE);
+/** The turn built `slates`, what it was asked to, itself: no helper hired and no swarm, and no prototype standing in
+ *  for them (`prototypeSteps`); a preview and a screenshot of the real slate are its check, as the slates skill asks. */
+export async function builtItself(verifier: EvalVerifier, slates: readonly string[]): Promise<void> {
+  await madeNoPrototype(verifier, slates);
 
   await verifier.check('hired-no-one', async () => {
     const delegated = (await verifier.turnToolCalls()).filter((call) => call.name === 'agents' && /"op":"(?:hire|swarm)"/u.test(call.args));
@@ -43,9 +41,10 @@ export async function buildsClean(verifier: EvalVerifier, slate: DrawnSlate): Pr
   }));
 }
 
-/** Everything a slate is held to once a turn has built it, besides what its own methods answer. */
-export async function slateQuality(verifier: EvalVerifier, slate: DrawnSlate): Promise<void> {
-  await builtItself(verifier);
+/** Everything a slate is held to once a turn has built it, besides what its own methods answer; `slates` are every one
+ *  the turn was asked for, the slate among them. */
+export async function slateQuality(verifier: EvalVerifier, slate: DrawnSlate, slates: readonly string[] = [slate.id]): Promise<void> {
+  await builtItself(verifier, slates);
   await buildsClean(verifier, slate);
 
   await verifier.check(`${slate.id}-follows-the-theme`, () => verifier.browse(async (browser) => {

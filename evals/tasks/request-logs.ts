@@ -349,7 +349,7 @@ count anywhere, not as requests and not as skipped lines, and a 429 now counts a
         });
       });
 
-      await builtItself(verifier);
+      await builtItself(verifier, ['logs']);
       await buildsClean(verifier, dashboard({ days: [...FIRST_DAYS, JUNE_4, JUNE_5], rules: TURN_2_RULES }));
     },
     verifyAfterEviction: async (verifier) => {

@@ -629,7 +629,7 @@ pressing a piece and then a square plays that move.`,
 
 Everything that already worked keeps working.`,
     verify: async verifier => {
-      await builtItself(verifier);
+      await builtItself(verifier, [SLATE_ID]);
       await buildsClean(verifier, DRAWN);
       await verifier.check("imports-known-games-to-the-right-positions", async () => {
         const api = verifier.slate(SLATE_ID, METHODS);
@@ -738,7 +738,7 @@ same pieces on the same squares, the same castling rights and the same en passan
 available. The moves of a game loaded with loadPgn count; loadFen and newGame start afresh.
 Everything that already worked keeps working.`,
     verify: async verifier => {
-      await builtItself(verifier);
+      await builtItself(verifier, [SLATE_ID]);
       await buildsClean(verifier, DRAWN);
       await verifier.check("detects-threefold-repetition-and-the-fifty-move-rule", async () => {
         const api = verifier.slate(SLATE_ID, METHODS);

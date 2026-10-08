@@ -281,7 +281,7 @@ Everything that already worked keeps working.`,
         return { pass: bobBefore === 2 && aliceBefore === 0 && await unread(BOB) === 0, evidence: { bobBefore, aliceBefore } };
       });
 
-      await builtItself(verifier);
+      await builtItself(verifier, [SLATE_ID]);
       await buildsClean(verifier, SIGN_IN);
     },
   }],
