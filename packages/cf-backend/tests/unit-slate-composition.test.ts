@@ -9,7 +9,7 @@ import {
 import { sqlOver } from '@kinu.run/test-utils';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import {
-  hostedSubordinateHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
+  gatewayWorkspace, hostedSubordinateHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
 } from './helpers/actor-harness';
 import { chatCompletion, wordByWordCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import { createWorkspaceBundle } from '../../core/tests/helpers';
@@ -477,15 +477,14 @@ test('a slate never reaches what only the agent does', async () => {
 });
 
 test('the owner\'s own slate hires a helper and lists it as the owner does; a hired agent\'s slate does neither', async () => {
-  const gateway = stubAiBinding((run) => chatCompletion(run, 'Counted 3 files.'));
-  const parent = orchestratorHarness(undefined, { aiGateway: gateway });
-  parent.agent.harnessInstallCatalog({ tiers: { default: { model: GATEWAY_MODEL } }, availableModels: [GATEWAY_MODEL] });
+  const parent = gatewayWorkspace(stubAiBinding((run) => chatCompletion(run, 'Counted 3 files.')));
   const files = workspaceFiles(parent.agent);
   await files.mkdir('/slates/board', { recursive: true });
   await writeText(files, '/slates/board/package.json', JSON.stringify({ main: 'server.ts' }));
   const asOwner = surface(parent.agent, ROOT_SLATE_CALLER, 'board');
 
-  expect(await asOwner(['agents', 'hire'], [{ role: 'task', name: 'counter', mission: 'Count the files in /home' }])).toMatchObject({ ok: true });
+  // As a program calls it: role, mission, then its options.
+  expect(await asOwner(['agents', 'hire'], ['task', 'Count the files in /home', { name: 'counter' }])).toMatchObject({ ok: true });
   expect((await parent.agent.listSubordinates()).map((entry) => entry.name)).toContain('counter');
 
   const listed = await asOwner(['agents', 'list']);
@@ -504,7 +503,7 @@ test('the owner\'s own slate hires a helper and lists it as the owner does; a hi
   await writeText(own, '/slates/own/package.json', JSON.stringify({ main: 'server.ts' }));
 
   for (const path of [['agents', 'list'], ['agents', 'hire']]) {
-    expect(await surface(parent.agent, asChild, 'own')(path, [{ role: 'task', mission: 'should not run' }]), path.join('.')).toMatchObject({ ok: false, reason: 'denied' });
+    expect(await surface(parent.agent, asChild, 'own')(path, ['task', 'should not run']), path.join('.')).toMatchObject({ ok: false, reason: 'denied' });
   }
 });
 
