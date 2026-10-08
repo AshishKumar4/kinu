@@ -9,9 +9,9 @@ describe('tool call summaries — the unified agents tool', () => {
       { input: { op: 'hire', name: 'scout', role: 'researcher — landscape' }, facts: ['hire', 'scout', 'researcher — landscape'] },
       { input: { op: 'hire', role: 'researcher' }, facts: ['hire', 'researcher'] },
       { input: { op: 'hireWorkspace', mission: 'summarize papers' }, facts: ['hire', 'workspace', 'summarize papers'] },
-      { input: { op: 'assign', agent: 'scout', message: 'Audit the CLI surface' }, facts: ['hire', 'scout', 'Audit the CLI surface'] },
+      { input: { op: 'assign', agent: 'scout', message: 'Audit the CLI surface' }, facts: ['assign', 'scout', 'Audit the CLI surface'] },
       { input: { op: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the CLI surface' }, facts: ['hire', 'task', 'auditor'] },
-      { input: { op: 'message', agent: 'scout', topic: 'fyi' }, facts: ['msg', 'scout', 'fyi'] },
+      { input: { op: 'message', agent: 'scout', topic: 'fyi' }, facts: ['message', 'scout', 'fyi'] },
       { input: { op: 'reply', eventId: 'ev-1', message: 'here you go' }, facts: ['msg', 'here you go'] },
       { input: { op: 'dismiss', agent: 'arch-auditor' }, facts: ['dismiss', 'arch-auditor'] },
       { input: { op: 'list' }, facts: ['list'] },
@@ -39,7 +39,7 @@ describe('tool call summaries — builtins', () => {
     expect(summarizeToolCall('memory', { op: 'search', query: 'deploy' })).toContain('deploy');
     expect(summarizeToolCall('memory', { op: 'note', content: 'the deploy target is staging' }))
       .toContain('the deploy target is staging');
-    expect(summarizeToolCall('memory', { op: 'listConversations' })).toBe('conversations');
+    expect(summarizeToolCall('memory', { op: 'listConversations' })).toBe('listConversations');
     expect(summarizeToolCall('memory', { op: 'remember', key: 'user.tz', value: 'UTC' }))
       .toContain('user.tz');
     expect(summarizeToolCall('memory', { op: 'forget', key: 'deploy.target' })).toContain('deploy.target');

@@ -231,7 +231,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
 
     const ns = sandbox(searchableDeps({ budget: governor }));
     expect(await ns.list({})).toMatchObject({ subordinates: [] });
-    expect(await ns.dismiss({ agent: 'helper' })).toMatchObject({ ok: true });
+    expect(await ns.dismiss('helper')).toMatchObject({ ok: true });
   });
 
   test('no governor and no scope leave the search path unbudgeted, and identically so', async () => {

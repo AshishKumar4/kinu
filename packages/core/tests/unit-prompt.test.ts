@@ -38,6 +38,7 @@ import {
 import { createTestRuntime, createTestActors, scriptedTurnModel, unobservedSearchSeams, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { makeSqlExec, conversationsFor } from './helpers';
 import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
+import { namespaceDeclaration } from '../src/tools/operation-surfaces';
 
 const RUNTIME = { backend: 'cf', model: { id: 'claude-sonnet-4-7' }, date: '2026-01-01' } as const;
 
@@ -47,7 +48,9 @@ function agentSelfTypes(): string {
     get: () => async () => null,
   });
 
-  return createAgentSelfProvider(host).types ?? '';
+  const provider = createAgentSelfProvider(host);
+
+  return namespaceDeclaration(provider.name, provider.declarations ?? {}, new Set());
 }
 
 function expectDefaultPromptToMatch(...patterns: readonly RegExp[]): void {

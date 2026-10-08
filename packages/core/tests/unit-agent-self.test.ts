@@ -4,6 +4,7 @@ import * as v from "valibot";
 import { MissionGovernor } from "../src/mission-budget";
 import { createAgentSelfProvider, type AgentSelfHost } from "../src/tools/agent-self";
 import { codemodeFunction, type CodemodeProvider } from "../src/tools/sandbox-contract";
+import { namespaceDeclaration } from "../src/tools/operation-surfaces";
 import type { BackgroundJob } from "../src/jobs/store";
 import { makeExecRaw, makeSql } from "./helpers";
 import { createTestActors, present } from "@kinu.run/test-utils";
@@ -111,12 +112,15 @@ const called = (p: CodemodeProvider, member: string) => codemodeFunction("agent"
 
 const refused = (text: string) => ({ success: false, reason: "bad_input", error: expect.stringContaining(text) });
 
+/** The namespace as a program reads it. */
+const declared = (p: CodemodeProvider): string => namespaceDeclaration(p.name, p.declarations ?? {}, new Set());
+
 describe("createAgentSelfProvider — shape", () => {
   test("is a well-formed CodemodeProvider", () => {
     const p = createAgentSelfProvider(fakeHost());
     expect(p.name).toBe("agent");
     expect(p.positionalArgs).toBe(true);
-    expect(p.types).toContain("schedule");
+    expect(declared(p)).toContain("schedule(");
 
     for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "scaffoldVersions", "schedule", "cancelSchedule", "compactNow"]) {
       const descriptor = p.tools[name];
@@ -132,8 +136,8 @@ describe("createAgentSelfProvider — delegation + validation", () => {
   test("curriculum tools call through with the right args", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
-    await p.tools.proposeCurriculum.execute(3);
-    await p.tools.listCurriculum.execute("pending");
+    await p.tools.proposeCurriculum.execute({ count: 3 });
+    await p.tools.listCurriculum.execute({ status: "pending" });
     await p.tools.acceptCurriculumTask.execute("t1");
     expect(host.calls).toEqual(["propose:3", "list:pending", "set:t1:accepted"]);
   });
@@ -153,7 +157,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const p = createAgentSelfProvider(host);
     const rationale = "Revive the branching-heads stepping stone from v1 with a tighter merge step.";
     const code = "async function* run(rt, task) { await host.defaultInference(); }";
-    const r = await p.tools.proposeScaffold.execute(rationale, code, 1);
+    const r = await p.tools.proposeScaffold.execute(rationale, code, { baseVersion: 1 });
     expect(r).toEqual({ ok: true, version: 2 });
     expect(host.calls).toEqual([`scaffold:${rationale.length}:${code.length}:1`]);
   });
@@ -172,7 +176,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
   test("scaffoldVersions exposes the archive read-only via the host", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
-    const r = await p.tools.scaffoldVersions.execute(10);
+    const r = await p.tools.scaffoldVersions.execute({ limit: 10 });
     expect(r).toMatchObject([{ version: 0, status: "current" }]);
     expect(host.calls).toEqual(["archive:10"]);
   });
@@ -180,10 +184,10 @@ describe("createAgentSelfProvider — delegation + validation", () => {
   test("quality exposes satisfaction per day read-only via the host", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
-    const r = await p.tools.quality.execute(7);
+    const r = await p.tools.quality.execute({ days: 7 });
     expect(r).toMatchObject([{ day: "2026-10-02", rated: 5 }]);
     expect(host.calls).toEqual(["quality:7"]);
-    expect(p.types).toContain("quality(days?: number)");
+    expect(declared(p)).toContain("quality(");
   });
 
   test("jobResult on a SETTLED job passes the row through unchanged — the result is there to read", async () => {
@@ -235,7 +239,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
   test("acceptCurriculumTask rejects a non-string id", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
-    expect(await called(p, "acceptCurriculumTask")(42)).toEqual(refused("id must be a non-empty string"));
+    expect(await called(p, "acceptCurriculumTask")(42)).toEqual(refused('agent.acceptCurriculumTask: "id"'));
     expect(host.calls).toEqual([]);
   });
 
@@ -266,27 +270,27 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const p = createAgentSelfProvider(host);
 
     const out = v.parse(ScheduledBudgetSchema, await p.tools.schedule.execute({
-      cron: "0 12 * * *", budget_usd: 5, budget_label: "nightly-sweep",
+      cron: "0 12 * * *", budgetUsd: 5, budgetLabel: "nightly-sweep",
     }));
 
     expect(out.budget).toMatchObject({ label: "nightly-sweep", limits: { usd: 5 }, spent: { tokens: 0 } });
     expect(host.calls).toEqual(["timer:0 12 * * *:nightly-sweep"]);
-    expect(await p.tools.budget.execute("nightly-sweep")).toMatchObject([{ label: "nightly-sweep" }]);
+    expect(await p.tools.budget.execute({ label: "nightly-sweep" })).toMatchObject([{ label: "nightly-sweep" }]);
   });
 
   test("a recurring schedule re-declared under the same label keeps its cumulative spend", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
-    await p.tools.schedule.execute({ cron: "0 12 * * *", budget_tokens: 1000, budget_label: "nightly" });
+    await p.tools.schedule.execute({ cron: "0 12 * * *", budgetTokens: 1000, budgetLabel: "nightly" });
     host.budget.activate(["nightly"]);
     host.budget.debit(400);
-    await p.tools.schedule.execute({ cron: "0 13 * * *", budget_tokens: 1000, budget_label: "nightly" });
-    expect(await p.tools.budget.execute("nightly")).toMatchObject([{ spent: { tokens: 400 } }]);
+    await p.tools.schedule.execute({ cron: "0 13 * * *", budgetTokens: 1000, budgetLabel: "nightly" });
+    expect(await p.tools.budget.execute({ label: "nightly" })).toMatchObject([{ spent: { tokens: 400 } }]);
   });
 
   test("budget rejects a non-string label without reading anything", async () => {
     const p = createAgentSelfProvider(fakeHost());
-    expect(await called(p, "budget")(42)).toEqual(refused("label must be a string"));
+    expect(await called(p, "budget")(42)).toEqual(refused("takes its options as one object"));
   });
 
   test("compactNow arms the ladder's forced rebuild and says where the fold lands", async () => {
@@ -295,6 +299,6 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(await p.tools.compactNow.execute()).toEqual({ armed: true, appliesAt: "next-turn-assembly" });
     expect(await p.tools.compactNow.execute()).toEqual({ armed: true, appliesAt: "next-turn-assembly" });
     expect(host.calls).toEqual(["compactNow", "compactNow"]);
-    expect(p.types).toContain("compactNow");
+    expect(declared(p)).toContain("compactNow(");
   });
 });

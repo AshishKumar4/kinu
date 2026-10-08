@@ -4,6 +4,7 @@
  * Each executor is its own namespace on its own plane, so each member is its own operation.
  */
 import * as v from 'valibot';
+import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 import { defineOperation, type Impact, type Operation } from './operation';
 
 const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
@@ -48,7 +49,9 @@ export const WORKSPACE = {
   }),
   createTool: ws({
     name: 'createTool', impact: 'mutate',
-    help: 'Craft a tool, callable as `tools.<name>(args)` by every program and turn after this one; the same name updates it.',
+    help: 'Save a crafted tool, callable as `tools.<name>(args)` from the next program; the same name updates it. `code` is '
+      + `${CRAFTED_TOOL_BODY}; helpers may precede it. In its body, ${WORKSPACE_FILE_BINDINGS}, and call `
+      + '`tools.<name>(args)`; `require`, `import` and `eval` are refused.',
     input: v.strictObject({ name: v.pipe(v.string(), v.nonEmpty()), description: v.pipe(v.string(), v.nonEmpty()), code: v.pipe(v.string(), v.nonEmpty()) }),
     output: v.object({ name: v.string(), action: v.picklist(['created', 'updated']) }),
   }),

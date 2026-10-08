@@ -15,6 +15,7 @@ import {
 } from '../src/strategy/swarm';
 import { VERIFIER_KINDS, resolveVerifier, unregisteredKindRefusal } from '../src/strategy/verifier-registry';
 import { JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject } from '../src/utils/json';
+import { SwarmObjectiveSchema } from '../src/tools/swarm-input';
 import { createAgentsTool } from '../src/delegation/agents-operations';
 import { asSchema } from 'ai';
 import { createTestRuntime, present, unobservedSearchSeams } from '@kinu.run/test-utils';
@@ -89,9 +90,10 @@ function parsed(sent: { readonly call: object }): JsonObject {
 
 const PARSED = parsed({ call: CALL });
 
+// The wire objective as the swarm operation reads it: the schema it is declared with maps it to camelCase.
 const OBJECTIVE = v.parse(
   v.custom<ScalarObjective>((input) => v.is(v.object({ kind: v.literal('scalar') }), input)),
-  PARSED.objective,
+  v.parse(SwarmObjectiveSchema, PARSED.objective),
 );
 
 const FLOOR: Floor = v.parse(
