@@ -825,7 +825,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       executeTool: (call) => {
         this.agentActivity(actorId, call.activity);
 
-        return this.agentTurns.execute(actorId, call);
+        // Open while the tool runs, under the RPC that relayed it: a kill keeps the cut span's name.
+        return this.tracing.invocation('rpc', `tool.${call.name}`, () => this.agentTurns.execute(actorId, call));
       },
       observe: async (lines) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines)); },
       answerMetadata: (turnId, narration) => this.takeTurnSlates(actorId, turnId, async () => narration),

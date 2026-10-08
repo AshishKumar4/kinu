@@ -150,14 +150,25 @@ changes none of that.
 
 ## Where spans are open
 
-Two invocation sites, both in `cf-backend/src/orchestrator.ts`, in two of the
+Three invocation sites, all in `cf-backend/src/orchestrator.ts`, in two of the
 four declared invocation classes (grep of `this.tracing.invocation`,
-2026-09-22), and every turn (below).
+2026-10-08), and every turn (below).
 
 | Class | Root span | Entry method |
 | --- | --- | --- |
 | `alarm` | `alarm.tick` | `OrchestratorAgent._kinuTimerTick` |
 | `rpc` | `rpc.head.record_step` | `OrchestratorAgent.recordHeadStep` |
+| `rpc` | `rpc.tool.<name>` | an agent's tool relayed to the workspace (`agentWorkspace().executeTool`) |
+
+An RPC method needs no span of its own: the platform's `jsrpc <method>` span
+names it. A Kinu span earns its place by naming work the platform cannot see.
+`rpc.tool.<name>` is open while the tool runs, and a span the platform cuts
+when it kills the invocation keeps its name (`span_not_ended`) and loses its
+attributes, so the tool's name is in the span's name. `scripts/prod-logs.ts
+kills` reads each killed invocation's trace from the `otel` dataset: on
+2026-10-08 the 302 s CPU kill of `75fa0d91` left no log line and 445 spans.
+Measured on staging the same day: 890 platform spans per model step, 79 of
+them RPC invocations; this site adds one per relayed tool call.
 
 `InvocationKind` declares `fetch`, `alarm`, `rpc` and `websocket`
 (`core/src/obs/agent-tracing.ts`). Only `alarm` and `rpc` are used. The class

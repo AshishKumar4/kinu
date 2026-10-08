@@ -69,6 +69,7 @@
  *   bun scripts/prod-logs.ts errors [--since 24h] [--until ISO] [--json]
  *   bun scripts/prod-logs.ts wakes [--since 24h] [--until ISO] [--json]
  *   bun scripts/prod-logs.ts version <version-id> [--since ISO] [--json]
+ *   bun scripts/prod-logs.ts kills [--since 24h] [--until ISO] [--json]
  * `--since` takes 30m / 6h / 7d or an ISO instant; `--worker` works everywhere.
  */
 import { readFileSync } from 'node:fs';
@@ -100,7 +101,7 @@ export const IDLE_WAKE_DISTANCE_MS = 5 * MINUTE_MS;
 /** Objects a per-minute read keeps; a read that reaches it is capped, and an object it drops would read as idle. */
 const MINUTE_GROUPS_CAP = 2000;
 
-const MODES = ['live', 'query', 'timeline', 'errors', 'wakes', 'version'] as const;
+const MODES = ['live', 'query', 'timeline', 'errors', 'wakes', 'version', 'kills'] as const;
 
 type Mode = (typeof MODES)[number];
 
@@ -296,7 +297,7 @@ const TelemetryEvent = v.looseObject({
     eventType: v.optional(v.string()),
     outcome: v.optional(v.string()),
     scriptVersion: v.optional(v.looseObject({ id: v.optional(v.string()) })),
-    wallTimeMs: v.optional(v.number()),
+    wallTimeMs: v.optional(v.number()), cpuTimeMs: v.optional(v.number()), entrypoint: v.optional(v.string()),
     event: v.optional(v.looseObject({ rpcMethod: v.optional(v.string()), rpcMethods: v.optional(v.array(v.string())) })),
   }), {}),
   $metadata: v.optional(v.looseObject({
@@ -1275,6 +1276,88 @@ async function versionCommand(args: Args): Promise<number> {
   return findings.length === 0 ? 0 : 1;
 }
 
+/** The outcomes of an invocation the platform ended for what it spent. */
+const KILLED_OUTCOMES = ['exceededCpu', 'exceededMemory', 'exceededWallTime'] as const;
+
+const OtelSpan = v.looseObject({
+  timestamp: v.number(),
+  source: v.looseObject({
+    name: v.optional(v.string(), ''),
+    jsrpc: v.optional(v.looseObject({ method: v.optional(v.string()) })),
+    db: v.optional(v.looseObject({ query: v.optional(v.looseObject({ text: v.optional(v.string()) })) })),
+    cloudflare: v.optional(v.looseObject({ warning: v.optional(v.looseObject({ type: v.optional(v.string()) })) })),
+  }),
+  $metadata: v.looseObject({ type: v.optional(v.string()), spanName: v.optional(v.string()) }),
+});
+
+const OtelResult = v.looseObject({
+  result: v.looseObject({ events: v.optional(v.looseObject({ events: v.optional(v.array(OtelSpan), []) }), { events: [] }) }),
+});
+
+/** What a span did, by name: a platform span's RPC method or SQL statement, a Kinu span's own name. */
+function spanLabel(span: v.InferOutput<typeof OtelSpan>): string {
+  const sql = span.source.db?.query?.text?.replace(/\s+/g, ' ').slice(0, 80);
+
+  return [span.source.name, span.source.jsrpc?.method, sql].filter((part) => part !== undefined && part !== '').join(' ');
+}
+
+/**
+ * `kills`: every invocation the platform ended for its CPU, memory or wall time, read through its trace. Its logs die
+ * with it (staging 2026-10-08: a 302 s CPU kill left none), but the `otel` dataset keeps its trace: every span by name,
+ * a cut one marked `span_not_ended`. The Kinu spans cut by the kill (`rpc.tool.<name>`, `alarm.<phase>`) name the
+ * work that was running; the clock does not advance through pure JS, so durations there read zero.
+ */
+async function kills(t: Telemetry, args: Args): Promise<void> {
+  const ended = (await Promise.all(KILLED_OUTCOMES.map(async (outcome) => (await t.events([eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', outcome)], EVENT_CAP)).events))).flat();
+  // One reset ends every invocation the object was serving at once; the one that spent most is its cause.
+  const resets = new Map<string, TelemetryEvent>();
+
+  for (const row of ended) {
+    const key = `${row.$workers.durableObjectId ?? row.$metadata.requestId ?? ''}@${String(row.timestamp)}`;
+    const held = resets.get(key);
+
+    if (held === undefined || (row.$workers.cpuTimeMs ?? 0) > (held.$workers.cpuTimeMs ?? 0)) resets.set(key, row);
+  }
+
+  const read = await Promise.all([...resets.values()].map(async (row) => {
+    const trace = row.$metadata.traceId ?? '';
+
+    const text = trace === '' ? '' : await t.raw({
+      view: 'events', limit: EVENT_CAP, timeframe: { from: row.timestamp - 6 * HOUR_MS, to: row.timestamp + MINUTE_MS },
+      parameters: { datasets: ['otel'], filters: [{ key: '$metadata.traceId', operation: 'eq', value: trace, type: 'string' }] },
+    });
+
+    const spans = text === '' ? [] : v.parse(OtelResult, JSON.parse(text)).result.events.events.filter((span) => span.$metadata.type === 'span');
+    const cut = spans.filter((span) => span.source.cloudflare?.warning?.type === 'span_not_ended').map(spanLabel);
+    const counts = new Map<string, number>();
+
+    for (const span of spans) counts.set(spanLabel(span), (counts.get(spanLabel(span)) ?? 0) + 1);
+
+    return {
+      at: iso(row.timestamp), object: row.$workers.durableObjectId ?? null, entrypoint: row.$workers.entrypoint ?? null,
+      eventType: row.$workers.eventType ?? null, outcome: row.$workers.outcome ?? null, cpuMs: row.$workers.cpuTimeMs ?? null,
+      wallMs: row.$workers.wallTimeMs ?? null, rpcMethods: row.$workers.event?.rpcMethods ?? [], request: row.$metadata.requestId ?? null,
+      trace, spans: spans.length, spansCapped: spans.length >= EVENT_CAP, cut,
+      busiest: [...counts].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([span, count]) => ({ span, count })),
+    };
+  }));
+
+  if (args.json) {
+    console.log(JSON.stringify({ window: { from: iso(args.from), to: iso(args.to) }, kills: read, sampling: t.sampling }, null, 1));
+
+    return;
+  }
+
+  console.log([`invocations the platform ended for what they spent, ${iso(args.from)} .. ${iso(args.to)}:`,
+    ...read.length === 0 ? ['  none'] : read.flatMap((kill) => [
+      `  ${kill.at} ${kill.entrypoint ?? '?'} ${kill.object?.slice(0, 16) ?? '?'} ${kill.eventType ?? '?'} ${kill.outcome ?? '?'}: cpu ${String(kill.cpuMs ?? '?')} ms, `
+        + `wall ${String(kill.wallMs ?? '?')} ms, rpc ${kill.rpcMethods.join(',') || 'none'}`,
+      `    trace ${kill.trace || 'none'}: ${String(kill.spans)} span(s)${kill.spansCapped ? ' (capped)' : ''}; cut by the kill: ${kill.cut.join('; ') || 'none'}`,
+      ...kill.busiest.map((busy) => `      ${String(busy.count).padStart(5)}  ${busy.span}`),
+    ]),
+    ...samplingNote(t)].join('\n'));
+}
+
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
 
@@ -1284,7 +1367,7 @@ if (import.meta.main) {
     process.exitCode = await versionCommand(args);
   } else {
     const t = new Telemetry(await readToken(), args);
-    const run = { query, timeline, errors, wakes }[args.mode];
+    const run = { query, timeline, errors, wakes, kills }[args.mode];
 
     await run(t, args);
   }
