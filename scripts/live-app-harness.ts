@@ -257,14 +257,13 @@ function loadDevVars(paths: readonly string[]) {
 }
 
 /** The worktree's own `.dev.vars` files first (checkout-local wins), then the
- *  primary checkout's root and cf-backend `.dev.vars` — where the
- *  containers-registry token and CREDENTIAL_ENCRYPTION_KEY live — resolved
- *  through `git worktree list` row one, never a literal path. vite dev needs
- *  these in PROCESS env for the container registry; wrangler's own secret
- *  injection does not cover that check (measured 2026-09-17: dev exits "error
- *  when starting dev server" without CLOUDFLARE_API_TOKEN), and the boot's
- *  credential path 503s without the cf-backend file plus CLOUDFLARE_INCLUDE_
- *  PROCESS_ENV below. */
+ *  primary checkout's root and cf-backend `.dev.vars`, resolved through
+ *  `git worktree list` row one, never a literal path. None is needed: the boot
+ *  is offline (KINU_DEV_OFFLINE turns off every remote binding and the managed
+ *  container image, vite.config.ts) and mints its own keys below, so a checkout
+ *  with no `.dev.vars` at all boots (measured on armada 2026-10-08, job
+ *  20261008023701-8cd576ae: every live-app row booted with no credential). A
+ *  file that is there still binds its values. */
 function liveAppEnv() {
   const primary = /^worktree (.+)$/mu.exec(git(REPO, 'worktree', 'list', '--porcelain'))?.[1];
 

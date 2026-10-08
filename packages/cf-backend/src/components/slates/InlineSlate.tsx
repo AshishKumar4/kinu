@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from "react";
+import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from "react";
 import { Loader } from "@cloudflare/kumo/components/loader";
 import { ArrowSquareOutIcon, CaretRightIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
@@ -159,6 +159,8 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   const contextRef = useRef(context);
   contextRef.current = context;
 
+  const notifyReady = useEffectEvent(() => onReady?.());
+
   useEffect(() => {
     let live = true;
     setPreview(null);
@@ -186,11 +188,11 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
 
       if (display === 'inline') setHeight(slateInlineHeight(parsed.output.inline.height));
 
-      onReady?.();
+      notifyReady();
     }), showing((chain) => { if (live) setRefusal(chain); })));
 
     return () => { live = false; };
-  }, [id, rpc, display, reloadKey, onReady]);
+  }, [id, rpc, display, reloadKey]);
 
   const previewOrigin = useMemo(() => (preview === null ? null : new URL(preview.url).origin), [preview]);
   // The src is a snapshot; recomputing it on a theme flip would reload the slate.
