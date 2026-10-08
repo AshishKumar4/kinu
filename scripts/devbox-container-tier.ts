@@ -25,6 +25,14 @@ const ACCOUNT = 'f44999d1ddda7012e9a87729eba250f1';
 
 const PART_BYTES = 256 * 1024 * 1024;
 
+/** The box's own words when the platform refused it a container and it armed a startup (packages/devbox/src/devbox.ts). */
+const ASK_AGAIN = 'A startup is armed, so ask again';
+
+/** Asks of one call, a minute apart in all: the startup the box armed retries within seconds. */
+const ASK_AGAIN_TIMES = 12;
+
+const ASK_AGAIN_MS = 5_000;
+
 const Json = v.looseObject({ error: v.optional(v.string()) });
 
 const Exec = v.object({ exitCode: v.number(), stdout: v.string(), stderr: v.string() });
@@ -129,12 +137,25 @@ async function main(): Promise<void> {
     if (origin === undefined) throw new Error('the fixture has not deployed');
     const url = new URL(path, origin);
     url.searchParams.set('box', name);
-    const reply = await fetch(url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
-    const value: unknown = await reply.json();
 
-    if (!reply.ok) throw new Error(`${path}: ${String(reply.status)} ${JSON.stringify(value).slice(-900)}`);
+    // A box the platform refused a container (a dropped connection, no room) arms its own startup and says to ask
+    // again; a contract asks again, as an agent does, rather than read a platform refusal as the contract broken
+    // (390ad4e4c's disk-chain: "Network connection lost." after /lose-snapshot).
+    for (let asked = 1; ; asked += 1) {
+      const reply = await fetch(url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+      const value: unknown = await reply.json();
 
-    return v.parse(schema, value);
+      if (reply.ok) return v.parse(schema, value);
+      const said = JSON.stringify(value);
+
+      if (asked < ASK_AGAIN_TIMES && said.includes(ASK_AGAIN)) {
+        process.stdout.write(`[${run}] ${path}: not ready, asking again: ${said.slice(-300)}\n`);
+        await delay(ASK_AGAIN_MS);
+        continue;
+      }
+
+      throw new Error(`${path}: ${String(reply.status)} ${said.slice(-900)}`);
+    }
   };
 
   const step = async <Evidence>(contract: string, work: () => Promise<Evidence>) => {
