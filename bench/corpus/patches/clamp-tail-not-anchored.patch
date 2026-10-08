@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/tools/clamp.ts b/packages/core/src/tools/clamp.ts
-index b115761e1..c0f5ba78c 100644
+index 68fb488fb..b8f7b4e4e 100644
 --- a/packages/core/src/tools/clamp.ts
 +++ b/packages/core/src/tools/clamp.ts
-@@ -75,7 +75,7 @@ export async function clampToolResult(
-   const room = DEFAULT_TOOL_RESULT_MAX_CHARS - marker.length - MARKER_FENCE_CHARS;
+@@ -96,7 +96,7 @@ function clampedAround(text: string, saved: Offload | null, opts: ClampToolResul
+   const room = (opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS) - marker.length - MARKER_FENCE_CHARS;
    const headLen = Math.floor(room * HEAD_FRACTION);
    const head = text.slice(0, headEnd(text, headLen));
 -  const tail = text.slice(tailStart(text, room - headLen));

@@ -2260,9 +2260,7 @@ export abstract class ActorAgent extends Agent<Env> {
           turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID,
           durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
-        clamp: {
-          files: this.rt.storage, budget: this.acc.context, producer: 'external_tool',
-        },
+        spill: this.rt.storage,
       }));
 
     return this._mcpToolsCache;

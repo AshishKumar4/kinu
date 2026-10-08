@@ -114,6 +114,13 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
               nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...call(toolArgs)));
             }
 
+            // `workspace.createTool` takes the function itself, sent as its source, as in the CF sandbox.
+            const create = nsp['createTool'];
+
+            if (p.name === 'workspace' && create !== undefined) {
+              nsp['createTool'] = (...toolArgs) => create(...toolArgs.map((arg) => (typeof arg === 'function' ? String(arg) : arg)));
+            }
+
             providerBindings[p.name] = nsp;
           }
 

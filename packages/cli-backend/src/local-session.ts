@@ -1184,11 +1184,7 @@ export class LocalAgentSession {
         turnId: () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
         durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
       },
-      clamp: {
-        files: this.rt.storage,
-        budget: this.actorSession.orchestrator.acc.context,
-        producer: 'external_tool',
-      },
+      spill: this.rt.storage,
     }));
     this.mcpClose = () => conn.close();
     await this.admitMcp(await this.modelCatalog.resolved());

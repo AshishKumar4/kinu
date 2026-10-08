@@ -34,12 +34,13 @@ const WRITER = 'async (args) => { await workspace.writeFile(args.path, args.text
 
 const BROKEN = 'async () => { throw new Error("nope"); }';
 
+/** A tool sent as its source text; `doubleIt` is sent as the function itself. */
 const create = (name: string, body: string): string => `await workspace.createTool(${JSON.stringify(name)}, ${JSON.stringify(`${name} tool`)}, ${JSON.stringify(body)});`;
 
 /** The eval programs each turn runs, by the words that open it; a turn answers once its programs are spent. */
 const TURNS = {
   'Build the report tools.': [
-    `await workspace.writeFile('reports/trial.json', ${JSON.stringify(REPORT)}); ${create('report_totals', TOTALS)} ${create('write_result', WRITER)} ${create('doubleIt', 'async (n) => n * 2')} return 'made';`,
+    `await workspace.writeFile('reports/trial.json', ${JSON.stringify(REPORT)}); ${create('report_totals', TOTALS)} ${create('write_result', WRITER)} await workspace.createTool('doubleIt', 'doubleIt tool', async (n) => n * 2); return 'made';`,
     "return { totals: await tools.report_totals({ path: 'reports/trial.json' }), wrote: await tools.write_result({ path: 'reports/output.txt', text: 'saved' }), doubled: await tools.doubleIt(21) };",
     `${create('brokenIt', BROKEN)} return 'made';`,
     'return await tools.brokenIt();',

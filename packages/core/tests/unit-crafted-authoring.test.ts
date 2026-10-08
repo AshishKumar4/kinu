@@ -69,6 +69,29 @@ describe('saving a tool that reads a file', () => {
     }
   });
 
+  test('a body the program quoted, whose escapes it read first, is refused showing what broke, and the function form is declared', async () => {
+    const { db, provider } = workspaceOf();
+
+    // The shape a live createTool took: in a template-literal body, a quoted `\'` reaches the parser as a bare `'`.
+    const program = [
+      "return await workspace.createTool('check_contract', 'Checks the contract', `async (a) => {",
+      String.raw`  await a.reject('Members cannot revoke somebody else\'s invitation');`,
+      '}`);',
+    ].join('\n');
+
+    try {
+      const { ok, error } = await replay(program, provider);
+      const declared = renderCodemodeDescription([executorNamespace(provider)], {});
+
+      expect({
+        ok, shown: error.includes("somebody else's invitation"), remedy: error.includes('send the function itself'),
+        declared: declared.includes('createTool(name, description, async (args) => { ... })'),
+      }).toEqual({ ok: false, shown: true, remedy: true, declared: true });
+    } finally {
+      db.close();
+    }
+  });
+
   test('the declaration the model reads says what a tool body is and how it reads a file', () => {
     const { db, provider } = workspaceOf();
 
