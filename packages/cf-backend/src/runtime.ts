@@ -635,7 +635,6 @@ function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'env' | 'actor' | 
   return createAgentProviderRegistry({
     ...(currentTurn !== undefined && { currentTurn }),
     env,
-    ownerUserId: actor.ownerUserId(),
     userDO: userCredentialSourceFor(env, actor),
     appTitle: title,
   });

@@ -46,7 +46,6 @@ export {
 
 export * from './model-test';
 
-export { EGRESS_REFUSAL_HEADER, EgressCalls, refusalError } from './egress-calls';
 
 export * from './codex-oauth';
 

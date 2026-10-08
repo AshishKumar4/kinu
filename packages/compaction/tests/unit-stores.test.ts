@@ -175,7 +175,7 @@ describe('createCompactionStateStore', () => {
   // every plan, a `/compact` fold included, was thrown away on the next turn.
   test('a plan keeps its attachment key, links and bypass through the durable row', async () => {
     const { store } = stateRig();
-    const snap: PlanSnapshot = { ...snapshot('s1'), attachmentPolicyKey: 'anthropic/claude-opus-4-7|recent:2', attachmentLinks: { 'turn:item': 'vfs://home/main/attachments/a.png' }, bypassSummaries: true };
+    const snap: PlanSnapshot = { ...snapshot('s1'), attachmentPolicyKey: 'recent:2', attachmentLinks: { 'turn:item': 'vfs://home/main/attachments/a.png' }, bypassSummaries: true };
     await store.plans.save('s1', snap);
     expect(store.plans.load('s1')).toEqual(snap);
   });

@@ -6,7 +6,7 @@
 
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { DELEGATION_MAX_DEPTH, ORCHESTRATOR_AGENT_SLUG } from '@kinu.run/core';
+import { DELEGATION_MAX_DEPTH, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath } from '@kinu.run/core';
 import { CHAIN_BOTTOM, CHILD_ANSWER, HIRE_MISSION, NEST_RELAY, type HireObservation, type LogRow } from './hire-shapes';
 import * as v from 'valibot';
 import { HireRosterSchema, hireSocket } from '../helpers/hire-socket';
@@ -326,6 +326,68 @@ describe('hire', () => {
       expect(archived.sections[child]).toBeGreaterThan(0);
     } finally {
       client.close();
+    }
+  });
+
+  it('a hired agent\'s plan is reviewed in its own window, and the owner\'s feedback starts its next turn there', async () => {
+    const app = env.HIRE_APP;
+
+    const created = await app.fetch('http://localhost/api/user/workspaces', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'hire-plan-client', displayName: 'Hire Plan Client' }),
+    });
+
+    expect(created.ok).toBe(true);
+    const { name: workspace } = v.parse(v.object({ name: v.string() }), await created.json());
+
+    const configured = await app.fetch('http://localhost/api/user/credentials/openai-compat.default', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'openai-compat', baseURL: `http://hire-models.invalid/w/${encodeURIComponent(workspace)}/v1`, apiKey: 'hire-fixture-key' }),
+    });
+
+    expect(configured.ok).toBe(true);
+    const workspacePath = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(workspace)}`;
+    const root = await hireSocket(app, workspacePath, CHILD_ANSWER);
+    const PlanSchema = v.nullable(v.looseObject({ id: v.string(), revision: v.number(), status: v.string(), content: v.string() }));
+
+    try {
+      await root.rpc('setModel', ['openai-compat/hire-root-durable'], v.object({ spec: v.string() }));
+      root.send('Hire a durable auditor, then send it one message.');
+      await root.completed();
+      const [auditor] = (await root.rpc('listSubordinates', [], HireRosterSchema)).filter((row) => row.lifetime === 'durable');
+      const name = auditor?.name ?? '';
+      const submitted = await probe(workspace).submitChildPlan(workspace, name, [{ start: 1, content: '# Audit plan\n\n1. Read the ledger.' }]);
+
+      expect(submitted.ok).toBe(true);
+      const pane = await hireSocket(app, `${workspacePath}/${hostedActorSocketPath(name)}`, CHILD_ANSWER);
+
+      try {
+        const shown = await pane.rpc('getActivePlanReview', [], PlanSchema);
+
+        expect(shown?.status).toBe('pending');
+        expect(shown?.content).toContain('Read the ledger');
+        // The plan is the agent's own: the root's window shows none, and the agent's snapshot shows this one.
+        expect(await root.rpc('getActivePlanReview', [], PlanSchema)).toBeNull();
+        expect((await pane.rpc('getActorSnapshot', [name], v.looseObject({ activePlan: PlanSchema }))).activePlan?.id).toBe(shown?.id);
+
+        const feedbackAnswered = pane.nextAnswer();
+
+        const decided = await pane.rpc('decidePlanReview', [shown?.id ?? '', shown?.revision ?? 0, 'request_changes', 'Name the ledger files.'],
+          v.looseObject({ ok: v.boolean(), queued: v.optional(v.boolean()) }));
+
+        expect(decided).toMatchObject({ ok: true, queued: true });
+        expect((await pane.rpc('getActivePlanReview', [], PlanSchema))?.status).toBe('changes_requested');
+
+        // The feedback is the agent's next turn, in its own chat, streamed to its window: no clock, so a turn that never comes hangs here.
+        await feedbackAnswered;
+        const lines = await probe(workspace).childLines(workspace, name);
+
+        expect(lines.find((line) => line.includes('Name the ledger files.'))).toContain('The owner requested changes to plan');
+      } finally {
+        pane.close();
+      }
+    } finally {
+      root.close();
     }
   });
 });

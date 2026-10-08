@@ -1,19 +1,11 @@
 import { Cause, Effect } from 'effect';
+/** Codex and ChatGPT-plan model calls from the cloud: chatgpt.com refuses Workers, so the account's connected machine carries them. */
 import {
-  activeOperationProfile, asFetchFunction, WORKSPACE_RUN_ID, abortCause, EGRESS_REFUSAL_HEADER, EGRESS_ROUTE_HEADER, refusalError,
+  activeOperationProfile, asFetchFunction, WORKSPACE_RUN_ID, abortCause, EGRESS_ROUTE_HEADER,
   isDeviceNotConnectedError, DEVICE_ERRORS,
   type ActorReference, type OperationProfile, type RelayedProvider, type UserCaller,
 } from '@kinu.run/core';
 import { attempt, carriesCauseCode, detach, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
-import type { CodexEgress } from './codex-egress';
-
-export interface CodexEgressNamespace<Id = DurableObjectId> {
-  idFromName(name: string): Id;
-  get(id: Id): {
-    forward(...args: Parameters<CodexEgress['forward']>): Promise<Response>;
-    cancel(...args: Parameters<CodexEgress['cancel']>): Promise<void>;
-  };
-}
 
 /** The account's side of the device relay: which machine carries a provider, and one relayed call. */
 export interface ModelRelayHub {
@@ -22,13 +14,17 @@ export interface ModelRelayHub {
   cancelModelRelay(caller: UserCaller, callId: string): Promise<void>;
 }
 
-type DeviceRoute = { readonly kind: 'device'; readonly id: string; readonly label: string } | { readonly kind: 'container' } | { readonly kind: 'none' };
-
-const CONTAINER: DeviceRoute = { kind: 'container' };
+type DeviceRoute = { readonly kind: 'device'; readonly id: string; readonly label: string } | { readonly kind: 'none' };
 
 const NONE: DeviceRoute = { kind: 'none' };
 
 const PROVIDER_NAMES: Readonly<Record<RelayedProvider, string>> = { codex: 'Codex', chatgpt: 'ChatGPT' };
+
+/** What a call with no machine to carry it is told, in the words a provider's own refusal would use. */
+const NO_MACHINE: Readonly<Record<RelayedProvider, string>> = {
+  codex: 'Codex calls from kinu.run go through your connected machine; connect one, or pick ChatGPT (Sign in with ChatGPT)',
+  chatgpt: 'No connected machine holds a ChatGPT sign-in with plan usage',
+};
 
 const PINNED = new Map<string, { readonly turn: string; readonly route: Promise<DeviceRoute> }>();
 
@@ -47,14 +43,14 @@ function liveTurnOf(
   return { actor: JSON.stringify([provider, actor.workspaceId, actor.actorId, actor.parentActorId]), turn: JSON.stringify([operation.runId, operation.turnId]) };
 }
 
-function stoppedBy(signal: AbortSignal | undefined, cancel: () => Promise<void>, route: 'container' | 'device'): Promise<never> {
+function stoppedBy(signal: AbortSignal | undefined, cancel: () => Promise<void>): Promise<never> {
   const stopped = Promise.withResolvers<never>();
 
   signal?.addEventListener('abort', () => {
     stopped.reject(abortCause(signal));
-    detach(Effect.catchCause(Effect.promise(cancel), (failed) => Effect.sync(() => diagnostics.failure('codex_egress.cancel_failed', toKinuError({
+    detach(Effect.catchCause(Effect.promise(cancel), (failed) => Effect.sync(() => diagnostics.failure('model_relay.cancel_failed', toKinuError({
       doing: 'cancelling a relayed model call', cause: Cause.squash(failed), otherwise: 'unavailable',
-    }), { route }))));
+    })))));
   }, { once: true });
 
   return stopped.promise;
@@ -71,57 +67,20 @@ function stamped(response: Response, route: string): Response {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-export interface CodexContainer {
-  forward(callId: string, request: Request): Promise<Response>;
-  cancel(callId: string): Promise<void>;
-}
-
-export function codexEgressFetch<Id>(namespace: CodexEgressNamespace<Id>, ownerUserId: string): typeof fetch {
-  return codexContainerFetch(ownerContainer(namespace, ownerUserId));
-}
-
-export function ownerContainer<Id>(namespace: CodexEgressNamespace<Id>, ownerUserId: string): CodexContainer {
-  const stub = namespace.get(namespace.idFromName(ownerUserId));
-
-  return { forward: (callId, request) => stub.forward(ownerUserId, callId, request), cancel: (callId) => stub.cancel(callId) };
-}
-
-export function codexContainerFetch(stub: CodexContainer): typeof fetch {
-  return asFetchFunction(async (input, init) => {
-    const signal = init?.signal ?? undefined;
-
-    if (signal?.aborted) throw abortCause(signal);
-    const callId = crypto.randomUUID();
-    const request = new Request(input, { ...init, signal: null });
-    const stopped = stoppedBy(signal, () => stub.cancel(callId), 'container');
-    const response = await Promise.race([stub.forward(callId, request), stopped]);
-    const refusal = response.headers.get(EGRESS_REFUSAL_HEADER);
-
-    if (refusal !== null) throw refusalError({ url: request.url, refusal, message: await response.text() });
-
-    return response;
-  });
-}
-
-/**
- * One machine per turn. Codex falls back to its egress container; the ChatGPT plan cannot, since its token
- * lives only on the machine that signed in.
- */
+/** One machine per turn, and none is refused: no other route carries these calls. */
 export function deviceRouteFetch(input: {
   readonly provider: RelayedProvider;
-  readonly container?: typeof fetch;
   readonly hub: ModelRelayHub;
   readonly caller: () => Promise<UserCaller>;
   readonly currentTurn?: (actor: ActorReference) => string | null;
 }): typeof fetch {
-  const { provider, container, hub, caller, currentTurn = () => null } = input;
+  const { provider, hub, caller, currentTurn = () => null } = input;
   const name = PROVIDER_NAMES[provider];
-  const fallback = container === undefined ? NONE : CONTAINER;
 
   const pick = async (): Promise<DeviceRoute> => {
     const device = await hub.relayDevice(await caller(), provider);
 
-    return device === null ? fallback : { kind: 'device', id: device.id, label: device.label };
+    return device === null ? NONE : { kind: 'device', id: device.id, label: device.label };
   };
 
   const routeOf = (turn: TurnKey | null): Effect.Effect<DeviceRoute, KinuError> => {
@@ -145,10 +104,6 @@ export function deviceRouteFetch(input: {
     );
   };
 
-  const viaFallback = (request: RequestInfo | URL, init: RequestInit | undefined): Effect.Effect<Response, KinuError> => (container === undefined
-    ? Effect.fail(new KinuError('unavailable', 'No connected machine holds a ChatGPT sign-in with plan usage'))
-    : Effect.promise(async () => stamped(await container(request, init), 'relay')));
-
   return asFetchFunction(async (request, init) => {
     const signal = init?.signal ?? undefined;
     const turn = liveTurnOf(provider, activeOperationProfile(), currentTurn);
@@ -159,11 +114,11 @@ export function deviceRouteFetch(input: {
       yield* unstopped;
       const route = yield* routeOf(turn);
 
-      if (route.kind !== 'device') return yield* viaFallback(request, init);
+      if (route.kind !== 'device') return yield* new KinuError('unavailable', NO_MACHINE[provider]);
       const who = yield* attempt({ doing: `reading who asks for ${name}`, otherwise: 'unavailable' }, () => caller());
       const callId = crypto.randomUUID();
       yield* unstopped;
-      const stopped = stoppedBy(signal, () => hub.cancelModelRelay(who, callId), 'device');
+      const stopped = stoppedBy(signal, () => hub.cancelModelRelay(who, callId));
 
       const lostDevice = (failure: { readonly cause: unknown }): KinuError => {
         const lost = new KinuError('unavailable', `${route.label} went offline during this turn, and ${name} keeps one route per turn. Send again to continue`, failure);

@@ -29,6 +29,9 @@ export const MEMORY_MEMBER_EFFECTS = effects(MEMORY);
 
 export const TASKS_MEMBER_EFFECTS = effects(TASKS);
 
+/** An `ai` binding's one member, `env.<name>.run({ prompt, system?, tier? })`: a model call, never a tool's name. */
+export const AI_RUN_MEMBER = 'run';
+
 export const WEB_MEMBER_EFFECTS = effects(WEB);
 
 /** Per native operation, named by `op`. */

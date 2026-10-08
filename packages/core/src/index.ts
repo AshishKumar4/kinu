@@ -804,6 +804,8 @@ export {
 
 export { rasterImage, type RasterImage } from './utils/raster-image';
 
+export { mediaImage, mediaTokens, UNPRICED_MEDIA_TOKENS, type MediaPart } from './prompting/media-tokens';
+
 export { toolDescription } from './utils/tool-description';
 
 export { serverCompactor, isServerCompaction, latestCompaction, type ServerCompactor, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
@@ -907,7 +909,7 @@ export {
   type LandedSteerRow, type PendingSendRow,
 } from './orchestrator/inbox';
 
-export { SendStateSchema, type SendState } from './orchestrator/send-state';
+export { sendLanding, SendStateSchema, type SendRecord, type SendState } from './orchestrator/send-state';
 
 export {
   buildTranscript, extendTranscript, sealTranscript, segmentBySteers,

@@ -412,6 +412,14 @@ function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsToolAct
   return agentsActionsFor({ swarm: {}, swarms, team: deps.team, peers: deps.peers });
 }
 
+/** The owner's review calls on one hosted agent's plans, answered by its isolate. */
+export interface HostedPlanReviews {
+  active(): Promise<PlanReview | null>;
+  saveAnnotations(id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
+  dismiss(id: string, revision: number): Promise<PlanReviewResult>;
+  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanDecisionOutcome>;
+}
+
 /**
  * Ledgers that can owe work with no instant and nothing else to watch it. A live background job has its `bg:` fiber;
  * activation arms one ledger recovery pass even if that row expired, and a deferred job is timed (`nextOwedAt`).
@@ -700,9 +708,20 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.planActions.submit(edits, this.turnDrivingMetadata());
   }
 
+  /** An agent's window reviews that agent's plans, which live in its own isolate; the root's window, the root's. */
+  private windowPlans(window: string): Effect.Effect<HostedPlanReviews, KinuError> {
+    const plans = this.hostedPlanReviews(window);
+
+    return plans === null ? Effect.fail(new KinuError('missing', `${window} is not an agent of this workspace`)) : Effect.succeed(plans);
+  }
+
   @callable()
   async getActivePlanReview(): Promise<PlanReview | null> {
-    return this.planActions.active();
+    const window = this.addressedActor();
+
+    if (window === null) return this.planActions.active();
+
+    return await settle(Effect.flatMap(this.windowPlans(window), (plans) => Effect.promise(async () => await plans.active())));
   }
 
   @callable()
@@ -711,12 +730,20 @@ export abstract class ActorAgent extends Agent<Env> {
     revision: number,
     annotations: ReviewAnnotation[],
   ): Promise<PlanReviewResult> {
-    return this.planActions.saveAnnotations(id, revision, { value: annotations });
+    const window = this.addressedActor();
+
+    if (window === null) return this.planActions.saveAnnotations(id, revision, { value: annotations });
+
+    return await settle(Effect.flatMap(this.windowPlans(window), (plans) => Effect.promise(async () => await plans.saveAnnotations(id, revision, annotations))));
   }
 
   @callable()
   async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
-    return this.planActions.dismiss(id, revision, (prefix) => { this.chatLoop.stopIfRunning(prefix); });
+    const window = this.addressedActor();
+
+    if (window === null) return this.planActions.dismiss(id, revision, (prefix) => { this.chatLoop.stopIfRunning(prefix); });
+
+    return await settle(Effect.flatMap(this.windowPlans(window), (plans) => Effect.promise(async () => await plans.dismiss(id, revision))));
   }
 
   @callable()
@@ -726,7 +753,11 @@ export abstract class ActorAgent extends Agent<Env> {
     decision: PlanReviewDecision,
     feedback?: string,
   ): Promise<PlanDecisionOutcome> {
-    return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.host.enqueueTurn(turn));
+    const window = this.addressedActor();
+
+    if (window === null) return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.host.enqueueTurn(turn));
+
+    return await settle(Effect.flatMap(this.windowPlans(window), (plans) => Effect.promise(async () => await plans.decide(id, revision, decision, feedback))));
   }
 
   /** The orchestrator answers with the root budget; a facet actor answers from durable storage,
@@ -1824,6 +1855,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Null when this workspace hosts no such actor; only the workspace root knows its directory. */
   protected abstract hostedChatWire(actorId: string): ChatWire | null;
+
+  /** A hosted agent's plan reviews, in its own isolate; null for a name this workspace holds no agent under. */
+  protected abstract hostedPlanReviews(actorId: string): HostedPlanReviews | null;
 
   /** An owner's words to an agent, resolved once its chat has reserved them, as the root's `admit` is. */
   protected abstract hostedAdmit(actorId: string, input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<void>;

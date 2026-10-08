@@ -4,7 +4,7 @@ import { abortAllDurableObjects } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
 import { DEVICE_METHOD, DEVICE_RELAY, JsonValueSchema } from '@kinu.run/core';
-import { deviceRouteFetch } from '../../src/egress/codex-egress-route';
+import { deviceRouteFetch } from '../../src/egress/model-relay-route';
 
 it('a UserDO reset mid-relay reaches its caller as an interrupted device relay', async () => {
   const stub = env.DEVICE_LEDGER_PROBE.get(env.DEVICE_LEDGER_PROBE.idFromName('relay-eviction'));

@@ -91,9 +91,10 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = 8_500_000;
  *  b0de8580f, 351-362 MB on lane/memory-gap 9875bab49 once a tool's JSON Schema is built once and only a decode walks the
  *  SDK's message schema, 347-348 MB on a21347229 once a sealed step's own message skips it too, 360 MB in a whole-tier
  *  run; 316-321 MB on 3e0c5614c once a context revision touches only the entries it changed; 305-319 MB on e0f89081e
- *  once image-free prompts, file-free answers and an append-only step's cache pass untouched. The sampler's spread is
+ *  once image-free prompts, file-free answers and an append-only step's cache pass untouched; 301.8-303.7 MB on
+ *  4a6fee13c once replay normalization resumes per turn and inline payloads skip the runner. The sampler's spread is
  *  about 15 MB; past this row, a per-step rebuild came back. */
-export const LONG_TURN_ALLOCATED_BOUND_BYTES = 340_000_000;
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 325_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on

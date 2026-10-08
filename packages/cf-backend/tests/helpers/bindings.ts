@@ -62,7 +62,6 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
     MonitorDO: unreachableObjects('MonitorDO'),
     ControlPlaneDO: unreachableObjects('ControlPlaneDO'),
     KinuDevbox: unreachableObjects('KinuDevbox'),
-    CodexEgress: unreachableObjects('CodexEgress'),
     DeployRunDO: unreachableObjects('DeployRunDO'),
     AUTH_KV: unreachableKvNamespace('AUTH_KV'),
     BROWSER: unreachableBrowser(),

@@ -18,6 +18,9 @@ type Prompt = LanguageModelV4CallOptions['prompt'];
 
 const MINUTE_MS = 60_000;
 
+/** A clock far from a day's end: the block states the date, so a turn either side of midnight states a new one. */
+const NOON = Date.parse('2026-10-07T12:00:00.000Z');
+
 function chatRequest(id: string, text: string): string {
   return JSON.stringify({
     type: 'cf_agent_use_chat_request', id,
@@ -73,9 +76,8 @@ function messageOrder(prompt: Prompt): string[] {
   return prompt.map((message) => messageText(message).startsWith(DYNAMIC_CONTEXT_OPEN_TAG) ? 'dynamic' : `${message.role}:${messageText(message)}`);
 }
 
-/** Two turns, the object reactivated over the same storage in between, `gapMs` of clock apart. */
-async function acrossRestart(gapMs: number): Promise<{ readonly before: Prompt; readonly after: Prompt }> {
-  const start = Date.now();
+/** Two turns, the object reactivated over the same storage in between, `gapMs` of clock apart from `start`. */
+async function acrossRestart(gapMs: number, start = NOON): Promise<{ readonly before: Prompt; readonly after: Prompt }> {
   setSystemTime(new Date(start));
   const first = orchestratorHarness();
   await first.agent.activateActor();
@@ -100,6 +102,19 @@ describe('the dynamic context across an object restart', () => {
     ]);
     // As bytes: `toEqual` ignores key order and undefined fields, which the wire does not.
     expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
+  });
+
+  // 2026-10-08, armada runs straddling 00:00 UTC: the second turn stated the new date, which the case above read as a
+  // change it could not explain.
+  test('a turn after midnight states the new date in a block of its own, the prefix still byte-identical', async () => {
+    const { before, after } = await acrossRestart(MINUTE_MS, Date.parse('2026-10-07T23:59:59.000Z'));
+
+    expect(messageOrder(after)).toEqual([
+      expect.stringMatching(/^system:/u), 'dynamic', 'user:hello one', 'assistant:answer first', 'dynamic', 'user:hello two',
+    ]);
+    expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
+    expect(after.flatMap((message) => messageText(message).match(/Current date: \S+/u) ?? []))
+      .toEqual(['Current date: 2026-10-07', 'Current date: 2026-10-08']);
   });
 
   test('with the prompt cache expired, the stored blocks go and the state is stated once, before the new input', async () => {

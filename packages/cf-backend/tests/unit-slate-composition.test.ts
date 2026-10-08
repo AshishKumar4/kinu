@@ -633,7 +633,7 @@ test('a slate ai binding runs one model call under the caller authority, as a sl
   }));
 
   const call = (args: JsonValue[]) =>
-    actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'thinker', 'MODEL', { member: 'shell', args, invocation: null });
+    actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'thinker', 'MODEL', { member: 'run', args, invocation: null });
 
   const answer = await call([{ prompt: 'summarize', system: 'be brief' }]);
 

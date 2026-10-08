@@ -46,7 +46,6 @@
     "tests/workerd/user-socket-probe.ts",
     "tests/workerd/public-surface-probe.ts",
     "tests/workerd/hire-probe.ts",
-    "tests/workerd/codex-egress-probe.ts",
     "tests/workerd/agent-facet-probe.ts",
     "tests/workerd/delete-all-probe.ts",
     "tests/workerd/delete-all-shapes.ts",

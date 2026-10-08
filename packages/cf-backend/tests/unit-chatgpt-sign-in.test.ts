@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
-import { asFetchFunction, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, DEVICE_CHATGPT, type JsonValue, type UserCaller } from '@kinu.run/core';
+import { accountCredentialKey, asFetchFunction, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, DEVICE_CHATGPT, type JsonValue, type UserCaller } from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
@@ -84,7 +84,7 @@ function routes(harness: TestUserDO) {
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async userMcp_warmConnections() { return { servers: 0 }; },
     async listActiveWorkspaces() { return []; },
-    startChatGptPasteSignIn: (caller: UserCaller) => harness.userDO.startChatGptPasteSignIn(caller),
+    startChatGptPasteSignIn: (caller: UserCaller, account?: string) => harness.userDO.startChatGptPasteSignIn(caller, account),
     finishChatGptPasteSignIn: (caller: UserCaller, url: string) => harness.userDO.finishChatGptPasteSignIn(caller, url),
   });
 
@@ -94,7 +94,7 @@ function routes(harness: TestUserDO) {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
 
-  const call = async (path: string, body?: { url: string }) => {
+  const call = async (path: string, body?: { url: string } | { account: string }) => {
     const response = await serveFamily(userRoutes, { identity: IDENTITY, ctx: { waitUntil(promise: Promise<unknown>) { pending.push(promise); } } })(
       new Request(`https://kinu.example.com/api/user${path}`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}),
@@ -108,7 +108,7 @@ function routes(harness: TestUserDO) {
     return response;
   };
 
-  const start = async () => new URL(v.parse(v.object({ authorizeUrl: v.string(), redirectUri: v.string() }), await (await call('/chatgpt/paste/start')).json()).authorizeUrl);
+  const start = async (account?: string) => new URL(v.parse(v.object({ authorizeUrl: v.string(), redirectUri: v.string() }), await (await call('/chatgpt/paste/start', account === undefined ? undefined : { account })).json()).authorizeUrl);
 
   /** Where the browser ends after `authorize`, with the code and the issued client. */
   const returned = (authorize: URL, extra: Record<string, string> = {}) => `${CHATGPT_PASTE_REDIRECT}?${new URLSearchParams({
@@ -117,7 +117,7 @@ function routes(harness: TestUserDO) {
 
   const finish = async (url: string) => call('/chatgpt/paste/finish', { url });
 
-  return { start, returned, finish };
+  return { call, start, returned, finish };
 }
 
 const storedKeys = async (harness: TestUserDO) => (await harness.userDO.listCredentials(await testOwner())).map((c) => c.key);
@@ -154,6 +154,29 @@ describe('ChatGPT sign-in by paste-back', () => {
     const workspace = { workspaceToken: await provisionTestWorkspace(harness, 'jarvis') };
     expect(await harness.userDO.getAuthHeaders(workspace, CHATGPT_CRED_KEY)).toEqual({ Authorization: 'Bearer at-1' });
     expect((await harness.userDO.chatgptPlan(await testOwner())).account).toEqual({ email: 'owner@example.com' });
+    harness.close();
+  });
+
+  test('a sign-in named for an account seals that account\'s login and leaves the main one as it was', async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+    const named = accountCredentialKey(CHATGPT_CRED_KEY, 'reviewer');
+    const authorize = await web.start('reviewer');
+
+    openaiAuth(() => tokens(authorize, { access: 'at-reviewer' }));
+    expect(v.parse(FinishedSchema, await (await web.finish(web.returned(authorize))).json()).outcome).toBe('signed_in');
+    expect(await storedKeys(harness)).toEqual([named]);
+    const workspace = { workspaceToken: await provisionTestWorkspace(harness, 'jarvis') };
+    expect(await harness.userDO.getAuthHeaders(workspace, named)).toEqual({ Authorization: 'Bearer at-reviewer' });
+    harness.close();
+  });
+
+  test('a name that is not an account\'s is refused, and no sign-in is held for it', async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+
+    expect((await web.call('/chatgpt/paste/start', { account: 'Not An Account' })).status).toBe(400);
+    expect((await web.finish(`${CHATGPT_PASTE_REDIRECT}?code=code-1&state=any`)).status).toBe(404);
     harness.close();
   });
 

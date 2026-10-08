@@ -212,6 +212,11 @@ const HOSTED_WINDOW_RPC = {
   listPendingConsents: () => true,
   resolveDeviceConsent: () => true,
   getToolDescriptions: () => true,
+  // Each acts on the window's own agent: the call is routed by the window it arrives on.
+  getActivePlanReview: () => true,
+  savePlanReviewAnnotations: () => true,
+  dismissPlanReview: () => true,
+  decidePlanReview: () => true,
 } as const satisfies Partial<Record<AgentRpcMethod, HostedWindowCheck>>;
 
 export function hostedWindowCalls(method: string): method is keyof typeof HOSTED_WINDOW_RPC {

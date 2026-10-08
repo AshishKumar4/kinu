@@ -37,7 +37,9 @@ test('the member table is what the grant, the graph and the audit row read', () 
   expect(memberEffect('rpc', 'anything')).toBe('read');
   expect(memberEffect('rpc', 'dropTables')).toBe('read');
   expect(memberEffect('agent', 'send')).toBe('mutate');
-  expect(memberEffect('ai', 'shell')).toBe('mutate');
+  expect(memberEffect('agent', 'anything')).toBe('mutate');
+  expect(memberEffect('ai', 'run')).toBe('mutate');
+  expect(memberEffect('ai', 'anything')).toBe('mutate');
 });
 
 test('every operation a native tool offers is classified, and a share reads it as the tool does', () => {

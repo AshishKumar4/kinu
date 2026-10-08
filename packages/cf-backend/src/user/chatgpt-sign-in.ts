@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  DEVICE_CHATGPT, DeviceChatGptStatusSchema, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId, chatgptRegistrationOf, finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome, type DeviceChatGptStatus, nanoid, type UserCaller,
+  accountCredentialKey, DEVICE_CHATGPT, DeviceChatGptStatusSchema, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, MAIN_ACCOUNT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId, chatgptRegistrationOf, finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome, type DeviceChatGptStatus, nanoid, type UserCaller,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, KinuError, logged, renderThrownChain, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -19,7 +19,8 @@ const CHATGPT_REGISTRATION_KEY = 'chatgpt.registration';
 
 const ChatGptKnownRegistrationSchema = v.object({ registration: ChatGptRegistrationSchema, planDeclined: v.boolean() });
 
-const ChatGptPasteHeldSchema = v.object({ ...ChatGptPasteSignInSchema.entries, revision: v.number() });
+/** The paste-back in progress, and the credential it seals: `chatgpt.oauth@<account>`, the main one the bare key. */
+const ChatGptPasteHeldSchema = v.object({ ...ChatGptPasteSignInSchema.entries, key: v.string(), revision: v.number() });
 
 const ChatGptMachineSignInSchema = v.variant('state', [
   v.object({ state: v.literal('waiting_for_machine'), attempt: v.string() }),
@@ -165,9 +166,14 @@ export class UserChatGptSignIn {
     this.host.ctx.storage.kv.delete(CHATGPT_PASTE_SIGN_IN_KEY);
   }
 
-  /** Paste-back sign-in: the account itself holds the login, so no machine is needed. The PKCE verifier stays here. */
-  async startChatGptPasteSignIn(caller: UserCaller): Promise<{ readonly authorizeUrl: string; readonly redirectUri: string }> {
+  /**
+   * Paste-back sign-in: the account itself holds the login, so no machine is needed. The PKCE verifier stays here.
+   * `account` names the login it seals, as the Codex device sign-in names its own.
+   */
+  async startChatGptPasteSignIn(caller: UserCaller, account: string = MAIN_ACCOUNT): Promise<{ readonly authorizeUrl: string; readonly redirectUri: string }> {
     await this.host.requireTier(caller, 'subscription_auth');
+    // Refuses a name that is not an account's before a sign-in is held for it.
+    const key = accountCredentialKey(CHATGPT_CRED_KEY, account);
     const known = v.safeParse(ChatGptKnownRegistrationSchema, this.host.ctx.storage.kv.get(CHATGPT_REGISTRATION_KEY));
 
     const { url, held } = await startChatGptPasteSignIn({
@@ -176,7 +182,7 @@ export class UserChatGptSignIn {
       consent: known.success && known.output.planDeclined,
     });
 
-    this.host.ctx.storage.kv.put(CHATGPT_PASTE_SIGN_IN_KEY, { ...held, revision: this.host.vault.credentialRevision(CHATGPT_CRED_KEY) });
+    this.host.ctx.storage.kv.put(CHATGPT_PASTE_SIGN_IN_KEY, { ...held, key, revision: this.host.vault.credentialRevision(key) });
 
     return { authorizeUrl: url, redirectUri: CHATGPT_PASTE_REDIRECT };
   }
@@ -196,7 +202,7 @@ export class UserChatGptSignIn {
       const finished = yield* attemptInItsWords('denied', () => finishChatGptPasteSignIn(held, returned));
 
       const sealed = finished.outcome === 'signed_in'
-        ? yield* attempt({ doing: 'sealing the ChatGPT credential', otherwise: 'io' }, () => this.host.vault.sealCredential(CHATGPT_CRED_KEY, finished.credential))
+        ? yield* attempt({ doing: 'sealing the ChatGPT credential', otherwise: 'io' }, () => this.host.vault.sealCredential(held.key, finished.credential))
         : null;
 
       const current = v.safeParse(ChatGptPasteHeldSchema, this.host.ctx.storage.kv.get(CHATGPT_PASTE_SIGN_IN_KEY));
@@ -213,7 +219,7 @@ export class UserChatGptSignIn {
       const { registration } = finished;
 
       if (sealed !== null && finished.outcome === 'signed_in'
-        && !this.host.vault.commitCredential({ key: CHATGPT_CRED_KEY, kind: finished.credential.kind, sealed, expectRevision: held.revision })) {
+        && !this.host.vault.commitCredential({ key: held.key, kind: finished.credential.kind, sealed, expectRevision: held.revision })) {
         return yield* Effect.fail(superseded);
       }
 

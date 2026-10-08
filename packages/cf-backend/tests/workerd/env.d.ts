@@ -8,7 +8,6 @@ import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
 import type { SpendProbeDO } from './spend-probe';
 import type { OperationCost } from './sql-meter';
-import type { HostileCalls, ProbeRecords } from './codex-egress-records';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
 import type { DeviceOutputHubProbeDO, DeviceOutputWorkspaceProbeDO } from './device-output-probe';
 import type { DbCapabilityProbeDO } from './db-capability-probe';
@@ -170,15 +169,6 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
   openDeviceTerminal(): Promise<void>;
 }
 
-interface CodexEgressProbeRpc extends Rpc.DurableObjectBranded, HostileCalls {
-  forward(ownerUserId: string, callId: string, request: Request): Promise<Response>;
-  cancel(callId: string): void;
-}
-
-interface CodexEgressRecordsRpc extends Rpc.WorkerEntrypointBranded {
-  read(id: string): ProbeRecords;
-}
-
 /** The production UserDO's device chokepoint, with the identities a test cannot mint from outside. */
 interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
   fetch(input: string, init?: RequestInit): Promise<Response>;
@@ -204,6 +194,8 @@ interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
 
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
   setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
+  submitChildPlan(workspace: string, name: string, edits: import('@kinu.run/core').PlanEdit[]): Promise<import('@kinu.run/core').PlanReviewResult>;
+  childLines(workspace: string, name: string): Promise<string[]>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
   modelSaw(workspace: string, texts: readonly string[]): Promise<void>;
@@ -447,8 +439,6 @@ declare global {
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
       HIRE_PROBE: DurableObjectNamespace<HireProbeRpc>;
       HIRE_WORKSPACE: DurableObjectNamespace<import('agents').Agent<Cloudflare.Env>>;
-      CODEX_EGRESS_PROBE: DurableObjectNamespace<CodexEgressProbeRpc>;
-      CODEX_EGRESS_RECORDS: Service<CodexEgressRecordsRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       DELETE_ALL_PROBE: DurableObjectNamespace<import('./delete-all-probe').DeleteAllProbeDO>;

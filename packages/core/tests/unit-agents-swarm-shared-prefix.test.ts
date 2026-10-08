@@ -16,6 +16,9 @@ import {
 } from '../src/index';
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import type { JsonObject } from '../src/utils/json';
+import { sharedPrefix } from '../src/strategy/swarm-expansion';
+import type { TreeNode } from '../src/strategy/swarm-tree';
+import { createRecordingLogger } from '../src/obs/index';
 
 const MARKER = 'COMPACTED-PREFIX-MARKER';
 
@@ -111,6 +114,33 @@ function forkCall(branches: number) {
     },
   };
 }
+
+describe('the inherited prefix\'s threshold', () => {
+  /** A 64x64 PNG header over 540 kB: 180k tokens by its base64's length, a handful by any image model's rule. */
+  const SCREENSHOT = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 64, 0, 0, 0, 64]), Buffer.alloc(540_000, 1)]).toString('base64');
+
+  test('is priced for the nodes\' model: a small screenshot of heavy bytes is no reason to compact', async () => {
+    const parent: TreeNode = {
+      id: 'branch', parentId: null, depth: 0, artifact: null, measurement: null, score: null,
+      pareto: null, proposal: null, proposalError: null, granted: null, conclusion: null,
+      transcript: [{ role: 'user', content: [{ type: 'text', text: 'what does this page show?' }, { type: 'image', image: SCREENSHOT, mediaType: 'image/png' }] }],
+      compacted: null, aggregated: [],
+    };
+
+    const compacted: (readonly ModelMessage[])[] = [];
+
+    const kept = await sharedPrefix({
+      target: { model: 'anthropic/claude-sonnet-4-5', window: 200_000 }, parent, log: createRecordingLogger(), preset: 'custom',
+      compactShared: async (messages) => {
+        compacted.push(messages);
+
+        return [];
+      },
+    });
+
+    expect({ kept: kept === parent.transcript, compacted: compacted.length }).toEqual({ kept: true, compacted: 0 });
+  });
+});
 
 describe('compactShared wiring through runSwarmAction', () => {
   test('context:inherit carries the caller conversation through the agents tool bridge', async () => {

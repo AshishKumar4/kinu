@@ -1,13 +1,12 @@
-// A Codex turn on the real hosted root: the route pin reads the actor's live turn through the production seam
-// (the root's ActorSession), and a profile-lane call made inside that turn (judge, fast, advisor) follows it.
+// A Codex turn on the real hosted root: the owner's connected machine carries it, the route pin reads the actor's live
+// turn through the production seam (the root's ActorSession), and with no machine the turn is refused in so many words.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { CODEX_CRED_KEY, DEVICE_RELAY, EgressCalls, asFetchFunction, requestUrl, type JsonValue } from '@kinu.run/core';
+import { CODEX_CRED_KEY, DEVICE_RELAY, asFetchFunction, requestUrl, type JsonValue } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import {
-  agentSql, catalogTurn, driveUntil, hostedSubordinateHarness, makeEnv, orchestratorHarness, sideLane, wakeForDelegatedTask,
+  agentSql, catalogTurn, driveUntil, hostedSubordinateHarness, makeEnv, orchestratorHarness, wakeForDelegatedTask,
 } from './helpers/actor-harness';
-import type { CodexEgressNamespace } from '../src/egress/codex-egress-route';
 
 const OWNER_USER_ID = 'fedcba9876543210fedcba9876543210';
 
@@ -52,14 +51,12 @@ interface CodexWorkspace {
   readonly user: TestUserDO;
   readonly actor: ReturnType<typeof orchestratorHarness>;
   readonly relayed: string[];
-  readonly forwarded: string[];
   readonly connectMachine: (label: string) => Promise<string>;
 }
 
-/** A hosted root routing every tier to Codex; `duringFirstCall` runs inside the first turn's first chatgpt.com call. */
-async function codexWorkspace(duringFirstCall: (workspace: CodexWorkspace) => Promise<void> = async () => {}): Promise<CodexWorkspace> {
+/** A hosted root routing every tier to Codex. */
+async function codexWorkspace(): Promise<CodexWorkspace> {
   const relayed: string[] = [];
-  const forwarded: string[] = [];
   let user: TestUserDO | null = null;
 
   user = createTestUserDO({
@@ -81,7 +78,6 @@ async function codexWorkspace(duringFirstCall: (workspace: CodexWorkspace) => Pr
   await opened.userDO.setCredential(owner, CODEX_CRED_KEY, { kind: 'oauth', accessToken: ACCESS, refreshToken: 'refresh-never-used' });
   const token = await provisionTestWorkspace(opened, WORKSPACE, 'Codex turn');
   const world = { userDO: opened.userDO, workspace: WORKSPACE, ownerUserId: OWNER_USER_ID };
-  const calls = new EgressCalls();
 
   const connectMachine = async (label: string): Promise<string> => {
     const { deviceId } = await opened.userDO.registerDevice(owner, label);
@@ -90,61 +86,40 @@ async function codexWorkspace(duringFirstCall: (workspace: CodexWorkspace) => Pr
     return deviceId;
   };
 
-  let workspace: CodexWorkspace | null = null;
-
-  const container: CodexEgressNamespace = {
-    idFromName: (name) => ({ name, toString: () => name, equals: (other: DurableObjectId) => other.toString() === name }),
-    get: () => ({
-      forward: async (_owner, callId, request) => {
-        if (request.method === 'GET') return Response.json({ models: [] });
-        forwarded.push(request.url);
-        const body = await request.text();
-
-        if (forwarded.length === 1 && workspace !== null) await duringFirstCall(workspace);
-
-        return calls.run(callId, { start: async () => {}, fetch: async () => answer(body, 'from the relay') });
-      },
-      cancel: async (callId) => { calls.cancel(callId); },
-    }),
-  };
-
-  const actor = orchestratorHarness(undefined, world, Object.assign(makeEnv(undefined, undefined, world), { CodexEgress: container }));
+  const actor = orchestratorHarness(undefined, world, makeEnv(undefined, undefined, world));
   actor.agent.harnessHoldsCapability(token);
   actor.agent.harnessInstallCatalog({ tiers: { default: { model: CODEX_MODEL }, deep: { model: CODEX_MODEL }, fast: { model: CODEX_MODEL } }, availableModels: [CODEX_MODEL] });
-  workspace = { user: opened, actor, relayed, forwarded, connectMachine };
 
-  return workspace;
+  return { user: opened, actor, relayed, connectMachine };
 }
 
-test('a machine that connects during a Codex turn waits for the next turn, and the turn\'s own side calls stay with it', async () => {
-  let sideAnswer = '';
+/** Why each of the root's turns ended, oldest first. */
+function turnErrors(actor: CodexWorkspace['actor']): string[] {
+  return actor.db.query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'run_end' ORDER BY rowid").all()
+    .map((row) => v.parse(v.object({ error: v.optional(v.string()) }), JSON.parse(row.payload)).error ?? '');
+}
 
-  const { user, actor, relayed, forwarded } = await codexWorkspace(async ({ actor: during, connectMachine }) => {
-    await connectMachine('studio');
-    sideAnswer = await sideLane(during.agent).complete('judge this');
-  });
+test('a Codex turn with no machine connected is refused in so many words, and the next turn goes out from one', async () => {
+  const { user, actor, relayed, connectMachine } = await codexWorkspace();
 
   await catalogTurn(actor.agent, 'say hello');
 
-  expect(sideAnswer).toBe('from the relay');
-  expect(forwarded).toHaveLength(2);
+  expect(turnErrors(actor).at(-1)).toContain('Codex calls from kinu.run go through your connected machine; connect one, or pick ChatGPT (Sign in with ChatGPT)');
   expect(relayed).toEqual([]);
 
+  await connectMachine('studio');
   await catalogTurn(actor.agent, 'again');
-  // The next turn goes out from the machine.
-  expect(relayed.filter((url) => url.endsWith('/codex/responses'))).toHaveLength(1);
+  expect(relayed.filter((url) => url.endsWith('/codex/responses')).length).toBeGreaterThan(0);
+  expect(turnErrors(actor).at(-1)).toBe('');
   await user.joinFibers();
   user.close();
 });
 
-test('the Activity tab names the route of the newest Codex step: the machine by its current name, or the container', async () => {
+test('the Activity tab names the machine of the newest Codex step by its current name', async () => {
   const { user, actor, connectMachine } = await codexWorkspace();
 
-  await catalogTurn(actor.agent, 'say hello');
-  expect((await actor.agent.getActivitySnapshot()).latest).toMatchObject({ modelId: 'gpt-5.5', route: { kind: 'container' } });
-
   const deviceId = await connectMachine('studio');
-  await catalogTurn(actor.agent, 'again');
+  await catalogTurn(actor.agent, 'say hello');
   expect((await actor.agent.getActivitySnapshot()).latest).toMatchObject({ modelId: 'gpt-5.5', route: { kind: 'device', id: deviceId, name: 'studio' } });
 
   // Read at snapshot time, and asking no machine: a slow one cannot hold the tab up.
@@ -157,8 +132,9 @@ test('the Activity tab names the route of the newest Codex step: the machine by 
   user.close();
 });
 
-test("a hired agent's Codex call from its own isolate goes out through the owner's egress container", async () => {
-  const { user, actor, forwarded } = await codexWorkspace();
+test("a hired agent's Codex call from its own isolate goes out through the owner's machine", async () => {
+  const { user, actor, relayed, connectMachine } = await codexWorkspace();
+  await connectMachine('studio');
   const hire = await hostedSubordinateHarness(actor, { name: 'coder', displayName: 'Coder', nameOrigin: 'user', mission: 'code' });
   const hireId = hire.actor.handle.actorId;
 
@@ -168,7 +144,7 @@ test("a hired agent's Codex call from its own isolate goes out through the owner
   await wakeForDelegatedTask(actor, hireId, 'Write the thing.');
   await driveUntil(actor, "the hire's turn never ended", () => ended().length > 0);
 
-  expect(forwarded.filter((url) => url.endsWith('/codex/responses'))).toHaveLength(1);
+  expect(relayed.filter((url) => url.endsWith('/codex/responses'))).toHaveLength(1);
   expect(ended().join('')).not.toContain('unexpected network call');
   await user.joinFibers();
   user.close();

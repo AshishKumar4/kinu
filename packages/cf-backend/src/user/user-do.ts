@@ -519,8 +519,8 @@ export class UserDO extends Agent<Env> {
     return this.chatgpt.cancelChatGptSignIn(caller);
   }
 
-  startChatGptPasteSignIn(caller: UserCaller): ReturnType<UserChatGptSignIn['startChatGptPasteSignIn']> {
-    return this.chatgpt.startChatGptPasteSignIn(caller);
+  startChatGptPasteSignIn(caller: UserCaller, account?: string): ReturnType<UserChatGptSignIn['startChatGptPasteSignIn']> {
+    return this.chatgpt.startChatGptPasteSignIn(caller, account);
   }
 
   finishChatGptPasteSignIn(caller: UserCaller, returned: string): ReturnType<UserChatGptSignIn['finishChatGptPasteSignIn']> {
