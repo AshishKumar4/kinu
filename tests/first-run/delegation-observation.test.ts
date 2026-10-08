@@ -29,7 +29,7 @@ const taskHire = call('task', 4, { op: 'hire', lifetime: 'task', role: 'task', m
   status: 'working', agent: 'ask-task-ymhu3n', lifetime: 'task', role: 'task', answer: 'Working.',
 });
 
-const durableHire = call('roster', 4, { op: 'assign' }, { name: 'task-9j4odl' });
+const durableHire = call('roster', 4, { op: 'hire' }, { name: 'task-9j4odl' });
 
 const roster = call('roster', 10, { op: 'list' }, { subordinates: [{ name: 'task-9j4odl' }] });
 

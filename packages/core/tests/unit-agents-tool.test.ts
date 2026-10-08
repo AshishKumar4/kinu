@@ -173,7 +173,7 @@ describe('agents tool — registration and dep-gating', () => {
     expect(opsOf({ value: t.inputSchema })).toEqual(AGENTS_OPS.filter((op) => op !== 'swarm'));
     expect(JSON.stringify({ description: t.description, schema: t.inputSchema })).not.toContain('preset');
     await expect(t.execute({ op: 'swarm', task: 'rank the three caching designs', preset: 'ideate' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('unknown op "swarm"') });
+      .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('"Beta: swarms"') });
   });
 
   test('with it off, two accounts\' tools are byte-identical, whatever roles and tiers their catalogs hold', () => {

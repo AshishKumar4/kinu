@@ -502,14 +502,18 @@ export {
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
 
-export { createStateCodemodeProvider } from './tools/state-codemode';
+export { createStateCodemodeProvider } from './tools/state-operations';
+
+export { DB, type AppColumnType } from './operations/db';
+
+export { STATE } from './operations/state';
 
 export { initCodemodeStateTable, createProgramStateStore, type ProgramStateStore } from './identity/program-state';
 
 export {
   APP_TABLE_SCOPES, APP_MUTATIONS,
   initAgentDataTables, createAppDataStore, createDbCodemodeProvider,
-  type AppColumn, type AppColumnType, type AppTableScope, type AppMutation,
+  type AppColumn, type AppTableScope, type AppMutation,
   type AppTableSpec, type AppTableRecord, type AppPredicate, type AppWhere,
   type AppSelect, type AppOp, type AppOpResult, type AppRow,
   type AppDataStore, type AppDataStoreDeps, type DbOpRecord,

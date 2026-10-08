@@ -177,7 +177,7 @@ describe('Plan mode tool lifecycle', () => {
       edits: [{ start: 4, end: 4, content: 'Second, with tests' }],
     });
 
-    expect(revised).toMatchObject({ ok: true, revision: 2 });
+    expect(revised).toMatchObject({ revision: 2, status: 'pending' });
     await turns.settle({ messageId: 'a-revised', text: 'revised' });
     expect(await requesting).toMatchObject({ ok: true, queued: true });
     expect(await agent.getActivePlanReview()).toMatchObject({ revision: 2, content: '# Plan\n\nFirst\nSecond, with tests' });

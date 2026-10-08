@@ -402,14 +402,14 @@ test('native tool bindings use the caller file plane and lose reach immediately 
   expect(await call()).toMatchObject({ ok: true, value: expect.stringContaining('root note') });
   const memory = (asCaller: SlateCaller, member: string, args: JsonValue[]) => parent.agent.slateBindingCallAs(asCaller, 'native-reader', 'NOTES', { member, args, invocation: null });
   expect(await memory(caller, 'remember', ['slate-key', 'child fact'])).toMatchObject({ ok: true, value: { key: 'slate-key' } });
-  expect(await memory(ROOT_SLATE_CALLER, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: { found: false } });
+  expect(await memory(ROOT_SLATE_CALLER, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: null });
   parent.agent.harnessInstallCatalog({
     roles: { scribe: { description: 'Only memory.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
     tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
   });
   child.actor.stores.config.setRoleSelection('scribe');
   expect(await call()).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
-  expect(await memory(caller, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: { found: true, value: 'child fact' } });
+  expect(await memory(caller, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: { key: 'slate-key', value: 'child fact' } });
   child.actor.stores.config.setRoleSelection('task');
   expect(await call()).toMatchObject({ ok: true, value: expect.stringContaining('root note') });
 });

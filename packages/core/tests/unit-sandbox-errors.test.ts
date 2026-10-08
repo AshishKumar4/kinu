@@ -19,7 +19,7 @@ import { createInlineExecutor, createNimbusWorkspaceExecutor, type InlineExecuto
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import { createParentExecutor } from '../src/execution/parent';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
-import { createStateCodemodeProvider } from '../src/tools/state-codemode';
+import { createStateCodemodeProvider } from '../src/tools/state-operations';
 import { createAgentsCodemodeProvider } from '../src/delegation/agents-operations';
 import { createReportCodemodeProvider } from '../src/tools/report-operations';
 import { createMemoryCodemodeProvider } from '../src/tools/memory-operations';

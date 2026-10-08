@@ -239,7 +239,7 @@ describe('the honest read, scanned rather than made resident', () => {
   test('a leading blank line does not make the next line look free', async () => {
     // The joining newline costs a char per line after the first; at this cap the rule keeps 2 lines, not 3.
     const rows = ['', ...Array.from({ length: 29 }, (_, i) => String.fromCharCode(97 + (i % 26)).repeat(10))];
-    const blank = await slice(rows.join('\n'), { maxChars: 121 });
+    const blank = await slice(rows.join('\n'), { maxChars: 117 });
 
     expect(blank.output.split('\n\n[')[0]).toBe('\naaaaaaaaaa');
     expect(blank.last).toBe(2);
@@ -590,7 +590,7 @@ describe('file tool', () => {
     const { call } = toolFor(vfs);
     await call({ op: 'read', path: 'a.ts' });
     const result = call({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] });
-    await expect(result).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('edits[0].new_text') });
+    await expect(result).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('"edits.0.new_text" is required') });
     expect(vfs.files.get('a.ts')).toBe('alpha\n');
     expect(await call({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha', new_text: '' }] }))
       .toMatchObject({ path: 'a.ts', applied: [expect.objectContaining({ line: expect.any(Number) })] });

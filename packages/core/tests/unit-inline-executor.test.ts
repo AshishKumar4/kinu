@@ -8,13 +8,13 @@ import { createTestRuntime } from './helpers';
 import { createInlineExecutor, type InlineExecutorDeps } from '../src/tools/inline-executor';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
-import { createFileTool } from '../src/tools/file-operations';
+import { createFileCodemodeProvider, createFileTool } from '../src/tools/file-operations';
 
 type FileToolInput = JsonObject & { readonly op: string };
 
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
-import { toolExecute } from '@kinu.run/test-utils';
+import { present, toolExecute } from '@kinu.run/test-utils';
 import type { JsonValue, JsonObject } from '../src/utils/json';
 import type { CraftedTool } from '../src/types/craft';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
@@ -34,10 +34,6 @@ const ToolNamedSchema = v.object({ ok: v.boolean(), name: v.string() });
 const ToolActionSchema = v.object({ ok: v.boolean(), action: v.string() });
 
 const ToolOkSchema = v.object({ ok: v.boolean() });
-
-const FileSuccessSchema = v.object({ ok: v.boolean() });
-
-const ErrorResultSchema = v.object({ error: v.string() });
 
 const VfsMessageSchema = v.object({ message: v.string(), code: v.string() });
 
@@ -303,61 +299,43 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
   });
 });
 
-/** workspace.editFile shares the native `file` tool's read-before-write gate and, with a ledger thunk, its state. */
-describe('workspace.editFile — the same gate the native `file` tool enforces', () => {
-  test('refuses to edit a file never read or written in this scope', async () => {
-    const { rt } = createTestRuntime();
-    await writeText(rt.storage.vfs, 'blind.md', 'original');
-    const exec = buildExec(rt);
+/** workspace.* and file.* share one read-before-write ledger when the turn hands both the same thunk. */
+describe('workspace.* and file.* share the read-before-write gate', () => {
+  function sharedScope(rt: ReturnType<typeof createTestRuntime>['rt']) {
+    const ledger = new TurnFileLedger();
 
-    const result = v.parse(ErrorResultSchema, await exec.tools.editFile.execute('blind.md', [
-      { old_text: 'original', new_text: 'changed' },
-    ]));
+    const exec = createInlineExecutor({
+      filesOwner: 'agent',
+      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+      sql: rt.storage.sql,
+      ledger: () => ledger,
+    });
 
-    expect(result.error).toContain('has not been read here yet');
-    expect(await readText(rt.storage.vfs, 'blind.md')).toBe('original');
-  });
+    const file = createFileCodemodeProvider(() => ({
+      home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory,
+    }));
 
-  test('readFile then editFile: the read counts, the edit lands', async () => {
+    return { exec, edit: present(file.tools.edit, 'file.edit').execute };
+  }
+
+  test('workspace.readFile then file.edit: the read counts, the edit lands', async () => {
     const { rt } = createTestRuntime();
     await writeText(rt.storage.vfs, 'notes.md', 'Hello world');
-    const exec = buildExec(rt);
+    const { exec, edit } = sharedScope(rt);
     await exec.tools.readFile.execute('notes.md');
 
-    const result = v.parse(FileSuccessSchema, await exec.tools.editFile.execute('notes.md', [
-      { old_text: 'world', new_text: 'kinu' },
-    ]));
-
-    expect(result.ok).toBe(true);
+    expect(await edit('notes.md', [{ old_text: 'world', new_text: 'kinu' }])).toMatchObject({ path: 'notes.md' });
     expect(await readText(rt.storage.vfs, 'notes.md')).toBe('Hello kinu');
   });
 
-  test('writeFile then editFile in the same script: the write counts as having read it', async () => {
+  test('workspace.writeFile then file.edit in the same program: the write counts as having read it', async () => {
     const { rt } = createTestRuntime();
-    const exec = buildExec(rt);
+    const { exec, edit } = sharedScope(rt);
     await exec.tools.writeFile.execute('fresh.md', 'v1 content');
 
-    const result = v.parse(FileSuccessSchema, await exec.tools.editFile.execute('fresh.md', [
-      { old_text: 'v1', new_text: 'v2' },
-    ]));
-
-    expect(result.ok).toBe(true);
+    expect(await edit('fresh.md', [{ old_text: 'v1', new_text: 'v2' }])).toMatchObject({ path: 'fresh.md' });
     expect(await readText(rt.storage.vfs, 'fresh.md')).toBe('v2 content');
-  });
-
-  test('refuses a non-unique old_text, touching nothing', async () => {
-    const { rt } = createTestRuntime();
-    const exec = buildExec(rt);
-    await exec.tools.writeFile.execute('dup.md', 'foo\nfoo\n');
-
-    const result = v.parse(ErrorResultSchema, await exec.tools.editFile.execute('dup.md', [
-      { old_text: 'foo', new_text: 'bar' },
-    ]));
-
-    // Naming anchor, count and file lets the model widen the anchor on retry.
-    expect(result.error).toContain('appears 2 times in dup.md');
-    expect(result.error).toContain('ambiguous');
-    expect(await readText(rt.storage.vfs, 'dup.md')).toBe('foo\nfoo\n');
   });
 
   test('a shared ledger thunk makes workspace.readFile and the native `file` tool see the SAME read state', async () => {
@@ -377,12 +355,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     const fileTool = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
 
-    const result = v.parse(FileSuccessSchema, await execute({
-      op: 'edit', path: 'shared.md',
-      edits: [{ old_text: 'shared', new_text: 'REPLACED' }],
-    }));
-
-    expect(result.ok).toBe(true);
+    expect(await execute({ op: 'edit', path: 'shared.md', edits: [{ old_text: 'shared', new_text: 'REPLACED' }] })).toMatchObject({ path: 'shared.md' });
     expect(await readText(rt.storage.vfs, 'shared.md')).toBe('REPLACED content');
   });
 

@@ -57,8 +57,24 @@ export function failedToolOutcome(input: Parameters<typeof renderThrownChain>[0]
 /** A namespace call returns typed operation refusals for authored code to handle. */
 export function branchableToolCall<Result>(call: () => Promise<Result>) {
   return settle(Effect.tryPromise({ try: call, catch: (cause) => ({ cause }) }).pipe(
-    Effect.catch((failed) => Effect.succeed({ ...failedToolOutcome(failed), error: renderThrownChain(failed) })),
+    Effect.catch((failed) => Effect.succeed({ ...failedToolOutcome(failed), error: renderThrownChain(failed), ...failedIndexOf(failed) })),
   ));
+}
+
+const FailedIndexSchema = v.object({ failedIndex: v.number() });
+
+/** A refused batch's failed operation (db.batch), part of the refusal a program branches on. */
+function failedIndexOf(input: { readonly cause: unknown }) {
+  const seen = new Set<Error>();
+
+  for (let error = input.cause; error instanceof Error && !seen.has(error); error = error.cause) {
+    seen.add(error);
+    const indexed = v.safeParse(FailedIndexSchema, error);
+
+    if (indexed.success) return { failedIndex: indexed.output.failedIndex };
+  }
+
+  return undefined;
 }
 
 interface ProgramInvocation {

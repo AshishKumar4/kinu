@@ -83,7 +83,7 @@ describe('db.* in the local codemode sandbox', () => {
         await db.update('findings', { severity: 5 }, { id: 'f1' });
         return {
           rows: await db.select('findings', { orderBy: [{ column: 'id' }] }),
-          high: await db.count('findings', { severity: { op: '>=', value: 4 } }),
+          high: await db.count('findings', { where: { severity: { op: '>=', value: 4 } } }),
           tables: (await db.listTables()).map((table) => table.name + ':' + table.scope),
         };
       `);
