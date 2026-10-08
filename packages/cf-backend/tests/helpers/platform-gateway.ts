@@ -126,6 +126,11 @@ export function toolCallCompletion(run: RecordedGatewayRun, call: GatewayToolCal
   return assistantCompletion(run, null, [{ id, name: call.tool, arguments: JSON.stringify(call.args) }]);
 }
 
+/** Words to the reader and a tool call in one step, as a model says what it is about to do and then does it. */
+export function textThenToolCompletion(run: RecordedGatewayRun, text: string, call: GatewayToolCall, id: string): Response {
+  return assistantCompletion(run, text, [{ id, name: call.tool, arguments: JSON.stringify(call.args) }]);
+}
+
 const WireCallSchema = v.object({ id: v.string(), function: v.object({ name: v.string(), arguments: v.string() }) });
 
 const WireTextPartSchema = v.object({ type: v.literal('text'), text: v.string() });

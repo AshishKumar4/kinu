@@ -41,21 +41,44 @@ export type DiffAnchor =
     readonly baseline: string;
   };
 
-export interface ReviewAnnotation {
+interface NoteFields {
   readonly id: string;
+  readonly createdA: number;
+  /** Set when the note was carried into a later revision: the revision it was written on. A carried note is read-only. */
+  readonly revision?: number;
+}
+
+/** A comment on, or a removal of, a passage of the plan (or of a diff, through `anchor`). */
+export interface PassageNote extends NoteFields {
+  readonly type: 'COMMENT' | 'DELETION';
   readonly blockId: string;
   readonly startOffset: number;
   readonly endOffset: number;
-  readonly type: 'DELETION' | 'COMMENT' | 'GLOBAL_COMMENT';
-  readonly text?: string;
   readonly originalText: string;
-  readonly createdA: number;
+  readonly text?: string;
   readonly author?: string;
   readonly startMeta?: PlanAnnotationTextPosition;
   readonly endMeta?: PlanAnnotationTextPosition;
   readonly mathTargets?: readonly PlanAnnotationMathTarget[];
   readonly anchor?: DiffAnchor;
 }
+
+/** A comment on the whole plan, or on all of a change-set: no block, offsets or quote. */
+export interface GeneralNote extends NoteFields {
+  readonly type: 'GLOBAL_COMMENT';
+  readonly text: string;
+  readonly author?: string;
+}
+
+/** A reply in a note's thread; `inReplyTo` names a note in the same list that is not itself a reply. */
+export interface NoteReply extends NoteFields {
+  readonly type: 'REPLY';
+  readonly inReplyTo: string;
+  readonly text: string;
+  readonly author: 'owner' | 'agent';
+}
+
+export type ReviewAnnotation = PassageNote | GeneralNote | NoteReply;
 
 export interface PlanReview {
   readonly id: string;
@@ -81,4 +104,8 @@ export type PlanDecisionOutcome =
 
 export interface SubmitPlanToolDeps {
   readonly submit: (edits: readonly PlanEdit[]) => PlanReviewResult | Promise<PlanReviewResult>;
+}
+
+export interface ReplyToCommentToolDeps {
+  readonly reply: (comment: string, text: string) => PlanReviewResult | Promise<PlanReviewResult>;
 }

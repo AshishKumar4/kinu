@@ -392,9 +392,10 @@ no containment. The remaining checks limit the longer blast radius that
 persistence creates. `SURFACE_CRITERIA` in `core/src/safety/misevolution.ts`
 owns this split, and `core/src/tools/inline-executor.ts` applies it.
 
-Plan mode keeps ordinary tools but removes Release structurally:
-`SUBMIT_PLAN_TOOL` exists only on Plan turns (`core/src/tools/registry.ts`,
-added by `buildBuiltinTools`) and `release` is codemode-only (`TOOL_REACH`).
+Plan mode keeps ordinary tools but removes Release structurally: `release` is
+codemode-only (`TOOL_REACH`). `SUBMIT_PLAN_TOOL` (`core/src/tools/registry.ts`,
+added by `buildBuiltinTools`) is wired on an owner's root turn in either mode, and
+`REPLY_TO_COMMENT_TOOL` only while a review the owner sent back awaits answers.
 `WorkMode` (`plan` or `build`) propagates to delegation, jobs, and exploration.
 A job's wake carries `kinuMode: job.workMode` (`core/src/jobs/runner.ts`), and
 `workModeForTurnMetadata` (`core/src/prompting/surface.ts`) reads it, so a

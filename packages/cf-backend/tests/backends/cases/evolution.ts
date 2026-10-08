@@ -135,11 +135,19 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       // Annotations are owner input over the wire: a malformed one is refused, not stored.
       const malformed = JSON.parse('[{"id":"a-1","blockId":"b-1","startOffset":0,"endOffset":4,"type":"COMMENT"}]');
       expect(await surface.savePlanReviewAnnotations(id, revision, malformed)).toMatchObject({
-        ok: false, error: 'annotation 0 has invalid text or author fields',
+        ok: false, error: expect.stringContaining('annotation 0: '),
       });
 
-      expect(await surface.decidePlanReview(id, revision, 'request_changes', 'smaller steps')).toMatchObject({
-        ok: true, queued: true, plan: { status: 'changes_requested', feedback: 'smaller steps', handoffAccepted: true },
+      // A comment on a passage and one on the whole plan, which has no block to sit on, are both sent.
+      expect(await surface.savePlanReviewAnnotations(id, revision, [
+        { id: 'a-1', type: 'COMMENT', blockId: 'b-1', startOffset: 3, endOffset: 7, originalText: 'Ship', text: 'Which branch?', createdA: 1 },
+        { id: 'a-2', type: 'GLOBAL_COMMENT', text: 'smaller steps', createdA: 2 },
+      ])).toMatchObject({ ok: true });
+      expect(await surface.decidePlanReview(id, revision, 'request_changes')).toMatchObject({
+        ok: true, queued: true, plan: {
+          status: 'changes_requested', handoffAccepted: true,
+          feedback: '- Comment a-1 on "Ship": Which branch?\n- Comment a-2 on the whole plan: smaller steps',
+        },
       });
       // The handoff was accepted: repeating the verdict does not submit a second turn.
       expect(await surface.decidePlanReview(id, revision, 'request_changes', 'smaller steps')).toMatchObject({

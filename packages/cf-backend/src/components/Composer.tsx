@@ -129,12 +129,12 @@ export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void
 }
 
 const MODE_TITLE = {
-  build: "Auto. The agent makes the change and shows what it ran.",
+  build: "Auto. The agent makes the change, or submits a plan first when you ask for one or the work warrants it.",
   plan: "Plan. Review a plan before anything changes.",
 } satisfies Record<ChatMode, string>;
 
 /**
- * Plan is a trust boundary (`submit_plan` exists only on Plan turns), so it is a two-item segment,
+ * Plan is a trust boundary (the agent changes nothing until a plan is approved), so it is a two-item segment,
  * not an ambiguous toggle. The wire value for Auto stays `build`.
  */
 function ModeSegment({ value, onChange, disabled }: {
