@@ -23,7 +23,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 import { stripGitContext } from '../packages/test-utils/src/git';
 import { runUnderDeadline } from './deadline';
@@ -464,22 +463,6 @@ export function sweepVerdict(runs: readonly SweepRun[]): SweepVerdict {
   return { flaky, red, broken };
 }
 
-const CiRunSchema = v.array(v.object({ conclusion: v.string(), status: v.string(), createdAt: v.string(), url: v.string() }));
-
-/** Main's latest CI run, as GitHub reports it, or why it could not be read. */
-function mainCiVerdict(): string {
-  const run = Bun.spawnSync(['gh', 'run', 'list', '--workflow=ci.yml', '--branch', 'main', '--limit', '1', '--json', 'conclusion,status,createdAt,url'], {
-    cwd: root, stdout: 'pipe', stderr: 'pipe',
-  });
-
-  const parsed = run.exitCode === 0 ? v.safeParse(CiRunSchema, tolerate(() => JSON.parse(run.stdout.toString()), 'malformed-input')) : undefined;
-  const [latest] = parsed?.success === true ? parsed.output : [];
-
-  if (latest === undefined) return `unknown: gh run list answered ${String(run.exitCode)} ${run.stderr.toString().trim().slice(0, 160)}`;
-
-  return `${latest.conclusion === '' ? latest.status : latest.conclusion}, the run of ${latest.createdAt} (${latest.url})`;
-}
-
 /** One run of `batch` in the order `seed` decides, its JUnit report read where its runner writes one. */
 export async function sweepRun(batch: SweepBatch, seed: number, scratch: string, index: number): Promise<SweepRun> {
   const report = join(scratch, `sweep-${String(index)}-${String(seed)}.xml`);
@@ -543,9 +526,6 @@ async function sweep(only: string | undefined, shard: Shard | undefined): Promis
     return 0;
   }
 
-  const ci = mainCiVerdict();
-
-  console.log(`flake-sweep: main's CI: ${ci}`);
   console.log(`flake-sweep: ${String(batches.length)} batch(es) from the CI tier${shard === undefined ? '' : `, part ${String(shard.part)} of ${String(shard.count)}`}, `
     + `${String(SWEEP_RUNS)} seeded run(s) each`);
 
@@ -577,7 +557,7 @@ async function sweep(only: string | undefined, shard: Shard | undefined): Promis
   const tree = git({ cwd: root, env: process.env }, ['rev-parse', 'HEAD']).trim();
 
   mkdirSync(directory, { recursive: true });
-  writeFileSync(artifact, `${JSON.stringify({ ranAt: new Date().toISOString(), tree, ci, results }, null, 2)}\n`);
+  writeFileSync(artifact, `${JSON.stringify({ ranAt: new Date().toISOString(), tree, results }, null, 2)}\n`);
 
   const flaky = results.reduce((sum, { verdict }) => sum + verdict.flaky.length, 0);
   const red = results.reduce((sum, { verdict }) => sum + verdict.red.length + verdict.broken.length, 0);

@@ -1395,6 +1395,24 @@ Measured staging `85a438698` (2026-10-02): total 8,599 s, critical Ling order-bo
 Every request's provider-reported input, cache-read and output counts come from the public main and retained-descendant ledgers. Actor/run/step identities are retained; absent counts remain unknown. The per-trial and deployment report uses Activity's cache EMA (alpha 0.2) and nearest-rank p95/p99, plus token-weighted hit share, with the previous deploy alongside. Old reports without those request measurements are named unavailable; none are backfilled. Vitest's first-party output-file config places the JSON report beside the deploy evidence; repeating its CLI output option was measured red and is not used.
 Amended 2026-10-06 by the owner (m1973, m1976, m1929): the eval pass is the deploy's soak, not its path. It starts once the deployment serves and is never awaited; its reds land in the report's soak section, which it renders again when it ends, and are no reds of the deploy. The 1200-second budget is the whole deploy, start to verdict, with nothing subtracted. The statistical evals (L19) still gate a promotion.
 
+L25. CI is armada only: a push to integration or main is proved there, once, and the deploy takes that verdict.
+Decided 2026-10-07 by the owner ("why do we use github CI still when we have armada?", then "armada only"),
+replacing L23's push CI. The same tree was proved up to three times: by the lane on armada, by GitHub on the
+integration push, and by GitHub again when the release moved main. Now the pre-push hook proves a push to
+`integration/**` or `main` on armada, the ladder's whole CI tier for the exact pushed commit: it takes the verdict
+armada stored for that commit when there is one, else runs `armada run`, and refuses the push unless every row is
+green. A stored red is not run again. Moving main to a commit integration proved reads that verdict and only moves
+the pointer, and the release no longer waits on GitHub. The deploy reads the same verdict before anything else,
+and a missing or red one ends it before any build; a promotion takes staging's record, which only a deploy past
+that gate wrote. armada grades every planned row exactly once, with each split suite's file timings, before it
+stores a verdict, so its stored verdict is the complete proof. The six hammer runs were in the CI tier and stay
+in it, each a task of its own. ci.yml and its part, artifact and collection plumbing are deleted; evals.yml,
+the secret scan, Lean verification, the bench corpus and the flake sweep stay on GitHub. armada is a pinned dev
+dependency, so the hook and the deploy run this checkout's `armada`, against `~/.config/armada/connection.json`.
+Measured 2026-10-07: the tier on armada took 7.0 to 9.1 minutes for 90 rows on 13 to 20 containers over nine
+green runs (0b74ff100 in 7.3 minutes on 13, job 20261007190749-9267a508). GitHub's hosted matrix of 2026-10-01
+took 7m15s to 18m21s per source job and 24m47s for the hammer, and its under-15-minute target was never observed.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing

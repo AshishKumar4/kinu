@@ -28,8 +28,8 @@ description: Install elan from a checksum-verified release artifact, then restor
 # download fails the checksum and the job stops before `elan-init` runs at all.
 #
 # ONE PLACE FOR THE CACHE TOO. This action caches BOTH `~/.elan` (the toolchain)
-# and `lean/.lake` (the build), and `ci.yml`, `lean-verify.yml` and
-# `deploy-staging.yml` all take it from here. Caching the toolchain alone
+# and `lean/.lake` (the build), and `lean-verify.yml` takes it from here.
+# Caching the toolchain alone
 # rebuilds 330 theorems — about fifteen minutes — on every single run.
 
 runs:
