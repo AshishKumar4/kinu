@@ -5,8 +5,7 @@ import { Database } from "bun:sqlite";
 import { Effect } from "effect";
 import { settle } from "../src/obs/effect";
 import {
-  initWorkspaceProposalsTable, proposedSoul, WorkspaceProposals, WorkspaceProposalStore, WORKSPACE_PROPOSAL_SIGNAL,
-  type WorkspaceProposalDeps,
+  initWorkspaceProposalsTable, proposedSoul, WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalDeps,
 } from "../src/safety/workspace-proposals";
 import { buildPendingActions } from "../src/read-models/pending-actions";
 import type { AgentSignal } from "../src/types/signals";
@@ -92,7 +91,7 @@ describe("a proposed workspace", () => {
     expect([first?.status, second]).toEqual(["created", null]);
     expect(h.created).toEqual([{ displayName: "Market research", purpose: ASK.brief, soul: proposedSoul(ASK) }]);
     expect(h.woken).toEqual([expect.objectContaining({
-      kind: WORKSPACE_PROPOSAL_SIGNAL,
+      kind: "workspace_proposal",
       text: expect.stringContaining("https://kinu.example/workspace/blue-river-1a2b"),
       metadata: { proposal: "wsp-1", decision: "created", workspace: "blue-river-1a2b", url: "https://kinu.example/workspace/blue-river-1a2b" },
     })]);

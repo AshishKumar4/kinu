@@ -632,14 +632,14 @@ function WorkspaceProposalCard({ action, rpc, onDecided }: { action: PendingActi
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
-  const decide = (answer: ProposalDecision) => settle(Effect.catchCause(Effect.gen(function* () {
+  const decide = (answer: ProposalDecision) => Effect.catchCause(Effect.gen(function* () {
     setBusy(true);
     setError(null);
     yield* Effect.promise(() => rpc("decideWorkspaceProposal", [action.id, answer]));
     onDecided?.();
   }), (failed) => Effect.sync(() => {
     setError(`Could not record the decision: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
-  })).pipe(Effect.ensuring(Effect.sync(() => { setBusy(false); }))));
+  })).pipe(Effect.ensuring(Effect.sync(() => { setBusy(false); })));
 
   return (
     <div className="py-1 space-y-2" data-workspace-proposal={action.id}>
@@ -663,8 +663,8 @@ function WorkspaceProposalCard({ action, rpc, onDecided }: { action: PendingActi
       )}
       {error && <div className="p-t-status p-danger">{error}</div>}
       <div className="flex items-center gap-1.5 flex-wrap">
-        <FilledButton disabled={busy} onClick={() => detach(Effect.promise(async () => decide("approve")))}>Create workspace</FilledButton>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => detach(Effect.promise(async () => decide("decline")))}>Decline</Button>
+        <FilledButton disabled={busy} onClick={() => detach(decide("approve"))}>Create workspace</FilledButton>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => detach(decide("decline"))}>Decline</Button>
       </div>
     </div>
   );

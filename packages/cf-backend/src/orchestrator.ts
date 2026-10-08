@@ -3062,9 +3062,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async decideWorkspaceProposal(id: string, answer: WorkspaceProposalAnswer): Promise<{ decided: boolean; workspace: string | null }> {
     const asked = v.parse(v.object({ id: v.string(), answer: v.picklist(['approve', 'decline']) }), { id, answer });
-    const decided = await settle(this.proposals.decide(asked.id, asked.answer));
 
-    return { decided: decided !== null, workspace: decided?.workspace ?? null };
+    return settle(Effect.map(this.proposals.decide(asked.id, asked.answer), (decided) => ({ decided: decided !== null, workspace: decided?.workspace ?? null })));
   }
 
   /** Called by the UserDO over DO RPC. Resolves on decision or `timeout`; `timeout` is not

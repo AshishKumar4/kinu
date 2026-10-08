@@ -187,10 +187,10 @@ describe("createAgentSelfProvider — delegation + validation", () => {
 
     const propose = called(createAgentSelfProvider(host), "proposeWorkspace");
 
-    expect(await propose({ name: "Research", soul: "Terse.", brief: "Track pricing." })).toMatchObject({ status: "pending", proposal: "wsp-1" });
-    expect(asked).toEqual([{ name: "Research", soul: "Terse.", brief: "Track pricing." }]);
-    expect(await propose({ name: "Research", soul: "Terse." })).toEqual(refused('"brief"'));
-    expect(await called(createAgentSelfProvider(fakeHost()), "proposeWorkspace")({ name: "Research", soul: "", brief: "Track pricing." }))
+    expect(await propose("Research", "Track pricing.", "Terse.")).toMatchObject({ status: "pending", proposal: "wsp-1" });
+    expect(asked).toEqual([{ name: "Research", brief: "Track pricing.", soul: "Terse." }]);
+    expect(await propose("Research", "", "Terse.")).toEqual(refused('"brief"'));
+    expect(await called(createAgentSelfProvider(fakeHost()), "proposeWorkspace")("Research", "Track pricing.", ""))
       .toMatchObject({ success: false, reason: "unsupported" });
   });
 

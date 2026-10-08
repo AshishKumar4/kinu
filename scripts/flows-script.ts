@@ -141,7 +141,7 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
   if (latest.includes(WORKSPACE_PROPOSAL_ASK)) {
     return request.turn.length > 0
       ? { text: 'PROPOSED' }
-      : { toolCall: { name: 'eval', arguments: { code: `return await agent.proposeWorkspace(${JSON.stringify(PROPOSED_WORKSPACE)});` } } };
+      : { toolCall: { name: 'eval', arguments: { code: `return await agent.proposeWorkspace(${[PROPOSED_WORKSPACE.name, PROPOSED_WORKSPACE.brief, PROPOSED_WORKSPACE.soul].map((arg) => JSON.stringify(arg)).join(', ')});` } } };
   }
 
   if (latest.includes(MEMORY_ASK)) {

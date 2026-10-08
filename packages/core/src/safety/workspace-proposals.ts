@@ -12,12 +12,12 @@ import { renderSoulMarkdown } from '../identity/soul';
 import type { AgentInbox } from '../types/signals';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
-export const WORKSPACE_PROPOSAL_SIGNAL = 'workspace_proposal';
+const WORKSPACE_PROPOSAL_SIGNAL = 'workspace_proposal';
 
 /** The display name's longest form: a title, never a paragraph. */
-export const WORKSPACE_PROPOSAL_NAME_MAX = 80;
+const WORKSPACE_PROPOSAL_NAME_MAX = 80;
 
-export type WorkspaceProposalStatus = 'pending' | 'creating' | 'declined' | 'created' | 'failed';
+type WorkspaceProposalStatus = 'pending' | 'creating' | 'declined' | 'created' | 'failed';
 
 export type WorkspaceProposalAnswer = 'approve' | 'decline';
 

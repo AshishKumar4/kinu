@@ -148,7 +148,6 @@ export {
   WorkspaceProposalStore,
   initWorkspaceProposalsTable,
   proposedSoul,
-  WORKSPACE_PROPOSAL_SIGNAL,
   type WorkspaceProposal,
   type WorkspaceProposalAnswer,
   type WorkspaceProposalInput,
