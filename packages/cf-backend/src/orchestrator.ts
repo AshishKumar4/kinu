@@ -1153,6 +1153,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
       ...(report !== undefined && { report }),
+      // A Plan turn submits its plan to the agent's own review, which the owner reads in that agent's window.
+      ...(turn.input.mode === 'plan' && { submitPlan: { submit: (edits) => this.hostedPlanSubmit(turn.actor.handle.actorId, edits) } }),
     };
 
     const built = buildActorTools(deps);
