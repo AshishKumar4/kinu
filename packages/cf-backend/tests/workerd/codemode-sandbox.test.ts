@@ -443,7 +443,7 @@ describe('the eval sandbox under workerd', () => {
     const received: unknown[] = [];
 
     const swarm = async (...args: unknown[]) => {
-      received.push(args[0]);
+      received.push(args);
 
       return { ok: true };
     };
@@ -451,12 +451,12 @@ describe('the eval sandbox under workerd', () => {
     const agents = { name: 'agents', fns: { swarm } };
 
     const result = await executor.execute(
-      "// ask for a small swarm\nreturn await agents.swarm({ task: 'review the diff', preset: 'ideate', branches: 2, depth: 1 });",
+      "// ask for a small swarm\nreturn await agents.swarm('review the diff', { preset: 'ideate', branches: 2, depth: 1 });",
       [toolsProvider([]), agents],
     );
 
     expect(result.error).toBeUndefined();
-    expect(received).toEqual([{ task: 'review the diff', preset: 'ideate', branches: 2, depth: 1 }]);
+    expect(received).toEqual([['review the diff', { preset: 'ideate', branches: 2, depth: 1 }]]);
   });
 
   test('a bare native tool name is corrected toward tools.<name>', async () => {
