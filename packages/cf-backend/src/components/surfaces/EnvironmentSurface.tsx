@@ -225,9 +225,9 @@ function EnvironmentCard({ rpc, mount, exec, active, onSelect, onOpenFiles, onCo
     >
       <div className="flex items-center gap-1.5 min-w-0">
         <CircleIcon size={7} weight="fill" className={`shrink-0 ${status.dotClass}`} />
-        <h3 className={`p-row-text font-medium truncate ${mount.live ? "p-text" : "p-text-3"}`}>{title}</h3>
+        <span className={`p-row-text font-medium truncate ${mount.live ? "p-text" : "p-text-3"}`}>{title}</span>
         {kindTag !== null && (
-          <span data-env-kind className="p-meta p-text-4 shrink-0">{kindTag}</span>
+          <span className="p-meta p-text-4 shrink-0">{kindTag}</span>
         )}
         {mount.policy.readOnly && (
           <span title="read-only" className="shrink-0 flex"><LockSimpleIcon size={11} className="p-text-3" /></span>

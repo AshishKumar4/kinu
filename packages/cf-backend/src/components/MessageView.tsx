@@ -451,7 +451,7 @@ export function SteerBubble({ steer, onFork }: {
 }) {
   return (
     <div className="group flex flex-col items-end animate-fade-in" data-steer={steer.state}>
-      <div data-user-bubble className={USER_BUBBLE_CLASS}>
+      <div className={USER_BUBBLE_CLASS}>
         {steer.text}
         {onFork && steer.state === "landed" && (
           <button
@@ -539,7 +539,7 @@ export const MessageView = memo(function MessageView({
 
     return (
       <div className="flex flex-col items-end animate-fade-in group">
-        <div data-user-bubble className={USER_BUBBLE_CLASS}>
+        <div className={USER_BUBBLE_CLASS}>
           {fileParts.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-1.5">
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
