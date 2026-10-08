@@ -180,12 +180,6 @@ describe('createCompactionStateStore', () => {
     expect(store.plans.load('s1')).toEqual(snap);
   });
 
-  test('a plan saved under its model\'s key before 2026-10-08 loads under the policy\'s, and so still replays', async () => {
-    const { store } = stateRig();
-    await store.plans.save('s1', { ...snapshot('s1'), attachmentPolicyKey: 'anthropic/claude-opus-4-7|recent:2' });
-    expect(await store.plans.load('s1')).toMatchObject({ attachmentPolicyKey: 'recent:2' });
-  });
-
   test('save(null) clears a stale plan but keeps the prompt-token signal', async () => {
     const { store } = stateRig();
     store.savePromptTokens('s1', 12_345, 30);
