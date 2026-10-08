@@ -1,6 +1,8 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Device daemon self-update, and the frames it shares with the hub, with the hub faked at its two seams (helpers/update-hub.ts). */
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
@@ -440,6 +442,36 @@ describe('the daemon answers the hub in core\'s frames', () => {
     expect(ran.stdout).toContain(`the full stdout is at ${shown}]`);
     expect(await readText(files, shown)).toBe(`${'x'.repeat(600_000)}END`);
     await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId]);
+  });
+});
+
+// What a dropped socket left running could answer no one, and nothing could name, stop or observe it again.
+describe('a socket the hub drops', () => {
+  test('ends the command it left unanswered, the process group the command started included', async () => {
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    startDaemon(home, await releaseSigningEnv());
+    await served.sockets.until((hellos) => hellos[0] !== undefined);
+    const socket = present(served.sockets.items[0], 'the HELLO');
+
+    // Both FIFOs are open for reading before the command runs. `started` ends once a descendant of the command holds
+    // `life` open; `life` ends only once no process holds it, so a group left running is a read that never ends.
+    const dir = scratchDir('daemon-dropped-socket');
+    const [started, life] = [join(dir, 'started'), join(dir, 'life')];
+    execFileSync('mkfifo', [started, life]);
+    const begun = readFile(started, 'utf8');
+    const ended = readFile(life, 'utf8');
+
+    socket.send({
+      id: 'rpc-dropsocket-1',
+      method: 'exec',
+      params: [`(exec 3>'${life}'; echo up >'${started}'; exec sleep 600) & sleep 600`],
+      sandbox: { tier: 'raw', agentHome: '', roots: [] },
+    });
+
+    expect(await begun).toBe('up\n');
+    socket.drop();
+    expect(await ended).toBe('');
   });
 });
 
