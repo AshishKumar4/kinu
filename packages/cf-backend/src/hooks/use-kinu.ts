@@ -596,11 +596,8 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
 
   // Shown from the moment the server takes a steer until its durable user row arrives.
   const [steerRuns, setSteerRuns] = useState<InlineSteer[]>([]);
-  // Fed by useChat's live stream error and the on-connect replay frame (the ws transport drops
-  // its stale request id). The server retains its last terminal record until a later turn
-  // supersedes it (agents SDK `_replayTerminalOnAck`); an id announced in `cf_agent_stream_resuming`
-  // marks a replay, anything else a live failure.
-  const resumedRequestIds = useRef(new Set<string>());
+  // Fed by useChat's live stream error and by every frame ending a chat response in failure (`terminalChatError`),
+  // the runtime's refusal of this tab among them, whose request id the ws transport may not hold.
   const [chatError, setChatError] = useState<ChatTurnError | null>(null);
 
   /** Cleared on the next stream frame, socket close, or a timer keyed to the declared wait: the
@@ -675,20 +672,12 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
       window.dispatchEvent(new CustomEvent("kinu:workspace-renamed", {
         detail: { name: actorAddress.workspace, displayName },
       }));
-    } else if (data.type === "cf_agent_stream_resuming") {
-      resumedRequestIds.current.add(data.id);
     } else if (data.type === "provider_wait") {
       showProviderWait(data);
     } else if (data.type === "cf_agent_use_chat_response") {
       // A stream frame ends the wait; the on-connect replay must not paint "waiting" either.
       clearProviderWait();
-      const failed = terminalChatError(data, resumedRequestIds.current);
-
-      if (failed !== null) setChatError(failed);
-    } else {
-      // On connect the server replays the last terminal error with a stale request id the transport
-      // drops; this handler is the only place that frame is seen. The rule lives in `chat-turn-error.ts`.
-      const failed = terminalChatError(data, resumedRequestIds.current);
+      const failed = terminalChatError(data);
 
       if (failed !== null) setChatError(failed);
     }
@@ -740,7 +729,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
   // Always live: the transport only surfaces this for a request id still in flight.
   useEffect(() => {
     if (!streamError) return;
-    setChatError({ body: streamError.message || String(streamError), replayed: false });
+    setChatError({ body: streamError.message || String(streamError), refused: false });
     const reports = chatStreamReports.current;
 
     let report: Promise<void> | null = null;
