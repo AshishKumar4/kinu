@@ -4,7 +4,6 @@ import { Seeded } from './seeded';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask, type EvalPart } from '../src/task';
 import type { Evidence, EvalVerifier, SlateClient } from '../src/verifier';
-import { ElementHandle } from 'puppeteer';
 import type { SlateView } from '../src/browser';
 import { builtItself, buildsClean, slateQuality, type DrawnSlate } from './slate-quality';
 
@@ -80,16 +79,8 @@ async function squares(view: SlateView): Promise<Record<string, string>> {
 }
 
 /** Press the square whose accessible name starts with `square`, as a person's pointer does. */
-async function pressSquare(view: SlateView, square: string): Promise<boolean> {
-  const control = await view.frame.evaluateHandle((wanted) => [...document.querySelectorAll('button, [role="button"], [role="gridcell"]')]
-    .find((element) => (element.getAttribute('aria-label') ?? element.getAttribute('title') ?? element.textContent ?? '').trim().toLowerCase()
-      .startsWith(wanted)) ?? null, square);
-
-  if (!(control instanceof ElementHandle)) return false;
-  await control.click();
-  await control.dispose();
-
-  return true;
+function pressSquare(view: SlateView, square: string): Promise<boolean> {
+  return view.pressNamed(new RegExp(`^${square}\\b`, 'iu'));
 }
 
 const MISSION = 'A shared chess workspace where a friend and I play, import games and share our own.';

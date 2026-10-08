@@ -111,6 +111,21 @@ export class SlateView {
     })());
   }
 
+  /** Press the first control whose accessible name, its `aria-label`, else its `title`, else its text, `name` matches. */
+  async pressNamed(name: RegExp): Promise<boolean> {
+    return bounded(`the slate page, pressed for ${name.source}`, (async () => {
+      const control = await this.frame.evaluateHandle((source, flags) => [...document.querySelectorAll('button, [role="button"], [role="gridcell"]')]
+        .find((element) => new RegExp(source, flags).test((element.getAttribute('aria-label') ?? element.getAttribute('title') ?? element.textContent ?? '').trim()))
+        ?? null, name.source, name.flags);
+
+      if (!(control instanceof ElementHandle)) return false;
+      await control.click();
+      await control.dispose();
+
+      return true;
+    })());
+  }
+
   /** What failed in the page: errors nothing caught and scripts that did not load (`script-failures.ts`). */
   async faults(): Promise<{ errors: string[]; scripts: string[] }> {
     return v.parse(Faults, await bounded('the slate page, asked what failed', this.frame.evaluate(DOCUMENT_FAULTS)));

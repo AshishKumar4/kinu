@@ -100,6 +100,7 @@ const NON_BUN_RUNNERS: readonly {
  * does not; CI_EXEMPT carries that too.
  */
 const AFTER_CI_SUITES = {
+  'evals/tasks/chat-app.eval.ts': 'bun run evals',
   'evals/tasks/chess.eval.ts': 'bun run evals',
   'evals/tasks/coding.eval.ts': 'bun run evals',
   'evals/tasks/dashboards.eval.ts': 'bun run evals',
