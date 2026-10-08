@@ -410,7 +410,8 @@ test('a slate never reaches what only the agent does', async () => {
   }
 
   // A native tool is its own namespace on the surface, never a member of `tools`; `$` members are the agent's lifecycle.
-  expect(await call(['tools', 'agents'], [{ op: 'hire', role: 'task', mission: 'should not run' }])).toMatchObject({ ok: false });
+  expect(await call(['tools', 'agents'], [{ op: 'hire', role: 'task', mission: 'should not run' }]))
+    .toMatchObject({ ok: true, value: { success: false, reason: 'missing' } });
   expect(await call(['slates', 'limited', '$share'])).toMatchObject({ ok: false });
   expect(await call(['tasks', 'list'])).toMatchObject({ ok: true });
   expect(await call(['tasks', 'add'], [false])).toMatchObject({ ok: false, reason: 'bad_input' });

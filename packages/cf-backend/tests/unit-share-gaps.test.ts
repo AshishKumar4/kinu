@@ -93,6 +93,12 @@ async function twoUserWorld(): Promise<World> {
   // One KV behind the edge route and every workspace object, as AUTH_KV in production.
   const kv = makeKv();
   const ownerSide = await userWorld(OWNER_ID, 'issues-owner', kv);
+
+  // Seeded on the newest MCP manager, so before the viewer's account builds its own: these are the owner's tools.
+  seedMcpTools('connection-id', [
+    { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+    { name: 'create_issue', inputSchema: { type: 'object' } },
+  ]);
   const viewerSide = await userWorld(VIEWER_ID, 'viewer-home', kv);
 
   const agents = new Map<string, HarnessOrchestratorAgent>([
@@ -128,10 +134,6 @@ async function twoUserWorld(): Promise<World> {
   // reachable from the dispatch the suite drives.
   const env = partialEnv as Env;
 
-  seedMcpTools('connection-id', [
-    { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
-    { name: 'create_issue', inputSchema: { type: 'object' } },
-  ]);
   await authorIssuesSlate(workspaceFiles(ownerSide.agent.agent));
   await exerciseIssuesSlate(ownerSide.agent.agent);
 

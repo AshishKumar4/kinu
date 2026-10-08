@@ -14,7 +14,9 @@ interface ReachConnection {
 
 /** One namespace of a slate's surface, as a person reads what it asks of them. */
 export function reachConnection(namespace: string): ReachConnection {
-  const [head = "", name = ""] = namespace.split(".");
+  // The head is the first name; the rest, dots and all, is the server or slate it names.
+  const [head = "", ...rest] = namespace.split(".");
+  const name = rest.join(".");
 
   switch (head) {
     case "mcp": return { text: `Connect an MCP server named "${name}" to your account.`, to: APP_ROUTES.userMcp, label: "MCP servers" };

@@ -15,6 +15,8 @@ it('runs an authored class: the prototype is the surface and the reserved storag
     expect(await subject.call('greet', ['kinu'])).toEqual({ ok: true, value: 'hello kinu #2 [probe]' });
     expect(await subject.call('missing', [])).toMatchObject({ ok: false, error: expect.stringContaining('has no method missing') });
     expect(await subject.socket('greet', ['browser'])).toEqual({ ok: true, value: 'hello browser #3 [probe]' });
+    // A class-backed page reaches the same surface as one with no class, beside the class's own methods.
+    expect(await subject.socket('$workspace', ['x'], ['slates', 'peer', 'ask'])).toEqual({ ok: true, value: '{"chain":["probe"],"args":["x"]}' });
   } finally {
     await subject.stop();
   }
@@ -123,7 +125,7 @@ it('a slate with no class serves its page as written, the client mapped in ahead
     expect(page.body.indexOf('<script type="importmap">')).toBeLessThan(page.body.indexOf('page-only-marker-5d21'));
     expect((await subject.route('/__kinu/slate.js')).status).toBe(200);
     // The page's socket reaches the surface, under the socket's own invocation.
-    expect(await subject.socket('call', ['x'], ['slates', 'peer', 'ask'])).toEqual({ ok: true, value: '{"chain":["probe"],"args":["x"]}' });
+    expect(await subject.socket('$workspace', ['x'], ['slates', 'peer', 'ask'])).toEqual({ ok: true, value: '{"chain":["probe"],"args":["x"]}' });
     expect(await subject.socket('greet', ['kinu'])).toMatchObject({ ok: false });
   } finally {
     await subject.stop();

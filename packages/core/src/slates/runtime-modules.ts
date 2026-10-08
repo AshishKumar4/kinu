@@ -109,7 +109,7 @@ export const slate = new Proxy(Object.create(null), {
  *  members sit at the top too, so workspace.readFile(path) reads as it does in a program. */
 function surface(path) {
   return new Proxy(function () {}, {
-    apply(_fn, _self, args) { return session().call(path, args); },
+    apply(_fn, _self, args) { return session().$workspace(path, args); },
     get(_fn, name) {
       if (typeof name !== "string" || name === "then") return undefined;
       return surface([...path, name]);

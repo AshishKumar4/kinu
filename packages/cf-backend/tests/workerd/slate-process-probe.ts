@@ -272,7 +272,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
       try {
         const raw = surface === undefined
           ? await newWebSocketRpcSession<Record<string, (...input: JsonValue[]) => Promise<JsonValue>>>(socket)[method](...args)
-          : await newWebSocketRpcSession<{ call(path: string[], input: JsonValue[]): Promise<JsonValue> }>(socket).call(surface, args);
+          : await newWebSocketRpcSession<{ $workspace(path: string[], input: JsonValue[]): Promise<JsonValue> }>(socket).$workspace(surface, args);
 
         return { ok: true, value: v.is(v.string(), raw) ? raw : JSON.stringify(raw) };
       } catch (cause) { return { ok: false, error: renderThrownChain({ cause }) }; }

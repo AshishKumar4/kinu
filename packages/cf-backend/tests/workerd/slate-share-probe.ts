@@ -60,6 +60,9 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
   private readonly filesystem = new ProcessFiles(this.vfs);
   private readonly processes = new SessionProcessSupervisor();
+
+  /** How many processes the owner's own calls left running before the board was shared. */
+  private ownersOwn = 0;
   private readonly ports = new PortRegistry();
   private readonly host: SlateHost;
   private _budget: MissionGovernor | undefined;
@@ -242,6 +245,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   /** `approved` names members granted beyond the graph's observing members. */
   async share(approved: readonly { namespace: string; member: string }[] = []): Promise<SlateCallResult> {
     await this.exerciseBoard();
+    this.ownersOwn = this.processes.getRunning().length;
 
     return this.host.operation(ROOT_SLATE_CALLER, {
       op: 'share', id: SLATE_ID, visibility: 'public', approved: approved.map((granted) => ({ slate: SLATE_ID, ...granted })),
@@ -393,8 +397,9 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return this.host.operation(ROOT_SLATE_CALLER, { op: 'unshare', share });
   }
 
+  /** Whether every process a share started has stopped; the owner's own, from exercising the board, keep running. */
   async stopped(): Promise<boolean> {
-    return this.processes.getRunning().length === 0;
+    return this.processes.getRunning().length === this.ownersOwn;
   }
 
   async slateCallAs(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {

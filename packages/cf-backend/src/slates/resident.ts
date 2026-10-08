@@ -107,11 +107,14 @@ const CLASS_BOOT: readonly string[] = [
   '      }',
   '    }',
   '    this.#slate = slate;',
+  '    const workspace = new SurfaceTarget(this.env.workspace);',
   '    this.#forwarder = new Proxy(new RpcTarget(), {',
   '      get(target, member) {',
   '        // Symbols and the promise surface pass through to the RpcTarget so',
   '        // capnweb introspection never sees a throwing function.',
   '        if (typeof member !== "string" || member === "then" || member === "toJSON") return Reflect.get(target, member);',
+  '        // The page\'s `workspace`: the method rule refuses `$`, so no class method takes the name.',
+  '        if (member === "$workspace") return (path, args) => invocations.run(invocations.getStore() ?? null, () => workspace.$workspace(path, args));',
   '        if (!allowed.has(member)) {',
   '          // A member the slate never published refuses at call time, not',
   '          // at lookup: capnweb dispatches on the value.',
@@ -126,7 +129,7 @@ const CLASS_BOOT: readonly string[] = [
   '    return { ok: true, methods: [...allowed] };',
 ];
 
-/** No class: the socket serves the surface's one `call(path, args)`, and no method is published for an actor to call. */
+/** No class: the socket serves only the page's `$workspace(path, args)`, and no method is published for an actor to call. */
 const SURFACE_BOOT: readonly string[] = [
   '    const workspace = this.env.workspace;',
   '    this.#forwarder = new SurfaceTarget(workspace);',
@@ -207,7 +210,7 @@ export function slateRunnerSource(
     'class SurfaceTarget extends RpcTarget {',
     '  #stub;',
     '  constructor(stub) { super(); this.#stub = stub; }',
-    '  call(path, args) { return surface(this.#stub, path)(...args); }',
+    '  $workspace(path, args) { return surface(this.#stub, path)(...args); }',
     '}',
     // `__storage` needs no lineage, so it always passes the root invocation.
     'function storageProxy(stub) {',

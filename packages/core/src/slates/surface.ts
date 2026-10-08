@@ -113,6 +113,11 @@ function slateExcludes(address: SlateAddress): boolean {
   });
 }
 
+/** Whether a slate reaches an eval namespace's member: the impact table names it, and it is not the agent's alone. */
+export function slateReaches(address: SlateAddress): boolean {
+  return slateAddressImpact(address) !== null && !slateExcludes(address);
+}
+
 function oneObject(said: string, args: readonly JsonValue[]): Effect.Effect<JsonObject, KinuError> {
   const argument = args.length === 0 ? {} : args[0];
 
@@ -122,7 +127,7 @@ function oneObject(said: string, args: readonly JsonValue[]): Effect.Effect<Json
 }
 
 function routeAgent(id: string, args: readonly JsonValue[]): Effect.Effect<SlateRoute, KinuError> {
-  const parsed = v.safeParse(v.tuple([v.strictObject({ text: v.pipe(v.string(), v.minLength(1)), data: v.optional(JsonValueSchema) })]), args);
+  const parsed = v.safeParse(v.strictTuple([v.strictObject({ text: v.pipe(v.string(), v.minLength(1)), data: v.optional(JsonValueSchema) })]), args);
 
   if (!parsed.success) return Effect.fail(new KinuError('bad_input', 'agent.send takes one { text, data? } object'));
   const [{ text, data }] = parsed.output;
@@ -131,7 +136,7 @@ function routeAgent(id: string, args: readonly JsonValue[]): Effect.Effect<Slate
 }
 
 function routeAi(args: readonly JsonValue[]): Effect.Effect<SlateRoute, KinuError> {
-  const parsed = v.safeParse(v.tuple([v.strictObject({
+  const parsed = v.safeParse(v.strictTuple([v.strictObject({
     prompt: v.pipe(v.string(), v.minLength(1)),
     system: v.optional(v.string()),
     tier: v.optional(v.string()),
@@ -214,7 +219,7 @@ function routed(id: string, request: SlateCallRequest, chain: readonly string[])
   if (impact === null) return Effect.fail(refused);
 
   // The list names eval namespaces; `agent.send` and the rest of the surface's own are routed above it.
-  return Effect.flatMap(route(id, request, chain), (found) => (found.kind === 'namespace' && slateExcludes(address)
+  return Effect.flatMap(route(id, request, chain), (found) => (found.kind === 'namespace' && !slateReaches(address)
     ? Effect.fail(refused)
     : Effect.succeed({ route: found, address, impact })));
 }

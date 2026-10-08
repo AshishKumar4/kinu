@@ -100,3 +100,18 @@ test('a cut grant is every observing member plus exactly the approved ones that 
   expect(() => cutShareGrant(graph, [{ slate: 'issues', namespace: 'workspace', member: 'readFile' }])).toThrow('is not a member of slate issues that acts');
   expect(() => cutShareGrant(graph, [{ slate: 'issues', namespace: 'workspace', member: 'remove' }])).toThrow('is not a member of slate issues that acts');
 });
+
+test('a dotted slate or server name is walked and looked up whole', () => {
+  const dotted = slateCapabilityGraph({
+    slate: 'root', workspace: 'w',
+    catalog: { mcp: [{ server: 'files.prod', title: 'Files', tools: [{ name: 'read', readOnly: true }] }], slates: ['root', 'budget.board'] },
+    usage: (slate) => (slate === 'root' ? used('slates.budget.board.count', 'mcp.files.prod.read') : used('memory.recall')),
+  });
+
+  expect(dotted.slates).toEqual(['root', 'budget.board']);
+  expect(dotted.namespaces.map((each) => [each.slate, each.namespace, each.problem ?? null, each.members.map((member) => member.impact)])).toEqual([
+    ['root', 'slates.budget.board', null, ['observe']],
+    ['budget.board', 'memory', null, ['observe']],
+    ['root', 'mcp.files.prod', null, ['observe']],
+  ]);
+});

@@ -15,7 +15,7 @@ import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { nanoid } from '../utils/nanoid';
 import type { WorkspaceSlateContentStore } from './content';
 import { slateProject, type SlateProject } from './project';
-import type { SlateUsage } from './capability-graph';
+import { namespaceHead, type SlateUsage } from './capability-graph';
 import type { WorkspaceSlates } from './runtime';
 import { type NewSlateShare, type ShareUser, type SlateShareStore } from './shares';
 import {
@@ -39,8 +39,6 @@ type Tree = v.InferOutput<typeof Tree>;
 type TreeEntry = v.InferOutput<typeof TreeEntry>;
 
 /** One lowercase segment: `mcp.my_files` becomes `mcp.my-files`. */
-const CANONICAL_REQUIREMENT_NAME = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u;
-
 const BLUEPRINT_FACET_PREFIX = 'kinu.slate.';
 
 /** Each namespace once, in the order first called. */
@@ -48,35 +46,14 @@ function reachOf(usage: readonly SlateUsage[]): string[] {
   return [...new Set(usage.map((entry) => entry.namespace))];
 }
 
-function canonicalRequirementName(namespace: string): Effect.Effect<string, KinuError> {
-  const canonical = namespace.toLowerCase().replace(/_/g, '-');
-
-  return CANONICAL_REQUIREMENT_NAME.test(canonical)
-    ? Effect.succeed(canonical)
-    : Effect.fail(new KinuError('bad_input', `"${namespace}" cannot be published: a requirement name is letters, digits, "." and "-", starting with a letter`));
-}
-
-/** A declaration, never a grant: the forked slate calls its forker's own surface, as its forker. */
-function blueprintRequirements(reaches: readonly string[]): Effect.Effect<BindingRequirement[], KinuError> {
-  return Effect.gen(function* () {
-    const requirements: BindingRequirement[] = [];
-    const seen: Record<string, string> = {};
-
-    for (const namespace of reaches) {
-      const canonical = yield* canonicalRequirementName(namespace);
-      const other = seen[canonical];
-
-      if (other !== undefined) {
-        return yield* new KinuError('bad_input', `"${other}" and "${namespace}" would publish as the same requirement "${canonical}"`);
-      }
-
-      seen[canonical] = namespace;
-      const [head] = namespace.split('.');
-      requirements.push(new BindingRequirement(new BindingName(canonical), new FacetPackageId(BLUEPRINT_FACET_PREFIX + head), CompatRange.any()));
-    }
-
-    return requirements;
-  });
+/**
+ * A declaration, never a grant: the forked slate calls its forker's own surface, as its forker. Each is named by its
+ * namespace verbatim, the name the slate's code calls, so a forker connects exactly what it will call.
+ */
+function blueprintRequirements(reaches: readonly string[]): BindingRequirement[] {
+  return reaches.map((namespace) => new BindingRequirement(
+    new BindingName(namespace), new FacetPackageId(BLUEPRINT_FACET_PREFIX + namespaceHead(namespace)), CompatRange.any(),
+  ));
 }
 
 /** `package.json` always, plus every entry under an included top-level name. */
@@ -158,7 +135,7 @@ export class WorkspaceBlueprints {
       const tree = includeTree(this.tree(record.source), included);
       // A subset is retained as its own bundle, so the skeleton names what ships.
       const bundle = included === undefined ? record.source : this.retainTree(tree);
-      const requirements = yield* blueprintRequirements(inspection.reaches);
+      const requirements = blueprintRequirements(inspection.reaches);
       const publication = yield* Effect.promise(() => this.deps.slates.publish(record.id, requirements, bundle));
 
       const row: NewSlateShare = {
@@ -237,7 +214,7 @@ export class WorkspaceBlueprints {
     return settle(Effect.gen({ self: this }, function* () {
       const slate = yield* Effect.promise(() => this.deps.slates.synchronize(new SlateId(slateId)));
       const tree = this.tree(slate.source);
-      const skeleton = new SlateSkeleton(slate.source.digest, yield* blueprintRequirements(reachOf(this.deps.usage(slateId))));
+      const skeleton = new SlateSkeleton(slate.source.digest, blueprintRequirements(reachOf(this.deps.usage(slateId))));
       const blobs: Record<string, string> = {};
 
       for (const entry of tree.entries) {

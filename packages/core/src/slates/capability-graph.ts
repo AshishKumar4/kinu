@@ -20,6 +20,20 @@ export interface SlateSurfaceCatalog {
   readonly slates: readonly string[];
 }
 
+/** A namespace's first name: `mcp` of `mcp.<server>`, `slates` of `slates.<id>`. */
+export function namespaceHead(namespace: string): string {
+  const dot = namespace.indexOf('.');
+
+  return dot < 0 ? namespace : namespace.slice(0, dot);
+}
+
+/** What a namespace names after its head, dots and all: the server of `mcp.files.prod` is `files.prod`. */
+function namespaceTarget(namespace: string): string {
+  const dot = namespace.indexOf('.');
+
+  return dot < 0 ? '' : namespace.slice(dot + 1);
+}
+
 /** A member a slate has called, once per slate: recorded where the host routes its owner's calls. */
 export interface SlateUsage {
   readonly namespace: string;
@@ -47,7 +61,7 @@ interface RiskSubject {
 }
 
 function riskBody({ namespace, title, member, workspace }: RiskSubject, impact: Exclude<Impact, 'observe'>): string {
-  const [head = ''] = namespace.split('.');
+  const head = namespaceHead(namespace);
 
   switch (impact) {
     case 'mutate':
@@ -88,7 +102,8 @@ interface GraphRowInput {
 
 /** A problem row still carries its members, so a call refuses for the real reason, not absence from the grant. */
 function graphRow({ slate, namespace, members, catalog, workspace }: GraphRowInput): SlateGraphNamespace {
-  const [head, name] = namespace.split('.');
+  const head = namespaceHead(namespace);
+  const name = namespaceTarget(namespace);
   const server = head === 'mcp' ? catalog.mcp.find((entry) => entry.server === name) : undefined;
   const title = server?.title ?? namespace;
 
@@ -138,9 +153,9 @@ function capabilityGraph(input: Parameters<typeof slateCapabilityGraph>[0]): Eff
 
     for (const [namespace, members] of byNamespace) {
       namespaces.push(graphRow({ slate: id, namespace, members, catalog, workspace }));
-      const [head, callee] = namespace.split('.');
+      const callee = namespaceTarget(namespace);
 
-      if (head === 'slates' && !walked.has(callee) && catalog.slates.includes(callee)) walk(callee);
+      if (namespaceHead(namespace) === 'slates' && !walked.has(callee) && catalog.slates.includes(callee)) walk(callee);
     }
   };
 
