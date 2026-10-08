@@ -82,7 +82,7 @@ export function createWebCodemodeProvider(deps: WebDeps & { readonly prelude?: {
   const namespace = codemodeNamespace('web', serveWeb(deps));
   const { prelude } = deps;
 
-  if (deps.sessions === undefined || prelude === undefined) return namespace;
+  if (prelude === undefined) return namespace;
 
   return {
     ...namespace,

@@ -182,7 +182,7 @@ function messagesAt(t: number): UIMessage[] {
   const read = toolPart(t, {
     tool: 'file', id: 'movie-read',
     startAt: MOVIE_CUES.readStart, doneAt: MOVIE_CUES.readDone,
-    input: { action: 'read', path: 'packages/checkout/src/apply-coupon.ts' },
+    input: { op: 'read', path: 'packages/checkout/src/apply-coupon.ts' },
     output: '…',
   });
 
@@ -191,7 +191,7 @@ function messagesAt(t: number): UIMessage[] {
   const search = toolPart(t, {
     tool: 'file', id: 'movie-search',
     startAt: MOVIE_CUES.searchStart, doneAt: MOVIE_CUES.searchDone,
-    input: { action: 'search', path: 'packages/checkout', query: 'coupon_ineligible' },
+    input: { op: 'search', path: 'packages/checkout', query: 'coupon_ineligible' },
     output: '3 matches',
   });
 
@@ -221,7 +221,7 @@ function messagesAt(t: number): UIMessage[] {
   ] as const) {
     const write = toolPart(t, {
       tool: 'file', id, startAt, doneAt,
-      input: { action: 'write', path },
+      input: { op: 'write', path },
       output: 'ok',
     });
 
