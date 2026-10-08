@@ -152,7 +152,7 @@ test('a turn cut off after its report-tool answer, mid-turn, is not run again an
 
   expect(asked(gateway) - first).toBe(0);
   // The hire's turn claim is in its own database.
-  expect(agentSql(actorId)<{ settled: number }>`
+  expect(agentSql(workspace, actorId)<{ settled: number }>`
     SELECT outcome IS NOT NULL AS settled FROM actor_turn_claims WHERE actor_id = ${actorId}`).toEqual([{ settled: 1 }]);
 });
 

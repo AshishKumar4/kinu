@@ -22,7 +22,7 @@ import type { CodemodeProvider } from '../types/codemode';
 import { defineOperation, opaque, serve, type OperationCall, type Served } from '../operations/operation';
 import { codemodeNamespace, nativeTool } from '../tools/operation-surfaces';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
-import { AGENTS_IMPACTS, type AgentsOp } from '../operations/agents';
+import { AGENTS_IMPACTS, AGENTS_SLATE, type AgentsOp } from '../operations/agents';
 
 const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
 
@@ -32,7 +32,7 @@ const optional = <S extends v.GenericSchema>(schema: S) => v.optional(schema);
 
 /** Fields join by wiring, so an operation's entries are assembled per wiring; its fields keep their types to its arm. */
 const agentsOp = <const E extends v.ObjectEntries>(name: AgentsOp, help: string, plan: boolean, entries: E) =>
-  defineOperation({ ns: 'agents', name, help, impact: AGENTS_IMPACTS[name], plan, slate: false, input: v.strictObject(entries), output: JsonValueSchema });
+  defineOperation({ ns: 'agents', name, help, impact: AGENTS_IMPACTS[name], plan, slate: AGENTS_SLATE, input: v.strictObject(entries), output: JsonValueSchema });
 
 const ROLE = described(v.pipe(v.string(), v.maxLength(64)), 'A catalog role id; your step context lists the roles.');
 

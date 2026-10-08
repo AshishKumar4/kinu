@@ -58,7 +58,7 @@ const REPO_ROOT = resolve(import.meta.dir, '..', '..');
  *     `renderAgentStateSection` (prompt.ts:236) skip the whole delegation
  *     ladder. The model is then not shown the surface it is being scored on
  *     reaching for.
- *   - without the codemode namespaces production wires as `extraProviders`
+ *   - without the codemode namespaces production builds with `actorNamespaces`
  *     (`agents.*`, `web.*`, `memory.*`, `tasks.*`), `eval` code the
  *     prompt teaches throws `not a function` inside the eval only.
  *

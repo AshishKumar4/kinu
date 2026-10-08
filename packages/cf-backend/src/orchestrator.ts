@@ -24,7 +24,7 @@ import {
   vfsTurnSkills, conversationKey, captureOperationProfile, type AgentRuntime, type RunTurnSources,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
   createTeamToolDeps, currentDateForPrompt, delegationExhausted,
-  mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
+  agentNamer, withHeadCaptureRecording, DelegatedTurnRunners,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
@@ -56,12 +56,12 @@ import {
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
 import { contextFill, type ContextFill } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
-import { DELEGATION_LANE_FIBER } from './fiber-recovery';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
+import { initSlateBuildTable } from "./slates/builds";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import type { MessageBlock } from "./slates/sources";
@@ -105,13 +105,14 @@ import {
   forkWorkspace, ForkTargetWriter, ForkTransferReceiver,
   type ForkTransport, type ForkFrame,
   readWorkspaceArchivePage, type ArchiveAgentSource, type ArchiveCursor, type ArchivePage,
-  nanoid, type HeadRunView,
+  nanoid, type HeadRunView, BACKGROUND_FIBER_PREFIX, parseJsonValue,
+  ForkNotices, forkNoticeDeliveries, initForkNoticeTable,
   // Delegation runner shared with the local host: an assignment is a whole turn input
   // and no reactor may digest it.
   drainAssignments, delegatedTaskMetadata,
   appendMemoryNote,
   parseMemoryNotes,
-  type SlateCallRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
+  type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type SlateSurfaceCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
@@ -208,7 +209,6 @@ import {
   WORKSPACE_RUN_ID, activeOperationProfile, SLATES_ROOT,
   buildWorkspaceOverview, recoveryBackoffMs, type WorkspaceOverview,
   projectJsonValue,
-  type AgentSignal,
 } from "@kinu.run/core";
 import * as v from 'valibot';
 import { Hono } from 'hono';
@@ -218,6 +218,7 @@ import { ownedByAnotherAccount } from './user/workspace-ownership';
 import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
+  EVOLUTION_LANE_FIBER,
   type ActorDynamicContextExtras,
   type ActorToolDeps,
   type HostedPlanReviews,
@@ -228,6 +229,7 @@ import {
 } from "@kinu.run/core/analytics";
 import {
   agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
+  WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
@@ -250,7 +252,6 @@ import {
   sendInboundEmailReceipt, sendOwnerEmail,
 } from "./email/outbound";
 import { EmailOutbox } from "@kinu.run/core";
-import { dispatchRecoveredNotice, type RecoveredNotice } from "./fiber-recovery";
 import {
   acceptSandboxLifecycleIncident, initSandboxLifecycleTable,
   type SandboxLifecycleIncidentResult,
@@ -286,8 +287,8 @@ const SANDBOX_STARTING = 'sandbox_starting';
 
 const SANDBOX_REFUSED = 'sandbox_refused';
 
-/** Smaller than the fiber sweep's row budget: each sealed head costs a durable report write
- *  and a broadcast. A pass that fills either budget arms the maintenance wake. */
+/** Smaller than the fiber sweep's row budget: each sealed head or re-pended lease costs a write and an event.
+ *  A pass that fills a budget arms the maintenance wake. */
 const ORPHAN_SEAL_MAX_ROWS = 256;
 
 /** Transfer id is fresh per transfer, so two readers of one path cannot replace
@@ -989,6 +990,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       env: this.env,
       ctx: this.ctx,
       agent: this,
+      holdLane: (body) => this.holdLane(body),
       currentTurn: (reference) => this.currentTurnOf(reference),
       exec: this.boundExec(),
       sql: this.boundSql,
@@ -1194,6 +1196,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       facts: turn.actor.stores.facts,
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
+      slate: (operation) => this.slateAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation),
       ...(report !== undefined && { report }),
       // The owner's own Plan turn, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
       ...(turn.input.mode === 'plan' && !turn.parentDriven && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
@@ -1256,7 +1259,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       originContext: () => this.agentStores(actor.handle.actorId).workingContext(),
       // The workspace's purpose, shared by every actor in it.
       ownMission: () => this.ownMission(),
-      createName: mintSubordinateName,
+      createName: agentNamer(this.workspaceActors(), roster),
       rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',
@@ -1461,7 +1464,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Soonest instant a timed ledger (terminal retry, deferred job resume) owes a wake, or null.
    * Untimed owed work is excluded; it is {@link owedUntimedWork}. */
   protected override nextOwedAt(): number | null {
-    const at = Math.min(this.workOwedAt() ?? Infinity, this.overviewRetry?.at ?? Infinity);
+    const at = Math.min(this.workOwedAt() ?? Infinity, this.overviewRetry?.at ?? Infinity, this.forkNotices.nextDueAt() ?? Infinity);
 
     return Number.isFinite(at) ? at : null;
   }
@@ -1485,8 +1488,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ).toArray().length > 0;
   }
 
-  /** A lease from before this activation lost its runner; effects dedupe on rerun. */
-  private rependDeadActivationLeases(): void {
+  /** A lease from before this activation lost its runner; effects dedupe on rerun. True when the pass filled its budget. */
+  private rependDeadActivationLeases(): boolean {
     // Looked for first: every wake runs this, and a write tells each open page its agents moved.
     const dead = this.boundExec().exec(
       `SELECT 1 FROM agent_log
@@ -1496,38 +1499,38 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.activationStartedAt,
     ).toArray();
 
-    if (dead.length === 0) return;
+    if (dead.length === 0) return false;
 
     const rows = this.boundExec().exec(
       `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
-       WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
-         AND consumed_at IS NOT NULL AND consumed_at < ?
+       WHERE rowid IN (
+         SELECT rowid FROM agent_log
+         WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
+           AND consumed_at IS NOT NULL AND consumed_at < ?
+         LIMIT ?
+       )
        RETURNING id`,
       this.activationStartedAt,
+      ORPHAN_SEAL_MAX_ROWS,
     ).toArray();
 
     for (const row of rows) {
       diagnostics.event('subordinate.assignment_repended', { workspace: this.name, assignment: v.parse(LeasedRowSchema, row).id, cause: 'dead_activation' });
     }
+
+    return rows.length >= ORPHAN_SEAL_MAX_ROWS;
   }
 
   protected readonly delegatedTurns = new DelegatedTurnRunners({
     pass: (record) => this.drainActorAssignments(record),
-    holdLane: async (body) => {
-      await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
-        ctx.stash({ lane: DELEGATION_LANE_FIBER });
-        await body();
-      });
-    },
+    // Off the wake: inside it a turn held the alarm to its 15-minute wall, whose reset closed every socket
+    // (warm-forge-4d6acc02, 2026-09-25). Kept alive, not recovered: the admitted rows re-drive the drain.
+    holdLane: (body) => this.holdLane(body),
     failed: (record, error) => {
       diagnostics.failure('subordinate.delegation_drain_failed', error, { workspace: this.name, ...(record !== null && { actor: record.name }) });
     },
   });
 
-  /**
-   * Admitted delegated turns run on a fiber, off the wake: inside it a turn held the alarm to its
-   * 15-minute wall, whose reset closed every socket (warm-forge-4d6acc02, 2026-09-25).
-   */
   /** One the owner added has its own Stop. */
   protected override stopSubtree(actorId: string): void {
     const seams = this.hostedSeams();
@@ -1821,6 +1824,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }, { drainTurnId });
     }
 
+    this.deliverForkNotices();
     await super.owedDeliveryWork();
   }
 
@@ -1846,6 +1850,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return deafInbox ? [deafInbox] : [];
       },
+      failingSlates: () => this.slates.failingBuilds().map(({ slate, failure }) => `${slate}: ${failure}`),
     };
   }
 
@@ -2017,11 +2022,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Every pass runs (no short-circuit): each owns a different table and is budgeted and idempotent. */
-  protected override maintenanceSweeps(activation = false): boolean {
+  protected override maintenanceSweeps(): boolean {
+    const leases = this.rependDeadActivationLeases();
     const branches = this.reconcileOrphanedBranches();
-    const fibers = super.maintenanceSweeps(activation);
 
-    return branches || fibers;
+    return leases || branches;
   }
 
   protected get engine(): EvolutionEngine {
@@ -2384,6 +2389,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Owner's revoke path; drops the webhook secret with the row.
       cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
       armCompactNow: () => { this.compactionState.armCompaction(this.name); },
+      proposeWorkspace: (proposal) => this.proposals.propose(proposal),
     });
   }
 
@@ -3055,6 +3061,33 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
+  // Lazy like `consents`. A proposed workspace is created through the account's one creation path, under its owner.
+  private _proposals: WorkspaceProposals | null = null;
+  private get proposals(): WorkspaceProposals {
+    return this._proposals ??= new WorkspaceProposals({
+      store: new WorkspaceProposalStore(this.boundSql),
+      newId: () => `wsp-${nanoid(10)}`,
+      now: () => Date.now(),
+      create: async ({ displayName, purpose, soul }) => {
+        const { stub: userDO, caller } = await this.userHub();
+
+        return createCloudWorkspaceForUser({ env: this.env, userId: this.requireOwnerUserId(), userDO, caller, input: { displayName, purpose }, soul });
+      },
+      link: (workspace) => `${this.env.CLI_PUBLIC_ORIGIN ?? ''}/workspace/${encodeURIComponent(workspace)}`,
+      // Read through `this.orch` at delivery time, never captured, as the deferrals' inbox is.
+      inbox: { send: (signal) => this.orch.inbox.send(signal) },
+      announce: () => { this.overviewChanged(); },
+    });
+  }
+
+  /** The owner's one decision on a workspace the agent proposed; a second answer decides nothing. */
+  @callable()
+  async decideWorkspaceProposal(id: string, answer: WorkspaceProposalAnswer): Promise<{ decided: boolean; workspace: string | null }> {
+    const asked = v.parse(v.object({ id: v.string(), answer: v.picklist(['approve', 'decline']) }), { id, answer });
+
+    return settle(Effect.map(this.proposals.decide(asked.id, asked.answer), (decided) => ({ decided: decided !== null, workspace: decided?.workspace ?? null })));
+  }
+
   /** Called by the UserDO over DO RPC. Resolves on decision or `timeout`; `timeout` is not
    *  `deny`, since an unanswered prompt means the owner was away. */
   async awaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
@@ -3160,6 +3193,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
     initChangeNotesTable(execRaw);
     initSlatePictureTable(execRaw);
+    initSlateBuildTable(execRaw);
     initBrowserSessionTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
@@ -3178,6 +3212,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
     initSandboxLifecycleTable(execRaw);
     initActivationTable(execRaw);
+    initForkNoticeTable(execRaw);
   }
 
   /** Written by the first claim or a fork, never by a start. */
@@ -3208,9 +3243,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // An unborn workspace owes nothing: its first claim writes it.
     if (this.storageRefusal !== undefined || !this.workspaceBorn()) return;
-    this.rependDeadActivationLeases();
     // Row-budgeted (init gate); a truncated pass drains under the wake below.
-    this.maintenanceUnfinished = this.maintenanceSweeps(true);
+    this.maintenanceUnfinished = this.maintenanceSweeps();
     // An activation is the only moment a workspace whose wake was lost can notice; the arm is detached.
     this.armDurableWake();
 
@@ -3226,6 +3260,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Boot awaits only this object's SQLite and session composition. A failure fails the start, so the object
     // stays unstarted and every request fails with the cause until one boots; owed work keeps its wake.
     await this.hostedWorkspace().bundle.session();
+    this.activationRecovery = this.recoverDeadActivation();
   }
 
   /**
@@ -3234,34 +3269,125 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private readonly activationStartedAt = Date.now();
 
-  /**
-   * In-memory on purpose: fork-journal recovery runs once per isolate; a second pass could retire
-   * a root the resume gate already claimed and re-drove in this activation.
-   */
-  private activationRecoveryPending = true;
+  /** {@link recoverDeadActivation}'s run, which every maintenance pass joins first. */
+  private activationRecovery: Promise<void> = Promise.resolve();
 
-  /** Carry a fork-recovery notice durably until delivered; the idempotency key collides duplicates. */
-  private dispatchForkNotice(signal: AgentSignal): void {
-    const notice: RecoveredNotice = {
-      kind: signal.kind, text: signal.text,
-    };
+  private _forkNotices: ForkNotices | null = null;
 
-    if (signal.idempotencyKey !== undefined) notice.idempotencyKey = signal.idempotencyKey;
+  private get forkNotices(): ForkNotices {
+    this._forkNotices ??= new ForkNotices(this.boundSql, this.activationStartedAt);
 
-    if (signal.metadata !== undefined) notice.metadata = signal.metadata;
-    dispatchRecoveredNotice(
-      {
-        redrive: (lane, checkpoint, body) => { this.redriveRecoveredLane(lane, checkpoint, body); },
-        deliverSignal: (recovered) => this.orch.inbox.send(recovered),
-      },
-      notice,
-    );
+    return this._forkNotices;
   }
 
-  /** Reconcile the fork journal a dead activation left running, then reclaim settled facets.
-   *  Runs once per activation by the guard below. */
+  /** Starts every due notice; each attempt settles its own row, so none is started twice. */
+  private deliverForkNotices(): void {
+    const deliveries = forkNoticeDeliveries(this.forkNotices, {
+      send: (signal) => this.orch.inbox.send(signal),
+      arm: (dueAt) => this.scheduleTerminalRetry(dueAt),
+      workspace: this.name,
+    }, Date.now());
+
+    for (const delivery of deliveries) this.detachOwned(delivery);
+  }
+
+
+
+
+  /**
+   * Reconcile the fork journal a dead activation left running, then reclaim the exploration actors it settled.
+   * Once per activation, so started only by `onStart`, last, and not awaited: the resume gate re-drives jobs, and a
+   * second gate would reclaim a job from the executor the first started.
+   */
+  private recoverDeadActivation(): Promise<void> {
+    this.redriveOrphanedFibers();
+
+    const forks = this.hasLiveExploration() || this.jobs.countRunningInWorkspace() > 0
+      // The window the reconcile reads (its default), so this asks what the sweep would find.
+      || this.eventRecorder.unterminatedRuns(undefined, this.activationStartedAt).length > 0;
+
+    if (!forks && !this.hasExplorationActors()) return Promise.resolve();
+
+    return settleLogged('head.journal_reconcile_failed', { doing: 'reconciling fork-journal heads a dead activation left running', otherwise: 'io' }, () => this.holdLane(async () => {
+      // The seal owns pre-cutoff steer branches, which the reconcile would retire as lost fork work; each pass
+      // moves its rows off `running`, so the loop ends.
+      let sealing = true;
+
+      while (sealing) sealing = this.reconcileOrphanedBranches();
+      await reconcileInterruptedForks({
+        now: this.activationStartedAt,
+        journal: this.headJournal,
+        // The row written synchronously is the acceptance boundary, and the notice's turn belongs outside this frame.
+        inbox: {
+          send: (signal) => {
+            this.forkNotices.hold(signal.idempotencyKey ?? nanoid(), signal, Date.now());
+            this.deliverForkNotices();
+
+            return Promise.resolve('queued');
+          },
+        },
+        search: this.mctsSearchStore,
+        runEvents: this.eventRecorder,
+        // The loop's runs, and the open one the wake re-opens (`resumeChatLoop`): live on purpose, not lost fork work.
+        liveRuns: () => {
+          const owed = this.eventRecorder.openRun();
+
+          return [...this.drivenChatRuns(), ...(owed === null ? [] : [owed])];
+        },
+        resume: jobRedriveResumeGate({
+          // Every actor's: some jobs have no fiber row.
+          recoverOrphans: () => this.jobAuthorities.recoverOrphans(),
+          inputOf: (jobId) => this.jobs.getInput(jobId),
+          rootsForTask: (task) => resumableForkRoots(
+            { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
+          ),
+        }),
+        logActivity: (event, detail) => this.logActivity(event, detail),
+      });
+      await this.reclaimSettledExplorationActors();
+    }), { workspace: this.name });
+  }
+
+  /**
+   * Every actor's `fibers` rows an earlier activation left, each a lane that died with it. A row is taken by re-stamping
+   * it into this activation, so it stays the lane's carrier until its re-drive ends, and a reset before then leaves it
+   * for the next. A job's row is the only record of a settled job whose wake never landed.
+   */
+  private redriveOrphanedFibers(): void {
+    let taken = ORPHAN_SEAL_MAX_ROWS;
+
+    while (taken >= ORPHAN_SEAL_MAX_ROWS) {
+      const orphans = this.boundSql<{ actor_id: string; id: string; name: string; snapshot: string | null }>`
+        UPDATE fibers SET created_at = ${this.activationStartedAt} WHERE rowid IN (
+          SELECT rowid FROM fibers WHERE created_at < ${this.activationStartedAt} LIMIT ${ORPHAN_SEAL_MAX_ROWS})
+        RETURNING actor_id, id, name, snapshot`;
+
+      taken = orphans.length;
+
+      for (const orphan of orphans) {
+        const carried = (): void => { void this.boundSql`DELETE FROM fibers WHERE actor_id = ${orphan.actor_id} AND id = ${orphan.id}`; };
+
+        if (orphan.name === EVOLUTION_LANE_FIBER) {
+          // Its inputs are durable, so a fresh pass finishes what the dead one began; that lane's row now carries it.
+          this.settleEvolutionInBackground();
+          carried();
+        } else if (orphan.name.startsWith(BACKGROUND_FIBER_PREFIX) && orphan.snapshot !== null) {
+          const snapshot = orphan.snapshot;
+
+          this.detachOwned(logged('jobs.lane_redrive_failed', { doing: 're-driving a background job an earlier activation was running', otherwise: 'io' }, async () => {
+            await this.holdLane(() => this.jobAuthorities.recover(parseJsonValue(snapshot)));
+            carried();
+          }, { workspace: this.name, lane: orphan.name }));
+        } else {
+          diagnostics.event('fiber.orphan_dropped', { workspace: this.name, lane: orphan.name });
+          carried();
+        }
+      }
+    }
+  }
 
   protected override async maintenanceWork(): Promise<boolean> {
+    await this.activationRecovery;
     // Resume the root's own loop before anything else the wake finishes on its behalf.
     this.resumeChatLoop();
 
@@ -3303,48 +3429,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Retained claims still fence new work; verification alone is not execution.
     this.startDelegationDrain();
 
-    if (!this.activationRecoveryPending) return await super.maintenanceWork();
-
-    // Wait for the branch seal to drain: the fork reconcile would retire a pre-cutoff running
-    // steer branch head as lost fork work.
-    if (this.headJournal.listRunningBranchHeads(
-      STEER_BRANCH_RUN_ID_PREFIX, 1, this.activationStartedAt,
-    ).length > 0) return true;
-    this.activationRecoveryPending = false;
-
-    await settleLogged('head.journal_reconcile_failed', { doing: 'reconciling fork-journal heads a dead activation left running', otherwise: 'io' }, async () => {
-      await reconcileInterruptedForks({
-        now: this.activationStartedAt,
-        journal: this.headJournal,
-        // The notice's queueing promise belongs outside this alarm frame.
-        inbox: {
-          // The fiber row written synchronously is the acceptance boundary; replays after eviction
-          // collide on the signal's idempotency key.
-          send: (signal) => {
-            this.dispatchForkNotice(signal);
-
-            return Promise.resolve('queued');
-          },
-        },
-        search: this.mctsSearchStore,
-        runEvents: this.eventRecorder,
-        // Runs the resumed loop re-opened are live and must not be sealed as wreckage.
-        liveRuns: () => this.chatLoop.drivenRuns(),
-        resume: jobRedriveResumeGate({
-          // Every actor's: some jobs have no fiber row.
-          recoverOrphans: () => this.jobAuthorities.recoverOrphans(),
-          inputOf: (jobId) => this.jobs.getInput(jobId),
-          rootsForTask: (task) => resumableForkRoots(
-            { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
-          ),
-        }),
-        logActivity: (event, detail) => this.logActivity(event, detail),
-      });
-      await this.reclaimSettledExplorationActors();
-    }, { workspace: this.name });
-
     return await super.maintenanceWork();
   }
+
   /**
    * Retire exploration actors a reset left behind, against ledgers fork reconciliation settled (S13).
    * Must run after `reconcileInterruptedForks` so an `interrupted` head reads as resumable, not terminal.
@@ -3376,6 +3463,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private hasLiveExploration(): boolean {
     return this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms();
+  }
+
+  /** A search's actor outlives its run until {@link reclaimSettledExplorationActors} retires it. */
+  private hasExplorationActors(): boolean {
+    return this.boundExec().exec(
+      `SELECT 1 FROM workspace_actors WHERE origin = 'swarm' AND deleted_at IS NULL AND retiring_at IS NULL LIMIT 1`,
+    ).toArray().length > 0;
   }
 
   // Kinu's timer, the `kinu-timer` Lifecycle job (wake-jobs.ts); not an `alarm()` override because
@@ -3614,6 +3708,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return buildPendingActions({
       scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       deferredActions: this.deferrals.list(),
+      workspaceProposals: this.proposals.open(),
       unseenChanges: {
         count: unseen.length,
         revertable: unseen.filter((entry) => entry.revert !== undefined).length,
@@ -4606,7 +4701,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { html: addressedBlock(texts, address).html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
   }
 
-  async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateCallResult> {
+  async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateSurfaceResult> {
     return this.slates.surfaceCall(caller, id, name, request);
   }
 
@@ -4861,14 +4956,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Blank `displayName` is intentional: the first-interaction title policy reads it
-   * (`SubordinateAgent.onChatResponse`). Route by `name`, a stable slug.
+   * (`SubordinateAgent.onChatResponse`). Route by `name`, a stable slug drawn from `opening`, the words the chat is
+   * opened with, which are sent to it once it exists.
    */
-  @callable() async createSubordinateAgent(): Promise<{
+  @callable() async createSubordinateAgent(opening?: string): Promise<{
     name: string;
     displayName: string;
     subordinate: SubordinateRosterEntry;
   }> {
-    const result = await this.getTeamToolDeps().create({});
+    const result = await this.getTeamToolDeps().create({ ...(opening !== undefined && { brief: opening }) });
 
     return {
       ...result,

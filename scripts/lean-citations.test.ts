@@ -28,26 +28,14 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import * as v from 'valibot';
 import {
   auditCitations, auditCoverage, citations, isGovernedCitationFile, type Citations,
 } from './lean-citations';
 import { isTextSource, isVendoredSource, trackedFiles } from './sources';
+import { LADDER } from './ladder';
 import { stringValues, tsDeclarations } from '../lean/ts-refs.mjs';
 
 const repoRoot = resolve(import.meta.dir, '..');
-
-/** The workflow's trigger, as far as this assertion needs it: whether either
- *  event declares a path filter, and what it holds. */
-const TriggerSchema = v.object({
-  on: v.record(
-    v.string(),
-    v.nullable(v.object({
-      paths: v.optional(v.array(v.string())),
-      'paths-ignore': v.optional(v.array(v.string())),
-    })),
-  ),
-});
 
 /** Real modules, so a fixture exercises resolution rather than mocking it. */
 const ARBITRATION = 'lean/Kinu/Exploration/Arbitration.lean';
@@ -228,78 +216,30 @@ describe('the corpus this gate governs', () => {
   });
 });
 
-describe('the workflow that runs this gate fires on what this gate reads', () => {
+describe('the CI tier runs this gate on every commit', () => {
   /**
-   * `lean-verify.yml` is the ONLY Lean gate GitHub runs, so a `paths:` filter naming
-   * `lean/**` and `packages/**\/src/**\/*.ts` does not cover it. This gate's corpus
-   * is every tracked TEXT source, and citations really do live outside that
-   * filter: `docs/`, `scripts/`, `packages/core/tests/` and `bench/corpus/patches/`.
-   * A broken citation added to any of them would reach `main` with no Lean gate
-   * having run, and `scripts/lean-citations.ts` itself would not be a trigger
-   * path — editing the gate would not run it.
-   *
-   * A filter is allowed only if it COVERS the corpus, which is checked here
-   * rather than argued in a comment. Enumerating the real union is the same
-   * thing as not filtering, so today there is no filter; this test is what makes
-   * re-adding a narrow one a failure that names the files it would drop.
+   * This gate's corpus is every tracked TEXT source, and citations really do live outside `lean/`: `docs/`,
+   * `scripts/`, `packages/core/tests/` and `bench/corpus/patches/`. Any trigger narrower than every commit would let a
+   * broken citation reach `main` with no Lean gate having run. The Lean row is a ci-tier row, which armada runs on
+   * every commit, and its inputs are `live`, so no proof an earlier commit recorded stands in for it.
    */
-  const workflowPath = '.github/workflows/lean-verify.yml';
+  test('the Lean row runs at the CI tier, on armada, never from a recorded proof', () => {
+    const row = LADDER.find((gate) => gate.run === 'bun run verify:lean');
 
-  test('it declares no path filter narrower than the citation corpus', () => {
-    const parsed = v.parse(
-      TriggerSchema,
-      Bun.YAML.parse(readFileSync(resolve(repoRoot, workflowPath), 'utf8')),
-    );
-
-    const corpus = trackedFiles().filter(isTextSource);
-    // The denominator: a corpus this assertion could not populate would make it
-    // pass over nothing, which is the defect the gate itself is about.
-    expect(corpus.length).toBeGreaterThan(1000);
-
-    const dropped: string[] = [];
-
-    for (const [event, trigger] of Object.entries(parsed.on)) {
-      if (trigger === null) continue;
-      const ignore = trigger['paths-ignore'] ?? [];
-
-      if (ignore.length > 0) {
-        const globs = ignore.map((pattern) => new Bun.Glob(pattern));
-        dropped.push(...corpus
-          .filter((file) => globs.some((glob) => glob.match(file)))
-          .map((file) => `${event} paths-ignore drops ${file}`));
-      }
-
-      const paths = trigger.paths ?? [];
-
-      if (paths.length === 0) continue;
-      const globs = paths.map((pattern) => new Bun.Glob(pattern));
-      dropped.push(...corpus
-        .filter((file) => !globs.some((glob) => glob.match(file)))
-        .map((file) => `${event} paths does not select ${file}`));
-    }
-
-    // Named, not counted, and capped only in the message: the first few are what
-    // a reader needs, and the count is what says how bad it is.
-    expect(dropped.slice(0, 5)).toEqual([]);
-    expect(dropped).toEqual([]);
+    expect({ tier: row?.tier, inputs: row?.inputs.kind, here: row?.here }).toEqual({ tier: 'ci', inputs: 'live', here: undefined });
   });
 
-  test('every gate the workflow runs is itself inside the corpus it fires on', () => {
-    // The gate programs are text sources too, so an unfiltered trigger covers
-    // them. This is the direction that was missing outright: neither
-    // `scripts/lean-citations.ts` nor `lean/check-traceability.mjs` appeared in
-    // the old filter, so a change to either shipped without running.
+  test('every gate the runner runs is itself inside the corpus it reads', () => {
+    // The gate programs are text sources too. Neither `scripts/lean-citations.ts` nor `lean/check-traceability.mjs`
+    // appeared in the old workflow's path filter, so a change to either shipped without running.
     const corpus = new Set(trackedFiles().filter(isTextSource));
     const runner = 'scripts/verify-lean.sh';
     const script = readFileSync(resolve(repoRoot, runner), 'utf8');
-
-    const gates = [runner, workflowPath, 'scripts/lean-citations.ts',
-      'lean/check-traceability.mjs', 'lean/check-no-false.sh'];
+    const gates = [runner, 'scripts/lean-citations.ts', 'lean/check-traceability.mjs', 'lean/check-no-false.sh'];
 
     expect(gates.filter((gate) => !corpus.has(gate))).toEqual([]);
 
-    // And the runner really invokes each of the three, so this list is not a
-    // guess about what the workflow does.
+    // And the runner really invokes each of the three, so this list is not a guess about what CI runs.
     for (const gate of ['lean-citations.ts', 'check-traceability.mjs', 'check-no-false.sh']) {
       expect(script).toContain(gate);
     }

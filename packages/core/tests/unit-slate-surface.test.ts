@@ -85,9 +85,12 @@ test('ai.run routes one model call, the tier the call names', () => {
 });
 
 test('what only the agent does is refused before it is routed', () => {
-  for (const path of [['agents', 'hire'], ['agent', 'hire'], ['workspace', 'createTool'], ['sandbox', 'createTool'], ['workspace', 'slates'], ['report', 'send'], ['tasks', 'switchRole']]) {
+  for (const path of [['agent', 'hire'], ['workspace', 'createTool'], ['sandbox', 'createTool'], ['workspace', 'slates'], ['report', 'send'], ['tasks', 'switchRole']]) {
     expect(() => call(path), path.join('.')).toThrow(expect.objectContaining({ code: 'denied' }));
   }
+
+  // Helpers are the owner's own slate's to hire: routed as the act they are, and held to the owner by the host.
+  expect(call(['agents', 'hire'], [{}])).toMatchObject({ address: { namespace: 'agents', member: 'hire' }, impact: 'delegate' });
 
   // Read models and the browser are the surface's; an unknown read model is not.
   expect(call(['reads', 'getExecutors']).route).toEqual({ kind: 'rpc', method: 'getExecutors' });
@@ -113,7 +116,8 @@ const viewerCall = (path: string[], args: JsonValue[] = []) => routeViewerCall({
 });
 
 test('a viewer call refuses what the owner call refuses, then what the grant does not name', () => {
-  expect(() => viewerCall(['agents', 'hire'])).toThrow("agents.hire is not on a slate's surface");
+  expect(() => viewerCall(['agents', 'hire'])).toThrow("agents.hire runs only in its owner's own slate, never for a share's viewer");
+  expect(() => viewerCall(['agents', 'list'])).toThrow("agents.list runs only in its owner's own slate, never for a share's viewer");
   expect(() => viewerCall(['writeFile'], ['/a', 'x'])).toThrow('Slate issues does not grant workspace.writeFile to viewers');
 });
 

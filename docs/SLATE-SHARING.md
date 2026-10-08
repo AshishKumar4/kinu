@@ -12,9 +12,10 @@ namespaces its caller's `eval` programs reach (executors, `memory`, `tasks`,
 `reads.<model>`, `agent.send`, `ai.run` and `slates.<id>.<method>`, each called
 as the caller, with the caller's role reach, Plan permissions, egress and
 approval gates (decision M3 in `docs/ARCHITECTURE-DECISIONS.md`).
-`package.json` names no capabilities. What only the agent does (delegating,
-steering itself, making tools, changing slates) is refused where the host
-routes a call (`SLATE_EXCLUDED` in `packages/core/src/slates/surface.ts`), as
+`package.json` names no capabilities. What only the agent does (steering
+itself, making tools, changing slates) is refused where the host routes a
+call; delegating (`agents.*`) is the owner's own slate's alone, so no share
+grants it and approving it refuses (`SLATE_EXCLUDED` in `packages/core/src/slates/surface.ts`), as
 is any member the impact table does not name (`packages/core/src/slates/members.ts`).
 
 **How every route resolves as the caller.** The host mints the `workspace` stub

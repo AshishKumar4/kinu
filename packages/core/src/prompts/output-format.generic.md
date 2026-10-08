@@ -1,0 +1,3 @@
+- Lead with the result. Then what you changed or found, how you checked it, and what remains uncertain.
+- Say each thing once: do not repeat an answer, a question or an update already given in this turn.
+- Match the length to the request: a direct question gets a direct answer. Use headers, lists and tables only where they help the reader.

@@ -100,6 +100,8 @@ export interface DynamicContext {
   approvals?: ActiveRoster<DynamicApproval>;
   /** Configured capabilities missing from this turn's surface, so the model can explain their absence. */
   missingCapabilities?: readonly MissingCapability[];
+  /** Slates whose latest source does not build, each `id: the compiler's words`; the user still sees the last that did. */
+  failingSlates?: readonly string[];
 }
 
 /** The search roster as delegates, in the surface's words (`agents({op:'swarm'})`, nodes), never `fork` or
@@ -156,6 +158,7 @@ export interface DynamicContextSources {
   readonly subordinateDelegates?: readonly DynamicDelegate[];
   readonly approvals?: ActiveRoster<DynamicApproval>;
    readonly missingCapabilities: readonly MissingCapability[];
+   readonly failingSlates?: readonly string[];
 }
 
 /** Both backends' live state for one step: this alone decides which planes exist; an absent one renders nothing. */
@@ -202,6 +205,8 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   if (sources.memoryTail) context.memoryTail = sources.memoryTail;
 
   if (sources.recoveryFindings.length > 0) context.recoveries = sources.recoveryFindings;
+
+  if (sources.failingSlates !== undefined && sources.failingSlates.length > 0) context.failingSlates = sources.failingSlates;
 
   if (sources.toolLessons.length > 0) context.toolLessons = sources.toolLessons;
 
@@ -466,11 +471,20 @@ const DYNAMIC_SECTION_TITLES = {
   executors: '## Execution status',
   devices: '## Your user\'s machines (the `device` runtime)',
   tasks: '## Your task list: what is still open (you keep this with the `tasks` tool)',
-  jobs: '## Background work still running (collect it before you finish)',
+  jobs: '## Background work still running',
   delegates: '## Delegates working for you',
   approvals: '## Waiting on the user (not on you)',
   missingCapabilities: '## Configured but not available this turn (plan without these, and say so if asked)',
+  failingSlates: '## Slates that do not build (the user sees each one\'s last working version until you fix it)',
 } satisfies Record<keyof DynamicContext, string>;
+
+/** Each slate whose latest source does not build, in the compiler's words. */
+function failingSlatesSection(failures: readonly string[]) {
+  return rosterSection(
+    DYNAMIC_SECTION_TITLES.failingSlates, { items: failures, total: failures.length }, { cap: MAX_RECOVERIES, keyed: false },
+    (failure) => `- ${clip(failure, RECOVERY_ENTRY_CHARS)}`,
+  );
+}
 
 /** For a reported empty set; an unreported (`undefined`) set stays silent. */
 const NO_CRAFTED_TOOLS_YET =
@@ -538,6 +552,8 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, { cap: MAX_RECOVERIES, keyed: false },
     (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
   ));
+
+  add('failingSlates', failingSlatesSection(ctx.failingSlates ?? []));
 
   add('toolLessons', toolLessonsSection(ctx.toolLessons ?? []));
   add('delegation', delegationSection(ctx.delegation));

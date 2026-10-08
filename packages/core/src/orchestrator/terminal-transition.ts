@@ -48,7 +48,7 @@ export interface TerminalTransitionDeps {
   readonly scheduleRetry: (atMs: number) => Promise<void>;
   /** Called once a transition closes with nothing left to retry, so the host can let its arms go. */
   readonly settled: () => Promise<void>;
-  /** Keeps the host alive while a settled turn's detached effects close (a durable fiber on CF); settles with `close`. */
+  /** Keeps the host alive while a settled turn's detached effects close; settles with `close`. */
   readonly hold: (close: () => Promise<void>) => Promise<void>;
 }
 
@@ -315,28 +315,6 @@ export class TerminalTransitions {
         await this.armRecovery(transition, { cause: err });
       }
     }
-  }
-
-  /** Arms the wake without replaying, for a caller that must not await (a fiber-recovery hook runs inside the init gate). {@link resumeAll}'s claim join makes the re-entry safe. */
-  async armOwedRecovery(): Promise<void> {
-    const owed = this.toRecover();
-
-    if (owed.length === 0) return;
-    // The ledger's own instant when it has one; the base delay otherwise.
-    const at = this.nextRetryAt() ?? this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS;
-    const armed = await this.armWake(at);
-
-    if (armed.armed) {
-      diagnostics.event('turn.terminal_recovery_armed', { owed: owed.length, at });
-
-      return;
-    }
-
-    diagnostics.failure('turn.terminal_recovery_unarmed', toKinuError({
-      doing: 'arming the durable wake for the terminal sequences an interruption left owed',
-      cause: armed.refusal,
-      otherwise: 'io',
-    }), { owed: owed.length });
   }
 
   /** Released and re-armed: the rejection may be the ledger's final wake failing. */

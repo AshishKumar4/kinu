@@ -81,19 +81,19 @@ describe('a subagent', () => {
   test('keeps its own home at /home/<name>, beside the main agent\'s', async () => {
     const database = await nimbusSeededWorkspace();
     const { kernel } = await boot(database);
-    const name = actorHomeName({ origin: 'agent', storageKey: 'reviewer' });
+    const name = actorHomeName({ origin: 'agent', name: 'reviewer', storageKey: 'reviewer' });
 
     const home = provisionAgentHome(kernel, name, agentIdentity(workspaceSql(database), name));
 
-    expect(home).toBe('/home/sub-reviewer');
-    expect(kernel.readdir('/home').map((entry) => entry.name).sort((a, b) => a.localeCompare(b))).toEqual(['main', 'sub-reviewer']);
+    expect(home).toBe('/home/reviewer');
+    expect(kernel.readdir('/home').map((entry) => entry.name).sort((a, b) => a.localeCompare(b))).toEqual(['main', 'reviewer']);
   });
 });
 
 /** One boot with an agent hired into the workspace, and the plane as each credential reaches it. */
 async function withHire(database: Database) {
   const { bundle, kernel, user } = await boot(database);
-  const agent = actorHomeName({ origin: 'agent', storageKey: 'builder' });
+  const agent = actorHomeName({ origin: 'agent', name: 'builder', storageKey: 'builder' });
   const identity = agentIdentity(workspaceSql(database), agent);
   const home = provisionAgentHome(kernel, agent, identity);
   const builder = (await bundle.session()).vfs.as(agentCred(identity));

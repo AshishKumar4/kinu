@@ -6,7 +6,7 @@
 import type { Impact } from '@agent-core/core/facets';
 import type { Operation } from '../operations/operation';
 import { AGENT } from '../operations/agent';
-import { AGENTS_IMPACTS } from '../operations/agents';
+import { AGENTS_IMPACTS, AGENTS_SLATE } from '../operations/agents';
 import { DB } from '../operations/db';
 import { DEVICE, PARENT, SANDBOX, WORKSPACE } from '../operations/executors';
 import { FILE } from '../operations/file';
@@ -17,6 +17,9 @@ import { WEB, WEB_SANDBOX_IMPACTS } from '../operations/web';
 
 /** `workspace.ai.run({ prompt, system?, tier? })`: a model call, never the `shell` tool, whose run was renamed. */
 export const AI_RUN_MEMBER = 'run';
+
+/** `workspace.ai.stream({ prompt, system?, tier? })`: the same call, its text handed over as it is written. */
+export const AI_STREAM_MEMBER = 'stream';
 
 /** A tool call's chip: whether it only looked. */
 export type ActionEffect = 'read' | 'mutate';
@@ -49,14 +52,32 @@ export const NATIVE_ACTION_EFFECTS = {
 /** The browser members a program's sandbox holds, declared beside `web`'s operations. */
 const SANDBOX_WEB = new Map<string, Impact>(Object.entries(WEB_SANDBOX_IMPACTS));
 
+/** Namespaces the wiring declares per actor (`agents.*`): what each member does, and who reaches it from a slate. */
+const WIRED = new Map<string, { readonly impacts: ReadonlyMap<string, Impact>; readonly slate: Operation['slate'] }>([
+  ['agents', { impacts: new Map(Object.entries(AGENTS_IMPACTS)), slate: AGENTS_SLATE }],
+]);
+
 /** A declared operation a slate may call, by its catalog entry; `null` for one it may not, or one never declared. */
 function namespaceMemberImpact(namespace: string, member: string): Impact | null {
   const sandboxWeb = namespace === 'web' ? SANDBOX_WEB.get(member) : undefined;
 
   if (sandboxWeb !== undefined) return sandboxWeb;
+
+  const wired = WIRED.get(namespace);
+
+  if (wired !== undefined) return wired.slate === false ? null : wired.impacts.get(member) ?? null;
   const op = DECLARED.get(namespace)?.get(member);
 
-  return op?.slate === true ? op.impact : null;
+  return op?.slate === true || op?.slate === 'owner' ? op.impact : null;
+}
+
+/** A member only the owner's own slate reaches, as the owner: a share never grants it, a hosted actor's slate never holds it. */
+export function slateOwnerOnly(address: { readonly namespace: string; readonly member: string }): boolean {
+  const wired = WIRED.get(address.namespace);
+
+  if (wired !== undefined) return wired.slate === 'owner' && wired.impacts.has(address.member);
+
+  return DECLARED.get(address.namespace)?.get(address.member)?.slate === 'owner';
 }
 
 /**
@@ -76,8 +97,8 @@ export function slateAddressImpact(address: { readonly namespace: string; readon
 
   if (address.namespace === 'agent' && address.member === 'send') return 'externalSend';
 
-  // `ai` has one member; any other is no model call, and no namespace of the actor's either.
-  if (address.namespace === 'ai') return address.member === AI_RUN_MEMBER ? 'execute' : null;
+  // `ai` has two members, one call answered whole or as it is written; any other is no model call, and no namespace of the actor's either.
+  if (address.namespace === 'ai') return address.member === AI_RUN_MEMBER || address.member === AI_STREAM_MEMBER ? 'execute' : null;
 
   return namespaceMemberImpact(address.namespace, address.member);
 }

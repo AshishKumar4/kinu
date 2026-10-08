@@ -273,9 +273,9 @@ function rpc(ws, id, result, error) {
 
 // ── Shadow-git checkpoints ─────────────────────────────────────────────
 //
-// One store format with the CLI's engine: the block below is core's
-// checkpoints/format.ts, generated, so a machine's checkpoints read alike
-// whichever side wrote them:
+// One engine with the CLI's: the blocks below are core's checkpoints/format.ts
+// and checkpoints/engine.ts, generated, so a machine's checkpoints are taken by
+// the same rules and read alike whichever side wrote them:
 //
 //   <device home>/checkpoints/<agent>/<sha256(dir)[:16]>/ — bare GIT_DIR
 //     KINU_WORKDIR                                    — the target dir
@@ -419,44 +419,80 @@ function checkpointRefTimestampMs(ref) {
 
 // END GENERATED
 
-const SHA_RE = /^[0-9a-f]{4,64}$/i;
+// BEGIN GENERATED from packages/core/src/checkpoints/engine.ts by `bun scripts/daemon-generated.ts`. Do not edit.
 
-/** `git diff-tree --name-status` letters this daemon reports by name; every
- *  other letter (M, R, T, …) restores as a modification. */
-const DIFF_KIND = { A: 'create', D: 'delete' };
+// Shadow-git checkpoint engine, the one both the CLI and the device daemon run; the daemon carries a generated copy.
+// It imports no value: the host hands it the filesystem, paths, the platform's dirs, hashing and git, so the copy
+// runs in the daemon's dependency-free JavaScript unchanged. One set of rules:
+//   - no wall clock on git: it ends on its own, and a bounded buffer keeps this process's heap;
+//   - one operation at a time, in arrival order: git keeps one index per store, and a restore rewrites the tree a
+//     snapshot reads;
+//   - one snapshot per agent, directory and turn, taken before the mutation it precedes, never blocking it;
+//   - a workdir climbs from the entry itself (`lstat`: moving a link changes the directory holding it), never
+//     through the shared temp directory, the home folder, or a directory `covers` refuses.
 
+/** What marks a project directory, the snapshot unit a file write climbs to. */
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
 
-// Shared temp roots, pinned alongside the TS engine's copy
-// (cli-backend/src/checkpoints.ts): a bare `/tmp/x.js` resolves to `/tmp` for
-// want of a project marker, and that is not a work tree.
-const UNSNAPSHOTTABLE = new Set([os.tmpdir(), '/tmp', '/var/tmp'].map((dir) => path.resolve(dir)));
+const SHA_RE = /^[0-9a-f]{4,64}$/i;
 
-function createCheckpoints(opts = {}) {
-  const base = opts.base ?? path.join(DEVICE_HOME, 'checkpoints');
-  const keep = Math.max(1, opts.keep ?? DEFAULT_CHECKPOINT_KEEP);
-  const gitBin = opts.gitBin ?? 'git';
+/** git's output this process keeps in memory, at most. */
+const GIT_OUTPUT_BYTES = 32 * 1024 * 1024;
+
+/** A git run: `code` null when git never finished (a signal, an overfull buffer); `missing` when it could not start. */
+
+/** The node modules the engine reads through, as both hosts hand them over. */
+
+/** A snapshot a mutation asks for. `turn` null is out of any turn: the turn key is `no-turn`. */
+
+/** What a request got: the checkpoint id (null when the directory is no work tree), or why none was taken. */
+
+function failed(message) {
+  return new Error(message);
+}
+
+/** The environment a git child runs under. */
+
+/** A failure and each cause under it, outermost first: the frame naming the real fault is often a cause deeper. */
+function causeText(failure) {
+  const links = [failure.message];
+
+  for (let at = failure.cause; at instanceof Error; at = at.cause) links.push(at.message);
+
+  return links.join(': ');
+}
+
+/** A `diff-tree --name-status` letter in restore direction (current to checkpoint). */
+function restoreKindOf(status) {
+  if (status === 'A') return 'create';
+
+  return status === 'D' ? 'delete' : 'modify';
+}
+
+function createCheckpointEngine(host, options) {
+  const { fs: disk, path: paths } = host;
+  const keep = Math.max(1, options.keep);
+  const unsnapshottable = new Set([host.tmpdir, '/tmp', '/var/tmp'].map((dir) => paths.resolve(dir)));
   let gitAvailable = null;
   let refSeq = 0;
-  /** `${agent}|${dir}` → last turn key; one snapshot per turn per dir. */
+  /** `${agent}|${dir}` → the turn whose snapshot was taken. A failed one is never recorded, so the next mutation retries. */
   const turnDone = new Map();
 
   const isolatedEnv = () => {
     const env = {};
 
-    for (const [k, v] of Object.entries(process.env)) {
-      if (v !== undefined && !k.startsWith('GIT_')) env[k] = v;
+    for (const [name, value] of Object.entries(host.env)) {
+      if (value !== undefined && !name.startsWith('GIT_')) env[name] = value;
     }
 
-    env.GIT_CONFIG_GLOBAL = os.devNull;
-    env.GIT_CONFIG_SYSTEM = os.devNull;
+    env.GIT_CONFIG_GLOBAL = host.devNull;
+    env.GIT_CONFIG_SYSTEM = host.devNull;
     env.GIT_CONFIG_NOSYSTEM = '1';
     env.GIT_AUTHOR_NAME = 'Kinu Checkpoint';
     env.GIT_AUTHOR_EMAIL = 'checkpoints@kinu.local';
     env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
     env.GIT_COMMITTER_EMAIL = 'checkpoints@kinu.local';
-    // So `diagnoseStaging` parses git's own words rather than a translation of
-    // them: a localized warning would read as an unexplained staging failure.
+    // `stagingOutcome` parses git's own English diagnostics.
     env.LC_ALL = 'C';
 
     return env;
@@ -464,378 +500,329 @@ function createCheckpoints(opts = {}) {
 
   const storeEnv = (gitDir, workdir) => ({ ...isolatedEnv(), GIT_DIR: gitDir, GIT_WORK_TREE: workdir });
 
-  const runGit = (args, cwd, env) => runToExit(gitBin, args, {
-    cwd, env, encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024,
-  });
+  /** A missing cwd fails the spawn the way a missing binary does; it is checked so it never reads as "no git". */
+  const runGit = async (args, cwd, env) => {
+    if (!disk.existsSync(cwd)) return { code: 1, stdout: '', stderr: `working directory not found: ${cwd}`, missing: false };
+    const run = await host.run(options.gitBin, args, { cwd, env, maxBuffer: GIT_OUTPUT_BYTES });
 
-  /** Run git; returns stdout. Throws on non-zero exit or missing binary. */
-  const git = async (args, cwd, env) => {
-    // A missing cwd would fail spawn with the same ENOENT a missing binary
-    // produces — never let a vanished workdir flip the degraded-mode probe.
-    if (!fs.existsSync(cwd)) throw new Error(`working directory not found: ${cwd}`);
-    const { error, stdout, stderr } = await runGit(args, cwd, env);
-
-    if (error !== null && error.code === 'ENOENT') {
+    if (run.missing) {
       gitAvailable = false;
-      throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT, { cause: error });
+      throw failed(CHECKPOINTS_UNAVAILABLE_NO_GIT);
     }
 
     gitAvailable = true;
 
-    if (error !== null) throw new Error(String(stderr).trim() || error.message, { cause: error });
-
-    return stdout;
+    return run;
   };
 
-  const probe = async () => {
+  /** git's stdout, or its stderr thrown. */
+  const git = async (args, cwd, env, doing) => {
+    const run = await runGit(args, cwd, env);
+
+    const said = run.stderr.trim();
+
+    if (run.code !== 0) throw failed(`${doing}: ${said === '' ? `git exited ${String(run.code)}` : said}`);
+
+    return run.stdout;
+  };
+
+  const probeGit = async () => {
     if (gitAvailable !== null) return gitAvailable;
 
     try {
-      await git(['--version'], os.homedir(), isolatedEnv());
-    } catch (err) {
-      // git() records availability from the spawn outcome, so a git that ran
-      // and failed is still a git that exists. Only a failure that never
-      // reached the binary leaves availability unknown, and that must not be
-      // reported as "git not found".
-      if (gitAvailable === null) throw err;
+      await runGit(['--version'], host.homedir, isolatedEnv());
+    } catch (error) {
+      // A rejection that did not record a missing git is not one.
+      if (gitAvailable !== false) throw error;
     }
 
-    return gitAvailable;
+    return gitAvailable ?? false;
   };
 
-  const sanitizeAgent = (agent) => {
-    const name = String(agent ?? '');
-
-    return (name === '' ? 'agent' : name).replace(/[^A-Za-z0-9_-]/g, '_');
-  };
-
-  const dirHash = (dir) => crypto.createHash('sha256').update(path.resolve(dir)).digest('hex').slice(0, 16);
-  const storeDirFor = (agent, dir) => path.join(base, sanitizeAgent(agent), dirHash(dir));
-  const workdirOrBase = (workdir) => (fs.existsSync(workdir) ? workdir : base);
+  const sanitizeAgent = (agent) => (agent === '' ? 'agent' : agent).replace(/[^A-Za-z0-9_-]/g, '_');
+  const storeDirFor = (agent, dir) => paths.join(options.base, sanitizeAgent(agent), host.sha256(paths.resolve(dir)).slice(0, 16));
+  const workdirOrBase = (workdir) => (disk.existsSync(workdir) ? workdir : options.base);
 
   const initStore = async (gitDir, workdir) => {
-    if (fs.existsSync(path.join(gitDir, 'HEAD'))) return;
-    fs.mkdirSync(gitDir, { recursive: true });
-    await git(['init', '--bare', '--quiet', gitDir], path.dirname(gitDir), isolatedEnv());
-    fs.mkdirSync(path.join(gitDir, 'info'), { recursive: true });
-    fs.writeFileSync(path.join(gitDir, 'info', 'exclude'), CHECKPOINT_EXCLUDES.join('\n') + '\n');
-    fs.writeFileSync(path.join(gitDir, CHECKPOINT_WORKDIR_MARKER), path.resolve(workdir) + '\n');
+    if (disk.existsSync(paths.join(gitDir, 'HEAD'))) return;
+    disk.mkdirSync(gitDir, { recursive: true });
+    await git(['init', '--bare', '--quiet', gitDir], paths.dirname(gitDir), isolatedEnv(), 'checkpoint store init failed');
+    disk.mkdirSync(paths.join(gitDir, 'info'), { recursive: true });
+    disk.writeFileSync(paths.join(gitDir, 'info', 'exclude'), CHECKPOINT_EXCLUDES.join('\n') + '\n');
+    disk.writeFileSync(paths.join(gitDir, CHECKPOINT_WORKDIR_MARKER), paths.resolve(workdir) + '\n');
   };
 
   /** Why `dir` is no work tree to snapshot, or null when it is one. */
   const snapshotSkipped = (dir) => {
-    const abs = path.resolve(dir);
+    const abs = paths.resolve(dir);
 
-    // Not a work tree, so a whole-tree snapshot of one is never what the caller
-    // meant: the filesystem root, the user's home, and the SHARED temp roots —
-    // `workdirForPath` resolves a bare `/tmp/x.js` to `/tmp`, which holds every
-    // process's and user's scratch, none of it this agent's to copy.
-    if (abs === path.parse(abs).root || abs === path.resolve(os.homedir())) return 'it is the filesystem root or the owner\'s home folder itself';
+    if (abs === paths.parse(abs).root || abs === paths.resolve(host.homedir)) return 'it is the filesystem root or the owner\'s home folder itself';
 
-    if (UNSNAPSHOTTABLE.has(abs)) return 'it is a temp directory every process shares';
+    // `workdirForPath` resolves a bare `/tmp/x.js` to `/tmp`, which holds every process's scratch.
+    if (unsnapshottable.has(abs)) return 'it is a temp directory every process shares';
 
-    // Dependency-free spelling of the closed set: a vanished path is the one
-    // expected statSync failure here; anything else must surface.
-    try { return fs.statSync(abs).isDirectory() ? null : 'it is not a directory'; }
-    catch (err) {
-      if (!err || err.code !== 'ENOENT') throw err;
+    if (!disk.existsSync(abs)) return 'it does not exist';
 
-      return 'it does not exist';
-    }
+    return disk.statSync(abs).isDirectory() ? null : 'it is not a directory';
   };
 
   const storeRefs = async (gitDir, workdir) => {
-    let out;
+    const run = await runGit(['for-each-ref', '--sort=-refname', '--format=%(refname)|%(objectname)|%(subject)', CHECKPOINT_REF_PREFIX],
+      workdirOrBase(workdir), storeEnv(gitDir, workdir));
 
-    try {
-      out = await git(['for-each-ref', '--sort=-refname', '--format=%(refname)|%(objectname)|%(subject)', CHECKPOINT_REF_PREFIX],
-        workdirOrBase(workdir), storeEnv(gitDir, workdir));
-    } catch (err) {
-      if (err.message === CHECKPOINTS_UNAVAILABLE_NO_GIT) throw err;
+    if (run.code !== 0) return [];
 
-      return [];
-    }
-
-    return out.split('\n').filter(Boolean).map((line) => {
-      const [ref, id, ...rest] = line.split('|');
+    return run.stdout.split('\n').filter(Boolean).map((line) => {
+      const [ref = '', id = '', ...rest] = line.split('|');
 
       return { ref, id, subject: rest.join('|') };
     });
   };
 
-  /** `git add -A`, keeping what it could not read instead of failing over it.
-   *  Not the `git` helper above, because stderr is the answer here, and it
-   *  arrives on a clean exit too (an unreadable DIRECTORY is only a warning). */
-  const stageAll = async (workdir, env) => {
-    if (!fs.existsSync(workdir)) throw new Error(`working directory not found: ${workdir}`);
-    const { error, stderr } = await runGit(['add', '-A', '--ignore-errors'], workdir, env);
-
-    if (error !== null && error.code === 'ENOENT') {
-      gitAvailable = false;
-      throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT, { cause: error });
-    }
-
-    gitAvailable = true;
-    // A code that is not an exit status (a timeout's kill, an overfull buffer) is git never finishing.
-    const finished = error === null || Number.isInteger(error.code);
-    const staged = stagingOutcome(finished ? (error?.code ?? 0) : null, String(stderr));
-
-    if (staged.failure !== undefined) throw new Error(staged.failure, { cause: error ?? undefined });
-
-    return staged.unreadable;
-  };
-
+  /** `--ignore-errors`, so an unreadable path costs only that path; the skipped paths are named in the reason. */
   const stageCurrent = async (gitDir, workdir) => {
     const env = storeEnv(gitDir, workdir);
-    const unreadable = await stageAll(workdir, env);
+    const add = await runGit(['add', '-A', '--ignore-errors'], workdir, env);
+    const staged = stagingOutcome(add.code, add.stderr);
 
-    return { tree: (await git(['write-tree'], workdir, env)).trim(), unreadable };
+    if ('failure' in staged) throw failed(staged.failure);
+
+    return { tree: (await git(['write-tree'], workdir, env, 'checkpoint write-tree failed')).trim(), unreadable: staged.unreadable };
   };
 
-  const snapshot = async (agent, dir, turn, reason) => {
+  /** The new checkpoint's id, or the newest one's when nothing changed; null when `dir` is no work tree. */
+  const snapshot = async (agent, dir, meta, reason) => {
     if (snapshotSkipped(dir) !== null) return null;
-    const abs = path.resolve(dir);
+    const abs = paths.resolve(dir);
     const gitDir = storeDirFor(agent, abs);
+
     await initStore(gitDir, abs);
     const env = storeEnv(gitDir, abs);
     const staged = await stageCurrent(gitDir, abs);
-    const tree = staged.tree;
-
     const refs = await storeRefs(gitDir, abs);
     const latest = refs[0];
 
-    if (latest && (await git(['rev-parse', `${latest.id}^{tree}`], abs, env)).trim() === tree) return latest.id;
+    if (latest !== undefined && (await runGit(['rev-parse', `${latest.id}^{tree}`], abs, env)).stdout.trim() === staged.tree) return latest.id;
 
-    const subject = checkpointSubject(turn, checkpointReason(reason, staged.unreadable));
-    const sha = (await git(['commit-tree', tree, '-m', subject], abs, env)).trim();
-    const refName = `${CHECKPOINT_REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
-    await git(['update-ref', refName, sha], abs, env);
+    const subject = checkpointSubject(meta, checkpointReason(reason, staged.unreadable));
+    const sha = (await git(['commit-tree', staged.tree, '-m', subject], abs, env, 'checkpoint commit failed')).trim();
+    const refName = `${CHECKPOINT_REF_PREFIX}/${String(host.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
+
+    await git(['update-ref', refName, sha], abs, env, 'checkpoint ref update failed');
 
     if (refs.length + 1 > keep) {
-      for (const stale of (await storeRefs(gitDir, abs)).slice(keep)) {
-        await git(['update-ref', '-d', stale.ref], abs, env);
-      }
-
-      await git(['prune', '--expire=now'], abs, env);
+      for (const stale of (await storeRefs(gitDir, abs)).slice(keep)) await runGit(['update-ref', '-d', stale.ref], abs, env);
+      await runGit(['prune', '--expire=now'], abs, env);
     }
 
     return sha;
   };
 
   const requireCheckpoint = async (agent, dir, id) => {
-    if (!SHA_RE.test(String(id))) throw new Error(`invalid checkpoint id: ${id}`);
-    const abs = path.resolve(dir);
+    if (!SHA_RE.test(id)) throw failed(`invalid checkpoint id: ${id}`);
+    const abs = paths.resolve(dir);
     const gitDir = storeDirFor(agent, abs);
 
-    if (!fs.existsSync(path.join(gitDir, 'HEAD'))) throw new Error(`no checkpoints exist for ${abs}`);
+    if (!disk.existsSync(paths.join(gitDir, 'HEAD'))) throw failed(`no checkpoints exist for ${abs}`);
     const env = storeEnv(gitDir, abs);
 
-    try { await git(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env); }
-    catch (err) {
-      if (err.message === CHECKPOINTS_UNAVAILABLE_NO_GIT) throw err;
-      throw new Error(`checkpoint not found: ${id}`, { cause: err });
-    }
+    if ((await runGit(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env)).code !== 0) throw failed(`checkpoint not found: ${id}`);
 
     return { gitDir, abs, env };
   };
 
-  /** diff current staged state → checkpoint tree, in restore direction. */
+  /** The current tree against the checkpoint's, in restore direction; an unreadable path is in neither. */
   const diffToCheckpoint = async (gitDir, abs, id) => {
-    const env = storeEnv(gitDir, abs);
-    // An unreadable path is in neither tree, so no change names it.
     const current = await stageCurrent(gitDir, abs);
-    const out = await git(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env);
-    const files = [];
+    const out = await git(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, storeEnv(gitDir, abs), 'checkpoint diff failed');
 
-    for (const line of out.split('\n')) {
-      if (!line) continue;
+    return out.split('\n').flatMap((line) => {
       const tab = line.indexOf('\t');
 
-      if (tab < 0) continue;
+      if (tab < 0) return [];
       const status = line.slice(0, tab);
-      files.push({
-        path: line.slice(tab + 1),
-        kind: DIFF_KIND[status] ?? 'modify',
-      });
-    }
 
-    return files;
+      return [{ path: line.slice(tab + 1), kind: restoreKindOf(status) }];
+    });
   };
 
-  const listEntries = async (agent, limit, turnId) => {
-    if (!(await probe())) return [];
-    const agentBase = path.join(base, sanitizeAgent(agent));
-    let stores;
+  const listEntries = async (agent, query) => {
+    if (!(await probeGit())) return [];
+    const agentBase = paths.join(options.base, sanitizeAgent(agent));
 
-    try { stores = fs.readdirSync(agentBase); }
-    catch (err) {
-      // No store directory means this agent has taken no checkpoints; any
-      // other readdir failure is a real fault and must not read as "none".
-      if (!err || err.code !== 'ENOENT') throw err;
-
-      return [];
-    }
-
+    // No store directory means this agent has taken no checkpoints.
+    if (!disk.existsSync(agentBase)) return [];
     const entries = [];
 
-    for (const name of stores) {
-      const gitDir = path.join(agentBase, name);
-      const marker = path.join(gitDir, CHECKPOINT_WORKDIR_MARKER);
+    for (const name of disk.readdirSync(agentBase)) {
+      const gitDir = paths.join(agentBase, name);
+      const marker = paths.join(gitDir, CHECKPOINT_WORKDIR_MARKER);
 
-      if (!fs.existsSync(path.join(gitDir, 'HEAD')) || !fs.existsSync(marker)) continue;
-      const workdir = fs.readFileSync(marker, 'utf8').trim();
+      if (!disk.existsSync(paths.join(gitDir, 'HEAD')) || !disk.existsSync(marker)) continue;
+      const workdir = disk.readFileSync(marker, 'utf8').trim();
 
       for (const ref of await storeRefs(gitDir, workdir)) {
         const meta = parseCheckpointSubject(ref.subject);
 
-        if (turnId !== undefined && turnId !== null && meta.turnId !== turnId) continue;
+        if (typeof query.turnId === 'string' && meta.turnId !== query.turnId) continue;
         entries.push({ id: ref.id, dir: workdir, at: checkpointRefTimestampMs(ref.ref), ...meta });
       }
     }
 
     entries.sort((a, b) => b.at - a.at);
 
-    return entries.slice(0, Math.max(1, limit ?? 50));
+    return entries.slice(0, Math.max(1, query.limit ?? 50));
   };
 
   const restoreTo = async (agent, dir, id) => {
-    if (!(await probe())) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
+    if (!(await probeGit())) throw failed(CHECKPOINTS_UNAVAILABLE_NO_GIT);
     const { gitDir, abs, env } = await requireCheckpoint(agent, dir, id);
 
-    if (!fs.existsSync(abs)) throw new Error(`working directory no longer exists: ${abs}`);
+    if (!disk.existsSync(abs)) throw failed(`working directory no longer exists: ${abs}`);
     const files = await diffToCheckpoint(gitDir, abs, id);
-
-    // Safety snapshot first, so the restore itself is undoable.
+    // Out of any turn, so the restore is undoable without joining the armed turn's group.
     const preRestoreId = await snapshot(agent, abs, null, 'pre-restore');
 
-    // Remove files created since the checkpoint, then materialize the
-    // checkpoint tree (content + recreated deletions) from the store index.
+    // Files created since the checkpoint go; the checkpoint's tree, content and deletions, is then checked out.
     for (const change of files) {
-      if (change.kind !== 'delete') continue;
-      const target = path.resolve(abs, change.path);
+      const target = paths.resolve(abs, change.path);
 
-      if (!target.startsWith(abs)) continue;
+      if (change.kind !== 'delete' || !target.startsWith(abs)) continue;
 
-      try { fs.unlinkSync(target); }
-      catch (err) { if (!err || err.code !== 'ENOENT') throw err; }
+      // The one failure expected: the file is already gone.
+      try {
+        disk.unlinkSync(target);
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      }
     }
 
-    await git(['read-tree', id], abs, env);
-    await git(['checkout-index', '-a', '-f'], abs, env);
+    await git(['read-tree', id], abs, env, 'checkpoint read-tree failed');
+    await git(['checkout-index', '-a', '-f'], abs, env, 'checkpoint restore failed');
 
     return { dir: abs, id, files, preRestoreId };
   };
 
-  /**
-   * The pre-mutation snapshot the frame's checkpoint hint asks for: `{ id }`
-   * once taken, `{ skipped }` saying why none could be, or null when none was
-   * asked or this turn's own already covers the directory. Never throws: a
-   * snapshot failure must not block the operation it precedes.
-   */
-  const snapshotFor = async (hint, fallbackDir) => {
+  const ensureNow = async (request) => {
     try {
-      if (!hint) return null;
-
-      if (!(await probe())) return { skipped: 'this machine has no git to take one with' };
-      const dir = hintedDir(hint) ?? fallbackDir;
-
-      if (!dir) return null;
-      const abs = path.resolve(dir);
+      if (!(await probeGit())) return { skipped: 'this machine has no git to take one with' };
+      const abs = paths.resolve(request.dir);
       const skipped = snapshotSkipped(abs);
 
       if (skipped !== null) return { skipped };
-      const dedupeKey = `${sanitizeAgent(hint.agent)}|${abs}`;
-      const turnId = hint.turnId ?? '';
-      const turnKey = turnId === '' ? 'no-turn' : turnId;
+      const key = `${sanitizeAgent(request.agent)}|${abs}`;
+      const turnKey = request.turn?.turnId ?? 'no-turn';
 
-      if (turnDone.get(dedupeKey) === turnKey) return null;
-      const id = await snapshot(hint.agent, abs, { turnId: hint.turnId, sessionId: hint.sessionId }, 'pre-mutation');
-      // Only once it is taken: a failed one leaves the turn's next command to try again.
-      turnDone.set(dedupeKey, turnKey);
+      if (turnDone.get(key) === turnKey) return null;
+      const id = await snapshot(request.agent, abs, request.turn, request.reason);
+
+      turnDone.set(key, turnKey);
 
       return { id };
-    } catch (err) {
-      log('checkpoint snapshot failed (non-blocking):', err.message);
+    } catch (error) {
+      const skipped = `the snapshot failed: ${error instanceof Error ? causeText(error) : 'it threw something that is not an Error'}`;
 
-      return { skipped: `the snapshot failed: ${errorDetail(err)}` };
+      host.log(`checkpoint ${skipped} (the mutation it preceded runs)`);
+
+      return { skipped };
     }
   };
 
-  /** Settles once every operation queued before it has settled. */
   let queue = Promise.resolve();
 
-  /** One operation at a time, in arrival order. Git keeps one index per store,
-   *  and a restore rewrites the tree a snapshot reads, so two operations must
-   *  never overlap; a synchronous daemon had this order for free. */
   const inOrder = (operation) => {
     const run = queue.then(operation);
+
     queue = Promise.allSettled([run]);
 
     return run;
   };
 
   return {
-    status() {
-      return inOrder(async () => ((await probe())
-        ? { available: true }
-        : { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT }));
-    },
+    status: () => inOrder(async () => ((await probeGit())
+      ? { available: true }
+      : { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT })),
+    ensure: (request) => inOrder(() => ensureNow(request)),
+    mutate: (request, apply) => inOrder(async () => apply(request === null ? null : await ensureNow(request))),
+    list: (agent, query) => inOrder(() => listEntries(agent, query)),
+    plan: (agent, dir, id) => inOrder(async () => {
+      if (!(await probeGit())) throw failed(CHECKPOINTS_UNAVAILABLE_NO_GIT);
+      const { gitDir, abs } = await requireCheckpoint(agent, dir, id);
 
-    /** The pre-mutation snapshot the hint asks for, in store order: its id,
-     *  or null when none was taken. */
-    ensure(hint, fallbackDir) {
-      return inOrder(async () => (await snapshotFor(hint, fallbackDir))?.id ?? null);
-    },
+      return { dir: abs, id, files: await diffToCheckpoint(gitDir, abs, id) };
+    }),
+    restore: (agent, dir, id) => inOrder(() => restoreTo(agent, dir, id)),
+    workdirForPath(target, covers = () => true) {
+      const abs = paths.resolve(target);
+      // The entry itself, never what a link points at: moving or removing a link changes the directory holding it.
+      const candidate = disk.existsSync(abs) && disk.lstatSync(abs).isDirectory() ? abs : paths.dirname(abs);
+      const home = paths.resolve(host.homedir);
+      // Stop at the temp directory, resolved and real (scripts/preflight.ts refuses a marker above it): a marker there
+      // claimed every write beneath it, 24,483 ms for one device write (2026-09-02).
+      const temp = paths.resolve(host.tmpdir);
+      const realTemp = disk.existsSync(temp) ? disk.realpathSync(temp) : temp;
+      let probe = candidate;
 
-    /** `apply`, a frame's mutation, in store order and after the pre-mutation
-     *  snapshot its hint asks for, which `apply` is handed as `snapshotFor`
-     *  answers it: the snapshot never holds the mutation it precedes, and no
-     *  store operation runs while it lands. */
-    mutate(hint, fallbackDir, apply) {
-      return inOrder(async () => apply(await snapshotFor(hint, fallbackDir)));
-    },
+      while (probe !== paths.dirname(probe) && probe !== home && covers(probe)) {
+        const real = disk.existsSync(probe) ? disk.realpathSync(probe) : probe;
 
-    // `turnId` filters HERE, before the limit truncates, because retention is
-    // per working directory while the limit is global across them: a caller that
-    // reads a window and filters by turn itself loses turns whose checkpoint
-    // still exists. See FileCheckpoints.list in @kinu.run/core.
-    list(agent, limit, turnId) {
-      return inOrder(() => listEntries(agent, limit, turnId));
-    },
+        if (probe === temp || real === realTemp) break;
 
-    plan(agent, dir, id) {
-      return inOrder(async () => {
-        if (!(await probe())) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
-        const { gitDir, abs } = await requireCheckpoint(agent, dir, id);
-
-        return { dir: abs, id, files: await diffToCheckpoint(gitDir, abs, id) };
-      });
-    },
-
-    restore(agent, dir, id) {
-      return inOrder(() => restoreTo(agent, dir, id));
-    },
-
-    /** The project directory holding `p`, climbing only through directories
-     *  `covers` admits, so a marker above what the frame may write never widens
-     *  a checkpoint past it. */
-    workdirForPath(p, covers = () => true) {
-      const abs = path.resolve(p);
-      let candidate = abs;
-
-      try { if (!fs.statSync(abs).isDirectory()) candidate = path.dirname(abs); }
-      catch (err) { if (!err || err.code !== 'ENOENT') throw err; candidate = path.dirname(abs); }
-
-      const home = path.resolve(os.homedir());
-      let probeDir = candidate;
-
-      while (probeDir !== path.dirname(probeDir) && probeDir !== home && covers(probeDir)) {
-        if (PROJECT_MARKERS.some((m) => fs.existsSync(path.join(probeDir, m)))) return probeDir;
-        probeDir = path.dirname(probeDir);
+        if (PROJECT_MARKERS.some((marker) => disk.existsSync(paths.join(probe, marker)))) return probe;
+        probe = paths.dirname(probe);
       }
 
       return candidate;
     },
+  };
+}
+
+// END GENERATED
+
+/** This daemon's frames over core's one checkpoint engine: a hint names the agent, its turn and the directory. */
+function createCheckpoints(opts = {}) {
+  const engine = createCheckpointEngine({
+    fs, path, homedir: os.homedir(), tmpdir: os.tmpdir(), devNull: os.devNull, env: process.env,
+    sha256: (text) => crypto.createHash('sha256').update(text).digest('hex'),
+    run: async (bin, args, options) => {
+      const { error, stdout, stderr } = await runToExit(bin, [...args], { ...options, encoding: 'utf8' });
+      // A code that is not an exit status (a signal, an overfull buffer) is git never finishing.
+      const finished = error === null || Number.isInteger(error.code);
+
+      return {
+        code: finished ? (error?.code ?? 0) : null,
+        stdout: String(stdout), stderr: String(stderr), missing: error !== null && error.code === 'ENOENT',
+      };
+    },
+    now: () => Date.now(),
+    log: (message) => { log(message); },
+  }, {
+    base: opts.base ?? path.join(DEVICE_HOME, 'checkpoints'),
+    keep: opts.keep ?? DEFAULT_CHECKPOINT_KEEP,
+    gitBin: opts.gitBin ?? 'git',
+  });
+
+  /** The snapshot a frame's hint asks for, or null when it asks none. */
+  const requestFor = (hint, fallbackDir) => {
+    const dir = hint ? (hintedDir(hint) ?? fallbackDir) : undefined;
+
+    if (!hint || !dir) return null;
+
+    const named = (field) => ((field ?? '') === '' ? null : field);
+
+    return { agent: String(hint.agent ?? ''), dir, turn: { turnId: named(hint.turnId), sessionId: named(hint.sessionId) }, reason: 'pre-mutation' };
+  };
+
+  return {
+    status: () => engine.status(),
+    /** The pre-mutation snapshot the hint asks for, in store order: its id, or null when none was taken. */
+    ensure: (hint, fallbackDir) => engine.mutate(requestFor(hint, fallbackDir), (outcome) => (outcome !== null && 'id' in outcome ? outcome.id : null)),
+    /** `apply`, a frame's mutation, after the snapshot its hint asks for, handed that snapshot's outcome. */
+    mutate: (hint, fallbackDir, apply) => engine.mutate(requestFor(hint, fallbackDir), apply),
+    list: (agent, limit, turnId) => engine.list(String(agent ?? ''), { limit, turnId }),
+    plan: (agent, dir, id) => engine.plan(String(agent ?? ''), dir, String(id)),
+    restore: (agent, dir, id) => engine.restore(String(agent ?? ''), dir, String(id)),
+    workdirForPath: (p, covers) => engine.workdirForPath(p, covers),
   };
 }
 

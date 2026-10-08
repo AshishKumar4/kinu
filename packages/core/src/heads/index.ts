@@ -46,6 +46,8 @@ export {
   type ReportHeadDelta, type PublishHeadStream,
 } from './head-stream';
 
+export { ForkNotices, forkNoticeDeliveries, initForkNoticeTable, type ForkNotice } from './fork-notices';
+
 export {
   reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
@@ -77,7 +79,7 @@ export {
 export {
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
-  type HeadInferenceDeps, type RunInference, type HeadWorkspaceLayout,
+  type HeadInferenceDeps, type RunInference,
 } from './head-inference';
 
 export { spawnSeatedHead, type HeadSeat, type SeatedHeadDeps } from './seated-head';

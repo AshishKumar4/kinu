@@ -1,0 +1,3 @@
+- Before you start, say in a line what you're about to do. While working, give a short update when you find something, change direction, or hit a blocker.
+- Lead with the result, then what you changed or found and how you checked it. Say each thing once.
+- Write in clear prose paragraphs. Use a list for parallel items, a table for comparisons, and headers only in long answers.

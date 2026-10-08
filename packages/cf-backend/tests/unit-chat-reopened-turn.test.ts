@@ -22,9 +22,8 @@ import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
 import {
-  alarmDue, GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness, type HarnessOrchestratorAgent, type StartedHarness,
+  alarmDue, GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness, until, type HarnessOrchestratorAgent, type StartedHarness,
 } from './helpers/actor-harness';
-import { joinHarnessFibers } from './helpers/agents-sdk';
 import { answeringGateway, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { socketConnection } from './helpers/bindings';
 
@@ -466,7 +465,8 @@ test('a turn cut at the same step in two activations is settled, not run a third
   await last.agent.terminalRetryPass();
 
   if (alarmDue(last.db)) await last.agent.alarm();
-  await joinHarnessFibers();
+  // The re-opened turn decides for itself whether it may go on (`ActorSession.resumeOrClose`).
+  await until(() => last.db.query<{ outcome: string | null }, []>(`SELECT outcome FROM actor_turn_claims WHERE turn_id = 'req-stall'`).get()?.outcome != null, 'the re-opened turn decided');
 
   // Two runs ended at one step: the turn is closed rather than handed the same cut a third time.
   expect(third.runs.length).toBe(0);

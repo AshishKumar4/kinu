@@ -860,7 +860,7 @@ describe("one deploy path", () => {
    *  workflows AND the composite actions beside them. `release-config.test.ts`
    *  reads `.github/workflows` alone, and a composite action's `run:` body is a
    *  command this repository executes inside the job that holds the deploy
-   *  credential — `setup-lean` is one, which is why it is checksum-verified. */
+   *  credential, so a composite action added later is read here too. */
   const automationFiles = trackedFiles()
     .filter((file) => file.startsWith(".github/") && /\.ya?ml$/u.test(file));
 
@@ -913,9 +913,9 @@ describe("one deploy path", () => {
   test("every automation file GitHub executes is in the denominator", () => {
     expect(automationFiles, "the enumerator stopped listing the workflows")
       .toContain(".github/workflows/evals.yml");
-    expect(automationFiles, "the enumerator stopped listing the composite actions")
-      .toContain(".github/actions/setup-lean/action.yml");
-    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(3);
+    expect(automationFiles, "the enumerator stopped listing the secret scan")
+      .toContain(".github/workflows/security-scan.yml");
+    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(1);
     expect(automationSteps.length, "the parse read no run body").toBeGreaterThan(10);
 
     // Deploys are run by a person through `bun run deploy`; no workflow deploys.

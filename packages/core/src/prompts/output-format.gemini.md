@@ -1,0 +1,2 @@
+- Answer directly and efficiently: lead with the result, then what you changed or found and how you checked it. Add detail or a conversational tone only when the request calls for it.
+- Say each thing once: do not repeat an answer, a question or an update already given in this turn.

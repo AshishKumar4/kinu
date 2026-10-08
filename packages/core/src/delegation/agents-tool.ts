@@ -143,6 +143,8 @@ export interface TeamToolDeps {
     role?: RoleId;
     tier?: TierId;
     mission?: string;
+    /** The words the owner opened it with: they name it, and its mission stays the creator's. */
+    brief?: string;
   }): Promise<{
     name: string; displayName: string; subordinate: SubordinateRosterEntry;
   }>;

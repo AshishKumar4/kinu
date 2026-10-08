@@ -44,7 +44,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
     const seat = actors.find((actor) => actor.creation_id === node?.id);
 
     if (seat === undefined) throw new Error('the search registered no node actor');
-    const claims = agentSql(seat.actor_id)<{ actor_id: string; outcome: string }>`SELECT actor_id, outcome FROM actor_turn_claims`;
+    const claims = agentSql({ agent, db }, seat.actor_id)<{ actor_id: string; outcome: string }>`SELECT actor_id, outcome FROM actor_turn_claims`;
     expect(db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ?').get(seat.actor_id)?.n).toBe(0);
 
     // The run is bridged onto this actor's session, so the seating (origin, parent, own claim) is load-bearing.
@@ -84,7 +84,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
       .get(node?.id ?? '');
 
     if (seat === null) throw new Error('the cancelled node has no registered actor');
-    const claims = agentSql(seat.actor_id)<{ outcome: string }>`SELECT outcome FROM actor_turn_claims`;
+    const claims = agentSql({ agent, db }, seat.actor_id)<{ outcome: string }>`SELECT outcome FROM actor_turn_claims`;
 
     expect(node?.status).toBe('aborted');
     expect(claims.map((claim) => claim.outcome)).toEqual(['aborted']);

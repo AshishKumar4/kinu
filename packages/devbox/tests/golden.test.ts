@@ -12,6 +12,8 @@ class Platform {
   readonly told: [string, GoldenAnswer][] = [];
   builds = 0;
   failInstall: string | undefined;
+  /** Runs while the tools install, as a box's ask lands mid-build. */
+  duringInstall: (() => Promise<void>) | undefined;
   clock = 1_000 * DAY;
   #taken = 0;
 
@@ -26,6 +28,7 @@ class Platform {
 
         if (command.includes('apt-get')) {
           this.calls.push('install');
+          await this.duringInstall?.();
 
           return this.failInstall === undefined ? { stdout: 'installMs=1', stderr: '', exitCode: 0 } : { stdout: '', stderr: this.failInstall, exitCode: 1 };
         }
@@ -54,7 +57,21 @@ test('a box finding no golden waits, is told why, and each ask requests the buil
   const answer = await settle(goldenFor(platform.ports(), 'box-a'));
   await settle(goldenFor(platform.ports(), 'box-a'));
 
-  expect({ answer, waiting: platform.state.waiting, builds: platform.builds }).toEqual({ answer: { kind: 'pending', reason: expect.any(String) }, waiting: ['box-a'], builds: 2 });
+  expect({ answer, waiting: platform.state.waiting, builds: platform.builds })
+    .toEqual({ answer: { kind: 'pending', reason: expect.any(String), building: { step: null } }, waiting: ['box-a'], builds: 2 });
+});
+
+test('a box asking while the build runs is told the step it is at, and a finished build leaves none', async () => {
+  const platform = new Platform();
+  const midBuild: GoldenAnswer[] = [];
+  platform.duringInstall = async () => { midBuild.push(await settle(goldenFor(platform.ports(), 'box-b'))); };
+
+  await settle(goldenFor(platform.ports(), 'box-a'));
+  await settle(buildGolden(platform.ports(), false));
+
+  expect({ midBuild, after: platform.state.building }).toEqual({
+    midBuild: [{ kind: 'pending', reason: expect.any(String), building: { step: 'installing the tools' } }], after: undefined,
+  });
 });
 
 test('a build installs the pinned tools on the base, checks them, snapshots, and tells every waiting box once', async () => {

@@ -830,6 +830,30 @@ waits for leave (`ChatOptions.paceStep`): the facet asks
 `step(turnId)`, and that call grants the waiting step and answers once it has
 ended (`StepPacer`). Any turn the isolate runs is paced, whoever started it.
 
+D11. Kinu owns no SDK fiber lane; what a dead activation left is re-driven by
+the next one's `onStart`. Amends D7's carrier, not its shape: delegation still
+runs off the wake. Decided 2026-10-08 under the owner's rule (ONSTART-0926):
+wake-time init runs in `onStart`, bounded by algorithm, never by a timeout, with
+no once-guard outside it, and model work is started there, not awaited. The
+SDK re-offered a `cf_agents_runs` row through `onFiberRecovered` inside
+`blockConcurrencyWhile`, under a 10 s hook timeout and a scan deadline
+(`fiberRecoveryHookTimeoutMs`, `fiberRecoveryScanDeadlineMs`); Kinu answered
+with a classifier and redelivery sleeps, and ran its fork reconcile from the
+alarm behind the in-memory `activationRecoveryPending`.
+What changes. Every lane runs under `ActorAgent.holdLane` (`keepAliveWhile`).
+Terminal effects and delegation keep no lane row: their ledger rows already
+were the obligation. A background job's lane and the evolution lane write the
+CLI's own `fibers` row (`createSqlFiber`); the last statement of `onStart`
+takes every row from before the activation began (`recoverDeadActivation`, 256
+a statement) and re-drives it, a job's row being the only record of a settled
+job whose wake never landed. The same seam reconciles the fork journal once,
+sealing every pre-cutoff steer branch first, and every maintenance pass joins
+it; the open turn the wake re-opens counts as a live run, so the start does
+not re-open it. A fork-interrupted notice is a `fork_notices` row until the
+inbox takes it; a refusal makes it due again at the shared capped backoff, and
+the wake fold reads that instant. Dead-activation leases re-pend 256 a pass,
+the rest under the wake (f2619ff00).
+
 ## Deploy ladder
 
 L1. The deploy wave is scheduled by a thread budget, not a gate count. Each
@@ -1427,8 +1451,10 @@ the pointer, and the release no longer waits on GitHub. The deploy reads the sam
 and a missing or red one ends it before any build; a promotion takes staging's record, which only a deploy past
 that gate wrote. armada grades every planned row exactly once, with each split suite's file timings, before it
 stores a verdict, so its stored verdict is the complete proof. The six hammer runs were in the CI tier and stay
-in it, each a task of its own. ci.yml and its part, artifact and collection plumbing are deleted; evals.yml,
-the secret scan, Lean verification, the bench corpus and the flake sweep stay on GitHub. armada is a pinned dev
+in it, each a task of its own. ci.yml and its part, artifact and collection plumbing are deleted; evals.yml
+and the secret scan stay on GitHub. On 2026-10-08 the rest moved: Lean verification is a CI row (armada's
+environment holds the Lean build), and the flake sweep and bench corpus validation are nightly `armada map` runs
+(scripts/nightly-sweeps.ts). armada is a pinned dev
 dependency, so the hook and the deploy run this checkout's `armada`, against `~/.config/armada/connection.json`.
 Measured 2026-10-07: the tier on armada took 7.0 to 9.1 minutes for 90 rows on 13 to 20 containers over nine
 green runs (0b74ff100 in 7.3 minutes on 13, job 20261007190749-9267a508). GitHub's hosted matrix of 2026-10-01

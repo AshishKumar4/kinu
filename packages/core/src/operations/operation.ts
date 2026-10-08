@@ -26,8 +26,11 @@ export interface Operation<I extends OperationInput = OperationInput, O extends 
   readonly impact: Impact;
   /** Whether a Plan turn reaches it; by default, an observe operation only. */
   readonly plan?: boolean;
-  /** Reachable from a slate. */
-  readonly slate: boolean;
+  /**
+   * Reachable from a slate. `'owner'`: only from the workspace owner's own slate running as the owner, never from a
+   * share's viewer nor a hosted actor's slate; shares cannot grant it.
+   */
+  readonly slate: boolean | 'owner';
   readonly input: I;
   readonly output: O;
   /** How the model reads a result where text reads better than its JSON, a page's Markdown above all; a program gets the value. */
