@@ -4231,9 +4231,17 @@ describe('the Environment cards', () => {
       await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-env-card="sandbox"] [data-env-size]');
 
-      const past = await page.$$eval('[data-env-card]', (cards) => cards
-        .map((card) => [card.getAttribute('data-env-card'), Math.round(card.getBoundingClientRect().right - document.documentElement.clientWidth)])
-        .filter(([, beyond]) => Number(beyond) > 0));
+      // Each card inside the page, and everything drawn in a card inside the card: its size choice ran past it.
+      const past = await page.$$eval('[data-env-card]', (cards) => cards.flatMap((card) => {
+        const edge = card.getBoundingClientRect().right;
+        const drawn = [...card.querySelectorAll('*')].filter((inner) => inner.getClientRects().length > 0);
+        const furthest = Math.max(edge, ...drawn.map((inner) => inner.getBoundingClientRect().right));
+
+        return [
+          [card.getAttribute('data-env-card'), Math.round(edge - document.documentElement.clientWidth)],
+          [`${card.getAttribute('data-env-card') ?? ''} contents`, Math.round(furthest - edge)],
+        ];
+      }).filter(([, beyond]) => Number(beyond) > 0));
 
       expect(past).toEqual([]);
     });

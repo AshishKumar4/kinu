@@ -345,15 +345,23 @@ async function startNewChat(page: Page): Promise<void> {
   }
 }
 
+/** Send is back before the page learns the turn began, so the turn's close on the socket is its end: read as idle
+ *  0.7 s after the send, the changes-storm row went on before its seed was written (staging, 2026-10-08). */
 async function sendAndSettle(page: Page, text: string): Promise<void> {
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
   const composer = await typeIntoComposer(page, text);
+  const ledger = await frameLedger(page);
 
-  await composer.press('Enter');
-  await until(page, 'the sent words in the chat column',
-    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(text)})`);
-  await until(page, "the turn's end, Send offered again", CHAT_IDLE);
+  try {
+    await composer.press('Enter');
+    await until(page, 'the sent words in the chat column',
+      `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(text)})`);
+    await waitOn(page, "the turn's close on its socket", ledger.turnClosed());
+    await until(page, "the turn's end, Send offered again", CHAT_IDLE);
+  } finally {
+    await ledger.stop();
+  }
 }
 
 const FrameSchema = v.object({
@@ -1401,6 +1409,9 @@ export async function pressUntil(page: Page, input: {
 }): Promise<PressOutcome> {
   const attempts: ControlAttempt[] = [];
 
+  // A page behind another gets no animation frames, and `settled` waits on them: the second of three tabs waited
+  // forever (staging, 2026-10-08).
+  await page.bringToFront();
   let value = v.parse(v.number(), await page.evaluate(input.read));
 
   while (!input.reached(value)) {
@@ -1530,7 +1541,9 @@ export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Pro
 }
 
 /** The burst's files the Changes tab lists. */
-const STORM_LISTED = `${CHANGED_PATHS}.filter((path) => path.includes(${JSON.stringify(`/${STORM_DIR}/`)})).length`;
+/** A changed path names its folder as a segment: the pane lists them from the workspace root, `storm/f1.txt`, and a
+ *  count of `/storm/` read 0 of 50 forever (staging, 2026-10-08). */
+const STORM_LISTED = `${CHANGED_PATHS}.filter((path) => path.split('/').includes(${JSON.stringify(STORM_DIR)})).length`;
 
 export interface ChangesStormVerdict {
   readonly workspace: string;

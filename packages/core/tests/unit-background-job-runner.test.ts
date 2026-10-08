@@ -25,6 +25,9 @@ import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { processJobHolder } from '../src/jobs/process-holder';
 import { scratchPath } from '@kinu.run/test-utils';
+import { handClock } from '@kinu.run/test-utils/hand-clock';
+import type { Clock } from '../src/types/clock';
+import { silenceBoundMs } from '../src/platform-catalog';
 
 /** Runs the body inline; exposes in-flight bodies so a test can await detach completion. */
 function fakeFiber() {
@@ -74,6 +77,8 @@ function setup(opts: {
   onCancelled?: ((jobId: string) => Promise<void> | void) | null;
   scheduleResume?: (atMs: number) => Promise<void> | void;
   holder?: JobHolder;
+  clock?: Clock;
+  alive?: () => Promise<void>;
 } = {}) {
   const db = opts.db ?? new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
@@ -114,6 +119,8 @@ function setup(opts: {
     harvest: opts.harvest,
     scheduleResume: opts.scheduleResume,
     holder: opts.holder,
+    clock: opts.clock,
+    alive: opts.alive,
   };
 
   const runner = new BackgroundJobRunner(runnerDeps);
@@ -301,6 +308,56 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     expect(store.get(id)?.error).toBe('storage unavailable');
     expect(notified).toEqual([{ id, status: 'failed' }]);
     expect(stashes.at(-1)).toEqual({ phase: 'settled', jobId: id, kind: 'think' });
+  });
+});
+
+describe('BackgroundJobRunner — a detached job whose work stops answering', () => {
+  /** The context a job's work runs in answers its probe; a context the platform dropped never answers anything. */
+  const detachForever = async (runner: BackgroundJobRunner): Promise<string> => {
+    const outcome = await runner.thresholdDeps({ command: 'cat >> /slates/countdown/server.ts' }, 'build', new AbortController())
+      .onThreshold('shell', new Promise(() => {}));
+
+    return outcome.detached ? outcome.jobId : 'not detached';
+  };
+
+  const flush = async (): Promise<void> => { for (let turn = 0; turn < 5; turn += 1) await Promise.resolve(); };
+
+  const silence = silenceBoundMs('job.context_silence_ms');
+
+  test('it settles failed in its own words once its context has gone unheard for the bound, and its agent is told', async () => {
+    const clock = handClock(Date.now());
+    const { runner, store, enqueued } = setup({ clock, alive: () => new Promise(() => {}) });
+    const jobId = await detachForever(runner);
+
+    clock.advance(silence - 1_000);
+    await flush();
+    await runner.recoverDueResumes();
+    expect(store.get(jobId)?.status).toBe('running');
+
+    clock.advance(1_000);
+    await flush();
+    await runner.recoverDueResumes();
+    expect({ status: store.get(jobId)?.status, error: store.get(jobId)?.error }).toEqual({
+      status: 'failed',
+      error: 'interrupted before completion: nothing came back from its work for 10m, so it was given up as lost: '
+        + 'its executor was lost and this kind cannot be re-driven, and it had produced no partial result to hand back',
+    });
+    expect(enqueued.map((turn) => turn.metadata?.status)).toEqual(['failed']);
+  });
+
+  test('a job whose context keeps answering runs on however long it takes: the bound is silence, not a deadline', async () => {
+    const clock = handClock(Date.now());
+    const { runner, store, enqueued } = setup({ clock, alive: async () => {} });
+    const jobId = await detachForever(runner);
+
+    for (let minute = 0; minute < 6 * 60; minute += 1) {
+      clock.advance(60_000);
+      await flush();
+      await runner.recoverDueResumes();
+    }
+
+    expect(store.get(jobId)?.status).toBe('running');
+    expect(enqueued).toEqual([]);
   });
 });
 

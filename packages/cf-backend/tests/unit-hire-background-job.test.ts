@@ -37,6 +37,8 @@ interface BoxExec {
 function serverBox(clock: HandClock, killed: string[] = []) {
   const running = new Map<string, (exitCode: number) => void>();
   const stamps = new Map<string, string | null>();
+  const waiting: { readonly count: number; readonly resolve: () => void }[] = [];
+  let served = 0;
 
   const serve = ({ execId, env }: BoxExec, exit: (exitCode: number) => void): void => {
     const once = (exitCode: number): void => {
@@ -48,9 +50,24 @@ function serverBox(clock: HandClock, killed: string[] = []) {
     running.set(execId, once);
     stamps.set(execId, env?.[JOB_STAMP_ENV] ?? null);
     clock.after(SERVES_MS, () => { once(0); });
+    served += 1;
+
+    for (const waiter of waiting.splice(0)) {
+      if (served >= waiter.count) waiter.resolve();
+      else waiting.push(waiter);
+    }
   };
 
   return {
+    /** Resolves once `count` commands have started serving, each its life armed on the clock. */
+    served: (count: number): Promise<void> => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+
+      if (served >= count) resolve();
+      else waiting.push({ count, resolve });
+
+      return promise;
+    },
     resolveReadiness: async () => ({ kind: 'restored' as const }),
     configureEgress: async () => {},
     restoreStatus: async () => ({ restoring: false, refused: undefined }),
@@ -155,7 +172,7 @@ async function hiredServer() {
   /** The hire's model call that was woken about `jobId`. */
   const woken = (jobId: string) => gateway.runs.find((run) => asked(run).at(-1)?.includes(jobId) === true);
 
-  return { clock, workspace, name, heard, woken, job, told: toolAnswers(present(answered(), 'the answered run')).join('') };
+  return { clock, box, workspace, name, heard, woken, job, told: toolAnswers(present(answered(), 'the answered run')).join('') };
 }
 
 test("a hired agent's command that outruns its window becomes the hire's own job, streamed to its view", async () => {
@@ -195,7 +212,7 @@ test("the owner's cancel ends a hired agent's job and its command, and wakes the
 });
 
 test("the owner's retry runs a hired agent's settled job again as the hire, and its settle wakes the hire", async () => {
-  const { clock, workspace, name, heard, woken, job } = await hiredServer();
+  const { clock, box, workspace, name, heard, woken, job } = await hiredServer();
   const jobId = present(job, "the hire's job").id;
 
   await clock.whenArmed(2);
@@ -208,8 +225,7 @@ test("the owner's retry runs a hired agent's settled job again as the hire, and 
   expect(await workspace.agent.listBackgroundJobs(20)).toEqual([]);
 
   // The same command runs on the box again, its output in the hire's view, and its settle is the hire's next turn.
-  // The first call armed its window, its server's life and an output flush; the retry arms its server's and a flush.
-  await clock.whenArmed(5);
+  await box.served(2);
   clock.advance(SERVES_MS);
   await driveUntil(workspace, "the retry's settle never woke the hire", () => woken(retryId) !== undefined);
 
