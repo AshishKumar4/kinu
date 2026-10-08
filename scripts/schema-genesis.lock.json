@@ -653,6 +653,13 @@
     "source_message_created_at INTEGER NOT NULL",
     "forked_at INTEGER NOT NULL"
   ],
+  "fork_notices@packages/core/src/heads/fork-notices.ts": [
+    "notice_key TEXT PRIMARY KEY",
+    "signal TEXT NOT NULL",
+    "attempts INTEGER NOT NULL",
+    "due_at INTEGER NOT NULL",
+    "started_at INTEGER"
+  ],
   "fork_staged_files@packages/core/src/identity/schema.ts": [
     "path TEXT PRIMARY KEY"
   ],
@@ -1045,6 +1052,13 @@
     "recipient_user_id TEXT NOT NULL",
     "card TEXT NOT NULL",
     "PRIMARY KEY (workspace, share_id, recipient_user_id)"
+  ],
+  "slate_builds@packages/cf-backend/src/slates/builds.ts": [
+    "slate TEXT PRIMARY KEY",
+    "good_key TEXT",
+    "good_image TEXT",
+    "failed_key TEXT",
+    "failure TEXT"
   ],
   "slate_file_manifest@packages/core/src/state/workspace-schema.ts": [
     "slate_id TEXT NOT NULL",

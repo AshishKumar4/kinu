@@ -15,7 +15,7 @@ import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface'
 import { AgentWorkspaceRPC } from '../../src/agent-facets';
 import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
-import { SLATE_STORAGE_BINDING, type SlateCallResult } from '@kinu.run/core';
+import { SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
 import type { AgentFacetAnswer, CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
@@ -364,7 +364,7 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
     return { answer: listing.map(({ key, kind }) => ({ key, kind })), carriesDisposer: Symbol.dispose in listing };
   }
 
-  async slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateCallResult>> {
+  async slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateSurfaceResult>> {
     await this.target(workspace);
     const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER };
     const binding = new SlateBinding(Object.create(this.ctx, { props: { value: props } }), this.env);

@@ -34,6 +34,11 @@ export function isSubordinateOrigin(origin: ActorOrigin): origin is 'user' | 'ag
   return origin === 'user' || origin === 'agent' || origin === 'evolution';
 }
 
+/** Read as a home `actorHomeName` derives from a key (`main`, `sub-<key>`, `head-<key>`), so never one's own. */
+function mimicsDerivedHome(name: string): boolean {
+  return name === 'main' || name.startsWith('sub-') || name.startsWith('head-');
+}
+
 /** The preset for a child made with `origin`; only an agent-made hire chooses its lifetime. */
 function actorPreset(origin: Exclude<ActorOrigin, 'system'>, lifetime: ActorProfile['lifetime']): ActorProfile {
   switch (origin) {
@@ -277,12 +282,27 @@ export class WorkspaceActorDirectory {
 
     if (this.childRow(parent.actorId, name)) throw new KinuError('denied', 'The sibling name already exists.');
     const actorId = crypto.randomUUID();
-    this.insert({ actorId, parentActorId: parent.actorId, name, storageKey: actorId, profile: actorPreset(input.origin, input.lifetime), creationId, ended: null });
+    // A hire whose name no actor of this workspace has had is keyed, and so housed (`actorHomeName`), by that name;
+    // a cousin's name, or one used before, keys nothing, and the fresh id does. `insert` decides it as it writes.
+    this.insert({
+      actorId, parentActorId: parent.actorId, name, storageKey: actorId, keyByName: isSubordinateOrigin(input.origin) && !mimicsDerivedHome(name),
+      profile: actorPreset(input.origin, input.lifetime), creationId, ended: null,
+    });
     const row = this.retained(actorId);
 
     if (!row) throw new KinuError('io', 'The child actor was not recorded.');
 
     return this.issue(row);
+  }
+
+  /** Every name and key this workspace's actors have had that is `base` or numbered from it (`base-2`), in one read. */
+  namesFrom(base: string): ReadonlySet<string> {
+    const numbered = `${base}-%`;
+
+    const rows = this.sql<{ name: string; storage_key: string }>`SELECT name, storage_key FROM workspace_actors
+      WHERE name = ${base} OR storage_key = ${base} OR name LIKE ${numbered} OR storage_key LIKE ${numbered}`;
+
+    return new Set(rows.flatMap((row) => [row.name, row.storage_key]));
   }
 
   /** Null when there is no bindable child; decided on row state, not by catching `open`'s `missing`. */
@@ -364,15 +384,24 @@ export class WorkspaceActorDirectory {
     return row;
   }
   /** `ended` stamps a creation that is retired and released as it is recorded. */
+  /**
+   * `keyByName`: keyed by its name instead of `storageKey` when no actor of the workspace, under any parent, live or
+   * gone, has had that name as its name or key. Decided in the one statement that writes, so a second connection
+   * cannot claim the name between the check and the row.
+   */
   private insert(row: {
     readonly actorId: string; readonly parentActorId: string | null; readonly name: string; readonly storageKey: string;
-    readonly profile: ActorProfile; readonly creationId: string; readonly ended: number | null;
+    readonly keyByName?: boolean; readonly profile: ActorProfile; readonly creationId: string; readonly ended: number | null;
   }): void {
     const { profile } = row;
+    const keyByName = row.keyByName === true ? 1 : 0;
 
     void this.sql`INSERT INTO workspace_actors
       (actor_id, parent_actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id, retiring_at, deleted_at)
-      VALUES (${row.actorId}, ${row.parentActorId}, ${row.name}, ${row.storageKey}, ${profile.origin}, ${profile.tab ? 1 : 0},
+      VALUES (${row.actorId}, ${row.parentActorId}, ${row.name},
+        CASE WHEN ${keyByName} = 1 AND NOT EXISTS (SELECT 1 FROM workspace_actors WHERE name = ${row.name} OR storage_key = ${row.name})
+          THEN ${row.name} ELSE ${row.storageKey} END,
+        ${profile.origin}, ${profile.tab ? 1 : 0},
         ${profile.input ? 1 : 0}, ${profile.lifetime}, ${profile.evolves ? 1 : 0}, ${row.ended ?? Date.now()}, ${row.creationId},
         ${row.ended}, ${row.ended})`;
   }
@@ -500,7 +529,6 @@ export class WorkspaceActorDirectory {
   }
 }
 
-/** Keyed by the immutable storage key, never the name, so renames and reused names never share a directory. */
 /** Hired agents below `actorId`, deepest first. */
 export function subordinateDescendants(actors: readonly WorkspaceActor[], actorId: string): readonly WorkspaceActor[] {
   const below: WorkspaceActor[] = [];
@@ -518,6 +546,10 @@ export function subordinateDescendants(actors: readonly WorkspaceActor[], actorI
   return below;
 }
 
+/**
+ * Keyed by the immutable storage key: a hire's name only when no actor of the workspace had it before (`create`), so
+ * renames and reused names never share a directory.
+ */
 export function actorStateRoot(storageKey: string): string {
   return `.kinu/agents/${encodeURIComponent(storageKey)}`;
 }

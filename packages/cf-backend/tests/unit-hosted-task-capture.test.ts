@@ -60,8 +60,8 @@ test('a hosted subordinate hires its advisor, whose note opens its next turn, wi
 
   // The hire's notes and window are in its own database.
   const hire = () => advisedHire(workspace.db);
-  const advisorNotes = () => agentSql(hire())<{ actor_id: string; message: string }>`SELECT actor_id, message FROM evolution_events WHERE type = 'advisor_note'`;
-  const ownTurns = () => agentSql(hire())<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns`[0]?.n ?? 0;
+  const advisorNotes = () => agentSql(workspace, hire())<{ actor_id: string; message: string }>`SELECT actor_id, message FROM evolution_events WHERE type = 'advisor_note'`;
+  const ownTurns = () => agentSql(workspace, hire())<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns`[0]?.n ?? 0;
 
   // The hire's turn ends on its own answer; its advisor answers on a delegated turn of its own, whose note opens the hire's next.
   await driveUntil(workspace, 'the advice reached the hire', () => requests.length >= 2);
@@ -95,7 +95,7 @@ function advisedWorkspace(severity: 'concern' | 'blocker') {
   const workspace = gatewayWorkspace(gateway);
   const root = workspaceMainActor(workspace.db);
   const hire = () => advisedHire(workspace.db);
-  const judged = () => agentSql(hire())<{ data: string }>`SELECT data FROM evolution_events WHERE type = 'advisor_note'`.map((row) => row.data);
+  const judged = () => agentSql(workspace, hire())<{ data: string }>`SELECT data FROM evolution_events WHERE type = 'advisor_note'`.map((row) => row.data);
 
   return { gateway, workspace, root, hireRequests, judged };
 }

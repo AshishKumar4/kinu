@@ -12,7 +12,7 @@ import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.
 import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
 import {
   facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, restoreAgentTmpConfinements,
-  settleWorkspaceRoot, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
+  settleWorkspaceRoot, WORKSPACE_ROOT, actorHomeName, explorationActorKey } from '@kinu.run/core';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   credentialedSessionBox,
@@ -106,12 +106,17 @@ function credOf(workspace: { readonly cred?: VfsCred; readonly home: string }): 
   return workspace.cred;
 }
 
+/** A swarm node's home on `homeHost`, provisioned as both backends provision one. */
+function provisionNode(homeHost: NodeHomeHost, identity: { nodeId: string }) {
+  return facetHomeProvisioner(homeHost)(actorHomeName({ origin: 'swarm', name: explorationActorKey(identity.nodeId), storageKey: identity.nodeId }));
+}
+
 describe('a hosted node hardcoding /tmp stays private', () => {
   test('the shell resolves /tmp per credential once the owner confines it', async () => {
     const f = await openOwner();
 
     try {
-      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(actorHomeName({ origin: 'swarm', storageKey: identity.nodeId }));
+      const provision = (identity: { nodeId: string }) => provisionNode(f.homeHost, identity);
       const a = credOf(await provision(node('aX9')));
       const b = credOf(await provision(node('bK2')));
 
@@ -129,7 +134,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
     const f = await openOwner();
 
     try {
-      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(actorHomeName({ origin: 'swarm', storageKey: identity.nodeId }));
+      const provision = (identity: { nodeId: string }) => provisionNode(f.homeHost, identity);
       const homeA = await provision(node('aX9'));
       const homeB = await provision(node('bK2'));
       const [a, b] = [credOf(homeA), credOf(homeB)];
@@ -152,7 +157,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
     const f = await openOwner();
 
     try {
-      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(actorHomeName({ origin: 'swarm', storageKey: identity.nodeId }));
+      const provision = (identity: { nodeId: string }) => provisionNode(f.homeHost, identity);
       const a = credOf(await provision(node('aX9')));
       expect(await rpcExec(f.host, 'echo a > /tmp/gone', { cred: a })).toMatchObject({ exitCode: 0 });
       await facetHomeReleaser(f.homeHost)('head-aX9');

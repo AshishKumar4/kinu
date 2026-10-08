@@ -74,6 +74,8 @@ export const SURFACE_POLICY = {
   operations: { state: true, agents: true, stores: true, webFiles: true, browser: 'class' },
   /** A slate's call, which a share's visitor may make: it saves nothing through web, delegates nothing and keeps no state. */
   slate: { state: false, agents: false, stores: true, webFiles: false, browser: 'class' },
+  /** The owner's own slate calling as the owner, no share in it: a slate's reach, and it hires and messages helpers. */
+  ownerSlate: { state: false, agents: true, stores: true, webFiles: false, browser: 'class' },
   /** A crafted tool a slate runs: a program of the actor's that delegates nothing, driving its caller's browser. */
   slateTool: { state: true, agents: false, stores: true, webFiles: true, browser: 'program' },
   slateToolForViewer: { state: true, agents: false, stores: true, webFiles: true, browser: 'viewer' },

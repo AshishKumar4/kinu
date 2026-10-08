@@ -29,6 +29,7 @@ import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
 import type { JsonValue } from '../utils/json';
 import { cloudPlanes, type PathPlanes } from '../vfs/resolve';
+import { SlateBuildNoteSchema } from '../operations/file';
 
 const StringSchema = v.string();
 
@@ -39,7 +40,13 @@ const FileWriteSuccessSchema = v.object({
   bytes: v.number(),
   action: v.picklist(['created', 'replaced']),
   undo: v.optional(v.string()),
+  build: v.optional(SlateBuildNoteSchema),
 });
+
+/** A written slate file's build, as a line of the answer. */
+function buildLine(build: v.InferOutput<typeof SlateBuildNoteSchema>): string {
+  return build.builds ? `The slate ${build.slate} builds.` : `The slate ${build.slate} does not build; the user still sees its last working version:\n${build.error ?? ''}`;
+}
 
 function parseInput<TSchema extends v.GenericSchema>(
   schema: TSchema,
@@ -123,6 +130,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   // The native `file` tool's write, on the same ledger read live per call.
   const fileWrite = serveFile(() => ({
     vfs, home: deps.home ?? WORKSPACE_ROOT, planes: deps.planes ?? cloudPlanes(deps.home ?? WORKSPACE_ROOT), ledger: currentLedger(), budget: currentBudget(), memory,
+    ...(deps.slate !== undefined && { slate: deps.slate }),
   })).write;
 
   const tools: ExecutorProvider['tools'] = {
@@ -158,9 +166,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const success = v.safeParse(FileWriteSuccessSchema, result);
 
         if (!success.success) return result;
-        const written = `Written ${success.output.bytes} bytes to ${success.output.path}`;
+        const { bytes, path, undo, build } = success.output;
 
-        return success.output.undo === undefined ? written : `${written}\n${success.output.undo}`;
+        return [`Written ${bytes} bytes to ${path}`, ...(undo === undefined ? [] : [undo]), ...(build === undefined ? [] : [buildLine(build)])].join('\n');
       },
     },
 

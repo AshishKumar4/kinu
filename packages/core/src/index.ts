@@ -139,7 +139,7 @@ export {
   applyWorkspaceTitle,
   deriveWorkspaceTitle,
   fallbackWorkspaceIdentity,
-  mintSubordinateName,
+  mintAgentName,
   parseWorkspaceTitle,
   planWorkspaceTitle, autoTitleMayReplace, nameOriginOf, persistAutoTitle, titleActorFromMessage,
   resolveWorkspaceTitle,
@@ -265,7 +265,7 @@ export {
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
 } from './slates/sharing';
 
-export { slateAddressImpact } from './slates/members';
+export { slateAddressImpact, slateOwnerOnly } from './slates/members';
 
 export {
   slateCapabilityGraph, cutShareGrant, grantAdmits, type SlateSurfaceCatalog, type SlateUsage,
@@ -281,7 +281,7 @@ export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 
 export {
-  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer,
+  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue,
   type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
@@ -591,6 +591,7 @@ export { SubordinateRosterStore, initSubordinateRosterTable, subordinateTitle } 
 export {
   admitSubordinateReport,
   admitSubordinateTask,
+  agentNamer,
   createTeamToolDeps,
   describeSubordinateHandoff,
   normalizeReportContent,
@@ -1554,6 +1555,7 @@ export {
   type ReportHeadDelta, type PublishHeadStream,
   reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
+  ForkNotices, forkNoticeDeliveries, initForkNoticeTable, type ForkNotice,
   HeadController, runHeadSplit, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   type HeadJournalPort,

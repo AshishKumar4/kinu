@@ -9,7 +9,7 @@ import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
 import {
   HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
-  type SlateCallResult, type TerminalEffectName, type TerminalEffectPhase,
+  type SlateAnswer, type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import {
   createCompositeLogger,
@@ -288,7 +288,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** How the agent's last answer's block, its last ask and the answer named as the workspace's resolve, as a preview
    *  and as a page's `workspace` call: `ok`, or the refusal's reason. */
   async answerSlates(agent: string): Promise<AgentSlateUi> {
-    const reason = (result: SlateCallResult) => (result.ok ? 'ok' : result.reason);
+    const reason = (result: SlateAnswer<unknown>) => (result.ok ? 'ok' : result.reason);
     // A page's own call resolves its source first, so a block that resolves is refused only for the authority lent to it.
     const call = async (id: string) => reason(await this.slateCallAs(ROOT_SLATE_CALLER, id, 'workspace', { path: ['exists'], args: ['/home'], invocation: null }));
     const { items } = await this.agentStores(agent).historyPage({});
@@ -397,9 +397,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
     // The SDK's holds: `keepAliveWhile` arms its heartbeat alarm in the future, so no alarm is yet due.
     if (this._keepAliveRefs > 0) busy.push(`${String(this._keepAliveRefs)} keepAlive hold(s)`);
-    const fibers = this.unmetered('SELECT id FROM cf_agents_runs').toArray().length;
+    const fibers = this.unmetered('SELECT id FROM fibers').toArray().length;
 
-    if (fibers > 0) busy.push(`${String(fibers)} durable fiber(s)`);
+    if (fibers > 0) busy.push(`${String(fibers)} open lane(s)`);
     const alarm = await this.actorState.storage.getAlarm();
 
     if (alarm !== null && alarm <= Date.now()) busy.push('an alarm due');

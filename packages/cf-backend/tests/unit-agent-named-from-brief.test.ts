@@ -7,8 +7,7 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { actorConnectionTag, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
-import { agentDatabase } from './helpers/agent-facets';
-import { actorOver, agentSql, driveUntil, gatewayWorkspace } from './helpers/actor-harness';
+import { actorOver, agentSql, driveUntil, gatewayWorkspace, ownDatabase } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 const said = (run: RecordedGatewayRun): string => JSON.stringify(requestOf(run).messages);
@@ -39,10 +38,10 @@ test("an agent whose first turn was stopped is named from its owner's first word
   const pane = [actorConnectionTag(actorId)];
   const name = () => actorOver(workspace.db, actorId).config.getDisplayName();
 
-  const turnsEnded = (): number => agentSql(actorId)<{ n: number }>`
+  const turnsEnded = (): number => agentSql(workspace, actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n ?? 0;
 
-  const naming = () => agentDatabase(workspace.agent.agentOf(actorId).storageKey)
+  const naming = () => ownDatabase(workspace, actorId)
     .query<{ status: string }, []>(`SELECT status FROM terminal_effects WHERE effect_name = 'auto_title'`).all();
 
   await asPane(pane, () => workspace.agent.send(FIRST, crypto.randomUUID()));

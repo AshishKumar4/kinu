@@ -25,6 +25,11 @@ export type SlateAnswer<Value> =
 
 export type SlateCallResult = SlateAnswer<JsonValue>;
 
+/** What a slate's own call on its surface answers: JSON, or for `ai.stream` the answer's UTF-8 text as the model writes it. */
+export type SlateSurfaceValue = JsonValue | ReadableStream<Uint8Array>;
+
+export type SlateSurfaceResult = SlateAnswer<SlateSurfaceValue>;
+
 const VersionId = v.pipe(v.string(), v.minLength(1));
 
 const ShareId = v.pipe(v.string(), v.minLength(1));

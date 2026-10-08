@@ -196,7 +196,10 @@ export function cancelLocalCreation(parent: ActorHandle, input: LocalActorCreati
   return scope.directory.apply(parent, scope.path, { action: 'cancelCreation', ...input }).reference;
 }
 
-export async function recoverLocalActorRetirements(root: ActorHandle, cleanup: (storagePath: readonly string[]) => Promise<void>): Promise<void> {
+/** `cleanup` is given the retiring actor's storage path and its reference: a key is not an actor's id. */
+export async function recoverLocalActorRetirements(
+  root: ActorHandle, cleanup: (storagePath: readonly string[], reference: ActorReference) => Promise<void>,
+): Promise<void> {
   const scope = scopeFor(root);
 
   if (root.parentActorId !== null) throw new KinuError('denied', 'Only the local root owns physical retirement recovery.');
@@ -208,7 +211,7 @@ export async function recoverLocalActorRetirements(root: ActorHandle, cleanup: (
       parentPath: actor.parentPath,
       name: actor.name,
       reference: actor.reference,
-      cleanup: (key) => cleanup([...actor.parentPath, key]),
+      cleanup: (key) => cleanup([...actor.parentPath, key], actor.reference),
     });
   }
 }

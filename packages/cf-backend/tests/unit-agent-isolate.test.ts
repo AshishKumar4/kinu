@@ -43,9 +43,9 @@ test('a planner a Build turn hires cannot write files through the workspace', as
   expect(toolOutputs(planner() ?? gateway.runs[0])).not.toContain('created');
   const hired = workspace.db.query<{ id: string }, []>("SELECT actor_id AS id FROM workspace_actors WHERE origin = 'agent'").get()?.id ?? '';
 
-  await driveUntil(workspace, "the planner's run never ended", () => agentSql(hired)<{ n: number }>`
+  await driveUntil(workspace, "the planner's run never ended", () => agentSql(workspace, hired)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${hired} AND type = 'run_end'`[0]?.n === 1);
-  expect(agentSql(hired)<{ payload: string }>`
+  expect(agentSql(workspace, hired)<{ payload: string }>`
     SELECT payload FROM run_events WHERE actor_id = ${hired} AND type = 'turn_end'`[0]?.payload).toContain('"workMode":"plan"');
 });
 
@@ -63,7 +63,7 @@ test("a turn an agent's isolate loses to its own reset runs again, the workspace
   const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const middleId = middle.actor.handle.actorId;
 
-  const ended = (): number => agentSql(middleId)<{ n: number }>`
+  const ended = (): number => agentSql(workspace, middleId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'run_end'`[0]?.n ?? 0;
 
   await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
@@ -172,12 +172,12 @@ test("a hired agent's turn requests are read from its own database", async () =>
   const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const middleId = middle.actor.handle.actorId;
 
-  const ended = (): number => agentSql(middleId)<{ n: number }>`
+  const ended = (): number => agentSql(workspace, middleId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'run_end'`[0]?.n ?? 0;
 
   await wakeForDelegatedTask(workspace, middleId, 'Say done.');
   await driveUntil(workspace, "the hire's turn never ended", () => ended() > 0);
-  const turnId = agentSql(middleId)<{ turn: string }>`SELECT turn_id AS turn FROM actor_turn_claims WHERE actor_id = ${middleId}`[0]?.turn ?? '';
+  const turnId = agentSql(workspace, middleId)<{ turn: string }>`SELECT turn_id AS turn FROM actor_turn_claims WHERE actor_id = ${middleId}`[0]?.turn ?? '';
   const index = await workspace.agent.getTurnRequests(turnId, middleId);
 
   expect(index.claim).not.toBeNull();
@@ -216,7 +216,7 @@ test("a hired agent's model spend counts in the workspace's and the account's to
   const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const middleId = middle.actor.handle.actorId;
 
-  const steps = (): number => agentSql(middleId)<{ n: number }>`
+  const steps = (): number => agentSql(workspace, middleId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'step_finish'`[0]?.n ?? 0;
 
   const before = (await workspace.agent.getActivitySnapshot()).spend.total.calls;
@@ -251,7 +251,7 @@ test("a hired agent's working context is read and edited where its conversation 
   const middleId = middle.actor.handle.actorId;
   const hirer = `/context/agents/${middle.actor.record.storageKey}/working.jsonl`;
 
-  const ended = (): number => agentSql(middleId)<{ n: number }>`
+  const ended = (): number => agentSql(workspace, middleId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'run_end'`[0]?.n ?? 0;
 
   const main = async (): Promise<string> => readText((await hostedMainActor(workspace)).actor.runtime.storage.vfs, hirer);
@@ -288,12 +288,12 @@ test("a child's client snapshot counts its own chat inputs and answers", async (
   if (child === null) throw new Error('the child was not registered');
   const actorId = child.actorId;
 
-  await driveUntil(workspace, 'the child never completed its answer', () => agentSql(actorId)<{ n: number }>`
+  await driveUntil(workspace, 'the child never completed its answer', () => agentSql(workspace, actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n === 1);
 
   expect((await workspace.agent.getActorSnapshot(child.name)).messageCount).toBe(2);
   await wakeForDelegatedTask(workspace, actorId, 'Second task.');
-  await driveUntil(workspace, 'the child never completed its second answer', () => agentSql(actorId)<{ n: number }>`
+  await driveUntil(workspace, 'the child never completed its second answer', () => agentSql(workspace, actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n === 2);
 
   expect((await workspace.agent.getActorSnapshot(child.name)).messageCount).toBe(4);

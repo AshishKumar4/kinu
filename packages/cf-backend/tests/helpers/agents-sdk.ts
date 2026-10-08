@@ -25,7 +25,7 @@ let harnessFiberSeq = 0;
 /** Fibers running in this process; the interrupted scan skips them, as `_runFiberActiveFibers` does. */
 const harnessActiveFibers = new Set<string>();
 
-/** Live fiber bodies, so a test can join what production detaches on purpose. */
+/** Live fiber and lane bodies, so a test can join what production detaches on purpose. */
 const harnessFiberBodies = new Set<Promise<unknown>>();
 
 /** `cf_agents_runs`, as `agents/dist/index.js:663` declares it. */
@@ -127,7 +127,14 @@ export async function joinHarnessKeepAlives(agent: workersModule.DurableObject):
   while (open !== undefined && open.size > 0) await Promise.allSettled(open);
 }
 
-/** Resolves when every `runFiber` body started so far has settled. */
+/** A lane's body (`ActorAgent.holdLane`), joined with the fibers. */
+export function trackHarnessLane<Result>(lane: Promise<Result>): Promise<Result> {
+  harnessFiberBodies.add(lane);
+
+  return lane.finally(() => { harnessFiberBodies.delete(lane); });
+}
+
+/** Resolves when every `runFiber` body and lane started so far has settled. */
 export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);
 }
@@ -141,26 +148,6 @@ export function abandonHarnessFibers(): void {
   harnessFiberBodies.clear();
   held.clear();
   harnessActiveFibers.clear();
-}
-
-/** Seeds the row a dead activation leaves: the isolate lost the in-memory active set but kept the
- *  `cf_agents_runs` row (same INSERT as `agents/dist/index.js:2899`). */
-export function seedOrphanFiberRow(
-  storage: DurableObjectStorage, name: string, snapshot: JsonValue, createdAt = Date.now(),
-): string {
-  const id = `orphan-${String(++harnessFiberSeq)}`;
-  storage.sql.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
-    id TEXT PRIMARY KEY NOT NULL,
-    name TEXT NOT NULL,
-    snapshot TEXT,
-    created_at INTEGER NOT NULL
-  )`);
-  storage.sql.exec(
-    `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, ?, ?)`,
-    id, name, snapshot === undefined ? null : JSON.stringify(snapshot), createdAt,
-  );
-
-  return id;
 }
 
 function recoveryContextOf(row: RunRow, managed: boolean): FiberRecoveryContext {

@@ -40,7 +40,7 @@ describe('a workspace fork', () => {
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'fork the workspace' });
     const sourceSession = await src.bundle.session();
-    const sourceName = actorHomeName({ origin: 'agent', storageKey: 'source-owner' });
+    const sourceName = actorHomeName({ origin: 'agent', name: 'source-owner', storageKey: 'source-owner' });
     const sourceOwner = agentIdentity(sourceSession.sql, sourceName);
     const root = sourceSession.vfs.as(CRED_KERNEL);
     provisionAgentHome(root, sourceName, sourceOwner);
@@ -52,7 +52,7 @@ describe('a workspace fork', () => {
 
     await forkInto(src, tgt, { untilMessageId: 'm1' });
     const targetSession = await tgt.bundle.session();
-    const unrelatedName = actorHomeName({ origin: 'agent', storageKey: 'unrelated' });
+    const unrelatedName = actorHomeName({ origin: 'agent', name: 'unrelated', storageKey: 'unrelated' });
     const unrelated = agentIdentity(targetSession.sql, unrelatedName);
     provisionAgentHome(targetSession.vfs.as(CRED_KERNEL), unrelatedName, unrelated);
     // The registry did not cross: the unrelated hire reuses the number, not the source principal's authority.
@@ -72,7 +72,7 @@ describe('a workspace fork', () => {
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'fork the workspace' });
     const sourceSession = await src.bundle.session();
-    const sourceGroup = agentIdentity(sourceSession.sql, actorHomeName({ origin: 'agent', storageKey: 'source-group' }));
+    const sourceGroup = agentIdentity(sourceSession.sql, actorHomeName({ origin: 'agent', name: 'source-group', storageKey: 'source-group' }));
     const root = sourceSession.vfs.as(CRED_KERNEL);
     const directory = `${WORKSPACE_ROOT}/shared`;
     const secret = `${directory}/group-secret`;
@@ -87,7 +87,7 @@ describe('a workspace fork', () => {
 
     await forkInto(src, tgt, { untilMessageId: 'm1' });
     const targetSession = await tgt.bundle.session();
-    const unrelated = agentIdentity(targetSession.sql, actorHomeName({ origin: 'agent', storageKey: 'unrelated' }));
+    const unrelated = agentIdentity(targetSession.sql, actorHomeName({ origin: 'agent', name: 'unrelated', storageKey: 'unrelated' }));
     expect(unrelated.gid).toBe(sourceGroup.gid);
 
     // Main must not acquire the kernel's ownership either. Every hire is also in the shared group 1000.
