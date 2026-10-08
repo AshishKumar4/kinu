@@ -260,4 +260,16 @@ describe('OpenAI server-side compaction', () => {
     // The direct route leaves `store` on, so the API holds the item and the next request names it.
     expect(JSON.stringify(body(next.mock).input)).toContain(JSON.stringify({ type: 'item_reference', id: 'cmp_1' }));
   });
+
+  test('what follows the item is priced for the model: a small screenshot of heavy bytes asks for no compaction', async () => {
+    const first = await openaiTurn('gpt-5.5', [{ role: 'user', content: 'rename the parser' }]);
+    const done = v.parse(ResponseMessagesSchema, first.events.find((event) => event.type === 'done'));
+    const stored = decodeModelMessageValues(encodeModelMessageValues(done.responseMessages));
+    // A 64x64 PNG header over 540 kB: past the 170k trigger by its base64's length, a handful of gpt-5.5's patches.
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 64, 0, 0, 0, 64]), Buffer.alloc(540_000, 1)]);
+    const shot: ModelMessage = { role: 'user', content: [{ type: 'image', image: png.toString('base64'), mediaType: 'image/png' }] };
+    const next = await openaiTurn('gpt-5.5', [{ role: 'user', content: 'rename the parser' }, ...stored, shot]);
+
+    expect(body(next.mock).context_management).toBeUndefined();
+  });
 });

@@ -22,6 +22,9 @@ export const TASKS_MEMBER_EFFECTS = {
   list: 'read', add: 'mutate', update: 'mutate', mode: 'mutate',
 } as const satisfies Readonly<Record<string, SlateMemberEffect>>;
 
+/** An `ai` binding's one member, `env.<name>.run({ prompt, system?, tier? })`: a model call, never a tool's name. */
+export const AI_RUN_MEMBER = 'run';
+
 /** The `web` namespace's members write nothing. */
 export const WEB_MEMBER_EFFECTS = {
   search: 'read', fetch: 'read', screenshot: 'read',

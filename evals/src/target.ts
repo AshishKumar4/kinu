@@ -4,7 +4,7 @@ import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary }
 import {
   openPublicSession, resolveWebIdentity, webHeaders, type CatalogNeed, type KinuPublicSession, type PublicWebIdentity,
 } from './session';
-import { REVIEW_MODELS } from './config';
+import { REVIEW_ACCOUNTS, REVIEW_KEYED_MODEL, REVIEW_MODELS, reviewLogin } from './config';
 import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
 import type { SeedFile } from './task';
 import { answered, repliesTo, settle, TurnWatch } from './workspace-completion';
@@ -81,21 +81,34 @@ export function openWorkspace(target: EvalTarget, request: {
 
 const ModelsSchema = v.object({ models: v.array(v.object({ spec: v.string() })) });
 
+const CredentialsSchema = v.array(v.looseObject({ key: v.string() }));
+
+/** One read the eval identity makes of its deployment's user surface, parsed by `schema`. */
+async function userRead<Schema extends v.GenericSchema>(target: EvalTarget, path: string, schema: Schema): Promise<v.InferOutput<Schema>> {
+  const response = await fetch(`${target.origin}${path}`, { headers: webHeaders(target.identity) });
+
+  if (!response.ok) throw new DeploymentAnswer(`${path} answered ${String(response.status)}`, response.status);
+
+  return v.parse(schema, await response.json());
+}
+
 /**
- * The reviewer's models the deployment lists for the eval identity, first choice first (`REVIEW_MODELS`): a Codex login
- * the deployment does not hold is not listed, so the review runs on the next. None listed fails the review, naming what
- * would list one.
+ * The reviewer's models the deployment serves the eval identity, first choice first (`REVIEW_MODELS`): a ChatGPT login
+ * by its credential being held, the key's model by its listing, so a review runs on the next when one is missing. None
+ * served fails the review, naming what would serve one.
  */
 export function reviewerModels(target: EvalTarget): Promise<[string, ...string[]]> {
   return infraBoundary(`GET ${target.origin}/api/user/models`, async () => {
-    const response = await fetch(`${target.origin}/api/user/models`, { headers: webHeaders(target.identity) });
+    const [{ models }, credentials] = await Promise.all([
+      userRead(target, '/api/user/models', ModelsSchema), userRead(target, '/api/user/credentials', CredentialsSchema),
+    ]);
 
-    if (!response.ok) throw new DeploymentAnswer(`/api/user/models answered ${String(response.status)}`, response.status);
-    const listed = new Set(v.parse(ModelsSchema, await response.json()).models.map((model) => model.spec));
-    const [first, ...rest] = REVIEW_MODELS.filter((model) => listed.has(model));
+    const held = new Set(credentials.map((credential) => credential.key));
+    const logins = REVIEW_ACCOUNTS.map(reviewLogin).filter((login) => held.has(login.key)).map((login) => login.spec);
+    const [first, ...rest] = [...logins, ...models.map((model) => model.spec).filter((spec) => spec === REVIEW_KEYED_MODEL)];
 
     if (first === undefined) {
-      throw new Error(`${target.origin} lists none of the reviewer's models (${REVIEW_MODELS.join(', ')}) for the eval identity: `
+      throw new Error(`${target.origin} serves none of the reviewer's models (${REVIEW_MODELS.join(', ')}) to the eval identity: `
         + `sign it in (bun evals/scripts/reviewer-sign-in.ts ${target.origin}) or store its keys (bun scripts/eval-provider-keys.ts ${target.origin})`);
     }
 

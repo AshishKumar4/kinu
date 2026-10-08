@@ -19,7 +19,7 @@ import {
   toolModelMessageSchema,
   userModelMessageSchema,
 } from 'ai';
-import { fnv1a64 } from '@kinu.run/core';
+import { CHARS_PER_TOKEN, fnv1a64, UNPRICED_MEDIA_TOKENS } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
@@ -75,8 +75,8 @@ interface StoredToolPairHandle extends ToolPairHandle {
 
 type ToolItem = Extract<Item, { kind: 'tool' }>;
 
-/** Media is priced flat: providers charge by dimensions, and base64 length would wildly overprice. */
-const ESTIMATED_MEDIA_CHARS = 4_800;
+/** Media is priced flat here, its rule applied by the attachment policy: base64 length would wildly overprice it. */
+const ESTIMATED_MEDIA_CHARS = UNPRICED_MEDIA_TOKENS * CHARS_PER_TOKEN;
 
 const TRANSCRIPT_PREVIEW_CHARS = 20_000;
 

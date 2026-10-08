@@ -1,8 +1,8 @@
 /** Native container egress policy. D38 records the 2026-09-28/29 runtime measurements:
  * Kinu has no raw internet; HTTP/HTTPS go through the owner vault; generic Devbox stays public.
- * Configuration and source lineage jointly define the private set. Generic classes come from
- * Devbox's source lineage. Fixed-image forwarders retain separate image and RPC confinement.
- * This is a source proof; its blind spots print on every green run. */
+ * Configuration and source lineage jointly define the private set: every bound container is a Devbox.
+ * Generic classes come from Devbox's source lineage. This is a source proof; its blind spots print
+ * on every green run. */
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,8 +17,6 @@ import { assertMeasured } from "./gate-ratchet";
 import {
   classMembers, declaredName, importBindings, literalText, memberCalleeName, parse, publishedNames, superClassName, walk, type SyntaxNode,
 } from './syntax';
-import { CONTAINER_IMAGES, imageReference, readSource, sourceHash, type ContainerImage } from './container-images';
-import { tolerate } from "../packages/core/src/obs/index";
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -99,343 +97,11 @@ export function sandboxLineage(sources: ReadonlyMap<string, string>): ReadonlySe
   return lineage;
 }
 
-/** Direct `DurableObject` subclasses in the deployment source, each with the file declaring it: bound to a container,
- *  candidates for forwarder admission. */
-export function declaredForwarderClasses(sources: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
-  const declared = new Map<string, string>();
-
-  for (const [file, text] of sources) {
-    if (!file.startsWith("packages/cf-backend/") || !text.includes("DurableObject")) continue;
-    walk(parse(file, text).root, (node) => {
-      const name = superClassName(node) === 'DurableObject' ? declaredName(node) : undefined;
-
-      if (name !== undefined && !declared.has(name)) declared.set(name, file);
-    });
-  }
-
-  return declared;
-}
-
-/** The interpreters a forwarder's CMD may name besides its own tracked script. */
-const FORWARDER_INTERPRETERS: readonly string[] = ['node'];
-
-/** The only Dockerfile instructions a forwarder image may use: none of them runs anything at build or names a
- *  program other than CMD's. */
-const FORWARDER_INSTRUCTIONS: readonly string[] = ['FROM', 'COPY', 'WORKDIR', 'ENV', 'EXPOSE', 'USER', 'LABEL', 'CMD'];
-
-/** Everything RPC can call on an admitted forwarder, each with why it cannot change what the container runs or where it
- *  may connect. The class's own function properties must equal this table; one more, from the class or its base, is red. */
-export const FORWARDER_SURFACE: ReadonlyMap<string, string> = new Map([
-  ['constructor', 'not callable over RPC; the native container belongs to this Durable Object'],
-  ['forward', 'checks the owner and core codexEgressAllowed, then the container\'s policy.mjs checks again'],
-  ['cancel', 'aborts one of this object\'s own in-flight calls by id'],
-]);
-
-
-export interface ForwarderSurface {
-  readonly parentIsDurableObject: boolean;
-  readonly methods: readonly string[];
-}
-
-export interface ForwarderInputs {
-  /** What the loaded class exposes: its parent, and its own function property names. */
-  readonly surface: ForwarderSurface;
-  readonly owner: string;
-  /** The file declaring the class, whole: its imports name the predicates. */
-  readonly fileText: string;
-  readonly file: string;
-  /** Its record in `container-images.ts`, if any. */
-  readonly image: ContainerImage | undefined;
-  /** The image wrangler.jsonc binds to the class. */
-  readonly boundImage: string | undefined;
-  /** Every tracked file under the record's source directory, with its bytes. */
-  readonly sourceFiles: ReadonlyMap<string, string | Uint8Array>;
-}
-
-/**
- * A container-bound object runs guest code only if its image or its start command lets it, so it leaves the
- * interception set only when all three hold: (a) its image is the pinned build of a tracked directory whose hash is
- * recorded; (b) that Dockerfile copies only tracked files, runs nothing at build, and its CMD runs a tracked script;
- * (c) it extends DurableObject, its RPC surface equals FORWARDER_SURFACE, and the Container it holds privately declares
- * only BOX_FIELDS and is touched only through BOX_USES. The reasons it fails, empty when admitted.
- */
-export function auditForwarder(input: ForwarderInputs): string[] {
-  const reasons: string[] = [];
-  const { image } = input;
-
-  if (image === undefined) return ['has no record in scripts/container-images.ts, so nothing says what its image runs'];
-
-  if (input.boundImage !== imageReference(image)) reasons.push(`is bound to ${String(input.boundImage)}, not its recorded ${imageReference(image)}`);
-
-  if (input.sourceFiles.size === 0) reasons.push(`records source ${image.source}, which holds no tracked file`);
-  else if (sourceHash(input.sourceFiles) !== image.sourceHash) reasons.push(`${image.source} no longer hashes to the source its digest was built from`);
-
-  const dockerfile = input.sourceFiles.get(`${image.source}/Dockerfile`);
-
-  if (dockerfile === undefined) reasons.push(`${image.source} tracks no Dockerfile`);
-  else reasons.push(...dockerfileReasons(image.source, String(dockerfile), input.sourceFiles));
-
-  reasons.push(...surfaceReasons(input.surface), ...classReasons(input));
-
-  return reasons;
-}
-
-function dockerfileReasons(source: string, dockerfile: string, files: ReadonlyMap<string, unknown>): string[] {
-  const reasons: string[] = [];
-  const copied = new Set<string>();
-  let command: string | undefined;
-  const lines = dockerfile.replaceAll(/\\\r?\n/gu, ' ').split('\n').map((text) => text.trim()).filter((text) => text !== '' && !text.startsWith('#'));
-
-  for (const line of lines) {
-    const [instruction = '', ...rest] = line.split(/\s+/u);
-    const verb = instruction.toUpperCase();
-
-    if (!FORWARDER_INSTRUCTIONS.includes(verb)) {
-      reasons.push(`uses \`${verb}\`, outside FROM, COPY, WORKDIR, ENV, EXPOSE, USER, LABEL and CMD`);
-      continue;
-    }
-
-    if (verb === 'FROM' && !/@sha256:[0-9a-f]{64}$/u.test(rest[0] ?? '')) reasons.push(`builds FROM ${rest[0] ?? ''}, not a pinned digest`);
-
-    if (verb === 'ENV' && rest.some((word) => word.startsWith('NODE_'))) reasons.push('sets a NODE_ variable, which can load code CMD does not name');
-
-    if (verb === 'COPY') {
-      if (rest.some((word) => word.startsWith('--'))) reasons.push(`copies with a flag (${line}), not tracked files alone`);
-
-      for (const from of rest.slice(0, -1)) {
-        if (!files.has(`${source}/${from}`)) reasons.push(`copies ${from}, which is not a tracked file of ${source}`);
-        else copied.add(from);
-      }
-    }
-
-    if (verb === 'CMD') {
-      if (command !== undefined) reasons.push('names CMD twice');
-      command = rest.join(' ');
-    }
-  }
-
-  const words = command === undefined ? null : v.safeParse(v.array(v.string()), tolerate<unknown>(() => JSON.parse(command), 'malformed-input'));
-
-  if (words === null || !words.success) {
-    reasons.push('has no exec-form CMD, so what the container runs is not a named file');
-  } else if (!words.output.some((word) => copied.has(word)) || words.output.some((word) => !copied.has(word) && !FORWARDER_INTERPRETERS.includes(word))) {
-    reasons.push(`runs ${JSON.stringify(words.output)}, not one tracked script under a known interpreter`);
-  }
-
-  return reasons;
-}
-
 /** `name` of an Identifier or PrivateIdentifier (as `#name`), else undefined. */
 function nameOf(node: Node | null | undefined): string | undefined {
   if (node?.type === 'Identifier') return node.name;
 
   return node?.type === 'PrivateIdentifier' ? `#${node.name}` : undefined;
-}
-
-export function surfaceReasons(surface: ForwarderSurface): string[] {
-  const reasons: string[] = [];
-
-  if (!surface.parentIsDurableObject) reasons.push('does not extend DurableObject directly, so a base class\'s methods are on its RPC surface');
-
-  for (const method of surface.methods) if (!FORWARDER_SURFACE.has(method)) reasons.push(`exposes \`${method}\` over RPC, which FORWARDER_SURFACE does not classify`);
-
-  for (const method of FORWARDER_SURFACE.keys()) if (!surface.methods.includes(method)) reasons.push(`lacks \`${method}\`, which FORWARDER_SURFACE expects`);
-
-  return reasons;
-}
-
-function isNativeContainer(raw: Node | null | undefined): boolean {
-  return memberPath(raw) === 'this.ctx.container';
-}
-
-function containerAliases(owner: SyntaxNode): ReadonlySet<string> {
-  const aliases = new Set<string>();
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    walk(owner, node => {
-      const raw = node.raw;
-
-      if (raw.type !== 'VariableDeclarator' || raw.init === null || raw.init === undefined) return;
-
-      if (!isNativeContainer(raw.init) && !(raw.init.type === 'Identifier' && aliases.has(raw.init.name))) return;
-      const name = nameOf(raw.id);
-
-      if (name !== undefined && !aliases.has(name)) { aliases.add(name); changed = true; }
-    });
-  }
-
-  return aliases;
-}
-
-function constantString(raw: Node | null | undefined, tree: SyntaxNode): boolean {
-  if (raw?.type === 'Literal') return v.is(v.string(), raw.value);
-
-  if (raw?.type === 'TemplateLiteral') return raw.expressions.length === 0;
-
-  if (raw?.type !== 'Identifier') return false;
-  let found = false;
-  walk(tree, node => {
-    if (node.raw.type === 'VariableDeclarator' && nameOf(node.raw.id) === raw.name
-      && node.parent?.raw.type === 'VariableDeclaration' && node.parent.raw.kind === 'const') {
-      const value = node.raw.init;
-
-      if (value?.type === 'Literal' && v.is(v.string(), value.value)) found = true;
-
-      if (value?.type === 'TemplateLiteral' && value.expressions.length === 0) found = true;
-    }
-  });
-
-  return found;
-}
-
-function nativeReadinessAllowed(args: readonly Node[], tree: SyntaxNode): boolean {
-  const [argv, options] = args;
-
-  return args.length === 2 && argv?.type === 'ArrayExpression' && argv.elements.length === 3
-    && literalIs(argv.elements[0], 'node') && literalIs(argv.elements[1], '-e') && constantString(argv.elements[2], tree)
-    && options?.type === 'ObjectExpression' && options.properties.length === 1 && objectValue(options, 'signal') !== undefined;
-}
-
-function nativePortFetchAllowed(args: readonly Node[], call: SyntaxNode): boolean {
-  if (args.length !== 1 || !literalIs(args[0], 8080)) return false;
-  const fetch = call.parent?.parent?.raw;
-
-  return call.parent?.raw.type === 'MemberExpression' && nameOf(call.parent.raw.property) === 'fetch'
-    && fetch?.type === 'CallExpression' && fetch.arguments.length === 1
-    && fetch.arguments[0]?.type === 'NewExpression' && nameOf(fetch.arguments[0].callee) === 'Request'
-    && literalIs(fetch.arguments[0].arguments[0], 'http://codex-egress/forward');
-}
-
-function nativeCallAllowed(member: string, args: readonly Node[], call: SyntaxNode, tree: SyntaxNode): boolean {
-  if (args.some(arg => arg.type === 'SpreadElement')) return false;
-
-  if (member === 'start') {
-    const options = args[0];
-
-    return args.length === 1 && options?.type === 'ObjectExpression' && options.properties.length === 1
-      && literalIs(objectValue(options, 'enableInternet'), true);
-  }
-
-  if (member === 'setInactivityTimeout') return args.length === 1;
-
-  if (member === 'exec') return nativeReadinessAllowed(args, tree);
-
-  return member === 'getTcpPort' && nativePortFetchAllowed(args, call);
-}
-
-function containerUseReasons(owner: SyntaxNode, tree: SyntaxNode): string[] {
-  const aliases = containerAliases(owner);
-  const reasons: string[] = [];
-  let uses = 0;
-  walk(owner, node => {
-    const raw = node.raw;
-
-    if (!isNativeContainer(raw) && !(raw.type === 'Identifier' && aliases.has(raw.name))) return;
-    const parent = node.parent?.raw;
-
-    if (parent?.type === 'MemberExpression' && parent.property === raw && !parent.computed) return;
-
-    if (parent?.type === 'VariableDeclarator' && (parent.id === raw || parent.init === raw)) return;
-
-    if (parent?.type === 'BinaryExpression' && ['===', '!=='].includes(parent.operator)
-      && (nameOf(parent.left) === 'undefined' || nameOf(parent.right) === 'undefined')) return;
-
-    if (parent?.type === 'MemberExpression' && parent.object === raw && !parent.computed) {
-      const member = nameOf(parent.property);
-
-      if (member === 'running') return;
-      const call = node.parent?.parent;
-
-      if (member !== undefined && call?.raw.type === 'CallExpression' && nativeCallAllowed(member, call.raw.arguments, call, tree)) { uses++;
-
- return; }
-    }
-
-    reasons.push('uses the native container outside fixed start, readiness, inactivity, and port-forward operations');
-  });
-
-  if (uses === 0) reasons.push('has no measured native container operations');
-
-  return reasons;
-}
-
-
-/** A getter or setter is a function RPC can reach under a property name. */
-function accessorReasons(owner: SyntaxNode): string[] {
-  return classMembers(owner).flatMap((member) => (member.raw.type === 'MethodDefinition' && (member.raw.kind === 'get' || member.raw.kind === 'set')
-    ? [`declares a ${member.raw.kind}ter \`${nameOf(member.raw.key) ?? '[computed]'}\`, which RPC can reach`]
-    : []));
-}
-
-/** A function or arrow that captures `this` or a box alias can carry the box out unless it is called where it is made
- *  or handed to `#calls.run`, which only calls it. */
-function closureReasons(owner: SyntaxNode, tree: SyntaxNode): string[] {
-  const reasons: string[] = [];
-  const trustedRun = callsIsEgressCalls(owner, tree);
-  const aliases = containerAliases(owner);
-  walk(owner, inner => {
-    if (inner.raw.type !== 'ArrowFunctionExpression' && inner.raw.type !== 'FunctionExpression') return;
-
-    if (inner.parent?.raw.type === 'MethodDefinition') return;
-    let captures = false;
-    walk(inner, child => { if (child.raw.type === 'ThisExpression' || (child.raw.type === 'Identifier' && aliases.has(child.raw.name))) captures = true; });
-
-    if (!captures) return;
-
-    if (inner.parent?.raw.type === 'CallExpression' && inner.parent.raw.callee === inner.raw) return;
-
-    for (let parent = inner.parent; parent !== undefined; parent = parent.parent) {
-      if (trustedRun && parent.raw.type === 'CallExpression' && isCallsRun(parent.raw)) return;
-    }
-
-    reasons.push('makes a function that captures this or the native container outside the owned call lifetime');
-  });
-
-  return reasons;
-}
-
-/** `#calls` is `new EgressCalls()` with EgressCalls imported from '@kinu.run/core': only then does `run` merely call
- *  the functions it is given. */
-function callsIsEgressCalls(owner: SyntaxNode, tree: SyntaxNode): boolean {
-  const imported = tree.children.some((statement) => statement.raw.type === 'ImportDeclaration' && statement.raw.source.value === '@kinu.run/core'
-    && statement.raw.specifiers.some((spec) => spec.type === 'ImportSpecifier' && nameOf(spec.local) === 'EgressCalls' && nameOf(spec.imported) === 'EgressCalls'));
-
-  return imported && classMembers(owner).some((member) => member.raw.type === 'PropertyDefinition' && nameOf(member.raw.key) === '#calls'
-    && member.raw.value?.type === 'NewExpression' && nameOf(member.raw.value.callee) === 'EgressCalls' && member.raw.value.arguments.length === 0);
-}
-
-/** `this.#calls.run(…)`: EgressCalls only calls the functions it is given. */
-function isCallsRun(call: Node): boolean {
-  return call.type === 'CallExpression' && call.callee.type === 'MemberExpression' && nameOf(call.callee.property) === 'run'
-    && call.callee.object.type === 'MemberExpression' && call.callee.object.object.type === 'ThisExpression' && nameOf(call.callee.object.property) === '#calls';
-}
-
-function classReasons(input: ForwarderInputs): string[] {
-  const tree = parse(input.file, input.fileText).root;
-  let owner: SyntaxNode | undefined;
-  walk(tree, node => { if (node.type === 'ClassDeclaration' && declaredName(node) === input.owner) owner = node; });
-
-  if (owner === undefined) return ['has no declared forwarder class'];
-  const reasons: string[] = [];
-  walk(owner, node => { if (node.type === 'Decorator') reasons.push('carries a decorator, which can rewrite its RPC surface'); });
-
-  return [...reasons, ...accessorReasons(owner), ...closureReasons(owner, tree), ...containerUseReasons(owner, tree)];
-}
-
-/** A loaded class: a function whose prototype is an object. */
-const LoadedClass = v.custom<{ readonly prototype: object }>((value) => value instanceof Function && Object.getPrototypeOf(value.prototype) !== undefined);
-
-/** The loaded class's parent and own function properties, for {@link surfaceReasons}. */
-export function surfaceOf(cls: { readonly prototype: object }, durableObject: { readonly prototype: object }): ForwarderSurface {
-  const { prototype } = cls;
-
-  return {
-    parentIsDurableObject: Object.getPrototypeOf(prototype) === durableObject.prototype,
-    // Every own key, accessors and symbols included: a getter can return a function RPC then calls.
-    methods: [...Object.getOwnPropertyNames(prototype), ...Object.getOwnPropertySymbols(prototype).map(String)],
-  };
 }
 
 export function declaredSandboxClasses(sources: ReadonlyMap<string, string>): string[] {
@@ -711,58 +377,10 @@ export function nativeRoutingReasons(sources: ReadonlyMap<string, string>, entry
 }
 
 
-/** What RPC can reach on `name` exported from `path`, read off the loaded class. `cloudflare:workers` is shimmed as
- *  scripts/test-preload.ts does, unless something already provides it; the class and the comparison use one module. */
-export async function loadForwarderSurface(path: string, name: string): Promise<ForwarderSurface | undefined> {
-  class DurableObject<Ctx, Env> {
-    constructor(readonly ctx: Ctx, readonly env: Env) {}
-  }
-
-  Bun.plugin({
-    name: 'egress-interception:cloudflare-workers',
-    setup(build) {
-      build.module('cloudflare:workers', () => ({
-        exports: { DurableObject, WorkerEntrypoint: class {}, RpcTarget: class {}, env: {}, exports: {} },
-        loader: 'object',
-      }));
-    },
-  });
-
-  const workersModule = 'cloudflare:workers';
-  const base = v.safeParse(v.object({ DurableObject: LoadedClass }), await import(workersModule));
-  const cls = v.safeParse(v.object({ [name]: LoadedClass }), await import(path));
-  const loaded = cls.success ? cls.output[name] : undefined;
-
-  return base.success && loaded !== undefined ? surfaceOf(loaded, base.output.DurableObject) : undefined;
-}
-
 if (import.meta.main) {
   const sources = readInterceptionSources();
   const bound = wranglerContainerClasses(parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER));
-  const declaredContainers = parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER).containers ?? [];
-  const records = new Map<string, ContainerImage>(Object.entries(CONTAINER_IMAGES));
-  const forwarderReasons = new Map<string, string[]>();
-
-  // The loaded class, not its source text, answers what RPC can reach: a base's methods are enumerable here.
-  for (const [owner, file] of [...declaredForwarderClasses(sources)].sort(([a], [b]) => a.localeCompare(b))) {
-    if (!bound.includes(owner)) continue;
-    const image = records.get(owner);
-    const surface = await loadForwarderSurface(join(root, file), owner);
-
-    forwarderReasons.set(owner, surface === undefined ? ['has no loadable source file'] : auditForwarder({
-      owner, file, fileText: sources.get(file) ?? '', image, surface,
-      boundImage: declaredContainers.find((entry) => entry.class_name === owner)?.image,
-      sourceFiles: image === undefined ? new Map() : readSource(root, image.source),
-    }));
-  }
-
-  const forwarders = [...forwarderReasons].filter(([, reasons]) => reasons.length === 0).map(([owner]) => owner);
-
-  for (const [owner, reasons] of forwarderReasons) {
-    for (const reason of reasons) console.error(`egress-interception: ${owner} is not an admitted forwarder: it ${reason}`);
-  }
-
-  const fromWrangler = bound.filter(name => !forwarders.includes(name));
+  const fromWrangler = bound;
   const fromSource = declaredSandboxClasses(sources);
   const classes = [...new Set([...fromWrangler, ...fromSource])].sort();
   const privateAudit = auditInterception(sources, classes);
@@ -795,10 +413,7 @@ if (import.meta.main) {
   console.log('egress-interception: ok — ' + measured);
   console.log('egress-interception: private network denied: ' + classes.join(', ') + '; public network retained: ' + generic.join(', '));
   console.log('egress-interception: HTTP and HTTPS enter the host router; Kinu binds the owner vault before the public-network fallback');
-  console.log('egress-interception: admitted fixed-image forwarders: ' + (forwarders.join(', ') || 'none'));
-
-  for (const [method, why] of FORWARDER_SURFACE) console.log('egress-interception: ' + method + ' — ' + why);
-  console.log('egress-interception: blind spots: this proves literal/inherited policy and explicit native call/binding edges, not arbitrary control-flow equivalence or runtime platform enforcement. Dynamic aliases and metaprogramming are not credited. Vault authorization and forwarder policy bodies are covered by their behavioral tests; native routing, TLS trust and platform behavior by D38.');
+  console.log('egress-interception: blind spots: this proves literal/inherited policy and explicit native call/binding edges, not arbitrary control-flow equivalence or runtime platform enforcement. Dynamic aliases and metaprogramming are not credited. Vault authorization is covered by its behavioral tests; native routing, TLS trust and platform behavior by D38.');
   console.log('egress-interception: DNS was measured closed with internet disabled on 0.2.0+28bc79307: UDP/TCP 53 did not escape and nonexistent names resolved to the same private ULA. This is a platform observation, not a source proof.');
   process.exit(0);
 }

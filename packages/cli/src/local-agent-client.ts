@@ -171,14 +171,8 @@ interface LocalAgentClientDeps {
 interface PendingLocalTurn {
   /** Appended when the running turn opens, or marked steered when the running turn read it. */
   readonly entry: JsonObject;
-  /** Null until the turn's own `turn-end` arrives; see `unfinishedTurn`. */
-  result: AgentTurnResult | null;
-}
-
-/** A turn that never reported an end must not read as a clean empty success, or `kinu exec` exits 0 on a turn
- * that never ran. */
-function unfinishedTurn(): AgentTurnResult {
-  return { text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: true };
+  /** Its turn's own `turn-end`: a send that landed as a turn opened one, and every turn it opens ends. */
+  readonly ended: ReturnType<typeof Promise.withResolvers<AgentTurnResult>>;
 }
 
 export class LocalAgentClient implements AgentClient {
@@ -307,7 +301,7 @@ export class LocalAgentClient implements AgentClient {
 
     // The session decides where the words land; the minted id is the id that turn opens under.
     const id = crypto.randomUUID();
-    const pending: PendingLocalTurn = { entry: sessionEntry, result: null };
+    const pending: PendingLocalTurn = { entry: sessionEntry, ended: Promise.withResolvers() };
     this.awaiting.set(id, pending);
 
     try {
@@ -319,7 +313,7 @@ export class LocalAgentClient implements AgentClient {
         return { landed };
       }
 
-      return { landed, ...(pending.result ?? unfinishedTurn()) };
+      return { landed, ...await pending.ended.promise };
     } finally {
       this.awaiting.delete(id);
       this.live = this.live.filter((open) => open !== pending);
@@ -586,7 +580,7 @@ export class LocalAgentClient implements AgentClient {
       for (const pending of this.live) this.activeCliSession.append('user', pending.entry);
     }
 
-    if (mapped.type === 'turn-end') for (const pending of this.live) pending.result = mapped.turn;
+    if (mapped.type === 'turn-end') for (const pending of this.live) pending.ended.resolve(mapped.turn);
     this.emit(mapped);
   }
 

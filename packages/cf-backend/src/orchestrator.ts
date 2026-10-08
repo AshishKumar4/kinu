@@ -237,7 +237,6 @@ import {
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
 import { attempt, authoredRefusal, classify, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
-import { ownerContainer, type CodexContainer } from "./egress/codex-egress-route";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -835,8 +834,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         await stub.cancelModelRelay(caller, callId);
       },
-      forwardCodex: async (callId, request) => await (await this.codexContainer()).forward(callId, request),
-      cancelCodex: async (callId) => { await (await this.codexContainer()).cancel(callId); },
       sayToParent: async (signal) => {
         const { parentActorId } = this.liveAgentOf(actorId);
 
@@ -868,15 +865,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!this.liveActor(actorId)) return;
     recordAgentFigures(this.boundSql, actorId, figures);
     this.delegatedTurns.start([this.liveAgentOf(actorId)]);
-  }
-
-  async codexContainer(): Promise<CodexContainer> {
-    const owner = await this.getOwnerUserId();
-    const namespace = this.env.CodexEgress;
-
-    if (namespace === undefined || !owner) return settleSync(Effect.fail(new KinuError('unavailable', "This workspace has no Codex egress container for its owner.")));
-
-    return ownerContainer(namespace, owner);
   }
 
   /** A promise so the workspace boots on the first provision, never at activation. */
@@ -4268,9 +4256,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** The machine's name is read from the account, so it is current. */
-  private async codexRoute(egress: string | undefined, deviceId: string | null): Promise<NonNullable<ActivitySnapshot['latest']>['route']> {
-    if (egress === 'relay') return { kind: 'container' };
-
+  private async codexRoute(deviceId: string | null): Promise<NonNullable<ActivitySnapshot['latest']>['route']> {
     if (deviceId === null) return null;
     const { stub, caller } = await this.userHub();
 
@@ -4307,7 +4293,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           usage: newest.usage ?? {},
           context: newest.context ?? null,
           modelId: newest.modelId ?? null,
-          route: await this.codexRoute(newest.egress, deviceId),
+          route: await this.codexRoute(deviceId),
         },
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.

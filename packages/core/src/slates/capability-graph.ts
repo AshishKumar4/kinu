@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import {
-  memberEffect, MEMORY_MEMBER_EFFECTS, TASKS_MEMBER_EFFECTS, toolActionEffect, toolMembers,
+  AI_RUN_MEMBER, memberEffect, MEMORY_MEMBER_EFFECTS, TASKS_MEMBER_EFFECTS, toolActionEffect, toolMembers,
   TOOL_ACTION_EFFECTS, WEB_MEMBER_EFFECTS,
 } from './members';
 import type { SlateBinding, SlateProject } from './project';
@@ -190,7 +190,7 @@ function graphBinding({ slate, name, binding, catalog, workspace }: GraphBinding
 
     return row(
       capability,
-      [graphMember(capability, 'shell', 'mutate', workspace)],
+      [graphMember(capability, AI_RUN_MEMBER, 'mutate', workspace)],
       declared.tier !== undefined && !catalog.tiers.includes(declared.tier)
         ? `you have no ${declared.tier} tier`
         : undefined,

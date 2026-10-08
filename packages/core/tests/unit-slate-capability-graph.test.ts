@@ -137,7 +137,7 @@ test('the graph renders every binding with members, effects and risk text', () =
   expect(graph.bindings[7]).toEqual({
     slate: 'issues', name: 'BRAIN', kind: 'ai', capability: { kind: 'model', tier: 'fast' },
     members: [{
-      member: 'shell', effect: 'mutate',
+      member: 'run', effect: 'mutate',
       risk: {
         public: 'Runs a model call on your fast tier. Every call spends your inference. Anyone who opens this share can trigger it.',
         users: 'Runs a model call on your fast tier. Every call spends your inference. Anyone you named on this share can trigger it.',

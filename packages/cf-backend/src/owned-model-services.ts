@@ -16,7 +16,6 @@ import {
 } from './providers/agent-registry';
 import type { ActorReference, ModelCallSink, UserCaller } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
-import type { CodexEgressNamespace } from './egress/codex-egress-route';
 
 type MarkdownConversion = NonNullable<Parameters<typeof buildCfWebSearchProvider>[0]['AI']>['toMarkdown'];
 
@@ -28,7 +27,6 @@ export interface OwnedAiBinding extends WorkersAIBinding {
 export interface OwnedModelEnv<Id> extends ProviderEnv {
   AI?: OwnedAiBinding;
   BROWSER: BrowserRunQuickActions;
-  CodexEgress?: CodexEgressNamespace;
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
 }
 
@@ -85,7 +83,6 @@ export class OwnedModelServices<Id = DurableObjectId> {
 
       this.providerRegistryCache = createAgentProviderRegistry({
         env: this.options.env,
-        ownerUserId: userId,
         userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
         appTitle: this.options.appTitle,
         onProviderWait: this.options.onProviderWait,
