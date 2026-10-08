@@ -154,7 +154,7 @@ import {
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
-  captureOperationProfile, currentOperationProfile, withOperationProfile,
+  captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type CodemodeSurface,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
@@ -497,6 +497,8 @@ function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearc
 interface SlateAuthority {
   readonly mode: WorkMode;
   readonly reach: ToolSurfaceNarrowing;
+  /** The profile a call runs under: the turn's when one is live, else this one resolved now, as a hire reads its role. */
+  readonly operation?: OperationProfile;
 }
 
 /** `use` over the namespaces and tools an authority reaches, in its mode; each tool is reached through its record. */
@@ -3047,7 +3049,10 @@ export abstract class ActorAgent extends Agent<Env> {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode, owner)));
           const providers = providersInWorkMode(authority.mode, this.slateNamespaces(mode, owner));
 
-          return yield* Effect.promise(async () => slateMember(slateToolReach(authority.reach, owner).narrowProviders(providers), route, context));
+          // The owner's own slate hires under the owner's role as of now, as a program in a turn does.
+          return yield* Effect.promise(async () => runOperationProfile(owner ? authority.operation ?? null : null, async () => slateMember(
+            slateToolReach(authority.reach, owner).narrowProviders(providers), route, context,
+          )));
         }
 
         case 'tool': {
@@ -3224,13 +3229,15 @@ export abstract class ActorAgent extends Agent<Env> {
   private async slateAuthority(
     requested: WorkMode, providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = [],
   ): Promise<SlateAuthority> {
-    const { profile } = await this.actorProfile({
+    const { profile, inputs } = await this.actorProfile({
       actor: this.actorHandle(),
       workMode: requested,
       availableTools: [...actorActiveTools(this.actorToolDeps()), ...mcpToolKeys, ...codemodeCapabilitiesFor(providers)],
     });
 
-    return { mode: profile.workMode, reach: narrowToolSurface((this.operationProfile()?.profile ?? profile).allowedTools) };
+    const operation = this.operationProfile() ?? captureOperationProfile({ actor: this.actorHandle(), profile, inputs, runId: WORKSPACE_RUN_ID, turnId: null });
+
+    return { mode: profile.workMode, reach: narrowToolSurface(operation.profile.allowedTools), operation };
   }
 
   /**
