@@ -9,7 +9,6 @@ const FALLBACK_ID = "fallback-probe";
 const FALLBACK_SLATES: readonly SlateSummary[] = [{
   id: FALLBACK_ID,
   title: "Fallback Probe",
-  bindings: [],
 }];
 
 export const SLATE_GALLERY_URL = 'https://6s5-abcdef0123-aaaaaaaaaaaaaaa-gallery.preview.example.test/';

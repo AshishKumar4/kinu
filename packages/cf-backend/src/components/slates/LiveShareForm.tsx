@@ -7,7 +7,7 @@ import * as v from "valibot";
 import {
   LiveShareRecordSchema, SlateCapabilityGraphSchema,
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE,
-  type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type Rpc, type SlateAnswer, type SlateCapability, type SlateCapabilityGraph, type SlateGraphBinding,
+  type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type Rpc, type SlateAnswer, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember,
 } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -23,36 +23,26 @@ export interface LiveShareFixture {
 
 interface Approval {
   slate: string;
-  binding: string;
+  namespace: string;
   member: string;
 }
 
 function approvalKey(approval: Approval): string {
-  return JSON.stringify([approval.slate, approval.binding, approval.member]);
+  return JSON.stringify([approval.slate, approval.namespace, approval.member]);
 }
 
-function capabilityLabel(capability: SlateCapability): string {
-  switch (capability.kind) {
-    case "executor": return `${capability.namespace} executor`;
-    case "mcp": return capability.title;
-    case "tool": return `tool ${capability.name}`;
-    case "memory": return "your workspace memory";
-    case "tasks": return "your task list";
-    case "web": return "the web, as you";
-    case "rpc": return "read models";
-    case "agent": return "your agent";
-    case "model": return `your ${capability.tier} tier`;
-    case "slate": return `slate ${capability.id}`;
-  }
-}
+/** Each impact as a person reads it beside the member that has it. */
+const IMPACT_WORDS: Readonly<Record<SlateGraphMember["impact"], string>> = {
+  observe: "reads", mutate: "changes", externalSend: "sends out", execute: "runs", delegate: "delegates", administer: "administers",
+};
 
 const ACCESS: readonly AccessOption<LiveShareVisibility>[] = [
   { id: "users", icon: <UsersIcon size={15} />, label: "Only people you add", detail: "Anyone else who gets the link sees nothing." },
   { id: "public", icon: <GlobeIcon size={15} />, label: "Anyone with the link", detail: "No sign-in needed. It still runs as you." },
 ];
 
-function BindingRow({ binding, visibility, approved, onToggle, disabled }: {
-  binding: SlateGraphBinding;
+function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
+  row: SlateGraphNamespace;
   visibility: LiveShareVisibility;
   approved: ReadonlySet<string>;
   onToggle: (approval: Approval) => void;
@@ -60,22 +50,23 @@ function BindingRow({ binding, visibility, approved, onToggle, disabled }: {
 }) {
   let members: ReactNode;
 
-  if (binding.problem !== undefined) {
-    members = <p className="p-badge-danger inline-block rounded px-2 py-0.5 text-[11px]">{binding.problem}</p>;
-  } else if (binding.members.length === 0) {
+  if (row.problem !== undefined) {
+    members = <p className="p-badge-danger inline-block rounded px-2 py-0.5 text-[11px]">{row.problem}</p>;
+  } else if (row.members.length === 0) {
     members = <p className="p-text-4">No members.</p>;
   } else {
     members = (
       <ul className="space-y-1">
-        {binding.members.map((member) => {
-          const approval = { slate: binding.slate, binding: binding.name, member: member.member };
+        {row.members.map((member) => {
+          const approval = { slate: row.slate, namespace: row.namespace, member: member.member };
           const key = approvalKey(approval);
           const risk = visibility === "public" ? member.risk.public : member.risk.users;
 
-          if (member.effect === "read") {
+          if (member.impact === "observe") {
             return (
               <li key={key} className="flex items-center gap-2">
                 <span className="font-mono p-text-2">{member.member}</span>
+                <span className="p-text-4">{IMPACT_WORDS[member.impact]}</span>
                 <span className="ml-auto p-text-4">Always on</span>
               </li>
             );
@@ -87,8 +78,9 @@ function BindingRow({ binding, visibility, approved, onToggle, disabled }: {
             <li key={key} className={`-mx-2 rounded-md px-2 py-1.5 ${checked ? "p-tint-warning" : ""}`}>
               <label className="flex cursor-pointer items-center gap-2">
                 <span className="font-mono p-text">{member.member}</span>
+                <span className="p-text-3">{IMPACT_WORDS[member.impact]}</span>
                 <input type="checkbox" checked={checked} onChange={() => onToggle(approval)} disabled={disabled}
-                  className="ml-auto size-4 accent-[var(--c-accent)]" aria-describedby={`risk-${key}`} data-approve={`${binding.name}.${member.member}`} />
+                  className="ml-auto size-4 accent-[var(--c-accent)]" aria-describedby={`risk-${key}`} data-approve={`${row.namespace}.${member.member}`} />
               </label>
               <p id={`risk-${key}`} className="mt-0.5 leading-relaxed p-text-3">{risk}</p>
             </li>
@@ -101,8 +93,8 @@ function BindingRow({ binding, visibility, approved, onToggle, disabled }: {
   return (
     <li className="space-y-1.5 py-2">
       <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="font-mono text-xs font-medium p-text">{binding.name}</span>
-        <span className="p-text-4">{capabilityLabel(binding.capability)}</span>
+        <span className="font-mono text-xs font-medium p-text">{row.namespace}</span>
+        {row.title !== row.namespace && <span className="p-text-4">{row.title}</span>}
       </div>
       {members}
     </li>
@@ -119,12 +111,12 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
   const [open, setOpen] = useState(false);
 
   const counts = useMemo(() => {
-    const members = graph.bindings.flatMap((binding) => binding.problem === undefined ? binding.members : []);
+    const members = graph.namespaces.flatMap((row) => row.problem === undefined ? row.members : []);
 
-    return { read: members.filter((member) => member.effect === "read").length, mutating: members.filter((member) => member.effect === "mutate").length };
+    return { read: members.filter((member) => member.impact === "observe").length, acting: members.filter((member) => member.impact !== "observe").length };
   }, [graph]);
 
-  const names = [...new Set(graph.bindings.filter((binding) => binding.slate === graph.slate).map((binding) => capabilityLabel(binding.capability)))].join(", ");
+  const names = [...new Set(graph.namespaces.filter((row) => row.slate === graph.slate).map((row) => row.title))].join(", ");
   let changes = "reading only";
 
   if (approved.size > 0) changes = `${String(approved.size)} ${approved.size === 1 ? "change" : "changes"} allowed`;
@@ -144,26 +136,26 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
         <div className="space-y-2 border-t p-border px-3.5 py-2 text-xs">
           <p className="p-text-3">Everything here uses your connections. Reading is on; each change stays off until you tick it.</p>
           {graph.slates.map((slateId) => {
-            const rows = graph.bindings.filter((binding) => binding.slate === slateId);
+            const rows = graph.namespaces.filter((row) => row.slate === slateId);
 
             if (rows.length === 0) return null;
 
             const via = slateId === graph.slate ? null
-              : graph.bindings.find((binding) => binding.capability.kind === "slate" && binding.capability.id === slateId)?.name ?? slateId;
+              : graph.namespaces.find((row) => row.namespace === `slates.${slateId}`)?.slate ?? slateId;
 
             return (
               <div key={slateId} className={via === null ? "" : "border-l-2 p-border pl-3"}>
                 {via !== null && <div className="p-text-3">via <span className="font-mono">{via}</span> → <span className="font-mono">{slateId}</span></div>}
                 <ul className="divide-y divide-[var(--c-border)]">
-                  {rows.map((binding) => (
-                    <BindingRow key={`${binding.slate}/${binding.name}`} binding={binding} visibility={visibility} approved={approved} onToggle={onToggle} disabled={disabled} />
+                  {rows.map((row) => (
+                    <NamespaceRow key={`${row.slate}/${row.namespace}`} row={row} visibility={visibility} approved={approved} onToggle={onToggle} disabled={disabled} />
                   ))}
                 </ul>
               </div>
             );
           })}
           <p className="p-text-2" data-grant-summary>
-            People get {counts.read} read-only member{counts.read === 1 ? "" : "s"}. You allowed {approved.size} of {counts.mutating} change{counts.mutating === 1 ? "" : "s"}.
+            People get {counts.read} read-only member{counts.read === 1 ? "" : "s"}. You allowed {approved.size} of {counts.acting} change{counts.acting === 1 ? "" : "s"}.
           </p>
         </div>
       )}
@@ -247,7 +239,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       const approvals = [...approved].map((key) => v.parse(v.tuple([v.string(), v.string(), v.string()]), JSON.parse(key)))
-        .map(([slateId, binding, member]) => ({ slate: slateId, binding, member }));
+        .map(([slateId, namespace, member]) => ({ slate: slateId, namespace, member }));
 
       const result = yield* Effect.promise(async () => shareLive({ workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, approved: approvals, fork }));
       setCreated(result);
@@ -292,7 +284,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     );
   }
 
-  const reaches = graph !== null && graph.bindings.length > 0;
+  const reaches = graph !== null && graph.namespaces.length > 0;
 
   const limits = reaches
     ? `Each person gets ${String(SHARE_VIEWER_REQUESTS_PER_MINUTE)} requests a minute; the share gets $${String(SHARE_SPEND_CAP_USD_PER_DAY)} of model spend a day.`

@@ -1126,6 +1126,12 @@
     "value TEXT NOT NULL",
     "PRIMARY KEY (slate_id, key)"
   ],
+  "slate_usage@packages/core/src/slates/usage.ts": [
+    "slate_id TEXT NOT NULL",
+    "namespace TEXT NOT NULL",
+    "member TEXT NOT NULL",
+    "PRIMARY KEY (slate_id, namespace, member)"
+  ],
   "slate_versions@packages/core/src/state/workspace-schema.ts": [
     "id TEXT PRIMARY KEY",
     "slate_id TEXT NOT NULL",

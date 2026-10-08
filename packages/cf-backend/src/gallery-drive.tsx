@@ -165,17 +165,17 @@ const SLATE_PICTURES = {
 
 const LIBRARY: SharedLibrary = {
   slates: [
-    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", bindings: 4, visibility: "public", picture: SLATE_PICTURES["issue-triage"] },
-    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", bindings: 1, picture: SLATE_PICTURES.lighthouse },
-    { id: "standup", title: "Standup notes", workspace: "email-triage", bindings: 0 },
+    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", visibility: "public", picture: SLATE_PICTURES["issue-triage"] },
+    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", picture: SLATE_PICTURES.lighthouse },
+    { id: "standup", title: "Standup notes", workspace: "email-triage" },
   ],
   mine: [
-    { id: "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha", kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
-    { id: "live-board-1", kind: "live", share: "live-board-1", slate: "issue-triage", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, bindings: 4, visibility: "users", workspace: "checkout-fixes", users: ["sam@example.com", "lee@example.com"], fork: true },
+    { id: "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha", kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 3 * 864e5, workspace: "checkout-fixes", users: ["pat@example.com"] },
+    { id: "live-board-1", kind: "live", share: "live-board-1", slate: "issue-triage", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, visibility: "users", workspace: "checkout-fixes", users: ["sam@example.com", "lee@example.com"], fork: true },
   ],
   received: [
-    { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, bindings: 2, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true },
-    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", kind: "blueprint", share: "z8Xc4vB2nM6qW3eR", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 864e5, bindings: 2, workspace: "sam-mail", owner: "sam@example.com" },
+    { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true },
+    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", kind: "blueprint", share: "z8Xc4vB2nM6qW3eR", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 864e5, workspace: "sam-mail", owner: "sam@example.com" },
   ],
 };
 

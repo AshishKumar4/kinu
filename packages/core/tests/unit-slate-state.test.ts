@@ -73,7 +73,7 @@ test('list orders by key and a prefix bounds the range without a LIKE', () => {
 
 test('routeSlateStorageCall refuses by class: bad input versus a member it does not offer', () => {
   const route = (member: string, args: JsonValue[] = []) =>
-    routeSlateStorageCall({ member, args, invocation: null });
+    routeSlateStorageCall({ member, args });
 
   expect(route('get', ['k'])).toEqual({ op: 'get', key: 'k' });
   expect(route('put', ['k', { a: 1 }])).toEqual({ op: 'put', key: 'k', value: { a: 1 } });

@@ -9,6 +9,8 @@ export { WorkspaceSlates, type WorkspaceSlatesDeps } from './runtime';
 
 export { EphemeralSlates, initEphemeralSlateTable } from './ephemeral';
 
+export { SlateUsageStore, initSlateUsageTable } from './usage';
+
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, SqliteSlateStateStore, routeSlateStorageCall, type SlateStorageOp, type SlateStorageListOptions } from './state';
 
 export { SLATE_SERVER_MODULE, SLATE_CLIENT_MODULE } from './runtime-modules';

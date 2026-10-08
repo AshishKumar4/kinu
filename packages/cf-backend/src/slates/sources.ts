@@ -2,13 +2,13 @@ import { SlateId } from '@agent-core/core/slates';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { slateDirectory, type WorkspaceSlates } from '@kinu.run/core/slates';
 import {
-  addressedBlock, ephemeralBindings, ephemeralSlateAddress, ephemeralSlateId, parseSlateProject, sha256Hex, type EphemeralSlateAddress, type SlateProject,
+  addressedBlock, ephemeralSlateAddress, ephemeralSlateId, parseSlateProject, sha256Hex, type EphemeralSlateAddress, type SlateProject,
 } from '@kinu.run/core';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import { ROOT_SLATE_CALLER, type SlateCaller } from './bindings';
 
 /** The block an ephemeral slate's id names, and the author whose authority its page runs with; null when no authority
- *  can be lent to it here, and the page is drawn with nothing bound. */
+ *  can be lent to it here, and the page is drawn with nothing it can call. */
 export interface MessageBlock {
   readonly html: string;
   readonly author: SlateCaller | null;
@@ -23,7 +23,11 @@ const UNBOUND: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
  */
 export type SlateSource =
   | { readonly kind: 'files'; readonly project: SlateProject; readonly root: string }
-  | { readonly kind: 'message'; readonly project: SlateProject; readonly root: string; readonly html: string; readonly author: SlateCaller };
+  | {
+    readonly kind: 'message'; readonly project: SlateProject; readonly root: string; readonly html: string; readonly author: SlateCaller;
+    /** False for a page drawn with no authority lent to it: every call on its surface is refused. */
+    readonly bound: boolean;
+  };
 
 /** Not a directory any slate's files are in: an ephemeral slate has no files. */
 const EPHEMERAL_ROOT = '/usr/lib/kinu/slate/pages';
@@ -57,11 +61,9 @@ export class SlateSources {
     if (address === null) return { kind: 'files', project: await this.deps.project(cred, id), root: slateDirectory(new SlateId(id)) };
     const block = this.deps.host.messageBlock === undefined ? await noAnswers(address) : await this.deps.host.messageBlock(address);
 
-    const bindings = block.author === null ? {} : ephemeralBindings();
-
     return {
       kind: 'message', root: `${EPHEMERAL_ROOT}/${ephemeralSlateId(address)}`, html: block.html, author: block.author ?? UNBOUND,
-      project: parseSlateProject({ name: address.name, browser: PAGE_ENTRY, slate: { title: address.name, bindings } }),
+      bound: block.author !== null, project: parseSlateProject({ name: address.name, browser: PAGE_ENTRY, slate: { title: address.name } }),
     };
   }
 

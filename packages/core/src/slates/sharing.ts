@@ -3,7 +3,7 @@
  * Blueprints carry no credentials and warn on secret-shaped text rather than promise none (S8).
  */
 import * as v from 'valibot';
-import { SLATE_BINDING_KINDS, type SlateBindingDeclaration } from './project';
+import type { Impact } from '@agent-core/core/facets';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
 
 
@@ -14,13 +14,15 @@ export type ShareKind = (typeof SHARE_KINDS)[number];
 export { type LiveShareVisibility } from './live-share-visibility';
 
 
-const SlateMemberEffectSchema = v.picklist(['read', 'mutate']);
+/** What a call does, in agent-core's words; a share approves and shows each member by it. */
+const ImpactSchema = v.picklist(['observe', 'mutate', 'externalSend', 'execute', 'delegate', 'administer'] as const satisfies readonly Impact[]);
 
+/** A member of a namespace on the slate's surface: `memory`, `workspace`, `mcp.<server>`, `slates.<id>`. */
 const ShareGrantMemberSchema = v.object({
   slate: v.string(),
-  binding: v.string(),
+  namespace: v.string(),
   member: v.string(),
-  effect: SlateMemberEffectSchema,
+  impact: ImpactSchema,
 });
 
 export type ShareGrantMember = v.InferOutput<typeof ShareGrantMemberSchema>;
@@ -34,44 +36,30 @@ export const ShareGrantSchema = v.object({
 
 export type ShareGrant = v.InferOutput<typeof ShareGrantSchema>;
 
-const SlateCapabilitySchema = v.variant('kind', [
-  v.object({ kind: v.literal('executor'), namespace: v.string() }),
-  v.object({ kind: v.literal('mcp'), server: v.string(), title: v.string() }),
-  v.object({ kind: v.literal('tool'), name: v.string() }),
-  v.object({ kind: v.literal('memory') }),
-  v.object({ kind: v.literal('tasks') }),
-  v.object({ kind: v.literal('web') }),
-  v.object({ kind: v.literal('rpc') }),
-  v.object({ kind: v.literal('agent') }),
-  v.object({ kind: v.literal('model'), tier: v.string() }),
-  v.object({ kind: v.literal('slate'), id: v.string() }),
-]);
-
-export type SlateCapability = v.InferOutput<typeof SlateCapabilitySchema>;
-
 const SlateGraphMemberSchema = v.object({
   member: v.string(),
-  effect: SlateMemberEffectSchema,
+  impact: ImpactSchema,
   risk: v.object({ public: v.string(), users: v.string() }),
 });
 
 export type SlateGraphMember = v.InferOutput<typeof SlateGraphMemberSchema>;
 
-const SlateGraphBindingSchema = v.object({
+/** One namespace a slate has called, with the members it called there. */
+const SlateGraphNamespaceSchema = v.object({
   slate: v.string(),
-  name: v.string(),
-  kind: v.picklist(SLATE_BINDING_KINDS),
-  capability: SlateCapabilitySchema,
+  namespace: v.string(),
+  /** How the namespace reads to a person: an MCP server by its title. */
+  title: v.string(),
   members: v.array(SlateGraphMemberSchema),
   problem: v.optional(v.string()),
 });
 
-export type SlateGraphBinding = v.InferOutput<typeof SlateGraphBindingSchema>;
+export type SlateGraphNamespace = v.InferOutput<typeof SlateGraphNamespaceSchema>;
 
 export const SlateCapabilityGraphSchema = v.object({
   slate: v.string(),
   slates: v.array(v.string()),
-  bindings: v.array(SlateGraphBindingSchema),
+  namespaces: v.array(SlateGraphNamespaceSchema),
 });
 
 export type SlateCapabilityGraph = v.InferOutput<typeof SlateCapabilityGraphSchema>;
@@ -100,9 +88,9 @@ export type LiveShareCreated = v.InferOutput<typeof LiveShareCreatedSchema>;
 
 export const ViewerCallSchema = v.object({
   slate: v.string(),
-  binding: v.string(),
+  namespace: v.string(),
   member: v.string(),
-  effect: SlateMemberEffectSchema,
+  impact: ImpactSchema,
   ok: v.boolean(),
 });
 
@@ -175,13 +163,6 @@ const SecretSightingSchema = v.object({
   path: v.string(), line: v.number(), pattern: v.string(), message: v.string(),
 });
 
-const SlateBindingDeclarationSchema = v.object({
-  name: v.string(),
-  kind: v.picklist(SLATE_BINDING_KINDS),
-  target: v.string(),
-  credentialed: v.boolean(),
-});
-
 const BlueprintEntrySchema = v.object({
   path: v.string(),
   kind: v.picklist(['file', 'directory', 'symlink']),
@@ -196,8 +177,8 @@ export const BlueprintInspectionSchema = v.object({
   title: v.string(),
   description: v.string(),
   entries: v.array(BlueprintEntrySchema),
-  bindings: v.array(SlateBindingDeclarationSchema),
-  credentialed: v.array(SlateBindingDeclarationSchema),
+  /** The namespaces the slate has been seen calling: what a forker's own workspace must offer. */
+  reaches: v.array(v.string()),
   warnings: v.array(SecretSightingSchema),
 });
 
@@ -226,8 +207,7 @@ export const BlueprintViewSchema = v.object({
   id: v.string(),
   title: v.string(),
   description: v.string(),
-  bindings: v.array(SlateBindingDeclarationSchema),
-  credentialed: v.array(SlateBindingDeclarationSchema),
+  reaches: v.array(v.string()),
   entries: v.array(BlueprintEntrySchema),
   warnings: v.array(SecretSightingSchema),
   createdAt: v.number(),
@@ -242,7 +222,6 @@ const SharedRowSchema = v.object({
   title: v.string(),
   description: v.string(),
   createdAt: v.number(),
-  bindings: v.number(),
   visibility: v.optional(LiveShareVisibilitySchema),
   workspace: v.optional(v.string()),
   /** A live share's slate, so a share of yours can show that slate's picture. */
@@ -259,7 +238,6 @@ const OwnedSlateSchema = v.object({
   id: v.string(),
   title: v.string(),
   workspace: v.string(),
-  bindings: v.number(),
   visibility: v.optional(LiveShareVisibilitySchema),
   picture: v.optional(v.string()),
 });
@@ -274,13 +252,12 @@ export const SharedLibrarySchema = v.object({
 
 export type SharedLibrary = v.InferOutput<typeof SharedLibrarySchema>;
 
-/** `requirements` is the runtime's canonical unsatisfied set; `bindings` is the same set as `package.json` declares it. */
+/** `requirements` is the runtime's canonical unsatisfied set: a namespace each, which the forker's workspace answers. */
 export const BlueprintForkSchema = v.object({
   workspace: v.string(),
   slate: v.string(),
   title: v.string(),
   requirements: v.array(v.object({ name: v.string(), facet: v.string() })),
-  bindings: v.array(SlateBindingDeclarationSchema),
 });
 
 export type BlueprintFork = v.InferOutput<typeof BlueprintForkSchema>;
@@ -299,4 +276,3 @@ export const BlueprintBundleSchema = v.object({
 
 export type BlueprintBundle = v.InferOutput<typeof BlueprintBundleSchema>;
 
-export type { SlateBindingDeclaration };

@@ -23,7 +23,7 @@ function workspace(tree: Readonly<Record<string, string | Uint8Array>>): Evidenc
 
       return Promise.resolve(content instanceof Uint8Array ? content : new TextEncoder().encode(content));
     },
-    listSlates: () => Promise.resolve({ slates: [{ id: 'exchange', title: 'Exchange', bindings: [] }], problems: [] }),
+    listSlates: () => Promise.resolve({ slates: [{ id: 'exchange', title: 'Exchange' }], problems: [] }),
     slateOp: (operation: JsonValue): Promise<JsonValue> => {
       const { op, method } = v.parse(v.looseObject({ op: v.string(), method: v.optional(v.string()) }), operation);
 

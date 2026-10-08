@@ -331,18 +331,11 @@ previews and removes slates there, and only the workspace root shares one with o
 `worker` runtime, `package.json` `main` names the module that exports
 `class Slate extends SlateObject` from `kinu:slate`; every public method is
 callable from the client. A `node` runtime instead names a server `slate.port`
-and a `dev` or `start` script. Capabilities are declared in the strict
-`slate.bindings` field and called as `this.env.NAME.member(...args)`. Write the
-files through the ordinary file plane, then call
+and a `dev` or `start` script. A slate declares no capabilities: it calls its
+caller's own reach as `this.env.workspace.<namespace>.<member>(...args)`, the
+namespaces an `eval` program reaches less what only the agent does
+(`docs/LIVE-UI.md`). Write the files through the ordinary file plane, then call
 `workspace.slates.<id>.$preview()` to boot a live preview.
-
-Workspace namespace path prefixes must be absolute and free of NUL; a
-malformed prefix refuses the project instead of shrinking its grant.
-`/folder/` and `/folder` both grant the directory itself and its descendants.
-A call's path must be absolute; it is resolved as POSIX resolves it and then
-judged where it lands, every link followed, against the prefixes, also
-followed (a Nimbus home prefix grants the home it links to). A link that
-leads outside, or names nothing, is refused naming the prefixes.
 
 `workspace.slates.<id>.<method>(...args)` calls a class method with JSON
 arguments, as the slate's own client does. `$commit()` freezes source,
