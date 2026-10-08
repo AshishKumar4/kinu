@@ -5,7 +5,7 @@
  */
 import {
   AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA,
-  blobColumn, doubleColumn, indexColumn,
+  analyticsDataset, blobColumn, doubleColumn, indexColumn,
   type AnalyticsSchema, type BlobName, type DoubleName,
 } from './schemas';
 
@@ -62,6 +62,8 @@ interface QueryMetric {
 
 interface WeightedQuery<S extends AnalyticsSchema> {
   readonly schema: S;
+  /** Which deployment's copy to read (`analyticsDataset`): staging shares production's account. */
+  readonly datasetSuffix: string;
   readonly groupBy: readonly BlobName<S>[];
   readonly groupByComputed?: readonly QueryMetric[];
   readonly metrics: readonly QueryMetric[];
@@ -93,7 +95,7 @@ function buildWeightedQuery<S extends AnalyticsSchema>(query: WeightedQuery<S>):
 
   const lines = [
     `SELECT ${selected.join(', ')}`,
-    `FROM ${schema.dataset}`,
+    `FROM ${analyticsDataset(schema, query.datasetSuffix)}`,
     `WHERE ${predicates.join(' AND ')}`,
   ];
 
@@ -129,8 +131,9 @@ const PANEL_ROW_LIMIT = 50;
  * actor and the filter would silently empty the panel.
  */
 export function controlPlaneMetricsQueries(
-  opts: { sinceHours: number; workspaceDigest?: string },
+  opts: { sinceHours: number; datasetSuffix: string; workspaceDigest?: string },
 ): ControlPlaneMetricQueries {
+  const { datasetSuffix } = opts;
   const since = `'${Math.max(1, Math.trunc(opts.sinceHours))}' HOUR`;
   const agent = AGENT_METRICS_SCHEMA;
   const ops = CONTROL_PLANE_OPS_SCHEMA;
@@ -148,7 +151,7 @@ export function controlPlaneMetricsQueries(
 
   return {
     turns: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['outcome', 'code'],
       metrics: [
         { as: 'turns', expression: weightedCount() },
@@ -161,7 +164,7 @@ export function controlPlaneMetricsQueries(
       orderBy: 'turns',
     }),
     latency: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['model'],
       metrics: [
         { as: 'turns', expression: weightedCount() },
@@ -174,7 +177,7 @@ export function controlPlaneMetricsQueries(
       limit: PANEL_ROW_LIMIT,
     }),
     tokens: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['provider', 'model'],
       metrics: [
         { as: 'calls', expression: weightedCount() },
@@ -190,7 +193,7 @@ export function controlPlaneMetricsQueries(
       limit: PANEL_ROW_LIMIT,
     }),
     toolFailures: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['tool', 'outcome', 'code'],
       metrics: [
         { as: 'calls', expression: weightedCount() },
@@ -202,7 +205,7 @@ export function controlPlaneMetricsQueries(
       limit: PANEL_ROW_LIMIT,
     }),
     firstToken: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['provider', 'model'],
       metrics: [
         { as: 'turns', expression: weightedCount() },
@@ -216,7 +219,7 @@ export function controlPlaneMetricsQueries(
       limit: PANEL_ROW_LIMIT,
     }),
     startups: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: [],
       groupByComputed: [
         { as: 'workspace', expression: indexColumn(agent) },
@@ -229,7 +232,7 @@ export function controlPlaneMetricsQueries(
       limit: PANEL_ROW_LIMIT,
     }),
     adminOps: buildWeightedQuery({
-      schema: ops,
+      schema: ops, datasetSuffix,
       groupBy: ['operation', 'outcome'],
       metrics: [
         { as: 'operations', expression: weightedCount() },
@@ -252,13 +255,13 @@ const ALERTED_EVENTS = [
   'turn.terminal_effect_failed', 'turn.terminal_effects_owed',
 ] as const;
 
-export function fleetAlertQueries(): FleetAlertQueries {
+export function fleetAlertQueries(datasetSuffix: string): FleetAlertQueries {
   const agent = AGENT_METRICS_SCHEMA;
   const kind = (value: string): string => `${blobColumn(agent, 'kind')} = '${value}'`;
 
   return {
     startups: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: [],
       groupByComputed: [
         { as: 'workspace', expression: indexColumn(agent) },
@@ -271,14 +274,14 @@ export function fleetAlertQueries(): FleetAlertQueries {
       limit: 500,
     }),
     events: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['event', 'code'],
       metrics: [{ as: 'count', expression: weightedCount() }],
       since: "'1' HOUR",
       where: [kind('event'), `${blobColumn(agent, 'event')} IN (${ALERTED_EVENTS.map((event) => `'${event}'`).join(', ')})`],
     }),
     turns: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['outcome'],
       metrics: [{ as: 'count', expression: weightedCount() }],
       since: "'1' HOUR",
