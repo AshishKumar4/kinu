@@ -387,6 +387,25 @@ describe('a workspace whose host cannot compile node programs', () => {
     expect(JSON.parse(toolText(logs))).toEqual({ pid: 41, text: CODEGEN_STDERR });
   });
 
+  test("a program's workspace.logs(pid, { lines, bytes }) reads the process with both limits", async () => {
+    const box = fakeBox();
+    const asked: unknown[] = [];
+
+    box.processes = {
+      kill: async (pid) => ({ ok: true, pid }),
+      logs: async (pid, limits) => {
+        asked.push(limits);
+
+        return { pid, text: 'ready' };
+      },
+    };
+
+    const workspace = executorNamespace(blockedProvider(box)).tools;
+
+    await present(workspace.logs, 'workspace.logs').execute(41, { lines: 20, bytes: 4096 });
+    expect(asked).toEqual([{ lines: 20, bytes: 4096 }]);
+  });
+
   test('a port without a listener refuses rather than advertising a working preview', async () => {
     const box = fakeBox();
     box.ports = {

@@ -43,3 +43,19 @@ test('a preview answers its own port token only, and a visitor path naming anoth
     reached: ['5173 /', '5173 /_devbox/preview/8080/tok8080/x'],
   });
 });
+
+// Staging, 2026-10-08: a preview whose server was not up threw out of the box's fetch, an uncaught exception and a bare 500.
+test('a preview whose server is not listening answers 502 in the platform\'s words, and throws nothing', async () => {
+  const { box, rows, container } = harness(PreviewBox);
+  rows.set('devbox:port:8001', { port: 8001, name: 'site', token: 'tok8001', createdAt: 1 });
+  container.listening.add(8001);
+  await box.devboxStartup();
+  // The server went away after the port was exposed; the platform refuses the connection.
+  container.portAnswer = (port) => { throw new Error(`The container is not listening in the TCP address 10.0.0.1:${String(port)}`); };
+
+  const answer = await box.fetch(new Request('https://box/_devbox/preview/8001/tok8001/'));
+
+  expect({ status: answer.status, said: await answer.text() }).toEqual({
+    status: 502, said: expect.stringContaining('The container is not listening in the TCP address 10.0.0.1:8001'),
+  });
+});

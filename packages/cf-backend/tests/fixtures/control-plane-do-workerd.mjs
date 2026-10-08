@@ -153,6 +153,16 @@ const persistencePath = scratchDir('control-plane');
 const isolateDiagnostics = [];
 
 /**
+ * Lines a drain is waiting for. Miniflare's `dispose` destroys workerd's stdout before it kills the process, so a
+ * line still in the pipe is never handled, and a starved process reads the response before the log that preceded
+ * it. workerd writes its isolates' lines to that one stdout in order, so a line the Worker writes after a step has
+ * arrived only once every line written before it has.
+ */
+const drains = new Map();
+
+let drained = 0;
+
+/**
  * One runtime, configured from the manifest read above.
  *
  * `resourcePersistencePath` is the whole persistence half: the same path across
@@ -163,7 +173,12 @@ const isolateDiagnostics = [];
  */
 const runtime = () => new Miniflare({
   log: new NoOpLog(),
-  handleStructuredLogs: ({ message }) => { isolateDiagnostics.push(message); },
+  handleStructuredLogs: ({ message }) => {
+    const waiting = drains.get(message);
+
+    if (waiting === undefined) isolateDiagnostics.push(message);
+    else { drains.delete(message); waiting(); }
+  },
   resourcePersistencePath: persistencePath,
   workers: [{
     config: {
@@ -203,6 +218,17 @@ async function settle(miniflare, steps) {
   assert.equal(response.status, 200, `fixture worker answered ${response.status}: ${body}`);
 
   return JSON.parse(body);
+}
+
+/** Returns once every line the runtime wrote so far has been handled: call before `dispose`. */
+async function drain(miniflare) {
+  drained += 1;
+  const line = `control-plane-fixture-drain-${String(drained)}`;
+  const arrived = new Promise((resolve) => { drains.set(line, resolve); });
+  const response = await miniflare.dispatchFetch(`https://control-plane.test/drain?line=${line}`);
+
+  assert.equal(response.status, 204, `the drain answered ${response.status}`);
+  await arrived;
 }
 
 /* ── 4. The refusals ─────────────────────────────────────────────────────── */
@@ -371,6 +397,7 @@ try {
     auditEntries: overview.auditEntries,
     auditId: auditRow.id,
   };
+  await drain(first);
 } finally {
   await first.dispose();
 }
@@ -486,6 +513,7 @@ try {
     pendingAfterSettlement: pendingAfter.value.length,
     resettleRefused: replayed.settled === 'rejected',
   };
+  await drain(second);
 } finally {
   await second.dispose();
   releaseScratch();

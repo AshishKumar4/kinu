@@ -315,6 +315,7 @@ const SampleEvent = v.looseObject({
   }), { fields: {} }),
   $workers: v.optional(v.looseObject({ durableObjectId: v.optional(v.string()), entrypoint: v.optional(v.string()) }), {}),
   $metadata: v.optional(v.looseObject({ error: v.optional(v.string()), requestId: v.optional(v.string()), traceId: v.optional(v.string()) }), {}),
+  timestamp: v.optional(v.number(), 0),
 });
 
 type SampleEvent = v.InferOutput<typeof SampleEvent>;
@@ -906,26 +907,41 @@ export function versionFindings(read: VersionRead): VersionFinding[] {
   return findings;
 }
 
-/** One exception per entrypoint in `entrypoints`: the text the runtime logged for the request, and the object of the
- *  invocation, or, for an RPC entrypoint, of the call in its trace that has one. The first sampled exception a code
- *  update did not cause is the one shown. */
+/** One exception per entrypoint in `entrypoints`, each sampled from that entrypoint's own: one sample of all of them
+ *  held none of an entrypoint that threw 20 times beside two that threw 184 (staging, 2026-10-08). Its text is the last
+ *  line the request logged, the error that ended it; the object is the invocation's, or, for an RPC entrypoint, the
+ *  call's in its trace that has one. The first exception a code update did not cause is the one shown. */
 async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoints: ReadonlySet<string>): Promise<ExceptionSample[]> {
-  const ended = await t.sampleEvents([...scope, eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', 'exception')], 50);
   const samples: ExceptionSample[] = [];
 
+  for (const entrypoint of entrypoints) {
+    const sample = await exceptionSample(t, scope, entrypoint);
+
+    if (sample !== undefined) samples.push(sample);
+  }
+
+  return samples;
+}
+
+async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoint: string): Promise<ExceptionSample | undefined> {
+  const ended = await t.sampleEvents([
+    ...scope, eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', 'exception'), eq('$workers.entrypoint', entrypoint),
+  ], 10);
+
+  // A reset ends every call the object was serving, but only the invocation that met it logs its words: a sample
+  // without text gives way to a later one with it.
+  let silent: ExceptionSample | undefined;
+
   for (const event of ended) {
-    const entrypoint = event.$workers.entrypoint ?? '';
     const request = event.$metadata.requestId ?? '';
 
-    // A reset ends every call the object was serving, but only the invocation that met it logs its words: a sample
-    // without text gives way to a later one with it.
-    const held = samples.findIndex((sample) => sample.entrypoint === entrypoint);
+    if (request === '') continue;
+    const logged = await t.sampleEvents([eq('$metadata.requestId', request), eq('$metadata.type', 'cf-worker')], 20);
 
-    if (!entrypoints.has(entrypoint) || request === '' || (held >= 0 && samples[held].message !== '')) continue;
-    const logged = await t.sampleEvents([eq('$metadata.requestId', request), eq('$metadata.type', 'cf-worker')], 5);
-    const message = logged.map((line) => line.$metadata.error ?? line.source.message ?? '').find((text) => text !== '') ?? '';
+    const message = [...logged].sort((a, b) => b.timestamp - a.timestamp)
+      .map((line) => line.$metadata.error ?? line.source.message ?? '').find((text) => text !== '') ?? '';
 
-    if (message === CODE_UPDATE_RESET || (held >= 0 && message === '')) continue;
+    if (message === CODE_UPDATE_RESET || (message === '' && silent !== undefined)) continue;
     const own = event.$workers.durableObjectId ?? '';
     const trace = event.$metadata.traceId ?? '';
     const traced = own !== '' || trace === '' ? [] : await t.sampleEvents([eq('$metadata.traceId', trace), eq('$metadata.type', 'cf-worker-event')], 20);
@@ -937,11 +953,11 @@ async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoi
       request,
     };
 
-    if (held >= 0) samples[held] = sample;
-    else samples.push(sample);
+    if (message !== '') return sample;
+    silent = sample;
   }
 
-  return samples;
+  return silent;
 }
 
 /** The first event of `event` for the version, as an effect sample. */

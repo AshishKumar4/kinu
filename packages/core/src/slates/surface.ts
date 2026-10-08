@@ -213,15 +213,17 @@ function route(id: string, request: SlateCallRequest, chain: readonly string[]):
 
 function routed(id: string, request: SlateCallRequest, chain: readonly string[]): Effect.Effect<SlateCall, KinuError> {
   const address = slateCallAddress(request.path);
-  const impact = slateAddressImpact(address);
   const refused = new KinuError('denied', `${address.namespace}.${address.member} is not on a slate's surface: what only the agent does, or no member at all`);
 
-  if (impact === null) return Effect.fail(refused);
-
+  // A malformed path is told its shape first; a well-formed one reaches only what the catalog puts on the surface.
   // The list names eval namespaces; `agent.send` and the rest of the surface's own are routed above it.
-  return Effect.flatMap(route(id, request, chain), (found) => (found.kind === 'namespace' && !slateReaches(address)
-    ? Effect.fail(refused)
-    : Effect.succeed({ route: found, address, impact })));
+  return Effect.flatMap(route(id, request, chain), (found) => {
+    const impact = slateAddressImpact(address);
+
+    return impact === null || (found.kind === 'namespace' && !slateReaches(address))
+      ? Effect.fail(refused)
+      : Effect.succeed({ route: found, address, impact });
+  });
 }
 
 interface SlateCallInput {

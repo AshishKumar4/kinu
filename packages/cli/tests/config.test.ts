@@ -68,6 +68,33 @@ describe("CLI config safety", () => {
     expect(result.stdout.trim()).toBe(`ok ${ciToken}`);
   });
 
+  // Staging walk, 2026-10-08: `list`, `status` and `run` answered with KINU_TOKEN while `whoami` said "Not authenticated".
+  test("kinu whoami answers for KINU_TOKEN, as every other command does", async () => {
+    const seen: string[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        seen.push(`${new URL(request.url).pathname} ${request.headers.get("authorization") ?? ""}`);
+
+        return Response.json({ user: { id: "u-ci", email: "ci@example.com" } });
+      },
+    });
+
+    try {
+      const env: NodeJS.ProcessEnv = {
+        ...process.env, KINU_HOME: scratchDir("cli-whoami"), KINU_ORIGIN: `http://127.0.0.1:${String(server.port)}`, KINU_TOKEN: "pta_ci", NO_COLOR: "1",
+      };
+
+      const proc = await runToExit([process.execPath, "packages/cli/bin/cli.ts", "whoami"], { cwd: resolve(__dirname, "../../.."), env });
+
+      expect({ exitCode: proc.exitCode, seen }).toEqual({ exitCode: 0, seen: ["/api/cli/me Bearer pta_ci"] });
+      expect(proc.stdout).toContain("ci@example.com");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("one invalid field is reported, not replaced by defaults that would read as a first run", async () => {
     expect(await runInvalidFieldLoad()).toContain('is not a valid Kinu config');
   });
