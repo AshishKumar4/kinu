@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { normalizeReplayForDestination } from '../src/prompting/replay-normalization';
+import { normalizeReplayForDestination, ReplayProgress } from '../src/prompting/replay-normalization';
 
 const SOURCE: ModelMessage[] = [
   {
@@ -46,5 +46,33 @@ describe('destination replay normalization', () => {
     const textOnly: ModelMessage[] = [{ role: 'user', content: 'hello' }];
     expect(normalizeReplayForDestination(textOnly, { providerId: 'openai' })).toBeUndefined();
     expect(normalizeReplayForDestination(SOURCE, undefined)).toBeUndefined();
+  });
+
+  test('a turn resumed step by step sends what a fresh pass sends, through appends, woven blocks, edits and a new destination', () => {
+    const pair = (n: number): ModelMessage[] => [
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: `toolu_${String(n)}`, toolName: 'look', input: { n } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: `toolu_${String(n)}`, toolName: 'look', output: { type: 'text', value: String(n) } }] },
+    ];
+
+    const block: ModelMessage = { role: 'user', content: '<dynamic-context>state</dynamic-context>' };
+    const progress = new ReplayProgress();
+    const input: ModelMessage = { role: 'user', content: 'go' };
+    let history: ModelMessage[] = [input, ...SOURCE];
+
+    const steps: { readonly messages: ModelMessage[]; readonly destination: { providerId: string } }[] = [];
+
+    for (let n = 0; n < 6; n++) {
+      // A new list a step, its earlier messages the same objects, as each step's history is.
+      history = history.concat(pair(n));
+      steps.push({ messages: history, destination: { providerId: 'openai' } });
+    }
+
+    steps.push({ messages: [input, block, ...history.slice(1)], destination: { providerId: 'openai' } });
+    steps.push({ messages: [...history.slice(0, 3), ...history.slice(5)], destination: { providerId: 'openai' } });
+    steps.push({ messages: history, destination: { providerId: 'anthropic' } });
+
+    for (const { messages, destination } of steps) {
+      expect(normalizeReplayForDestination(messages, destination, progress)).toEqual(normalizeReplayForDestination(messages, destination));
+    }
   });
 });
