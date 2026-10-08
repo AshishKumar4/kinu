@@ -2286,7 +2286,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override async enqueueMainTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     const main = this.actorHandle().actorId;
 
-    return await this.handInput(main, async () => await (await this.agentCalls(main)).enqueue(this.agentSnapshot(main), input));
+    // Answered at admission, as a hosted agent's wake is: a settle of this object's that hands main a turn would
+    // otherwise wait out that turn, whose own settle comes back here.
+    return await this.handInput(main, async () => await (await this.agentCalls(main)).queue(this.agentSnapshot(main), input));
   }
 
   protected override async mainLastUserMetadata(): Promise<JsonObject | undefined> {

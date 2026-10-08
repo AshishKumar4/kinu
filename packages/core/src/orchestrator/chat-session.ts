@@ -476,6 +476,15 @@ export class ChatSession {
     return promise;
   }
 
+  /** As {@link enqueueTurn}, answered once the turn is queued unless admission already decided it: a caller in another
+   *  object, itself mid-settle, never waits out the turn it handed over. */
+  queueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+    const queued: EnqueueTurnResult = { status: 'queued' };
+
+    // An answer decided at admission resolves first; a turn still to run answers 'queued'.
+    return Promise.race([this.enqueueTurn(input), Promise.resolve(queued)]);
+  }
+
   /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
   private settleItem(item: QueueItem, failure: KinuError | null, yielded?: boolean, abandoned?: string): void {
     item.settle(failure, yielded, abandoned);

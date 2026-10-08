@@ -88,6 +88,8 @@ export interface AgentFacetCalls {
   run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd>;
   /** Answered once its chat has processed it. */
   enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
+  /** Answered once the turn is queued: the workspace's own agent's wakes, handed over from inside the workspace's settles. */
+  queue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding>;
   /** Resolves once its chat has reserved the words, not when they land. */
   admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void>;
@@ -233,6 +235,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     return await settle(this.withChat(snapshot, (chat) => chat.session.enqueueTurn(turn)));
+  }
+
+  async queue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+    return await settle(this.withChat(snapshot, (chat) => chat.session.queueTurn(turn)));
   }
 
   async send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding> {
