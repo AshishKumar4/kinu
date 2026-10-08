@@ -3616,7 +3616,7 @@ function rowArgv(gate: Gate, tracked: readonly string[], deploying: boolean, tim
   return argv;
 }
 
-const ArmadaReportSchema = v.object({
+export const ArmadaReportSchema = v.object({
   job: v.string(),
   verdicts: v.optional(v.object({
     rows: v.array(v.object({
@@ -3665,7 +3665,7 @@ async function echoed(argv: readonly string[]): Promise<{ readonly exitCode: num
   return { exitCode: await run.exited, said };
 }
 
-type ArmadaReport = v.InferOutput<typeof ArmadaReportSchema>;
+export type ArmadaReport = v.InferOutput<typeof ArmadaReportSchema>;
 
 /** Where `armada run` keeps each run's report, as `<project>-<task job>.json` (armada's src/ci.ts). */
 const ARMADA_REPORTS = join(homedir(), '.local', 'state', 'armada', 'runs');
@@ -3720,20 +3720,28 @@ async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[]
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
   const { exitCode, said } = await echoed(argv);
   const graded = armadaReport(said);
-
-  // A task that wrote no verdict is reported under its own name, with its exit and output: its row is red with them.
-  const verdicts = new Map((graded?.verdicts?.rows ?? []).flatMap((row) => {
-    const gate = row.run === undefined ? rows.find((each) => armadaTaskName(each) === row.name) : rows.find((each) => each.run === row.run);
-
-    return gate === undefined ? [] : [[gate.run, row] as const];
-  }));
-
-  const found = graded === undefined ? `\`armada run\` exited ${String(exitCode)} and wrote no report` : [`job ${graded.job}`, ...graded.problems].join('; ');
   const reproduce = `node_modules/.bin/armada run ${sha} -- --deploy-phase=${phase}`;
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
-  return rows.filter((gate) => !recordArmadaRow(report, gate, verdicts.get(gate.run), { found, reproduce, said })).map((gate) => gate.run);
+  return armadaRowVerdicts(rows, graded, exitCode).filter(({ gate, verdict, found }) => !recordArmadaRow(report, gate, verdict, { found, reproduce, said }))
+    .map(({ gate }) => gate.run);
+}
+
+/** Each row's own verdict from a phase job's report, and what was found about it: the task that wrote no verdict is
+ *  reported under its task's name, with its exit and output, and armada names each problem by the task it is about. */
+export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | undefined, exitCode: number): { readonly gate: Gate; readonly verdict: ArmadaRow | undefined; readonly found: string }[] {
+  const reported = graded?.verdicts?.rows ?? [];
+
+  return rows.map((gate) => {
+    const task = armadaTaskName(gate);
+    const verdict = reported.find((row) => row.run === gate.run) ?? reported.find((row) => row.run === undefined && row.name === task);
+
+    const found = graded === undefined ? `\`armada run\` exited ${String(exitCode)} and wrote no report`
+      : [`job ${graded.job}`, ...graded.problems.filter((problem) => problem.startsWith(`${task} `))].join('; ');
+
+    return { gate, verdict, found };
+  });
 }
 
 /** CI's exact-SHA rows stay visible in the deploy's report; a red is imported as red and never run until green. */
