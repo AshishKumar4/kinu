@@ -438,8 +438,10 @@ export class EventLog {
    * frame runs `drainPendingEvents`, or the row stays pending. Only `at` conditions name a time.
    */
   nextPendingDrainAt(now = Date.now()): number | null {
+    const parked = this.parkedIds();
+
     const drainableNow = this.pending({ resolve_deferred: { now, phase: 'idle' } })
-      .some((event) => wakesADrain(event, this.isEvolutionReport));
+      .some((event) => !parked.has(event.id) && wakesADrain(event, this.isEvolutionReport));
 
     if (drainableNow) return now;
 
@@ -486,6 +488,28 @@ export class EventLog {
        WHERE actor_id = ? AND turn_id = ? AND kind = 'event'`,
       this.actorId, turnId,
     );
+  }
+
+  /**
+   * Pending again, stamped with the instant its drain turn failed: it drains with the next batch any drain takes, but
+   * wakes none itself (a turn that failed on its own fails again on a clock). Only a park leaves `consumed_at` on a row
+   * no turn holds; a bind or unbind clears it.
+   */
+  park(eventId: EventId, now = Date.now()): void {
+    this.actor.assertCurrent();
+    this.sql.exec(
+      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = ? WHERE actor_id = ? AND id = ? AND kind = 'event'`,
+      now, this.actorId, eventId,
+    );
+  }
+
+  private parkedIds(): ReadonlySet<EventId> {
+    this.actor.assertCurrent();
+
+    return new Set(this.sql.exec(
+      `SELECT id FROM agent_log WHERE actor_id = ? AND kind = 'event' AND turn_id IS NULL AND consumed_at IS NOT NULL`,
+      this.actorId,
+    ).toArray().map((row) => v.parse(IdRowSchema, row).id));
   }
 
   /** Used by abort_replan to re-pend events. */
