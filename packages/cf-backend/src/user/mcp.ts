@@ -277,15 +277,14 @@ export type McpFailureKind =
   | 'auth' | 'not_connected' | 'connection_closed' | 'timeout' | 'http' | 'server_error' | 'protocol'
   | 'send_failed' | 'cancelled' | 'refused' | 'tool_error' | 'unknown';
 
-/** A call refused before dispatch: its server's connection was not usable, and `kind` says how. */
-export class McpServerUnreachable extends KinuError {
-  constructor(readonly kind: McpFailureKind, message: string) {
-    super('unavailable', message);
-  }
-}
+/** The states a call goes out in: the transport is open, whether or not discovery has finished. */
+export const CALLABLE_MCP_STATES: ReadonlySet<McpObservedState> = new Set(['ready', 'connected', 'discovering']);
 
-/** Decided by error class and code, never text: the first link of the cause chain that says. */
-export function classifyMcpFailure(input: { cause: unknown }): McpFailureKind {
+/**
+ * Decided by error class and code, never text: the first link of the cause chain that says. A call refused before
+ * dispatch carries no transport error, so `state`, the connection's when the call failed, says what it met.
+ */
+export function classifyMcpFailure(input: { cause: unknown; state?: McpObservedState }): McpFailureKind {
   if (isMcpTransportUnauthorized(input)) return 'auth';
 
   for (const error of causeChain(input)) {
@@ -294,7 +293,9 @@ export function classifyMcpFailure(input: { cause: unknown }): McpFailureKind {
     if (kind !== undefined) return kind;
   }
 
-  return 'unknown';
+  if (input.state === 'authenticating') return 'auth';
+
+  return input.state === undefined || CALLABLE_MCP_STATES.has(input.state) ? 'unknown' : 'not_connected';
 }
 
 /** A Kinu code that says nothing of the wire (`unavailable`, `io`, ...) defers to its cause. */
@@ -303,8 +304,6 @@ const KINU_FAILURE_KINDS: Partial<Record<ErrorCode, McpFailureKind>> = {
 };
 
 function failureKindOf(error: Error): McpFailureKind | undefined {
-  if (error instanceof McpServerUnreachable) return error.kind;
-
   // Before `SdkError`, which `SdkHttpError` extends.
   if (error instanceof SdkHttpError || error instanceof SseError) return 'http';
 

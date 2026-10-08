@@ -11,7 +11,7 @@ import {
   recordedMcpToolCalls, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer, seedUndiscoveredMcpTools,
   type RecordedMcpTransport,
 } from './helpers/agents-sdk';
-import { classifyMcpFailure, McpServerUnreachable, storedMcpOptionsCarryCredential } from '../src/user/mcp';
+import { classifyMcpFailure, storedMcpOptionsCarryCredential } from '../src/user/mcp';
 import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
 import { KinuError, renderThrownChain, setDiagnosticsSink, type LogFields } from '@kinu.run/core/obs';
 import { ProtocolError, SdkError, SdkErrorCode } from '@modelcontextprotocol/client';
@@ -1110,11 +1110,16 @@ describe('MCP connections and calls are logged, classified', () => {
       wrapped,
       new KinuError('cancelled', 'stopped'),
       new KinuError('denied', 'not allowed'),
-      new McpServerUnreachable('auth', 'signing in'),
       new Error('401 Unauthorized: Not connected, timed out'),
     ].map((cause) => classifyMcpFailure({ cause }))).toEqual([
       'not_connected', 'connection_closed', 'timeout', 'send_failed', 'protocol', 'server_error',
-      'auth', 'http', 'not_connected', 'cancelled', 'refused', 'auth', 'unknown',
+      'auth', 'http', 'not_connected', 'cancelled', 'refused', 'unknown',
     ]);
+
+    // A call refused before dispatch carries no transport error: the connection's state says what it met.
+    const refused = new KinuError('unavailable', 'the call was not sent');
+
+    expect((['authenticating', 'connecting', 'absent', 'ready'] as const).map((state) => classifyMcpFailure({ cause: refused, state })))
+      .toEqual(['auth', 'not_connected', 'not_connected', 'unknown']);
   });
 });

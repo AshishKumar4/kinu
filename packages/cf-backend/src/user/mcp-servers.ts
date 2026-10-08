@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import {
   nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk,
 } from '@kinu.run/core';
@@ -8,7 +8,7 @@ import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-pro
 import { detach, diagnostics, KinuError, logged, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  mapConnectionStatus, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession, storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, readUndiscoveredToolList, mcpListingRefusals, classifyMcpFailure, observedMcpState, McpServerUnreachable, McpTransitionLog, type McpObservedState, type McpPresetAvailability, type McpServerSummary, type McpToolListing,
+  mapConnectionStatus, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession, storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, readUndiscoveredToolList, mcpListingRefusals, classifyMcpFailure, observedMcpState, CALLABLE_MCP_STATES, McpTransitionLog, type McpObservedState, type McpPresetAvailability, type McpServerSummary, type McpToolListing,
 } from './mcp';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import type { UserCredentials } from './credentials';
@@ -124,8 +124,9 @@ export class UserMcpServers {
 
   private readonly transitions: McpTransitionLog;
 
-  /** This activation's reconciliation, begun by {@link start}; MCP requests join it and never run one. */
-  private activation: Promise<void> | null = null;
+  /** This activation's reconciliation, begun by {@link start}; MCP requests join it and never run one. Before
+   *  `start` there is nothing to join: the gate (`startBeforeRpc`) runs `onStart` before any MCP request. */
+  private activation: Promise<void> = Promise.resolve();
 
   /** Redials in flight, by server: concurrent calls share one, since a second `init` would close the first's transport. */
   private readonly redials = new Map<string, Promise<void>>();
@@ -146,8 +147,6 @@ export class UserMcpServers {
   }
 
   private async joinActivation(): Promise<void> {
-    if (this.activation === null) throw new KinuError('unavailable', 'The MCP servers were asked for before this object started.');
-
     await this.activation;
   }
 
@@ -167,18 +166,9 @@ export class UserMcpServers {
     const configured = new Set(rows.map((row) => row.id));
     const sdkRows = mgr.listServers();
 
+    // A removal that fails ends the activation's reconciliation, and `mcp.start_failed` says why.
     for (const stored of sdkRows) {
-      if (configured.has(stored.id)) continue;
-
-      try { await mgr.removeServer(stored.id); }
-      catch (err) {
-        diagnostics.failure('mcp.orphan_server_removal_failed', toKinuError({
-          doing: 'removing an SDK MCP server row that no config row owns',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { serverId: stored.id });
-        throw err;
-      }
+      if (!configured.has(stored.id)) await mgr.removeServer(stored.id);
     }
 
     const registered: string[] = [];
@@ -744,7 +734,7 @@ export class UserMcpServers {
       inFlight.workspace = principal.kind === 'workspace' ? principal.workspace : null;
       const { signal } = inFlight.stop;
 
-      return await settle(Effect.promise(() => this.callUserMcpTool(call, signal)), { signal, interrupted: 'The MCP tool call stopped before its server answered.' });
+      return await settle(this.callUserMcpTool(call, signal), { signal, interrupted: 'The MCP tool call stopped before its server answered.' });
     } finally {
       this._mcpCalls.delete(call.id);
     }
@@ -763,7 +753,7 @@ export class UserMcpServers {
   }
 
   /** Every failure is logged as `mcp.call_failed`, classified; a server's own `isError` answer too, as `tool_error`. */
-  private async callUserMcpTool(call: { serverId: string; name: string; args: JsonObject }, signal: AbortSignal): Promise<string> {
+  private callUserMcpTool(call: { serverId: string; name: string; args: JsonObject }, signal: AbortSignal): Effect.Effect<string> {
     const { serverId, name } = call;
     const startedAt = Date.now();
 
@@ -771,17 +761,20 @@ export class UserMcpServers {
       serverId, tool: name, state: observedMcpState(this.host.mcp.mcpConnections[serverId]), ms: Date.now() - startedAt,
     });
 
-    try {
-      const answer = await this.dispatchUserMcpTool(call, signal);
+    return Effect.promise(() => this.dispatchUserMcpTool(call, signal)).pipe(
+      Effect.onError((failed) => Effect.sync(() => {
+        const facts = observed();
+        const cause = Cause.squash(failed);
+        const kind = Cause.hasInterruptsOnly(failed) ? 'cancelled' : classifyMcpFailure({ cause, state: facts.state });
 
-      if (v.is(McpProtocolFailureSchema, answer)) diagnostics.event('mcp.call_failed', { ...observed(), kind: 'tool_error' });
+        diagnostics.failure('mcp.call_failed', toKinuError({ doing: `calling ${name} on MCP server ${serverId}`, cause, otherwise: 'unavailable' }), { ...facts, kind });
+      })),
+      Effect.map((answer) => {
+        if (v.is(McpProtocolFailureSchema, answer)) diagnostics.event('mcp.call_failed', { ...observed(), kind: 'tool_error' });
 
-      return JSON.stringify(decodeJsonValue({ value: answer }));
-    } catch (cause) {
-      const error = toKinuError({ doing: `calling ${name} on MCP server ${serverId}`, cause, otherwise: 'unavailable' });
-      diagnostics.failure('mcp.call_failed', error, { ...observed(), kind: classifyMcpFailure({ cause }) });
-      throw cause;
-    }
+        return JSON.stringify(decodeJsonValue({ value: answer }));
+      }),
+    );
   }
 
   private async dispatchUserMcpTool(call: { serverId: string; name: string; args: JsonObject }, signal: AbortSignal): Promise<CallToolResult> {
@@ -847,14 +840,12 @@ export class UserMcpServers {
     this.transitions.observe('tool call');
     const reached = state();
 
-    if (reached === 'ready' || reached === 'connected' || reached === 'discovering') return;
+    if (CALLABLE_MCP_STATES.has(reached)) return;
     const why = mgr.mcpConnections[serverId]?.connectionError;
 
-    throw new McpServerUnreachable(
-      reached === 'authenticating' ? 'auth' : 'not_connected',
-      `MCP server ${serverName} is ${reached}${why ? ` (${why})` : ''}, so the call was not sent.`
-        + (reached === 'authenticating' ? ' Sign in to it again in Settings.' : ''),
-    );
+    // `mcp.call_failed` classifies this refusal by the state it names.
+    throw new KinuError('unavailable', `MCP server ${serverName} is ${reached}${why ? ` (${why})` : ''}, so the call was not sent.`
+      + (reached === 'authenticating' ? ' Sign in to it again in Settings.' : ''));
   }
 
   /** One redial per server at a time: a second `init` would close the transport the first just opened. */
