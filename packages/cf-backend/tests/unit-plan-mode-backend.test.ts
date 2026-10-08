@@ -233,7 +233,7 @@ describe('Plan mode tool lifecycle', () => {
       queueError: expect.stringContaining('actor interrupted after durable acceptance'),
       plan: { status: 'approved', handoffAccepted: false },
     });
-    harness.db.run('DROP TRIGGER lose_acceptance');
+    mainDatabase(harness).run('DROP TRIGGER lose_acceptance');
 
     expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
       ok: true,

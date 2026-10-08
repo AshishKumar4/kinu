@@ -4,7 +4,7 @@
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { agentSql, catalogTurn, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
+import { agentSql, catalogTurn, gatewayWorkspace, mainDatabase, workspaceMainActor } from './helpers/actor-harness';
 import {
   GATEWAY_MODEL, chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
@@ -56,9 +56,9 @@ test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the ro
 
   if (hire === null) throw new Error('the root hired no one');
 
-  // The root's steps are in the workspace's ledger; the hire's in its own database.
+  // Each agent's steps are in its own database, the root's as a hire's.
   const priced = (mine: boolean) => (mine
-    ? workspace.db.query<{ payload: string }, [string]>(
+    ? mainDatabase(workspace).query<{ payload: string }, [string]>(
       "SELECT payload FROM run_events WHERE type = 'step_finish' AND actor_id = ? ORDER BY ts, event_index",
     ).all(root.actorId)
     : agentSql(hire.actor_id)<{ payload: string }>`

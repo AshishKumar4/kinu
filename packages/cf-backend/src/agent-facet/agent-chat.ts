@@ -82,7 +82,8 @@ export class FacetChat {
       transaction: (body) => storage.transactionSync(body),
       transport: {
         deliver: (event) => {
-          if (event.type === 'turn-end') return workspace.turnEnded(event, deps.database.figures());
+          // Its last charge lands before its end is told: nothing the workspace reads of the turn can miss it.
+          if (event.type === 'turn-end') return this.charged().then(async () => { await workspace.turnEnded(event, deps.database.figures()); });
 
           return ROOM_EVENTS.has(event.type) ? workspace.chatEvent(event) : undefined;
         },
@@ -125,7 +126,7 @@ export class FacetChat {
     // A chat turn under a mission of its workspace's spends there, as each model call is guarded and charged.
     const { missionLabels } = prepared;
 
-    const mission = missionLabels === undefined ? null : missionGate({
+    const mission = missionLabels === undefined ? null : this.missionCharges = missionGate({
       labels: missionLabels,
       port: { guard: async (seam, labels) => await workspace.guard(turn.id, seam, labels), debit: async (tokens, opts) => { await workspace.debit(turn.id, tokens, opts); } },
     });
@@ -142,6 +143,16 @@ export class FacetChat {
         await bundle.settle?.(profile, inputs);
       },
     }, asked);
+  }
+
+  /** The running turn's charges to its workspace's missions, if it runs under any. */
+  private missionCharges: { settled(): Promise<void> } | null = null;
+
+  private async charged(): Promise<void> {
+    const charges = this.missionCharges;
+
+    this.missionCharges = null;
+    await charges?.settled();
   }
 
   private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
