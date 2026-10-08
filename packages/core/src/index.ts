@@ -445,6 +445,7 @@ export {
   // A surface that prices a call must use this, exactly as the ledger debits it.
   priceCall,
   localMissionScope,
+  missionGate,
   listMissionSpend,
   type MissionBudgetPort,
   type MissionScope,

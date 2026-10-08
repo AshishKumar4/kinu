@@ -3886,9 +3886,13 @@ export abstract class ActorAgent extends Agent<Env> {
     // Until the facet binds the profile it assembled on, and again when a restarted workspace reads the turn anew.
     this._turnOperation = captureOperationProfile({ actor: this.actorHandle(), profile: turn.profile.profile, inputs: reads.profileInputs, runId: turn.turnId, turnId: turn.turnId });
 
+    // A role imposing another mode (a planner on a Build message) runs the turn on that mode's tools.
+    const { workMode } = turn.profile.profile;
+    const turnTools = workMode === turn.input.mode ? tools : withToolText(this.actorToolsets(workMode).turn, this.turnArtifacts().tools);
+
     return {
-      tools: this.inFacetTurn(tools, turn.taskPlan),
-      raw: this.inFacetTurn(this.actorToolsets(turn.input.mode).raw, turn.taskPlan),
+      tools: this.inFacetTurn(turnTools, turn.taskPlan),
+      raw: this.inFacetTurn(this.actorToolsets(workMode).raw, turn.taskPlan),
       sources: { ...sources, wiredToolNames: (mode) => [...sources.wiredToolNames(mode), ...Object.keys(external)] },
       ...(trial !== null && { trial }),
     };
@@ -3906,15 +3910,37 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnExternalTools = allowed.has('eval') ? Object.fromEntries(Object.entries(turn.external).filter(([name]) => allowed.has(name))) : {};
   }
 
-  /** Main's tools run under the profile its facet assembled on, and inside the approved plan it implements. */
+  /** Main's tools run under the profile its facet assembled on, and inside the approved plan it implements; each call is
+   *  a fleet row, as it was when its turn ran here. */
   private inFacetTurn(tools: ToolSet, taskPlan: TaskPlan | undefined): ToolSet {
     const held = taskPlan === undefined ? tools : withTaskPlan(tools, { sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: taskPlan });
 
     return Object.fromEntries(Object.entries(held).map(([name, entry]) => {
       const { execute } = entry;
 
-      return [name, execute === undefined ? entry : { ...entry, execute: (input, options) => runOperationProfile(this._turnOperation, () => execute(input, options)) }];
+      if (execute === undefined) return [name, entry];
+
+      return [name, { ...entry, execute: async (input, options) => {
+        const started = Date.now();
+        let failed = true;
+
+        try {
+          const result = await runOperationProfile(this._turnOperation, () => execute(input, options));
+
+          failed = false;
+
+          return result;
+        } finally {
+          // Name, verdict and duration only: its input and result carry the workspace's content.
+          recordToolRow(this.env, { workspace: this.workspaceName(), agentKind: this.actorKind(), tool: name, failed, durationMs: Date.now() - started });
+        }
+      } }];
     }));
+  }
+
+  /** Main's first token as its window hears it, from the turn's own start. */
+  protected recordMainFirstToken(openedAt: number): void {
+    recordTtftRow(this.env, { workspace: this.workspaceName(), agentKind: this.actorKind(), ...this.analyticsModel(), ttftMs: Date.now() - openedAt });
   }
 
   /** The turn's evolved text; between turns, the promoted text. */

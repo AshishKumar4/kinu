@@ -2,7 +2,7 @@
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, approvedTaskPlan, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect,
+  planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -122,8 +122,17 @@ export class FacetChat {
 
     const { sources: bundle } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id });
 
+    // A chat turn under a mission of its workspace's spends there, as each model call is guarded and charged.
+    const { missionLabels } = prepared;
+
+    const mission = missionLabels === undefined ? null : missionGate({
+      labels: missionLabels,
+      port: { guard: async (seam, labels) => await workspace.guard(turn.id, seam, labels), debit: async (tokens, opts) => { await workspace.debit(turn.id, tokens, opts); } },
+    });
+
     return await assembleActorTurn({
       ...bundle,
+      ...(mission !== null && { budget: mission }),
       toolset: () => tools,
       externalTools: async () => ({}),
       // A measure between turns binds nothing: no turn is open to bind it to.

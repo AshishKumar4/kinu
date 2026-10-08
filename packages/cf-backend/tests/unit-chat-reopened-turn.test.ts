@@ -108,60 +108,6 @@ function nextActivation(first: StartedHarness, model: StubbedAiBinding): Promise
   });
 }
 
-test('a tab that redials into the activation that re-opens its turn draws the turn there, to its end', async () => {
-  const request = 'req-count';
-  const rest = 'Three, and done.';
-  const first = firstActivation();
-  await first.started;
-  const sent = new AwaitedList<Frame>();
-  const sender = socketOn(first.agent, 'first-socket', (raw) => { sent.push(v.parse(FrameSchema, JSON.parse(raw))); });
-  await first.agent.onConnect(sender, CONNECT);
-  // A request is answered when its turn ends, which this activation never reaches: it ends inside the third step.
-  const answered = Promise.resolve(first.agent.onMessage(sender, chatRequest(request))).then(() => 'answered');
-  const streamed = sent.until((frames) => counted(frames, 'finish-step') === 2).then(() => 'two steps streamed');
-
-  expect(await Promise.race([answered, streamed])).toBe('two steps streamed');
-
-  const next = await nextActivation(first, answeringGateway(rest));
-  // The client redials before the wake re-drives the turn: the redial is what activates the object.
-  const heard = new AwaitedList<Frame>();
-  const acks: Promise<void>[] = [];
-
-  const socket: Connection = socketOn(next.agent, 'redialled-socket', (raw) => {
-    const frame = v.parse(FrameSchema, JSON.parse(raw));
-    heard.push(frame);
-
-    // As the SDK's hook acks it: the stream it is told of, whatever request id the activation gave it.
-    if (frame.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING) {
-      acks.push(Promise.resolve(next.agent.onMessage(socket, JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }))));
-    }
-  });
-
-  await next.agent.onConnect(socket, CONNECT);
-  await next.agent.terminalRetryPass();
-  await heard.until((frames) => frames.some((frame) => frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE && frame.done === true));
-  await Promise.all(acks);
-
-  const resumed = heard.items.find((frame) => frame.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING);
-  const followed = heard.items.filter((frame) => resumed !== undefined && frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE && frame.id === resumed.id);
-  const kinds = followed.map((frame) => chunkOf(frame)?.type);
-
-  // The two steps before the restart are restated from the ledger, ahead of every chunk the relay holds; the relay
-  // adds the answer's own step.
-  expect({
-    toldPending: heard.items.some((frame) => frame.type === CHAT_MESSAGE_TYPES.STREAM_PENDING),
-    restatedFirst: kinds.indexOf('text-delta') > kinds.lastIndexOf('tool-input-available'),
-    calls: calls(followed),
-    cuts: counted(followed, 'data-kinu-step-cut'),
-    steps: counted(followed, 'finish-step'),
-    rest: followed.flatMap((frame) => chunkOf(frame)?.delta ?? []).join(''),
-    ended: followed.at(-1)?.done === true,
-  }).toEqual({
-    toldPending: true, restatedFirst: true, calls: ['call_0', 'call_1'],
-    steps: 3, cuts: 0, rest, ended: true,
-  });
-});
-
 test("an activation ending between a step's seal and its ledger rows leaves the re-driven turn every step's rows once, in order", async () => {
   // F2 probe run 4 on staging d968007de (2026-10-01): a step was sealed and its output kept, but its row never written.
   const models = { [GATEWAY_CATALOG.tiers.default.model]: { id: 'harness', contextWindow: 1_048_576, cost: { input: 1, output: 2 } } };

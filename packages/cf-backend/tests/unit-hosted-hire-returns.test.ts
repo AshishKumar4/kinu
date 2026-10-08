@@ -10,7 +10,7 @@ import { createRecordingLogger, KinuError, setDiagnosticsSink } from '@kinu.run/
 import { makeSqlExec } from '../../core/tests/helpers';
 import { asPane, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import {
-  actorOver, agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask,
+  actorOver, agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask, workspaceMainActor,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
@@ -122,9 +122,12 @@ test('a hire whose facet cannot load reports its named failure to its hirer', as
 
   const workspace = gatewayWorkspace(gateway);
 
-  Object.defineProperty(workspace.agent, 'agentCalls', { value: async () => {
-    throw new KinuError('unsupported', 'loader refused the facet compatibility flag');
-  } });
+  // The hire's isolate alone: the hirer's own turns run in an isolate of their own.
+  const main = workspaceMainActor(workspace.db).actorId;
+
+  workspace.agent.harnessIsolateRefusal = {
+    refuses: (actorId) => actorId !== main, error: new KinuError('unsupported', 'loader refused the facet compatibility flag'),
+  };
   await catalogTurn(workspace.agent, 'Hire one task agent.');
   const reports = () => gateway.runs.map(openingOf).filter((text) => text.includes('[subordinate_report]'));
 

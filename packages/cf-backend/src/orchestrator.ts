@@ -755,6 +755,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       chatIdle: async (reference) => { await (await this.agentCalls(reference.actorId)).idle(); },
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
+      // Main's missions are the workspace's: owner-declared here, and charged here as its turns spend.
+      missions: (actorId) => (actorId === this.actorHandle().actorId ? this.budget : null),
     });
 
     return this._agentTurns;
@@ -891,15 +893,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (actorId === this.actorHandle().actorId) {
         this.mainChatOpenedAt = Date.now();
+        this.mainFirstTokenHeard = false;
         this.turnClaimChanged();
       }
+    }
+
+    if (event.type === 'text-delta' && actorId === this.actorHandle().actorId && !this.mainFirstTokenHeard) {
+      this.mainFirstTokenHeard = true;
+      this.recordMainFirstToken(this.mainChatOpenedAt);
     }
 
     await this.chatRooms.hostedRoom(actorId)?.deliver(event);
   }
 
-  /** When main's running turn opened, as its room heard it. */
+  /** When main's running turn opened, as its room heard it, and whether its first token has been heard since. */
   private mainChatOpenedAt = 0;
+
+  private mainFirstTokenHeard = false;
 
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures): Promise<void> {
     await this.hostedChatEvent(actorId, event);

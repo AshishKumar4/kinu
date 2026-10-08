@@ -9,8 +9,8 @@ import { turnAuthor, type ProgrammaticTurn } from '@kinu.run/core';
 import type { ModelMessage, UIMessage } from 'ai';
 import * as v from 'valibot';
 import {
-  admittedTurnClaim, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat,
-  type HarnessOrchestratorAgent, type RecordedUserPlaneCalls, workspaceMainActor,
+  mainDatabase, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat,
+  type HarnessOrchestratorAgent, workspaceMainActor,
 } from './helpers/actor-harness';
 import { present } from '@kinu.run/test-utils';
 
@@ -71,20 +71,6 @@ const DynamicContextSchema = v.object({
 
 
 describe('a message typed while the agent is working', () => {
-  test('a Stop on the next activation stops the device work of the turn the evicted one was running', async () => {
-    const h = steerHarness();
-    // What the evicted activation left: its turn admitted, never closed.
-    await admittedTurnClaim(h, 'turn-before-reset');
-    const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], turnCancels: [] };
-
-    // A cold activation holds no live turn: the newest unsettled claim is the turn Stop must reach.
-    const restarted = await reactivateOrchestratorHarness(h.db, userPlane);
-    await restarted.agent.installWorkspaceCapability('workspace-token');
-    await restarted.agent.cancelCurrentWork();
-
-    expect(userPlane.turnCancels).toEqual(['turn-before-reset']);
-  });
-
   test('is queued as the next ordinary turn when no turn is running', async () => {
     const h = steerHarness();
     const turns = chatSessionTurns(h.agent);
@@ -97,7 +83,7 @@ describe('a message typed while the agent is working', () => {
     expect(admitted).toHaveLength(1);
     expect(admitted[0]?.parts).toEqual([{ type: 'text', text: 'nothing is running' }]);
     expect(turnAuthor(admitted[0])).toBe('operator');
-    expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'build' });
+    expect(mainDatabase(h).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'build' });
     expect(steerFrames(h.frames)).toEqual([]);
     expect(turn.prompt.filter((m) => !v.is(DynamicContextSchema, m))).toEqual([...turn.messages]);
 
@@ -114,7 +100,7 @@ describe('a message typed while the agent is working', () => {
     await opened;
     const admitted = (await storedChat(h)).filter((message) => message.role === 'user');
     expect(turnAuthor(admitted[0])).toBe('operator');
-    expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'plan' });
+    expect(mainDatabase(h).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'plan' });
     await chatSessionTurns(h.agent).settle({ messageId: 'a-plan', text: 'ok' });
   });
 

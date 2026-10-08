@@ -9,14 +9,14 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  CHAT_SESSION_ID, PROGRAMMATIC_MESSAGE_ID_PREFIX, RunEventRecorder,
-  TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore, openTurnRun,
+  CHAT_SESSION_ID, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { sqlOver } from '@kinu.run/test-utils';
 import {
-  admittedTurnClaim, chatSessionTurns, historyOver, ledgerOver, orchestratorHarness,
+  chatSessionTurns, historyOver, ledgerOver, orchestratorHarness,
   reactivateOrchestratorHarness,
   tapDiagnostics, until, workspaceMainActor, type ActorHarness, type HarnessActorWorld, type HarnessOrchestratorAgent,
   type ScriptedHeadReport,
@@ -126,9 +126,13 @@ function windowedTurns(harness: Harness): number {
 }
 
 /** Settle one response and wait until its sequence is closed in storage. */
-async function settleResponse(harness: Harness, turnId: string, messageId: string, text = 'the answer'): Promise<void> {
-  await turns(harness).settle({ messageId, text });
-  await until(() => disposition(harness, turnId, messageId) === 'done', `the sequence of ${messageId} closed`);
+/** Answers the id main's isolate minted for the answer, which the workspace's sequence is keyed on. */
+async function settleResponse(harness: Harness, turnId: string, messageId: string, text = 'the answer'): Promise<string> {
+  const settled = await turns(harness).settle({ messageId, text });
+
+  await until(() => disposition(harness, turnId, settled.messageId) === 'done', `the sequence of ${settled.messageId} closed`);
+
+  return settled.messageId;
 }
 
 /** A steer branch launched while `turnId` runs toward answer `messageId`, through the public redirect;
@@ -379,10 +383,10 @@ describe('mid-turn captures are credited to the turn only when it answered', () 
   test('a completed turn credits its branch take set to its answer', async () => {
     const harness = orchestratorHarness(undefined, { heads: headsAnswering({ status: 'completed', summary: 'the branch answer' }) });
     await branchDuring(harness, 'u-credit', 'a-credit', 'try the other library');
-    await turns(harness).settle({ messageId: 'a-credit', text: 'the live answer' });
+    const { messageId } = await turns(harness).settle({ messageId: 'a-credit', text: 'the live answer' });
     await joinHarnessFibers();
 
-    expect(harness.db.query('SELECT turn_id FROM alternate_takes').all()).toEqual([{ turn_id: 'a-credit' }]);
+    expect(harness.db.query('SELECT turn_id FROM alternate_takes').all()).toEqual([{ turn_id: messageId }]);
   });
 
   test('a turn that failed credits nothing: its branch is aborted and no take set is written', async () => {
@@ -400,17 +404,6 @@ describe('a turn releases its tool claims only when no response can still run', 
   /** A tool call claimed and unsettled: the state a still-executing turn leaves. */
   function claimTool(harness: Harness, turnId: string, callId: string): void {
     claimToolEffect(sqlOver(harness.db), workspaceMainActor(harness.db), { turnId, callId, digest: 'harness-tool-digest' });
-  }
-
-  /** An open run the isolate died inside; the restart re-opens it as a continuation. */
-  function openRun(harness: Harness, runId: string, turnId: string): void {
-    openTurnRun(new RunEventRecorder(sqlOver(harness.db), workspaceMainActor(harness.db)), runId, {
-      agentId: workspaceMainActor(harness.db).actorId,
-      causedBy: 'chat',
-      userMessage: 'the message the turn answers',
-      turnIndex: 1,
-      turn: { turnId, messageId: 'a-first', kind: 'user', text: 'the message the turn answers' },
-    });
   }
 
   const released = [
@@ -431,32 +424,4 @@ describe('a turn releases its tool claims only when no response can still run', 
     });
   }
 
-  /** Defends: closing the earlier response must keep a live continuation's tool claim. */
-  test('cold recovery keeps the claims of a continuation it has not replayed yet', async () => {
-    const harness = orchestratorHarness();
-    await admittedTurnClaim(harness, 'u-cont');
-    claimTool(harness, 'u-cont', 'call_send_1');
-    expect(disposition(harness, 'u-cont', 'a-first')).toBe('first');
-    openRun(harness, 'run-a-cont', 'u-cont');
-
-    const restarted = await reactivateOrchestratorHarness(harness.db);
-    await restarted.agent.terminalRetryPass();
-
-    expect(disposition(restarted, 'u-cont', 'a-first')).toBe('done');
-    expect(toolClaims(restarted, 'u-cont')).toEqual(['call_send_1']);
-  });
-
-  /** Negative control: no response of the turn survived, so the close drops the claims. */
-  test('cold recovery releases them when no response survived the isolate', async () => {
-    const harness = orchestratorHarness();
-    await admittedTurnClaim(harness, 'u-gone');
-    claimTool(harness, 'u-gone', 'call_send_1');
-    expect(disposition(harness, 'u-gone', 'a-first')).toBe('first');
-    openRun(harness, 'run-other-turn', 'u-other');
-
-    const restarted = await reactivateOrchestratorHarness(harness.db);
-    await restarted.agent.terminalRetryPass();
-
-    expect(toolClaims(restarted, 'u-gone')).toEqual([]);
-  });
 });

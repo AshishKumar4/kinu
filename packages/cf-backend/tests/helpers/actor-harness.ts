@@ -176,7 +176,12 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.ctx;
   }
 
+  /** An isolate the loader refuses to open, for the agents it names. */
+  harnessIsolateRefusal: { readonly refuses: (actorId: string) => boolean; readonly error: Error } | null = null;
+
   protected override async agentIsolate(actorId: string): Promise<AgentFacetCalls> {
+    if (this.harnessIsolateRefusal?.refuses(actorId) === true) throw this.harnessIsolateRefusal.error;
+
     return this.harnessDynamicWorkers.counted(this.agentOf(actorId).storageKey, await this.harnessAgentIsolate(actorId));
   }
 
@@ -236,7 +241,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return [...activationWorlds.get(this.ctx)?.aiGateway?.unanswered ?? []];
   }
 
-  modelFactory?: () => LanguageModel;
+  private _modelFactory: (() => LanguageModel) | undefined;
+  /** The model this object's own lanes run on, and main's turns in its own isolate, scripted under its conversation. */
+  get modelFactory(): (() => LanguageModel) | undefined { return this._modelFactory; }
+  set modelFactory(factory: (() => LanguageModel) | undefined) {
+    this._modelFactory = factory;
+    scriptConversationModel(agentAffinityKey(this.name), factory ?? null);
+  }
   override getModel(): LanguageModel {
     return this.modelFactory?.() ?? super.getModel();
   }
@@ -282,7 +293,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The model main's turns run on, in its isolate and on this object's own model lanes. */
   harnessScriptMainModel(factory: () => LanguageModel): void {
     this.modelFactory = factory;
-    scriptConversationModel(agentAffinityKey(this.name), factory);
   }
   private profileHold: { readonly reached: () => void; readonly release: Promise<void> } | null = null;
   /** The next profile read (a measure's or a turn's composition) waits for `release`; resolves once it is waiting. */
@@ -560,12 +570,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** The scripted model the next turns run on; held, not consumed by one turn. */
   harnessSupplyTurnModel(model: LanguageModel): void {
-    const factory = () => model;
-    Object.defineProperty(this, 'modelFactory', { configurable: true, value: factory });
+    this.modelFactory = () => model;
     const turn = () => model;
     Object.defineProperty(this, 'turnModel', { configurable: true, value: turn });
-    // Main's turns run in its own isolate, whose calls are routed under main's conversation.
-    scriptConversationModel(agentAffinityKey(this.name), factory);
   }
   harnessFleetTurnRows(): FleetPoint[] {
     return fleetPlaneForTest(this.env).agent.points.map((point) => ({ ...point }));
