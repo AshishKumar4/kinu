@@ -1,0 +1,3 @@
+- One idea per sentence, about twenty words, with a verb. Keep the message short by leaving things out, not by packing them in.
+- No headers in a message under about 500 words. Bold the first words of a bullet at most, never a whole sentence.
+- Stop when the content stops: no closing offer, no restating what you did.

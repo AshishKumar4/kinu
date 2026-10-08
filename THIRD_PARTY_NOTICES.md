@@ -36,6 +36,15 @@ Zechner, 2025-2026 Can Bölük and 2026 Stencil Labs, Inc., under the MIT
 License. The required copyright notice and license text sit in
 [`third_party/oh-my-pi-LICENSE-MIT`](third_party/oh-my-pi-LICENSE-MIT).
 
+## Codex
+
+Parts of Kinu's system prompt for GPT-family models (`packages/core/src/prompts/*.gpt.md`) and its autonomy and
+delegation wording follow the GPT-6.1 Sol instructions and `spawn_agent` text of
+[Codex](https://github.com/openai/codex) at commit `cd85a26cae` (2026-10-08):
+`codex-rs/models-manager/models.json` and `codex-rs/core/src/tools/handlers/multi_agents_spec.rs`, adapted to
+Kinu's tools. Codex is copyright 2025 OpenAI, under the Apache License 2.0; its license text sits in
+[`third_party/codex-LICENSE-Apache-2.0`](third_party/codex-LICENSE-Apache-2.0).
+
 ## models.dev
 
 The OpenAI and OpenCode marks in the model picker

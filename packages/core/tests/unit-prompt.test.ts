@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import { asSchema, jsonSchema, tool, type ToolSet } from 'ai';
 import { AGENTS_OPS, BUILTIN_SKILLS, buildSystemPromptSync, compilePromptSurface, currentDateForPrompt, BUILTIN_ROLE_DEFINITIONS, turnReasonForMetadata, workModeForTurnMetadata, buildBuiltinTools, permitInPlan, skillIndexLine, type SkillHeader } from '../src/index';
 import { createAgentsTool } from '../src/delegation/agents-operations';
+import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import { swarmSeats } from './helpers-actor-host';
 import { createTestRuntime, scriptedTurnModel, unobservedSearchSeams, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { conversationsFor } from './helpers';
@@ -132,6 +133,12 @@ describe('buildSystemPromptSync', () => {
 });
 
 // Prefix caching stops at the first differing byte, so what every workspace shares comes first.
+
+test('no prompt section names an agents op the tool does not have', () => {
+  for (const section of [...PROMPT_SECTIONS, ...Object.values(BUILTIN_ROLE_DEFINITIONS).map((role) => ({ source: role.instructions }))]) {
+    for (const [, op] of section.source.matchAll(/agents\(\{\s*op:\s*["'](\w+)["']/g)) expect<readonly string[]>(AGENTS_OPS).toContain(op);
+  }
+});
 
 test('no built-in skill body calls an op or a field the agents tool does not have', async () => {
   // Nothing typechecks a template string, so a renamed op or field drifts silently. The tool is the production one,

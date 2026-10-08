@@ -236,7 +236,8 @@ export const BUILTIN_TOOL_SPECS = {
       '`tools.<name>(input)` calls a native tool with the input its schema declares; a tool saved with `workspace.createTool` joins `tools` from the next program, declared in dynamic_context.',
       '`require()` loads Node builtins, plus `fs`, `fs/promises` and `child_process` over your workspace files and shell; `process.cwd()` is the workspace root. Only promise forms work: `execSync`, `spawn` and `fs.*Sync` throw.',
       '`console.log` output comes back with the result. Variables do not survive between programs; `state` does.',
-      'A refused call, in any namespace, resolves to a `Refusal` instead of throwing; returning it fails the call with that reason.',
+      'A refused call, in any namespace, resolves to a `Refusal` instead of throwing: check for one before reading a result\'s fields. Returning it fails the call with that reason.',
+      'Run independent calls together with `await Promise.all([...])`, and `return` the values you need rather than logging them.',
       'Start with one `//` comment naming the operation and its target; the interface shows it as the call\'s intent.',
     ],
     example: "eval({code:\"// List the newest reports\\nconst fs = require('fs/promises');\\nconst files = await fs.readdir('reports');\\nreturn files.slice(0, 5)\"})",
@@ -249,7 +250,7 @@ export const BUILTIN_TOOL_SPECS = {
         + 'concurrent calls run side by side. A `name` keeps its directory and exported variables from call to call, '
         + 'and runs one call at a time.',
       'Output starts with the directory the command started in, holds both streams, labelled when both wrote, and gives the exit code when it is not zero.',
-      'Each runtime keeps its own files; `workspace` is the filesystem the `file` tool reads.',
+      'Each runtime keeps its own files; `workspace` is the filesystem the `file` tool reads. Read and edit a file there with `file`, not `cat`, `head`, `sed` or heredocs; the shell is for programs, builds, tests, git and searches across many files.',
       'In a container, `nproc` and `free` report the host: size parallelism from the cpus and memory the execution status lists.',
     ],
     example: "shell({runtime:'workspace', command:'npm test'})",
@@ -258,7 +259,8 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'file',
     summary: 'Read, list, stat, search, edit or write files in your workspace.',
     notes: [
-      'An edit fails when its target text is not there; `sed -i`, heredocs and scripts in `shell` write regardless.',
+      'Find before you read: `search` a file for the lines you need, then `read` around them. Read a large file in pages with `offset` and `limit`; a read that stops early names the offset that continues it.',
+      'Read a file in this turn before you `edit` it. An edit matches the text as last read, and fails when its `old_text` is absent or occurs more than once: copy just enough to be unique.',
     ],
     example: "file({op:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
   },
@@ -273,7 +275,9 @@ export const BUILTIN_TOOL_SPECS = {
   tasks: {
     name: 'tasks',
     summary: 'Your task list, shown in your context at every step, and your active role.',
-    notes: [],
+    notes: [
+      'Keep a list for work of three or more steps, never for a one-step request. Update it in the same step as the work it tracks, and mark an item done as soon as it is.',
+    ],
     example: "tasks({op:'add', titles:['Reproduce the 502', 'Patch the gateway timeout', 'Add a regression test']})",
   },
   web: {

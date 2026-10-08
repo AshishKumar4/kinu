@@ -26,7 +26,7 @@ import verificationSection from "../prompts/verification-section.md" with { type
 import outputFormatSection from "../prompts/output-format-section.md" with { type: 'text' };
 import workspaceInstructionsSection from "../prompts/workspace-instructions-section.md" with { type: 'text' };
 // Lead/worker doctrine adapted from AshishKumar4/oh-my-pi c6a7d56cc6,
-// fusion-lead/direct-edit-reminder and agents/sidekick (MIT-licensed sources:
+// fusion-lead and agents/sidekick (MIT-licensed sources:
 // opencode-fusion and OpenHands; upstream THIRD-PARTY-NOTICES.txt).
 import leadResponsibility from '../prompts/lead-responsibility.md' with { type: 'text' };
 import leadBrief from '../prompts/lead-brief.md' with { type: 'text' };
@@ -34,10 +34,13 @@ import leadParallel from '../prompts/lead-parallel.md' with { type: 'text' };
 import leadReview from '../prompts/lead-review.md' with { type: 'text' };
 import leadInterruptions from '../prompts/lead-interruptions.md' with { type: 'text' };
 import leadDelivery from '../prompts/lead-delivery.md' with { type: 'text' };
-import leadDirectEdit from '../prompts/lead-direct-edit.md' with { type: 'text' };
+// GPT wording follows Codex's GPT-6.1 Sol instructions (THIRD_PARTY_NOTICES.md); Claude wording follows Claude Code's.
 import operatingKimi from '../prompts/operating-guidance.kimi.md' with { type: 'text' };
 import operatingGpt from '../prompts/operating-guidance.gpt.md' with { type: 'text' };
+import operatingClaude from '../prompts/operating-guidance.claude.md' with { type: 'text' };
 import operatingGemini from '../prompts/operating-guidance.gemini.md' with { type: 'text' };
+import outputGpt from '../prompts/output-format.gpt.md' with { type: 'text' };
+import outputClaude from '../prompts/output-format.claude.md' with { type: 'text' };
 import briefGpt from '../prompts/lead-brief.gpt.md' with { type: 'text' };
 import { definePromptSection, type PromptSection } from './template';
 import type { PromptModelFamily } from './model-profile';
@@ -126,7 +129,7 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  */
 export const EXECUTORS_SECTION = definePromptSection(
   "executors/section",
-  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasSandbox}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}",
+  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasSandbox}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}{{#if hasHire}}{{/if}}",
   executorsSection.trimEnd(),
 );
 
@@ -160,7 +163,7 @@ export const DELEGATION_SECTION = definePromptSection(
 
 export const BACKGROUND_WORK_SECTION = definePromptSection(
   "state/background-work",
-  "",
+  "{{#if hasHire}}{{/if}}",
   backgroundWorkSection.trimEnd(),
 );
 
@@ -177,7 +180,7 @@ export const VERIFICATION_SECTION = definePromptSection(
 
 export const OUTPUT_FORMAT_SECTION = definePromptSection(
   "state/output-format",
-  "",
+  "{{familyDelta}}",
   outputFormatSection.trimEnd(),
 );
 
@@ -202,15 +205,18 @@ export const LEAD_INTERRUPTION = definePromptSection('lead/interruptions', '', l
 
 export const LEAD_DELIVERY = definePromptSection('lead/delivery', '', leadDelivery.trimEnd());
 
-export const LEAD_DIRECT_EDIT = definePromptSection('lead/direct-edit', '', leadDirectEdit.trimEnd());
-
-// Files contain only differing paragraphs; no entry means base wording. The familyDelta slot
-// survives promotion. GPT/Gemini wording comes from the fork cited above; Claude uses the base.
+// A delta adds what one family needs on top of the base, which alone carries every behaviour (a generic
+// model gets only the base); no instruction sits in both. The familyDelta slot survives promotion.
 const FAMILY_DELTAS = new Map<string, Readonly<Partial<Record<PromptModelFamily, PromptSection<''>>>>>([
   [OPERATING_GUIDANCE.id, {
     kimi: definePromptSection('delta/operating-kimi', '', operatingKimi.trimEnd()),
     gpt: definePromptSection('delta/operating-gpt', '', operatingGpt.trimEnd()),
+    claude: definePromptSection('delta/operating-claude', '', operatingClaude.trimEnd()),
     gemini: definePromptSection('delta/operating-gemini', '', operatingGemini.trimEnd()),
+  }],
+  [OUTPUT_FORMAT_SECTION.id, {
+    gpt: definePromptSection('delta/output-gpt', '', outputGpt.trimEnd()),
+    claude: definePromptSection('delta/output-claude', '', outputClaude.trimEnd()),
   }],
   [LEAD_BRIEF.id, {
     gpt: definePromptSection('delta/brief-gpt', '', briefGpt.trimEnd()),
@@ -241,7 +247,6 @@ export const PROMPT_SECTIONS: readonly PromptSection<string>[] = [
   LEAD_REVIEW,
   LEAD_INTERRUPTION,
   LEAD_DELIVERY,
-  LEAD_DIRECT_EDIT,
 ];
 
 /** Absent means built-in sources, the state the layergate prefix digest is locked against. */

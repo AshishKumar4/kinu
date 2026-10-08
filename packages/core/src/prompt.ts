@@ -44,7 +44,6 @@ import {
   LEAD_REVIEW,
   LEAD_INTERRUPTION,
   LEAD_DELIVERY,
-  LEAD_DIRECT_EDIT,
   sectionRenderer,
   promptFamilyDelta,
   type PromptSectionOverrides,
@@ -207,6 +206,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
     // The slate route exists only on workspaces that can publish a preview on their own origin.
     workspacePreview: previewExecutors.some((exec) => exec.name === 'workspace'),
     exposeCalls: previewExecutors.map((exec) => `${exec.name}.exposePort(port)`).join(' or '),
+    hasHire: surface.agentsActions.includes('hire'),
   });
 }
 
@@ -259,13 +259,13 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
   }
 
   if (hasTool(tools, 'shell') || hasTool(tools, 'eval') || hasTool(tools, 'agents')) {
-    parts.push(render(BACKGROUND_WORK_SECTION, {}));
+    parts.push(render(BACKGROUND_WORK_SECTION, { hasHire: surface.agentsActions.includes('hire') }));
   }
 
   parts.push(render(VERIFICATION_SECTION, {
     hasShell: hasTool(tools, 'shell') || hasTool(tools, 'eval'),
   }));
-  parts.push(render(OUTPUT_FORMAT_SECTION, {}));
+  parts.push(render(OUTPUT_FORMAT_SECTION, { familyDelta: promptFamilyDelta(OUTPUT_FORMAT_SECTION.id, surface.model.family) }));
 
   return parts.join('\n\n');
 }
@@ -342,7 +342,6 @@ export function buildSystemPromptSync(
       render(LEAD_REVIEW, {}),
       render(LEAD_INTERRUPTION, {}),
       render(LEAD_DELIVERY, {}),
-      render(LEAD_DIRECT_EDIT, {}),
     ] : []),
     renderPlanesSection(rt.planes, render),
     readSoulForPrompt(opts.soulOverride),
