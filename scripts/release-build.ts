@@ -4,14 +4,16 @@
  * (scripts/release-build.sh), unpacked into packages/cf-backend/dist, its CLI release signed here, where the key is.
  * Nothing is compiled or bundled on this machine.
  */
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { connect } from 'armada';
 
 const ROOT = join(import.meta.dir, '..');
 
-const DIST = join(ROOT, 'packages', 'cf-backend', 'dist');
+const BACKEND = join(ROOT, 'packages', 'cf-backend');
+
+const DIST = join(BACKEND, 'dist');
 
 const UnsignedSchema = v.object({ version: v.string(), sha: v.string() });
 
@@ -45,10 +47,14 @@ async function main(): Promise<number> {
 
   if (tarball === null) throw new Error(`the build on armada (job ${job}) left no output`);
   rmSync(DIST, { recursive: true, force: true });
+  rmSync(join(BACKEND, '.wrangler', 'deploy'), { recursive: true, force: true });
   mkdirSync(DIST, { recursive: true });
-  const unpacked = Bun.spawnSync(['tar', '-xzf', '-', '-C', join(DIST, '..')], { stdin: tarball, stdout: 'pipe', stderr: 'pipe' });
+  const unpacked = Bun.spawnSync(['tar', '-xzf', '-', '-C', BACKEND], { stdin: tarball, stdout: 'pipe', stderr: 'pipe' });
 
   if (unpacked.exitCode !== 0) throw new Error(`unpacking the build of job ${job}: ${unpacked.stderr.toString().trim()}`);
+
+  // Without it, `wrangler deploy` bundles the sources itself instead of publishing this build.
+  if (!existsSync(join(BACKEND, '.wrangler', 'deploy', 'config.json'))) throw new Error(`the build of job ${job} holds no .wrangler/deploy/config.json`);
   console.log(`built ${target} ${sha} on armada, job ${job}: ${String(tarball.byteLength)} bytes`);
 
   if (promote !== undefined) return 0;

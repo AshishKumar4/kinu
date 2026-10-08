@@ -31,7 +31,7 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { cpus } from 'node:os';
+import { cpus, homedir } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
@@ -3060,14 +3060,17 @@ function ciPlan(costs: HostedCosts): CIMatrix {
   };
 }
 
+/** The task a deploy row runs as in its phase's armada job, as armada names it in its report. */
+function armadaTaskName(gate: Gate): string {
+  return gate.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80);
+}
+
 /** The matrix of a deploy phase's armada rows (`armada run <sha> -- --deploy-phase=<phase>`), weighed by their
  *  declared seconds so the longest start first. */
 function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined): CIMatrix {
   return {
     include: armadaPhaseRows(phases).map((gate) => {
-      const entry: CIMatrixEntry = {
-        name: gate.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.run],
-      };
+      const entry: CIMatrixEntry = { name: armadaTaskName(gate), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.run] };
 
       if (readsDeployment(gate) && origin !== undefined) entry.origin = origin;
 
@@ -3616,8 +3619,12 @@ function rowArgv(gate: Gate, tracked: readonly string[], deploying: boolean, tim
 const ArmadaReportSchema = v.object({
   job: v.string(),
   verdicts: v.optional(v.object({
-    rows: v.array(v.object({ run: v.string(), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''), evidence: v.optional(v.object({ dir: v.string(), tgz: v.string() })) })),
+    rows: v.array(v.object({
+      run: v.optional(v.string()), name: v.optional(v.string()), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
+      evidence: v.optional(v.object({ dir: v.string(), tgz: v.string() })),
+    })),
   })),
+  problems: v.optional(v.array(v.string()), []),
 });
 
 /** A row's evidence from its container, unpacked where the deploy's report keeps it. */
@@ -3660,6 +3667,18 @@ async function echoed(argv: readonly string[]): Promise<{ readonly exitCode: num
 
 type ArmadaReport = v.InferOutput<typeof ArmadaReportSchema>;
 
+/** Where `armada run` keeps each run's report, as `<project>-<task job>.json` (armada's src/ci.ts). */
+const ARMADA_REPORTS = join(homedir(), '.local', 'state', 'armada', 'runs');
+
+/** The report of the `armada run` that printed `said`, named by its task job. A run it could not grade whole (exit 2)
+ *  prints no `report:` line, and its report still holds every row that did report. */
+function armadaReport(said: string): ArmadaReport | undefined {
+  const job = /^task job (\S+):/mu.exec(said)?.[1];
+  const path = job === undefined ? undefined : join(ARMADA_REPORTS, `kinu-${job}.json`);
+
+  return path === undefined || !existsSync(path) ? undefined : v.parse(ArmadaReportSchema, JSON.parse(readFileSync(path, 'utf8')));
+}
+
 type ArmadaRow = NonNullable<ArmadaReport['verdicts']>['rows'][number];
 
 /** One armada row's verdict into the deploy's report, its evidence unpacked beside it; whether it is green. */
@@ -3700,10 +3719,16 @@ async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[]
 
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
   const { exitCode, said } = await echoed(argv);
-  const reportPath = /^report: (.+)$/mu.exec(said)?.[1]?.trim();
-  const graded = reportPath === undefined || !existsSync(reportPath) ? undefined : v.parse(ArmadaReportSchema, JSON.parse(readFileSync(reportPath, 'utf8')));
-  const verdicts = new Map((graded?.verdicts?.rows ?? []).map((row) => [row.run, row]));
-  const found = graded === undefined ? `\`armada run\` exited ${String(exitCode)} and wrote no report` : `job ${graded.job}`;
+  const graded = armadaReport(said);
+
+  // A task that wrote no verdict is reported under its own name, with its exit and output: its row is red with them.
+  const verdicts = new Map((graded?.verdicts?.rows ?? []).flatMap((row) => {
+    const gate = row.run === undefined ? rows.find((each) => armadaTaskName(each) === row.name) : rows.find((each) => each.run === row.run);
+
+    return gate === undefined ? [] : [[gate.run, row] as const];
+  }));
+
+  const found = graded === undefined ? `\`armada run\` exited ${String(exitCode)} and wrote no report` : [`job ${graded.job}`, ...graded.problems].join('; ');
   const reproduce = `node_modules/.bin/armada run ${sha} -- --deploy-phase=${phase}`;
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });

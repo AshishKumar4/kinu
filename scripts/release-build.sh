@@ -16,4 +16,5 @@ if [ "$promote" != --promote ]; then
   bun scripts/build-worker-release.ts "$version" "$sha"
   bash scripts/build-cli-dist.sh --unsigned
 fi
-tar -czf "${ARMADA_OUT:?runs as an armada task}" -C packages/cf-backend dist
+# With the build, the redirect vite writes beside it, which points `wrangler deploy` at dist/kinu/wrangler.json.
+tar -czf "${ARMADA_OUT:?runs as an armada task}" -C packages/cf-backend dist .wrangler/deploy
