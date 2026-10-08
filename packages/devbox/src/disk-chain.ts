@@ -14,12 +14,11 @@ export const DEFAULT_EXCLUDES = ['node_modules', '*.log', '.cache', '.bun', '__p
 
 const DISK_CHAIN_FORMAT = 'disk-chain/2';
 
-/** The SHA-256 of each part's SHA-256 in order, `partBytes` apiece, as the publisher reported it; absent on a layer
- *  published before it reported one. */
+/** The SHA-256 of each part's SHA-256 in order, `partBytes` apiece, as the publisher reported it. */
 const LayerDigest = v.object({ sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/u)), partBytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)) });
 
 const Layer = v.object({
-  key: v.string(), bytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)), committedAt: v.number(), digest: v.optional(LayerDigest),
+  key: v.string(), bytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)), committedAt: v.number(), digest: LayerDigest,
 });
 
 /** `saves`: how many saves the layer covers, from the boundary below it; a delta from before D77 covers one. */
@@ -74,7 +73,7 @@ const RECOVERED = `${RT}/disk-recovered.json`;
 const RecoveryRecord = v.object({
   rev: v.number(),
   layers: v.array(v.string()),
-  digests: v.optional(v.array(v.object({ key: v.string(), ...LayerDigest.entries })), []),
+  digests: v.array(v.object({ key: v.string(), ...LayerDigest.entries })),
 });
 
 /** The words of a copy that refused itself: a layer it read is not the one that was published. */
@@ -446,7 +445,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     if (state === null) return { kind: 'empty', detail: 'no disk chain record', recoveredTo: undefined };
     const held = [...[...state.deltas].reverse(), state.base];
     const layers = held.map(layer => layer.key);
-    const digests = held.flatMap(layer => (layer.digest === undefined ? [] : [{ key: layer.key, ...layer.digest }]));
+    const digests = held.map(layer => ({ key: layer.key, ...layer.digest }));
     yield* run('recording the recovery', `mkdir -p ${shellPath(RT)} && printf %s ${shellPath(JSON.stringify({ rev: state.rev, layers, digests }))} > ${shellPath(RECOVERED)} `
       + `&& rm -f ${shellPath(INVENTORY_REV)} ${shellPath(HYDRATED)} ${shellPath(HYDRATE_REFUSED)}`);
     yield* mountLayers(layers);
