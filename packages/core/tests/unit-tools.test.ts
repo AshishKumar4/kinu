@@ -518,11 +518,14 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     ])).toEqual([{ name: 'workspace' }]);
   });
 
-  test('a namespace two capabilities reach survives while EITHER does', () => {
-    // `shell` and `file` both reach `workspace`: losing one keeps the filesystem, losing both drops it.
+  test('a namespace two capabilities reach survives while EITHER does, and `file` is the file tool\'s alone', () => {
+    // `shell` and `slate` both reach `workspace`: losing one keeps it, losing both drops it.
     expect(narrowToolSurface(['eval', 'shell']).allowsNamespace('workspace')).toBe(true);
-    expect(narrowToolSurface(['eval', 'file']).allowsNamespace('workspace')).toBe(true);
+    expect(narrowToolSurface(['eval', 'slate']).allowsNamespace('workspace')).toBe(true);
     expect(narrowToolSurface(['eval']).allowsNamespace('workspace')).toBe(false);
+    // eval alone is no file tool: `file.*` is reached only with it.
+    expect(narrowToolSurface(['eval', 'shell']).allowsNamespace('file')).toBe(false);
+    expect(narrowToolSurface(['eval', 'file']).allowsNamespace('file')).toBe(true);
   });
 
   test('an absent list allows everything — absent inherits, as it does in the resolver', () => {

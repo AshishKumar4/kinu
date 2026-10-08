@@ -10,8 +10,9 @@ import * as v from 'valibot';
 import type {
   AgentRuntime, AgentsToolAction, AgentsSwarmDeps, AgentsToolDeps, BuiltinToolName,
   LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope, RuntimeFacts,
-  ProviderCatalogSnapshot, ToolCallRecord,
+  ProviderCatalogSnapshot, ToolCallRecord, JsonObject, JsonValue, ToolOutcome,
 } from '../../packages/core/src/index';
+import { compactToolCall } from '../../packages/core/src/evolution/tool-call-record';
 import {
   artifactOverrides, currentArtifacts, agentsActionsFor, buildActorTools,
   buildSystemPromptSync, createFactsStore,
@@ -229,23 +230,35 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
  * from what the ledger expects a record to carry. The system prompt, the
  * messages and the store writes stay with the caller: those are what differ.
  */
+/** A step's call as the provider carried it, for a suite's own assertions; a turn records {@link compactToolCall}'s part. */
+export interface LiveToolCall {
+  readonly toolCallId: string;
+  readonly name: string;
+  readonly args: JsonObject;
+  result: JsonValue;
+  outcome?: ToolOutcome;
+}
+
 export interface StepToolCallLog {
-  readonly records: ToolCallRecord[];
+  readonly calls: LiveToolCall[];
   steps: number;
+  /** The calls as a turn records them. */
+  records(): ToolCallRecord[];
   onStepFinish(step: Pick<StepResult<ToolSet>, 'toolCalls' | 'content'>): void;
 }
 
 export function createStepToolCallLog(): StepToolCallLog {
   const log: StepToolCallLog = {
-    records: [],
+    calls: [],
     steps: 0,
+    records: () => log.calls.map((call) => compactToolCall(call)),
     onStepFinish(step) {
       log.steps += 1;
-      const byId = new Map<string, ToolCallRecord>();
+      const byId = new Map<string, LiveToolCall>();
 
       for (const call of step.toolCalls) {
-        const record: ToolCallRecord = { name: call.toolName, args: v.parse(JsonObjectSchema, call.input), result: null };
-        log.records.push(record);
+        const record: LiveToolCall = { toolCallId: call.toolCallId, name: call.toolName, args: v.parse(JsonObjectSchema, call.input), result: null };
+        log.calls.push(record);
         byId.set(call.toolCallId, record);
       }
 

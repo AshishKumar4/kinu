@@ -817,7 +817,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     if (policy === undefined || current.accepts === undefined || current.accepts.size === policy.accepts.size) return [...request];
 
-    return sanitizeAttachmentsForModel(request, { ...policy, accepts: current.accepts });
+    return [...await sanitizeAttachmentsForModel(request, { ...policy, accepts: current.accepts })];
   };
 
   const callModel = async function* (

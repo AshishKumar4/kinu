@@ -107,3 +107,20 @@ test('a dotted slate or server name is walked and looked up whole', () => {
     ['root', 'mcp.files.prod', null, ['observe']],
   ]);
 });
+
+test("a slate reaches what each operation's catalog entry says, and nothing undeclared", () => {
+  const notes = slateCapabilityGraph({
+    slate: 'notes', workspace: 'w', catalog: { mcp: [], slates: ['notes'] },
+    usage: () => used('file.read', 'file.write', 'state.set', 'agent.schedule', 'workspace.undeclared'),
+  });
+
+  // file is on a slate's surface, its reads observing; state and agent are the agent's alone; nothing is reached by
+  // being missing from the catalog.
+  expect(notes.namespaces.map((each) => [each.namespace, each.members.map((member) => [member.member, member.impact])])).toEqual([
+    ['file', [['read', 'observe'], ['write', 'mutate']]],
+    ['state', []],
+    ['agent', []],
+    ['workspace', []],
+  ]);
+  expect(cutShareGrant(notes, []).members).toEqual([{ slate: 'notes', namespace: 'file', member: 'read', impact: 'observe' }]);
+});

@@ -153,19 +153,6 @@ if [ "$KINU_ROLLBACK" = "1" ]; then
   fi
   exec bun "$KINU_ROOT/scripts/promote.ts" rollback
 fi
-# The pre-deploy phase, read by scripts/infra-verify.ts, travels in the
-# environment so the `bun run gate:infra` line below stays one string for
-# scripts/ladder.ts to parse.
-# ALWAYS ASSIGNED, in both arms: an ambient KINU_INFRA_PHASE from whatever shell
-# launched this must never decide how strictly a deploy nobody asked to
-# bootstrap is checked. There is no third value, and no value of it reaches the
-# upload without step 5 behind it.
-if [ "$KINU_BOOTSTRAP" = "1" ]; then
-  export KINU_INFRA_PHASE="bootstrap"
-else
-  export KINU_INFRA_PHASE="full"
-fi
-
 # ── The two environments ─────────────────────────────────────────────────────
 #
 # STAGING is where a deploy lands: `kinu-staging`, wrangler.jsonc's
@@ -219,8 +206,29 @@ if [ "$KINU_RESET" = "1" ]; then
     echo -e "${RED}A production reset is confirmed at a terminal, and this run has none. Nothing was deployed or deleted.${NC}"
     exit 1
   fi
-  echo -e "${BOLD}RESET: this deploy deletes every Durable Object of $KINU_ENV, with all its storage:${NC}"
-  bun "$KINU_ROOT/scripts/reset.ts" plan "$KINU_ENV" || exit 1
+  # A reset whose build never uploaded left its placeholder serving and its classes gone: this deploy finishes it,
+  # and its pre-deploy phase is the bootstrap one, as the classes it creates cannot exist before it.
+  KINU_PENDING_RESET="$(bun "$KINU_ROOT/scripts/reset.ts" pending "$KINU_ENV")" || exit 1
+  if [ "$KINU_PENDING_RESET" != "none" ]; then
+    KINU_BOOTSTRAP=1
+    echo -e "${BOLD}RESET: finishing $KINU_PENDING_RESET, whose build never uploaded; $KINU_ENV serves its placeholder.${NC}"
+  else
+    echo -e "${BOLD}RESET: this deploy deletes every Durable Object of $KINU_ENV, with all its storage:${NC}"
+    bun "$KINU_ROOT/scripts/reset.ts" plan "$KINU_ENV" || exit 1
+  fi
+fi
+
+# The pre-deploy phase, read by scripts/infra-verify.ts, travels in the
+# environment so the `bun run gate:infra` line below stays one string for
+# scripts/ladder.ts to parse.
+# ALWAYS ASSIGNED, in both arms: an ambient KINU_INFRA_PHASE from whatever shell
+# launched this must never decide how strictly a deploy nobody asked to
+# bootstrap is checked. There is no third value, and no value of it reaches the
+# upload without step 5 behind it.
+if [ "$KINU_BOOTSTRAP" = "1" ]; then
+  export KINU_INFRA_PHASE="bootstrap"
+else
+  export KINU_INFRA_PHASE="full"
 fi
 
 # Captured during deploy for final summary

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
 import { deployedConfig } from './infra-manifest';
-import { LATEST_RESET_KEY, type Reset, ResetSchema, type ResetTarget, type Serving, wipe } from './reset';
+import { LATEST_RESET_KEY, pendingReset, type Reset, ResetSchema, type ResetTarget, type Serving, wipe } from './reset';
 
 const config = deployedConfig('staging');
 
@@ -156,5 +156,19 @@ describe('a reset stopped anywhere can be finished', () => {
     await expect(wipe({ environment: 'staging', config, recordFile, restToken: 'a-rest-token', target }))
       .rejects.toThrow('binds no class, as a reset placeholder does, and no reset record names it');
     expect(state.applications).toHaveLength(3);
+  });
+
+  test('a wipe whose build never uploaded is pending until a build binds its classes again', async () => {
+    const { state, target } = account();
+    const worker = config.name ?? '';
+
+    expect(pendingReset(worker, target.serving(), target.latest())).toBeUndefined();
+    const done = await wipe({ environment: 'staging', config, recordFile, restToken: 'a-rest-token', target });
+
+    expect(pendingReset(worker, target.serving(), target.latest())).toEqual(done);
+    state.serving = { versionId: 'next-build', bound: new Map([['KinuDevbox', 'ns-devbox-2']]) };
+    expect(pendingReset(worker, target.serving(), target.latest())).toBeUndefined();
+    state.serving = { versionId: 'an-unrecorded-placeholder', bound: new Map() };
+    expect(pendingReset(worker, target.serving(), target.latest())).toBeUndefined();
   });
 });

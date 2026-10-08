@@ -1,221 +1,267 @@
-/**
- * The durability canary: one long agent turn on a deployment with nobody connected, then an idle tail, and the three
- * numbers the owner judges execution by (docs: kinu-logs/onstart/DESIGN.md, S0).
- *   1. Autonomy: the turn reaches its end with no client connected.
- *   2. Disruptions per hour of active work, by cause: `turn.resumed` rows, beside the invocation outcomes
- *      (exceededMemory, exceededCpu, exceededWallTime, canceled) the platform logged for the object.
- *   3. True rest: startups of the object during the idle tail after the turn ended; the target is zero.
- * Plus what a resume must never cost: a step bought twice (a marker printed twice) or an effect run twice.
- *
- * Two workloads (`scripts/canary-script.ts`): an inline turn of steps under the 30 s detach threshold, which stays
- * open for steps x sleep, and a few steps past it, which detach into background jobs that must settle on their own.
- *
- * Driven by `scripts/durability-canary.sh`, which resolves the `scripted` eval account the way the first-run tier does,
- * so the turn runs on the scripted model at zero model tokens.
- *   bun scripts/durability-canary.ts [--steps 720] [--sleep 20] [--jobs 3] [--job-sleep 900] [--helper-steps 30]
- *     [--tail-minutes 10] [--worker kinu-staging]
- */
-import { spawnSync } from 'node:child_process';
-import * as v from 'valibot';
+/** A staging measurement, never a repair: no workspace read between disconnect and the planned inspection,
+ * and none during the idle tail. Account lease beats update only UserDO's roster, not the workspace object. */
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
-import { resolvePublicSessionPlan } from '../evals/src/session';
-import { CANARY_PREFIX, canaryAsk, canaryMarker, type CanaryLoad } from './canary-script';
-import type { RunEvent } from '../packages/core/src/index';
+import { resolvePublicSessionPlan, type KinuPublicSession } from '../evals/src/session';
+import { BACKGROUND_POLICY } from '../packages/core/src/index';
+import { CANARY_PREFIX, canaryAsk, type CanaryLoad } from './canary-script';
+import { ledgerFindings, measureCanaryLedger, readCanaryLedger, type CanaryFinding, type CanaryMeasurement } from './durability-canary-ledger';
+import { measureCanaryTelemetry, telemetryFindings, type CanaryTelemetryMeasurement, type CanaryTouch, type CanaryWindow } from './durability-canary-telemetry';
+
+const MINUTE = 60_000;
+
+const TELEMETRY_LAG = 2 * MINUTE;
+
+const RECHECK = 15 * MINUTE;
+
+const iso = (at: number): string => new Date(at).toISOString();
 
 function flag(name: string, fallback: string): string {
   const at = process.argv.indexOf(`--${name}`);
 
-  return at >= 0 ? process.argv[at + 1] ?? fallback : fallback;
+  if (at < 0) return fallback;
+  const value = process.argv[at + 1];
+
+  if (value === undefined || value.startsWith('--')) throw new Error(`--${name} requires a value`);
+
+  return value;
+}
+
+function numberFlag(name: string, fallback: string): number {
+  const value = Number(flag(name, fallback));
+
+  if (!Number.isFinite(value) || value < 0) throw new Error(`--${name} requires a non-negative finite number`);
+
+  return value;
 }
 
 const load: CanaryLoad = {
-  steps: Number(flag('steps', '720')),
-  sleepSeconds: Number(flag('sleep', '20')),
-  jobs: Number(flag('jobs', '3')),
-  jobSleepSeconds: Number(flag('job-sleep', '900')),
-  helperSteps: Number(flag('helper-steps', '30')),
+  steps: numberFlag('steps', '540'), sleepSeconds: numberFlag('sleep', '20'),
+  helperSteps: numberFlag('helper-steps', '540'), jobs: numberFlag('jobs', '3'), jobSleepSeconds: numberFlag('job-sleep', '900'),
 };
 
-// A step at or past the threshold detaches, and the inline workload would measure nothing.
-if (load.sleepSeconds >= 30 || load.jobSleepSeconds <= 30) throw new Error('inline steps must sleep under 30 s and job steps past it');
+if (Object.values(load).some((value) => !Number.isSafeInteger(value))) throw new Error('canary load knobs must be integers (the deployed script parses integer loads)');
 
-const tailMs = Number(flag('tail-minutes', '10')) * 60_000;
+if (load.steps < 1 || load.helperSteps < 1 || load.sleepSeconds < 1 || load.sleepSeconds >= 30 || load.jobSleepSeconds <= 30) {
+  throw new Error('root/helper steps must be positive, inline sleep must be 1..29 s, and job sleep must be past 30 s');
+}
+
+const tailMs = numberFlag('tail-minutes', '60') * MINUTE;
+
+const marginMs = numberFlag('margin-minutes', '10') * MINUTE;
+
+const recheckCapMs = numberFlag('max-recheck-minutes', '60') * MINUTE;
+
+if (tailMs <= TELEMETRY_LAG) throw new Error('--tail-minutes must exceed 2 so the idle window after the settling margin is nonempty');
 
 const worker = flag('worker', 'kinu-staging');
 
-const resolution = resolvePublicSessionPlan('durability-canary', SCRIPTED_MODEL_SPEC);
+const out = flag('out', `/mnt/local/kinu/logs/bg-canary-${iso(Date.now()).replaceAll(':', '-')}.json`);
 
-if (resolution.kind === 'unavailable') throw new Error(resolution.remedy);
+const detachMs = BACKGROUND_POLICY.interactive.detachAfterMs;
 
-const session = await resolution.plan.open({ subject: 'canary', purpose: 'Durability canary: one long turn, nobody connected.', genesis: false });
+const swarmMs = load.helperSteps * load.sleepSeconds * 1000;
 
-const MARKER = new RegExp(`${CANARY_PREFIX}_[A-Z]+_STEP_\\d+`, 'g');
+const swarmForegroundMs = Math.min(swarmMs, detachMs);
 
-/** One count per marker in the given texts. */
-function markerCounts(texts: readonly string[]): Map<string, number> {
-  const counts = new Map<string, number>();
+const prefixMs = swarmForegroundMs + load.jobs * detachMs;
 
-  for (const marker of texts.flatMap((text) => text.match(MARKER) ?? [])) counts.set(marker, (counts.get(marker) ?? 0) + 1);
+const rootMs = prefixMs + load.steps * load.sleepSeconds * 1000;
 
-  return counts;
+const helperMs = swarmForegroundMs + swarmMs;
+
+const jobsMs = load.jobs === 0 ? 0 : swarmForegroundMs + (load.jobs - 1) * detachMs + load.jobSleepSeconds * 1000;
+
+const plannedMs = Math.max(rootMs, helperMs, jobsMs, swarmMs);
+
+const plan = {
+  model: SCRIPTED_MODEL_SPEC, worker, load, ask: canaryAsk(load),
+  timelineMinutes: { swarmNodesParallel: swarmMs / MINUTE, root: rootMs / MINUTE, helper: helperMs / MINUTE,
+    lastDetachedShellJob: jobsMs / MINUTE, work: plannedMs / MINUTE, inspectionMargin: marginMs / MINUTE,
+    firstWorkspaceTouch: (plannedMs + marginMs) / MINUTE, recheckEvery: RECHECK / MINUTE,
+    maxRecheckAfterFirstTouch: recheckCapMs / MINUTE, idleTail: tailMs / MINUTE,
+    idleMeasurementStartsAfterLastTouch: TELEMETRY_LAG / MINUTE, telemetryLagAfterTail: TELEMETRY_LAG / MINUTE,
+    earliestReport: (plannedMs + marginMs + tailMs + TELEMETRY_LAG) / MINUTE },
+  noWorkspaceTraffic: 'Disconnect after the first tool output; inspect only at the planned work end plus margin, then at most every 15 minutes up to the cap. Disconnect again for the entire idle tail.',
+  accountLeaseHeartbeat: 'Every 60 s, POST /api/user/workspaces/:name/touch updates UserDO.last_visited only; no workspace RPC. Idle object telemetry includes any invocation it might unexpectedly cause.',
+  assumptions: ['The ideate swarm has five parallel nodes, each using helper steps.',
+    'The swarm and detached shell calls return after the 30 s interactive foreground window; hire returns immediately.',
+    'Provider/tool/queue overhead is not included in the sleep arithmetic; the inspection margin and capped rechecks disclose overruns.'],
+  out,
+};
+
+if (process.argv.includes('--plan')) {
+  console.log(JSON.stringify(plan, null, 2));
+  process.exit(0);
 }
 
-const TimelineSchema = v.looseObject({
-  object: v.string(),
-  startupsByHour: v.array(v.looseObject({ startups: v.number() })),
-  outcomes: v.array(v.looseObject({ eventType: v.string(), outcome: v.string(), count: v.number() })),
-  topEvents: v.array(v.looseObject({ event: v.string(), count: v.number() })),
-  sampling: v.number(),
-});
-
-/** One object's telemetry over a window, read through `prod-logs.ts timeline`, which owns the query shapes. The
- *  target is the workspace's name while the object id is unknown: a window with no startup (a resting tail) cannot
- *  resolve a name, so the tail is read by the id the active window named. A failed read is reported, not thrown, so
- *  the ledger half of the report still prints. */
-function timeline(target: string, from: number, to: number): v.InferOutput<typeof TimelineSchema> | { readonly failed: string } {
-  const run = spawnSync('bun', ['scripts/prod-logs.ts', 'timeline', target, '--worker', worker,
-    '--since', new Date(from).toISOString(), '--until', new Date(to).toISOString(), '--json'], { encoding: 'utf8' });
-
-  if (run.status !== 0) return { failed: run.stderr.slice(-500) };
-
-  return v.parse(TimelineSchema, JSON.parse(run.stdout));
+async function waitUntil(until: number, phase: string): Promise<void> {
+  while (Date.now() < until) {
+    console.error(`canary ${phase}: workspace untouched; ${String(Math.ceil((until - Date.now()) / MINUTE))} min to ${iso(until)}`);
+    await Bun.sleep(Math.min(MINUTE, until - Date.now()));
+  }
 }
 
-/** The canary's root runs, oldest first: a resumed turn may continue under a run of its own. */
-function canaryRuns(events: readonly RunEvent[]): { readonly runId: string; readonly start: string; readonly end: RunEvent | undefined }[] {
-  return events
-    .filter((event) => event.type === 'run_start' && event.userMessage?.startsWith(CANARY_PREFIX) === true)
-    .map((start) => ({
-      runId: start.runId,
-      start: start.timestamp,
-      end: events.find((event) => event.runId === start.runId && event.type === 'run_end'),
-    }));
-}
+const createdAt = Date.now();
 
-/** The canary's own run starts it has seen, by run id. */
-const known = new Map<string, { readonly start: string; cursor: number; end: RunEvent | undefined }>();
+let session: KinuPublicSession | null = null;
 
-/**
- * Waits until the canary's newest run ends as completed, or until no run of it has been open for `quietMs`. It reads
- * the run list and each canary run's new events once per `pollMs`: nobody watches the turn meanwhile, and a poll every
- * five minutes is sparser than the platform's idle eviction, so it keeps nothing alive the product would not.
- */
-async function waitForCompletion(pollMs: number, quietMs: number): Promise<void> {
-  let quietSince = Date.now();
+let opened: { readonly runId: string; readonly timestamp: string } | null = null;
 
-  for (;;) {
-    for (const runId of await session.runIds()) {
-      const seen = known.get(runId);
+let disconnectedAt: number | null = null;
 
-      if (seen?.end !== undefined) continue;
-      const added = await session.runEventsOf(runId, seen === undefined ? 0 : seen.cursor + 1);
-      const start = added.find((event) => event.type === 'run_start');
+let firstTouch: number | null = null;
 
-      if (seen === undefined && (start?.type !== 'run_start' || start.userMessage?.startsWith(CANARY_PREFIX) !== true)) continue;
-      const entry = seen ?? { start: start?.timestamp ?? '', cursor: 0, end: undefined };
+let measured: CanaryMeasurement | null = null;
 
-      for (const event of added) {
-        entry.cursor = Math.max(entry.cursor, event.eventIndex);
+let telemetry: CanaryTelemetryMeasurement | null = null;
 
-        if (event.type === 'run_end') entry.end = event;
-      }
+let idle: CanaryWindow | null = null;
 
-      known.set(runId, entry);
-    }
+const touches: CanaryTouch[] = [];
 
-    const runs = [...known.values()].sort((a, b) => a.start.localeCompare(b.start));
-    const newest = runs.at(-1);
+const findings: CanaryFinding[] = [];
 
-    if (newest?.end?.type === 'run_end' && newest.end.reason === 'completed') return;
+let integrityFindings: CanaryFinding[] = [];
 
-    if (runs.some((run) => run.end === undefined)) quietSince = Date.now();
-    else if (Date.now() - quietSince > quietMs) return;
+let fatal: string | null = null;
 
-    await Bun.sleep(pollMs);
+let cleanup: string | null = null;
+
+async function inspect(sessionToRead: KinuPublicSession, reason: string): Promise<CanaryMeasurement> {
+  const from = Date.now();
+  firstTouch ??= from;
+
+  try {
+    return measureCanaryLedger(await readCanaryLedger(sessionToRead), load);
+  } finally {
+    sessionToRead.disconnect();
+    touches.push({ from, to: Date.now(), reason });
   }
 }
 
 try {
-  const startedAt = Date.now();
+  const resolution = resolvePublicSessionPlan('durability-canary', SCRIPTED_MODEL_SPEC);
+
+  if (resolution.kind === 'unavailable') throw new Error(resolution.remedy);
+  session = await resolution.plan.open({ subject: 'background', purpose: 'Durability canary: root and hired agent work with nobody connected.', genesis: false });
   const submission = session.submit(canaryAsk(load));
-  await session.awaitChunk(submission.requestId, (body) => body.includes('"tool-output-available"'));
-  const opened = (await session.runEvents()).find((event) => event.type === 'run_start' && event.userMessage?.startsWith(CANARY_PREFIX) === true);
+  await Promise.race([session.awaitChunk(submission.requestId, (body) => body.includes('"tool-output-available"')), submission.settled]);
+  const start = (await session.runEvents()).find((event) => event.type === 'run_start' && event.userMessage?.startsWith(`${CANARY_PREFIX} root`) === true);
 
-  if (opened === undefined) throw new Error('the canary turn opened no run');
-  // Nobody is connected from here to the end of the turn: only the product keeps it running.
+  if (start === undefined) throw new Error('the scripted canary opened no root run');
+  opened = { runId: start.runId, timestamp: start.timestamp };
   session.disconnect();
-  console.log(`canary ${session.workspace}: run ${opened.runId} open; client gone at ${new Date().toISOString()}`);
+  disconnectedAt = Date.now();
+  console.error(`canary ${session.workspace}: ${start.runId}; client disconnected ${iso(disconnectedAt)}; first inspection ${iso(Date.parse(start.timestamp) + plannedMs + marginMs)}`);
+  await waitUntil(Math.max(disconnectedAt, Date.parse(start.timestamp) + plannedMs + marginMs), 'active window');
+  measured = await inspect(session, 'planned end plus margin');
+  const inspectionStarted = firstTouch ?? Date.now();
+  const cap = inspectionStarted + recheckCapMs;
+  let recheckAt = inspectionStarted + RECHECK;
 
-  await waitForCompletion(5 * 60_000, 20 * 60_000);
+  while (!measured.ended && recheckAt <= cap) {
+    await waitUntil(recheckAt, 'completion recheck');
+    measured = await inspect(session, '15-minute completion recheck');
+    recheckAt += RECHECK;
+  }
 
-  const endedAt = Date.now();
-  console.log(`canary ${session.workspace}: run ended at ${new Date(endedAt).toISOString()}; idle tail ${String(tailMs / 60_000)} min`);
-  await Bun.sleep(tailMs);
-  // Telemetry lands within a minute or two; the read waits it out rather than reading an empty tail.
-  await Bun.sleep(120_000);
+  integrityFindings = ledgerFindings(measured);
+  findings.push(...integrityFindings);
+  const lastTouch = touches.at(-1)?.to ?? Date.now();
 
-  await session.connect();
-  const events = await session.runEvents();
-  const runs = canaryRuns(events);
-  const runIds = new Set(runs.map((run) => run.runId));
+  if (measured.ended) {
+    idle = { from: lastTouch + TELEMETRY_LAG, to: lastTouch + tailMs };
+    await waitUntil(idle.to, 'idle tail');
+  } else {
+    findings.push({ name: 'work.not-finished-at-inspection-cap', kind: 'defect', cause: 'Work remained unfinished at the configured observation cap; no idle-rest claim is made.',
+      evidence: [{ at: iso(lastTouch), event: 'ledger inspection', count: touches.length,
+        detail: `root DONE ${String(measured.root.done.count)}, helper DONE ${String(measured.helper.helpers.reduce((sum, helper) => sum + helper.done.count, 0))}, jobs completed ${String(measured.jobs.completed)}/${String(load.jobs)}` }] });
+  }
 
-  const inline = markerCounts(events
-    .filter((event) => runIds.has(event.runId) && event.type === 'tool_call_end')
-    .map((event) => JSON.stringify(event.type === 'tool_call_end' ? event.result ?? null : null)));
-
-  const expected = Array.from({ length: load.steps }, (_, step) => canaryMarker('root', step));
-  const jobs = await session.backgroundJobs();
-  const jobMarkers = markerCounts(jobs.map((job) => job.result ?? ''));
-
-  const last = runs.at(-1)?.end;
-  const runMs = runs.length > 0 && last !== undefined ? Date.parse(last.timestamp) - Date.parse(runs[0].start) : 0;
-  const stepsLost = expected.filter((marker) => !inline.has(marker)).length;
-  const stepsBoughtTwice = [...inline.entries(), ...jobMarkers.entries()].filter(([, n]) => n > 1).map(([marker, n]) => ({ marker, n }));
-
-  // The ledger half first: it needs nothing but the object's own rows.
-  console.log(JSON.stringify({
-    ledger: {
-      runs: runs.map((run) => ({ runId: run.runId, start: run.start, end: run.end?.type === 'run_end' ? run.end.reason : null })),
-      stepsLost, stepsBoughtTwice, jobs: jobs.map((job) => job.status),
-    },
-  }));
-
-  const active = timeline(session.workspace, startedAt, endedAt);
-  const object = 'failed' in active ? null : active.object;
-  const idle = object === null ? { failed: 'no object id from the active window' } : timeline(object, endedAt + 30_000, endedAt + tailMs);
-  const hours = (endedAt - startedAt) / 3_600_000;
-  const resumed = 'failed' in active ? null : active.topEvents.find((e) => e.event === 'turn.resumed')?.count ?? 0;
-
-  const report = {
-    workspace: session.workspace,
-    object,
-    load,
-    activeHours: Number(hours.toFixed(2)),
-    autonomy: {
-      completed: last?.type === 'run_end' && last.reason === 'completed',
-      runsOpened: events.filter((e) => e.type === 'run_start' && e.userMessage?.startsWith(CANARY_PREFIX) === true).length,
-      // The inline workload held the turn open for its planned length, or it measured something else.
-      runMinutes: Number((runMs / 60_000).toFixed(1)),
-      plannedMinutes: Number((load.steps * load.sleepSeconds / 60).toFixed(1)),
-      heldPlannedLength: runMs >= load.steps * load.sleepSeconds * 1000,
-    },
-    detached: {
-      planned: load.jobs,
-      settled: jobs.filter((job) => job.status === 'completed').length,
-      statuses: jobs.map((job) => job.status),
-      markersSeen: Array.from({ length: load.jobs }, (_, j) => canaryMarker('job', j)).filter((marker) => jobMarkers.has(marker)).length,
-    },
-    disruptions: 'failed' in active ? active : {
-      resumed,
-      perHour: Number(((resumed ?? 0) / hours).toFixed(2)),
-      outcomes: active.outcomes.filter((o) => o.outcome !== 'ok'),
-    },
-    stepsLost,
-    stepsBoughtTwice,
-    idleStartups: 'failed' in idle ? idle : idle.startupsByHour.reduce((sum, h) => sum + h.startups, 0),
-  };
-
-  console.log(JSON.stringify(report, null, 1));
-} finally {
-  await session.teardown();
+  await waitUntil((idle?.to ?? lastTouch) + TELEMETRY_LAG, 'telemetry landing');
+} catch (error) {
+  fatal = String(error);
+  session?.disconnect();
+  findings.push({ name: 'canary.deployment-or-driver-failure', kind: 'measurement', cause: fatal,
+    evidence: [{ at: iso(Date.now()), event: 'driver', count: 1, detail: 'No product code was changed or repaired.' }] });
+  await waitUntil(Date.now() + TELEMETRY_LAG, 'failure telemetry landing');
 }
+
+const observedTo = idle?.to ?? touches.at(-1)?.to ?? Date.now() - TELEMETRY_LAG;
+
+const activeFrom = opened === null ? createdAt : Date.parse(opened.timestamp);
+
+const activeTo = measured?.finishedAt ?? touches.at(-1)?.to ?? observedTo;
+
+if (session !== null) {
+  try {
+    telemetry = await measureCanaryTelemetry({ worker, workspace: session.workspace,
+      observed: { from: createdAt, to: observedTo }, active: { from: activeFrom, to: activeTo }, idle, touches,
+      helperActors: measured?.helper.helpers.flatMap((helper) => helper.actor === null ? [] : [helper.actor]) ?? [] });
+    findings.push(...telemetryFindings(telemetry));
+  } catch (error) {
+    findings.push({ name: 'telemetry.unavailable', kind: 'measurement', cause: String(error), evidence: [] });
+  }
+
+  try {
+    await session.teardown();
+    cleanup = 'workspace deleted after measurement';
+  } catch (error) {
+    cleanup = `teardown failed: ${String(error)}`;
+    findings.push({ name: 'canary.teardown-failed', kind: 'measurement', cause: cleanup, evidence: [] });
+  }
+}
+
+const beforeFirstTouch = measured?.finishedAt == null || firstTouch === null ? null : measured.finishedAt < firstTouch;
+
+if (measured?.ended === true && beforeFirstTouch !== true) findings.push({ name: 'work.autonomy-not-proven', kind: 'defect',
+  cause: beforeFirstTouch === false ? 'Work finished only after the first driver inspection; the inspection may have woken the object.'
+    : 'Work ended, but at least one completion timestamp was unavailable, so finishing before the first touch cannot be proven.',
+  evidence: [{ at: measured.finishedAt === null ? null : iso(measured.finishedAt), event: 'run_end/helper DONE/jobs settledAt', count: 1,
+    detail: `first touch ${firstTouch === null ? 'none' : iso(firstTouch)}` }] });
+
+const intact = measured !== null && integrityFindings.length === 0;
+
+const idleRest = telemetry?.complete === true && telemetry.idle !== null && telemetry.idle.startups === 0
+  && telemetry.idle.alarms === 0 && telemetry.idle.otherInvocations === 0;
+
+const passed = fatal === null && intact && beforeFirstTouch === true && idleRest
+  && !findings.some((finding) => finding.kind === 'measurement' || finding.kind === 'defect');
+
+const report = {
+  schema: 'kinu.background-agent-canary.v1', recordedAt: iso(Date.now()), worker, workspace: session?.workspace ?? null,
+  model: SCRIPTED_MODEL_SPEC, load, plan, out, passed, fatal, cleanup,
+  accountLeaseHeartbeat: { intervalSeconds: 60, target: 'UserDO roster only, no workspace RPC',
+    source: 'evals/src/session.ts markLive; cf-backend/src/user/workspaces.ts touchWorkspace',
+    idleWorkspaceInvocationCount: telemetry?.idle?.invocations ?? null },
+  timing: { createdAt: iso(createdAt), runStartedAt: opened?.timestamp ?? null,
+    disconnectedAt: disconnectedAt === null ? null : iso(disconnectedAt),
+    firstWorkspaceTouchAt: firstTouch === null ? null : iso(firstTouch),
+    lastWorkspaceTouchAt: touches.length === 0 ? null : iso(touches[touches.length - 1].to),
+    touches: touches.map((touch) => ({ from: iso(touch.from), to: iso(touch.to), reason: touch.reason })),
+    finishedAt: measured?.finishedAt == null ? null : iso(measured.finishedAt),
+    activeWindowCensored: measured?.finishedAt == null,
+    activeHours: (activeTo - activeFrom) / 3_600_000 },
+  autonomy: { ended: measured?.ended ?? false, finishedBeforeFirstTouch: beforeFirstTouch, exactlyOnceAndResultIntact: intact },
+  ledger: measured, telemetry, findings,
+};
+
+await mkdir(dirname(out), { recursive: true });
+
+await writeFile(out, `${JSON.stringify(report, null, 2)}\n`);
+
+console.error(`canary ${session?.workspace ?? '(not created)'}: finished before first touch=${String(beforeFirstTouch)}; intact=${String(intact)}; disruptions=${String(telemetry?.active.disruptions ?? 'unmeasured')}; idle startups/alarms/other=${String(telemetry?.idle?.startups ?? 'unmeasured')}/${String(telemetry?.idle?.alarms ?? 'unmeasured')}/${String(telemetry?.idle?.otherInvocations ?? 'unmeasured')}; report ${out}`);
+
+for (const finding of findings) {
+  console.error(`${finding.kind} ${finding.name}: ${finding.cause}`);
+
+  for (const row of finding.evidence.slice(0, 3)) console.error(`  ${row.at ?? 'timestamp unavailable'} ${row.event} count=${String(row.count)} ${row.detail.slice(0, 240)}`);
+
+  if (finding.evidence.length > 3) console.error(`  ${String(finding.evidence.length - 3)} more evidence rows in the JSON report`);
+}
+
+console.log(JSON.stringify(report, null, 2));
+
+process.exitCode = passed ? 0 : 1;

@@ -193,6 +193,11 @@ const PathSchema = v.pipe(v.string(), v.minLength(1));
 
 const OptionalStringSchema = v.optional(v.string());
 
+/** `listFiles({ path? })` and `readdir({ path? })`: the working directory when `path` is absent or empty. */
+const ListOptionsSchema = v.optional(v.object({ path: v.optional(v.string()) }), {});
+
+const ExposeOptionsSchema = v.optional(v.object({ name: v.optional(v.string()) }), {});
+
 const PortSchema = v.pipe(v.number(), v.minValue(1), v.maxValue(65535));
 
 export function isSandboxTransientError(error: Error | string): boolean {
@@ -447,13 +452,13 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
       description: 'List files in a directory: the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
-        const path = parseInput(OptionalStringSchema, { value: args[0] });
+        const listing = parseInput(ListOptionsSchema, { value: args[0] });
 
-        if (args[0] !== undefined && path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox listFiles: path must be a string'));
+        if (listing === undefined) {
+          return refusalOf(new KinuError('bad_input', 'sandbox listFiles: takes its options as one object, `{ path? }`'));
         }
 
-        const dir = path === undefined || path === '' ? WORKSPACE_BACKUP_DIR : path;
+        const dir = listing.path === undefined || listing.path === '' ? WORKSPACE_BACKUP_DIR : listing.path;
 
         try {
           const r = await withSandboxRetry(() => touch(() => handle.listFiles(dir, { recursive: false })));
@@ -531,7 +536,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
         if (!previewHostSuffix) return previewsUnconfigured();
         const p = parseInput(PortSchema, { value: args[0] });
-        const name = parseInput(OptionalStringSchema, { value: args[1] });
+        const name = parseInput(ExposeOptionsSchema, { value: args[1] })?.name;
 
         if (p === undefined) {
           return refusalOf(new KinuError('bad_input', `sandbox exposePort: invalid port ${String(args[0])}`));

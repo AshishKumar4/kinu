@@ -3,6 +3,7 @@
  * its struggles whether or not anything rates it, the fast tier writes the lesson, and the later turns that were shown
  * it and used its tool score it until it retires. A rewrite is a new revision whose evidence starts at none.
  */
+import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { present } from '@kinu.run/test-utils';
@@ -19,8 +20,8 @@ function turn(turnId: string, struggles: readonly Struggle[], shown: CompletedTu
   return {
     userMessage: 'fix the typo in the README', assistantResponse: 'Fixed.',
     toolCalls: [
-      { name: 'edit', args: { text: 'teh' }, result: 'edit: path is required', outcome: { success: false, reason: 'bad_input' } },
-      { name: 'edit', args: { path: 'README.md', text: 'the' }, result: 'ok', outcome: { success: true } },
+      compactToolCall({ name: 'edit', args: { text: 'teh' }, result: 'edit: path is required', outcome: { success: false, reason: 'bad_input' } }),
+      compactToolCall({ name: 'edit', args: { path: 'README.md', text: 'the' }, result: 'ok', outcome: { success: true } }),
     ],
     durationMs: 1, steps: 3, hadError: false, feedback: null, turnId, sessionId: 'default', origin: 'user',
     struggles, shownLessons: shown,

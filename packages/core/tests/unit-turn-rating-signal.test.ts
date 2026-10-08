@@ -3,6 +3,7 @@
  * stays unrated however cleanly its tools ran, and a reply that corrects the turn is read by the decision model,
  * not inferred from tool exits.
  */
+import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
@@ -14,7 +15,7 @@ const REFLECTION = 'When the user names an API, call that API and no other.';
 function turn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   return {
     userMessage: 'use the streaming API to export the report', assistantResponse: 'Exported it with the batch API.',
-    toolCalls: [{ name: 'eval', args: { code: 'await tools.export_report()' }, outcome: { success: true } }],
+    toolCalls: [compactToolCall({ name: 'eval', args: { code: 'await tools.export_report()' }, outcome: { success: true } })],
     craftedToolsUsed: ['export_report'], durationMs: 1, steps: 2, hadError: false, feedback: null,
     turnId: 'u-1', sessionId: 'default', origin: 'user',
     ...overrides,

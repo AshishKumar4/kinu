@@ -1,3 +1,4 @@
+import { compactToolCall } from '../evolution/tool-call-record';
 import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Layer decomposition of the turn pipeline plus each layer's deterministic assertion slice: literal fixtures,
 // injected clock/RNG, no model calls or I/O, so every slice is byte-reproducible.
@@ -1300,19 +1301,19 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           steps: 7,
           durationMs: 95_000,
           toolCalls: [
-            { name: 'agents', args: { op: 'hire' }, result: null },
-            { name: 'agents', args: { op: 'dismiss' }, result: null },
-            { name: 'agents', args: { op: 'swarm' }, result: null },
-            { name: 'agents', args: { op: 'message' }, result: null },
-            { name: 'eval', args: {}, result: null },
-            { name: 'shell', args: {}, result: null },
+            compactToolCall({ name: 'agents', args: { op: 'hire' }, result: null }),
+            compactToolCall({ name: 'agents', args: { op: 'dismiss' }, result: null }),
+            compactToolCall({ name: 'agents', args: { op: 'swarm' }, result: null }),
+            compactToolCall({ name: 'agents', args: { op: 'message' }, result: null }),
+            compactToolCall({ name: 'eval', args: {}, result: null }),
+            compactToolCall({ name: 'shell', args: {}, result: null }),
           ],
         }),
       },
       {
         id: 'delegation/no-delegation-is-zero-not-absent',
         asserts: 'a fully inline turn reports zeros, so "did not delegate" is measurable',
-        observe: (s) => s.delegationFeatures({ steps: 3, durationMs: 4_000, toolCalls: [{ name: 'shell', args: {}, result: null }] }),
+        observe: (s) => s.delegationFeatures({ steps: 3, durationMs: 4_000, toolCalls: [compactToolCall({ name: 'shell', args: {}, result: null })] }),
       },
       {
         id: 'delegation/render-duration-units',

@@ -32,7 +32,7 @@ const SignalCardEventSchema: v.GenericSchema<SignalCardEvent> = v.variant('state
 
 function setup(opts: {
   turnInFlight?: boolean;
-  enqueue?: 'queued' | 'skipped' | 'throw';
+  enqueue?: 'queued' | 'skipped' | 'failed' | 'throw';
   /** Emulates an operator message admitted before the turn took its slot. */
   messageAdmitted?: boolean;
   /** Holds each enqueue open: the admission-to-opening window a real host has. */
@@ -53,6 +53,8 @@ function setup(opts: {
       if (opts.enqueue === 'throw') throw new Error('queue unavailable');
 
       if (opts.enqueue === 'skipped') return { status: 'skipped' };
+
+      if (opts.enqueue === 'failed') return { status: 'failed', reason: 'the provider refused the request (HTTP 429)' };
 
       if (opts.messageAdmitted === true && turn.yieldsToUserMessage === true) {
         return { status: 'yielded' };
@@ -369,6 +371,12 @@ describe('Inbox — settlement', () => {
     expect(await preempted.inbox.send(wake('drain', { compensate: (r) => reasons.push(r) })))
       .toBe('undelivered');
     expect(reasons).toEqual(['preempted']);
+
+    const ranAndFailed = setup({ turnInFlight: false, enqueue: 'failed' });
+    const turnFailures: string[] = [];
+    expect(await ranAndFailed.inbox.send(wake('drain', { compensate: (r) => turnFailures.push(r) })))
+      .toBe('undelivered');
+    expect(turnFailures).toEqual(['turn_failed']);
 
     const failed = setup({ turnInFlight: false, enqueue: 'throw' });
     const failures: string[] = [];

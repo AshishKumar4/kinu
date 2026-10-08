@@ -51,9 +51,13 @@ test('a successful tool call records the value it returned, and a text tool reco
         dynamic: () => ({ factsBlock: '' }),
       }, () => {});
 
-      const recorded = actor.session.orchestrator.acc.toolCalls.map((call) => [call.name, call.result]);
+      const stored = await actor.session.canonical.materialize();
+
+      const recorded = stored.messages.flatMap((message) => message.role === 'tool' ? message.content : [])
+        .flatMap((part) => part.type === 'tool-result' ? [[part.toolName, part.output]] : []);
+
       // The object the tool returned, as a value; the string the tool returned, as a string.
-      expect(recorded).toEqual([['file', WRITTEN], ['run', 'hello\n']]);
+      expect(recorded).toEqual([['file', { type: 'json', value: WRITTEN }], ['run', { type: 'text', value: 'hello\n' }]]);
     } finally {
       actor.session.finishTurn(lease);
     }
