@@ -11,7 +11,7 @@ import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
-import { deleteR2Prefix, wranglerSessionToken } from './cloudflare-rest';
+import { deleteR2Prefix, restApiToken } from './cloudflare-rest';
 import { runWrangler, wranglerProvesAbsence, deleteContainerApps, containerAppIds, publishTeardown, runTeardownOnce, delay } from './fixtures/r2-bench/deploy-substrate';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import artifact from '../packages/devbox/block-lower/upstream.json';
@@ -120,9 +120,12 @@ async function main(): Promise<void> {
   const app = `${worker}-contractbox`;
   const scratch = recovering === undefined ? mkdtempSync(join(tmpdir(), 'kinu-devbox-contracts-')) : dirname(process.argv[recoveryArgument + 1] ?? '');
   process.env['WRANGLER_LOG_PATH'] = join(scratch, 'wrangler');
-  const token = wranglerSessionToken();
-  // Only the throwaway application's REST cleanup uses this credential; never printed or persisted.
-  process.env['KINU_CLOUDFLARE_API_TOKEN'] = token;
+  // The registry token production's devbox holds (secrets.env), not wrangler's OAuth token, which expired mid-run
+  // (2026-10-08: the fixture's snapshot cleanup answered 401 minutes after it started).
+  const token = process.env['DEVBOX_REGISTRY_TOKEN']?.trim() ?? '';
+  const rest = restApiToken();
+
+  if (token === '' || rest === '') throw new Error('the real-container tier needs DEVBOX_REGISTRY_TOKEN and KINU_CLOUDFLARE_API_TOKEN (secrets.env)');
   const report = join(scratch, 'report.json');
   const steps: Step[] = recovering?.steps ?? [];
   const snapshots = new Set<string>(recovering?.snapshots);
@@ -212,7 +215,7 @@ async function main(): Promise<void> {
       },
       bucket: async () => {
       if (!runWrangler(REPO, ['r2', 'bucket', 'list']).includes(worker)) return;
-      await deleteR2Prefix({ accountId: ACCOUNT, bucket: worker, prefix: '', token });
+      await deleteR2Prefix({ accountId: ACCOUNT, bucket: worker, prefix: '', token: rest });
       const accessKeyId = process.env['R2_ACCESS_KEY_ID'];
       const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
 
