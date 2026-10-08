@@ -25,7 +25,7 @@ import {
 } from '@kinu.run/core';
 import { SLATES_ROOT } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, settleSync, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
 import { ROOT_SLATE_CALLER, slateCallerKey, slateCredentialKey, shareCaller, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
@@ -828,7 +828,7 @@ export class SlateHost {
       row = { slate: id, ...call.address, impact: call.impact, ok: false };
 
       // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
-      const nested = (namespace: string, member: string) => { settleSync(admitNestedViewerCall(this.live.live(input.share).grant, id, { namespace, member })); };
+      const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.live.live(input.share).grant, id, { namespace, member }); };
 
       const result = await this.run(caller, call.route, { nested, ...(request.authorize && { authorizeOnly: true }) }, viewer);
       row = { ...row, ok: result.ok };

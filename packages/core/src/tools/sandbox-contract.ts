@@ -292,7 +292,6 @@ function slateMembersOf<P extends { readonly name: string }>(provider: P): P {
   return { ...provider, tools };
 }
 
-/** A held slate stub is not a grant: reach is re-resolved per call. */
 /** `namespace.member` among `providers`, or why it is not: out of reach (denied), or no such member (missing). */
 function codemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string) {
   const provider = providers.find((candidate) => candidate.name === namespace);
@@ -307,9 +306,10 @@ function codemodeMember(providers: readonly CodemodeProvider[], namespace: strin
 
 /** Refuses exactly as {@link callCodemodeMember} would, without calling: for a member run elsewhere once allowed. */
 export function requireCodemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string): void {
-  settleSync(Effect.asVoid(codemodeMember(providers, namespace, member)));
+  return settleSync(Effect.asVoid(codemodeMember(providers, namespace, member)));
 }
 
+/** A held slate stub is not a grant: reach is re-resolved per call. */
 export async function callCodemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string, args: readonly JsonValue[]): Promise<JsonValue | undefined> {
   const call = codemodeFunction(namespace, member, () => settle(Effect.gen(function* () {
     const entry = yield* codemodeMember(providers, namespace, member);

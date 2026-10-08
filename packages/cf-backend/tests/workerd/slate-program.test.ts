@@ -56,9 +56,14 @@ it("a share's viewer runs the owner's approved crafted tool only as far as the g
   const ran = await subject.craftedToolUnderShare({ workspace: 'crafted-tool-share', owner: 'tool-owner' });
 
   // The owner's run lists the owner's browsers and writes, and what the tool reached inside itself is the slate's reach.
-  expect(JSON.parse(ran.owner)).toMatchObject({ result: { browsers: [], wrote: 'owner' } });
+  const owner: unknown = JSON.parse(ran.owner);
+
+  expect(owner).toMatchObject({ result: { browsers: [], read: 'owner' } });
+  expect(owner).not.toMatchObject({ result: { wrote: { error: expect.anything() } } });
   expect(ran.reached).toEqual(expect.arrayContaining(['tools.helper:execute', 'workspace.writeFile:mutate', 'web.browsers:observe']));
 
-  // Shared granting the tool alone: its write is not granted, and it holds no browser session of the owner's.
-  expect(JSON.parse(ran.viewer)).toEqual({ browsers: null, refused: expect.stringContaining('does not grant workspace.writeFile to viewers') });
+  // Shared granting the tool alone: its write is refused and the owner's stands, and it holds none of the owner's browsers.
+  expect(JSON.parse(ran.viewer)).toMatchObject({
+    browsers: null, wrote: { error: expect.stringContaining('does not grant workspace.writeFile to viewers') }, read: 'owner',
+  });
 });

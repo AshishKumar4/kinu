@@ -156,13 +156,16 @@ const RemovedValueSchema = v.object({
   id: v.string(), removed: v.boolean(), port: v.nullable(v.number()),
 });
 
-/** A crafted tool that lists its runner's browsers, then writes who ran it; each answers what it was refused. */
+/**
+ * A crafted tool that lists its runner's browsers, writes who ran it, and reads the file back. A member it holds none
+ * of throws; a refused one answers its refusal as the value, as every member does for a program to branch on.
+ */
 const HELPER = [
   'async (input) => {',
   '  let browsers = null;',
   '  try { browsers = await web.browsers({}); } catch {}',
-  '  try { await workspace.writeFile("/ran-by.txt", input.who); return { browsers, wrote: input.who }; }',
-  '  catch (cause) { return { browsers, refused: String(cause?.message ?? cause) }; }',
+  '  const wrote = await workspace.writeFile("ran-by.txt", input.who);',
+  '  return { browsers, wrote, read: await workspace.readFile("ran-by.txt") };',
   '}',
 ].join('\n');
 
