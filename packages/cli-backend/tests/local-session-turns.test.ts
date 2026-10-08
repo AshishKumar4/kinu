@@ -90,7 +90,7 @@ test('a provider failing after a real tool result retains that completed call ex
       provider = controller;
       controller.enqueue({ type: 'stream-start', warnings: [] });
       controller.enqueue({ type: 'tool-call', toolCallId: 'completed-save', toolName: 'memory',
-        input: JSON.stringify({ op: 'note', topic: 'completed', content: 'saved before the provider failed' }) });
+        input: JSON.stringify({ op: 'note', content: 'saved before the provider failed' }) });
       // ai 7 runs a step's tools once its model call finishes; the stream stays open for the failure.
       controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
     } }),

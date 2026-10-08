@@ -6,12 +6,12 @@ import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture'
 
 afterEach(cleanupChats);
 
-function editResult(path: string, applied: Array<{ line: number; removed_lines: number; added_lines: number }>): string {
-  return JSON.stringify({ ok: true, path, applied });
+function editResult(path: string, applied: Array<{ line: number; removedLines: number; addedLines: number }>): string {
+  return JSON.stringify({ path, reference: `root://${path}`, applied });
 }
 
 function writeResult(path: string, action: 'created' | 'replaced', bytes: number): string {
-  return JSON.stringify({ ok: true, path, bytes, action });
+  return JSON.stringify({ path, reference: `root://${path}`, bytes, action });
 }
 
 describe('the file diff card', () => {
@@ -29,7 +29,7 @@ describe('the file diff card', () => {
     });
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'call-1',
-      result: editResult('src/state.ts', [{ line: 12, removed_lines: 1, added_lines: 1 }]),
+      result: editResult('src/state.ts', [{ line: 12, removedLines: 1, addedLines: 1 }]),
       success: true,
     });
 
@@ -87,8 +87,8 @@ describe('the file diff card', () => {
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'call-1',
       result: editResult('src/state.ts', [
-        { line: 3, removed_lines: 1, added_lines: 1 },
-        { line: 40, removed_lines: 1, added_lines: 1 },
+        { line: 3, removedLines: 1, addedLines: 1 },
+        { line: 40, removedLines: 1, addedLines: 1 },
       ]),
       success: true,
     });
@@ -156,7 +156,7 @@ describe('the file diff card', () => {
 
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'orphan',
-      result: editResult('src/orphaned.ts', [{ line: 1, removed_lines: 2, added_lines: 3 }]),
+      result: editResult('src/orphaned.ts', [{ line: 1, removedLines: 2, addedLines: 3 }]),
       success: true,
     });
 
@@ -183,12 +183,12 @@ describe('the file diff card', () => {
     // Results arrive in call order: positional pairing alone would hand b.ts's call to a.ts's result.
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'edit-a',
-      result: editResult('a.ts', [{ line: 1, removed_lines: 1, added_lines: 1 }]),
+      result: editResult('a.ts', [{ line: 1, removedLines: 1, addedLines: 1 }]),
       success: true,
     });
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'edit-b',
-      result: editResult('b.ts', [{ line: 9, removed_lines: 1, added_lines: 1 }]),
+      result: editResult('b.ts', [{ line: 9, removedLines: 1, addedLines: 1 }]),
       success: true,
     });
     await screen.waitFor('both cards', () => screen.frame().includes('+ const two = 202;'));
