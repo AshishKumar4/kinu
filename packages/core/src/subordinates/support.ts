@@ -402,10 +402,10 @@ export function createTeamToolDeps(deps: {
 
     if (deps.roster.get(name)) return yield* Effect.die(new Error(`subordinate "${name}" already exists`));
 
-    // A typed title is final, and so is a name the hire gave (a hire told "named tidepool" showed "Planner",
-    // staging 2026-10-08); a role alone yields `auto`; nothing gives the slug's codename, which the title policy may
-    // claim once.
-    const chosen = optionalText(input.displayName) ?? (named ? name : undefined);
+    // A typed title is final, and so is the name a model's hire gives, the one it was told to (a hire "named
+    // tidepool" showed "Planner", staging 2026-10-08); an owner's slug is only an address. A role alone yields `auto`;
+    // nothing gives the slug's codename, which the title policy may claim once.
+    const chosen = optionalText(input.displayName) ?? (named && !ownerCreated ? name : undefined);
     const provisional = ownerCreated && input.role === undefined;
     const displayName = chosen ?? (provisional ? codenameFor(name) : displayNameForRole(roleLabel));
     const nameOrigin: 'user' | 'auto' = chosen ? 'user' : 'auto';
