@@ -29,7 +29,7 @@
  * hooks installed at all.
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
@@ -155,6 +155,11 @@ export const SHARED_RESOURCES = ['browser'] as const;
 
 export type SharedResource = (typeof SHARED_RESOURCES)[number];
 
+/** Why the rows that drive the deployment still run here: each needs the deployment's origin and its eval identity,
+ *  which an armada run does not pass yet. */
+const POST_PUBLISH_HERE = 'until it moves: it drives the deployment that just went up, with that deployment\'s origin and '
+  + 'eval identity, which an armada run does not pass yet.';
+
 export interface Gate {
   /** The exact command as invoked. */
   readonly run: string;
@@ -197,6 +202,10 @@ export interface Gate {
    *  and six suites' worth on the next. A tier runs it alone after its wave ({@link tierSchedule}); a deploy runs
    *  on a clean worktree, whose index holds nothing. */
   readonly sizedByIndex?: string;
+  /** Why a row the deploy runs, a deploy row or the preflight, runs on this machine. A deploy row without it runs on
+   *  armada, in its phase's one job at the deploy's exact SHA ({@link armadaPhaseRows}), so nothing heavy runs here
+   *  unless a row says why it must. */
+  readonly here?: string;
 }
 
 /** The environment names the by-name projections in `packages/test-utils`
@@ -238,6 +247,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/preflight.ts',
     label: 'Environment preflight',
+    here: 'measures this machine: its temp inodes and project markers are the environment every row the deploy runs '
+      + 'here reports through.',
     phase: 'preflight',
     alone: 'runs alone and FIRST, and its red ends a deploy, as only the upload gates\' does besides. '
       + 'Its subject is the environment every other gate reports through, so it is the precondition '
@@ -2181,6 +2192,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 scripts/deadline-capability.test.ts',
     label: 'The runner beside a process holding a capability',
+    here: 'measures this machine: the runner it proves is the one this box\'s deploy runs, beside a process its user '
+      + 'manager granted a capability, which no container has.',
     tier: 'deploy',
     seconds: 0.4,
     catches: 'a runner that crashes on a process it may not read. The leftover scan reads the environment of every '
@@ -2334,6 +2347,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:infra',
     label: 'Declared infrastructure exists and is bound',
+    here: 'until it moves: it reads the account through this machine\'s wrangler session, which no armada run carries yet.',
     phase: 'upload',
     alone: 'holds every upload, with the secret scan beside it: an account that cannot be proved never '
       + 'reaches `wrangler deploy`, and a wrong account is damage the next deploy cannot undo, where a '
@@ -2383,6 +2397,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:first-run',
     label: 'First-run tier',
+    here: POST_PUBLISH_HERE,
     phase: 'post-publish',
     deadline: {
       seconds: 1_800,
@@ -2438,6 +2453,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:devbox-e2e',
     label: 'Devbox contracts on real golden containers',
+    here: POST_PUBLISH_HERE,
     shared: 'browser',
     phase: 'post-publish',
     alone: 'uses the staging eval identity on its own throwaway Worker, application, bucket and boxes; the browser lane owns its desktop client.',
@@ -2452,6 +2468,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
+    here: POST_PUBLISH_HERE,
     phase: 'post-publish',
     alone: 'runs after the upload and the smoke gate, in the wave of the tiers whose subject is the '
       + 'build that just shipped and the local source gates (L18), its Chrome in the browser lane '
@@ -2484,6 +2501,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bash scripts/eval-pass-tier.sh',
     label: 'One trial of every eval task, on the deployment',
+    here: POST_PUBLISH_HERE,
     phase: 'soak',
     alone: 'is the deploy\'s soak (L24): started once the deployment serves, never awaited, so a real model\'s minutes '
       + 'are outside the deploy\'s 20-minute wall and its red outside the deploy\'s verdict. Its subject is the DEPLOYED '
@@ -2899,34 +2917,22 @@ export function productFlowsTierCommand(source = readFileSync(resolve(root, PROD
  * packages, 41 of 42 CLI files, the root suites and both Layergate runs.
  */
 /** Why no live-app row can run on a pull request: each boots the product's own dev server. */
-const LIVE_APP_AT_CI = 'needs the account\'s own dev credentials in PROCESS env for the product\'s dev server to '
-  + 'boot at all — measured 2026-09-17, `vite dev` exits "error when starting dev server" '
-  + 'with no CLOUDFLARE_API_TOKEN, and the credential path 503s without the cf-backend '
-  + 'secrets. Only the deploy\'s source-phase run on armada passes them (DEPLOY_SECRETS), never a '
-  + 'CI tier run, so it runs there, in a container of its own with workerd, Chrome and its scripted model.';
+const LIVE_APP_AT_CI = 'boots the product\'s own dev server, workerd, Chrome and a scripted model for minutes, which '
+  + 'answers for the tree being deployed rather than a push: it runs in the deploy\'s source-phase job on armada, '
+  + 'in a container of its own. The boot is offline (KINU_DEV_OFFLINE) and mints its own keys, '
+  + 'so it needs no credential (measured 2026-10-08 with none passed: every row booted).';
 
-/**
- * Deploy rows armada runs, one job per phase at the deploy's exact SHA (`armadaPhase`): each reads the commit and the
- * credentials that run passes, and none measures this machine. On this box they lost to its load: on 2026-10-07 the
- * staging deploy of 8505a3ce6 killed live-app-plans and live-app-sleep at the 480 s silence bound, at load 28 on 24
- * threads with 25 of 30 GB swap in use.
- */
-export const ARMADA_DEPLOY_ROWS: readonly string[] = [
-  'bun run gate:mutation-fences',
-  'bun run verify:lean',
-  'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
-  'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
-  'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
-  'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
-];
 
-/** The armada secrets a deploy's phase run passes (`armada run --secrets`): the live-app rows' dev credentials, which
- *  `writeDeploySecrets` turns into the `.dev.vars` files the harness reads. The CI tier's runs never get them. */
-export const DEPLOY_SECRETS = ['KINU_LIVE_APP_DEV_VARS', 'KINU_LIVE_APP_CLOUDFLARE_TOKEN'] as const;
+/** Whether armada runs `gate` at deploy: every deploy row that does not say why it runs here ({@link Gate.here}). On
+ *  this box they lost to its load: on 2026-10-07 the staging deploy of 8505a3ce6 killed live-app-plans and
+ *  live-app-sleep at the 480 s silence bound, at load 28 on 24 threads with 25 of 30 GB swap in use. */
+export function onArmada(gate: Gate): boolean {
+  return gate.tier === 'deploy' && gate.here === undefined;
+}
 
-/** The rows of `phases` that armada runs. */
+/** The rows of `phases` that armada runs, one job per phase at the deploy's exact SHA (`armadaPhase`). */
 export function armadaPhaseRows(phases: readonly DeployPhase[]): Gate[] {
-  return LADDER.filter((gate) => phases.some((phase) => phase === (gate.phase ?? 'source')) && ARMADA_DEPLOY_ROWS.includes(gate.run));
+  return LADDER.filter((gate) => phases.some((phase) => phase === (gate.phase ?? 'source')) && onArmada(gate));
 }
 
 export const CI_EXEMPT = {
@@ -2938,10 +2944,10 @@ export const CI_EXEMPT = {
     + 'a session to use.',
   'bun run gate:mutation-fences':
     'proves the tree being deployed, not a push: it materialises a `git worktree add --detach` copy and runs eight '
-    + '`bun test` processes inside it. It runs in the deploy\'s source-phase job on armada (ARMADA_DEPLOY_ROWS), whose '
+    + '`bun test` processes inside it. It runs in the deploy\'s source-phase job on armada, whose '
     + 'checkout carries the whole history.',
   'bun run verify:lean':
-    'runs in the deploy\'s source-phase job on armada (ARMADA_DEPLOY_ROWS). The armada environment installs elan and '
+    'runs in the deploy\'s source-phase job on armada. The armada environment installs elan and '
     + 'builds lean/ once (scripts/armada/install.sh), and each checkout keeps that build, so a run rebuilds only what '
     + 'changed. lean-verify.yml is gone; this is where the proofs are checked.',
   'bun run gate:first-run':
@@ -3063,17 +3069,6 @@ function phasesNamed(asked: string | undefined): DeployPhase[] | undefined {
   const phases = DEPLOY_PHASES.filter((candidate) => names.includes(candidate));
 
   return asked === undefined || phases.length !== names.length ? undefined : phases;
-}
-
-/** In a container running a deploy row: the live-app rows' `.dev.vars`, from the secrets the deploy's run passed.
- *  Both files are ignored by git, so the checkout stays clean. */
-function writeDeploySecrets(): void {
-  const backend = process.env['KINU_LIVE_APP_DEV_VARS'];
-  const token = process.env['KINU_LIVE_APP_CLOUDFLARE_TOKEN'];
-
-  if (backend !== undefined) writeFileSync(resolve(root, 'packages/cf-backend/.dev.vars'), backend.endsWith('\n') ? backend : `${backend}\n`);
-
-  if (token !== undefined) writeFileSync(resolve(root, '.dev.vars'), `CLOUDFLARE_API_TOKEN=${token}\n`);
 }
 
 /** A deploy runs only what CI cannot, and the preflight of this machine, not CI's inode/temp check. */
@@ -3557,14 +3552,14 @@ const ArmadaReportSchema = v.object({
 });
 
 /**
- * A deploy phase's armada rows, as one armada job at this exact SHA (`armadaPlan`) with the deploy's secrets, each row's
+ * A deploy phase's armada rows, as one armada job at this exact SHA (`armadaPlan`), each row's
  * verdict into the deploy's report as one run here would put it. Answers the rows that are not green: red, or never
  * graded because the run could not grade them.
  */
 async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
   const sha = fullRevision();
   const phase = phases.join(',');
-  const argv = [resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}`, `--secrets=${DEPLOY_SECRETS.join(',')}`, '--', `--deploy-phase=${phase}`];
+  const argv = [resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}`, '--', `--deploy-phase=${phase}`];
 
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
   const run = Bun.spawn(argv, { cwd: root, stdout: 'pipe', stderr: 'inherit' });
@@ -3604,7 +3599,7 @@ async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[]
     if (report !== '') {
       recordRed(report, {
         phase: gate.phase ?? 'source', what: gate.label, command: gate.run, verdict: verdict === undefined ? 'not graded' : `exit ${String(verdict.exitCode)}`,
-        reproduce: `node_modules/.bin/armada run ${sha} --secrets=${DEPLOY_SECRETS.join(',')} -- --deploy-phase=${phase}`, finding: found, output: verdict?.output ?? said.slice(-4000),
+        reproduce: `node_modules/.bin/armada run ${sha} -- --deploy-phase=${phase}`, finding: found, output: verdict?.output ?? said.slice(-4000),
       });
     }
   }
@@ -3908,7 +3903,7 @@ if (import.meta.main) {
 
   const phaseGates = phaseRows === undefined ? tierRun(tier) : localDeployGates(phaseRows.map(({ gate }) => gate));
   // A deploy phase's armada rows run there, as one job at this exact SHA; only what measures this machine runs here.
-  const armadaRows = deployPhase === undefined || selectedGate !== undefined ? [] : phaseGates.filter((gate) => ARMADA_DEPLOY_ROWS.includes(gate.run));
+  const armadaRows = deployPhase === undefined || selectedGate !== undefined ? [] : phaseGates.filter(onArmada);
   const declared = selectedGate === undefined ? phaseGates.filter((gate) => !armadaRows.includes(gate)) : [selectedGate];
 
   const verdictPath = process.argv.find((argument) => argument.startsWith('--verdicts='))?.slice('--verdicts='.length);
@@ -3923,11 +3918,10 @@ if (import.meta.main) {
 
   // A deploy phase's armada job runs its rows the same way (`armadaPlan`).
   const rowGate = ciRow === undefined ? undefined
-    : ciUnits(costs).find((unit) => unit.gate.run === ciRow)?.gate ?? LADDER.find((gate) => gate.run === ciRow && ARMADA_DEPLOY_ROWS.includes(gate.run));
+    : ciUnits(costs).find((unit) => unit.gate.run === ciRow)?.gate ?? LADDER.find((gate) => gate.run === ciRow && onArmada(gate));
 
   if (ciRow !== undefined && (tier !== 'ci' || rowGate === undefined)) throw new Error('unknown CI row or a non-CI tier: ' + ciRow);
 
-  if (rowGate !== undefined && ARMADA_DEPLOY_ROWS.includes(rowGate.run)) writeDeploySecrets();
   const chosen = rowGate === undefined ? declared : [rowGate];
   const tracked = trackedTestFiles();
   const changedByRun = new Map<string, Gate>();
@@ -4220,7 +4214,7 @@ if (import.meta.main) {
   };
 
   // The phase's armada job runs beside the rows here, and its reds join theirs before the phase ends.
-  const onArmada = armadaRows.length === 0 ? undefined : armadaPhase(deployPhase ?? [], armadaRows, report);
+  const armadaJob = armadaRows.length === 0 ? undefined : armadaPhase(deployPhase ?? [], armadaRows, report);
 
   if (phaseRows !== undefined) {
     // A deploy phase is one wave of its plan rows: the phase's barrier is this process ending.
@@ -4280,7 +4274,7 @@ if (import.meta.main) {
     }
   }
 
-  if (onArmada !== undefined) failed.push(...await onArmada);
+  if (armadaJob !== undefined) failed.push(...await armadaJob);
 
   finish();
 

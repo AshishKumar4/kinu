@@ -596,9 +596,9 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
 
   // Shown from the moment the server takes a steer until its durable user row arrives.
   const [steerRuns, setSteerRuns] = useState<InlineSteer[]>([]);
-  // Fed by useChat's live stream error and by every frame ending a chat response in failure (`terminalChatError`),
-  // the runtime's refusal of this tab among them, whose request id the ws transport may not hold.
-  const [chatError, setChatError] = useState<ChatTurnError | null>(null);
+  // Every frame ending a chat response in failure (`terminalChatError`), the runtime's refusal of this tab among them,
+  // whose request id the ws transport may not hold. A stream's own error is read live from useChat (`standingStreamError`).
+  const [frameError, setFrameError] = useState<ChatTurnError | null>(null);
 
   /** Cleared on the next stream frame, socket close, or a timer keyed to the declared wait: the
    *  clearing frame may never come if the request stays in the retry loop's sleep. `untilMs` is the
@@ -679,7 +679,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
       clearProviderWait();
       const failed = terminalChatError(data);
 
-      if (failed !== null) setChatError(failed);
+      if (failed !== null) setFrameError(failed);
     }
   }, [actorAddress.workspace, clearProviderWait, showProviderWait]);
 
@@ -691,6 +691,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     isStreaming: streamingTokens,
     status: chatStatus,
     error: streamError,
+    clearError: clearStreamError,
     connectionError,
   } = useAgentChat({
     agent,
@@ -726,17 +727,30 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
 
   const chatStreamReports = useRef(new Set<Promise<void>>());
 
-  // Always live: the transport only surfaces this for a request id still in flight.
+  // Read live, never latched. A stream whose socket closes mid-answer ends in an error (agents 0.26,
+  // `interruptChatStream`) that the reconnect's resume replaces, clearing useChat's error as it starts: while the socket
+  // is down the turn is the SDK's to rejoin, not a failed one.
+  const standingStreamError = connectionStatus === "connected" ? streamError : undefined;
+
+  const chatError = frameError ?? (standingStreamError === undefined
+    ? null
+    : { body: standingStreamError.message || String(standingStreamError), refused: false });
+
+  const clearChatError = useCallback(() => {
+    setFrameError(null);
+    clearStreamError();
+  }, [clearStreamError]);
+
   useEffect(() => {
-    if (!streamError) return;
-    setChatError({ body: streamError.message || String(streamError), refused: false });
+    if (!standingStreamError) return;
+    const failed = standingStreamError;
     const reports = chatStreamReports.current;
 
     let report: Promise<void> | null = null;
 
     report = (async () => {
       try {
-        await reportChatStreamFailure(streamError, subordinate === undefined ? "root" : "actor", {
+        await reportChatStreamFailure(failed, subordinate === undefined ? "root" : "actor", {
           release: await pageDeployedBuildSha(),
           route: routeTemplateOf(location.pathname),
         });
@@ -747,7 +761,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
       }
     })();
     reports.add(report);
-  }, [streamError, subordinate]);
+  }, [standingStreamError, subordinate]);
 
   // Version skew: /api/health's build sha compared on each reconnect. The baseline is per page
   // (`pageDeployedBuildSha`) because this hook remounts on every workspace navigation.
@@ -1055,7 +1069,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     knownPlans.current.clear();
     setPlanFocus(null);
     setActivePlan(null);
-    setChatError(null);
+    setFrameError(null);
     setModelFallbacks([]);
     // The last actor's id would admit its frames here and page its history.
     ownActorIdRef.current = null;
@@ -1082,7 +1096,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
 
     if (sendLatch.current.owner === null && !isStreaming) {
       const admitted = startTurn(() => {
-        setChatError(null);
+        setFrameError(null);
 
         return sendMessage({ role: "user", parts, metadata: { kinuMode: mode } });
       });
@@ -1110,7 +1124,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     if (messages.length === 0) return false;
 
     return startTurn(() => {
-      setChatError(null);
+      setFrameError(null);
 
       return regenerate();
     });
@@ -1201,7 +1215,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
       /** Also cancels the pending backoff retry and clears a stale action error. */
       retryLoad,
       chatError,
-      clearChatError: () => setChatError(null),
+      clearChatError,
       retryLastMessage,
       agentStatus,
       /** A pane may only report "none" for a read that came back; `agentStatus` alone cannot tell
