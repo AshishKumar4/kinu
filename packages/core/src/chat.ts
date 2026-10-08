@@ -153,6 +153,10 @@ export interface ChatOptions {
   cache?: { providerId?: string; modelId?: string; sessionKey: string; retention?: CacheRetention };
   /** A second reader of each call's stream as UIMessage chunks (the SDK tees it), once per call. */
   observeStream?: ObserveStream;
+  /** Leave to run the next model step, waited for before the step starts; the step calls what it answers once it has
+   *  ended. A Durable Object facet runs each step under the call that grants it, which gives the step its own CPU
+   *  budget (platform catalog `do.facet.cpu_ms`). */
+  paceStep?: (signal: AbortSignal) => Promise<() => void>;
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
   /** The subset of `tools` the model may call; the rest stay wired for execution. Absent, all are offered. */
   activeTools?: readonly string[];
@@ -716,6 +720,20 @@ function tokensSinceLatestCompaction(spec: string, messages: readonly ModelMessa
   return since === null ? null : messageTokens(spec, since);
 }
 
+
+type PrepareStep = NonNullable<Parameters<typeof streamText<ToolSet>>[0]['prepareStep']>;
+
+/** `prepare`, once `pace` has granted the step; `granted` holds the step's end. */
+function pacedPrepareStep(pace: ChatOptions['paceStep'], signal: AbortSignal, prepare: PrepareStep, granted: (ended: () => void) => void): PrepareStep {
+  if (pace === undefined) return prepare;
+
+  return async (options) => {
+    granted(await pace(signal));
+
+    return await prepare(options);
+  };
+}
+
 /** Only the transform's own fold may call a model. */
 export async function measureTurnRequest(opts: ChatOptions): Promise<{ readonly tokens: number; readonly contextWindow: number | null } | null> {
   const { admitted, window } = await admitRequest({ ...opts, stepContext: undefined });
@@ -858,6 +876,51 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const call = new ProviderCall(servingFallback);
     const attempt = cache;
+    let stepEnded: (() => void) | null = null;
+
+    const endStep = (): void => {
+      stepEnded?.();
+      stepEnded = null;
+    };
+
+    // Shared step pipeline, as Think's beforeStep composes it. Also stamps the request start
+    // (`ProviderCall.requestStarting`).
+    const prepareStep: PrepareStep = ({ stepNumber, initialMessages, steps }) => {
+      const messages = call.requestStarting(initialMessages);
+      stepSpans.start(stepOffset + stepNumber);
+      const opening = stepOffset + stepNumber === 0;
+      const previous = steps.at(-1);
+
+      // Never asked again right after its own compaction.
+      const trigger = carriesCompaction(previous) ? undefined
+        : compactionTriggerOptions(current.spec, serving.contextWindow, opening ? admittedTokens : previous?.usage.inputTokens, opening && forcedInput !== undefined);
+
+      const prepared = composePrepareStep({
+        extensions,
+        abortSignal: signal,
+        cache: hasCacheMarkers(attempt.strategy) ? { strategy: attempt.strategy } : null,
+        prune: { contextWindow, modelOutputLimit },
+        budget: opts.budget,
+        dynamic: opts.dynamicContext,
+        destination: servingRoute,
+        replay,
+        meter,
+        context: stepContextPlane,
+        turnStart,
+      }, { stepNumber: stepOffset + stepNumber, messages, steps });
+
+      const asked = (done: PrepareStepResult<ToolSet>) => {
+        const threshold = current.spec !== undefined && serverCompactor(current.spec) === 'openai'
+          ? serverCompactionOptions(current.spec, serving.contextWindow, opening ? forcedInput : undefined, tokensSinceLatestCompaction(current.spec, done?.messages ?? messages))
+          : undefined;
+
+        const extra = mergeProviderOptions(trigger, threshold);
+
+        return extra === undefined || done === undefined ? done : { ...done, providerOptions: mergeProviderOptions(done.providerOptions, extra) };
+      };
+
+      return prepared instanceof Promise ? prepared.then((done) => asked(done ?? { messages })) : asked(prepared ?? { messages });
+    };
 
     const result = streamText({
       model: call.model(current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts)),
@@ -879,44 +942,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // The only terminal handover: an aborted run never settles `result.steps`.
       onAbort: ({ steps }) => { call.aborted(steps); },
       providerOptions: { ...current.providerOptions, ...callRetries(route.callRetries) },
-      // Shared step pipeline, as Think's beforeStep composes it. Also stamps the request start
-      // (`ProviderCall.requestStarting`).
-      prepareStep: ({ stepNumber, initialMessages, steps }) => {
-        const messages = call.requestStarting(initialMessages);
-        stepSpans.start(stepOffset + stepNumber);
-        const opening = stepOffset + stepNumber === 0;
-        const previous = steps.at(-1);
-
-        // Never asked again right after its own compaction.
-        const trigger = carriesCompaction(previous) ? undefined
-          : compactionTriggerOptions(current.spec, serving.contextWindow, opening ? admittedTokens : previous?.usage.inputTokens, opening && forcedInput !== undefined);
-
-        const prepared = composePrepareStep({
-          extensions,
-          abortSignal: signal,
-          cache: hasCacheMarkers(attempt.strategy) ? { strategy: attempt.strategy } : null,
-          prune: { contextWindow, modelOutputLimit },
-          budget: opts.budget,
-          dynamic: opts.dynamicContext,
-          destination: servingRoute,
-          replay,
-          meter,
-          context: stepContextPlane,
-          turnStart,
-        }, { stepNumber: stepOffset + stepNumber, messages, steps });
-
-        const asked = (done: PrepareStepResult<ToolSet>) => {
-          const threshold = current.spec !== undefined && serverCompactor(current.spec) === 'openai'
-            ? serverCompactionOptions(current.spec, serving.contextWindow, opening ? forcedInput : undefined, tokensSinceLatestCompaction(current.spec, done?.messages ?? messages))
-            : undefined;
-
-          const extra = mergeProviderOptions(trigger, threshold);
-
-          return extra === undefined || done === undefined ? done : { ...done, providerOptions: mergeProviderOptions(done.providerOptions, extra) };
-        };
-
-        return prepared instanceof Promise ? prepared.then((done) => asked(done ?? { messages })) : asked(prepared ?? { messages });
-      },
+      prepareStep: pacedPrepareStep(opts.paceStep, signal, prepareStep, (ended) => { stepEnded = ended; }),
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
         async transform(part, controller) {
           call.nativePart(part);
@@ -937,13 +963,19 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           call.stepFailure ??= { doing: 'recording a finished model step', cause };
         }
 
-        if (call.stepFailure !== null || own === null) return;
+        if (call.stepFailure !== null || own === null) {
+          endStep();
+
+          return;
+        }
 
         try {
           await opts.onStep?.(step, own);
         } catch (cause) {
           call.stepFailure ??= { doing: 'run the step hook', cause };
         }
+
+        endStep();
       },
     });
 
@@ -990,7 +1022,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           const produced = call.produced();
           const paired = settleUnpairedToolCalls(produced, opts.lostToolCall) ?? produced;
 
-          await opts.persistStep?.(call.openRecord(responsePrefix.length === 0 ? paired : [...responsePrefix, ...paired]));
+          await Promise.resolve(opts.persistStep?.(call.openRecord(responsePrefix.length === 0 ? paired : [...responsePrefix, ...paired]))).finally(endStep);
+        } else {
+          endStep();
         }
       }
     }

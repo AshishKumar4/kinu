@@ -786,6 +786,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       program: (turnId, ...args) => this.agentTurns.program(actorId, turnId, ...args),
       traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
       traceStream: (turnId, lines) => this.agentTurns.traceStream(actorId, turnId, headDeltas(lines)),
+      paceStep: async (turnId) => { await (await this.agentCalls(actorId)).step(turnId); },
       resume: (turnId) => this.agentTurns.resume(actorId, turnId),
       guard: (turnId, ...args) => this.agentTurns.guard(actorId, turnId, ...args),
       debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),

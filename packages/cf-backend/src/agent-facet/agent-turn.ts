@@ -14,6 +14,7 @@ import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { createAgentProviderRegistry, routedModelReads, type AgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compaction';
 import type { AgentDatabase } from './agent-database';
+import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
 import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, PreparedAgentTurn } from '@kinu.run/core';
 
@@ -55,6 +56,8 @@ export interface AgentWorkspace {
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;
   observe(lines: ReadableStream<Uint8Array>): Promise<void>;
+  /** Calls the agent's `step` for the turn's waiting step, and answers once that step has ended (`StepPacer`). */
+  paceStep(turnId: string): Promise<void>;
   answerMetadata(turnId: string, narration: readonly string[]): Promise<JsonObject | null>;
   getAuth(key: string, opts?: AuthRequest): Promise<AuthResolution | null>;
   listCredentials(): ReturnType<UserCredentialClient['listCredentials']>;
@@ -234,6 +237,7 @@ export function facetTurnSources(turn: {
   readonly live: LiveTurn;
   readonly runId: string;
   readonly turnId: string;
+  readonly pacer: StepPacer;
 }) {
   const { actor, prepared, spend } = turn;
   const registry = facetModels(actor, turn.workspace, turn.providers, prepared);
@@ -253,6 +257,7 @@ export function facetTurnSources(turn: {
     scaffoldSpend: { source: 'scaffold', report: spend.report, operations: spend.operations },
     operations: spend.operations,
     observeStream: async (chunks) => { await turn.workspace.observe(lines(chunks)); },
+    paceStep: (signal) => turn.pacer.pace(turn.workspace, turn.turnId, signal),
     attachmentBudget: actor.session.orchestrator.acc.context,
     extensions: () => [compaction.extension],
     dynamic: () => () => turn.live.dynamic,
@@ -287,7 +292,8 @@ export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgen
 
 /** A one-shot run on the shared assembly and step loop. */
 export async function runAgentTask(
-  database: AgentDatabase, workspace: AgentWorkspace, providers: ProviderEnv, task: AgentTurnTask,
+  { database, workspace, providers, pacer }: { readonly database: AgentDatabase; readonly workspace: AgentWorkspace; readonly providers: ProviderEnv; readonly pacer: StepPacer },
+  task: AgentTurnTask,
 ): Promise<AgentTurnEnd> {
   const prepared = await workspace.prepareTurn(task.sequenceId);
 
@@ -299,7 +305,7 @@ export async function runAgentTask(
   const capture = new HeadCapture();
   const runId = prepared.runId;
   const spend = new FacetSpend(workspace);
-  const { sources, trigger } = facetTurnSources({ actor, workspace, providers, prepared, spend, live, runId, turnId: task.sequenceId });
+  const { sources, trigger } = facetTurnSources({ actor, workspace, providers, prepared, spend, live, runId, turnId: task.sequenceId, pacer });
 
   const inference: HeadInferenceDeps = {
     actor,

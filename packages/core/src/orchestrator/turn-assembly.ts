@@ -78,6 +78,7 @@ export interface TurnAssemblySources {
   readonly scaffoldSpend: ModelCallSpend;
   readonly attachmentBudget: NonNullable<ActorExecutionInput['chat']['attachments']>['budget'];
   readonly observeStream?: ActorExecutionInput['chat']['observeStream'];
+  readonly paceStep?: ActorExecutionInput['chat']['paceStep'];
   extensions(): readonly KinuExtension[];
   dynamic(turn: { readonly memoryTail: string | undefined; readonly activeSkills: ActiveSkillSet | null }): ActorExecutionInput['dynamic'];
   operation(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile;
@@ -225,6 +226,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     ...(sources.budget !== undefined && { budget: sources.budget }),
     ...(sources.operations !== undefined && { operations: sources.operations }),
     ...(sources.observeStream !== undefined && { observeStream: sources.observeStream }),
+    ...(sources.paceStep !== undefined && { paceStep: sources.paceStep }),
     ...(providerOptions !== undefined && { providerOptions }),
     ...routedChat(models, spec, profile),
   };

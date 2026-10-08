@@ -813,6 +813,23 @@ removed by `37a8d6c10` on 2026-09-30. Restore it from
 `98f64cde610869efc60ff072ff89e866bb5fd116` to replay that historical surface,
 not the six-axis swarm contract.
 
+D10. Each model step an agent's isolate takes runs under a call its workspace
+makes into it. Amends D9's "no call into the isolate is held open". Decided
+2026-10-08 on a probe and an incident (platform catalog `do.facet.cpu_ms`,
+kinu-logs/research/FACET-CPU-LIMIT-1008.md). A facet gets about 30 s of CPU
+whatever its parent's `limits.cpu_ms` says: a yielding burn was killed at
+31.5-32.6 s with the parent at 300,000 ms. A delegated turn ran inside the one
+`enqueue` call that handed it over, and on 2026-10-08 production lost
+chat-builder's turn four times to "Worker exceeded CPU time limit." after 22
+steps, 4.9-14.6 min in. Its CPU is a step's streamed deltas: locally a 160 KB tool
+argument cost 49 ms a step in one chunk and 532 ms in 16-character chunks. The
+same probe ran 84 s of CPU to the end when each slice waited for a call into
+the facet that resolved it and stayed open until it ended. So `prepareStep`
+waits for leave (`ChatOptions.paceStep`): the facet asks
+`AgentWorkspace.paceStep(turnId)`, the workspace calls the facet's
+`step(turnId)`, and that call grants the waiting step and answers once it has
+ended (`StepPacer`). Any turn the isolate runs is paced, whoever started it.
+
 ## Deploy ladder
 
 L1. The deploy wave is scheduled by a thread budget, not a gate count. Each
