@@ -679,18 +679,19 @@ describe('a deploy\'s armada rows', () => {
     }).toEqual({ every: true, atCi: [], exempt: [] });
   });
 
-  test('leave this machine only the rows that say why, each with its reason, and only deploy rows say it', () => {
+  test('leave this machine only the rows that say why, each with its reason, and only rows a deploy runs say it', () => {
     const here = LADDER.filter((gate) => gate.here !== undefined);
+    const atDeploy = new Set(localDeployGates(deployOrder()).map((gate) => gate.run));
 
     expect({
       rows: here.map((gate) => `${gate.phase ?? 'source'} ${gate.run}`), reasons: here.every((gate) => (gate.here ?? '').length > 40),
-      deployOnly: here.every((gate) => gate.tier === 'deploy'), local: localDeployGates(deployOrder()).filter((gate) => !onArmada(gate)).length,
+      atDeploy: here.every((gate) => atDeploy.has(gate.run)), local: localDeployGates(deployOrder()).filter((gate) => !onArmada(gate)).length,
     }).toEqual({
       rows: [
-        'source bun test --timeout=0 scripts/deadline-capability.test.ts', 'upload bun run gate:infra', 'post-publish bun run gate:first-run',
+        'preflight bun scripts/preflight.ts', 'source bun test --timeout=0 scripts/deadline-capability.test.ts', 'upload bun run gate:infra', 'post-publish bun run gate:first-run',
         'post-publish bun run gate:devbox-e2e', 'post-publish bash scripts/product-flows-tier.sh', 'soak bash scripts/eval-pass-tier.sh',
       ],
-      reasons: true, deployOnly: true, local: here.length,
+      reasons: true, atDeploy: true, local: here.length,
     });
   });
 });

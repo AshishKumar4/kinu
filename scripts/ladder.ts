@@ -202,8 +202,9 @@ export interface Gate {
    *  and six suites' worth on the next. A tier runs it alone after its wave ({@link tierSchedule}); a deploy runs
    *  on a clean worktree, whose index holds nothing. */
   readonly sizedByIndex?: string;
-  /** Why a deploy row runs on this machine. A deploy row without it runs on armada, in its phase's one job at the
-   *  deploy's exact SHA ({@link armadaPhaseRows}), so nothing heavy runs here unless a row says why it must. */
+  /** Why a row the deploy runs, a deploy row or the preflight, runs on this machine. A deploy row without it runs on
+   *  armada, in its phase's one job at the deploy's exact SHA ({@link armadaPhaseRows}), so nothing heavy runs here
+   *  unless a row says why it must. */
   readonly here?: string;
 }
 
@@ -246,6 +247,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/preflight.ts',
     label: 'Environment preflight',
+    here: 'measures this machine: its temp inodes and project markers are the environment every row the deploy runs '
+      + 'here reports through.',
     phase: 'preflight',
     alone: 'runs alone and FIRST, and its red ends a deploy, as only the upload gates\' does besides. '
       + 'Its subject is the environment every other gate reports through, so it is the precondition '
