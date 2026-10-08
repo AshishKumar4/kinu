@@ -29,6 +29,7 @@ function handoff(): SubordinateHandoff {
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { buildDrainBatch } from '../src/events/hub/drain';
 import type { KinuEvent } from '../src/events/hub/types';
+import { temporaryPortStub } from './helpers-agents';
 
 function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   const db = new Database(':memory:');
@@ -131,6 +132,12 @@ function searchableDeps(opts: {
       status: async () => ({}),
       message: recordHandoff('send'),
       dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),
+      // A task-lifetime hire is offered only where its port is wired.
+      temporary: { ...temporaryPortStub, start: async (request) => {
+        spawns.push(`task:${request.role}`);
+
+        return await temporaryPortStub.start();
+      } },
     },
     budget: opts.budget,
   };

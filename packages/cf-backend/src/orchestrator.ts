@@ -4499,10 +4499,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     this.operationCalls.set(call.callId, stop);
 
-    // A refusal is the call's answer, as it left the operation; a cancelled call's answer is its cancellation.
+    const cancelled = () => new KinuError('cancelled', `${id} was cancelled by its caller`);
+
+    // A refusal is the call's answer, as it left the operation; a cancelled call's answer is its cancellation, however
+    // the operation ended.
     return await settle(Effect.ensuring(
       Effect.promise(() => this.withReachedOperations(this.operationActor(caller.actorId), caller.mode, (providers) => callOperation(providers, id, input, { callId: call.callId, signal: stop.signal })))
-        .pipe(Effect.flatMap((answer) => (stop.signal.aborted ? Effect.fail(new KinuError('cancelled', `${id} was cancelled by its caller`)) : Effect.succeed(answer)))),
+        .pipe(
+          Effect.catchCause((cause) => (stop.signal.aborted ? Effect.fail(cancelled()) : Effect.failCause(cause))),
+          Effect.flatMap((answer) => (stop.signal.aborted ? Effect.fail(cancelled()) : Effect.succeed(answer))),
+        ),
       Effect.sync(() => { this.operationCalls.delete(call.callId); }),
     ));
   }

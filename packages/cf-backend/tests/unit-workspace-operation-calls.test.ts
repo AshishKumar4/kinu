@@ -37,10 +37,10 @@ test('a Plan caller lists only what Plan permits, and a write is refused', async
   const plan = { actorId: workspaceActorId(workspace.db), turnId: null, mode: 'plan' as const };
   const ids = (await workspace.agent.listOperations(plan)).map(({ id }) => id);
 
-  expect(ids).toContain('state.get');
-  expect(ids).toContain('memory.recall');
-  expect(ids).not.toContain('memory.remember');
-  await expect(workspace.agent.callOperation(plan, 'memory.remember', { key: 'k', value: 'v' }, call())).rejects.toMatchObject({ code: 'denied' });
+  expect(ids).toContain('file.read');
+  expect(ids).not.toContain('file.write');
+  expect(ids).not.toContain('workspace.exec');
+  await expect(workspace.agent.callOperation(plan, 'file.write', { path: 'notes.md', content: 'x' }, call())).rejects.toMatchObject({ code: 'denied' });
 });
 
 test('a call its caller cancels stops, and its answer is the cancellation', async () => {
