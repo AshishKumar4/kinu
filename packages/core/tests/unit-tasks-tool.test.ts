@@ -291,7 +291,6 @@ describe('tasks action=mode — the agent\'s durable role', () => {
 
     expect(plan).toContain('Role: Task');
     expect(plan).toContain('In Plan, inspect and research only. Do not change project files or system resources, release, deploy');
-    expect(plan).toContain('Implementation waits for an approved Build turn.');
     expect(Object.keys(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }))).not.toContain('submit_plan');
   });
 

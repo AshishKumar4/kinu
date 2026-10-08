@@ -23,11 +23,10 @@ import type { KinuExtension } from '@kinu.run/core';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
 import {
-  armedWakes, GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness, until, type HarnessOrchestratorAgent, type StartedHarness,
+  armedWakes, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness, until, type HarnessOrchestratorAgent, type StartedHarness,
 } from './helpers/actor-harness';
 import { answeringGateway, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { socketConnection } from './helpers/bindings';
-import { joinHarnessFibers } from './helpers/agents-sdk';
 
 const FrameSchema = v.looseObject({
   type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()),
@@ -436,20 +435,8 @@ test("a person's open tab redials into each re-drive across two restarts and dra
 /** Cuts in a step's own work that settle a turn (D12). */
 const POISON_WORK_CUTS = 6;
 
-/**
- * Until `holds`, in real time, joining fibers between looks: a re-opened turn's resume runs through the activation's
- * recovery and the re-read history, which grow with each reset, so an event-loop lap count is no bound for it.
- */
-async function eventually(holds: () => boolean, what: string): Promise<void> {
-  for (let waited = 0; waited < 300; waited += 1) {
-    await joinHarnessFibers();
-
-    if (holds()) return;
-    await Bun.sleep(50);
-  }
-
-  throw new Error(`${what}: never held in 15 s`);
-}
+/** The shared backoff after a first cut in a step's own work (`recoveryBackoffMs(1)`). */
+const FIRST_WORK_CUT_BACKOFF_MS = 2000;
 
 /** The claim of the turn `id`, as the next decision reads it. */
 function claimOf(harness: StartedHarness, id: string): { outcome: string | null; epoch: number } | null {
@@ -519,7 +506,7 @@ test('a turn cut while it waits on the provider, at one step, by six resets in a
     await last.started;
     await last.agent.terminalRetryPass();
     const final = last;
-    await eventually(() => claimOf(final, 'req-outside')?.outcome != null, 'the turn ended');
+    await driveUntil(final, 'the turn never ended', () => claimOf(final, 'req-outside')?.outcome != null);
 
     expect(claimOf(last, 'req-outside')).toEqual({ outcome: 'completed', epoch: 7 });
     expect(answering.runs.length).toBe(1);
@@ -553,7 +540,7 @@ test('a step that ends its own process every time it runs is settled at the sixt
       await last.started;
       await last.agent.terminalRetryPass();
       const current = last;
-      await eventually(() => asked.n === run || claimOf(current, 'req-poison')?.outcome != null, `activation ${String(run)} decided`);
+      await driveUntil(current, `activation ${String(run)} never decided`, () => asked.n === run || claimOf(current, 'req-poison')?.outcome != null);
     }
   } finally {
     setSystemTime();
@@ -565,29 +552,40 @@ test('a step that ends its own process every time it runs is settled at the sixt
 
 test('a turn cut inside its own work is asked again only after the backoff, which its wake carries', async () => {
   const asked = { n: 0 };
-  const first = gatewayWorkspace(poisonedModel(asked), { turnExtensions: POISONED });
-  await first.started;
-  const sender = socketOn(first.agent, 'first-socket', () => {});
+  // On a whole second, which is where a wake lands.
+  const at = Math.ceil(Date.now() / 1000) * 1000;
+  setSystemTime(new Date(at));
 
-  await first.agent.onConnect(sender, CONNECT);
-  const answered = Promise.resolve(first.agent.onMessage(sender, chatRequest('req-backoff'))).then(() => 'answered');
-  await until(() => asked.n === 1, 'the step ran');
-  expect(await Promise.race([answered, Promise.resolve('inside the step')])).toBe('inside the step');
+  try {
+    const first = gatewayWorkspace(poisonedModel(asked), { turnExtensions: POISONED });
+    await first.started;
+    const sender = socketOn(first.agent, 'first-socket', () => {});
 
-  const answering = answeringGateway('Done.');
-  const second = await nextActivation(first, answering);
-  await second.started;
-  await second.agent.terminalRetryPass();
+    await first.agent.onConnect(sender, CONNECT);
+    const answered = Promise.resolve(first.agent.onMessage(sender, chatRequest('req-backoff'))).then(() => 'answered');
+    await until(() => asked.n === 1, 'the step ran');
+    expect(await Promise.race([answered, Promise.resolve('inside the step')])).toBe('inside the step');
 
-  // Owed, and not asked yet: the wake is armed for the instant the backoff ends.
-  expect(answering.runs.length).toBe(0);
-  expect(claimOf(second, 'req-backoff')?.epoch).toBe(1);
-  expect(armedWakes(second.db).some((wake) => wake.time > Date.now())).toBe(true);
+    // A second into the backoff, so the wake's own lap (a pass's next, its 2 s after now) lands after the backoff's end.
+    setSystemTime(new Date(at + 1000));
+    const answering = answeringGateway('Done.');
+    const second = await nextActivation(first, answering);
+    await second.started;
+    await second.agent.terminalRetryPass();
 
-  // The process that holds it asks once the backoff (the shared one, 2 s for a first cut) is over.
-  await eventually(() => claimOf(second, 'req-backoff')?.outcome != null, 'the turn ran after its backoff');
-  expect(answering.runs.length).toBe(1);
-  expect(claimOf(second, 'req-backoff')).toEqual({ outcome: 'completed', epoch: 2 });
+    // Owed, and not asked yet: the wake is armed for the instant the backoff ends.
+    await until(() => armedWakes(second.db).some((wake) => wake.time === at + FIRST_WORK_CUT_BACKOFF_MS), 'the backoff was armed');
+    expect(answering.runs.length).toBe(0);
+    expect(claimOf(second, 'req-backoff')?.epoch).toBe(1);
+
+    // The wake fires as the backoff ends, and the process that holds the turn asks it.
+    setSystemTime(new Date(at + FIRST_WORK_CUT_BACKOFF_MS));
+    await driveUntil(second, 'the turn never ran after its backoff', () => claimOf(second, 'req-backoff')?.outcome != null);
+    expect(answering.runs.length).toBe(1);
+    expect(claimOf(second, 'req-backoff')).toEqual({ outcome: 'completed', epoch: 2 });
+  } finally {
+    setSystemTime();
+  }
 });
 
 test("a person's tab opened during the re-drive draws the steps before the restart, then the rest, while it streams", async () => {

@@ -101,7 +101,7 @@ import {
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   normalizeUsage, priceCall, type Usage,
   generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
-  WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
+  WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
@@ -124,7 +124,7 @@ import {
   inheritedContextFromTranscript,
   PlanReviewActions, planHandoffStillOwed, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type ReviewAnnotation,
-  type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
+  type PlanReviewDecision, type PlanReviewResult, type ReplyToCommentToolDeps, type SubmitPlanToolDeps,
   answerParentRpc,
   type ParentExecResult,
   type ParentRpcWrite,
@@ -159,7 +159,7 @@ import {
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
-  SUBMIT_PLAN_TOOL, REPORT_TOOL,
+  SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, REPORT_TOOL, planSubmissionReach,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsInWorkMode, type TaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
@@ -387,8 +387,10 @@ export interface ActorToolDeps {
   peers?: PeersToolDeps;
   /** Subordinate-only. */
   report?: ReportDeps;
-  /** Present on actors whose current turn belongs to the owner; surfaced only in Plan mode. */
+  /** Present on actors whose current turn belongs to the owner, in either mode. */
   submitPlan?: SubmitPlanToolDeps;
+  /** Present while the owner's sent-back review holds comments the agent may answer. */
+  replyToComment?: ReplyToCommentToolDeps;
 }
 
 /** BUILTIN_TOOLS filtered to what this actor's deps wire; the prompt and activeTools must not
@@ -715,6 +717,18 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult | Promise<PlanReviewResult> {
     return this.planActions.submit(edits, this.turnDrivingMetadata());
+  }
+
+  /** Whether this turn offers `submit_plan` in `mode` (core's `planSubmissionReach`). */
+  private submitsPlans(mode: WorkMode): boolean {
+    return planSubmissionReach(mode, this.turnDrivingMetadata());
+  }
+
+  /** The reply tool's deps while the owner's sent-back review awaits answers; absent otherwise. */
+  protected planReplyDeps(): ReplyToCommentToolDeps | undefined {
+    return this.planActions.awaitingReply(this.turnDrivingMetadata())
+      ? { reply: (comment, text) => this.planActions.reply(comment, text, this.turnDrivingMetadata()) }
+      : undefined;
   }
 
   /** An agent's window reviews that agent's plans, which live in its own isolate; the root's window, the root's. */
@@ -1220,9 +1234,13 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.eventRecorder.openRun() !== null || this.pendingSends.restore().length > 0;
   }
 
-  /** Constructing the loop re-opens the last open turn and reruns acknowledged sends. */
+  /** Constructing the loop re-opens the last open turn and reruns acknowledged sends; a re-opened turn waiting out its
+   *  backoff is asked again by the wake that ends it. */
   protected resumeChatLoop(): ChatSession {
-    return this.chatLoop;
+    const loop = this.chatLoop;
+    loop.reaskDue();
+
+    return loop;
   }
 
   /** Reads SQL, not the RAM drain, which an eviction loses. Only turn-bound rows are steers;
@@ -1784,9 +1802,13 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._chatLoop;
   }
 
+  /** Each slate `agent.ask` reply, fed by this actor's own turns. */
+  protected readonly replies = new TurnReplies();
+
   private _chatTransport: ChatWireTransport | null = null;
   protected get chatTransport(): ChatWireTransport {
     this._chatTransport ??= new ChatWireTransport({
+      replies: this.replies,
       turnOwed: () => this.chatLoopOwesWork(),
       steps: () => {
         const run = this.eventRecorder.openRun();
@@ -2171,7 +2193,11 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._host) {
       const armWake = this.durableWakeOwner();
       this._host = {
-        broadcast: (event) => this.broadcast(JSON.stringify(event)),
+        broadcast: (event) => {
+          // A slate's asked message lands where its card is shown, in the turn running then.
+          this.replies.card(event, this._chatLoop?.currentTurnId ?? null);
+          this.broadcast(JSON.stringify(event));
+        },
         enqueueTurn: (input) => this.chatLoop.enqueueTurn(input),
         // Synchronous read plus same-tick buffer push means the observed turn's prepareStep drains
         // the signal; a turn that settles first re-delivers it from settle().
@@ -3097,15 +3123,24 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (route.viewer !== undefined) metadata.viewer = route.viewer;
 
-          const outcome = yield* Effect.promise(async () => this.slateInbox().send({
-            kind: 'slate',
-            text: route.viewer === undefined
-              ? `Slate ${route.slate}: ${route.text}`
-              : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`,
-            metadata,
-          }));
+          const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
 
-          return { outcome };
+          if (route.ask !== true) return { outcome: yield* Effect.promise(async () => this.slateInbox().send({ kind: 'slate', text: said, metadata })) };
+
+          // Asked: the reply is open before the message is sent, so the turn it lands in feeds it from its first word. A
+          // send that opens a turn settles only when that turn ends, so the reply is answered now and only the wait is
+          // detached; a message that never lands says so on its card, which ends the reply.
+          const key = `ask:${crypto.randomUUID()}`;
+          const reply = this.replies.open(signalCardId(key));
+
+          const sent = this.slateInbox().send({
+            kind: 'slate', idempotencyKey: key, metadata,
+            text: `${said}\nYour answer's text streams to slate ${route.slate} as you write it: answer it in prose.`,
+          });
+
+          this.detachOwned(Effect.promise(async () => { await this.keepAliveWhile(async () => sent); }));
+
+          return { reply };
         }
 
         case 'ai': return yield* Effect.promise(async () => this.slateAiRun(route));
@@ -3792,7 +3827,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const profileKey = actorActiveTools(actorDeps).join(',');
     // Key includes crafted_tools quality (score filtering depends on recency) and the actor profile,
     // so an owner chat never reuses an assigned turn's upward-reporting surface.
-    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}`;
+    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}:${String(this.submitsPlans(mode))}:${String(actorDeps.replyToComment !== undefined)}`;
 
     // Only the chat surface is cached; a scoped rollout's surface is built once per rollout.
     if (claimScope === undefined && this._cachedTools && cacheKey === this._cachedToolsKey) {
@@ -3842,7 +3877,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
 
-      if (mode === 'plan' && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
+      if (actorDeps.submitPlan && this.submitsPlans(mode)) builtinDeps.submitPlan = actorDeps.submitPlan;
+
+      if (actorDeps.replyToComment) builtinDeps.replyToComment = actorDeps.replyToComment;
       const toolsets = buildActorTools(builtinDeps);
 
       if (claimScope === undefined) {
@@ -4230,7 +4267,10 @@ export abstract class ActorAgent extends Agent<Env> {
       toolset: (mode) => (mode === input.requestedWorkMode ? input.tools : this.actorToolsets(mode).turn),
       // MCP tools were admitted against the request's model in `readTurnInputs`.
       externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),
-      wiredToolNames: (mode) => (mode === 'plan' && turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
+      wiredToolNames: (mode) => [
+        ...(turnActorDeps.submitPlan && this.submitsPlans(mode) ? [SUBMIT_PLAN_TOOL] : []),
+        ...(turnActorDeps.replyToComment ? [REPLY_TO_COMMENT_TOOL] : []),
+      ],
       // `agent` / `llm` are reachable only inside `eval`: derived from the providers wired for this mode.
       codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.ownNamespaces(mode)),
       agentsActions: () => actorAgentsActions(turnActorDeps, this._accountSwarms === true),

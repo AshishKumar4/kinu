@@ -14,15 +14,15 @@ import { PLATFORM_CATALOG } from '../platform-catalog';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
 import { boundedInt } from '../utils/bounds';
 import type {
-  PlanDecisionOutcome, PlanEdit, PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, PlanReviewStatus,
+  NoteReply, PlanDecisionOutcome, PlanEdit, PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, PlanReviewStatus,
 } from '../types/plans';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
-import { admitReviewAnnotations, byteLength } from './annotation-admission';
+import { admitReviewAnnotations, byteLength, MAX_PLAN_ANNOTATIONS_BYTES } from './annotation-admission';
 
 export type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
-  DiffAnchor, DiffSide, PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult,
-  PlanReviewStatus, SubmitPlanToolDeps,
+  DiffAnchor, DiffSide, GeneralNote, NoteReply, PassageNote, PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult,
+  PlanReviewStatus, ReplyToCommentToolDeps, SubmitPlanToolDeps,
 } from '../types/plans';
 
 // Content plus annotations_json share one row capped at do.sqlite.row_bytes; this cap and MAX_PLAN_ANNOTATIONS_BYTES fit inside it together.
@@ -226,6 +226,80 @@ interface PlanHandoffTurn {
   readonly metadata: JsonObject;
 }
 
+/** Written on this revision rather than carried from an earlier one: what a decision on it sends. */
+export function freshNotes(notes: readonly ReviewAnnotation[]): ReviewAnnotation[] {
+  return notes.filter((note) => note.revision === undefined);
+}
+
+function quoted(text: string): string {
+  const flat = text.replace(/\s+/gu, ' ').trim();
+
+  return `"${flat.length > 160 ? `${flat.slice(0, 157)}...` : flat}"`;
+}
+
+function noteLine(note: Exclude<ReviewAnnotation, NoteReply>): string {
+  const carried = note.revision === undefined ? '' : `, from revision ${String(note.revision)}`;
+
+  if (note.type === 'GLOBAL_COMMENT') return `Comment ${note.id} on the whole plan${carried}: ${note.text}`;
+
+  if (note.type === 'DELETION') return `Comment ${note.id}${carried}: remove ${quoted(note.originalText)}${note.text ? `. ${note.text}` : ''}`;
+
+  return `Comment ${note.id} on ${quoted(note.originalText)}${carried}: ${note.text ?? ''}`;
+}
+
+/**
+ * Whether `notes`, as the next revision would carry them (each stamped with `revision`), fit the annotation budget and,
+ * beside `content`, the stored row: a write admits only a list its revision can still carry.
+ */
+function carryRefusal(content: string, notes: readonly ReviewAnnotation[], revision: number): string | null {
+  const carried = byteLength(JSON.stringify(notes.map((note) => note.revision === undefined ? { ...note, revision } : note)));
+
+  if (carried > MAX_PLAN_ANNOTATIONS_BYTES) return `the review's comments would exceed the maximum size of ${String(MAX_PLAN_ANNOTATIONS_BYTES / 1024)} KiB`;
+
+  const rowBytes = planReviewRowBytes();
+
+  return byteLength(content) + carried > rowBytes
+    ? `plan content and annotations exceed the stored row size of ${String(rowBytes)} bytes` : null;
+}
+
+/**
+ * Whether a turn may offer `submit_plan`: any Plan turn, which a submission from the harness then refuses with its
+ * reason; and in Build, only the owner's own turn or their review's feedback turn, so no harness turn is offered it.
+ */
+export function planSubmissionReach(mode: WorkMode, driving: JsonObject | undefined): boolean {
+  return mode === 'plan' || planSubmissionAllowed(driving);
+}
+
+/** The owner's own turn, or the feedback turn of their review: the only turns whose plan is the owner's to review. */
+function planSubmissionAllowed(driving: JsonObject | undefined): boolean {
+  return turnAuthor({ metadata: driving }) === 'operator' || driving?.kinuEvent === 'plan_feedback';
+}
+
+/**
+ * Whether a turn may answer comments of `plan`, the active revision: it was sent back with comments, and the turn is the
+ * owner's own or that revision's feedback turn. The reply tool's gate, and its check when called.
+ */
+export function planAwaitingReply(plan: PlanReview | null, driving: JsonObject | undefined): boolean {
+  if (plan?.status !== 'changes_requested' || !planSubmissionAllowed(driving)) return false;
+
+  if (driving?.kinuEvent === 'plan_feedback' && (driving.planId !== plan.id || driving.revision !== plan.revision)) return false;
+
+  return freshNotes(plan.annotations).some((note) => note.type !== 'REPLY' || note.author === 'owner');
+}
+
+/** The owner's comments and replies written on this revision, each under its id so the agent can answer it. */
+export function reviewFeedbackText(notes: readonly ReviewAnnotation[]): string {
+  const roots = new Map(notes.flatMap((note) => note.type === 'REPLY' ? [] : [[note.id, note] as const]));
+  const fresh = freshNotes(notes);
+  const answered = new Set(fresh.flatMap((note) => note.type === 'REPLY' && note.author === 'owner' ? [note.inReplyTo] : []));
+  const threads = [...roots.values()].filter((note) => note.revision === undefined || answered.has(note.id));
+
+  return threads.flatMap((root) => [
+    `- ${noteLine(root)}`,
+    ...fresh.flatMap((note) => note.type === 'REPLY' && note.author === 'owner' && note.inReplyTo === root.id ? [`  - Owner's reply: ${note.text}`] : []),
+  ]).join('\n');
+}
+
 function planHandoffTurn(plan: PlanReview, decision: PlanReviewDecision): PlanHandoffTurn {
   const text = decision === 'request_changes'
     ? [
@@ -233,6 +307,8 @@ function planHandoffTurn(plan: PlanReview, decision: PlanReviewDecision): PlanHa
         '',
         '## Review feedback',
         plan.feedback ?? '',
+        '',
+        'Answer with reply_to_comment, naming the comment\'s id, a comment that asks a question or one the revision will not simply follow; then revise.',
         '',
         `## Current plan (${plan.content.split('\n').length} lines)`,
         'Use these exact pre-edit line numbers in the next submit_plan call:',
@@ -364,7 +440,7 @@ export class PlanReviewStore {
 
       // A pending revision nobody has annotated is the author's to correct: a resubmit replaces it. Once the owner
       // marks it up, it waits for their decision.
-      if (current?.status === 'pending' && current.annotations.length > 0) {
+      if (current?.status === 'pending' && freshNotes(current.annotations).length > 0) {
         return { ok: false, error: `plan ${current.id} revision ${current.revision} is awaiting review`, plan: current };
       }
 
@@ -381,9 +457,12 @@ export class PlanReviewStore {
 
       if (content.trim() === '') return { ok: false, error: 'the plan is empty: write it in full with one edit starting at line 1', plan: current };
 
+      // The threads of a revision sent back carry into the next one, read-only, so its replies stay in view.
+      const carried = JSON.stringify((revising?.annotations ?? []).map((note) => note.revision === undefined ? { ...note, revision: revising?.revision } : note));
+
       const rowBytes = planReviewRowBytes();
 
-      if (byteLength(content) + byteLength('[]') > rowBytes) {
+      if (byteLength(content) + byteLength(carried) > rowBytes) {
         return { ok: false, error: `plan content exceeds the stored row size of ${rowBytes} bytes`, plan: current };
       }
 
@@ -394,7 +473,7 @@ export class PlanReviewStore {
       actor_id, id, session_id, revision, content, status, annotations_json, feedback,
       handoff_accepted, handoff_attempt, created_at, updated_at
     ) VALUES (
-      ${this.actorId}, ${id}, ${sessionId}, ${revision}, ${content}, 'pending', '[]', NULL,
+      ${this.actorId}, ${id}, ${sessionId}, ${revision}, ${content}, 'pending', ${carried}, NULL,
       0, 0, ${now}, ${now}
     )`;
       markStoreChanged(this.sql);
@@ -423,21 +502,26 @@ export class PlanReviewStore {
       return { ok: false, error: `plan revision is already ${current.status}`, plan: current };
     }
 
-    const admission = admitReviewAnnotations(annotations);
+    const carried = current.annotations.filter((note) => note.revision !== undefined);
+    const admission = admitReviewAnnotations({ value: annotations.value, kept: carried });
 
     if (Result.isFailure(admission)) return { ok: false, error: admission.failure.error, plan: current };
+    const written = admission.success;
 
-    if (admission.success.some((annotation) => annotation.anchor !== undefined)) {
+    if (written.some((note) => note.type !== 'GLOBAL_COMMENT' && note.type !== 'REPLY' && note.anchor !== undefined)) {
       return { ok: false, error: 'a plan note has no place in a diff', plan: current };
     }
 
-    const encoded = JSON.stringify(admission.success);
-
-    const rowBytes = planReviewRowBytes();
-
-    if (byteLength(current.content) + byteLength(encoded) > rowBytes) {
-      return { ok: false, error: `plan content and annotations exceed the stored row size of ${rowBytes} bytes`, plan: current };
+    if (written.some((note) => note.revision !== undefined || (note.type === 'REPLY' && note.author === 'agent'))) {
+      return { ok: false, error: 'carried notes and the agent\'s replies are kept by the review, not written by the reviewer', plan: current };
     }
+
+    // The reviewer writes only this revision's own notes; the carried threads stay as they were.
+    const merged = [...carried, ...written];
+    const tooBig = carryRefusal(current.content, merged, revision);
+
+    if (tooBig !== null) return { ok: false, error: tooBig, plan: current };
+    const encoded = JSON.stringify(merged);
 
     const now = this.now();
     void this.sql`UPDATE plan_reviews SET annotations_json=${encoded}, updated_at=${now}
@@ -475,11 +559,13 @@ export class PlanReviewStore {
       return { ok: false, error: `plan revision is already ${current.status}`, plan: current };
     }
 
-    const trimmedFeedback = feedback?.trim();
-    const normalizedFeedback = trimmedFeedback === undefined || trimmedFeedback === '' ? null : trimmedFeedback;
+    const note = feedback?.trim() ?? '';
+    // A change request sends the revision's own comments, rendered here so every reviewer sends the same text.
+    const sent = decision === 'request_changes' ? [reviewFeedbackText(current.annotations), note].filter(Boolean).join('\n\n') : note;
+    const normalizedFeedback = sent === '' ? null : sent;
 
     if (decision === 'request_changes' && !normalizedFeedback) {
-      return { ok: false, error: 'request_changes requires non-empty feedback', plan: current };
+      return { ok: false, error: 'request_changes requires a comment or feedback', plan: current };
     }
 
     const status: PlanReviewStatus = decision === 'approve' ? 'approved' : 'changes_requested';
@@ -490,6 +576,35 @@ export class PlanReviewStore {
     markStoreChanged(this.sql);
 
     return this.written(id, revision);
+  }
+
+  /** The agent's reply in a comment's thread, on the revision the owner sent back. */
+  reply(sessionId: string, comment: string, text: string): PlanReviewResult {
+    const current = this.getActive(sessionId);
+    const said = text.trim();
+
+    if (said === '') return { ok: false, error: 'a reply has text', plan: current };
+
+    if (current?.status !== 'changes_requested') {
+      return { ok: false, error: 'no plan review is waiting for replies: replies answer the comments of a revision the owner sent back', plan: current };
+    }
+
+    if (!current.annotations.some((note) => note.id === comment && note.type !== 'REPLY')) {
+      return { ok: false, error: `plan ${current.id} revision ${String(current.revision)} has no comment ${comment}; the review feedback names each comment's id`, plan: current };
+    }
+
+    const reply: NoteReply = { id: `reply-${nanoid(10)}`, type: 'REPLY', inReplyTo: comment, text: said, author: 'agent', createdA: this.now() };
+    const notes = [...current.annotations, reply];
+    const tooBig = carryRefusal(current.content, notes, current.revision);
+
+    if (tooBig !== null) return { ok: false, error: `the review holds no more replies: ${tooBig}`, plan: current };
+    const encoded = JSON.stringify(notes);
+
+    void this.sql`UPDATE plan_reviews SET annotations_json=${encoded}, updated_at=${reply.createdA}
+      WHERE actor_id=${this.actorId} AND id=${current.id} AND revision=${current.revision} AND status='changes_requested'`;
+    markStoreChanged(this.sql);
+
+    return this.written(current.id, current.revision);
   }
 
   dismiss(id: string, revision: number): PlanReviewResult {
@@ -577,7 +692,7 @@ export class PlanReviewActions {
 
   /** `driving`: the calling turn's metadata. */
   submit(edits: readonly PlanEdit[], driving: JsonObject | undefined): PlanReviewResult {
-    if (turnAuthor({ metadata: driving }) !== 'operator' && driving?.kinuEvent !== 'plan_feedback') {
+    if (!planSubmissionAllowed(driving)) {
       return {
         ok: false,
         error: 'a plan is submitted only from a turn the owner wrote or from its feedback turn; this turn was started by the harness',
@@ -602,6 +717,21 @@ export class PlanReviewActions {
 
   decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): PlanReviewResult {
     return this.announced(this.store.decide(id, revision, decision, feedback));
+  }
+
+  /** `driving`: the calling turn's metadata. */
+  reply(comment: string, text: string, driving: JsonObject | undefined): PlanReviewResult {
+    const active = this.store.getActive(CHAT_SESSION_ID);
+
+    if (!planAwaitingReply(active, driving)) {
+      return { ok: false, error: 'only the owner\'s own turn, or the feedback turn of the revision they sent back, answers its comments', plan: active };
+    }
+
+    return this.announced(this.store.reply(CHAT_SESSION_ID, comment, text));
+  }
+
+  awaitingReply(driving: JsonObject | undefined): boolean {
+    return planAwaitingReply(this.store.getActive(CHAT_SESSION_ID), driving);
   }
 
   dismiss(id: string, revision: number, stopRunning?: (keyPrefix: string) => void): PlanReviewResult {

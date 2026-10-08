@@ -234,8 +234,11 @@ export interface ChatSessionPorts {
   terminal(): TerminalTransitions;
   /** Asked per item at dequeue and before a drain binds rows; a refusal settles the item to its producer. */
   driverGate(): Refusal | null;
-  /** Called at the turn's synchronous open; soonest-wins. A backend whose process is the wake arms nothing. */
-  armTurnWake(atMs: number): Promise<void>;
+  /**
+   * Called at the turn's synchronous open; soonest-wins. Absent where the process is the wake: a person's start is its
+   * restart, so a re-opened turn there is asked again at once.
+   */
+  armTurnWake?(atMs: number): Promise<void>;
   /** Owed until {@link quiet}. */
   owed?(): void;
   /** The queue drained and no turn runs. */
@@ -406,9 +409,6 @@ export class ChatSession {
   close(): void {
     this.ended = true;
     this.unobserveMeasures();
-
-    if (this.reaskTimer !== null) clearTimeout(this.reaskTimer);
-    this.reaskTimer = null;
   }
   get closed(): boolean { return this.ended; }
 
@@ -903,9 +903,11 @@ export class ChatSession {
         await this.revision;
         const reaskAt = this.queue[0]?.continuation?.reaskAt ?? null;
 
-        if (reaskAt !== null && reaskAt > Date.now()) {
+        // The re-opened turn waits out its backoff, and the wake that ends it asks again ({@link reaskDue}).
+        if (reaskAt !== null && this.ports.armTurnWake !== undefined && reaskAt > Date.now()) {
           deferred = true;
-          await this.deferReask(reaskAt);
+          diagnostics.event('turn.reask_deferred', { turn: this.queue[0]?.turnId ?? 'unnamed', dueInMs: reaskAt - Date.now() });
+          await this.ports.armTurnWake(reaskAt);
           break;
         }
 
@@ -975,18 +977,9 @@ export class ChatSession {
     }
   }
 
-  private reaskTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /** The re-opened turn waits out its backoff: this process's timer brings it back, and the wake a process after it. */
-  private deferReask(at: number): Promise<void> {
-    diagnostics.event('turn.reask_deferred', { turn: this.queue[0]?.turnId ?? 'unnamed', dueInMs: at - Date.now() });
-    this.reaskTimer ??= setTimeout(() => {
-      this.reaskTimer = null;
-
-      if (!this.ended) this.pump();
-    }, at - Date.now());
-
-    return this.ports.armTurnWake(at);
+  /** The wake a deferred re-ask armed: the pump asks it if its backoff is over, and defers it again if not. */
+  reaskDue(): void {
+    if ((this.queue[0]?.continuation?.reaskAt ?? null) !== null) this.pump();
   }
 
   /** Appended, not unshifted, so it verifies final state; kicked because a startup replay has no pump yet. */
@@ -1091,7 +1084,7 @@ export class ChatSession {
     });
 
     // Armed at the synchronous open, at the recovery ceiling; soonest-wins.
-    await this.ports.armTurnWake(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
+    await this.ports.armTurnWake?.(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
 
     try {
       // A run a dead process left goes on only if recovery says so; any other ends here as a Stop ends it.
