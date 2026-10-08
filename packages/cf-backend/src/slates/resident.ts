@@ -9,7 +9,7 @@ import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import {
   SLATE_DRIVEN_MEMBERS, SLATE_IMPORT_MAP, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_HEAD, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject,
 } from '@kinu.run/core';
-import { attempt, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
@@ -36,7 +36,27 @@ export interface ResidentSlateDeps {
   facetManager: () => Promise<ComposedFacetManager>;
   /** esbuild for a credential's view, in the object's esbuild facet: esbuild-wasm's heap only grows. */
   bundler: (vfs: NamespaceFs) => EsbuildService;
+  /** Image digests no process runs that a sweep keeps: each slate's last working build. */
+  retained: () => Iterable<string>;
 }
+
+/**
+ * A slate's compiled modules and the files its runner serves, each held by digest in the facet image directory: what a
+ * launch runs, and what a slate falls back to while a later edit fails to build.
+ */
+export interface SlateImage {
+  readonly modules: Readonly<Record<string, string>>;
+  readonly client?: string;
+  readonly shell?: string;
+}
+
+/** What a build that did not compile says: the compiler's own words, file and line among them. */
+export interface SlateBuildFailure {
+  readonly failed: string;
+}
+
+/** What a build reads: the authored tree, as its caller sees it. */
+export type SlateBuildInput = Pick<ResidentSlateBoot, 'owner' | 'root' | 'project' | 'read' | 'cred'>;
 
 export interface ResidentSlateBoot {
   readonly key: string;
@@ -200,7 +220,8 @@ export function slateRunnerSource(
     '      }',
     '      return stub.call(path, args, invocation).then((result) => {',
     '        if (!result.ok) throw new SlateRefusal(result);',
-    '        return result.value;',
+    // `ai.stream` answers its text as UTF-8 bytes, which is all that crosses the host's RPC; the class reads text.
+    '        return result.value instanceof ReadableStream ? result.value.pipeThrough(new TextDecoderStream()) : result.value;',
     '      });',
     '    },',
     '    get(_fn, name) {',
@@ -520,8 +541,23 @@ export class ResidentSlateProcesses {
 
   constructor(private readonly deps: ResidentSlateDeps) {}
 
+  /** Builds the tree and runs it; a tree that does not compile is refused in the compiler's words. */
   start(input: ResidentSlateBoot): Promise<ResidentSlateProcess> {
     return settle(Effect.gen({ self: this }, function* () {
+      const built = yield* Effect.promise(async () => this.build(input));
+
+      if ('failed' in built) return yield* new KinuError('bad_input', built.failed);
+
+      return yield* Effect.promise(async () => this.launch(input, built));
+    }));
+  }
+
+  /**
+   * Compiles the authored tree into an image. A tree that does not compile is answered as a value, in the compiler's
+   * words, so its caller can keep serving the last image that did.
+   */
+  build(input: SlateBuildInput): Promise<SlateImage | SlateBuildFailure> {
+    return settle(Effect.catchIf(Effect.gen({ self: this }, function* () {
       const session = yield* Effect.promise(async () => this.deps.session());
       const main = input.project.main;
       const browser = input.project.browser;
@@ -541,7 +577,7 @@ export class ResidentSlateProcesses {
       }
 
       // Its react, capnweb and puppeteer sources are compiled only when a slate first starts in this isolate.
-      const { default: slateVendor, workerCompatibility } = yield* attempt({ doing: 'loading the slate runtime vendor', otherwise: 'io' }, async () => import('virtual:kinu-slate-vendor'));
+      const { default: slateVendor } = yield* attempt({ doing: 'loading the slate runtime vendor', otherwise: 'io' }, async () => import('virtual:kinu-slate-vendor'));
       this.provisionRuntimeFiles(session, slateVendor.reactStub);
 
       // Generated entries live under the runtime dir, never the slate root, where they would surface in listings,
@@ -575,21 +611,45 @@ export class ResidentSlateProcesses {
         [BROWSER_CLIENT_MODULE]: yield* Effect.promise(browserClientSource),
       };
 
-      // Non-main modules travel by content-addressed VFS path; the loader verifies bytes against the digest.
-      const images: Record<string, string> = {};
-      const textModules: Record<string, string> = {};
+      // Every module travels by content-addressed VFS path; the loader verifies bytes against the digest.
       kernelVfs.mkdir(`/${FACET_IMAGE_DIR}`, { recursive: true, mode: 0o755 });
 
-      for (const [name, contents] of Object.entries(modules)) {
+      const held = (contents: string) => Effect.gen(function* () {
         const digest = yield* Effect.promise(async () => facetImageDigest(contents));
         const path = facetImagePath(digest);
 
         if (!kernelVfs.exists(path)) kernelVfs.writeFile(path, contents, { mode: 0o644 });
-        images[name] = digest;
 
-        if (name !== MAIN_MODULE) textModules[name] = path;
-      }
+        return digest;
+      });
 
+      const digests: Record<string, string> = {};
+
+      for (const [name, contents] of Object.entries(modules)) digests[name] = yield* held(contents);
+      const client = assets.find((asset) => asset.path === '/__kinu/client.js');
+
+      return {
+        modules: digests,
+        ...(shell !== undefined && client !== undefined && { client: yield* held(client.contents), shell: yield* held(shell) }),
+      };
+    }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.succeed({ failed: renderCauseChain(error) })));
+  }
+
+  /** Runs an image: the durable application on its port, or a caller's private process. */
+  launch(input: ResidentSlateBoot, image: SlateImage): Promise<ResidentSlateProcess> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const session = yield* Effect.promise(async () => this.deps.session());
+      const { workerCompatibility } = yield* attempt({ doing: 'loading the slate runtime vendor', otherwise: 'io' }, async () => import('virtual:kinu-slate-vendor'));
+      const kernelVfs = session.vfs.as(CRED_KERNEL);
+      const slateId = input.root.slice(input.root.lastIndexOf('/') + 1);
+      const read = (digest: string) => kernelVfs.readFileString(facetImagePath(digest));
+      const runner = image.modules[MAIN_MODULE];
+      const applicationImage = image.modules[APPLICATION_MODULE];
+
+      if (runner === undefined) return yield* new KinuError('io', `Slate image holds no ${MAIN_MODULE}`);
+
+      if (applicationImage === undefined) return yield* new KinuError('io', `Slate image holds no ${APPLICATION_MODULE}`);
+      const textModules = Object.fromEntries(Object.entries(image.modules).filter(([name]) => name !== MAIN_MODULE).map(([name, digest]) => [name, facetImagePath(digest)]));
       const manager = (yield* Effect.promise(async () => this.deps.facetManager())).manager;
 
       const launch: LongRunningWorkerSpawnOptions = {
@@ -601,17 +661,11 @@ export class ResidentSlateProcesses {
       };
 
       if (input.app !== null) {
-        const runner = images[MAIN_MODULE];
-        const applicationImage = images[APPLICATION_MODULE];
-
-        if (runner === undefined) return yield* new KinuError('io', `Slate boot produced no ${MAIN_MODULE} image`);
-
-        if (applicationImage === undefined) return yield* new KinuError('io', `Slate boot produced no ${APPLICATION_MODULE} image`);
         launch.port = input.app.port;
         launch.durable = { owner: input.owner, image: { runner, application: applicationImage } };
       }
 
-      const spawned = yield* Effect.promise(async () => manager.spawnWorker(modules[MAIN_MODULE], `slate ${slateId}`, input.root, launch));
+      const spawned = yield* Effect.promise(async () => manager.spawnWorker(read(runner), `slate ${slateId}`, input.root, launch));
 
       const pid = spawned.pid;
       const refusal = v.safeParse(StartedResult, spawned.boot);
@@ -636,16 +690,13 @@ export class ResidentSlateProcesses {
         });
       });
 
-      const artifacts: SlateBootArtifacts = { application: modules[APPLICATION_MODULE] };
-      const clientBundle = assets.find((asset) => asset.path === '/__kinu/client.js');
-
-      if (shell !== undefined && clientBundle !== undefined) {
-        artifacts.client = clientBundle.contents;
-        artifacts.shell = shell;
-      }
+      const artifacts: SlateBootArtifacts = {
+        application: read(applicationImage),
+        ...(image.client !== undefined && image.shell !== undefined && { client: read(image.client), shell: read(image.shell) }),
+      };
 
       // Nothing else sweeps these images (fabric sweeps only its own), and every source edit writes a new one.
-      this.imagesInUse.set(pid, new Set(Object.values(images)));
+      this.imagesInUse.set(pid, new Set([...Object.values(image.modules), ...[image.client, image.shell].filter((digest) => digest !== undefined)]));
       this.sweepFacetImages(kernelVfs);
 
       return {
@@ -662,6 +713,9 @@ export class ResidentSlateProcesses {
     const keep = new Set<string>();
 
     for (const digests of this.imagesInUse.values()) for (const digest of digests) keep.add(facetImagePath(digest));
+
+    // A slate's last working build stays, so a later edit that fails to compile still has something to serve.
+    for (const digest of this.deps.retained()) keep.add(facetImagePath(digest));
 
     for (const entry of kernelVfs.readdir(`/${FACET_IMAGE_DIR}`)) {
       const path = `/${FACET_IMAGE_DIR}/${entry.name}`;

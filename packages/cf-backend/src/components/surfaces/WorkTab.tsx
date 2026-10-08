@@ -38,21 +38,24 @@ const FILTERS: Array<{ id: JournalFilter; label: string }> = [
   { id: "self", label: "Self-changes" },
 ];
 
-/** Where each pending kind is decided; tab names stay out of core. `deferred_action` is absent: the queue is its home. */
+/** Kinds decided in this queue, which is their only home. */
+type DecidedHere = "deferred_action" | "workspace_proposal";
+
+/** Where each pending kind is decided; tab names stay out of core. The kinds decided here are absent. */
 const PENDING_HOME = {
   scaffold_version: { surface: "Agent", cta: "decide in Agent → Evolution" },
   unseen_changes: { surface: null, cta: null },
   curriculum_task: { surface: null, cta: "decide in Supervise" },
   // The row is the deep link: it opens the review over the whole tab.
   plan_review: { surface: null, cta: "open the review" },
-} satisfies Record<Exclude<PendingActionKind, "deferred_action">, { surface: SurfaceKind | null; cta: string | null }>;
+} satisfies Record<Exclude<PendingActionKind, DecidedHere>, { surface: SurfaceKind | null; cta: string | null }>;
 
 const PENDING_ICON = {
   scaffold_version: GitBranchIcon,
   unseen_changes: SparkleIcon,
   curriculum_task: PackageIcon,
   plan_review: NotePencilIcon,
-} satisfies Record<Exclude<PendingActionKind, "deferred_action">, typeof ClockIcon>;
+} satisfies Record<Exclude<PendingActionKind, DecidedHere>, typeof ClockIcon>;
 
 export interface WorkTabProps {
   plan: PlanReview | null;
@@ -236,9 +239,10 @@ function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenReview 
   onOpenReview: (ref: { owner: string; id: string; revision: number }) => void;
 }) {
   const parkedCommands = pendingActions.filter((a) => a.kind === "deferred_action");
+  const proposals = pendingActions.filter((a) => a.kind === "workspace_proposal");
 
   const elsewhere = pendingActions.filter(
-    (a): a is DecidedElsewhere => a.kind !== "deferred_action");
+    (a): a is DecidedElsewhere => a.kind !== "deferred_action" && a.kind !== "workspace_proposal");
 
   const openQueuedReview = useCallback((action: DecidedElsewhere) => {
     if (action.planRef !== undefined) onOpenReview(action.planRef);
@@ -255,6 +259,9 @@ function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenReview 
           {parkedCommands.length > 0 && (
             <ParkedCommands actions={parkedCommands} rpc={rpc} onDecided={onDecided} />
           )}
+          {proposals.map((action) => (
+            <WorkspaceProposalCard key={action.id} action={action} rpc={rpc} onDecided={onDecided} />
+          ))}
           {elsewhere.map((action) => (
             <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface}
               onOpen={action.kind === "plan_review" ? () => openQueuedReview(action) : undefined} />
@@ -615,7 +622,53 @@ function ParkedWriteDiff({ id, rpc }: { id: string; rpc: Rpc }) {
   );
 }
 
-type DecidedElsewhere = PendingAction & { kind: Exclude<PendingActionKind, "deferred_action"> };
+type DecidedElsewhere = PendingAction & { kind: Exclude<PendingActionKind, DecidedHere> };
+
+type ProposalDecision = "approve" | "decline";
+
+/** A workspace the agent proposed: the SOUL.md approving writes, and one decision. Nothing exists until approved. */
+function WorkspaceProposalCard({ action, rpc, onDecided }: { action: PendingAction; rpc: Rpc; onDecided?: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const decide = (answer: ProposalDecision) => Effect.catchCause(Effect.gen(function* () {
+    setBusy(true);
+    setError(null);
+    yield* Effect.promise(() => rpc("decideWorkspaceProposal", [action.id, answer]));
+    onDecided?.();
+  }), (failed) => Effect.sync(() => {
+    setError(`Could not record the decision: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
+  })).pipe(Effect.ensuring(Effect.sync(() => { setBusy(false); })));
+
+  return (
+    <div className="py-1 space-y-2" data-workspace-proposal={action.id}>
+      <div className="flex items-start gap-2">
+        <SparkleIcon size={14} className="p-warning shrink-0 mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <div className="p-row-text p-text">{action.title}</div>
+          {action.detail && <div className="mt-0.5 break-words p-meta p-text-2">{action.detail}</div>}
+          <div className="mt-0.5 p-meta p-text-3">
+            The agent asked {timeAgo(action.at)}. Nothing is created until you approve it, under your account.
+          </div>
+        </div>
+      </div>
+      {action.proposal !== undefined && (
+        <div className="rounded-md px-2 py-1.5 p-elevated">
+          <button type="button" className="p-meta p-accent-fg hover:underline" onClick={() => setOpen((was) => !was)} aria-expanded={open}>
+            {open ? "Hide its soul" : "Show its soul"}
+          </button>
+          {open && <pre className="mt-1.5 p-t-code p-text whitespace-pre-wrap break-words" data-workspace-proposal-soul>{action.proposal.soul}</pre>}
+        </div>
+      )}
+      {error && <div className="p-t-status p-danger">{error}</div>}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <FilledButton disabled={busy} onClick={() => detach(decide("approve"))}>Create workspace</FilledButton>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => detach(decide("decline"))}>Decline</Button>
+      </div>
+    </div>
+  );
+}
 
 function PendingRow(
   { action, onOpenSurface, onOpen }: {

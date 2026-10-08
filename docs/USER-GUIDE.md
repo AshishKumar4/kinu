@@ -28,6 +28,14 @@ You can have both, and you can move a cloud workspace onto your machine later
 (§7). Both run the same core, but they are hosted differently and some
 features exist only in one.
 
+A cloud workspace's main agent can also propose a new workspace
+(`agent.proposeWorkspace`): a name, a brief that becomes its mission, and the
+rest of its soul. Nothing exists until you approve it under Work → Needs you,
+which shows the SOUL.md approving writes. Approved, it is created under your
+account as if you had created it, its first turn acts on the brief, and the
+agent that asked is told its link. Declined, nothing is created and the agent
+is told so.
+
 ## 2. Day one
 
 ```bash

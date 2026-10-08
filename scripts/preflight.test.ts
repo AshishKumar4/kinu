@@ -23,9 +23,12 @@ import {
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
 
-const ENGINE = 'packages/cli-backend/src/checkpoints.ts';
+const ENGINE = 'packages/core/src/checkpoints/engine.ts';
 
 const engineSource = readFileSync(join(REPO_ROOT, ENGINE), 'utf8');
+
+/** The daemon, which runs a generated copy of the engine: its markers are the copy's. */
+const DAEMON = 'packages/pc-agent/src/index.js';
 
 /** The string elements of `PROJECT_MARKERS`'s array literal in `source`. */
 function declaredMarkers(file: string, source: string): (string | undefined)[] {
@@ -86,10 +89,10 @@ describe('the test browsers --reclaim ends', () => {
 });
 
 describe('the markers this gate probes', () => {
-  test('are exactly the markers the engine treats as a project root', () => {
-    // The header claims this sync, and a hardcoded copy that drifted would make
-    // the check pass over the very directory it is guarding.
+  test('are exactly the markers both engines treat as a project root', () => {
+    // A copy that drifted would make the check pass over the very directory it is guarding.
     expect(declaredMarkers(ENGINE, engineSource)).toEqual([...PROJECT_MARKERS]);
+    expect(declaredMarkers(DAEMON, readFileSync(join(REPO_ROOT, DAEMON), 'utf8'))).toEqual([...PROJECT_MARKERS]);
   });
 
   test('are read as the array literal, whatever its quoting, layout or comments', () => {
