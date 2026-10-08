@@ -28,7 +28,10 @@ export type {
 // Content plus annotations_json share one row capped at do.sqlite.row_bytes; this cap and MAX_PLAN_ANNOTATIONS_BYTES fit inside it together.
 export const MAX_PLAN_CONTENT_BYTES = 1536 * 1024;
 
-const MAX_PLAN_REVIEW_ROW_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
+/** Read on call: the browser imports this module's schemas, and a module-scope read ships the whole catalog to it. */
+function planReviewRowBytes(): number {
+  return PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
+}
 
 const PlanReviewStatusSchema = v.picklist([
   'pending', 'changes_requested', 'approved', 'superseded', 'dismissed',
@@ -378,8 +381,10 @@ export class PlanReviewStore {
 
       if (content.trim() === '') return { ok: false, error: 'the plan is empty: write it in full with one edit starting at line 1', plan: current };
 
-      if (byteLength(content) + byteLength('[]') > MAX_PLAN_REVIEW_ROW_BYTES) {
-        return { ok: false, error: `plan content exceeds the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };
+      const rowBytes = planReviewRowBytes();
+
+      if (byteLength(content) + byteLength('[]') > rowBytes) {
+        return { ok: false, error: `plan content exceeds the stored row size of ${rowBytes} bytes`, plan: current };
       }
 
       const id = revising?.id ?? this.newId();
@@ -428,8 +433,10 @@ export class PlanReviewStore {
 
     const encoded = JSON.stringify(admission.success);
 
-    if (byteLength(current.content) + byteLength(encoded) > MAX_PLAN_REVIEW_ROW_BYTES) {
-      return { ok: false, error: `plan content and annotations exceed the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };
+    const rowBytes = planReviewRowBytes();
+
+    if (byteLength(current.content) + byteLength(encoded) > rowBytes) {
+      return { ok: false, error: `plan content and annotations exceed the stored row size of ${rowBytes} bytes`, plan: current };
     }
 
     const now = this.now();
