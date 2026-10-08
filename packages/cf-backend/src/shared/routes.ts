@@ -264,6 +264,8 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
   const { share, url } = v.parse(LiveShareCreatedSchema, created.value);
   const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
   const writes: Array<{ readonly listing?: 'pending' }> = [created];
+  // Answered as it stands once the people it names are recorded, so the answer names them.
+  let answered = share;
 
   if (share.visibility === 'users' && emails.length > 0) {
     const named = await Promise.all(emails.map(async (email) => ({ userId: await deriveUserId(email), email })));
@@ -271,9 +273,10 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
 
     if (!recorded.ok) return err(409, recorded.error);
     writes.push(recorded);
+    answered = recorded.value;
   }
 
-  return json({ body: { share, url, ...listed(...writes) } }, { status: 201 });
+  return json({ body: { share: answered, url, ...listed(...writes) } }, { status: 201 });
 }
 
 /** A live share and a blueprint link revoke alike: the owner's object knows which it holds. */

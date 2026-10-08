@@ -18,6 +18,8 @@ source scripts/repo-runtime.sh
 export KINU_EVAL_TRIALS=1
 # evals.yml's 20 Muse calls run beside it on the same opencode-go key (its KINU_EVAL_FILES).
 export KINU_EVAL_FILES=5 KINU_EVAL_CONCURRENCY=1
+# Beside evals.yml's measured run on the same deployment: its own trial accounts (evals/src/config.ts, PASS_FIRST_SLOT).
+export KINU_EVAL_PASS=1
 unset KINU_EVAL_MODELS
 if [[ -n "${KINU_DEPLOY_REPORT:-}" ]]; then
   export BENCH_ARTIFACTS="$KINU_DEPLOY_REPORT/evals"

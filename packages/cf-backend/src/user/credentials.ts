@@ -246,6 +246,8 @@ export class UserCredentials {
   /** Every stored credential sealed for `account`: a reset recreates this object under a new id, which its own seal binds. */
   async checkpointCredentials(caller: UserCaller, account: string): Promise<CheckpointedCredential[]> {
     await this.host.requireTier(caller, 'credentials.other');
+    // A rotation in flight would spend the refresh token this reads.
+    await Promise.allSettled(this._refreshing.values());
     const cipher = await this.cipher();
     const checkpoint: CheckpointedCredential[] = [];
 

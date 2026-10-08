@@ -1130,7 +1130,7 @@ export const LADDER: readonly Gate[] = [
       + 'that stores it, or one stored under a name no provider reads, evals dispatched from a branch that '
       + 'does not hold the build, and a reset that stops '
       + 'partway with no record, no barrier, or no way to finish it. And a version\'s uncaught exception, '
-      + 'platform kill, failed or owed effect, wake loop or alarm storm left out of the deploy\'s findings. '
+      + 'platform kill, failed or owed effect, wake loop or idle wake left out of the deploy\'s findings. '
       + 'And two deploys of one environment at once, or continuous staging deploying a tip a newer one '
       + 'passed, or one tip twice, or on another revision\'s install, and a promotion of an unverified build '
       + 'or a red one retried.',

@@ -14,7 +14,7 @@ import {
   ingressAdmitted,
   parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateCallRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateCall, issuedSlateInvocation,
-  routeViewerCall, slateCallAddress, slateAddressImpact, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
+  routeViewerCall, admitNestedViewerCall, slateCallAddress, slateAddressImpact, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, publicPage, UsageSchema, usageTotal,
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
@@ -34,6 +34,19 @@ import { SlateSources, type MessageBlock, type SlateSource } from './sources';
 
 type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
 
+/** What the host decided about a call, carried into the actor that runs it. */
+export interface SlateDispatchContext {
+  /** Check that the call may run, and run nothing: the class runs it, where its browser socket lives. */
+  readonly authorizeOnly?: true;
+  /** A share's viewer: what runs for it reaches no browser of the owner's, as a viewer's slate process does not. */
+  readonly viewer?: true;
+  /**
+   * Each member a call reaches inside itself, as a crafted tool's program does, before it runs: recorded for its
+   * owner's slate, held to the grant and the share's life for a viewer. It throws to refuse.
+   */
+  readonly nested: (namespace: string, member: string) => void;
+}
+
 interface SlateApps extends DurableApps {
   url(port: number, capability: string): Promise<WorkspacePreviewUrl>;
 }
@@ -42,13 +55,15 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   readonly ctx: DurableObjectState;
   readonly workspace: string;
   /** Runs as the caller: its own providers, role reach, read models and gates. */
-  dispatch(caller: SlateCaller, route: SlateCapabilityRoute): Promise<JsonValue>;
+  dispatch(caller: SlateCaller, route: SlateCapabilityRoute, context: SlateDispatchContext): Promise<JsonValue>;
   /** The actor whose browser sessions the caller's slate drives, as that actor's eval programs do; null for a share's
    *  viewer, whose grant no CDP socket passes through. */
   browserActor(caller: SlateCaller): Promise<string | null>;
   readonly apps: SlateApps;
   catalog(): Promise<SlateSurfaceCatalog>;
   shareUrl(handle: string): Promise<string | null>;
+  /** The app's page a `users` share is entered through, or null where this deployment names no app origin. */
+  shareEntry(share: string): string | null;
   /** Absent means no per-viewer rate bound, as at the edge. */
   kv?: KvStore;
   /** Debits the per-share per-day spend label; absent means no spend bound. */
@@ -237,6 +252,11 @@ export class SlateHost {
     const share = this.live.byHandle(input.handle);
 
     if (share === undefined) return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+
+    // A visitor not yet known signs in at the app, whose ticket brings them back as themselves.
+    const entry = share.visibility === 'users' && input.claim.userId === null ? this.deps.shareEntry(share.id) : null;
+
+    if (entry !== null) return new Response(null, { status: 303, headers: { location: entry, 'cache-control': 'no-store' } });
 
     if (share.visibility === 'users' && (input.claim.userId === null || !this.liveShareAdmitsUser(share.id, input.claim.userId))) {
       return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
@@ -753,11 +773,12 @@ export class SlateHost {
       // An answer's page calls as its author as of now, in the mode the author's next turn runs in.
       const callsAs = source.kind === 'message' ? source.author : caller;
       const call = routeSlateCall({ id, request: parsed.output, chain });
-
       // An answer's page is never shared or published, so what it calls is no slate's graph.
-      if (source.kind !== 'message') this.usage.record(id, call.address);
+      const record = (namespace: string, member: string) => { if (source.kind !== 'message') this.usage.record(id, { namespace, member }); };
 
-      return await this.run(callsAs, call.route);
+      record(call.address.namespace, call.address.member);
+
+      return await this.run(callsAs, call.route, { nested: record, ...(parsed.output.authorize && { authorizeOnly: true }) });
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} ${name}`, cause, otherwise: 'io' })) };
     }
@@ -812,7 +833,11 @@ export class SlateHost {
 
       const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
       row = { slate: id, ...call.address, impact: call.impact, ok: false };
-      const result = await this.run(caller, call.route, viewer);
+
+      // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
+      const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.live.live(input.share).grant, id, { namespace, member }); };
+
+      const result = await this.run(caller, call.route, { nested, ...(request.authorize && { authorizeOnly: true }) }, viewer);
       row = { ...row, ok: result.ok };
 
       if (result.ok) this.debitShare(share, result.value);
@@ -823,10 +848,10 @@ export class SlateHost {
     }
   }
 
-  private async run(caller: SlateCaller, route: SlateRoute, viewer?: SlateViewer): Promise<SlateCallResult> {
+  private async run(caller: SlateCaller, route: SlateRoute, context: SlateDispatchContext, viewer?: SlateViewer): Promise<SlateCallResult> {
     switch (route.kind) {
       case 'namespace': {
-        const value = await this.deps.dispatch(caller, route);
+        const value = await this.deps.dispatch(caller, route, context);
         const refused = answeredRefusal(value);
 
         return refused === null ? { ok: true, value } : { ok: false, ...refused };
@@ -838,7 +863,7 @@ export class SlateHost {
       case 'rpc':
       case 'tool':
       case 'agent':
-      case 'ai': return { ok: true, value: await this.deps.dispatch(caller, route) };
+      case 'ai': return { ok: true, value: await this.deps.dispatch(caller, route, context) };
       // The hop keeps the caller's authority, never the author's; the viewer follows the chain.
       case 'app': return this.call({ caller, id: route.id, method: route.method, args: [...route.args], chain: route.chain, viewer });
     }

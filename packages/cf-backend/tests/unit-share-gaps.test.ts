@@ -6,8 +6,9 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
+import { matchPath } from 'react-router-dom';
 import {
-  LiveShareRecordSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  APP_ROUTES, LiveShareRecordSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
   type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
@@ -16,6 +17,7 @@ import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
 import { makeKv } from './helpers/kv';
 import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
+import { accountRoutes } from '../src/user/account-routes';
 import { serveFamily } from './helpers/api';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
@@ -32,6 +34,8 @@ function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, 
 const OWNER_ID = '0123456789abcdef0123456789abcdef';
 
 const VIEWER_ID = 'fedcba9876543210fedcba9876543210';
+
+const APP_ORIGIN = 'https://app.test';
 
 async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
   await files.mkdir('/slates/issues', { recursive: true });
@@ -64,6 +68,8 @@ interface World {
   readonly owner: ActorHarness<HarnessOrchestratorAgent>;
   readonly viewer: ActorHarness<HarnessOrchestratorAgent>;
   readonly ownerUser: TestUserDO;
+  /** pat@example.test's account, which a card for pat reaches. */
+  readonly viewerUser: TestUserDO;
   /** Each workspace object the edge acquired, by name. */
   readonly acquired: string[];
   readonly close: () => void;
@@ -79,7 +85,7 @@ async function userWorld(
   const agent = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId: userId });
   // Declared before anything touches `slates`: its deps memoize.
   agent.agent.harnessDeclareEnv({
-    AUTH_KV: kv, PREVIEW_HOST_SUFFIX: 'share.test',
+    AUTH_KV: kv, PREVIEW_HOST_SUFFIX: 'share.test', CLI_PUBLIC_ORIGIN: APP_ORIGIN,
     CREDENTIAL_ENCRYPTION_KEY: TEST_USER_ENV.CREDENTIAL_ENCRYPTION_KEY,
   });
   await agent.agent.installWorkspaceCapability(capability);
@@ -146,7 +152,7 @@ async function twoUserWorld(): Promise<World> {
   await exerciseIssuesSlate(ownerSide.agent.agent);
 
   return {
-    env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user, acquired,
+    env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user, viewerUser: viewerSide.user, acquired,
     close: () => { ownerSide.user.close(); viewerSide.user.close(); resetRecordedMcp(); },
   };
 }
@@ -238,7 +244,7 @@ test('D3: a credentialed share answers its consent page until the consent cookie
   expect(requests).toHaveLength(1);
 });
 
-test('a users share lets in its owner and the people it names, each opening it as themselves, and no one else', async () => {
+test('a users share link sends each visitor to sign in, then lets in its owner and the people it names as themselves, and no one else', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
@@ -246,8 +252,14 @@ test('a users share lets in its owner and the people it names, each opening it a
   const url = present(created.url, 'the share URL');
   await world.owner.agent.shareLiveWith(created.share.id, [{ userId: VIEWER_ID, email: 'pat@example.test' }]);
 
+  // Each follows the link as a browser does: to the app's page for the share, whose open hands them a ticket.
   const openAs = async (identity: AuthIdentity, ip: string): Promise<number | undefined> => {
-    const opened = await sharedRequest(world.env, identity, post('/api/shared/live/open', { workspace: 'issues-owner', share: created.share.id }));
+    const sent = present(await visit(world, url, ip), 'the first visit');
+    const page = new URL(present(sent.headers.get('location'), 'where the first visit was sent'));
+
+    expect([sent.status, page.origin]).toEqual([303, APP_ORIGIN]);
+    const { params } = present(matchPath(APP_ROUTES.sharedLive, page.pathname), 'the share\'s entry page');
+    const opened = await sharedRequest(world.env, identity, post('/api/shared/live/open', { workspace: params.workspace, share: params.share }));
     const entry = await jsonBody(present(opened, 'the open answer'), v.object({ url: v.string() }));
     const exchanged = await handleSlateShareHostRequest(new Request(entry.url, { headers: { 'cf-connecting-ip': ip } }), world.env);
     const cookie = present(exchanged?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
@@ -258,7 +270,6 @@ test('a users share lets in its owner and the people it names, each opening it a
   expect(await openAs(identityOf(OWNER_ID, 'owner@example.test'), '203.0.113.5')).toBe(200);
   expect(await openAs(identityOf(VIEWER_ID, 'pat@example.test'), '203.0.113.6')).toBe(200);
   expect(await openAs(identityOf('00112233445566778899aabbccddeeff', 'sam@example.test'), '203.0.113.7')).toBe(404);
-  expect((await visit(world, url, '203.0.113.8'))?.status).toBe(404);
 });
 
 test('D1: a live share forks for who it names, refuses who it does not, honors fork:false, and its owner forks it too', async () => {
@@ -471,6 +482,9 @@ test("a named person's Drive holds the share's card from the owner's account, wa
   expect(shared.status).toBe(201);
   const created = await jsonBody(shared, LiveShareCreatedSchema);
 
+  // The answer names whom the share was made for, as the share now records them.
+  expect(created.share.users).toEqual(['pat@example.test']);
+
   // Delivered by the owner's account's job, not by the request: until it runs, the Drive holds nothing.
   expect((await library()).received).toEqual([]);
   await world.ownerUser.userDO.alarm();
@@ -486,6 +500,85 @@ test("a named person's Drive holds the share's card from the owner's account, wa
   expect(revoked.status).toBe(200);
   await world.ownerUser.userDO.alarm();
   expect((await library()).received).toEqual([]);
+});
+
+/** What the person a share names holds, read as their Drive reads it. */
+async function heldBy(world: World, identity: AuthIdentity) {
+  const answer = present(await sharedRequest(world.env, identity, new Request('https://app.test/api/shared')), 'the library answer');
+
+  return (await jsonBody(answer, SharedLibrarySchema)).received;
+}
+
+/** The owner shares the issues slate with pat, live; the card is delivered only when the owner's alarm runs. */
+async function shareWithPat(world: World, owner: AuthIdentity) {
+  const shared = present(await sharedRequest(world.env, owner, post('/api/shared/live', {
+    workspace: 'issues-owner', slate: 'issues', visibility: 'users', emails: ['pat@example.test'],
+  })), 'the share answer');
+
+  expect(shared.status).toBe(201);
+
+  return await jsonBody(shared, LiveShareCreatedSchema);
+}
+
+/** The account delete as its route runs it: the typed email, then the forget sweep, then the object's teardown. */
+async function deleteAccount(world: World, owner: AuthIdentity): Promise<number> {
+  const request = new Request('https://app.test/api/user/account', {
+    method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: owner.email }),
+  });
+
+  return present(await serveFamily(accountRoutes, { identity: owner })(request, world.env), 'the delete answer').status;
+}
+
+test("an account deleted while a card's removal is pending tells that person to forget it", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const viewer = identityOf(VIEWER_ID, 'pat@example.test');
+  const created = await shareWithPat(world, owner);
+  await world.ownerUser.userDO.alarm();
+  expect(await heldBy(world, viewer)).toHaveLength(1);
+
+  // The revoke queues the card's removal and drops its sent row; the alarm that would deliver it never runs.
+  await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: created.share.id }));
+  expect(await deleteAccount(world, owner)).toBe(200);
+  expect(await heldBy(world, viewer)).toEqual([]);
+});
+
+test("a card's delivery retried after the account's withdrawal sends nothing, and the card stays forgotten", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const viewer = identityOf(VIEWER_ID, 'pat@example.test');
+  const recipient = world.viewerUser.userDO;
+  const put = recipient.shareCards_put.bind(recipient);
+  const refused = Promise.withResolvers<void>();
+  let puts = 0;
+
+  // The first delivery fails, so the driver retries it after a backoff the delete lands inside.
+  Object.assign(recipient, {
+    shareCards_put: async (...args: Parameters<typeof put>) => {
+      puts += 1;
+
+      if (puts > 1) return await put(...args);
+      refused.resolve();
+      throw new KinuError('unavailable', "pat's account is restarting");
+    },
+  });
+  // The longest backoff the driver draws, so its retry comes after the delete rather than racing it.
+  const random = Math.random;
+  Math.random = () => 0.999;
+
+  try {
+    await shareWithPat(world, owner);
+    const driving = world.ownerUser.userDO.alarm();
+    await refused.promise;
+    expect(await deleteAccount(world, owner)).toBe(200);
+    await Promise.allSettled([driving]);
+  } finally {
+    Math.random = random;
+  }
+
+  expect(await heldBy(world, viewer)).toEqual([]);
 });
 
 test("a share whose recipients' tile cannot be pushed says the list is behind, whichever write it was", async () => {

@@ -56,6 +56,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     browserActor: async () => null,
     catalog: async () => ({ mcp: [], slates: [] }),
     shareUrl: async () => null,
+    shareEntry: () => null,
   });
 
   private prepare(): void {

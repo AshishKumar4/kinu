@@ -11,6 +11,7 @@ import WorkspacesPage from "./pages/WorkspacesPage";
 import PluginsPage from "./pages/PluginsPage";
 import DevicesPage from "./pages/DevicesPage";
 import BlueprintPage from "./pages/BlueprintPage";
+import LiveSharePage from "./pages/LiveSharePage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { APP_ROUTES, needsOnboarding } from "@kinu.run/core";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
@@ -105,6 +106,8 @@ export default function App() {
         </Route>
         {/* Outside the shell: a viewer without a session sees this page and nothing else. */}
         <Route path={APP_ROUTES.sharedBlueprint} element={<ErrorBoundary label="blueprint"><BlueprintPage /></ErrorBoundary>} />
+        {/* Outside onboarding too: a person a share names enters it before setting anything up. */}
+        <Route path={APP_ROUTES.sharedLive} element={<ErrorBoundary label="shared-live"><LiveSharePage /></ErrorBoundary>} />
         <Route path={APP_ROUTES.deploy} element={
           <ErrorBoundary label="deploy">
             <Suspense fallback={<LazyFallback />}>

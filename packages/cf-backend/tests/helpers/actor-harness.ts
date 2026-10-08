@@ -379,7 +379,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** Deployment bindings declared after construction (AUTH_KV, preview suffix).
    *  Declare before the read: `slates` memoizes its deps on first use. */
-  harnessDeclareEnv(bindings: { AUTH_KV?: KvStore; PREVIEW_HOST_SUFFIX?: string; CREDENTIAL_ENCRYPTION_KEY?: string; KinuDevbox?: Env["KinuDevbox"] }): void {
+  harnessDeclareEnv(bindings: {
+    AUTH_KV?: KvStore; PREVIEW_HOST_SUFFIX?: string; CLI_PUBLIC_ORIGIN?: string; CREDENTIAL_ENCRYPTION_KEY?: string; KinuDevbox?: Env["KinuDevbox"];
+  }): void {
     Object.assign(this.env, bindings);
   }
 

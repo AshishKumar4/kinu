@@ -55,7 +55,7 @@ import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
 import { contextFill, type ContextFill } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import { DELEGATION_LANE_FIBER } from './fiber-recovery';
-import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
+import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
@@ -4477,7 +4477,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       session: () => this.hostedWorkspace().bundle.session(),
       facetManager: () => this.hostedWorkspace().facetManager(),
       bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
-      dispatch: (caller, route) => this.slateCallDispatch(caller.path, route, caller.workMode),
+      // A share's caller carries its viewer through, so what the call reaches inside itself is held to the grant.
+      dispatch: (caller, route, context) => this.slateCallDispatch(caller.path, route, caller.workMode, { ...context, ...(caller.share !== undefined && { viewer: true }) }),
       browserActor: async (caller) => (caller.share === undefined ? this.slateCallerActorId(caller.path) : null),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
@@ -4486,6 +4487,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       catalog: () => this.slateSurfaceCatalog(),
       shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
+      shareEntry: (share) => liveShareEntryPage(this.env, this.name, share),
       kv: this.env.AUTH_KV,
       budget: () => this.budget,
       ownerTitle: async () => this.safeDisplayName(),

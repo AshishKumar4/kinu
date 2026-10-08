@@ -250,7 +250,7 @@ export { parseSlateProject, type SlateProject } from './slates/project';
 
 export {
   SHARE_KINDS, SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH,
-  formatBlueprintId, parseBlueprintId, blueprintPagePath,
+  formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
   ShareGrantSchema, SlateCapabilityGraphSchema, ShareCardSchema,
@@ -270,7 +270,7 @@ export {
 } from './slates/capability-graph';
 
 export {
-  SlateCallRequestSchema, routeSlateCall, issuedSlateInvocation, routeViewerCall, slateCallAddress,
+  SlateCallRequestSchema, SLATE_DRIVEN_MEMBERS, routeSlateCall, issuedSlateInvocation, routeViewerCall, admitNestedViewerCall, slateCallAddress,
   type SlateCallRequest, type SlateRoute, type SlateInvocation, type SlateViewer,
 } from './slates/surface';
 
@@ -490,7 +490,7 @@ export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, codemodeInputSchema,
   renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
-  slateToolReach, callCodemodeMember,
+  slateToolReach, callCodemodeMember, requireCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
