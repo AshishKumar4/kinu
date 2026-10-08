@@ -113,8 +113,9 @@ let killPlan = new Map<string, KillPoint>();
 /** Resolved when the N-kill turn's final answer is sent. */
 let killDone = Promise.withResolvers<void>();
 
-/** What the model was last told of each N-kill call, by its id. */
-const killTold = new Map<string, string>();
+/** Per step, as the newest request's history has it: how many of its calls the model holds an answer for, and how
+ *  many of those answers say it ran (show its line). */
+let killTally: ReadonlyArray<{ readonly step: number; readonly calls: number; readonly ran: number }> = [];
 
 /** A step's line as the shell printed it (the file's `cat`), not as the command spelled it (`echo step-K >>`). */
 const STEP_LINE = /step-(\d+)(?=\\n|\n|"|$)/gu;
@@ -135,15 +136,38 @@ function killGate(step: number, attempt: number): HeldGate {
   return gate;
 }
 
+/** Each step's calls in `messages` (the product names them its own way), matched to their answers by id. */
+function tallied(messages: OutboundBody['messages'] & {}): Array<{ step: number; calls: number; ran: number }> {
+  const stepOf = new Map<string, number>();
+
+  for (const call of messages.flatMap((m) => m.tool_calls ?? [])) {
+    const named = /echo step-(\d+) >>/u.exec(call.function.arguments ?? '');
+
+    if (named !== null) stepOf.set(call.id, Number(named[1]));
+  }
+
+  const tally = new Map<number, { step: number; calls: number; ran: number }>();
+
+  for (const message of messages) {
+    const step = message.role === 'tool' ? stepOf.get(message.tool_call_id ?? '') : undefined;
+
+    if (step === undefined) continue;
+    const entry = tally.get(step) ?? { step, calls: 0, ran: 0 };
+    const ran = [...textOf(message.content).matchAll(STEP_LINE)].some((match) => Number(match[1]) === step);
+
+    tally.set(step, { step, calls: entry.calls + 1, ran: entry.ran + (ran ? 1 : 0) });
+  }
+
+  return [...tally.values()].sort((left, right) => left.step - right.step);
+}
+
 /** The N-kill model: step K's request asks the workspace shell to wait, append `step-K` to {@link KILL_FILE} and print
  *  it; the next step is the one after the highest line any tool result shows, so a call whose result never came is
  *  asked for again as a fresh call. A planned request is parked, or its call is delivered, at its {@link KillPoint}. */
 async function killBody(body: OutboundBody): Promise<Response> {
   const messages = body.messages ?? [];
 
-  for (const message of messages) {
-    if (message.role === 'tool' && message.tool_call_id?.startsWith('call_kill_') === true) killTold.set(message.tool_call_id, textOf(message.content));
-  }
+  killTally = tallied(messages);
 
   const done = Math.max(0, ...messages.filter((m) => m.role === 'tool')
     .flatMap((m) => [...textOf(m.content).matchAll(STEP_LINE)].map((match) => Number(match[1]))));
@@ -224,7 +248,7 @@ const OutboundMessageSchema = v.object({
   content: v.optional(NullableMessageContentSchema),
   tool_calls: v.optional(v.array(v.object({
     id: v.string(),
-    function: v.object({ name: v.string() }),
+    function: v.object({ name: v.string(), arguments: v.optional(v.string()) }),
   }))),
 });
 
@@ -658,7 +682,7 @@ async function killControl(url: URL, request: Request): Promise<Response> {
     killPlan = new Map(plan.map(({ step, attempt, at }) => [`${String(step)}:${String(attempt)}`, at]));
     killRequests.clear();
     killAsked.clear();
-    killTold.clear();
+    killTally = [];
     killDone = Promise.withResolvers<void>();
 
     return Response.json({ ok: true });
@@ -681,12 +705,7 @@ async function killControl(url: URL, request: Request): Promise<Response> {
     return Response.json({ ok: true });
   }
 
-  // What the model was told of a call: whether that told it the step's line, so the call ran.
-  if (url.pathname === '/kill/told' && request.method === 'GET') {
-    const told = killTold.get(url.searchParams.get('id') ?? '') ?? null;
-
-    return Response.json({ told, ran: told !== null && [...told.matchAll(STEP_LINE)].length > 0 });
-  }
+  if (url.pathname === '/kill/tally' && request.method === 'GET') return Response.json(killTally);
 
   throw new Error(`probe-control: unhandled ${request.method} ${url.pathname}`);
 }

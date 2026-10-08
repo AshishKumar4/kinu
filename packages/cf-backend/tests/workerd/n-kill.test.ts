@@ -40,9 +40,10 @@ describe('a turn killed five times while it works', () => {
     // A call a kill cut is answered for what it is, never run again under its recorded id.
     expect(new Set(journey.issued).size).toBe(journey.issued.length);
 
-    // A call cut after delivery is never told it ran. Whether the kill landed after the call was claimed (it is then
-    // answered as one that may or may not have run) or just before (it is then never recorded) is measured, not pinned.
-    console.info('n-kill cut calls', JSON.stringify(journey.cutResults));
-    expect(journey.cutResults.map(({ id, ran }) => ({ id, ran }))).toEqual(journey.cutResults.map(({ id }) => ({ id, ran: false })));
+    // Each step is told it ran exactly once: no recorded call ran again and was answered twice, and none was lost. A
+    // cut call the product recorded is answered as one that may or may not have run, so a step can hold more calls
+    // than runs; how many is measured, not pinned.
+    console.info('n-kill steps', JSON.stringify(journey.steps));
+    expect(journey.steps.map(({ step, ran }) => ({ step, ran }))).toEqual(KILLS.map(({ step }) => ({ step, ran: 1 })));
   });
 });

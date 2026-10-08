@@ -1685,22 +1685,14 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     await awaitSettled(target);
     const calls = (await this.probeLog()).calls.filter((call) => call.model === 'probe-kill' && !drawsLogoCall(call));
-    const ToldSchema = v.object({ told: v.nullable(v.string()), ran: v.boolean() });
-    const cutResults: Array<KillJourney['cutResults'][number]> = [];
-
-    // What the model was told of each call a `delivered` kill cut.
-    for (const { step, attempt } of plan.filter(({ at }) => at === 'delivered')) {
-      const id = `call_kill_${String(step)}_${String(attempt)}`;
-      const { told, ran } = v.parse(ToldSchema, await (await fetch(`${control}/kill/told?id=${id}`)).json());
-
-      cutResults.push({ id, told, ran });
-    }
+    const TallySchema = v.array(v.object({ step: v.number(), calls: v.number(), ran: v.number() }));
+    const steps = v.parse(TallySchema, await (await fetch(`${control}/kill/tally`)).json());
 
     return {
       kills,
       file: new TextDecoder().decode(await target.readWorkspaceFile(KILL_FILE)),
       issued: calls.at(-1)?.toolCalls.map((call) => call.id) ?? [],
-      cutResults,
+      steps,
       answers: (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').length,
       runEnds: await target.runEnds(),
       claimOutcome: await target.latestClaimOutcome(),

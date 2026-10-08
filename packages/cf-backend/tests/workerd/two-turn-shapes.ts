@@ -429,13 +429,13 @@ export interface KillLanded {
 }
 
 /** What an N-kill turn left: its kills, the file its steps wrote, every tool call the model issued in order, what the
- *  model was told of each call a kill cut, and how the turn and its claim ended. */
+ *  model holds of each step's calls, and how the turn and its claim ended. */
 export interface KillJourney {
   readonly kills: readonly KillLanded[];
   readonly file: string;
   readonly issued: readonly string[];
-  /** Each cut call, what the model was last told of it (null: nothing), and whether that told it the step ran. */
-  readonly cutResults: ReadonlyArray<{ readonly id: string; readonly told: string | null; readonly ran: boolean }>;
+  /** Per step, the calls the model's final history answers, and how many of those answers say the step ran. */
+  readonly steps: ReadonlyArray<{ readonly step: number; readonly calls: number; readonly ran: number }>;
   readonly answers: number;
   readonly runEnds: ReadonlyArray<{ readonly runId: string; readonly reason: string }>;
   readonly claimOutcome: string | null;
