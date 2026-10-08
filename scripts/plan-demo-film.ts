@@ -181,7 +181,7 @@ const STRIP_LABELS = `[...document.querySelectorAll('#inspector .p-tabstrip butt
  */
 const TOOL_CARDS = `document.querySelectorAll('#chat [data-tool-state]').length`;
 
-export const PLAN_STATUS = `(document.querySelector('#inspector [data-plan-status]')?.textContent ?? '').trim()`;
+const PLAN_STATUS = `(document.querySelector('#inspector [data-plan-status]')?.textContent ?? '').trim()`;
 
 /** What the walkthrough did, as the product showed it. Every field is read off
  *  the rendered document, never off the script that drove it. */

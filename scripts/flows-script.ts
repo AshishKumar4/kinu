@@ -21,6 +21,11 @@ export const STORM_FILES = 50;
 
 export const STORM_DIR = 'storm';
 
+/** The agent-plan row's Plan-mode ask in an added agent's pane, and the plan its turn submits. */
+export const AGENT_PLAN_ASK = 'Flow agent plan: plan the release checklist.';
+
+export const AGENT_PLAN = '# Release checklist\n\n1. Tag the build.\n2. Write the notes.';
+
 /** The live-memory row's ask, and the note its turn saves. */
 export const MEMORY_ASK = 'Flow memory: save the release note.';
 
@@ -127,6 +132,13 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
         runtime: 'workspace',
         command: `mkdir -p ${STORM_DIR} && for i in $(seq 1 ${String(STORM_FILES)}); do echo $i > ${STORM_DIR}/f$i.txt; done`,
       } } };
+  }
+
+  // The agent's own Plan turn submits its plan; once submitted, or on the approval's handoff turn, it says so and ends.
+  if (latest.includes(AGENT_PLAN_ASK)) {
+    return request.available.includes('submit_plan') && !request.called.includes('submit_plan')
+      ? { toolCall: { name: 'submit_plan', arguments: { edits: [{ start: 1, content: AGENT_PLAN }] } } }
+      : { text: 'DONE' };
   }
 
   if (asked(SLATE_ASK) && request.available.includes('file')) {

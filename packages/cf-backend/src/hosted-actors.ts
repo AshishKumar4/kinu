@@ -283,7 +283,7 @@ export interface HostedTurnRequest {
   readonly inheritedContext?: SubordinateInheritedContext;
   /** A hirer's turn carries `report`; an owner's chat with the actor does not. */
   readonly parentDriven: boolean;
-  readonly driving?: JsonObject;
+  readonly driving: JsonObject | undefined;
   readonly run?: { readonly input: HeadInput; readonly inference: RunInference };
 }
 
@@ -320,7 +320,7 @@ export function prepareHostedTurn(
 export function hostedRetryTools(seams: HostedActorSeams, reference: ActorReference, mode: WorkMode, sequenceId: string): Promise<ToolSet> {
   return settle(Effect.gen(function* () {
     const actor = yield* Effect.promise(() => seams.host.acquire(reference));
-    const { turn } = yield* hostedTaskTurn(seams, actor, { body: '', mode, sequenceId, parentDriven: true }, undefined);
+    const { turn } = yield* hostedTaskTurn(seams, actor, { body: '', mode, sequenceId, parentDriven: true, driving: undefined }, undefined);
 
     return (yield* Effect.promise(() => seams.taskProfile(turn))).raw;
   }));

@@ -72,7 +72,7 @@ export class AgentTurns {
     const interruptions: Promise<void>[] = [];
     const cut = () => { interruptions.push(this.interruptRun(reference, input.id)); };
 
-    const request: HostedTurnRequest = { sequenceId: input.id, body: input.task, mode: input.mode, parentDriven: false, run: { input, inference } };
+    const request: HostedTurnRequest = { sequenceId: input.id, body: input.task, mode: input.mode, parentDriven: false, driving: undefined, run: { input, inference } };
 
     this.open.set(input.id, { reference, request, prepared: null, profile: null });
     ledger.open(opened, Date.now());
@@ -249,8 +249,7 @@ export class AgentTurns {
     const turn: OpenTurn = {
       reference: this.deps.reference(actorId),
       request: {
-        sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven,
-        ...(request.driving !== undefined && { driving: request.driving }),
+        sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving,
       },
       ...(request.explicitTier !== undefined && { explicitTier: request.explicitTier }),
       prepared: null,

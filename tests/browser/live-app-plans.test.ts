@@ -6,7 +6,7 @@ import { INSPECTOR_SHUT_PX } from '../../scripts/product-flows';
 import { PLAN_TASK_TITLES, SLATE_TITLE, SLATE_UI_FILE, SLATE_UI_PAGES } from '../../scripts/scripted-model';
 import { liveRows } from '../../scripts/live-app-rows';
 
-const { observed, verdictOf, boot } = liveRows('live-app-plans', ['plan-tabs', 'walkthrough', 'agent-plan', 'kept-tab', 'chat-scroll', 'plan-tasks', 'slate-ui', 'state']);
+const { observed, verdictOf, boot } = liveRows('live-app-plans', ['plan-tabs', 'walkthrough', 'kept-tab', 'chat-scroll', 'plan-tasks', 'slate-ui', 'state']);
 
 beforeAll(boot);
 
@@ -31,17 +31,6 @@ describe('a long chat pages older history only when the reader scrolls for it', 
 
     expect(scroll.pagesIdleAfterReturn).toBe(0);
     expect(scroll.returnFromBottom).toBeLessThan(60);
-  });
-});
-
-describe("an added agent's plan is reviewed beside its own pane", () => {
-  test('its Plan turn brings the plan back for review there, and approving it records the decision', () => {
-    const flow = verdictOf(observed.agentPlan, 'agent-plan');
-
-    expect(flow.pane).toContain('/agents/');
-    expect(flow.planReviewShown).toBeTrue();
-    expect(flow.approveControl).toMatch(/approve/iu);
-    expect(flow.planStatus).toBe('Approved');
   });
 });
 

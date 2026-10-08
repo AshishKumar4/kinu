@@ -521,6 +521,15 @@ interface AgentPlanWindow {
 
 const AgentPlanWindowContext = createContext<(window: AgentPlanWindow | null) => void>(() => {});
 
+/** The plan the work surface reviews and the RPC its decisions go through: the workspace's own on the main pane, the
+ *  shown agent's from its pane otherwise. */
+function useReviewedPlan(subName: string | undefined, root: AgentPlanWindow) {
+  const [agentWindow, setAgentWindow] = useState<AgentPlanWindow | null>(null);
+  const shown = subName === undefined ? root : agentWindow ?? { plan: null, rpc: root.rpc };
+
+  return { plan: shown.plan, planRpc: shown.rpc, showAgentWindow: setAgentWindow };
+}
+
 /** The work read names an owner by its own name, the last of its path. */
 function planOwnerName(subName: string | undefined, agentId: string | undefined): string {
   if (subName !== undefined) return subName.slice(subName.lastIndexOf("/") + 1);
@@ -853,8 +862,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     reportSide(source, describeError({ cause: Cause.squash(failed) }));
   }), [reportSide]);
 
-  const [agentPlanWindow, setAgentPlanWindow] = useState<AgentPlanWindow | null>(null);
-  const visiblePlan = subName === undefined ? state.activePlan : agentPlanWindow?.plan ?? null;
+  const reviewed = useReviewedPlan(subName, { plan: state.activePlan, rpc: state.rpc });
+  const visiblePlan = reviewed.plan;
   const [surface, setSurface] = useState<SurfaceKind>("Work");
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
   const workbench = useRef<WorkbenchHandle | null>(null);
@@ -1144,7 +1153,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
               <SwarmNodePane key={shownNode} main={state} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} rosterLoaded={rosterLoaded} />
             )}
             {shownNode === null && (subName ? (
-              <AgentPlanWindowContext.Provider value={setAgentPlanWindow}>
+              <AgentPlanWindowContext.Provider value={reviewed.showAgentWindow}>
                 <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
                   input={shownAgent?.input ?? true} />
               </AgentPlanWindowContext.Provider>
@@ -1289,7 +1298,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             changesFocus={changesFocus}
             filesFocus={filesFocus}
             planOwner={planOwnerName(subName, agentId)}
-            {...(subName !== undefined && agentPlanWindow !== null && { planRpc: agentPlanWindow.rpc })}
+            planRpc={reviewed.planRpc}
             workspacePlanArrival={state.workspacePlanArrival}
             onReviewActor={async (name, actorId) => {
               await navigate(`${helperBase(agentId, name).slice(0, -1)}${actorId === undefined ? "" : `?actor=${encodeURIComponent(actorId)}`}`);
