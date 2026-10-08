@@ -210,7 +210,7 @@ export class FacetChat {
       ...chatTurnParts(input),
       // Named once, from its brief (the turn that opened its conversation), however that turn ended: a later turn's
       // words ("Continue") are no name for it.
-      ...(input.opensConversation && { autoTitle: { mission: input.userText, standIn: true } }),
+      ...(input.opensConversation() && { autoTitle: { mission: input.userText, standIn: true } }),
       sleepTime: false,
       ...(this.reviewsTurns && { advisor: projectJsonValue({ value: session.advisorSnapshot(scoped, input.reachableTools) }) }),
       ...(report !== null && {

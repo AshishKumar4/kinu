@@ -1777,7 +1777,7 @@ export class LocalAgentSession {
     // The workspace mission names the root. A child is named once, from its brief (the turn that opened its
     // conversation), however that turn ended: a later turn's words ("Continue") are no name for it.
     if (root) parts.autoTitle = { mission: missionOf(soulIn(this.rt.space)) };
-    else if (input.opensConversation) parts.autoTitle = { mission: input.userText, standIn: true };
+    else if (input.opensConversation()) parts.autoTitle = { mission: input.userText, standIn: true };
     // The workspace's own conversation compresses into its facts; a hire's does not, as on cf.
     parts.sleepTime = root;
 

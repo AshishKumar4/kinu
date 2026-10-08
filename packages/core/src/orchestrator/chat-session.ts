@@ -174,8 +174,11 @@ export interface OwedTerminalEffectsInput {
   readonly credited: string | null;
   readonly messageId: string;
   readonly userText: string;
-  /** This turn opened the conversation: its words are the agent's brief, or its owner's first. */
-  readonly opensConversation: boolean;
+  /**
+   * This turn opened the conversation: its words are the agent's brief, or its owner's first. Asked only where a child
+   * is named, while the turn is in memory, so a root's turn pays no read for it.
+   */
+  readonly opensConversation: () => boolean;
   /** Read off the settling turn itself; undefined for a person's message. */
   readonly event: string | undefined;
   readonly assistantText: string;
@@ -1375,7 +1378,7 @@ export class ChatSession {
         messageId: answerId,
         userText: item.text,
         // A programmatic opening lands in this turn's commit, below: none yet is this turn's own.
-        opensConversation: [null, turnId].includes(this.transcript.firstUserTurnId()),
+        opensConversation: () => [null, turnId].includes(this.transcript.firstUserTurnId()),
         event: input.event,
         assistantText: input.assistantText,
         owedReport: input.owedReport,
