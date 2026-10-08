@@ -10,7 +10,7 @@ import { settleSync } from '../obs/effect';
 import { isSlateMethodName } from './rpc';
 import { SLATE_READ_MODELS, type SlateReadModel } from './read-models';
 import { grantAdmits } from './capability-graph';
-import { AI_RUN_MEMBER, AI_STREAM_MEMBER, slateAddressImpact, slateOwnerOnly } from './members';
+import { AGENT_ASK_MEMBER, AI_RUN_MEMBER, AI_STREAM_MEMBER, slateAddressImpact, slateOwnerOnly } from './members';
 import type { Impact } from '@agent-core/core/facets';
 import type { ShareGrant } from './sharing';
 import { WEB_SANDBOX_IMPACTS } from '../operations/web';
@@ -91,7 +91,8 @@ export type SlateRoute =
   | { readonly kind: 'tool'; readonly name: string; readonly input: JsonObject }
   | { readonly kind: 'rpc'; readonly method: SlateReadModel }
   | { readonly kind: 'mcp'; readonly server: string; readonly tool: string; readonly args: JsonObject; readonly readOnly?: true }
-  | { readonly kind: 'agent'; readonly slate: string; readonly text: string; readonly data?: JsonValue; readonly viewer?: string }
+  /** `ask`: the answer carries a stream of the agent's own reply, the text of the turn the message lands in. */
+  | { readonly kind: 'agent'; readonly slate: string; readonly text: string; readonly data?: JsonValue; readonly viewer?: string; readonly ask?: true }
   /** `stream`: the answer is its text as a byte stream, written as the model writes it, not one value at the end. */
   | { readonly kind: 'ai'; readonly prompt: string; readonly system?: string; readonly tier?: string; readonly stream?: true }
   | {
@@ -137,13 +138,13 @@ function oneObject(said: string, args: readonly JsonValue[]): Effect.Effect<Json
   return Effect.succeed(argument);
 }
 
-function routeAgent(id: string, args: readonly JsonValue[]): Effect.Effect<SlateRoute, KinuError> {
+function routeAgent(id: string, args: readonly JsonValue[], ask: boolean): Effect.Effect<SlateRoute, KinuError> {
   const parsed = v.safeParse(v.strictTuple([v.strictObject({ text: v.pipe(v.string(), v.minLength(1)), data: v.optional(JsonValueSchema) })]), args);
 
-  if (!parsed.success) return Effect.fail(new KinuError('bad_input', 'agent.send takes one { text, data? } object'));
+  if (!parsed.success) return Effect.fail(new KinuError('bad_input', `agent.${ask ? AGENT_ASK_MEMBER : 'send'} takes one { text, data? } object`));
   const [{ text, data }] = parsed.output;
 
-  return Effect.succeed(data === undefined ? { kind: 'agent', slate: id, text } : { kind: 'agent', slate: id, text, data });
+  return Effect.succeed({ kind: 'agent', slate: id, text, ...(data !== undefined && { data }), ...(ask && { ask: true }) });
 }
 
 function routeAi(args: readonly JsonValue[], stream: boolean): Effect.Effect<SlateRoute, KinuError> {
@@ -214,7 +215,7 @@ function route(id: string, request: SlateCallRequest, chain: readonly string[]):
       default: break;
     }
 
-    if (namespace === 'agent' && first === 'send') return routeAgent(id, args);
+    if (namespace === 'agent' && (first === 'send' || first === AGENT_ASK_MEMBER)) return routeAgent(id, args, first === AGENT_ASK_MEMBER);
 
     if (namespace === 'ai' && (first === AI_RUN_MEMBER || first === AI_STREAM_MEMBER)) return routeAi(args, first === AI_STREAM_MEMBER);
 

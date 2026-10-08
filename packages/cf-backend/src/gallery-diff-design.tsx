@@ -4,7 +4,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
 import {
   diffLines, fileDiff, inNoteOrder, parseGitDiff, type ChangeNotesCard, type ChangeSet, type DiffAnchor, type FileDiff, type FileStatus,
-  type PanelAgent, type ReviewAnnotation, type TurnLiveness,
+  type PanelAgent, type ChangeNote, type TurnLiveness,
 } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
@@ -457,7 +457,7 @@ const CLAMP_ANCHOR: DiffAnchor = {
   scope: "text", path: APPLY, side: "new", lineStart: 27, lineEnd: 27, charStart: CLAMP_AT, charEnd: CLAMP_AT + CLAMP.length, baseline: BASELINE,
 };
 
-const NOTES: readonly ReviewAnnotation[] = [
+const NOTES: readonly ChangeNote[] = [
   noteOf({
     id: "clamp", type: AnnotationType.COMMENT, createdA: NOW - 9 * 60e3, anchor: CLAMP_ANCHOR, quote: CLAMP,
     text: "Clamp it, but log it too: a 90% coupon is a data error someone should hear about.",
@@ -475,7 +475,7 @@ const NOTES: readonly ReviewAnnotation[] = [
   }),
 ];
 
-const SENT: readonly ReviewAnnotation[] = [
+const SENT: readonly ChangeNote[] = [
   ...NOTES,
   noteOf({
     id: "all", type: AnnotationType.GLOBAL_COMMENT, createdA: NOW - 3 * 60e3, quote: "",
@@ -483,11 +483,11 @@ const SENT: readonly ReviewAnnotation[] = [
   }),
 ];
 
-function cardOf(notes: readonly ReviewAnnotation[]): ChangeNotesCard {
+function cardOf(notes: readonly ChangeNote[]): ChangeNotesCard {
   return {
     source: "workspace", label: "Workspace",
     notes: inNoteOrder(notes).map((note) => ({
-      id: note.id, type: note.type, ...(note.text !== undefined && { text: note.text }), ...(note.anchor !== undefined && { anchor: note.anchor }),
+      id: note.id, type: note.type, ...(note.text !== undefined && { text: note.text }), ...(note.type !== "GLOBAL_COMMENT" && note.anchor !== undefined && { anchor: note.anchor }),
     })),
   };
 }
@@ -502,7 +502,7 @@ const REPLY: UIMessage = {
   parts: [{ type: "text", text: "On it. I'll log a clamped percentage, drop the label test, and keep `legacy-discount.ts` until the old carts are migrated. Then I'll rerun the checkout tests." }],
 };
 
-function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly ReviewAnnotation[] | null; onOpenNote: (anchor: DiffAnchor | undefined) => void }) {
+function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly ChangeNote[] | null; onOpenNote: (anchor: DiffAnchor | undefined) => void }) {
   const [value, setValue] = useState("");
   const [mode, setMode] = useState<ChatMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
@@ -645,12 +645,12 @@ function Scene({ params }: { params: URLSearchParams }) {
   const [opened, setOpened] = useState<{ readonly file: string | null; readonly n: number }>({ file: params.get("file"), n: 0 });
 
   const [reviewedAt, setReviewedAt] = useState<number | null>(params.get("reviewed") === "1" ? NOW - 60e3 : null);
-  const [sent, setSent] = useState<readonly ReviewAnnotation[] | null>(params.get("sent") === "1" ? SENT : null);
+  const [sent, setSent] = useState<readonly ChangeNote[] | null>(params.get("sent") === "1" ? SENT : null);
   const [chatPane, setChatPane] = useState(params.get("pane") === "chat");
   const shown = sets.find((set) => set.source === source) ?? sets[0];
 
   const initial = params.get("notes") === "1" && sent === null ? NOTES : [];
-  const latest = useRef<readonly ReviewAnnotation[]>(initial);
+  const latest = useRef<readonly ChangeNote[]>(initial);
 
   const store = useMemo<NotesStore>(() => ({
     load: () => Effect.sync(() => ({ ok: true, notes: [...latest.current] })),

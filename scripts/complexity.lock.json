@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-08",
-  "files": 3074,
-  "functions": 80328,
+  "files": 3087,
+  "functions": 80699,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -22,10 +22,6 @@
       "complexity": 46
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
-      "complexity": 43
-    },
-    {
       "key": "scripts/platform-catalog.ts#auditSchema",
       "complexity": 42
     },
@@ -40,6 +36,10 @@
     {
       "key": "scripts/bench-pilot.ts#validatePilotReport",
       "complexity": 41
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
+      "complexity": 40
     },
     {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",

@@ -3,41 +3,42 @@ import { Result } from 'effect';
 import { admitReviewAnnotations, MAX_PLAN_ANNOTATIONS_BYTES } from '../src/plans/annotation-admission';
 import { anchoredText, comparePaths, inReadingOrder } from '../src/read-models/change-view';
 import {
-  changeNotesCard, initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, type ChangeNotesMessage, type NotedChanges,
+  changeNotesCard, initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, type ChangeNote, type ChangeNotesMessage, type NotedChanges,
 } from '../src/read-models/change-notes';
-import type { DiffAnchor, ReviewAnnotation } from '../src/types/plans';
+import type { DiffAnchor, GeneralNote, PassageNote } from '../src/types/plans';
 import { diffLines, fileDiff, parseGitDiff } from '../src/vfs/diff';
 import { createTestRuntime } from './helpers';
 
 const BASELINE = 'gen-4f1c9a';
 
-function note(id: string, type: ReviewAnnotation['type'], fields: Pick<ReviewAnnotation, 'text' | 'anchor'> & { quote?: string }): ReviewAnnotation {
+function note(id: string, type: PassageNote['type'], fields: Pick<PassageNote, 'text' | 'anchor'> & { quote?: string }): PassageNote {
   const { quote = '', ...placed } = fields;
 
-  return {
-    id, type, blockId: placed.anchor === undefined ? 'changes' : placed.anchor.path, startOffset: 0, endOffset: 0,
-    originalText: quote, createdA: 1, ...placed,
-  };
+  return { id, type, blockId: placed.anchor?.path ?? 'changes', startOffset: 0, endOffset: 0, originalText: quote, createdA: 1, ...placed };
 }
+
+const general = (id: string, text: string): GeneralNote => ({ id, type: 'GLOBAL_COMMENT', text, createdA: 1 });
 
 const lines = (path: string, lineStart: number, lineEnd: number): DiffAnchor => ({ scope: 'lines', path, side: 'new', lineStart, lineEnd, baseline: BASELINE });
 
 const APPLY = 'packages/checkout/src/apply-coupon.ts';
 
-const NOTES: readonly ReviewAnnotation[] = [
-  note('all', 'GLOBAL_COMMENT', { text: 'Run the checkout tests again.' }),
+const CLAMP = note('clamp', 'COMMENT', {
+  text: 'Clamp it, but log it too.', quote: 'Math.min(coupon.value, ```rule```)',
+  anchor: { scope: 'text', path: 'packages/checkout/src/apply-coupon.ts', side: 'new', lineStart: 27, lineEnd: 27, charStart: 4, charEnd: 38, baseline: BASELINE },
+});
+
+const NOTES: readonly ChangeNote[] = [
+  general('all', 'Run the checkout tests again.'),
   note('test', 'DELETION', { quote: 'test("label")', anchor: lines('packages/checkout/tests/coupon-kind.test.ts', 27, 29) }),
   note('legacy', 'COMMENT', { text: 'Keep this until the old carts are migrated.', anchor: { scope: 'file', path: 'packages/checkout/src/legacy-discount.ts', baseline: BASELINE } }),
-  note('clamp', 'COMMENT', {
-    text: 'Clamp it, but log it too.', quote: 'Math.min(coupon.value, ```rule```)',
-    anchor: { scope: 'text', path: APPLY, side: 'new', lineStart: 27, lineEnd: 27, charStart: 4, charEnd: 38, baseline: BASELINE },
-  }),
+  CLAMP,
 ];
 
 const WORKSPACE: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline', trackedSince: Date.UTC(2026, 8, 24, 14, 14) };
 
 /** The message a source's notes become when sent, as the chat's admission takes it. */
-async function sent(notes: readonly ReviewAnnotation[]): Promise<ChangeNotesMessage> {
+async function sent(notes: readonly ChangeNote[]): Promise<ChangeNotesMessage> {
   const { rt } = createTestRuntime();
   initChangeNotesTable(rt.storage.execRaw);
   saveChangeNotes(rt, WORKSPACE.source, { value: notes });
@@ -58,7 +59,7 @@ async function sent(notes: readonly ReviewAnnotation[]): Promise<ChangeNotesMess
 
 describe('notes on a change-set', () => {
   test('a note carries its place in the diff through the one admission plan review uses, and a bad place is refused', () => {
-    const [clamp] = NOTES.filter((each) => each.id === 'clamp');
+    const clamp = CLAMP;
 
     expect(admitReviewAnnotations({ value: [clamp] })).toEqual(Result.succeed([clamp]));
 
@@ -88,8 +89,8 @@ describe('notes on a change-set', () => {
     // A second note on everything, a note on everything with a place, or a place-less note on a line: each refused,
     // and the kept notes stand.
     for (const refused of [
-      [...NOTES, note('again', 'GLOBAL_COMMENT', { text: 'twice' })],
-      [note('placed', 'GLOBAL_COMMENT', { text: 'x', anchor: lines(APPLY, 1, 1) })],
+      [...NOTES, general('again', 'twice')],
+      [{ ...general('placed', 'x'), anchor: lines(APPLY, 1, 1) }],
       [note('loose', 'COMMENT', { text: 'where?' })],
     ]) {
       expect(saveChangeNotes(rt, 'workspace', { value: refused }).ok).toBe(false);
@@ -119,7 +120,7 @@ describe('notes on a change-set', () => {
     const card = changeNotesCard({ metadata: message.metadata });
 
     expect(card?.notes.map((each) => each.id)).toEqual(['clamp', 'legacy', 'test', 'all']);
-    expect(card?.notes[0]).toEqual({ id: 'clamp', type: 'COMMENT', text: 'Clamp it, but log it too.', anchor: NOTES[3]?.anchor });
+    expect(card?.notes[0]).toEqual({ id: 'clamp', type: 'COMMENT', text: 'Clamp it, but log it too.', anchor: CLAMP.anchor });
     expect(changeNotesCard({ metadata: { kinuEvent: 'plan_feedback' } })).toBeNull();
     // Each send is a message of its own, never a retry of another's.
     expect((await sent(NOTES)).id).not.toBe(message.id);
@@ -180,9 +181,8 @@ describe('notes on a change-set', () => {
   });
 
   test('notes written on different baselines name each file\'s own', async () => {
-    const [clamp] = NOTES.filter((each) => each.id === 'clamp');
     const rule = note('rule', 'COMMENT', { text: 'Name this.', anchor: { ...lines('packages/checkout/src/rules.ts', 4, 4), baseline: 'gen-9b2e77' } });
-    const { text } = await sent([...clamp === undefined ? [] : [clamp], rule]);
+    const { text } = await sent([CLAMP, rule]);
     const headings = text.split('\n').filter((line) => line.startsWith('## ')).map((line) => line.slice(3));
 
     expect(headings).toEqual([`${APPLY} (snapshot gen-4f)`, 'packages/checkout/src/rules.ts (snapshot gen-9b)']);
