@@ -31,6 +31,8 @@ Self-evolving agent framework: swarm tree-search exploration, mutable scaffoldin
 ## Worktrees
 - Agents never edit the primary checkout. Every edit/write path is absolute under your worktree; an edit's section header carries the same absolute path the tag was read from. After the first edit, `git -C <worktree> status` must show it. Resolve the primary by `git worktree list` row one, never a literal path. A stray edit in the primary is reverted path-scoped; never a bare checkout or reset there.
 - Parallel writers use isolated worktrees and focused commits; main merges and verifies each.
+- Every lane syncs with the integration tip as soon as main announces a merged batch (owner, 2026-10-07): it finishes its current commit, then merges the tip before the next change. It never lets its branch fall more than one batch behind. Merge with `--no-commit`, so the new hooks check out before the merge commit runs them.
+- Before a lane edits a file in another lane's area, or one another lane is rewriting, it asks main first. Main dry-runs every lane tip against integration and against each other (`git merge-tree`) after each batch, and sends each predicted conflict to both lanes before either builds on it.
 - `archive/*` tags carry unreachable blobs; read `docs/BRANCH-ARCHIVE.md` before deleting one.
 
 ## Cost Never Gates Work
