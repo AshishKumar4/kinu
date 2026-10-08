@@ -19,6 +19,7 @@ import artifact from '../packages/devbox/block-lower/upstream.json';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/contract-types';
 import { shellQuote } from '../packages/core/src/utils/shell';
 import { withTestChrome } from './test-chrome';
+import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -33,6 +34,9 @@ const ASK_AGAIN = 'A startup is armed, so ask again';
 const ASK_AGAIN_TIMES = 12;
 
 const ASK_AGAIN_MS = 5_000;
+
+/** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
+const DESKTOP_SEEN_MS = 30_000;
 
 const Json = v.looseObject({ error: v.optional(v.string()) });
 
@@ -128,7 +132,8 @@ async function main(): Promise<void> {
   const run = recovering?.run ?? `dc${new Date().toISOString().replace(/\D/gu, '').slice(0, 14)}${crypto.randomUUID().slice(0, 5)}`;
   const worker = `kinu-${run}`;
   const box = `eval-devbox-${run}`;
-  const names = [box, `${box}-native`, `${box}-disk`, 'devbox-golden'];
+  // The last is a box only the desktop's check opens, so it opens on a fresh box.
+  const names = [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`];
   const app = `${worker}-contractbox`;
   const scratch = recovering === undefined ? mkdtempSync(join(tmpdir(), 'kinu-devbox-contracts-')) : dirname(process.argv[recoveryArgument + 1] ?? '');
   process.env['WRANGLER_LOG_PATH'] = join(scratch, 'wrangler');
@@ -264,39 +269,71 @@ async function main(): Promise<void> {
     return;
   }
 
-  /** The desktop's own client, framed by the product route, driven in a browser on this host. */
+  /**
+   * What a person sees on opening the desktop of a fresh box with nothing launched, through the product's client and
+   * routes in a browser on this host: a desktop (its background, a panel along its foot), not a black screen, whose
+   * panel launches a terminal and a browser (D80). Production opened an empty X session and showed a cursor on black.
+   */
   const desktopClient = async () => {
     await step('desktop-client', async () => {
-      const nativeBox = names[1] ?? '';
-      await shell('printf %s "<body style=margin:0><div style=width:100vw;height:100vh;background:#c00 onclick=\\\"this.style.background=\x27#00c\x27\\\"></div>" >/var/tmp/click.html; '
-        + 'DISPLAY=:0 setsid x-www-browser --kiosk file:///var/tmp/click.html >/var/tmp/browser.log 2>&1 </dev/null & '
-        + 'until DISPLAY=:0 xdotool search --class chromium >/dev/null 2>&1; do sleep 0.1; done', nativeBox);
+      const fresh = names[4] ?? '';
 
       return withTestChrome(async browser => {
         const page = await browser.newPage();
         page.setDefaultTimeout(0);
         await page.setExtraHTTPHeaders({ authorization: `Bearer ${identity}` });
         await page.setViewport({ width: 1300, height: 820 });
-        await page.goto(`${origin}/view?box=${nativeBox}`);
+        await page.goto(`${origin}/view?box=${fresh}`);
         const frame = await (await page.waitForSelector('iframe'))?.contentFrame();
 
         if (frame == null) throw new Error('the desktop client did not frame');
 
-        const shows = async (blue: boolean) => (await frame.waitForFunction(wantBlue => {
+        // The desktop a quarter in from its corner, where X never starts its pointer (the middle), and the foot's middle,
+        // in the desktop's own coordinates; and where the client draws it.
+        const screen = () => frame.evaluate((size, footY) => {
           const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
 
           if (canvas === undefined || canvas.width < 640) return null;
-          const [r = 0, , b = 0] = canvas.getContext('2d')?.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data ?? [];
+          const context = canvas.getContext('2d');
+          const at = (x: number, y: number) => [...context?.getImageData(x * canvas.width / size.width, y * canvas.height / size.height, 1, 1).data ?? []];
           const rect = canvas.getBoundingClientRect();
 
-          return (wantBlue ? b > 150 && r < 80 : r > 150 && b < 80) && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }, { polling: 'raf' }, blue)).jsonValue();
+          return { desktop: at(size.width / 4, size.height / 4), panel: at(size.width / 2, footY), rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height } };
+        }, DESKTOP_SIZE, DESKTOP_SIZE.height - DESKTOP_PANEL.height / 2);
 
-        const red = await shows(false);
+        await frame.waitForFunction(() => {
+          const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
 
-        if (red === null || red === false) throw new Error('the desktop rendered no red page');
-        await page.mouse.click(red.x + 10, red.y + 10);
-        await shows(true);
+          return canvas !== undefined && canvas.width >= 640 && canvas.getContext('2d')?.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data[3] === 255;
+        }, { polling: 'raf' });
+
+        const near = (rgba: readonly number[] | undefined, hex: string) => rgba !== undefined
+          && [1, 3, 5].every((at, channel) => Math.abs((rgba[channel] ?? -99) - Number.parseInt(hex.slice(at, at + 2), 16)) <= 12);
+
+        // The first frame may come before the panel paints: a person sees the desktop within seconds, or sees none.
+        const seenBy = Date.now() + DESKTOP_SEEN_MS;
+        let seen = await screen();
+
+        while (!(near(seen?.desktop, DESKTOP_COLOURS.background) && near(seen?.panel, DESKTOP_COLOURS.panel)) && Date.now() < seenBy) {
+          await delay(250);
+          seen = await screen();
+        }
+
+        if (seen === null || !near(seen.desktop, DESKTOP_COLOURS.background) || !near(seen.panel, DESKTOP_COLOURS.panel)) {
+          throw new Error(`opening the desktop of a fresh box showed ${JSON.stringify({ desktop: seen?.desktop, panel: seen?.panel })} `
+            + `${String(DESKTOP_SEEN_MS / 1000)} s after its first frame, not its background ${DESKTOP_COLOURS.background} and panel ${DESKTOP_COLOURS.panel}`);
+        }
+
+        const rect = seen.rect;
+
+        const opened = async (launcher: keyof typeof DESKTOP_PANEL.launchers, windowClass: string) => {
+          await page.mouse.click(rect.x + DESKTOP_PANEL.launchers[launcher] * rect.width / DESKTOP_SIZE.width,
+            rect.y + (DESKTOP_SIZE.height - DESKTOP_PANEL.height / 2) * rect.height / DESKTOP_SIZE.height);
+          await shell(`until DISPLAY=:0 xdotool search --onlyvisible --class ${windowClass} >/dev/null 2>&1; do sleep 0.1; done`, fresh);
+        };
+
+        await opened('terminal', 'xterm');
+        await opened('browser', 'chromium');
 
         const elsewhere = await frame.evaluate(() => new Promise<string>(resolve => {
           document.addEventListener('securitypolicyviolation', event => { resolve(event.violatedDirective); }, { once: true });
@@ -305,7 +342,7 @@ async function main(): Promise<void> {
 
         requireEqual(elsewhere, 'connect-src');
 
-        return 'the product desktop routes carried a click to the golden\'s Chromium; foreign sockets refused';
+        return 'a fresh box\'s desktop opened on its background and panel; the panel\'s clicks opened a terminal and a browser; foreign sockets refused';
       });
     });
   };
