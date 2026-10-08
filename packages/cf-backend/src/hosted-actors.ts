@@ -305,6 +305,8 @@ export function prepareHostedTurn(
     const actor = run?.inference.actor ?? (yield* Effect.promise(() => seams.host.acquire(reference)));
     const { turn, model } = yield* hostedTaskTurn(seams, actor, task, run);
 
+    if (!task.parentDriven && run === undefined) ownerAnswersWait(seams, actor);
+
     const profile = run === undefined
       ? yield* Effect.promise(() => seams.taskProfile(turn))
       : { tools: run.inference.tools, sources: run.inference.sources };
@@ -314,6 +316,16 @@ export function prepareHostedTurn(
       birthContext: run === undefined ? turn.input.inheritedContext.map(inheritedAsModelMessage) : [],
     };
   }));
+}
+
+/** The owner writing to an agent that waits on input answers that wait, as a message from its hirer does. */
+function ownerAnswersWait(seams: HostedActorSeams, actor: BoundActor): void {
+  const hirer = hostedHirer(seams, actor);
+  const roster = seams.roster(hirer);
+
+  if (roster.get(actor.record.name)?.status !== 'awaiting_input') return;
+  roster.resumeAfterMessage(actor.record.name);
+  seams.announce(hirer);
 }
 
 /** The raw tools a turn of the hosted actor's own would hold in `mode`: a retry of its job runs on them, as it. */
