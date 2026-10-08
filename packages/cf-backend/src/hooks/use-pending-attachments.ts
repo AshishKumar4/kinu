@@ -105,6 +105,8 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
 
   const conversionGeneration = useRef(0);
   const nextConversionTaskId = useRef(0);
+  // Each drop's offer waits for the one dropped before it: the cap keeps what came first, not what read first.
+  const lastOffer = useRef<Promise<void>>(Promise.resolve());
   const conversionTasks = useRef(new Map<number, ConversionTask>());
   useEffect(() => () => {
     conversionGeneration.current += 1;
@@ -127,17 +129,24 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
     const taskId = ++nextConversionTaskId.current;
     const owner: ConversionTask = { promise: null };
     conversionTasks.current.set(taskId, owner);
+    const before = lastOffer.current;
+    let offered = (): void => {};
+
+    lastOffer.current = new Promise((resolve) => { offered = resolve; });
     owner.promise = hold(Effect.gen(function* () {
       const thrown = yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
         const transfer = new DataTransfer();
 
         for (const file of convertible) transfer.items.add(file);
         const parts = yield* Effect.promise(() => convertFileListToFileUIParts(transfer.files));
+        yield* Effect.promise(() => before);
 
         if (generation === conversionGeneration.current) dispatch({ kind: "offer", parts, oversized });
 
         return null;
       }), (failed) => Effect.succeed({ cause: Cause.squash(failed) })), Effect.sync(() => {
+        offered();
+
         if (conversionTasks.current.get(taskId) === owner) conversionTasks.current.delete(taskId);
       }));
 
