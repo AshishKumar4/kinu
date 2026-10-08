@@ -158,14 +158,32 @@ describe('durable plan review lifecycle', () => {
     expect(store.getActive('default')).toBeNull();
   });
 
-  test('requires a decision before another revision and rejects stale input', () => {
+  test('a resubmit before any review replaces the pending revision; an annotated one waits for a decision', () => {
     const { store } = setup();
-    const first = store.submit('default', [{ start: 1, content: '# Plan\n\nFirst' }]);
-    expect(first.ok).toBe(true);
+    expect(store.submit('default', [{ start: 1, content: 'placeholder' }]).ok).toBe(true);
+    expect(store.submit('default', [{ start: 1, content: '   ' }])).toMatchObject({ ok: false, error: expect.stringContaining('empty') });
+
+    expect(store.submit('default', [{ start: 1, content: '# Tide Pool Study\n\n1. Map the zones' }])).toMatchObject({
+      ok: true, plan: { id: 'plan-1', revision: 2, status: 'pending', content: '# Tide Pool Study\n\n1. Map the zones' },
+    });
+    expect(store.get('plan-1', 1)?.status).toBe('superseded');
+
+    const annotation = {
+      id: 'a1', blockId: 'paragraph-1', startOffset: 0, endOffset: 3, type: 'COMMENT' as const, text: 'why', originalText: 'Map',
+      createdA: 1, author: 'Owner', startMeta: { parentTagName: 'P', parentIndex: 0, textOffset: 0 },
+    };
+
+    expect(store.saveAnnotations('plan-1', 2, { value: [annotation] }).ok).toBe(true);
     expect(store.submit('default', [{ start: 3, end: 3, content: 'Too soon' }])).toMatchObject({
       ok: false,
       error: expect.stringContaining('awaiting review'),
     });
+  });
+
+  test('rejects stale input', () => {
+    const { store } = setup();
+    const first = store.submit('default', [{ start: 1, content: '# Plan\n\nFirst' }]);
+    expect(first.ok).toBe(true);
     expect(store.decide('plan-1', 2, 'request_changes', 'Clarify the last step')).toMatchObject({
       ok: false,
       error: expect.stringContaining('stale'),
@@ -313,5 +331,10 @@ describe('submit_plan native tool', () => {
     expect(received).toEqual([[{ start: 1, content: '# Plan' }]]);
     expect(result).toMatchObject({ planId: 'plan-1', revision: 1, status: 'pending' });
     expect(JSON.stringify(result)).toContain('awaiting review');
+
+    // Edits sent as a JSON string, as a model whose tool calls serialize arrays to text sent them on staging.
+    const malformed = toolExecute<{ edits: string }, JsonValue>(tools.submit_plan);
+    await expect(malformed({ edits: '[{"content": "# Tide Pool Study"}]' })).rejects.toThrow('sent as an array and not as text');
+    expect(received).toHaveLength(1);
   });
 });
