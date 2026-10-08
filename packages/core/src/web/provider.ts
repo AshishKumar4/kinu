@@ -505,14 +505,6 @@ const OPEN_BROWSER_DEFAULT = 'chrome';
 /** Kitesurf has no session to keep: `connectBrowser` starts one per program under this id. */
 export const KITESURF_SESSION_ID = 'kitesurf';
 
-/** A slate's \`web\`: the one-shot members only, writing nothing into the workspace, since a share visitor may call it. */
-export function createSlateWebCodemodeProvider(provider: WebSearchProvider): CodemodeProvider {
-  return createWebCodemodeProvider({
-    provider, files: null,
-    sessions: { missing: 'a slate holds no browser session; it has web.search, web.fetch and web.screenshot' },
-  });
-}
-
 export function createWebCodemodeProvider(deps: WebCodemodeDeps): CodemodeProvider {
   const { provider, files } = deps;
 

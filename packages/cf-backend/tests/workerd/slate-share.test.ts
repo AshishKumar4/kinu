@@ -54,8 +54,8 @@ it('a public share serves the slate, admits the granted member, refuses the rest
     ['source:vitest', '/', 'ok'],
   ]);
   expect(rows[0]?.calls).toEqual([
-    { slate: 'board', binding: 'FILES', member: 'readFile', effect: 'read', ok: true },
-    { slate: 'board', binding: 'FILES', member: 'writeFile', effect: 'mutate', ok: false },
+    { slate: 'board', namespace: 'workspace', member: 'readFile', impact: 'observe', ok: true },
+    { slate: 'board', namespace: 'workspace', member: 'writeFile', impact: 'mutate', ok: false },
   ]);
   expect(rows[1]?.calls).toEqual(rows[0]?.calls);
   expect(rows[2]?.calls).toEqual([]);
@@ -64,9 +64,9 @@ it('a public share serves the slate, admits the granted member, refuses the rest
 const GraphSchema = v.object({
   slate: v.string(),
   slates: v.array(v.string()),
-  bindings: v.array(v.looseObject({
-    slate: v.string(), name: v.string(), capability: v.unknown(), problem: v.optional(v.nullable(v.string())),
-    members: v.optional(v.array(v.object({ member: v.string(), effect: v.string(), risk: v.object({ public: v.string(), users: v.string() }) }))),
+  namespaces: v.array(v.looseObject({
+    slate: v.string(), namespace: v.string(), problem: v.optional(v.string()),
+    members: v.array(v.object({ member: v.string(), impact: v.string(), risk: v.object({ public: v.string(), users: v.string() }) })),
   })),
 });
 
@@ -74,35 +74,38 @@ const AnsweredSchema = v.object({ ok: v.literal(true), value: v.unknown() });
 
 const answer = (result: Awaited<ReturnType<Probe['operationAs']>>) => v.parse(AnsweredSchema, result).value;
 
-it('a share is granted what its graph reads, across the app hop and its cycle, and what its owner approved', async () => {
+it('a share is granted what its graph observes, across the app hop and its cycle, and what its owner approved', async () => {
   const probe = subject('triage');
 
   await probe.start();
   await probe.authorTriage();
   const graph = v.parse(GraphSchema, answer(await probe.operationAs('root', { op: 'graph', id: 'issues' })));
-  const binding = (name: string) => graph.bindings.find((row) => `${row.slate}.${row.name}` === name);
+  const row = (name: string) => graph.namespaces.find((each) => `${each.slate}:${each.namespace}` === name);
+  const impacts = (name: string) => row(name)?.members.map((member) => [member.member, member.impact]);
 
-  // The hop into the digest is walked once: its way back names the slate and grants nothing more.
+  // The hop into the digest is walked once: its way back names the slate and walks nothing more.
   expect(graph.slates).toEqual(['issues', 'triage-digest']);
-  expect(binding('triage-digest.BACK')).toMatchObject({ capability: { kind: 'slate', id: 'issues' }, members: [] });
-  expect(binding('issues.GITHUB')?.members?.map((member) => [member.member, member.effect])).toEqual([['read_issue', 'read'], ['create_issue', 'mutate']]);
-  expect(binding('issues.FILES')?.members?.map((member) => [member.member, member.effect])).toEqual([['readFile', 'read'], ['writeFile', 'mutate']]);
+  expect(impacts('triage-digest:slates.issues')).toEqual([['refresh', 'observe']]);
+  expect(impacts('issues:mcp.github')).toEqual([['create_issue', 'externalSend'], ['read_issue', 'observe']]);
+  expect(row('issues:mcp.github')?.members[0]?.risk.public).toContain('Anyone who opens this share can trigger it.');
+  expect(impacts('issues:workspace')).toEqual([['readFile', 'observe'], ['writeFile', 'mutate']]);
 
   const ShareSchema = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });
 
-  const granted = async (visibility: 'public' | 'users', approved: Array<{ slate: string; binding: string; member: string }>) => v.parse(
+  const granted = async (visibility: 'public' | 'users', approved: Array<{ slate: string; namespace: string; member: string }>) => v.parse(
     ShareSchema, answer(await probe.operationAs('root', { op: 'share', id: 'issues', visibility, approved })),
-  ).share.grant.members.map((member) => `${member.binding}.${member.member}`).sort();
+  ).share.grant.members.map((member) => `${member.slate}:${member.namespace}.${member.member}`).sort();
 
-  expect(await granted('public', [])).toEqual(['DIGEST_FILES.readFile', 'FILES.readFile', 'GITHUB.read_issue', 'NOTES.recall']);
-  expect(await granted('users', [{ slate: 'issues', binding: 'ASK', member: 'send' }])).toContain('ASK.send');
+  expect(await granted('public', [])).toEqual([
+    'issues:mcp.github.read_issue', 'issues:memory.recall', 'issues:slates.triage-digest.summary', 'issues:workspace.readFile',
+    'triage-digest:slates.issues.refresh', 'triage-digest:workspace.readFile',
+  ]);
+  expect(await granted('users', [{ slate: 'issues', namespace: 'agent', member: 'send' }])).toContain('issues:agent.send');
 
-  // A slate may not hold its calling agent, or its eval and hiring tools: each is a problem, and none is granted.
+  // What only the agent does is refused where the host routes it, so it never enters a graph or a grant.
   const overreach = v.parse(GraphSchema, answer(await probe.operationAs('root', { op: 'graph', id: 'overreach' })));
 
-  expect(overreach.bindings.map((row) => [row.name, Boolean(row.problem), row.members ?? []])).toEqual([
-    ['CONTROL', true, []], ['TOOLS', true, []], ['HIRE', true, []],
-  ]);
+  expect(overreach.namespaces).toEqual([]);
   expect(v.parse(ShareSchema, answer(await probe.operationAs('root', { op: 'share', id: 'overreach', visibility: 'public', approved: [] })))
     .share.grant.members).toEqual([]);
 });
@@ -160,7 +163,7 @@ it('a mutating member is granted by approval only', async () => {
   await probe.start();
 
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
-    await probe.share([{ binding: 'FILES', member: 'writeFile' }])).value);
+    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
 
   // The unapproved share above refuses the same call: the approval is the grant.
   expect(await probe.viewerBatch(created.share.handle, CLAIM)).toEqual({ probe: 'fixture-bytes', mutateError: 'mutate answered' });
@@ -196,7 +199,7 @@ it('a share past its daily spend refuses calls as budget and shows paused', asyn
   expect(rows[0]?.calls.map((call) => call.ok)).toEqual([true, false, false]);
 });
 
-it('an app hop under a share runs the slate it names and is audited under its effect', async () => {
+it('an app hop under a share runs the slate it names and is audited under its impact', async () => {
   const probe = subject('live-hop');
   await probe.start();
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
@@ -204,7 +207,7 @@ it('an app hop under a share runs the slate it names and is audited under its ef
   expect(created.share.grant.slates).toContain('digest');
   expect(await probe.viewerHop(created.share.handle, CLAIM)).toBe('"digest-ok"');
   const rows = v.parse(Requests, await probe.requests(created.share.id)).value;
-  expect(rows[0]?.calls).toEqual([{ slate: 'board', binding: 'PEER', member: 'digest', effect: 'read', ok: true }]);
+  expect(rows[0]?.calls).toEqual([{ slate: 'board', namespace: 'slates.digest', member: 'digest', impact: 'observe', ok: true }]);
 });
 
 it('a blueprint import brings the code and runs none of it', async () => {

@@ -1,4 +1,4 @@
-/** Live: people use the running slate, as its owner. Blueprint: a copy to fork, every binding unmapped. */
+/** Live: people use the running slate, as its owner. Blueprint: a copy to fork, which calls its forker's own surface. */
 import { useState } from "react";
 import { ShareNetworkIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@kinu.run/core";

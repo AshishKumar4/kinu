@@ -34,7 +34,8 @@ export function slateCallerKey(caller: SlateCaller): string {
   return JSON.stringify([slateCredentialKey(caller.cred), caller.path, caller.workMode, caller.share ?? null]);
 }
 
-/** Only the host mints these props; a process receives the stub, not authority to mint one. */
+/** Only the host mints these props; a process receives the stub, not authority to mint one. `name` is `workspace`, the
+ *  slate's surface, or the reserved `__storage` or `__host`. */
 export interface SlateBindingProps {
   readonly workspace: string;
   readonly id: string;
@@ -46,11 +47,11 @@ interface SlateBindingEnv {
   OrchestratorAgent: WorkspaceOwnerNamespace<DurableObjectId>;
 }
 
-/** All four capability planes return through the owner's one route decision, as the caller. */
+/** Every call a slate makes returns through the owner's one route decision, as the caller. */
 export class SlateBinding extends WorkerEntrypoint<SlateBindingEnv, SlateBindingProps> {
-  call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
+  call(path: string[], args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
     const { workspace, id, name, caller } = this.ctx.props;
 
-    return relayedAnswer(workspaceOwner(this.env, workspace).slateBindingCallAs(caller, id, name, { member, args, invocation }));
+    return relayedAnswer(workspaceOwner(this.env, workspace).slateCallAs(caller, id, name, { path, args, invocation }));
   }
 }

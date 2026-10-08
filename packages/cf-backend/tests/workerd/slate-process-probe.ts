@@ -11,7 +11,7 @@ import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { newWebSocketRpcSession } from 'capnweb';
 import {
-  initSlateStateTable, parseSlateProject, issuedSlateInvocation, routeSlateBindingCall, routeSlateStorageCall,
+  initSlateStateTable, parseSlateProject, issuedSlateInvocation, routeSlateCall, routeSlateStorageCall,
   type JsonValue, type SlateCallResult, type SlateInvocation,
 } from '@kinu.run/core';
 import { SqliteSlateStateStore, type SlateStorageOp } from '@kinu.run/core/slates';
@@ -23,12 +23,10 @@ import { codemodeEgress } from '../../src/codemode-egress';
 /** Uses the host's own `issuedSlateInvocation`, so this probe cannot pass while `SlateHost`
  *  would refuse. */
 export class SlateChainProbe extends WorkerEntrypoint {
-  async call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
-    const project = parseSlateProject({ main: 'server.ts', slate: { bindings: { PEER: { kind: 'app', id: 'peer' } } } });
-
+  async call(path: string[], args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
     try {
       const chain = issuedSlateInvocation({ invocations: SlateProcessProbeDO.invocations, id: 'probe', invocation })?.chain ?? [];
-      const route = routeSlateBindingCall({ id: 'probe', project, name: 'PEER', request: { member, args, invocation }, chain });
+      const { route } = routeSlateCall({ id: 'probe', request: { path, args, invocation }, chain });
 
       if (route.kind !== 'app') throw new Error('Expected app route');
 
@@ -48,7 +46,7 @@ const DEFAULT_SLATE_SOURCE = [
   '  async greet(name: string) {',
   '    const count = (await this.storage.get("count")) ?? 0;',
   '    await this.storage.put("count", count + 1);',
-  '    const echo = await this.env.PEER.echo(name);',
+  '    const echo = await this.env.workspace.slates.peer.echo(name);',
   '    return `hello ${name} #${count + 1} [${echo.chain.join(">")}]`;',
   '  }',
   '  async fetch() { return new Response("not found", { status: 404 }); }',
@@ -110,7 +108,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
    *  unusable: `__storage` binds this DO's own stub and routes via `routeSlateStorageCall`. */
   private storageCall(member: string, args: JsonValue[]): SlateCallResult {
     try {
-      const operation: SlateStorageOp = routeSlateStorageCall({ member, args, invocation: null });
+      const operation: SlateStorageOp = routeSlateStorageCall({ member, args });
 
       switch (operation.op) {
         case 'get': return { ok: true, value: this.state.get('probe', operation.key) };
@@ -131,12 +129,13 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   /** The third parameter tells `__storage`'s stub calls apart from the tests' calls. */
-  async call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult>;
+  async call(path: string[], args: JsonValue[], invocation: string | null): Promise<SlateCallResult>;
   async call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
-  async call(member: string, args: JsonValue[] = [], third: string | null | string[] = []) {
-    if (Array.isArray(third)) return this.appCall(member, args, third);
+  async call(first: string | string[], args: JsonValue[] = [], third: string | null | string[] = []) {
+    // The runner's `__storage` calls name a path; a test's call names a method and a chain.
+    if (Array.isArray(first)) return this.storageCall(first.join('.'), args);
 
-    return this.storageCall(member, args);
+    return this.appCall(first, args, Array.isArray(third) ? third : []);
   }
 
   async start({
@@ -170,7 +169,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     };
 
     this.process = await this.resident.start(bindChain
-      ? { ...boot, bindings: { __storage: storageStub, PEER: exports.SlateChainProbe({}) } }
+      ? { ...boot, bindings: { __storage: storageStub, workspace: exports.SlateChainProbe({}) } }
       : { ...boot, bindings: { __storage: storageStub } });
   }
 
@@ -252,8 +251,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   /** The minted id retires when the socket closes: session lineage never outlives its call. */
-  /** `binding` names the binding a slate with no class serves under that name. */
-  async socket(method: string, args: JsonValue[] = [], binding?: string): Promise<{ ok?: boolean; value?: string; error?: string }> {
+  /** `surface` is a path on the surface a slate with no class serves on its socket; absent, `method` is the class's. */
+  async socket(method: string, args: JsonValue[] = [], surface?: string[]): Promise<{ ok?: boolean; value?: string; error?: string }> {
     const process = this.started();
     const invocation = crypto.randomUUID();
     SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain: [] });
@@ -271,9 +270,9 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
       socket.accept();
 
       try {
-        const raw = binding === undefined
+        const raw = surface === undefined
           ? await newWebSocketRpcSession<Record<string, (...input: JsonValue[]) => Promise<JsonValue>>>(socket)[method](...args)
-          : await newWebSocketRpcSession<Record<string, Record<string, (...input: JsonValue[]) => Promise<JsonValue>>>>(socket)[binding][method](...args);
+          : await newWebSocketRpcSession<{ call(path: string[], input: JsonValue[]): Promise<JsonValue> }>(socket).call(surface, args);
 
         return { ok: true, value: v.is(v.string(), raw) ? raw : JSON.stringify(raw) };
       } catch (cause) { return { ok: false, error: renderThrownChain({ cause }) }; }

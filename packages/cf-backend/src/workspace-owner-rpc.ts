@@ -2,7 +2,7 @@
  * file and execution operations need no owner RPC. */
 
 import type {
-  BlueprintBundle, BlueprintFork, LiveShareRecord, ShareViewerClaim, SlateAnswer, SlateBindingRequest, SlateCallResult, SlateOperation, SlateShareRecord,
+  BlueprintBundle, BlueprintFork, LiveShareRecord, ShareViewerClaim, SlateAnswer, SlateCallRequest, SlateCallResult, SlateOperation, SlateShareRecord,
 } from '@kinu.run/core';
 import type { BlueprintReading, ShareUser } from '@kinu.run/core/slates';
 import type { SlateCaller } from './slates/bindings';
@@ -11,7 +11,7 @@ import type { ObjectNamespace } from '@kinu.run/core';
 /** Slate operations made as a caller; the browser's `@callable slate` mints the root caller locally. */
 export interface WorkspaceOwnerRpc {
   slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult>;
-  slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult>;
+  slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateCallResult>;
   readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>>;
   blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>>;
   shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>>;

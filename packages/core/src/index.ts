@@ -246,10 +246,7 @@ export type * from './types/evaluation';
 
 // Slate stores live in `@kinu.run/core/slates`: they touch `node:util`, and client
 // code value-imports this barrel. Keep worker-only modules off it.
-export {
-  parseSlateProject, describeBindings, credentialedBindings, ephemeralBindings,
-  type SlateProject, type SlateBinding, type SlateBindingKind, type SlateBindingDeclaration,
-} from './slates/project';
+export { parseSlateProject, type SlateProject } from './slates/project';
 
 export {
   SHARE_KINDS, SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH,
@@ -261,24 +258,21 @@ export {
   type ShareKind, type LiveShareVisibility, type BlueprintAddress, type BlueprintInspection, type BlueprintView,
   type BlueprintFork, type BlueprintBundle,
   type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry,
-  type ShareGrantMember, type ShareGrant, type SlateCapability,
-  type SlateGraphMember, type SlateGraphBinding, type SlateCapabilityGraph,
+  type ShareGrantMember, type ShareGrant,
+  type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
 } from './slates/sharing';
 
-export {
-  memberEffect, toolActionMember, toolActionEffect, toolMembers,
-  type SlateMemberEffect,
-} from './slates/members';
+export { slateAddressImpact } from './slates/members';
 
 export {
-  slateCapabilityGraph, cutShareGrant, grantAdmits, type SlateBindingCatalog,
+  slateCapabilityGraph, cutShareGrant, grantAdmits, type SlateSurfaceCatalog, type SlateUsage,
 } from './slates/capability-graph';
 
 export {
-  SlateBindingRequestSchema, routeSlateBindingCall, issuedSlateInvocation, routeViewerBindingCall, assertLandsWithin,
-  type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation, type SlateViewer, type ViewerBindingCall,
-} from './slates/bindings';
+  SlateCallRequestSchema, routeSlateCall, issuedSlateInvocation, routeViewerCall, slateCallAddress,
+  type SlateCallRequest, type SlateRoute, type SlateInvocation, type SlateViewer,
+} from './slates/surface';
 
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 

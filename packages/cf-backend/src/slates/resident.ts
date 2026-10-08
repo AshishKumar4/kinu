@@ -47,6 +47,7 @@ export interface ResidentSlateBoot {
   readonly app: { readonly port: number } | null;
   /** Whose file plane compiles the authored tree: the caller's, never the origin's on its behalf. */
   readonly cred: VfsCred;
+  /** `workspace`, `__storage` and `__host`, each the host's entrypoint for this slate as its caller. */
   readonly bindings: Readonly<Record<string, Fetcher>>;
   /** The caller's explicitly selected network capability; never implicit inheritance. */
   readonly globalOutbound: Fetcher | null;
@@ -88,17 +89,11 @@ const CLASS_BOOT: readonly string[] = [
   '        .join(", ");',
   '      return { ok: false, error: "package.json main must export class Slate extends SlateObject from kinu:slate (the Slate export or the default export); found " + (found === "" ? "no exports at all" : found) };',
   '    }',
-  // `__storage` and `__host` are reserved; string env values (`PORT`, `NIMBUS_APP`) are not bindings.
-  '    const env = {};',
-  '    for (const [name, stub] of Object.entries(this.env)) {',
-  '      if (name === "__storage" || name === "__host" || typeof stub !== "object") continue;',
-  '      env[name] = bindingProxy(name, stub, true);',
-  '    }',
   '    const slate = new Slate({',
   '      storage: this.ctx.storage,',
   '      kv: storageProxy(this.env.__storage),',
   '      waitUntil: (work) => this.ctx.waitUntil(work),',
-  '    }, Object.freeze(env));',
+  '    }, Object.freeze({ workspace: surface(this.env.workspace, []) }));',
   '    // The callable surface: prototype methods between the instance and',
   '    // SlateObject (exclusive) whose name passes the host\'s own method rule.',
   '    // Own properties never appear: a closure assigned in the constructor',
@@ -131,20 +126,10 @@ const CLASS_BOOT: readonly string[] = [
   '    return { ok: true, methods: [...allowed] };',
 ];
 
-/** No class: the socket serves each binding under its own name, and no method is published for an actor to call. */
-const BINDINGS_BOOT: readonly string[] = [
-  '    const bindings = {};',
-  '    for (const [name, stub] of Object.entries(this.env)) {',
-  '      if (name === "__storage" || name === "__host" || typeof stub !== "object") continue;',
-  '      bindings[name] = bindingTarget(bindingProxy(name, stub, true));',
-  '    }',
-  '    this.#forwarder = new Proxy(new RpcTarget(), {',
-  '      get(target, name) {',
-  '        if (typeof name !== "string" || name === "then" || name === "toJSON") return Reflect.get(target, name);',
-  '        if (!Object.hasOwn(bindings, name)) return () => { throw new Error("Slate has no binding " + name); };',
-  '        return bindings[name];',
-  '      },',
-  '    });',
+/** No class: the socket serves the surface's one `call(path, args)`, and no method is published for an actor to call. */
+const SURFACE_BOOT: readonly string[] = [
+  '    const workspace = this.env.workspace;',
+  '    this.#forwarder = new SurfaceTarget(workspace);',
   // Nothing of its own answers HTTP: a path no asset serves is the runner's `no-fetch`.
   '    this.#slate = {};',
   '    return { ok: true, methods: [] };',
@@ -152,10 +137,10 @@ const BINDINGS_BOOT: readonly string[] = [
 
 /**
  * The generated `runner.js`; exported because its contract (a re-created instance starts before it serves) is asserted on the text.
- * With no class of its own, a slate is served its bindings on the socket where a class's methods would be.
+ * With no class of its own, a slate is served its surface on the socket where a class's methods would be.
  */
 export function slateRunnerSource(
-  assets: readonly { readonly path: string; readonly contents: string }[], shell: string | undefined, served: 'class' | 'bindings',
+  assets: readonly { readonly path: string; readonly contents: string }[], shell: string | undefined, served: 'class' | 'surface',
 ): string {
   const raw: Record<string, { body: string; immutable: boolean }> = {};
 
@@ -199,50 +184,50 @@ export function slateRunnerSource(
     '});',
     // Invocation is async context: `undefined` means no method is running; `null` is the root lineage.
     'const invocations = new AsyncLocalStorage();',
-    'function bindingProxy(name, stub, needsInvocation) {',
-    '  return new Proxy(Object.create(null), {',
-    '    get(_target, member) {',
-    '      if (typeof member !== "string" || member === "then" || member === "toJSON") return undefined;',
-    '      return async (...args) => {',
-    '        const invocation = invocations.getStore();',
-    '        if (needsInvocation && invocation === undefined) {',
-    '          throw new Error(`env.${name}.${member} is called from inside a slate method; there is no invocation to run it under`);',
-    '        }',
-    '        const result = await stub.call(member, args, invocation ?? null);',
+    // `workspace.memory.search(query)` calls ["memory", "search"]; outside a method or the socket there is no invocation.
+    'function surface(stub, path) {',
+    '  return new Proxy(function () {}, {',
+    '    apply(_fn, _self, args) {',
+    '      const invocation = invocations.getStore();',
+    '      if (invocation === undefined) {',
+    '        return Promise.reject(new Error(`workspace.${path.join(".")} is called outside a slate method; there is no invocation to run it under`));',
+    '      }',
+    '      return stub.call(path, args, invocation).then((result) => {',
     '        if (!result.ok) throw new SlateRefusal(result);',
     '        return result.value;',
-    '      };',
+    '      });',
+    '    },',
+    '    get(_fn, name) {',
+    '      if (typeof name !== "string" || name === "then" || name === "toJSON") return undefined;',
+    '      return surface(stub, [...path, name]);',
     '    },',
     '  });',
     '}',
-    // A binding as the page's socket sees it: each member call runs the binding under the socket's invocation.
-    'function bindingTarget(proxy) {',
-    '  return new Proxy(new RpcTarget(), {',
-    '    get(target, member) {',
-    '      if (typeof member !== "string" || member === "then" || member === "toJSON") return Reflect.get(target, member);',
-    '      return (...args) => proxy[member](...args);',
-    '    },',
-    '  });',
+    // The page's socket: each call runs under the socket's invocation.
+    'class SurfaceTarget extends RpcTarget {',
+    '  #stub;',
+    '  constructor(stub) { super(); this.#stub = stub; }',
+    '  call(path, args) { return surface(this.#stub, path)(...args); }',
     '}',
     // `__storage` needs no lineage, so it always passes the root invocation.
     'function storageProxy(stub) {',
     '  return Object.freeze({',
     '    get: async (key) => {',
-    '      const result = await stub.call("get", [key], null);',
+    '      const result = await stub.call(["get"], [key], null);',
     '      if (!result.ok) throw new SlateRefusal(result);',
     '      return result.value === null ? undefined : result.value.value;',
     '    },',
     '    put: async (key, value) => {',
-    '      const result = await stub.call("put", [key, value], null);',
+    '      const result = await stub.call(["put"], [key, value], null);',
     '      if (!result.ok) throw new SlateRefusal(result);',
     '    },',
     '    delete: async (key) => {',
-    '      const result = await stub.call("delete", [key], null);',
+    '      const result = await stub.call(["delete"], [key], null);',
     '      if (!result.ok) throw new SlateRefusal(result);',
     '      return result.value;',
     '    },',
     '    list: async (options) => {',
-    '      const result = await stub.call("list", options === undefined ? [] : [options], null);',
+    '      const result = await stub.call(["list"], options === undefined ? [] : [options], null);',
     '      if (!result.ok) throw new SlateRefusal(result);',
     '      return result.value;',
     '    },',
@@ -269,7 +254,7 @@ export function slateRunnerSource(
     '    return this.#started;',
     '  }',
     '  async #bootProcess() {',
-    ...(served === 'class' ? CLASS_BOOT : BINDINGS_BOOT),
+    ...(served === 'class' ? CLASS_BOOT : SURFACE_BOOT),
     '  }',
     '  async fetch(request) { return this.handleHttpRequest(request); }',
     '  async handleHttpRequest(request) {',
@@ -291,7 +276,7 @@ export function slateRunnerSource(
     '        const server = pair[0];',
     '        server.accept();',
     '        server.addEventListener("close", () => {',
-    '          if (invocation !== null && this.env.__host !== undefined) this.env.__host.call("release", [invocation], null);',
+    '          if (invocation !== null && this.env.__host !== undefined) this.env.__host.call(["release"], [invocation], null);',
     '        });',
     '        invocations.run(invocation, () => newWebSocketRpcSession(server, this.#forwarder));',
     '        return new Response(null, { status: 101, webSocket: pair[1] });',
@@ -559,7 +544,7 @@ export class ResidentSlateProcesses {
       const { assets, shell } = yield* browserSurface(build, input.project, (entry) => input.read(entry) ?? '');
 
       const modules = {
-        [MAIN_MODULE]: slateRunnerSource(assets, shell, main === undefined ? 'bindings' : 'class'),
+        [MAIN_MODULE]: slateRunnerSource(assets, shell, main === undefined ? 'surface' : 'class'),
         [APPLICATION_MODULE]: application,
         'capnweb.js': slateVendor.capnwebWorkers,
         'server.js': SLATE_SERVER_MODULE,

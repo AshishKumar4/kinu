@@ -1,6 +1,7 @@
 /**
- * Blueprints: a committed slate version published with every binding unmapped. Provider keys, MCP headers
- * and vault ids never live in a slate tree, but pasted secrets can, so inspection runs `secretSightings`.
+ * Blueprints: a committed slate version published with the namespaces it reaches as requirements, which the forker's own
+ * workspace answers. Provider keys, MCP headers and vault ids never live in a slate tree, but pasted secrets can, so
+ * inspection runs `secretSightings`.
  */
 import { CompatRange, ContentRef } from '@agent-core/core';
 import { BindingName, BindingRequirement, FacetPackageId } from '@agent-core/core/facets';
@@ -13,7 +14,8 @@ import { secretSightings, type SecretSighting } from '../safety/secret-patterns'
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { nanoid } from '../utils/nanoid';
 import type { WorkspaceSlateContentStore } from './content';
-import { credentialedBindings, describeBindings, slateProject, type SlateBindingDeclaration, type SlateProject } from './project';
+import { slateProject, type SlateProject } from './project';
+import type { SlateUsage } from './capability-graph';
 import type { WorkspaceSlates } from './runtime';
 import { type NewSlateShare, type ShareUser, type SlateShareStore } from './shares';
 import {
@@ -36,35 +38,41 @@ type Tree = v.InferOutput<typeof Tree>;
 
 type TreeEntry = v.InferOutput<typeof TreeEntry>;
 
-/** One lowercase segment: `GITHUB`/`my_files` become `github`/`my-files`; `package.json` keeps the authored spelling. */
-const CANONICAL_BINDING_NAME = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u;
+/** One lowercase segment: `mcp.my_files` becomes `mcp.my-files`. */
+const CANONICAL_REQUIREMENT_NAME = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u;
 
 const BLUEPRINT_FACET_PREFIX = 'kinu.slate.';
 
-function canonicalBindingName(name: string): Effect.Effect<string, KinuError> {
-  const canonical = name.toLowerCase().replace(/_/g, '-');
-
-  return CANONICAL_BINDING_NAME.test(canonical)
-    ? Effect.succeed(canonical)
-    : Effect.fail(new KinuError('bad_input', `Binding "${name}" cannot be published: a requirement name is letters, digits, "." and "-", starting with a letter`));
+/** Each namespace once, in the order first called. */
+function reachOf(usage: readonly SlateUsage[]): string[] {
+  return [...new Set(usage.map((entry) => entry.namespace))];
 }
 
-/** A declaration, never a grant: the forker maps each requirement before the slate runs. */
-function blueprintRequirements(project: SlateProject): Effect.Effect<BindingRequirement[], KinuError> {
+function canonicalRequirementName(namespace: string): Effect.Effect<string, KinuError> {
+  const canonical = namespace.toLowerCase().replace(/_/g, '-');
+
+  return CANONICAL_REQUIREMENT_NAME.test(canonical)
+    ? Effect.succeed(canonical)
+    : Effect.fail(new KinuError('bad_input', `"${namespace}" cannot be published: a requirement name is letters, digits, "." and "-", starting with a letter`));
+}
+
+/** A declaration, never a grant: the forked slate calls its forker's own surface, as its forker. */
+function blueprintRequirements(reaches: readonly string[]): Effect.Effect<BindingRequirement[], KinuError> {
   return Effect.gen(function* () {
     const requirements: BindingRequirement[] = [];
     const seen: Record<string, string> = {};
 
-    for (const declaration of describeBindings(project)) {
-      const canonical = yield* canonicalBindingName(declaration.name);
+    for (const namespace of reaches) {
+      const canonical = yield* canonicalRequirementName(namespace);
       const other = seen[canonical];
 
       if (other !== undefined) {
-        return yield* new KinuError('bad_input', `Bindings "${other}" and "${declaration.name}" would publish as the same requirement "${canonical}"`);
+        return yield* new KinuError('bad_input', `"${other}" and "${namespace}" would publish as the same requirement "${canonical}"`);
       }
 
-      seen[canonical] = declaration.name;
-      requirements.push(new BindingRequirement(new BindingName(canonical), new FacetPackageId(BLUEPRINT_FACET_PREFIX + declaration.kind), CompatRange.any()));
+      seen[canonical] = namespace;
+      const [head] = namespace.split('.');
+      requirements.push(new BindingRequirement(new BindingName(canonical), new FacetPackageId(BLUEPRINT_FACET_PREFIX + head), CompatRange.any()));
     }
 
     return requirements;
@@ -94,10 +102,9 @@ function topLevelNames(tree: Tree): string[] {
 export interface BlueprintHeading {
   readonly title: string;
   readonly description: string;
-  readonly bindings: number;
 }
 
-function heading(record: SlateShareRecord, project: SlateProject): Omit<BlueprintHeading, 'bindings'> {
+function heading(record: SlateShareRecord, project: SlateProject): BlueprintHeading {
   return { title: project.slate.title ?? project.name ?? record.slate, description: project.description ?? '' };
 }
 
@@ -111,6 +118,8 @@ export interface WorkspaceBlueprintsDeps {
   readonly slates: WorkspaceSlates;
   readonly content: WorkspaceSlateContentStore;
   readonly shares: SlateShareStore;
+  /** What a slate has called on its surface, as its owner ran it. */
+  readonly usage: (slate: string) => readonly SlateUsage[];
 }
 
 export class WorkspaceBlueprints {
@@ -135,8 +144,7 @@ export class WorkspaceBlueprints {
         title: project.slate.title ?? project.name ?? slate,
         description: project.description ?? '',
         entries: this.entries(tree, chosen),
-        bindings: describeBindings(project),
-        credentialed: credentialedBindings(project),
+        reaches: reachOf(this.deps.usage(slate)),
         warnings: this.warnings(chosen),
       };
     });
@@ -150,7 +158,7 @@ export class WorkspaceBlueprints {
       const tree = includeTree(this.tree(record.source), included);
       // A subset is retained as its own bundle, so the skeleton names what ships.
       const bundle = included === undefined ? record.source : this.retainTree(tree);
-      const requirements = yield* blueprintRequirements(yield* this.project(tree));
+      const requirements = yield* blueprintRequirements(inspection.reaches);
       const publication = yield* Effect.promise(() => this.deps.slates.publish(record.id, requirements, bundle));
 
       const row: NewSlateShare = {
@@ -175,12 +183,11 @@ export class WorkspaceBlueprints {
 
   /** Refuses when revoked (S6). */
   read(share: string): BlueprintReading {
-    return settleSync(Effect.map(this.published(share), ({ record, tree, project }) => ({
+    return settleSync(Effect.map(this.published(share), ({ record, tree, project, reaches }) => ({
       record,
       view: {
         ...heading(record, project),
-        bindings: describeBindings(project),
-        credentialed: credentialedBindings(project),
+        reaches,
         entries: this.entries(tree, tree),
         warnings: this.warnings(tree),
         createdAt: record.createdAt,
@@ -190,17 +197,18 @@ export class WorkspaceBlueprints {
 
   /** Without the entries and warnings, which read every file. */
   heading(share: string): BlueprintHeading {
-    return settleSync(Effect.map(this.published(share), ({ record, project }) => ({
-      ...heading(record, project), bindings: describeBindings(project).length,
-    })));
+    return settleSync(Effect.map(this.published(share), ({ record, project }) => heading(record, project)));
   }
 
-  private published(share: string): Effect.Effect<{ record: SlateShareRecord; tree: Tree; project: SlateProject }, KinuError> {
+  /** `reaches` is what the publication requires, fixed when it was published. */
+  private published(share: string): Effect.Effect<{ record: SlateShareRecord; tree: Tree; project: SlateProject; reaches: string[] }, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const record = this.deps.shares.live(share);
-      const tree = this.tree(this.deps.slates.publication(new SlatePublicationId(record.publication)).materialization);
+      const publication = this.deps.slates.publication(new SlatePublicationId(record.publication));
+      const tree = this.tree(publication.materialization);
+      const reaches = this.deps.slates.skeleton(publication.id).bindings.map((requirement) => requirement.name.value);
 
-      return { record, tree, project: yield* this.project(tree) };
+      return { record, tree, project: yield* this.project(tree), reaches };
     });
   }
 
@@ -229,7 +237,7 @@ export class WorkspaceBlueprints {
     return settle(Effect.gen({ self: this }, function* () {
       const slate = yield* Effect.promise(() => this.deps.slates.synchronize(new SlateId(slateId)));
       const tree = this.tree(slate.source);
-      const skeleton = new SlateSkeleton(slate.source.digest, yield* blueprintRequirements(yield* this.project(tree)));
+      const skeleton = new SlateSkeleton(slate.source.digest, yield* blueprintRequirements(reachOf(this.deps.usage(slateId))));
       const blobs: Record<string, string> = {};
 
       for (const entry of tree.entries) {
@@ -274,7 +282,6 @@ export class WorkspaceBlueprints {
         slate: admitted.slate.id.value,
         title: project.slate.title ?? project.name ?? admitted.slate.id.value,
         requirements: admitted.unsatisfied.map((requirement) => ({ name: requirement.name.value, facet: requirement.facet.value })),
-        bindings: describeBindings(project),
       };
     }));
   }
@@ -317,4 +324,4 @@ export class WorkspaceBlueprints {
   }
 }
 
-export type { SlateBindingDeclaration, TreeEntry as BlueprintTreeEntry };
+export type { TreeEntry as BlueprintTreeEntry };

@@ -1,84 +1,38 @@
 import { expect, test } from 'bun:test';
-import {
-  memberEffect, toolActionEffect, toolActionMember, toolMembers, TOOL_ACTION_EFFECTS,
-} from '../src/slates/members';
-import {
-  FILE_TOOL_ACTIONS, MEMORY_FACT_ACTIONS, MEMORY_NOTE_ACTIONS, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS,
-} from '../src/tools/registry';
+import { slateAddressImpact } from '../src/slates/members';
 import { toolCallEffect } from '../src/tools/tool-call-summary';
-import type { JsonObject } from '../src/utils/json';
 
-test('the member table is what the grant, the graph and the audit row read', () => {
-  const rows: readonly [Parameters<typeof memberEffect>[0], string, 'read' | 'mutate'][] = [
-    ['namespace', 'readFile', 'read'], ['namespace', 'readdir', 'read'], ['namespace', 'exists', 'read'],
-    ['namespace', 'stat', 'read'], ['namespace', 'searchMemory', 'read'], ['namespace', 'listTools', 'read'],
-    ['namespace', 'writeFile', 'mutate'], ['namespace', 'editFile', 'mutate'], ['namespace', 'mkdir', 'mutate'],
-    ['namespace', 'remove', 'mutate'], ['namespace', 'exec', 'mutate'], ['namespace', 'saveNote', 'mutate'],
-    ['namespace', 'createTool', 'mutate'], ['namespace', 'slate', 'mutate'], ['namespace', 'git', 'mutate'],
-    ['memory', 'search', 'read'], ['memory', 'recall', 'read'], ['memory', 'conversations', 'read'],
-    ['memory', 'save', 'mutate'], ['memory', 'remember', 'mutate'], ['memory', 'forget', 'mutate'],
-    ['tasks', 'list', 'read'], ['tasks', 'add', 'mutate'], ['tasks', 'update', 'mutate'], ['tasks', 'mode', 'mutate'],
-    ['web', 'search', 'read'], ['web', 'fetch', 'read'],
+const impact = (namespace: string, member: string) => slateAddressImpact({ namespace, member });
+
+test('the impact table is what the grant, the graph and the audit row read', () => {
+  const rows: readonly [string, string, string][] = [
+    ['workspace', 'readFile', 'observe'], ['workspace', 'readdir', 'observe'], ['sandbox', 'exists', 'observe'], ['workspace', 'stat', 'observe'],
+    ['workspace', 'writeFile', 'mutate'], ['workspace', 'editFile', 'mutate'], ['workspace', 'mkdir', 'mutate'], ['workspace', 'remove', 'mutate'],
+    ['workspace', 'exec', 'execute'], ['device', 'git', 'execute'],
+    ['db', 'select', 'observe'], ['db', 'insert', 'mutate'], ['db', 'dropTable', 'mutate'],
+    ['memory', 'search', 'observe'], ['memory', 'recall', 'observe'], ['memory', 'remember', 'mutate'], ['memory', 'forget', 'mutate'],
+    ['tasks', 'list', 'observe'], ['tasks', 'add', 'mutate'],
+    ['web', 'search', 'observe'], ['web', 'browsers', 'observe'], ['web', 'openBrowser', 'execute'], ['web', 'closeBrowser', 'mutate'],
+    ['mcp.github', 'read_issue', 'externalSend'], ['tools', 'nightly_rollup', 'execute'], ['reads', 'getExecutors', 'observe'],
+    ['slates.digest', 'count', 'observe'], ['agent', 'send', 'externalSend'], ['ai', 'run', 'execute'],
   ];
 
-  for (const [kind, member, effect] of rows) {
-    expect(memberEffect(kind, member)).toBe(effect);
-  }
+  for (const [namespace, member, expected] of rows) expect([namespace, member, impact(namespace, member)]).toEqual([namespace, member, expected]);
 
-  for (const kind of ['namespace', 'memory', 'tasks', 'web'] as const) {
-    // A member the table does not name fails closed.
-    expect(memberEffect(kind, 'reformatHardDrive')).toBe('mutate');
-  }
-
-  // rpc members are read models; agent and ai members are always acts.
-  expect(memberEffect('rpc', 'anything')).toBe('read');
-  expect(memberEffect('rpc', 'dropTables')).toBe('read');
-  expect(memberEffect('agent', 'send')).toBe('mutate');
-  expect(memberEffect('agent', 'anything')).toBe('mutate');
-  expect(memberEffect('ai', 'shell')).toBe('mutate');
-  expect(memberEffect('ai', 'anything')).toBe('mutate');
+  // An executor member no table names fails closed, as the heaviest impact.
+  expect(impact('workspace', 'reformatHardDrive')).toBe('administer');
+  // A member the agent keeps from slates is not on the surface at all: switching its own role is one.
+  expect(impact('tasks', 'mode')).toBeNull();
+  expect(impact('memory', 'reformat')).toBeNull();
 });
 
-test('every action a native tool declares is classified, and a share reads it as the tool does', () => {
-  // Replay safety is not the effect: the web tool replays safely, yet its fetch and screenshot write.
-  const pinned = (tool: string, actions: readonly string[]) => {
-    for (const action of actions) {
-      // `tasks.mode` is an action that either reads or switches the role; the
-      // member covers both forms, so the probe carries the mutating one.
-      const probe: JsonObject = tool === 'tasks' && action === 'mode' ? { action, role: 'researcher' } : { action };
-      // A declared action is classified ('unknown' is not an effect), and a share reads it the same way.
-      expect(toolCallEffect(tool, probe)).toBe(toolActionEffect(tool, action));
-    }
-  };
-
-  pinned('file', FILE_TOOL_ACTIONS);
-  pinned('memory', [...MEMORY_NOTE_ACTIONS, ...MEMORY_FACT_ACTIONS]);
-  pinned('tasks', TASKS_TOOL_ACTIONS);
-  pinned('web', WEB_TOOL_ACTIONS);
-
-  // A single-call tool has no read shape: `call` is the only member and it
-  // mutates — `agents` included.
-  for (const tool of ['shell', 'eval', 'report', 'agents']) {
-    expect(toolMembers(tool)).toEqual(['call']);
-    expect(toolActionEffect(tool, 'call')).toBe('mutate');
+test('a native tool\'s chip reads the same impact a slate\'s call of that member is shown with', () => {
+  for (const [tool, action] of [['memory', 'search'], ['memory', 'remember'], ['tasks', 'list'], ['tasks', 'add']] as const) {
+    expect([tool, action, toolCallEffect(tool, { action })]).toEqual([tool, action, impact(tool, action) === 'observe' ? 'read' : 'mutate']);
   }
 
-  expect(TOOL_ACTION_EFFECTS.agents).toEqual({ call: 'mutate' });
+  expect(toolCallEffect('tasks', { action: 'mode', role: 'researcher' })).toBe('mutate');
+  expect(toolCallEffect('tasks', { action: 'mode' })).toBe('read');
+  expect(toolCallEffect('file', { action: 'read' })).toBe('read');
+  expect(toolCallEffect('file', { action: 'write' })).toBe('mutate');
 });
-
-test('tool member derivation reads the action, and unknown tools get call', () => {
-  expect(toolActionMember('file', { action: 'read' })).toBe('read');
-  expect(toolActionMember('file', { action: 'edit', path: '/a' })).toBe('edit');
-  // No string action on a discriminating tool is still `call`.
-  expect(toolActionMember('file', {})).toBe('call');
-  expect(toolActionMember('file', { action: 7 })).toBe('call');
-  // A single-call tool ignores whatever `action` says.
-  expect(toolActionMember('shell', { command: 'ls' })).toBe('call');
-  expect(toolActionMember('shell', { action: 'read' })).toBe('call');
-
-  // A crafted tool this table does not know still gets its one member.
-  expect(toolMembers('nightly_rollup')).toEqual(['call']);
-  expect(toolActionEffect('nightly_rollup', 'call')).toBe('mutate');
-  expect(toolMembers('file')).toEqual(['read', 'list', 'stat', 'search', 'write', 'edit']);
-});
-

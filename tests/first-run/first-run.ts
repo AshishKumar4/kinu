@@ -247,10 +247,10 @@ export const FIRST_RUN_DEFECTS = {
   },
   'blueprint-fork': {
     id: 'blueprint-fork',
-    found: 'A blueprint published from a slate carried no mapped bindings; a second workspace imported it with bindings unmapped in the read model, and mapping one to its own MCP server made the slate serve.',
+    found: 'A blueprint published from a slate named what it reaches and carried nothing of its owner\'s; a second workspace imported it, its MCP call refused until that workspace connected its own server of the same name, which made the call answer.',
     missedBecause: 'Unit proofs cover publish and admit in isolation; nothing drove the app-host publish, public read, fork, and forker-side serve for the same bytes on the deployed product.',
     provedRedAt: null,
-    redDirection: 'Green requires publish to answer inspection plus link, the owner\'s Drive library to list the slate and the blueprint, the public blueprint read to name both bindings credentialed, the fork to answer two requirements with an unmapped graph problem, and hello() to answer, and the importer\'s own MCP roster to answer a list the mapping would read from.',
+    redDirection: 'Green requires publish to answer inspection plus link, the owner\'s Drive library to list the slate and the blueprint, the public blueprint read and the fork to name the two namespaces the slate reached, the fork\'s MCP call refused before its own server is connected, hello() to answer, and the call to answer through the importer\'s own MCP server.',
   },
   'drive': {
     id: 'drive',

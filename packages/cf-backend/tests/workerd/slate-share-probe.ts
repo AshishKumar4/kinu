@@ -1,6 +1,6 @@
 /**
  * A real SlateHost in workerd, reached through `routeShare` over Cap'n Web (batch and socket arms).
- * Also bound as `OrchestratorAgent` because the slate's FILES binding resolves `workspaceOwner(...).slateBindingCallAsWire` by `ctx.id.name`.
+ * Also bound as `OrchestratorAgent` because the slate's `workspace` resolves `workspaceOwner(...).slateCallAs` by `ctx.id.name`.
  */
 import { Effect } from 'effect';
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
@@ -31,42 +31,18 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 export * from '../../src/server';
 
 /** The owner's connections as a graph reads them: one MCP server with a read-only tool and one that writes. */
-const CATALOG = {
-  executors: [{ namespace: 'workspace', members: ['readFile', 'writeFile'] }],
-  mcp: [{ server: 'connection-id', title: 'github', tools: [{ name: 'read_issue', readOnly: true }, { name: 'create_issue', readOnly: false }] }],
-  tools: [],
-  tiers: [],
-};
+const MCP = [{ server: 'github', title: 'github', tools: [{ name: 'read_issue', readOnly: true }, { name: 'create_issue', readOnly: false }] }];
 
-/** A slate with every grant-relevant binding kind, and the `digest` its PEER hops into, which hops back. */
-const ISSUES = {
-  issues: {
-    name: 'issues', main: 'server.ts',
-    slate: { title: 'Issue triage', runtime: 'worker', bindings: {
-      GITHUB: { kind: 'mcp', server: 'connection-id', tools: ['read_issue', 'create_issue'] },
-      FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] },
-      NOTES: { kind: 'memory', members: ['recall', 'remember'] },
-      ASK: { kind: 'agent' },
-      PEER: { kind: 'app', id: 'triage-digest' },
-    } },
-  },
-  'triage-digest': {
-    name: 'triage-digest', main: 'server.ts',
-    slate: { title: 'Digest', runtime: 'worker', bindings: {
-      DIGEST_FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile'] },
-      BACK: { kind: 'app', id: 'issues' },
-    } },
-  },
-  // What a slate may never hold: control of its calling agent, or its eval and hiring tools.
-  overreach: {
-    name: 'overreach', main: 'server.ts',
-    slate: { title: 'Overreach', runtime: 'worker', bindings: {
-      CONTROL: { kind: 'namespace', namespace: 'agents' },
-      TOOLS: { kind: 'tool', name: 'eval' },
-      HIRE: { kind: 'tool', name: 'agents' },
-    } },
-  },
-};
+/** The triage slates, and what each calls as its owner runs it: `issues` hops into `triage-digest`, which hops back. */
+const TRIAGE = {
+  issues: [
+    ['mcp', 'github', 'read_issue'], ['mcp', 'github', 'create_issue'], ['readFile'], ['writeFile'],
+    ['memory', 'recall'], ['memory', 'remember'], ['agent', 'send'], ['slates', 'triage-digest', 'summary'],
+  ],
+  'triage-digest': [['readFile'], ['slates', 'issues', 'refresh']],
+  // What a slate never reaches: control of its calling agent, delegation, or making tools.
+  overreach: [['agents', 'hire'], ['agent', 'hire'], ['workspace', 'createTool']],
+} as const;
 
 const refusedText = async (call: Promise<JsonValue>): Promise<string> => {
   try {
@@ -142,7 +118,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         ...probeDurableApps(facets),
         url: async (port) => ({ url: `https://${String(port)}.preview.test/` }),
       },
-      catalog: async () => ({ ...CATALOG, slates: await this.host.projects(ROOT_SLATE_CALLER) }),
+      catalog: async () => ({ mcp: MCP, slates: Object.keys(await this.host.projects(ROOT_SLATE_CALLER)) }),
       shareUrl: async (handle) => `https://${handle}.share.test/`,
       // No AUTH_KV binding, as on a deployment without it; the spend bound is real.
       budget: () => this.governor(),
@@ -168,27 +144,21 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     files.mkdir(root, { recursive: true });
     files.writeFile(`${root}/package.json`, JSON.stringify({
       name: SLATE_ID, main: 'server.ts',
-      slate: {
-        title: 'Board', runtime: 'worker',
-        bindings: {
-          FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] },
-          PEER: { kind: 'app', id: 'digest' },
-        },
-      },
+      slate: { title: 'Board', runtime: 'worker' },
     }));
     files.writeFile(`${root}/server.ts`, [
       'import { SlateObject } from "kinu:slate";',
       'export class Slate extends SlateObject {',
-      '  async probe() { return await this.env.FILES.readFile("/x"); }',
-      '  async mutate() { return await this.env.FILES.writeFile("/x", "y"); }',
-      '  async hop() { return await this.env.PEER.digest(); }',
+      '  async probe() { return await this.env.workspace.readFile("/x"); }',
+      '  async mutate() { return await this.env.workspace.writeFile("/x", "y"); }',
+      '  async hop() { return await this.env.workspace.slates.digest.digest(); }',
       '  async fetch() { return new Response("share-ok"); }',
       '}',
     ].join('\n'));
     const digest = '/slates/digest';
     files.mkdir(digest, { recursive: true });
     files.writeFile(`${digest}/package.json`, JSON.stringify({
-      name: 'digest', main: 'server.ts', slate: { title: 'Digest', runtime: 'worker', bindings: {} },
+      name: 'digest', main: 'server.ts', slate: { title: 'Digest', runtime: 'worker' },
     }));
     files.writeFile(`${digest}/server.ts`, [
       'import { SlateObject } from "kinu:slate";',
@@ -211,7 +181,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const dir = slateDirectory(new SlateId('widgets'));
     const files = this.vfs.as(hire.cred);
     const main = this.vfs.as(CRED_SESSION_USER);
-    const manifest = (title: string) => JSON.stringify({ name: 'widgets', main: 'server.ts', slate: { title, runtime: 'worker', bindings: {} } });
+    const manifest = (title: string) => JSON.stringify({ name: 'widgets', main: 'server.ts', slate: { title, runtime: 'worker' } });
 
     const server = (count: number) => [
       'import { SlateObject } from "kinu:slate";',
@@ -232,14 +202,19 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return { preview, removed, left: this.vfs.as(CRED_KERNEL).exists(dir) };
   }
 
-  /** The triage slates (`ISSUES`), as an owner authors them where slates live. */
+  /** The triage slates (`TRIAGE`), as an owner authors them where slates live and runs each through what it calls. */
   async authorTriage(): Promise<void> {
     const files = this.vfs.as(CRED_KERNEL);
 
-    for (const [id, manifest] of Object.entries(ISSUES)) {
+    for (const id of Object.keys(TRIAGE)) {
       files.mkdir(`/slates/${id}`, { recursive: true });
-      files.writeFile(`/slates/${id}/package.json`, JSON.stringify(manifest));
+      files.writeFile(`/slates/${id}/package.json`, JSON.stringify({ name: id, main: 'server.ts', slate: { title: id, runtime: 'worker' } }));
       files.writeFile(`/slates/${id}/server.ts`, 'import { SlateObject } from "kinu:slate";\nexport class Slate extends SlateObject {}\n');
+    }
+
+    // Each call is recorded where the host routes it, whatever it then answers.
+    for (const [id, paths] of Object.entries(TRIAGE)) {
+      for (const path of paths) await this.host.surfaceCall(ROOT_SLATE_CALLER, id, 'workspace', { path: [...path], args: path[0] === 'mcp' || path[0] === 'agent' ? [{ text: 'x' }] : [], invocation: null });
     }
   }
 
@@ -254,11 +229,20 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   /** A call a share's viewer makes with no invocation: the share must name the running call it rides. */
   async unnamedShareCall(share: string): Promise<SlateCallResult> {
-    return this.host.bindingCall({ ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'FILES', { member: 'readFile', args: ['/x'], invocation: null });
+    return this.host.surfaceCall({ ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'workspace', { path: ['readFile'], args: ['/x'], invocation: null });
   }
 
-  /** `approved` names members granted beyond the graph's read members. */
-  async share(approved: readonly { binding: string; member: string }[] = []): Promise<SlateCallResult> {
+  /** The board as its owner runs it, so its graph names what a share can grant. */
+  private async exerciseBoard(): Promise<void> {
+    for (const [path, args] of [[['readFile'], ['/x']], [['writeFile'], ['/x', 'fixture-bytes']], [['slates', 'digest', 'digest'], []]] as const) {
+      await this.host.surfaceCall(ROOT_SLATE_CALLER, SLATE_ID, 'workspace', { path: [...path], args: [...args], invocation: null });
+    }
+  }
+
+  /** `approved` names members granted beyond the graph's observing members. */
+  async share(approved: readonly { namespace: string; member: string }[] = []): Promise<SlateCallResult> {
+    await this.exerciseBoard();
+
     return this.host.operation(ROOT_SLATE_CALLER, {
       op: 'share', id: SLATE_ID, visibility: 'public', approved: approved.map((granted) => ({ slate: SLATE_ID, ...granted })),
     });
@@ -306,7 +290,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   /**
    * One socket session whose share changes between its calls: revoked, or spent past its daily cap by other
    * viewers' calls. `late` is a call carrying the session's invocation that arrives after the change, as one
-   * already in flight from the slate does; JSON, as `slateBindingCallAsWire` answers.
+   * already in flight from the slate does.
    */
   async viewerSocketAcross(
     handle: string, claim: ShareViewerClaim, share: string, change: 'revoke' | 'spend',
@@ -396,8 +380,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   async replay(share: string): Promise<SlateCallResult> {
-    return this.host.bindingCall(
-      { ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'FILES', { member: 'readFile', args: ['/x'], invocation: this.lastCall },
+    return this.host.surfaceCall(
+      { ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'workspace', { path: ['readFile'], args: ['/x'], invocation: this.lastCall },
     );
   }
 
@@ -413,17 +397,13 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return this.processes.getRunning().length === 0;
   }
 
-  async slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
+  async slateCallAs(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
     const parsed = v.safeParse(v.object({ invocation: v.nullable(v.string()) }), request);
 
     // The close listener releases with a null invocation; a replay must present the id the slate's call carried.
     if (parsed.success && parsed.output.invocation !== null) this.lastCall = parsed.output.invocation;
 
-    return this.host.bindingCall(caller, id, name, request);
-  }
-
-  async slateBindingCallAsWire(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<string> {
-    return JSON.stringify(await this.slateBindingCallAs(caller, id, name, request));
+    return this.host.surfaceCall(caller, id, name, request);
   }
 }
 

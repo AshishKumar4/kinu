@@ -156,10 +156,9 @@ async function calculator(verifier: EvalVerifier, id: string, paths: readonly st
     const tools = (await verifier.tools()).filter((tool) => tool.name === CALCULATOR);
     const invoked = !requireInvocation || await verifier.toolInvoked(CALCULATOR);
     const client = 'eval-report-reader';
-    await verifier.writeFile(`/slates/${client}/package.json`, JSON.stringify({ main: 'server.js',
-      slate: { bindings: { CALCULATE: { kind: 'tool', name: CALCULATOR } } } }));
+    await verifier.writeFile(`/slates/${client}/package.json`, JSON.stringify({ main: 'server.js' }));
     await verifier.writeFile(`/slates/${client}/server.js`,
-      'import { SlateObject } from "kinu:slate"; export class Slate extends SlateObject { async calculate(input) { return this.env.CALCULATE.call(input); } }');
+      `import { SlateObject } from "kinu:slate"; export class Slate extends SlateObject { async calculate(input) { return this.env.workspace.tools[${JSON.stringify(CALCULATOR)}](input); } }`);
 
     try {
       const wrong: string[] = [];

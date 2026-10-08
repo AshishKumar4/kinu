@@ -1,69 +1,46 @@
 import { expect, test } from 'bun:test';
-import { cutShareGrant, grantAdmits, slateCapabilityGraph, type SlateBindingCatalog } from '../src/slates/capability-graph';
-import { parseSlateProject } from '../src/slates/project';
+import { cutShareGrant, grantAdmits, slateCapabilityGraph, type SlateSurfaceCatalog, type SlateUsage } from '../src/slates/capability-graph';
 
-const root = parseSlateProject({
-  main: 'server.js',
-  slate: {
-    bindings: {
-      GITHUB: { kind: 'mcp', server: 'github' },
-      FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] },
-      NOTES: { kind: 'memory', members: ['recall', 'remember'] },
-      TODO: { kind: 'tasks' },
-      NET: { kind: 'web' },
-      MODELS: { kind: 'rpc', methods: ['getExecutors'] },
-      ASK: { kind: 'agent' },
-      BRAIN: { kind: 'ai', tier: 'fast' },
-      PEER: { kind: 'app', id: 'digest' },
-    },
-  },
+const used = (...paths: string[]): SlateUsage[] => paths.map((path) => {
+  const names = path.split('.');
+
+  return { namespace: names.slice(0, -1).join('.'), member: names.at(-1) ?? '' };
 });
 
-// The hop target's BACK binding names the root: a cycle walked once.
-const digest = parseSlateProject({
-  main: 'server.js',
-  slate: {
-    bindings: {
-      DIGEST_FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile'] },
-      BACK: { kind: 'app', id: 'issues' },
-    },
-  },
-});
+/** What each slate called as its owner ran it; the digest's way back names the root, a cycle walked once. */
+const USAGE = new Map([
+  ['issues', used(
+    'mcp.github.read_issue', 'mcp.github.create_issue', 'workspace.readFile', 'workspace.writeFile', 'workspace.exec',
+    'memory.recall', 'memory.remember', 'tasks.list', 'web.search', 'reads.getExecutors', 'agent.send', 'ai.run', 'slates.digest.count',
+  )],
+  ['digest', used('workspace.readFile', 'slates.issues.refresh')],
+]);
 
-const catalog: SlateBindingCatalog = {
-  executors: [{ namespace: 'workspace', members: ['readFile', 'writeFile', 'exec'] }],
+const catalog: SlateSurfaceCatalog = {
   mcp: [{ server: 'github', title: 'GitHub', tools: [{ name: 'read_issue', readOnly: true }, { name: 'create_issue', readOnly: false }] }],
-  tools: [],
-  tiers: ['fast', 'deep'],
-  slates: { issues: root, digest },
+  slates: ['issues', 'digest'],
 };
 
-const graph = slateCapabilityGraph({ slate: 'issues', workspace: 'my-workspace', catalog });
+const graph = slateCapabilityGraph({ slate: 'issues', workspace: 'my-workspace', catalog, usage: (slate) => USAGE.get(slate) ?? [] });
 
 const NO_RISK = { public: '', users: '' };
 
-function risk(member: { risk: { public: string; users: string } }): [string, string] {
-  return [member.risk.public, member.risk.users];
-}
+const row = (slate: string, namespace: string) => graph.namespaces.find((each) => each.slate === slate && each.namespace === namespace);
 
-test('the graph renders every binding with members, effects and risk text', () => {
+test('the graph names each namespace a slate called, each member with its impact and risk text', () => {
   expect(graph.slate).toBe('issues');
   expect(graph.slates).toEqual(['issues', 'digest']);
-  expect(graph.bindings.map((binding) => [binding.slate, binding.name, binding.kind]))
-    .toEqual([
-      ['issues', 'GITHUB', 'mcp'], ['issues', 'FILES', 'namespace'], ['issues', 'NOTES', 'memory'],
-      ['issues', 'TODO', 'tasks'], ['issues', 'NET', 'web'], ['issues', 'MODELS', 'rpc'],
-      ['issues', 'ASK', 'agent'], ['issues', 'BRAIN', 'ai'], ['issues', 'PEER', 'app'],
-      ['digest', 'DIGEST_FILES', 'namespace'], ['digest', 'BACK', 'app'],
-    ]);
+  expect(graph.namespaces.map((each) => `${each.slate}:${each.namespace}`)).toEqual([
+    'issues:mcp.github', 'issues:workspace', 'issues:memory', 'issues:tasks', 'issues:web', 'issues:reads', 'issues:agent', 'issues:ai',
+    'issues:slates.digest', 'digest:workspace', 'digest:slates.issues',
+  ]);
 
-  expect(graph.bindings[0]).toEqual({
-    slate: 'issues', name: 'GITHUB', kind: 'mcp',
-    capability: { kind: 'mcp', server: 'github', title: 'GitHub' },
+  expect(row('issues', 'mcp.github')).toEqual({
+    slate: 'issues', namespace: 'mcp.github', title: 'GitHub',
     members: [
-      { member: 'read_issue', effect: 'read', risk: NO_RISK },
+      { member: 'read_issue', impact: 'observe', risk: NO_RISK },
       {
-        member: 'create_issue', effect: 'mutate',
+        member: 'create_issue', impact: 'externalSend',
         risk: {
           public: 'Calls create_issue on GitHub with your credentials. The server does not mark it read-only, so it can create or change data there. Anyone who opens this share can trigger it.',
           users: 'Calls create_issue on GitHub with your credentials. The server does not mark it read-only, so it can create or change data there. Anyone you named on this share can trigger it.',
@@ -71,212 +48,55 @@ test('the graph renders every binding with members, effects and risk text', () =
       },
     ],
   });
-  expect(graph.bindings[1]).toEqual({
-    slate: 'issues', name: 'FILES', kind: 'namespace',
-    capability: { kind: 'executor', namespace: 'workspace' },
-    members: [
-      { member: 'readFile', effect: 'read', risk: NO_RISK },
-      {
-        member: 'writeFile', effect: 'mutate',
-        risk: {
-          public: 'Writes, edits or deletes files in workspace my-workspace as you. Anyone who opens this share can trigger it.',
-          users: 'Writes, edits or deletes files in workspace my-workspace as you. Anyone you named on this share can trigger it.',
-        },
-      },
-    ],
-  });
-  expect(graph.bindings[2]).toEqual({
-    slate: 'issues', name: 'NOTES', kind: 'memory',
-    capability: { kind: 'memory' },
-    members: [
-      { member: 'recall', effect: 'read', risk: NO_RISK },
-      {
-        member: 'remember', effect: 'mutate',
-        risk: {
-          public: 'Changes your workspace memory as you: notes and remembered facts your agent reads back later. Anyone who opens this share can trigger it.',
-          users: 'Changes your workspace memory as you: notes and remembered facts your agent reads back later. Anyone you named on this share can trigger it.',
-        },
-      },
-    ],
-  });
-  expect(graph.bindings[3]).toMatchObject({
-    name: 'TODO', kind: 'tasks', capability: { kind: 'tasks' },
-    members: [
-      { member: 'list', effect: 'read' },
-      { member: 'add', effect: 'mutate' },
-      { member: 'update', effect: 'mutate' },
-      { member: 'mode', effect: 'mutate' },
-    ],
-  });
-  expect(risk(graph.bindings[3].members[1])).toEqual([
-    "Changes your agent's task list and role as you. Anyone who opens this share can trigger it.",
-    "Changes your agent's task list and role as you. Anyone you named on this share can trigger it.",
+  expect(row('issues', 'workspace')?.members.map((member) => [member.member, member.impact])).toEqual([
+    ['readFile', 'observe'], ['writeFile', 'mutate'], ['exec', 'execute'],
   ]);
-  expect(graph.bindings[4]).toEqual({
-    slate: 'issues', name: 'NET', kind: 'web', capability: { kind: 'web' },
-    members: [
-      { member: 'search', effect: 'read', risk: NO_RISK },
-      { member: 'fetch', effect: 'read', risk: NO_RISK },
-      { member: 'screenshot', effect: 'read', risk: NO_RISK },
-    ],
-  });
-  expect(graph.bindings[5]).toEqual({
-    slate: 'issues', name: 'MODELS', kind: 'rpc', capability: { kind: 'rpc' },
-    members: [{ member: 'getExecutors', effect: 'read', risk: NO_RISK }],
-  });
-  expect(graph.bindings[6]).toEqual({
-    slate: 'issues', name: 'ASK', kind: 'agent', capability: { kind: 'agent' },
-    members: [{
-      member: 'send', effect: 'mutate',
-      risk: {
-        public: "Sends a message to your agent's inbox as this slate. Your agent reads it and acts on it in workspace my-workspace. Anyone who opens this share can trigger it.",
-        users: "Sends a message to your agent's inbox as this slate. Your agent reads it and acts on it in workspace my-workspace. Anyone you named on this share can trigger it.",
-      },
-    }],
-  });
-  expect(graph.bindings[7]).toEqual({
-    slate: 'issues', name: 'BRAIN', kind: 'ai', capability: { kind: 'model', tier: 'fast' },
-    members: [{
-      member: 'shell', effect: 'mutate',
-      risk: {
-        public: 'Runs a model call on your fast tier. Every call spends your inference. Anyone who opens this share can trigger it.',
-        users: 'Runs a model call on your fast tier. Every call spends your inference. Anyone you named on this share can trigger it.',
-      },
-    }],
-  });
-  expect(graph.bindings[8]).toEqual({
-    slate: 'issues', name: 'PEER', kind: 'app', capability: { kind: 'slate', id: 'digest' }, members: [],
-  });
-  expect(graph.bindings[9]).toEqual({
-    slate: 'digest', name: 'DIGEST_FILES', kind: 'namespace',
-    capability: { kind: 'executor', namespace: 'workspace' },
-    members: [{ member: 'readFile', effect: 'read', risk: NO_RISK }],
-  });
-  expect(graph.bindings[10]).toEqual({
-    slate: 'digest', name: 'BACK', kind: 'app', capability: { kind: 'slate', id: 'issues' }, members: [],
-  });
+  expect(row('issues', 'workspace')?.members[1]?.risk.public)
+    .toBe('Writes, edits or deletes files in workspace my-workspace as you. Anyone who opens this share can trigger it.');
+  expect(row('issues', 'memory')?.members.map((member) => [member.member, member.impact])).toEqual([['recall', 'observe'], ['remember', 'mutate']]);
+  expect(row('issues', 'web')?.members).toEqual([{ member: 'search', impact: 'observe', risk: NO_RISK }]);
+  expect(row('issues', 'reads')?.members).toEqual([{ member: 'getExecutors', impact: 'observe', risk: NO_RISK }]);
+  expect(row('issues', 'agent')?.members.map((member) => member.impact)).toEqual(['externalSend']);
+  expect(row('issues', 'ai')?.members[0]).toMatchObject({ member: 'run', impact: 'execute', risk: { public: expect.stringContaining('spends') } });
+  expect(row('issues', 'slates.digest')).toEqual({ slate: 'issues', namespace: 'slates.digest', title: 'slates.digest', members: [{ member: 'count', impact: 'observe', risk: NO_RISK }] });
 });
 
-test('a cut grant is every read member plus exactly the approved mutations', () => {
+test('a namespace naming something absent is a problem row that keeps its members', () => {
+  const lone = slateCapabilityGraph({
+    slate: 'issues', workspace: 'w', catalog: { mcp: [], slates: ['issues'] }, usage: () => used('mcp.gone.read', 'slates.missing.count'),
+  });
+
+  expect(lone.namespaces).toEqual([
+    { slate: 'issues', namespace: 'mcp.gone', title: 'mcp.gone', members: [expect.objectContaining({ member: 'read', impact: 'externalSend' })], problem: 'MCP server gone is not connected' },
+    { slate: 'issues', namespace: 'slates.missing', title: 'slates.missing', members: [expect.objectContaining({ member: 'count' })], problem: 'no slate named missing' },
+  ]);
+  expect(lone.slates).toEqual(['issues']);
+  expect(() => slateCapabilityGraph({ slate: 'nope', workspace: 'w', catalog, usage: () => [] })).toThrow('No slate named nope');
+});
+
+test('a cut grant is every observing member plus exactly the approved ones that act', () => {
   const grant = cutShareGrant(graph, []);
 
   expect(grant.slates).toEqual(['issues', 'digest']);
   expect(grant.members).toEqual([
-    { slate: 'issues', binding: 'GITHUB', member: 'read_issue', effect: 'read' },
-    { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read' },
-    { slate: 'issues', binding: 'NOTES', member: 'recall', effect: 'read' },
-    { slate: 'issues', binding: 'TODO', member: 'list', effect: 'read' },
-    { slate: 'issues', binding: 'NET', member: 'search', effect: 'read' },
-    { slate: 'issues', binding: 'NET', member: 'fetch', effect: 'read' },
-    { slate: 'issues', binding: 'NET', member: 'screenshot', effect: 'read' },
-    { slate: 'issues', binding: 'MODELS', member: 'getExecutors', effect: 'read' },
-    { slate: 'digest', binding: 'DIGEST_FILES', member: 'readFile', effect: 'read' },
+    { slate: 'issues', namespace: 'mcp.github', member: 'read_issue', impact: 'observe' },
+    { slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe' },
+    { slate: 'issues', namespace: 'memory', member: 'recall', impact: 'observe' },
+    { slate: 'issues', namespace: 'tasks', member: 'list', impact: 'observe' },
+    { slate: 'issues', namespace: 'web', member: 'search', impact: 'observe' },
+    { slate: 'issues', namespace: 'reads', member: 'getExecutors', impact: 'observe' },
+    { slate: 'issues', namespace: 'slates.digest', member: 'count', impact: 'observe' },
+    { slate: 'digest', namespace: 'workspace', member: 'readFile', impact: 'observe' },
+    { slate: 'digest', namespace: 'slates.issues', member: 'refresh', impact: 'observe' },
   ]);
 
-  const approved = cutShareGrant(graph, [{ slate: 'issues', binding: 'GITHUB', member: 'create_issue' }]);
-  expect(approved.members).toEqual([
-    ...grant.members,
-    { slate: 'issues', binding: 'GITHUB', member: 'create_issue', effect: 'mutate' },
-  ]);
+  const approved = cutShareGrant(graph, [{ slate: 'issues', namespace: 'mcp.github', member: 'create_issue' }]);
+  expect(approved.members).toEqual([...grant.members, { slate: 'issues', namespace: 'mcp.github', member: 'create_issue', impact: 'externalSend' }]);
 
-  expect(grantAdmits(grant, 'issues', 'FILES', 'readFile'))
-    .toEqual({ slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read' });
-  expect(grantAdmits(grant, 'issues', 'FILES', 'writeFile')).toBeNull();
-  expect(grantAdmits(grant, 'digest', 'DIGEST_FILES', 'writeFile')).toBeNull();
-  expect(grantAdmits(approved, 'issues', 'GITHUB', 'create_issue'))
-    .toEqual({ slate: 'issues', binding: 'GITHUB', member: 'create_issue', effect: 'mutate' });
-});
+  expect(grantAdmits(grant, 'issues', 'workspace', 'readFile')).toEqual({ slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe' });
+  expect(grantAdmits(grant, 'issues', 'workspace', 'writeFile')).toBeNull();
+  expect(grantAdmits(grant, 'digest', 'workspace', 'writeFile')).toBeNull();
 
-test('a default share reads through the web namespace, but never lets the native web tool write', () => {
-  // The native tool's fetch spills a page and its screenshot saves an image into the workspace; the namespace writes nothing.
-  const project = parseSlateProject({
-    main: 'server.js',
-    slate: { bindings: { NATIVE: { kind: 'tool', name: 'web' }, NET: { kind: 'web' } } },
-  });
-
-  const shared = cutShareGrant(slateCapabilityGraph({
-    slate: 'reader', workspace: 'my-workspace', catalog: { ...catalog, tools: ['web'], slates: { reader: project } },
-  }), []);
-
-  expect(shared.members.map(({ binding, member, effect }) => `${binding}.${member}:${effect}`)).toEqual([
-    'NATIVE.search:read', 'NET.search:read', 'NET.fetch:read', 'NET.screenshot:read',
-  ]);
-});
-
-test('approving a read member or an unknown member refuses', () => {
-  expect(() => cutShareGrant(graph, [{ slate: 'issues', binding: 'FILES', member: 'readFile' }]))
-    .toThrow('FILES.readFile is not a mutating member of slate issues');
-  expect(() => cutShareGrant(graph, [{ slate: 'issues', binding: 'GITHUB', member: 'delete_issue' }]))
-    .toThrow('GITHUB.delete_issue is not a mutating member of slate issues');
-  expect(() => cutShareGrant(graph, [{ slate: 'issues', binding: 'NOPE', member: 'x' }]))
-    .toThrow('NOPE.x is not a mutating member of slate issues');
-});
-
-test('bindings the workspace cannot honour carry their problem on the row', () => {
-  const broken = parseSlateProject({
-    main: 'server.js',
-    slate: {
-      bindings: {
-        FILES: { kind: 'namespace', namespace: 'nonexistent' },
-        GH: { kind: 'mcp', server: 'gitlab' },
-        TOOL: { kind: 'tool', name: 'shell' },
-        MISSING_TOOL: { kind: 'tool', name: 'not_a_tool' },
-        DELEGATE: { kind: 'tool', name: 'agents' },
-        EXEC: { kind: 'tool', name: 'eval' },
-        SELF: { kind: 'namespace', namespace: 'agents' },
-        MODEL: { kind: 'ai', tier: 'quantum' },
-        GONE: { kind: 'app', id: 'missing' },
-      },
-    },
-  });
-
-  const problem = (name: string) => slateCapabilityGraph({
-    slate: 'broken', workspace: 'ws',
-    catalog: { ...catalog, slates: { broken }, tools: ['crafted_one'] },
-  }).bindings.find((binding) => binding.name === name)?.problem;
-
-  expect(problem('FILES')).toBe('no executor named nonexistent is available in this workspace');
-  expect(problem('GH')).toBe('MCP server gitlab is not connected');
-  expect(problem('MISSING_TOOL')).toBe('no tool named not_a_tool is available');
-  expect(problem('DELEGATE')).toBe('a slate cannot delegate or control its calling agent');
-  expect(problem('EXEC')).toBe('a slate cannot run eval');
-  expect(problem('SELF')).toBe('a slate cannot delegate or control its calling agent');
-  expect(problem('MODEL')).toBe('you have no quantum tier');
-  expect(problem('GONE')).toBe('no slate named missing');
-
-  const tool = slateCapabilityGraph({
-    slate: 'broken', workspace: 'ws',
-    catalog: { ...catalog, slates: { broken }, tools: ['crafted_one'] },
-  }).bindings.find((binding) => binding.name === 'TOOL');
-
-  expect(tool).toMatchObject({ capability: { kind: 'tool', name: 'shell' }, members: [{ member: 'call', effect: 'mutate' }] });
-
-  expect(() => slateCapabilityGraph({ slate: 'gone', workspace: 'ws', catalog }))
-    .toThrow('No slate named gone');
-});
-
-test('a path-scoped binding offers only the file members it declares', () => {
-  const scoped = parseSlateProject({
-    main: 'server.js',
-    slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace', paths: ['/a'] } } },
-  });
-
-  const whole = slateCapabilityGraph({
-    slate: 'scoped', workspace: 'ws',
-    catalog: { executors: [{ namespace: 'workspace', members: ['readFile', 'exec'] }], mcp: [], tools: [], tiers: [], slates: { scoped } },
-  });
-
-  expect(whole.bindings[0].members.map((member) => member.member)).toEqual(['readFile']);
-
-  const declared = parseSlateProject({
-    main: 'server.js',
-    slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace', members: ['exec', 'readFile'], paths: ['/a'] } } },
-  });
-
-  const narrowed = slateCapabilityGraph({
-    slate: 'declared', workspace: 'ws',
-    catalog: { ...catalog, slates: { declared } },
-  });
-
-  expect(narrowed.bindings[0].members.map((member) => member.member)).toEqual(['readFile']);
+  expect(() => cutShareGrant(graph, [{ slate: 'issues', namespace: 'workspace', member: 'readFile' }])).toThrow('is not a member of slate issues that acts');
+  expect(() => cutShareGrant(graph, [{ slate: 'issues', namespace: 'workspace', member: 'remove' }])).toThrow('is not a member of slate issues that acts');
 });

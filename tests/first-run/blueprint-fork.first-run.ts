@@ -1,13 +1,14 @@
 /**
- * A blueprint published from a slate carries no mapped bindings; a second
- * workspace imports it, then connects its own MCP server and calls it through
- * the fork. Cloudflare's public documentation MCP needs no OAuth credentials.
+ * A blueprint published from a slate names what the slate reaches and carries
+ * nothing of its owner's; a second workspace imports it, then connects its own
+ * MCP server of the same name and calls it through the fork. Cloudflare's
+ * public documentation MCP needs no OAuth credentials.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
-  BlueprintForkSchema, JsonValueSchema, parseSlateProject, PublishedBlueprintSchema, SharedLibrarySchema, SlateCapabilityGraphSchema,
+  BlueprintForkSchema, JsonValueSchema, PublishedBlueprintSchema, SharedLibrarySchema, SlateCapabilityGraphSchema,
 } from '@kinu.run/core';
 import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/session';
@@ -53,18 +54,22 @@ describe(SUITE, () => {
 
         const setup = v.parse(Exec, await session.execute('workspace', `mkdir -p /slates/${SLATE}
 cat > /slates/${SLATE}/package.json <<'END'
-{"name":"${SLATE}","description":"Blueprint fork probe","main":"server.ts","slate":{"title":"Fork probe","bindings":{"DOCS":{"kind":"mcp","server":"${mcpName}","tools":["search_cloudflare_documentation"]},"FILES":{"kind":"namespace","namespace":"workspace","members":["readFile"]}}}}
+{"name":"${SLATE}","description":"Blueprint fork probe","main":"server.ts","slate":{"title":"Fork probe"}}
 END
 cat > /slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
   async hello() { return { ok: true }; }
-  async docs() { return await this.env.DOCS.search_cloudflare_documentation({ query: "Cloudflare Durable Objects storage" }); }
+  async manifest() { return await this.env.workspace.readFile("/slates/${SLATE}/package.json"); }
+  async docs() { return await this.env.workspace.mcp["${mcpName}"].search_cloudflare_documentation({ query: "Cloudflare Durable Objects storage" }); }
   async fetch() { return new Response("fork-probe-ok"); }
 }
 END`));
 
         if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the fork source: ' + (setup.error ?? setup.stdout ?? ''));
+
+        // What the slate reaches is what its owner's calls recorded; the MCP call is refused here, and recorded all the same.
+        for (const method of ['manifest', 'docs']) await session.slateOp({ op: 'call', id: SLATE, method, args: [] });
 
         const committed = v.parse(Answered, await session.slateOp({ op: 'commit', id: SLATE }));
         const version = v.parse(v.object({ id: v.string() }), committed.value).id;
@@ -91,9 +96,7 @@ END`));
 
         const blueprintResponse = await fetch(`${plan.origin}/api/shared/blueprint/${encodeURIComponent(link.id)}`);
 
-        const blueprintView = v.parse(v.object({
-          bindings: v.array(v.object({ name: v.string(), kind: v.string(), credentialed: v.boolean() })),
-        }), await blueprintResponse.json());
+        const blueprintView = v.parse(v.object({ reaches: v.array(v.string()) }), await blueprintResponse.json());
 
         const forked = await plan.open({ subject: 'fork', purpose: 'Disposable blueprint fork target; no model task.', genesis: false });
         let mcpId: string | null = null;
@@ -110,17 +113,19 @@ END`));
 
           const fork = v.parse(BlueprintForkSchema, JSON.parse(forkText));
 
-          const graph = v.parse(SlateCapabilityGraphSchema, v.parse(Answered, await forked.slateOp({ op: 'graph', id: fork.slate })).value);
-          const problem = graph.bindings.find((binding) => binding.name === 'DOCS')?.problem ?? '';
+          const reaches = [`mcp.${mcpName}`, 'workspace'];
+          // Before the forker connects a server of that name, the fork's call to it is refused.
+          const unconnected = await forked.slateOp({ op: 'call', id: fork.slate, method: 'docs', args: [] });
+          const problem = JSON.stringify(unconnected);
 
           const hello = v.safeParse(Answered, await forked.slateOp({ op: 'call', id: fork.slate, method: 'hello', args: [] }));
 
           goals.push({
-            what: 'publish-carries-no-mapped-bindings',
-            reached: published.inspection.bindings.length === 2
-              && blueprintView.bindings.every((binding) => binding.credentialed === true)
+            what: 'publish-names-what-it-reaches',
+            reached: JSON.stringify(published.inspection.reaches) === JSON.stringify(reaches)
+              && JSON.stringify(blueprintView.reaches) === JSON.stringify(reaches)
               && !JSON.stringify(published).includes(session.workspace),
-            detail: JSON.stringify({ bindings: published.inspection.bindings, link }),
+            detail: JSON.stringify({ reaches: published.inspection.reaches, link }),
           });
           goals.push({
             what: 'drive-lists-the-slate-and-its-blueprint',
@@ -129,8 +134,8 @@ END`));
             detail: JSON.stringify({ slates: library.slates.length, mine: library.mine.map((row) => [row.kind, row.share]) }),
           });
           goals.push({
-            what: 'fork-bindings-read-unmapped',
-            reached: fork.requirements.length === 2 && problem.length > 0,
+            what: 'fork-requires-what-it-reaches',
+            reached: JSON.stringify(fork.requirements.map((requirement) => requirement.name)) === JSON.stringify(reaches) && problem.includes('"ok":false'),
             detail: JSON.stringify({ requirements: fork.requirements, problem: problem.slice(0, 160) }),
           });
           goals.push({
@@ -152,32 +157,21 @@ END`));
           if (!connected.ok) throw new Error(`Connect fork MCP answered ${String(connected.status)}: ${connectedText.slice(0, 200)}`);
           const connection = v.parse(McpConnection, JSON.parse(connectedText));
           mcpId = connection.id;
-          const manifestPath = `/slates/${fork.slate}/package.json`;
-          const project = parseSlateProject(JSON.parse(await forked.readFile(manifestPath)));
-          const binding = project.slate.bindings.DOCS;
-
-          if (binding?.kind !== 'mcp') throw new Error('The fork lost its DOCS MCP binding');
-          await forked.writeFile(manifestPath, JSON.stringify({
-            ...project,
-            slate: {
-              ...project.slate,
-              bindings: { ...project.slate.bindings, DOCS: { ...binding, server: connection.id } },
-            },
-          }));
-
-          const mappedGraph = v.parse(SlateCapabilityGraphSchema, v.parse(Answered,
-            await forked.slateOp({ op: 'graph', id: fork.slate })).value);
 
           const docs = v.safeParse(Answered, await forked.slateOp({ op: 'call', id: fork.slate, method: 'docs', args: [] }));
           const answer = v.safeParse(McpAnswer, docs.success ? docs.output.value : null);
-          const mapped = mappedGraph.bindings.find((mapping) => mapping.name === 'DOCS');
+
+          const forkGraph = v.parse(SlateCapabilityGraphSchema, v.parse(Answered,
+            await forked.slateOp({ op: 'graph', id: fork.slate })).value);
+
+          const reached = forkGraph.namespaces.find((row) => row.namespace === `mcp.${mcpName}`);
 
           goals.push({
-            what: 'own-mcp-mapping-works',
-            reached: connection.authUrl === null && mapped !== undefined && !mapped.problem
+            what: 'own-mcp-server-answers',
+            reached: connection.authUrl === null && reached !== undefined && reached.problem === undefined
               && answer.success && answer.output.isError !== true
               && answer.output.content.some((part) => part.text.includes('developers.cloudflare.com')),
-            detail: JSON.stringify({ server: mcpName, problem: mapped?.problem, called: docs.success, answered: answer.success }),
+            detail: JSON.stringify({ server: mcpName, problem: reached?.problem, called: docs.success, answered: answer.success }),
           });
         } finally {
           await Promise.all([

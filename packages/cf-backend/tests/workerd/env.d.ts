@@ -238,7 +238,7 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   esbuildInThisIsolate(): Promise<boolean>;
   facetImages(): Promise<string[]>;
   call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
-  socket(method: string, args?: JsonValue[], binding?: string): Promise<{ ok?: boolean; value?: string; error?: string }>;
+  socket(method: string, args?: JsonValue[], surface?: string[]): Promise<{ ok?: boolean; value?: string; error?: string }>;
   route(path?: string, chain?: string[]): Promise<{ status: number; body: string; contentType: string | null }>;
   artifacts(): Promise<{ application: string; client?: string; shell?: string }>;
   paths(): Promise<{ kinuInSlateRoot: boolean; entries: string[] }>;
@@ -336,7 +336,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   operationAs(as: 'root' | 'plan' | 'hire', input: import('@kinu.run/core').JsonValue): Promise<ProbeAnswer>;
   unnamedShareCall(share: string): Promise<ProbeAnswer>;
   previewAsHire(): Promise<{ preview: ProbeAnswer; removed: ProbeAnswer; left: boolean }>;
-  share(approved?: readonly { binding: string; member: string }[]): Promise<ProbeAnswer>;
+  share(approved?: readonly { namespace: string; member: string }[]): Promise<ProbeAnswer>;
   liveShares(): Promise<ProbeAnswer>;
   importBlueprint(): Promise<{ fork: string; running: number }>;
   viewerHop(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<string>;

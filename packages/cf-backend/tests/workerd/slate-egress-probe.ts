@@ -48,12 +48,12 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
     facetManager: async () => this.facets,
     bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
-    dispatch: async () => { throw new Error('The fixture declares no capability bindings'); },
+    dispatch: async () => { throw new Error('The fixture calls nothing on its surface'); },
     apps: {
       ...probeDurableApps(this.facets),
       url: async () => { throw new Error('The fixture does not publish preview URLs'); },
     },
-    catalog: async () => ({ executors: [], mcp: [], tools: [], tiers: [], slates: {} }),
+    catalog: async () => ({ mcp: [], slates: [] }),
     shareUrl: async () => null,
   });
 

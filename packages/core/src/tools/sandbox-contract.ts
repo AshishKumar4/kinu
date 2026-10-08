@@ -229,7 +229,7 @@ export function slateToolReach(caller: ToolSurfaceNarrowing): ToolSurfaceNarrowi
   };
 }
 
-/** A held slate binding is not a grant: reach is re-resolved per call. */
+/** A held slate stub is not a grant: reach is re-resolved per call. */
 export async function callCodemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string, args: readonly JsonValue[]): Promise<JsonValue | undefined> {
   const call = codemodeFunction(namespace, member, () => settle(Effect.gen(function* () {
     const provider = providers.find((candidate) => candidate.name === namespace);

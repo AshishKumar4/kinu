@@ -9,17 +9,17 @@ import {
   type BlueprintReading, type DurableAppIdentity, type DurableApps, type ShareUser,
 } from '@kinu.run/core/slates';
 import { SlateLiveShareStore, initSlateLiveShareTables, shareLiveSlate } from '@kinu.run/core/slates';
-import { EphemeralSlates, initEphemeralSlateTable } from '@kinu.run/core/slates';
+import { EphemeralSlates, initEphemeralSlateTable, SlateUsageStore, initSlateUsageTable } from '@kinu.run/core/slates';
 import {
-  credentialedBindings, ingressAdmitted,
+  ingressAdmitted,
   parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
-  SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, issuedSlateInvocation, assertLandsWithin,
-  routeViewerBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
+  SlateCallRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateCall, issuedSlateInvocation,
+  routeViewerCall, slateCallAddress, slateAddressImpact, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, publicPage, UsageSchema, usageTotal,
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
-  type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
-  type SlateBindingCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
+  type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
+  type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
   type MissionGovernor, type WorkspaceOverviewShare, slateCapabilityGraph, type SlateCapabilityGraph,
   ephemeralSlateAddress, type EphemeralSlateAddress,
 } from '@kinu.run/core';
@@ -32,7 +32,7 @@ import { ROOT_SLATE_CALLER, slateCallerKey, slateCredentialKey, shareCaller, typ
 import { codemodeEgress } from '../codemode-egress';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
 
-export type SlateCapabilityRoute = Exclude<SlateBindingRoute, { kind: 'app' }>;
+export type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
 
 export interface SlateApps extends DurableApps {
   url(port: number, capability: string): Promise<WorkspacePreviewUrl>;
@@ -44,7 +44,7 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   /** Runs as the caller: its own providers, role reach, read models and gates. */
   dispatch(caller: SlateCaller, route: SlateCapabilityRoute): Promise<JsonValue>;
   readonly apps: SlateApps;
-  catalog(): Promise<SlateBindingCatalog>;
+  catalog(): Promise<SlateSurfaceCatalog>;
   shareUrl(handle: string): Promise<string | null>;
   /** Absent means no per-viewer rate bound, as at the edge. */
   kv?: KvStore;
@@ -68,6 +68,9 @@ export interface SlateHostDeps extends ResidentSlateDeps {
 function heldKey(caller: SlateCaller, id: string): string {
   return ephemeralSlateAddress(id) === null ? `${slateCallerKey(caller)}#${id}` : `page#${id}`;
 }
+
+/** The one surface every slate is given, as its process sees it. */
+const SLATE_SURFACE = 'workspace';
 
 /** Answers' pages that keep a process and a reservation at once; drawing another retires the least recently drawn. */
 const EPHEMERAL_SLATES_KEPT = 16;
@@ -135,7 +138,8 @@ export class SlateHost {
   private readonly pages: EphemeralSlates;
   private readonly slateSources: SlateSources;
   /** A published blueprint never changes. */
-  private readonly blueprintHeadings = new Map<string, { title: string; description: string; bindings: number }>();
+  private readonly blueprintHeadings = new Map<string, { title: string; description: string }>();
+  private readonly usage: SlateUsageStore;
 
   constructor(private readonly deps: SlateHostDeps) {
     this.resident = new ResidentSlateProcesses({ session: deps.session, facetManager: deps.facetManager, bundler: deps.bundler });
@@ -145,6 +149,8 @@ export class SlateHost {
     this.live = new SlateLiveShareStore(deps.ctx.storage.sql);
     initEphemeralSlateTable((ddl) => { deps.ctx.storage.sql.exec(ddl); });
     this.pages = new EphemeralSlates(deps.ctx.storage.sql);
+    initSlateUsageTable((ddl) => { deps.ctx.storage.sql.exec(ddl); });
+    this.usage = new SlateUsageStore(deps.ctx.storage.sql);
     this.slateSources = new SlateSources({
       project: (cred, id) => this.project(cred, id), trees: (cred) => this.sources(cred), host: deps,
     });
@@ -165,6 +171,7 @@ export class SlateHost {
 
     return new WorkspaceBlueprints({ slates, content: this.content,
       shares: new SlateShareStore(this.deps.ctx.storage.sql),
+      usage: (slate) => this.usage.list(slate),
     });
   }
 
@@ -179,7 +186,7 @@ export class SlateHost {
   }
 
   private async graph(slate: string): Promise<SlateCapabilityGraph> {
-    return slateCapabilityGraph({ slate, workspace: this.deps.workspace, catalog: await this.deps.catalog() });
+    return slateCapabilityGraph({ slate, workspace: this.deps.workspace, catalog: await this.deps.catalog(), usage: (id) => this.usage.list(id) });
   }
 
   /** Uses `get`, not `live`: a revoked row still reads; refusing it is the caller's job. */
@@ -270,23 +277,22 @@ export class SlateHost {
       settle: (outcome) => { this.live.settleRequest(viewer.request, outcome); },
     };
   }
-  /** `null` when the slate reaches nothing credentialed of the owner's: nothing to disclose. */
+  /** `null` when the grant reaches nothing of the owner's: nothing to disclose. */
   private async consentPage(share: LiveShareRecord): Promise<Response | null> {
+    const namespaces = [...new Set(share.grant.members.map((member) => member.namespace))];
+
+    if (namespaces.length === 0) return null;
     const project = await this.project(CRED_SESSION_USER, share.slate);
-    const credentialed = credentialedBindings(project);
-
-    if (credentialed.length === 0) return null;
-
     const owner = (await this.deps.ownerTitle?.()) ?? this.deps.workspace;
     const title = project.slate.title ?? project.name ?? share.slate;
-    const bindings = credentialed.map((binding) => `<li>${escapeHtml(`${binding.name} (${binding.target})`)}</li>`).join('');
+    const reached = namespaces.map((namespace) => `<li>${escapeHtml(namespace)}</li>`).join('');
 
     const html = publicPage({
       title: `${owner} shared ${title}`,
       body: `<main><section class="section">
 <h1>${escapeHtml(owner)} shared ${escapeHtml(title)}</h1>
 <p class="dim">This slate runs in ${escapeHtml(owner)}'s workspace and calls these connections with their credentials:</p>
-<ul>${bindings}</ul>
+<ul>${reached}</ul>
 <p class="dim">What you do here runs as ${escapeHtml(owner)} and is logged for them.</p>
 <a class="btn solid" href="${VIEWER_EXCHANGE_PATH}?consent=1">Continue</a>
 </section></main>`,
@@ -434,7 +440,7 @@ export class SlateHost {
 
       cards.push({
         kind: 'live', share: record.id, slate: record.slate, title: titles.get(record.slate) ?? record.slate, description: '',
-        createdAt: record.createdAt, bindings: record.grant.members.length, users: [...record.users],
+        createdAt: record.createdAt, users: [...record.users],
         visibility: record.visibility, fork: record.grant.fork !== false,
       });
     }
@@ -512,7 +518,7 @@ export class SlateHost {
         case 'list': {
           const listing = await this.list(caller);
 
-          return { ok: true, value: { slates: listing.slates.map((slate) => ({ ...slate, bindings: [...slate.bindings] })), problems: listing.problems.map((problem) => ({ ...problem })) } };
+          return { ok: true, value: { slates: listing.slates.map((slate) => ({ ...slate })), problems: listing.problems.map((problem) => ({ ...problem })) } };
         }
 
         case 'preview': return await this.preview(caller, operation.id);
@@ -596,7 +602,6 @@ export class SlateHost {
         const summary: SlateSummary = {
           id: entry.name,
           title: project.slate.title ?? project.name ?? entry.name,
-          bindings: Object.keys(project.slate.bindings),
           port: live && running !== undefined ? running.app?.port : undefined,
         };
 
@@ -670,6 +675,7 @@ export class SlateHost {
         if (vfs.exists(root)) vfs.removeRecursive(root);
         forgetSlateFiles(this.deps.ctx.storage.sql, new SlateId(id));
         this.state.forget(id);
+        this.usage.forget(id);
       });
       await this.deps.forgetPicture?.(id);
 
@@ -682,7 +688,7 @@ export class SlateHost {
   private readonly invocations = new Map<string, SlateInvocation & { readonly held?: string }>();
 
   /**
-   * A named root invocation for a request this host did not originate; unnamed, a slate could replay a preview's bindings
+   * A named root invocation for a request this host did not originate; unnamed, a slate could replay a preview's calls
    * from inside a hop. A socket's invocation is released by its close listener via `__host`.
    */
   slateInvocation(port: number, socket: boolean): { readonly value: string; release: () => void } | null {
@@ -697,16 +703,10 @@ export class SlateHost {
     return null;
   }
 
-  private releaseInvocation(caller: SlateCaller, id: string, request: JsonValue): SlateCallResult {
-    const parsed = v.safeParse(SlateBindingRequestSchema, request);
+  private releaseInvocation(caller: SlateCaller, id: string, request: SlateCallRequest): SlateCallResult {
+    const target = request.args[0];
 
-    if (!parsed.success) {
-      return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} host call`, cause: new v.ValiError(parsed.issues), otherwise: 'io' })) };
-    }
-
-    const target = parsed.output.args[0];
-
-    if (parsed.output.member !== 'release' || !v.is(v.string(), target)) {
+    if (request.path.join('.') !== 'release' || !v.is(v.string(), target)) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} host call`, cause: new KinuError('bad_input', 'The host binding answers only release(invocation)'), otherwise: 'io' })) };
     }
 
@@ -724,96 +724,105 @@ export class SlateHost {
     return { ok: true, value: null };
   }
 
-  /** Re-read the slate field on every call: a held stub proves its name, not today's reach. */
-  async bindingCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
+  /** Every call a slate makes, routed and held to its caller's reach as of now: a held stub proves its slate, nothing more. */
+  async surfaceCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
     try {
-      const parsed = v.safeParse(SlateBindingRequestSchema, request);
+      const parsed = v.safeParse(SlateCallRequestSchema, request);
 
-      if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) });
+      if (!parsed.success) throw new KinuError('bad_input', 'A slate call is { path: string[], args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) });
 
       if (name === SLATE_HOST_BINDING) return this.releaseInvocation(caller, id, parsed.output);
 
       // Answered here, not dispatched: it carries no actor capability.
-      if (name === SLATE_STORAGE_BINDING) {
-        const operation = routeSlateStorageCall(parsed.output);
-
-        if (operation.op === 'put' || operation.op === 'delete') {
-          requireWorkModePermission(caller.workMode, false, 'slate storage write');
-        }
-
-        switch (operation.op) {
-          case 'get': return { ok: true, value: this.state.get(id, operation.key) };
-          case 'put': {
-            this.state.put(id, operation.key, operation.value);
-
-            return { ok: true, value: null };
-          }
-
-          case 'delete': return { ok: true, value: this.state.delete(id, operation.key) };
-          case 'list': return { ok: true, value: this.state.list(id, { prefix: operation.prefix, limit: operation.limit }) };
-        }
-      }
-
+      if (name === SLATE_STORAGE_BINDING) return this.storageCall(caller, id, parsed.output);
       const issued = issuedSlateInvocation({ invocations: this.invocations, id, invocation: parsed.output.invocation });
       const chain = issued?.chain ?? [];
 
       // The share row is re-read now, so a revoked share refuses mid-flight.
-      if (caller.share !== undefined) {
-        if (issued?.viewer === undefined) {
-          throw new KinuError('denied', 'A viewer binding call must name the invocation it was issued under');
-        }
-
-        const viewer = issued.viewer;
-
-        // S2: the per-day spend bound refuses as 'budget'.
-        const share = this.live.live(caller.share);
-        const governor = this.deps.budget?.();
-
-        if (governor !== undefined && governor.guard('model_call', [shareSpendLabel(share.id)]) !== null) {
-          this.live.recordCall(viewer.request, { slate: id, binding: name, member: parsed.output.member, effect: 'mutate', ok: false });
-          throw new KinuError('budget', 'This share is paused for today');
-        }
-
-        const project = await this.project(caller.cred, id);
-        let call;
-
-        try {
-          call = routeViewerBindingCall({ id, project, name, request: parsed.output, chain, viewer, grant: share.grant });
-        } catch (cause) {
-          this.live.recordCall(viewer.request, { slate: id, binding: name, member: parsed.output.member, effect: 'mutate', ok: false });
-          throw cause;
-        }
-
-        let result: SlateCallResult;
-
-        try {
-          result = await this.run(caller, call.route, viewer);
-        } catch (cause) {
-          this.live.recordCall(viewer.request, { slate: id, binding: name, member: call.member, effect: call.effect, ok: false });
-          throw cause;
-        }
-
-        this.live.recordCall(viewer.request, { slate: id, binding: name, member: call.member, effect: call.effect, ok: result.ok });
-
-        if (result.ok) this.debitShare(share, result.value);
-
-        return result;
-      }
+      if (caller.share !== undefined) return await this.viewerCall({ caller, share: caller.share, id, request: parsed.output, chain, issued });
 
       const source = await this.slateSources.resolve(caller.cred, id);
+
+      if (source.kind === 'message' && !source.bound) {
+        throw new KinuError('denied', `Slate ${id} is a hired agent's page, drawn with no authority lent to it: its calls would not run where that agent's stores are`);
+      }
+
       // An answer's page calls as its author as of now, in the mode the author's next turn runs in.
       const callsAs = source.kind === 'message' ? source.author : caller;
+      const call = routeSlateCall({ id, request: parsed.output, chain });
 
-      return await this.run(callsAs, routeSlateBindingCall({ id, project: source.project, name, request: parsed.output, chain }));
+      // An answer's page is never shared or published, so what it calls is no slate's graph.
+      if (source.kind !== 'message') this.usage.record(id, call.address);
+
+      return await this.run(callsAs, call.route);
     } catch (cause) {
-      return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} binding ${name}`, cause, otherwise: 'io' })) };
+      return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} ${name}`, cause, otherwise: 'io' })) };
     }
   }
 
-  private async run(caller: SlateCaller, route: SlateBindingRoute, viewer?: SlateViewer): Promise<SlateCallResult> {
+  private storageCall(caller: SlateCaller, id: string, request: SlateCallRequest): SlateCallResult {
+    const operation = routeSlateStorageCall({ member: request.path.join('.'), args: request.args });
+
+    if (operation.op === 'put' || operation.op === 'delete') {
+      requireWorkModePermission(caller.workMode, false, 'slate storage write');
+    }
+
+    switch (operation.op) {
+      case 'get': return { ok: true, value: this.state.get(id, operation.key) };
+      case 'put': {
+        this.state.put(id, operation.key, operation.value);
+
+        return { ok: true, value: null };
+      }
+
+      case 'delete': return { ok: true, value: this.state.delete(id, operation.key) };
+      case 'list': return { ok: true, value: this.state.list(id, { prefix: operation.prefix, limit: operation.limit }) };
+    }
+  }
+
+  /** A viewer's call: the grant decides, every call is audited, and what it spends is the share's. */
+  private async viewerCall(input: {
+    readonly caller: SlateCaller;
+    readonly share: string;
+    readonly id: string;
+    readonly request: SlateCallRequest;
+    readonly chain: readonly string[];
+    readonly issued: SlateInvocation | null;
+  }): Promise<SlateCallResult> {
+    const { caller, id, request, chain, issued } = input;
+
+    if (issued?.viewer === undefined) throw new KinuError('denied', 'A viewer call must name the invocation it was issued under');
+    const viewer = issued.viewer;
+    const named = slateCallAddress(request.path);
+    // What the audit row says, as far as the call got: refused until it is routed and answered.
+    let row: ViewerCall = { slate: id, ...named, impact: slateAddressImpact(named) ?? 'administer', ok: false };
+    // A revoked share refuses here, before there is a call of it to audit.
+    const share = this.live.live(input.share);
+
+    try {
+      // S2: the per-day spend bound refuses as 'budget'.
+      const governor = this.deps.budget?.();
+
+      if (governor !== undefined && governor.guard('model_call', [shareSpendLabel(share.id)]) !== null) {
+        throw new KinuError('budget', 'This share is paused for today');
+      }
+
+      const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
+      row = { slate: id, ...call.address, impact: call.impact, ok: false };
+      const result = await this.run(caller, call.route, viewer);
+      row = { ...row, ok: result.ok };
+
+      if (result.ok) this.debitShare(share, result.value);
+
+      return result;
+    } finally {
+      this.live.recordCall(viewer.request, row);
+    }
+  }
+
+  private async run(caller: SlateCaller, route: SlateRoute, viewer?: SlateViewer): Promise<SlateCallResult> {
     switch (route.kind) {
       case 'namespace': {
-        await assertLandsWithin((await this.deps.session()).filesystem.vfs.as(caller.cred), route);
         const value = await this.deps.dispatch(caller, route);
         const refused = answeredRefusal(value);
 
@@ -823,9 +832,8 @@ export class SlateHost {
       // MCP owns CallToolResult.isError; read models are application data.
       // Neither producer declares the internal namespace refusal vocabulary.
       case 'mcp':
-      case 'rpc': return { ok: true, value: await this.deps.dispatch(caller, route) };
+      case 'rpc':
       case 'tool':
-      case 'codemode': return { ok: true, value: await this.deps.dispatch(caller, route) };
       case 'agent':
       case 'ai': return { ok: true, value: await this.deps.dispatch(caller, route) };
       // The hop keeps the caller's authority, never the author's; the viewer follows the chain.
@@ -948,17 +956,10 @@ export class SlateHost {
       if (source.kind === 'message') await this.keepPage(id);
       const bindings: Record<string, Fetcher<SlateBinding>> = {};
 
-      for (const name of Object.keys(project.slate.bindings)) {
+      for (const name of [SLATE_SURFACE, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING]) {
         const props: SlateBindingProps = { workspace: this.deps.workspace, id, name, caller };
         bindings[name] = exports.SlateBinding({ props });
       }
-
-      bindings[SLATE_STORAGE_BINDING] = exports.SlateBinding({
-        props: { workspace: this.deps.workspace, id, name: SLATE_STORAGE_BINDING, caller },
-      });
-      bindings[SLATE_HOST_BINDING] = exports.SlateBinding({
-        props: { workspace: this.deps.workspace, id, name: SLATE_HOST_BINDING, caller },
-      });
 
       // Only the root's build process is the durable application; shares and Plan roots are private and must never
       // attach to its facet. A block is only ever seen through its preview, so it always has one.

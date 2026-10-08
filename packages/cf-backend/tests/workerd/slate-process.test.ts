@@ -10,7 +10,7 @@ it('runs an authored class: the prototype is the surface and the reserved storag
     // In the object's own isolate esbuild-wasm holds 28-44 MiB it never releases (ASK-esbuild-host.md).
     expect(await subject.esbuildInThisIsolate()).toBe(false);
     // `__storage` is the reserved handle, never in the guest's env map.
-    expect(await subject.call('envKeys', [])).toEqual({ ok: true, value: '["PEER"]' });
+    expect(await subject.call('envKeys', [])).toEqual({ ok: true, value: '["workspace"]' });
     expect(await subject.call('greet', ['kinu'])).toEqual({ ok: true, value: 'hello kinu #1 [probe]' });
     expect(await subject.call('greet', ['kinu'])).toEqual({ ok: true, value: 'hello kinu #2 [probe]' });
     expect(await subject.call('missing', [])).toMatchObject({ ok: false, error: expect.stringContaining('has no method missing') });
@@ -107,7 +107,7 @@ it('a private process gets an ephemeral facet: this.storage survives, this.sql d
   }
 });
 
-it('a slate with no class serves its page as written, the client mapped in ahead of it, and its bindings on the socket', async () => {
+it('a slate with no class serves its page as written, the client mapped in ahead of it, and its surface on the socket', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('page-only'));
 
   await subject.start({
@@ -122,8 +122,8 @@ it('a slate with no class serves its page as written, the client mapped in ahead
     expect(page.body.indexOf('<script type="importmap">')).toBeGreaterThan(-1);
     expect(page.body.indexOf('<script type="importmap">')).toBeLessThan(page.body.indexOf('page-only-marker-5d21'));
     expect((await subject.route('/__kinu/slate.js')).status).toBe(200);
-    // The page's socket reaches each binding under its name, under the socket's own invocation.
-    expect(await subject.socket('ask', ['x'], 'PEER')).toEqual({ ok: true, value: '{"chain":["probe"],"args":["x"]}' });
+    // The page's socket reaches the surface, under the socket's own invocation.
+    expect(await subject.socket('call', ['x'], ['slates', 'peer', 'ask'])).toEqual({ ok: true, value: '{"chain":["probe"],"args":["x"]}' });
     expect(await subject.socket('greet', ['kinu'])).toMatchObject({ ok: false });
   } finally {
     await subject.stop();
@@ -316,7 +316,7 @@ it('boots the class whether main exports it as Slate or as default, and the refu
   expect(noImport.detail).toContain('SlateObject is not defined');
 });
 
-it('binding calls never run outside a slate method invocation', async () => {
+it('surface calls never run outside a slate method invocation', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('invocation-scope'));
   // The constructor runs under startProcess, which no invocation wraps: its queued call must still be refused.
   // A timer inside a method keeps its lineage on purpose.
@@ -325,7 +325,7 @@ it('binding calls never run outside a slate method invocation', async () => {
       'import { SlateObject } from "kinu:slate";',
       'export class Slate extends SlateObject {',
       '  #early;',
-      '  constructor(ctx, env) { super(ctx, env); this.#early = this.env.PEER.echo("x"); }',
+      '  constructor(ctx, env) { super(ctx, env); this.#early = this.env.workspace.slates.peer.echo("x"); }',
       '  async replay() {',
       '    try { await this.#early; return "unexpected"; }',
       '    catch (cause) { return String(cause); }',

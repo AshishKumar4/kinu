@@ -50,7 +50,7 @@ export const SlateOperationSchema = v.variant('op', [
   v.strictObject({
     op: v.literal('share'), id: SlateDirectoryName,
     visibility: LiveShareVisibilitySchema,
-    approved: v.array(v.strictObject({ slate: v.string(), binding: v.string(), member: v.string() })),
+    approved: v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() })),
     fork: v.optional(v.boolean()),
   }),
   v.strictObject({ op: v.literal('liveShares') }),
@@ -102,7 +102,6 @@ export function requireSlateWorkMode(operation: SlateOperation, mode: WorkMode):
 export interface SlateSummary {
   readonly id: string;
   readonly title: string;
-  readonly bindings: readonly string[];
   /** Existing caller-scoped resident for exposed-port preview deduplication. */
   readonly port?: number;
 }

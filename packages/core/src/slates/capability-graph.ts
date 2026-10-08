@@ -1,109 +1,76 @@
 /**
- * What a slate could do if a viewer opened it: each grantable member classified read or mutating, with
- * per-visibility risk text. `app` bindings extend the walk; `slates` is the walk order.
+ * What a slate could do if a viewer opened it: each member it has called on its surface, with its impact and
+ * per-visibility risk text. A call into another slate extends the walk; `slates` is the walk order.
  */
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
-import {
-  memberEffect, MEMORY_MEMBER_EFFECTS, TASKS_MEMBER_EFFECTS, toolActionEffect, toolMembers,
-  TOOL_ACTION_EFFECTS, WEB_MEMBER_EFFECTS,
-} from './members';
-import type { SlateBinding, SlateProject } from './project';
-import type {
-  ShareGrant, ShareGrantMember, SlateCapability, SlateCapabilityGraph, SlateGraphBinding, SlateGraphMember,
-} from './sharing';
+import type { Impact } from '@agent-core/core/facets';
+import { slateAddressImpact } from './members';
+import type { ShareGrant, ShareGrantMember, SlateCapabilityGraph, SlateGraphMember, SlateGraphNamespace } from './sharing';
 
-/** Bindings naming something absent become a `problem` row rather than a silent blank. */
-export interface SlateBindingCatalog {
-  readonly executors: readonly { readonly namespace: string; readonly members: readonly string[] }[];
+/** What the owner's workspace offers now; a namespace naming something absent becomes a `problem` row, never a blank. */
+export interface SlateSurfaceCatalog {
   readonly mcp: readonly {
     readonly server: string;
     readonly title: string;
     readonly tools: readonly { readonly name: string; readonly readOnly: boolean }[];
   }[];
-  readonly tools: readonly string[];
-  readonly tiers: readonly string[];
-  readonly slates: Readonly<Record<string, SlateProject>>;
+  /** The slates the workspace holds. */
+  readonly slates: readonly string[];
 }
 
-const DELEGATION_PROBLEM = 'a slate cannot delegate or control its calling agent';
-
-/** The same five file members `routeNamespaceCall` admits. */
-const PATH_SCOPED_FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists'] as const;
+/** A member a slate has called, once per slate: recorded where the host routes its owner's calls. */
+export interface SlateUsage {
+  readonly namespace: string;
+  readonly member: string;
+}
 
 interface Risk {
   readonly public: string;
   readonly users: string;
 }
 
-/** Worded per member: the dialog is the consent, and a warning that does not name the act consents to nothing. */
-function riskOf(capability: SlateCapability, member: string, effect: 'read' | 'mutate', workspace: string): Risk {
-  if (effect === 'read') return { public: '', users: '' };
-  let body: string;
+/** What a `mutate` member changes, as its risk text names it. */
+function changed(head: string): string {
+  if (head === 'tasks') return "your agent's tasks";
 
-  switch (capability.kind) {
-    case 'executor':
-      if (member === 'exec') {
-        body = `Runs shell commands in workspace ${workspace} as you. A command can change or delete anything there.`;
-      } else if (member === 'writeFile' || member === 'editFile' || member === 'mkdir' || member === 'remove') {
-        body = `Writes, edits or deletes files in workspace ${workspace} as you.`;
-      } else if (member === 'saveNote') {
-        body = 'Writes notes into your workspace memory as you.';
-      } else if (member === 'createTool') {
-        body = `Adds crafted tools to workspace ${workspace} as you; every agent there can call them afterwards.`;
-      } else if (member === 'slate') {
-        body = `Changes the slates of workspace ${workspace} as you.`;
-      } else if (member === 'git') {
-        body = `Runs git in workspace ${workspace} as you, including pushes with your credentials.`;
-      } else {
-        body = `Runs ${member} in workspace ${workspace} as you.`;
-      }
+  return head === 'db' ? 'your workspace tables' : 'files';
+}
 
-      break;
-    case 'mcp':
-      body = `Calls ${member} on ${capability.title} with your credentials. The server does not mark it read-only, so it can create or change data there.`;
-      break;
-    case 'tool':
-      if (capability.name === 'file' && (member === 'write' || member === 'edit')) {
-        body = `Writes, edits or deletes files in workspace ${workspace} as you.`;
-      } else if (capability.name === 'shell') {
-        body = `Runs shell commands in workspace ${workspace} as you. A command can change or delete anything there.`;
-      } else if (capability.name === 'eval') {
-        body = `Runs a program with your whole tool surface in workspace ${workspace}.`;
-      } else if (capability.name === 'report') {
-        body = 'Sends reports to your agent as you.';
-      } else if (capability.name === 'memory') {
-        body = 'Changes your workspace memory as you: notes and remembered facts your agent reads back later.';
-      } else if (capability.name === 'tasks') {
-        body = "Changes your agent's task list and role as you.";
-      } else {
-        body = `Runs your crafted tool ${capability.name} as you, with whatever it reaches.`;
-      }
+/** A member as its risk text names it: its namespace, how a person reads it, and the workspace it acts in. */
+interface RiskSubject {
+  readonly namespace: string;
+  readonly title: string;
+  readonly member: string;
+  readonly workspace: string;
+}
 
-      break;
-    case 'memory':
-      body = 'Changes your workspace memory as you: notes and remembered facts your agent reads back later.';
-      break;
-    case 'tasks':
-      body = "Changes your agent's task list and role as you.";
-      break;
-    case 'agent':
-      body = `Sends a message to your agent's inbox as this slate. Your agent reads it and acts on it in workspace ${workspace}.`;
-      break;
-    case 'model':
-      body = `Runs a model call on your ${capability.tier} tier. Every call spends your inference.`;
-      break;
-    case 'web':
-      // Web members other than `search`/`fetch` fail closed to mutating.
-      body = `Calls ${member} on the web as you. The web tool does not name it, so what it does is not known here.`;
-      break;
-    case 'rpc':
-    case 'slate':
-      // Unreachable: rpc members are read models; app rows carry no members.
-      body = `Calls ${member} as you.`;
-      break;
+function riskBody({ namespace, title, member, workspace }: RiskSubject, impact: Exclude<Impact, 'observe'>): string {
+  const [head = ''] = namespace.split('.');
+
+  switch (impact) {
+    case 'mutate':
+      if (head === 'memory') return 'Changes your workspace memory as you: notes and remembered facts your agent reads back later.';
+
+      return `Writes, edits or deletes ${changed(head)} in workspace ${workspace} as you.`;
+    case 'externalSend':
+      if (head === 'mcp') return `Calls ${member} on ${title} with your credentials. The server does not mark it read-only, so it can create or change data there.`;
+
+      return `Sends ${namespace}.${member} out of workspace ${workspace} as you: your agent reads it and acts on it.`;
+    case 'execute':
+      if (head === 'ai') return 'Runs a model call on your inference. Every call spends it.';
+
+      return `Runs ${namespace}.${member} in workspace ${workspace} as you. It can change or delete anything there.`;
+    case 'delegate':
+    case 'administer': return `Runs ${namespace}.${member} in workspace ${workspace} as you, with whatever it reaches.`;
   }
+}
+
+/** Worded per impact and namespace: the dialog is the consent, and a warning that does not name the act consents to nothing. */
+function riskOf(subject: RiskSubject, impact: Impact): Risk {
+  if (impact === 'observe') return { public: '', users: '' };
+  const body = riskBody(subject, impact);
 
   return {
     public: `${body} Anyone who opens this share can trigger it.`,
@@ -111,174 +78,81 @@ function riskOf(capability: SlateCapability, member: string, effect: 'read' | 'm
   };
 }
 
-function graphMember(
-  capability: SlateCapability, member: string, effect: 'read' | 'mutate', workspace: string,
-): SlateGraphMember {
-  return { member, effect, risk: riskOf(capability, member, effect, workspace) };
-}
-
-interface GraphBindingInput {
+interface GraphRowInput {
   readonly slate: string;
-  readonly name: string;
-  readonly binding: SlateBinding;
-  readonly catalog: SlateBindingCatalog;
+  readonly namespace: string;
+  readonly members: readonly string[];
+  readonly catalog: SlateSurfaceCatalog;
   readonly workspace: string;
 }
 
-/** Problem rows still carry members so a call refuses for the real reason, not absence from the grant. */
-function graphBinding({ slate, name, binding, catalog, workspace }: GraphBindingInput): SlateGraphBinding {
-  const row = (capability: SlateCapability, members: SlateGraphMember[], problem?: string): SlateGraphBinding => {
-    const result: SlateGraphBinding = { slate, name, kind: binding.kind, capability, members };
+/** A problem row still carries its members, so a call refuses for the real reason, not absence from the grant. */
+function graphRow({ slate, namespace, members, catalog, workspace }: GraphRowInput): SlateGraphNamespace {
+  const [head, name] = namespace.split('.');
+  const server = head === 'mcp' ? catalog.mcp.find((entry) => entry.server === name) : undefined;
+  const title = server?.title ?? namespace;
 
-    if (problem !== undefined) return { ...result, problem };
+  const impactOf = (member: string): Impact | null => (server?.tools.find((tool) => tool.name === member)?.readOnly === true
+    ? 'observe'
+    : slateAddressImpact({ namespace, member }));
 
-    return result;
-  };
+  const graphMembers = members.flatMap((member): SlateGraphMember[] => {
+    const impact = impactOf(member);
 
-  const namespaceRow = (declared: Extract<SlateBinding, { kind: 'namespace' }>): SlateGraphBinding => {
-    const capability: SlateCapability = { kind: 'executor', namespace: declared.namespace };
+    return impact === null ? [] : [{ member, impact, risk: riskOf({ namespace, title, member, workspace }, impact) }];
+  });
 
-    if (declared.namespace === 'agent' || declared.namespace === 'agents') {
-      return row(capability, [], DELEGATION_PROBLEM);
-    }
+  const row = { slate, namespace, title, members: graphMembers };
 
-    const executor = catalog.executors.find((entry) => entry.namespace === declared.namespace);
-    let members = declared.members ?? executor?.members ?? [];
+  if (head === 'mcp' && server === undefined) return { ...row, problem: `MCP server ${name} is not connected` };
 
-    if (declared.paths !== undefined) {
-      members = members.filter((member) => PATH_SCOPED_FILE_MEMBERS.some((file) => file === member));
-    }
+  if (head === 'slates' && !catalog.slates.includes(name)) return { ...row, problem: `no slate named ${name}` };
 
-    return row(
-      capability,
-      members.map((member) => graphMember(capability, member, memberEffect('namespace', member), workspace)),
-      executor === undefined ? `no executor named ${declared.namespace} is available in this workspace` : undefined,
-    );
-  };
-
-  const mcpRow = (declared: Extract<SlateBinding, { kind: 'mcp' }>): SlateGraphBinding => {
-    const server = catalog.mcp.find((entry) => entry.server === declared.server);
-    const capability: SlateCapability = { kind: 'mcp', server: declared.server, title: server?.title ?? declared.server };
-    const members = declared.tools ?? server?.tools.map((tool) => tool.name) ?? [];
-    const known = new Map((server?.tools ?? []).map((tool) => [tool.name, tool.readOnly]));
-
-    return row(
-      capability,
-      members.map((tool) => graphMember(capability, tool, known.get(tool) === true ? 'read' : 'mutate', workspace)),
-      server === undefined ? `MCP server ${declared.server} is not connected` : undefined,
-    );
-  };
-
-  const toolRow = (declared: Extract<SlateBinding, { kind: 'tool' }>): SlateGraphBinding => {
-    const capability: SlateCapability = { kind: 'tool', name: declared.name };
-
-    if (declared.name === 'agents') return row(capability, [], DELEGATION_PROBLEM);
-
-    if (declared.name === 'eval') return row(capability, [], 'a slate cannot run eval');
-
-    return row(
-      capability,
-      toolMembers(declared.name).map((member) => graphMember(capability, member, toolActionEffect(declared.name, member), workspace)),
-      !Object.hasOwn(TOOL_ACTION_EFFECTS, declared.name) && !catalog.tools.includes(declared.name)
-        ? `no tool named ${declared.name} is available`
-        : undefined,
-    );
-  };
-
-  const aiRow = (declared: Extract<SlateBinding, { kind: 'ai' }>): SlateGraphBinding => {
-    const capability: SlateCapability = { kind: 'model', tier: declared.tier ?? 'default' };
-
-    return row(
-      capability,
-      [graphMember(capability, 'shell', 'mutate', workspace)],
-      declared.tier !== undefined && !catalog.tiers.includes(declared.tier)
-        ? `you have no ${declared.tier} tier`
-        : undefined,
-    );
-  };
-
-  const appRow = (declared: Extract<SlateBinding, { kind: 'app' }>): SlateGraphBinding => row(
-    { kind: 'slate', id: declared.id }, [],
-    Object.hasOwn(catalog.slates, declared.id) ? undefined : `no slate named ${declared.id}`,
-  );
-
-  switch (binding.kind) {
-    case 'namespace': return namespaceRow(binding);
-    case 'memory':
-    case 'tasks':
-    case 'web': {
-      const capability: SlateCapability = { kind: binding.kind };
-
-      const members = binding.members
-        ?? Object.keys({ memory: MEMORY_MEMBER_EFFECTS, tasks: TASKS_MEMBER_EFFECTS, web: WEB_MEMBER_EFFECTS }[binding.kind]);
-
-      return row(
-        capability,
-        members.map((member) => graphMember(capability, member, memberEffect(binding.kind, member), workspace)),
-      );
-    }
-
-    case 'rpc': {
-      const capability: SlateCapability = { kind: 'rpc' };
-
-      return row(
-        capability,
-        binding.methods.map((method) => graphMember(capability, method, 'read', workspace)),
-      );
-    }
-
-    case 'mcp': return mcpRow(binding);
-    case 'tool': return toolRow(binding);
-    case 'agent': {
-      const capability: SlateCapability = { kind: 'agent' };
-
-      return row(capability, [graphMember(capability, 'send', 'mutate', workspace)]);
-    }
-
-    case 'ai': return aiRow(binding);
-    case 'app': return appRow(binding);
-  }
+  return row;
 }
 
-/** Walks `app` bindings root first, each slate once. */
+/** Walks the slates a slate has called, root first, each once. */
 export function slateCapabilityGraph(input: {
   readonly slate: string;
   readonly workspace: string;
-  readonly catalog: SlateBindingCatalog;
+  readonly catalog: SlateSurfaceCatalog;
+  readonly usage: (slate: string) => readonly SlateUsage[];
 }): SlateCapabilityGraph {
   return settleSync(capabilityGraph(input));
 }
 
 function capabilityGraph(input: Parameters<typeof slateCapabilityGraph>[0]): Effect.Effect<SlateCapabilityGraph, KinuError> {
   const { slate, workspace, catalog } = input;
-  const root = Object.hasOwn(catalog.slates, slate) ? catalog.slates[slate] : undefined;
 
-  if (root === undefined) return Effect.fail(new KinuError('missing', `No slate named ${slate}`));
-  const bindings: SlateGraphBinding[] = [];
+  if (!catalog.slates.includes(slate)) return Effect.fail(new KinuError('missing', `No slate named ${slate}`));
+  const namespaces: SlateGraphNamespace[] = [];
   const slates: string[] = [];
   const walked = new Set<string>();
 
-  const walk = (id: string, project: SlateProject): void => {
+  const walk = (id: string): void => {
     walked.add(id);
     slates.push(id);
+    const byNamespace = new Map<string, string[]>();
 
-    for (const [name, binding] of Object.entries(project.slate.bindings)) {
-      bindings.push(graphBinding({ slate: id, name, binding, catalog, workspace }));
+    for (const { namespace, member } of input.usage(id)) byNamespace.set(namespace, [...byNamespace.get(namespace) ?? [], member]);
 
-      if (binding.kind !== 'app' || walked.has(binding.id) || !Object.hasOwn(catalog.slates, binding.id)) continue;
-      walk(binding.id, catalog.slates[binding.id]);
+    for (const [namespace, members] of byNamespace) {
+      namespaces.push(graphRow({ slate: id, namespace, members, catalog, workspace }));
+      const [head, callee] = namespace.split('.');
+
+      if (head === 'slates' && !walked.has(callee) && catalog.slates.includes(callee)) walk(callee);
     }
   };
 
-  walk(slate, root);
+  walk(slate);
 
-  return Effect.succeed({ slate, slates, bindings });
+  return Effect.succeed({ slate, slates, namespaces });
 }
 
-/** Every read member plus each approved mutating member; approving an unknown or read member refuses. */
+/** Every observing member plus each approved one that acts; approving an unknown or observing member refuses. */
 export function cutShareGrant(
   graph: SlateCapabilityGraph,
-  approved: readonly { slate: string; binding: string; member: string }[],
+  approved: readonly { slate: string; namespace: string; member: string }[],
 ): ShareGrant {
   return settleSync(shareGrant(graph, approved));
 }
@@ -287,35 +161,35 @@ function shareGrant(graph: SlateCapabilityGraph, approved: Parameters<typeof cut
   const members: ShareGrantMember[] = [];
   const seen = new Set<string>();
 
-  const admit = (slate: string, binding: string, member: string, effect: 'read' | 'mutate'): void => {
-    const key = JSON.stringify([slate, binding, member]);
+  const admit = (slate: string, namespace: string, member: string, impact: Impact): void => {
+    const key = JSON.stringify([slate, namespace, member]);
 
     if (seen.has(key)) return;
     seen.add(key);
-    members.push({ slate, binding, member, effect });
+    members.push({ slate, namespace, member, impact });
   };
 
-  for (const binding of graph.bindings) {
-    for (const member of binding.members) {
-      if (member.effect === 'read') admit(binding.slate, binding.name, member.member, 'read');
+  for (const row of graph.namespaces) {
+    for (const member of row.members) {
+      if (member.impact === 'observe') admit(row.slate, row.namespace, member.member, 'observe');
     }
   }
 
   for (const entry of approved) {
-    const member = graph.bindings
-      .find((binding) => binding.slate === entry.slate && binding.name === entry.binding)
+    const member = graph.namespaces
+      .find((row) => row.slate === entry.slate && row.namespace === entry.namespace)
       ?.members.find((candidate) => candidate.member === entry.member);
 
-    if (member === undefined || member.effect !== 'mutate') {
-      return Effect.fail(new KinuError('bad_input', `${entry.binding}.${entry.member} is not a mutating member of slate ${entry.slate}`));
+    if (member === undefined || member.impact === 'observe') {
+      return Effect.fail(new KinuError('bad_input', `${entry.namespace}.${entry.member} is not a member of slate ${entry.slate} that acts`));
     }
 
-    admit(entry.slate, entry.binding, entry.member, 'mutate');
+    admit(entry.slate, entry.namespace, entry.member, member.impact);
   }
 
   return Effect.succeed({ slates: [...graph.slates], members });
 }
 
-export function grantAdmits(grant: ShareGrant, slate: string, binding: string, member: string): ShareGrantMember | null {
-  return grant.members.find((entry) => entry.slate === slate && entry.binding === binding && entry.member === member) ?? null;
+export function grantAdmits(grant: ShareGrant, slate: string, namespace: string, member: string): ShareGrantMember | null {
+  return grant.members.find((entry) => entry.slate === slate && entry.namespace === namespace && entry.member === member) ?? null;
 }
