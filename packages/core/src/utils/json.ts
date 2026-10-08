@@ -115,7 +115,9 @@ export function assertJsonValue(
 /** Omits `undefined` properties, maps `undefined` array elements to `null`; unrepresentable values still throw. */
 export function projectJsonValue(input: { value: unknown }): JsonValue {
   // Already JSON, as nearly every value is: returned without a runner, which only a projection needs.
-  return v.is(JsonValueSchema, input.value) ? input.value : settleSync(projected(input));
+  if (v.is(JsonValueSchema, input.value)) return input.value;
+
+  return settleSync(projected(input));
 }
 
 function projected(input: { value: unknown }): Effect.Effect<JsonValue> {

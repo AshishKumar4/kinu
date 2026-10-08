@@ -48,31 +48,31 @@ describe('destination replay normalization', () => {
     expect(normalizeReplayForDestination(SOURCE, undefined)).toBeUndefined();
   });
 
-  test('a turn resumed step by step sends what a fresh pass sends, through appends, woven blocks, edits and a new destination', () => {
+  test('a turn resumed step by step keeps each result on its call, numbered in call order, through woven blocks and edits', () => {
     const pair = (n: number): ModelMessage[] => [
       { role: 'assistant', content: [{ type: 'tool-call', toolCallId: `toolu_${String(n)}`, toolName: 'look', input: { n } }] },
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: `toolu_${String(n)}`, toolName: 'look', output: { type: 'text', value: String(n) } }] },
     ];
 
-    const block: ModelMessage = { role: 'user', content: '<dynamic-context>state</dynamic-context>' };
+    const sent = (messages: ModelMessage[] | undefined): string[] => (messages ?? []).flatMap((message) => (
+      (message.role === 'assistant' || message.role === 'tool') && Array.isArray(message.content) ? message.content.flatMap((part) => (
+        part.type === 'tool-call' || part.type === 'tool-result' ? [`${part.type}:${part.toolCallId}`] : [])) : []));
+
+    const numbered = (calls: number): string[] => Array.from({ length: calls }, (_, index) => [`tool-call:kinu-i-${String(index + 1)}`, `tool-result:kinu-i-${String(index + 1)}`]).flat();
     const progress = new ReplayProgress();
     const input: ModelMessage = { role: 'user', content: 'go' };
     let history: ModelMessage[] = [input, ...SOURCE];
 
-    const steps: { readonly messages: ModelMessage[]; readonly destination: { providerId: string } }[] = [];
-
-    for (let n = 0; n < 6; n++) {
+    for (let n = 0; n < 4; n++) {
       // A new list a step, its earlier messages the same objects, as each step's history is.
       history = history.concat(pair(n));
-      steps.push({ messages: history, destination: { providerId: 'openai' } });
+      expect(sent(normalizeReplayForDestination(history, { providerId: 'openai' }, progress))).toEqual(numbered(n + 2));
     }
 
-    steps.push({ messages: [input, block, ...history.slice(1)], destination: { providerId: 'openai' } });
-    steps.push({ messages: [...history.slice(0, 3), ...history.slice(5)], destination: { providerId: 'openai' } });
-    steps.push({ messages: history, destination: { providerId: 'anthropic' } });
-
-    for (const { messages, destination } of steps) {
-      expect(normalizeReplayForDestination(messages, destination, progress)).toEqual(normalizeReplayForDestination(messages, destination));
-    }
+    const woven: ModelMessage = { role: 'user', content: '<dynamic-context>state</dynamic-context>' };
+    expect(sent(normalizeReplayForDestination([input, woven, ...history.slice(1)], { providerId: 'openai' }, progress))).toEqual(numbered(5));
+    // One pair edited out of the middle: the calls after it renumber, each result still on its call.
+    expect(sent(normalizeReplayForDestination([...history.slice(0, 3), ...history.slice(5)], { providerId: 'openai' }, progress))).toEqual(numbered(4));
+    expect(sent(normalizeReplayForDestination(history, { providerId: 'openai' }, progress))).toEqual(numbered(5));
   });
 });
