@@ -62,7 +62,11 @@ export function isFailingToolResult(ctx: ToolResultContext): boolean {
 
 /** Hashed rather than stored: an `eval` program can be large. */
 function callSignature(toolName: string, args: JsonObject): string {
-  return `${toolName}${fnv1a64(stableArgs(args))}`;
+  return signatureOf(toolName, stableArgs(args));
+}
+
+function signatureOf(toolName: string, rendered: string): string {
+  return `${toolName}${fnv1a64(rendered)}`;
 }
 
 /** Key-order-independent serialization, so `{a,b}` and `{b,a}` are one call. */
@@ -85,9 +89,7 @@ function stableArgs(args: JsonObject): string {
   return JSON.stringify(sortJsonValue(args));
 }
 
-function echoArgs(args: JsonObject): string {
-  const rendered = stableArgs(args);
-
+function echoArgs(rendered: string): string {
   return rendered.length <= ARGS_ECHO_MAX_CHARS
     ? rendered
     : `${rendered.slice(0, ARGS_ECHO_MAX_CHARS)}...`;
@@ -124,6 +126,9 @@ export class TurnSteering {
   /** -1 so the first step counts as a change, not a stall. */
   private lastProgress = -1;
   private stalledSteps = 0;
+  /** A count reached its steer threshold since `steerFor` last looked: counts climb by one, so a step where none did
+   *  has nothing new to find, and the maps of every distinct call so far are not copied for it. */
+  private crossed = false;
   /** Keyed by kind and tool; a count only grows. */
   private readonly struggled = new Map<string, Struggle>();
   private readonly refusals = new Map<string, number>();
@@ -138,6 +143,7 @@ export class TurnSteering {
     this.namedCall = null;
     this.lastProgress = -1;
     this.stalledSteps = 0;
+    this.crossed = false;
   }
 
   onToolCall(ctx: ToolCallContext): void {
@@ -147,7 +153,8 @@ export class TurnSteering {
   /** Returns a recovery only when a steer-worthy failure streak is broken by a different call
    *  (evolution/recovery.ts); the same call finally working is a lucky retry, not a recovery. */
   onToolResult(ctx: ToolResultContext): RecoveryFinding | null {
-    const signature = callSignature(ctx.toolName, ctx.args);
+    const rendered = stableArgs(ctx.args);
+    const signature = signatureOf(ctx.toolName, rendered);
     let recovery: RecoveryFinding | null = null;
 
     if (isFailingToolResult(ctx)) {
@@ -158,12 +165,15 @@ export class TurnSteering {
       if (streak) {
         streak.count = failures;
         streak.signature = signature;
-        streak.args = echoArgs(ctx.args);
+        streak.args = echoArgs(rendered);
       } else {
-        this.failures.set(ctx.toolName, { count: 1, signature, args: echoArgs(ctx.args) });
+        this.failures.set(ctx.toolName, { count: 1, signature, args: echoArgs(rendered) });
       }
 
-      if (failures >= CONSECUTIVE_FAILURES_BEFORE_STEER) this.struggle('repeated_failure', ctx.toolName, failures, ctx.result);
+      if (failures >= CONSECUTIVE_FAILURES_BEFORE_STEER) {
+        this.crossed = true;
+        this.struggle('repeated_failure', ctx.toolName, failures, ctx.result);
+      }
 
       if (!ctx.success && ctx.reason === 'bad_input') {
         this.refusals.set(ctx.toolName, (this.refusals.get(ctx.toolName) ?? 0) + 1);
@@ -177,7 +187,7 @@ export class TurnSteering {
           tool: ctx.toolName,
           failures: streak.count,
           failedArgs: streak.args,
-          succeededArgs: echoArgs(ctx.args),
+          succeededArgs: echoArgs(rendered),
           failedSignature: streak.signature,
         };
       }
@@ -192,13 +202,16 @@ export class TurnSteering {
     if (seen && seen.resultHash === resultHash) {
       seen.count += 1;
 
-      if (seen.count >= IDENTICAL_CALLS_BEFORE_STEER) this.struggle('repeated_call', ctx.toolName, seen.count, seen.args);
+      if (seen.count >= IDENTICAL_CALLS_BEFORE_STEER) {
+        this.crossed = true;
+        this.struggle('repeated_call', ctx.toolName, seen.count, seen.args);
+      }
 
       return recovery;
     }
 
     this.repeats.set(signature, {
-      tool: ctx.toolName, args: echoArgs(ctx.args), resultHash, count: 1,
+      tool: ctx.toolName, args: echoArgs(rendered), resultHash, count: 1,
     });
 
     return recovery;
@@ -240,7 +253,7 @@ export class TurnSteering {
     if (this.stalledSteps >= STEPS_WITHOUT_PROGRESS_BEFORE_STEER) this.struggle('no_progress', null, this.stalledSteps, '');
 
     if (this.fired) return null;
-    const looping = [...this.repeats].find(([, call]) => call.count >= IDENTICAL_CALLS_BEFORE_STEER);
+    const looping = this.crossed ? [...this.repeats].find(([, call]) => call.count >= IDENTICAL_CALLS_BEFORE_STEER) : undefined;
 
     if (looping) {
       const [signature, call] = looping;
@@ -250,7 +263,8 @@ export class TurnSteering {
       return signal(repeatedCallText(call.tool, call.args, call.count));
     }
 
-    const stuck = [...this.failures].find(([, streak]) => streak.count >= CONSECUTIVE_FAILURES_BEFORE_STEER);
+    const stuck = this.crossed ? [...this.failures].find(([, streak]) => streak.count >= CONSECUTIVE_FAILURES_BEFORE_STEER) : undefined;
+    this.crossed = false;
 
     if (stuck) {
       this.namedCall = stuck[1].signature;

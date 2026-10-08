@@ -33,10 +33,36 @@ index 535743d..7f6c14c 100644
  		function onAgentOpen() {
  			socketIsOpen = true;
 diff --git a/dist/src-BZeu-SCD.js b/dist/src-BZeu-SCD.js
-index 84c6dbf..cf4cc71 100644
+index 84c6dbf..96d5a4d 100644
 --- a/dist/src-BZeu-SCD.js
 +++ b/dist/src-BZeu-SCD.js
-@@ -3530,70 +3530,89 @@ var Agent = class Agent extends DurableObject {
+@@ -27,6 +27,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
+ import { DurableObject, RpcTarget, exports } from "cloudflare:workers";
+ import { nanoid } from "nanoid";
+ import { EmailMessage } from "cloudflare:email";
++/** A statement's query, built once per template: each call rebuilt it and spread the cursor. */
++const sqlQueries = /* @__PURE__ */ new WeakMap();
+ //#region src/dynamic-agents/bridges.ts
+ function isClosedWebSocketSendError(error) {
+ 	return error instanceof TypeError && error.message.includes("WebSocket send() after close");
+@@ -1675,10 +1677,13 @@ var Agent = class Agent extends DurableObject {
+ 	* @returns Array of query results
+ 	*/
+ 	sql(strings, ...values) {
+-		let query = "";
++		let query = sqlQueries.get(strings) ?? "";
+ 		try {
+-			query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? "?" : ""), "");
+-			return [...this.ctx.storage.sql.exec(query, ...values)];
++			if (query === "") {
++				query = strings.join("?");
++				sqlQueries.set(strings, query);
++			}
++			return this.ctx.storage.sql.exec(query, ...values).toArray();
+ 		} catch (e) {
+ 			throw new SqlError(query, e);
+ 		}
+@@ -3530,70 +3535,89 @@ var Agent = class Agent extends DurableObject {
  	async _checkRunFibers() {
  		if (this._runFiberRecoveryInProgress) return;
  		this._runFiberRecoveryInProgress = true;
@@ -184,7 +210,7 @@ index 84c6dbf..cf4cc71 100644
              UPDATE cf_agents_fibers
              SET status = 'interrupted',
                  snapshot = ${row.snapshot},
-@@ -3601,78 +3620,99 @@ var Agent = class Agent extends DurableObject {
+@@ -3601,78 +3625,99 @@ var Agent = class Agent extends DurableObject {
              WHERE fiber_id = ${row.id}
                AND status IN ('pending', 'running')
            `;
