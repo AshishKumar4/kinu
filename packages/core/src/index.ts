@@ -281,7 +281,7 @@ export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 
 export {
-  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue,
+  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, type SlateReply, isJsonAnswer,
   type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
@@ -899,8 +899,10 @@ export {
 } from './steer-branch';
 
 // Inbox: the one way anything reaches an agent.
+export { TurnReplies } from './orchestrator/turn-replies';
+
 export {
-  Inbox, readSignalId, PromptFileSchema, turnInputMessage,
+  Inbox, readSignalId, signalCardId, PromptFileSchema, turnInputMessage,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   describeLandedSteers, initPendingSendTables, PendingSendStore,
   type UserSteerDeps, type AcceptedSteer,
