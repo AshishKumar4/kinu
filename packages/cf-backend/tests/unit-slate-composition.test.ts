@@ -542,8 +542,8 @@ describe('a slate asking the agent', () => {
     const workspace = gatewayWorkspace(gateway);
     const chat = await chatSlate(workspace);
 
+    // The reply ends where the turn's answer is stored, so the transcript holds it once the reply has ended.
     const read = await readReply(await chat(['agent', 'ask'], [{ text: 'How many cards?' }]));
-    await workspace.agent.harnessChatLoop.pumpPromise;
 
     expect(read.failure).toBeNull();
     expect(read.pieces.join('')).toBe(words.join(''));
@@ -588,11 +588,11 @@ describe('a slate asking the agent', () => {
     const chat = await chatSlate(workspace);
     const answer = await chat(['agent', 'ask'], [{ text: 'Summarize everything.' }]);
 
+    // The owner's Stop, as the chat's stop control sends it.
     await started.promise;
-    workspace.agent.harnessChatLoop.interrupt();
+    await workspace.agent.cancelCurrentWork();
 
     expect(await readReply(answer)).toEqual({ pieces: [], failure: INTERRUPTED_TURN });
-    await workspace.agent.harnessChatLoop.pumpPromise;
   });
 });
 

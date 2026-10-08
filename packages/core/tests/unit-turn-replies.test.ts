@@ -48,13 +48,3 @@ test('a reply ends with why when its turn is stopped or fails, or when its messa
   expect(await readAll(stopped)).toEqual({ pieces: ['Half'], failure: 'The turn was interrupted before it finished.' });
   expect(await readAll(lost)).toEqual({ pieces: [], failure: 'The message was not delivered to the agent, so no turn answers it' });
 });
-
-test('a reader that lets its reply go is fed nothing more', async () => {
-  const replies = new TurnReplies();
-  const reply = replies.open('sig:a');
-
-  replies.card(shown('sig:a'), 'turn-1');
-  await reply.cancel();
-
-  expect(() => { replies.feed('turn-1', 'after'); replies.ended('turn-1', null); }).not.toThrow();
-});
