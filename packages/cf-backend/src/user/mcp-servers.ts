@@ -1,11 +1,11 @@
-import { Cause, Effect } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
 import {
   nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
 import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
-import { detach, diagnostics, KinuError, logged, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
   mapConnectionStatus, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession, storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, readUndiscoveredToolList, mcpListingRefusals, classifyMcpFailure, observedMcpState, CALLABLE_MCP_STATES, McpTransitionLog, type McpObservedState, type McpPresetAvailability, type McpServerSummary, type McpToolListing,
@@ -124,12 +124,14 @@ export class UserMcpServers {
 
   private readonly transitions: McpTransitionLog;
 
-  /** This activation's reconciliation, begun by {@link start}; MCP requests join it and never run one. Before
-   *  `start` there is nothing to join: the gate (`startBeforeRpc`) runs `onStart` before any MCP request. */
-  private activation: Promise<void> = Promise.resolve();
+  /** This activation's reconciliation, begun by {@link start}, as its outcome: null, or why it failed. MCP requests
+   *  join it and never run one. Before `start` there is nothing to join: the gate (`startBeforeRpc`) runs `onStart`
+   *  before any MCP request. */
+  private activation: Promise<KinuError | null> = Promise.resolve(null);
 
-  /** Redials in flight, by server: concurrent calls share one, since a second `init` would close the first's transport. */
-  private readonly redials = new Map<string, Promise<void>>();
+  /** Dials this object started, by server, each settled to nothing: a call waits on its own server's, and a second
+   *  dial joins the first, since a second `init` would close the transport the first just opened. */
+  private readonly dials = new Map<string, Promise<void>>();
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
@@ -141,18 +143,25 @@ export class UserMcpServers {
    * logged here and rethrown to every MCP request of this activation.
    */
   start(): void {
-    const activation = this.reconcile();
-    this.activation = activation;
-    detach(logged('mcp.start_failed', { doing: 'reconciling the MCP servers at activation', otherwise: 'unavailable' }, () => activation));
+    this.activation = hold(Effect.promise(() => this.reconcile())).then((exit) => {
+      if (Exit.isSuccess(exit)) return null;
+
+      const failure = toKinuError({ doing: 'reconciling the MCP servers at activation', cause: Cause.squash(exit.cause), otherwise: 'unavailable' });
+      diagnostics.failure('mcp.start_failed', failure);
+
+      return failure;
+    });
   }
 
   private async joinActivation(): Promise<void> {
-    await this.activation;
+    const failed = await this.activation;
+
+    if (failed !== null) throw new KinuError('unavailable', 'The MCP servers did not start when this object woke; they start again when it next wakes.', { cause: failed });
   }
 
   /** For a write the activation's registration pass could otherwise undo; a failed activation does not block it. */
   private async activationSettled(): Promise<void> {
-    await Promise.allSettled([this.activation]);
+    await this.activation;
   }
 
   /**
@@ -181,7 +190,7 @@ export class UserMcpServers {
 
     await this.restoreUserMcp(USER_MCP_CLIENT_NAME);
 
-    for (const id of registered) this.dial(id);
+    for (const id of registered) this.dial(id, () => mgr.establishConnection(id));
     this.transitions.observe('activation');
   }
 
@@ -203,10 +212,15 @@ export class UserMcpServers {
     return needsSeam || storedMcpOptionsCarryCredential(sdkRows.find((server) => server.id === row.id)?.server_options);
   }
 
-  /** A dial nothing awaits: the SDK tracks it for `waitForConnections`, and its outcome lands on the connection. */
-  private dial(serverId: string): void {
-    const dialled = this.host.mcp.establishConnection(serverId);
-    detach(logged('mcp.connect_failed', { doing: 'dialling an MCP server', otherwise: 'unavailable' }, () => dialled, { serverId }));
+  /** Starts `connect` unless a dial of this server is in flight; its outcome lands on the connection, a failure logged. */
+  private dial(serverId: string, connect: () => Promise<void>): void {
+    if (this.dials.has(serverId)) return;
+
+    const dialled = hold(Effect.promise(connect).pipe(Effect.catchCause(recording({ doing: 'dialling an MCP server', otherwise: 'unavailable' }, (failure) => {
+      diagnostics.failure('mcp.connect_failed', failure, { serverId });
+    })))).then(() => { this.dials.delete(serverId); });
+
+    this.dials.set(serverId, dialled);
   }
 
   /** Replace the SDK row with a transport this plane owns; tear down any live connection first,
@@ -581,8 +595,10 @@ export class UserMcpServers {
     const row = this.configuredRows().find((configured) => configured.id === id);
 
     if (row === undefined || !this.needsOwnedTransport(row, this.host.mcp.listServers())) return;
+    // A dial still out is on the connection this replaces.
+    await this.dials.get(id);
     await this.registerOwnedMcpTransport(row);
-    this.dial(id);
+    this.dial(id, () => this.host.mcp.establishConnection(id));
   }
 
   /** Claim `name` for `serverId` and run `write` atomically; the transaction is the check and holds
@@ -781,8 +797,7 @@ export class UserMcpServers {
     const { serverId, name, args } = call;
     const manager = this.host.mcp;
 
-    try { await this.joinActivation(); }
-    catch (err) { throw new KinuError('unavailable', 'The MCP servers did not start in this activation; try again.', { cause: err }); }
+    await this.joinActivation();
 
     // Check server membership in SQL so a stale orchestrator closure can't dispatch to a deleted server.
     const row = this.host.sqlx<{ name: string; allowed_tools: string | null }>(
@@ -834,9 +849,13 @@ export class UserMcpServers {
     const mgr = this.host.mcp;
     const state = (): McpObservedState => observedMcpState(mgr.mcpConnections[serverId]);
 
-    if (state() === 'connecting') await mgr.waitForConnections();
+    if (state() === 'connecting') await (this.dials.get(serverId) ?? mgr.waitForConnections());
 
-    if (state() === 'failed' || state() === 'closed') await this.redial(serverId);
+    if (state() === 'failed' || state() === 'closed') {
+      this.dial(serverId, () => this.connectAndDiscover(serverId));
+      await this.dials.get(serverId);
+    }
+
     this.transitions.observe('tool call');
     const reached = state();
 
@@ -846,18 +865,6 @@ export class UserMcpServers {
     // `mcp.call_failed` classifies this refusal by the state it names.
     throw new KinuError('unavailable', `MCP server ${serverName} is ${reached}${why ? ` (${why})` : ''}, so the call was not sent.`
       + (reached === 'authenticating' ? ' Sign in to it again in Settings.' : ''));
-  }
-
-  /** One redial per server at a time: a second `init` would close the transport the first just opened. */
-  private redial(serverId: string): Promise<void> {
-    const joined = this.redials.get(serverId);
-
-    if (joined !== undefined) return joined;
-
-    const redial = this.connectAndDiscover(serverId).finally(() => { this.redials.delete(serverId); });
-    this.redials.set(serverId, redial);
-
-    return redial;
   }
 
   private async connectAndDiscover(serverId: string): Promise<void> {
