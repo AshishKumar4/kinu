@@ -186,7 +186,6 @@
   "packages/core/src/prompting/volatile-context.ts#executorAvailabilityLabel (unreached-export)",
   "packages/core/src/prompting/volatile-context.ts#searchDelegates (unreached-export)",
   "packages/core/src/providers/codex-oauth.ts#CODEX_TOKEN_URL (unreached-export)",
-  "packages/core/src/providers/codex.ts#normalizeCodexResponsesRequest (unreached-export)",
   "packages/core/src/providers/effort.ts#workersAIEffortOption (unreached-export)",
   "packages/core/src/providers/input-tokens.ts#NO_COUNT_ENDPOINT (unreached-export)",
   "packages/core/src/providers/tool-call-id.ts#isPortableToolCallId (unreached-export)",
