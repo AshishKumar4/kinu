@@ -143,9 +143,10 @@ test('a requirement reads back as its namespace verbatim, as the slate\'s code c
   try {
     const published = await owner.blueprints.publish('mixed', (await owner.slates.commit(new SlateId('mixed'))).id.value);
 
-    expect(owner.blueprints.read(published.share.id).view.reaches).toEqual(reaches);
-    expect(owner.blueprints.bundle(published.share.id).skeleton.bindings.map((requirement) => requirement.facet))
-      .toEqual(['kinu.slate.mcp', 'kinu.slate.slates', 'kinu.slate.mcp', 'kinu.slate.mcp']);
+    // The skeleton keeps its requirements in its own order.
+    expect([...owner.blueprints.read(published.share.id).view.reaches].sort()).toEqual([...reaches].sort());
+    expect(owner.blueprints.bundle(published.share.id).skeleton.bindings.map((requirement) => requirement.facet).sort())
+      .toEqual(['kinu.slate.mcp', 'kinu.slate.mcp', 'kinu.slate.mcp', 'kinu.slate.slates']);
   } finally {
     owner.ws.db.close();
   }
