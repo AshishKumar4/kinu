@@ -140,17 +140,19 @@ export class BackgroundJobStore {
       SELECT id FROM background_jobs WHERE actor_id=${this.actorId} AND id=${opts.id} LIMIT 1`.length === 1;
   }
 
-  /** No-op if already settled or `epoch` is stale (§5.3). */
-  settle(id: string, epoch: number, result: string, now: number): void {
+  /** No-op if already settled or `epoch` is stale (§5.3); answers whether this write settled it. */
+  settle(id: string, epoch: number, result: string, now: number): boolean {
     this.actor.assertCurrent();
-    void this.sql`UPDATE background_jobs SET status='completed', result=${result}, settled_at=${now}
-      WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch}`;
+
+    return this.sql`UPDATE background_jobs SET status='completed', result=${result}, settled_at=${now}
+      WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch} RETURNING id`.length === 1;
   }
 
-  fail(id: string, epoch: number, error: string, now: number): void {
+  fail(id: string, epoch: number, error: string, now: number): boolean {
     this.actor.assertCurrent();
-    void this.sql`UPDATE background_jobs SET status='failed', error=${error}, settled_at=${now}
-      WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch}`;
+
+    return this.sql`UPDATE background_jobs SET status='failed', error=${error}, settled_at=${now}
+      WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch} RETURNING id`.length === 1;
   }
 
   cancel(id: string, epoch: number, now: number): void {

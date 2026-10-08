@@ -1,6 +1,7 @@
 // Shared wire path to the user's Cloudflare AI endpoint (workers-ai, my-gateway, /api/user/ai/v1 proxy).
 import { authenticatedSend } from './authenticated-send';
 import type { AuthResolution, AuthResolver } from './types';
+import { cloudflareAccountAPIRoot } from './cloudflare-oauth';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { diagnostics, tolerate, toKinuError } from '../obs/index';
 import * as v from 'valibot';
@@ -35,6 +36,16 @@ export interface CloudflareAIFetchOptions {
   mapError?: (res: Response, resolved: AuthResolution) => Promise<Response> | Response;
 }
 
+/**
+ * An author's own API at the gateway's endpoint for that author, which takes the request as the author's SDK writes it
+ * (its ids, `system` as blocks), where the account endpoint wants the gateway's ids and `system` as one string. The
+ * gateway's token goes as `cf-aig-authorization`: there `Authorization` and `x-api-key` are the author's own key (staging
+ * gateway, 200 for each, 2026-10-08).
+ */
+const AUTHOR_ENDPOINTS: ReadonlyMap<string, string> = new Map([['/responses', 'openai/responses'], ['/messages', 'anthropic/v1/messages']]);
+
+const GATEWAY_ORIGIN = 'https://gateway.ai.cloudflare.com/v1';
+
 /** A Cloudflare credential still rejected after the forced-refresh retry. */
 const DEAD_CLOUDFLARE_LOGIN =
   'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.';
@@ -56,11 +67,20 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
 
       for (const [key, value] of Object.entries(opts.requestHeaders ?? {})) headers.set(key, value);
 
-      const url = originalUrl.startsWith(opts.placeholder) && resolved.baseURL
-        ? resolved.baseURL.replace(/\/+$/, '') + originalUrl.slice(opts.placeholder.length)
-        : originalUrl;
+      const path = originalUrl.startsWith(opts.placeholder) ? originalUrl.slice(opts.placeholder.length) : null;
 
-      return baseFetch(url, { ...init, headers });
+      if (path === null || !resolved.baseURL) return baseFetch(originalUrl, { ...init, headers });
+      const [route = ''] = path.split('?');
+      const author = AUTHOR_ENDPOINTS.get(route);
+      const gateway = headers.get('cf-aig-gateway-id');
+      const account = cloudflareAccountAPIRoot(resolved.baseURL)?.split('/').at(-1);
+
+      if (author === undefined || gateway === null || account === undefined) return baseFetch(resolved.baseURL.replace(/\/+$/, '') + path, { ...init, headers });
+      headers.set('cf-aig-authorization', headers.get('authorization') ?? '');
+
+      for (const name of ['authorization', 'x-api-key', 'cf-aig-gateway-id']) headers.delete(name);
+
+      return baseFetch(`${GATEWAY_ORIGIN}/${account}/${encodeURIComponent(gateway)}/${author}${path.slice(route.length)}`, { ...init, headers });
     };
 
     // A token revoked mid-flight comes back 401 despite the proactive refresh. A renewal without an endpoint is no login.

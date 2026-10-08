@@ -22,7 +22,7 @@ import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
 import type { ResolvedTurnProfile } from '../profiles';
 import type { CacheWarmingLane } from '../providers/cache-warming';
-import { DEFAULT_CACHE_RETENTION } from '../providers/types';
+import { DEFAULT_CACHE_RETENTION, parseModelSpec } from '../providers/types';
 import { serverCompactor, SERVER_COMPACTION_MIN_TOKENS } from '../providers/server-compaction';
 import type { ToolOutcome } from '../tools/outcome';
 import { OVERFLOW_RETRY_EVENT } from '../turn-failure';
@@ -1295,16 +1295,18 @@ export class ChatSession {
     }
   }
 
-  /** No provider in the cache plan means nothing to keep warm. */
+  /** The warm replays the turn's last request to the model that served it, a fallback's where one did; no provider in
+   *  the cache plan means nothing to keep warm. */
   private armCacheWarm(prepared: PreparedTurn): void {
     const lane = this.ports.cacheWarming;
     const cache = prepared.execution.chat.cache;
+    const lastRequest = this.actorSession.orchestrator.acc.lastRequest;
 
     if (lane === undefined || cache?.providerId === undefined || cache.modelId === undefined) return;
     lane.armAfterTurn({
-      modelSpec: { provider: cache.providerId, modelId: cache.modelId },
+      modelSpec: lastRequest?.fallback === undefined ? { provider: cache.providerId, modelId: cache.modelId } : parseModelSpec(lastRequest.fallback),
       retention: cache.retention ?? DEFAULT_CACHE_RETENTION,
-      lastRequest: this.actorSession.orchestrator.acc.lastRequest,
+      lastRequest,
     });
   }
 

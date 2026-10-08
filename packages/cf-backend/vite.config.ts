@@ -107,9 +107,8 @@ export default defineConfig(({ command }) => ({
       // before it binds, so two boots at once both take 9229 and one dies with EADDRINUSE (2026-09-24).
       inspectorPort: process.env.KINU_DEV_INSPECTOR === "off" ? false : undefined,
       // An offline harness boot reaches no Cloudflare account: no binding proxied remotely (the `ai` binding's proxy
-      // never finishes "Establishing remote connection" without one) and no container image pulled from the managed
-      // registry (`dev.enable_containers` below). Its turns run on the scripted model; a developer's `bun run dev`
-      // keeps the plugin's defaults.
+      // never finishes "Establishing remote connection" without one). Its turns run on the scripted model; a
+      // developer's `bun run dev` keeps the plugin's remote bindings.
       remoteBindings: offline ? false : undefined,
       // `vite dev` serves its own preview zone (vite-preview-zone.ts); a build keeps the deployed zone. A harness
       // boot binds the Drive's JWT_SECRET here, as a var: wrangler reads secrets from packages/cf-backend/.dev.vars
@@ -121,9 +120,13 @@ export default defineConfig(({ command }) => ({
 
           return {
             vars: jwtSecret === undefined ? vars : { ...vars, JWT_SECRET: jwtSecret },
+            // No dev server runs a container: wrangler runs one through the Docker CLI, which this machine no longer
+            // keeps (owner, 2026-10-08). A box answers that it runs on a deployment, and its contracts are proved on
+            // real containers (gate:devbox-e2e).
+            dev: { ...worker.dev, enable_containers: false },
             // Offline, Workers AI and Vectorize are unbound rather than left to hang on a remote that is never reached:
             // memory falls back to its full-text index (runtime.ts), and the turns run on the scripted model.
-            ...(offline && { dev: { ...worker.dev, enable_containers: false }, ai: undefined, vectorize: [] }),
+            ...(offline && { ai: undefined, vectorize: [] }),
           };
         }
         : undefined,

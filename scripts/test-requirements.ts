@@ -50,6 +50,16 @@ export const TEST_REQUIREMENTS = {
       reference: 'https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html',
     },
   },
+  wcagReflow: {
+    kind: 'css',
+    values: { width: 320 },
+    authority: {
+      kind: 'spec',
+      standard: 'WCAG 2.2',
+      clause: '1.4.10 Reflow',
+      reference: 'https://www.w3.org/WAI/WCAG22/Understanding/reflow.html',
+    },
+  },
 } as const satisfies Record<string, TestRequirement>;
 
 /** Whether an owner ruling's commit came before the test that cites it, so no test can cite its own commit. */

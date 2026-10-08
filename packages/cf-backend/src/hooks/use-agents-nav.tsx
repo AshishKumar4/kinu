@@ -2,11 +2,20 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState, type
 import { useLocation } from "react-router-dom";
 import type { PanelAgent } from "@kinu.run/core";
 
+/** What a chat's tab, and its row in the sidebar, offer: a rename, and a delete, which for Main clears it instead. */
+export interface ChatActions {
+  readonly rename: (name: string) => Promise<void>;
+  readonly remove?: () => void;
+  readonly clears?: boolean;
+}
+
 export interface WorkspaceAgentsPanel {
   readonly workspace: string;
   readonly list: readonly PanelAgent[];
   readonly shown: string | null;
   readonly open: (agent: PanelAgent) => void;
+  /** The same rename and delete as the chat's tab, with the same dialogs. */
+  readonly actions: (agent: PanelAgent) => ChatActions;
 }
 
 interface AgentsNavValue {

@@ -3,7 +3,6 @@
 import { describe, test, expect } from 'bun:test';
 import { withModelStack } from '../src/providers/wire-model';
 import { asFetchFunction } from '../src/providers/fetch-shim';
-import { normalizeCodexResponsesRequest } from '../src/providers/codex';
 import { generateText } from 'ai';
 import * as v from 'valibot';
 import {
@@ -15,7 +14,7 @@ import {
   type ModelCallDeps, type ProviderDeps, type AuthResolution,
 } from '../src/index';
 import {
-  createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
+  createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
 
 const CodexRequestBodySchema = v.object({
   instructions: v.optional(v.string()),
@@ -285,14 +284,6 @@ describe('Codex provider contract', () => {
       { type: 'reasoning', encrypted_content: 'ENCRYPTED-1', summary: [] },
       { role: 'assistant', content: 'Reading notes.md now.' },
     ]));
-  });
-
-  test('leaves a non-array input untouched', () => {
-    const out = normalizeCodexResponsesRequest({ method: 'POST', body: JSON.stringify({ model: 'gpt-5.5', input: 'hello' }) });
-
-    const sent = present(out, 'the recorded codex request');
-    const body = v.parse(CodexStoredBodySchema, JSON.parse(v.parse(v.string(), sent.body)));
-    expect(body.input).toBe('hello');
   });
 
   test('refreshes on 401 by naming the refused login to getAuth', async () => {
