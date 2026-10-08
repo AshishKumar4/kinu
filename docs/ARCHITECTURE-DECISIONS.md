@@ -742,8 +742,19 @@ back. `agent_open_turns` is the workspace's only record of a turn handed out
 and not heard end; an activation after a reset asks each agent it names to
 recover its own claims (stalled turns retire; the rest re-pend because their
 rows stay leased until the turn ends). The browser's socket stays in the workspace object; an
-agent's stream reaches it as short `observe` calls. Main's turns stay in the
-workspace object.
+agent's stream reaches it as short `observe` calls.
+Extended to main on 2026-10-07 (owner: "every actor's turn then runs one
+way"): main's turn and main's own stores move into main's facet (being
+built), and its tools reach the workspace through one `callOperation`. The build ships as a
+reset deployment, so main's facet starts empty, as a fresh workspace's does.
+Its socket, roster and shared stores stay in the workspace object, and a root
+tab's socket opening pre-warms main's isolate. Measured 2026-10-07 on the same
+150-step turn and provider path, 3 runs each (armada 20261007185121-975afb24):
+main's turn in the workspace object peaked at 88.6-90.7 MB and allocated
+379-385 MB; a facet's turn peaked at 58.9-69.5 MB and allocated 337-346 MB,
+while the workspace object peaked at 48-52 MB serving it with 69-73 MB. The
+first model call came 23-28 ms after the turn started in the object, and
+511-1279 ms after a cold facet's hire, which is why the pre-warm exists.
 Measured 2026-09-28 on a throwaway Worker loading the shipped agent bundle
 (2.16 MB minified, 0.62 MB gzip; core, `ai` and the Nimbus SDK), deleted
 after the run: first call into a new agent 305 ms p50 (n=9, 329-416 ms at

@@ -118,11 +118,13 @@ export class SessionPayloads extends SessionPayloadReader {
   }
 
   prepare(value: JsonValue): Promise<SessionPayload> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const json = JSON.stringify(value);
-      const bytes = new TextEncoder().encode(json);
+    const json = JSON.stringify(value);
+    const bytes = new TextEncoder().encode(json);
 
-      if (bytes.byteLength <= INLINE_BYTES) return { json, path: null, digest: null };
+    // Most payloads are inline: they need no file and no runner.
+    if (bytes.byteLength <= INLINE_BYTES) return Promise.resolve({ json, path: null, digest: null });
+
+    return settle(Effect.gen({ self: this }, function* () {
       const digest = sha256Hex(bytes);
       const directory = `${(yield* Effect.promise(() => this.files())).artifactDirectory}/${SPILL_DIRS.eventContent}`;
       const path = `${directory}/${digest}.json`;

@@ -29,6 +29,7 @@ import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan, type 
 import { DEFAULT_CACHE_RETENTION, parseModelSpec, type CacheRetention } from './providers/types';
 import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
+import { ReplayProgress } from './prompting/replay-normalization';
 import { modelStepMessages } from './prompting/tool-error-feedback';
 import type { SpendGate } from './mission-budget';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality } from './prompting/attachment-sanitizer';
@@ -779,6 +780,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   /** The fallback serving the turn, once one took over. */
   let servingFallback: string | undefined;
   let calls = 0;
+  const replay = new ReplayProgress();
 
   const meter = opts.measureContext === true ? new TurnContextMeter({ system: cache.system, tools }) : undefined;
 
@@ -897,6 +899,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           budget: opts.budget,
           dynamic: opts.dynamicContext,
           destination: servingRoute,
+          replay,
           meter,
           context: stepContextPlane,
           turnStart,
