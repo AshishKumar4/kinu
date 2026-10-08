@@ -9,7 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
-  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareSkillNames, entryRevision, formatBytes, joinDir, parseSkillFile, shortAge,
+  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareSkillNames, liveSharePagePath, entryRevision, formatBytes, joinDir, parseSkillFile, shortAge,
   skillViewPath, workspaceDisplayTitle,
   type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
   type SkillFileRefusal,
@@ -18,7 +18,7 @@ import { diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip,
 } from "@/lib/drive-api";
-import { getSharedLibrary, openLiveShare } from "@/lib/shared-api";
+import { getSharedLibrary } from "@/lib/shared-api";
 import { useAsyncResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
@@ -547,14 +547,9 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     startTransition(() => settle(Effect.catchCause(Effect.promise(work), showing(setNotice))));
   };
 
+  // Entered as its link's visitor enters it, through the page that hands this account its ticket.
   const openLive = (row: SharedRow): void => {
-    const workspace = row.workspace;
-
-    if (workspace === undefined) return;
-    background(async () => {
-      const { url } = await openLiveShare({ workspace, share: row.share });
-      window.open(url, "_blank", "noopener");
-    });
+    if (row.workspace !== undefined) window.open(liveSharePagePath(row.workspace, row.share), "_blank", "noopener");
   };
 
   const afterSkillAdded = async (): Promise<void> => {

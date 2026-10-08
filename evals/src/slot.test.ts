@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { DEV_IDENTITY_ACCOUNT_HEADER, inheritedRows, parseEvalAccount } from '@kinu.run/core';
 import { WORKSPACE_LEASE_MS } from './session';
-import { claimTrialAccount, prepareTrialAccount, sharedAccounts, trialAccountsAt, trialSlot } from './slot';
+import { evalMatrix } from './config';
+import { claimTrialAccount, prepareTrialAccount, sharedAccounts, trialAccounts, trialAccountsAt, trialSlot } from './slot';
 import type { EvalTarget } from './target';
 
 const TASK_FILES = ['budget-board.eval.ts', 'chess.eval.ts', 'launch-prep.eval.ts', 'order-book.eval.ts'];
 
-const MATRIX = { models: ['opencode-go/muse', 'openrouter/mercury', 'openrouter/ling'], arms: ['product'], trials: 10 };
+const MATRIX = { models: ['opencode-go/muse', 'openrouter/mercury', 'openrouter/ling'], arms: ['product'], trials: 10, firstSlot: 1 };
 
 describe('a trial\'s slot', () => {
   test('every trial of a run has a slot of its own, one to the matrix\'s size, each an eval account', () => {
@@ -21,7 +22,18 @@ describe('a trial\'s slot', () => {
 
   test('a matrix past the accounts a deployment has fails at once, saying how many it needs', () => {
     expect(() => trialSlot({ taskFiles: TASK_FILES, task: 'order-book', matrix: { ...MATRIX, trials: 50 }, model: 'openrouter/ling', arm: 'product', trial: 50 }))
-      .toThrow('needs 600 trial accounts, and a deployment has trial-1 to trial-512');
+      .toThrow('needs 600 trial accounts, and its half of a deployment\'s has trial-1 to trial-256');
+  });
+
+  // Staging deploy of c9fee59a0: its one-trial pass ran beside evals.yml's ten, and its task i took trial-(i+1), a slot of
+  // the measured run's first tasks: three trials were refused as in use or inheriting that run's rows.
+  test('a deploy\'s pass and the measured run beside it never share an account', () => {
+    const accounts = (env: Record<string, string>, trials: string) => trialAccounts(TASK_FILES, evalMatrix({ ...env, KINU_EVAL_TRIALS: trials }, ['product']));
+    const measured = accounts({}, '10');
+    const pass = accounts({ KINU_EVAL_PASS: '1' }, '1');
+
+    expect(pass).toEqual(['trial-257', 'trial-258', 'trial-259', 'trial-260']);
+    expect(measured.filter((account) => pass.includes(account))).toEqual([]);
   });
 
   test('a task not named after its file has no place in the matrix, and says so', () => {

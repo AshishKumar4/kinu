@@ -5,7 +5,7 @@ import type { Schedule } from '../types/primitives';
 import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
-import { REAL_CLOCK, type Clock } from '../types/clock';
+import { every, REAL_CLOCK, type Clock } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob, type JobResume } from './store';
 import { JobOutputFeeds, type JobOutputFrame } from './live-output';
@@ -15,10 +15,19 @@ import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { WorkMode } from '../types/turn';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
-import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { classify, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
+import { silenceBoundMs } from '../platform-catalog';
+import { fmtSpan } from '../utils/format';
+import { Effect } from 'effect';
 
 /** Stamped by Kinu: `do.evict.no_signal` means the platform delivers no eviction notice. */
 const EVICTION_INTERRUPT_ERROR = 'interrupted by Durable Object eviction before completion';
+
+/** How long a detached job's context may go unheard before its work is given up as lost. */
+const JOB_SILENCE_MS = silenceBoundMs('job.context_silence_ms');
+
+/** Four probes a bound, so one lost answer never decides. */
+const JOB_PROBE_MS = JOB_SILENCE_MS / 4;
 
 /** Shared with each backend's fiber-recovery hook, which matches on it. */
 export const BACKGROUND_FIBER_PREFIX = 'bg:';
@@ -128,11 +137,15 @@ export interface BackgroundJobRunnerDeps {
   scheduleResume?: (atMs: number) => Promise<void> | void;
   /** Absent: one process owns the store (a Durable Object). */
   holder?: JobHolder;
+  /** Asked from the context a detached job's work runs in. A context the platform dropped answers nothing, its work's
+   *  answers included, so a job unheard for {@link JOB_SILENCE_MS} is recovered as an evicted one is, at the next
+   *  {@link BackgroundJobRunner.recoverLost}. Absent: no job is watched. */
+  alive?: () => Promise<void>;
 }
 
 /** The workspace's half of every job runner in it. */
 export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutput'>>
-  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock' | 'holder'>;
+  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock' | 'holder' | 'alive'>;
 
 const SearchJobInputSchema = v.object({ task: v.string() });
 
@@ -204,6 +217,12 @@ export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent
     + `what you changed.`;
 }
 
+interface WatchedJob {
+  at: number;
+  probe: Promise<void> | null;
+  readonly disarm: () => void;
+}
+
 export class BackgroundJobRunner {
   /** In-memory: eviction loses them, and recover() fails the orphan. */
   private readonly controllers = new Map<string, AbortController>();
@@ -216,6 +235,11 @@ export class BackgroundJobRunner {
    */
   private readonly cancelling = new Set<string>();
   private readonly fenced = new Map<string, () => Promise<void>>();
+
+  /** Each watched job's context: when it last answered, the probe it has not answered yet, and how to stop asking. */
+  private readonly heard = new Map<string, WatchedJob>();
+  /** Why a job's executor went away, for its bounded settle; absent, it was evicted. */
+  private readonly interrupted = new Map<string, string>();
 
   readonly output: JobOutputFeeds;
 
@@ -361,6 +385,8 @@ export class BackgroundJobRunner {
         await this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
           ctx.stash({ phase: 'running', jobId, kind });
           let status: string;
+          // Started here, in the context the work runs in: that context's answers are the ones asked for.
+          const unwatch = this.watch(jobId);
 
           try {
             await this.settleAndWake(jobId, exec);
@@ -374,6 +400,8 @@ export class BackgroundJobRunner {
               { jobId },
             );
             status = this.failUnsettled(jobId, { cause: err }) ? 'failed' : 'running';
+          } finally {
+            unwatch();
           }
 
           ctx.stash({ phase: status === 'running' ? 'running' : 'settled', jobId, kind });
@@ -405,6 +433,55 @@ export class BackgroundJobRunner {
 
     driver = drive();
     this.fiberDrivers.set(jobId, driver);
+  }
+
+  /** One probe in flight at a time: a dropped context leaves it unanswered, and the job unheard. */
+  private watch(jobId: string): () => void {
+    const { alive } = this.deps;
+
+    if (alive === undefined) return () => {};
+
+    const clock = this.deps.clock ?? REAL_CLOCK;
+
+    // A refusal is an answer too: only silence says the context is gone.
+    const answered = (): void => {
+      watched.at = clock.now();
+      watched.probe = null;
+    };
+
+    const watched: WatchedJob = {
+      at: clock.now(),
+      probe: null,
+      disarm: every(clock, JOB_PROBE_MS, () => { watched.probe ??= hold(Effect.promise(alive)).then(answered); }),
+    };
+
+    this.heard.set(jobId, watched);
+
+    return () => {
+      watched.disarm();
+      this.heard.delete(jobId);
+    };
+  }
+
+  /**
+   * A job unheard past {@link JOB_SILENCE_MS} lost its work with the context that ran it: its executor is let go and
+   * the job recovered as an evicted one is, re-driven or settled with what it had produced. Asked by any later event:
+   * a job's open fiber holds the object's alarm heartbeat, so one comes while any job runs.
+   */
+  async recoverLost(): Promise<void> {
+    const now = (this.deps.clock ?? REAL_CLOCK).now();
+
+    for (const [jobId, { at, disarm }] of this.heard) {
+      if (now - at < JOB_SILENCE_MS) continue;
+      disarm();
+      this.heard.delete(jobId);
+      diagnostics.event('jobs.lost', { jobId, kind: this.deps.store.get(jobId)?.kind ?? 'unknown', silentMs: now - at });
+      this.controllers.get(jobId)?.abort(new Error('its work stopped answering'));
+      this.controllers.delete(jobId);
+      this.fiberDrivers.delete(jobId);
+      this.interrupted.set(jobId, `interrupted before completion: nothing came back from its work for ${fmtSpan(now - at)}, so it was given up as lost`);
+      await this.recoverJob(jobId);
+    }
   }
 
   /** Throws only when a store write or the durable retry breadcrumb fails. */
@@ -440,6 +517,9 @@ export class BackgroundJobRunner {
         return;
       }
 
+      // A re-driven attempt that finished owes no account of the one that was lost.
+      this.interrupted.delete(jobId);
+
       if (outcome.kind === 'settled') this.deps.store.settle(jobId, epoch, serializeJobResult({ value: outcome.result }), Date.now());
       else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
       this.deps.logActivity?.('bg_job_settled',
@@ -463,13 +543,16 @@ export class BackgroundJobRunner {
     const job = this.deps.store.get(jobId);
     const harvested = job ? await this.harvestOf(job) : { ok: true, value: null } as const;
     const now = Date.now();
+    const interrupted = this.interrupted.get(jobId) ?? EVICTION_INTERRUPT_ERROR;
+
+    this.interrupted.delete(jobId);
 
     if (!harvested.ok) {
-      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR}: ${why}, and reading `
+      this.deps.store.fail(jobId, epoch, `${interrupted}: ${why}, and reading `
         + `what it had produced failed: ${harvested.error}`, now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} failed unreadable: ${why}`);
     } else if (harvested.value === null) {
-      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR}: ${why}, and it had `
+      this.deps.store.fail(jobId, epoch, `${interrupted}: ${why}, and it had `
         + 'produced no partial result to hand back', now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty: ${why}`);
     } else {
@@ -731,6 +814,7 @@ export class BackgroundJobRunner {
 
   /** Timer entry: re-arms a not-yet-due attempt, since its schedule row can be lost. */
   async recoverDueResumes(): Promise<void> {
+    await this.recoverLost();
     const next = this.nextResumeAt();
 
     if (next === null) return;

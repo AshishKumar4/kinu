@@ -5,7 +5,7 @@
  */
 
 import {
-  buildSlateShareHost, parseSlateShareLabel, previewHostSuffix, previewPortSuffix, workspaceAddressRefusal,
+  buildSlateShareHost, liveSharePagePath, parseSlateShareLabel, previewHostSuffix, previewPortSuffix, workspaceAddressRefusal,
   ingressAdmitted, labelSigner, reoriginateRequest, SHARE_VIEWER_REQUESTS_PER_MINUTE, type ShareViewerClaim, VIEWER_EXCHANGE_PATH,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
@@ -78,6 +78,13 @@ export async function viewerEntryUrl(env: Env, workspace: string, handle: string
   const ticket = await mintViewerTicket(env, workspace, handle, userId);
 
   return ticket === null ? null : `${base}${VIEWER_EXCHANGE_PATH.slice(1)}?ticket=${ticket}`;
+}
+
+/** The app's page a `users` share is entered through: it signs its visitor in, then mints their ticket. */
+export function liveShareEntryPage(env: Env, workspace: string, share: string): string | null {
+  const origin = env.CLI_PUBLIC_ORIGIN;
+
+  return origin === undefined || !URL.canParse(origin) ? null : new URL(liveSharePagePath(workspace, share), origin).toString();
 }
 
 /** A public viewer's consent subject is its source hash, so `userId` is null for it. */

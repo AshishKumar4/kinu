@@ -21,7 +21,7 @@ import { basename, join } from 'node:path';
 import * as v from 'valibot';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, inheritedRows, type EvalAccount } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
-import { DEFAULT_TRIALS, evalMatrix } from '../evals/src/config';
+import { DEFAULT_TRIALS, evalMatrix, PASS_FIRST_SLOT } from '../evals/src/config';
 import { WORKSPACE_LEASE_MS } from '../evals/src/session';
 import { trialAccounts, trialAccountsAt } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
@@ -244,7 +244,7 @@ if (import.meta.main) {
   const identity = process.env[identityEnv]?.trim();
   const taskFiles = trackedFiles().filter(isEvalTask).map((file) => basename(file));
 
-  // Every trial account a run of the full matrix acts as; a deployment that predates them runs its trials as eval-service.
+  // Every trial account a run of the full matrix and a deploy's pass act as; a deployment that predates them runs its trials as eval-service.
   const accounts = identity === undefined || identity === '' ? undefined
     : await trialAccountsAt({ origin, identity: { kind: 'secret', secret: identity } });
 
@@ -252,7 +252,10 @@ if (import.meta.main) {
 
   const { stored, findings, trials, notes } = await provisionEvalProviderKeys({
     origin, keysPath: EVAL_PROVIDER_KEYS, identity, identityEnv, models: matrix.models,
-    trialAccounts: accounts?.kind === 'trial' ? trialAccounts(taskFiles, { ...matrix, trials: Math.max(matrix.trials, DEFAULT_TRIALS) }) : undefined,
+    trialAccounts: accounts?.kind === 'trial' ? [
+      ...trialAccounts(taskFiles, { ...matrix, trials: Math.max(matrix.trials, DEFAULT_TRIALS) }),
+      ...trialAccounts(taskFiles, { ...matrix, trials: 1, firstSlot: PASS_FIRST_SLOT }),
+    ] : undefined,
   });
 
   for (const note of notes ?? []) console.log(`eval-provider-keys: ${note}`);

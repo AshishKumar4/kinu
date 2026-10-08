@@ -21,10 +21,13 @@ export interface CodemodeFactoryOptions {
   workspace: string;
   webSearch: WebSearchProvider;
   /** The actor's Chrome sessions, which `web.connectBrowser` in its programs reaches. */
-  browserSessions: BrowserSessions;
+  /** Absent: the program holds no browser session, and the browser members it would drive refuse. */
+  browserSessions?: BrowserSessions;
   /** Read per call so a re-bound model lands without a rebuild; omitted (heads) keeps `agents.*` out. */
   agents?: () => AgentsToolDeps;
   extraProviders?: () => CodemodeProvider[];
+  /** Asked before each member a program reaches runs, by namespace and member; it throws to refuse. */
+  nested?: (namespace: string, member: string) => void;
   onExecutorUsed?: (name: string) => void;
   /** Which namespaces the turn's role or allowed tools reach: none is bound past it. */
   reach: ToolSurfaceNarrowing;
@@ -35,6 +38,21 @@ export interface CodemodeFactory {
   callTool(surface: CodemodeSurface, name: string, input: JsonObject): Promise<JsonValue | undefined>;
 }
 
+/** `provider` with each member asking `nested` before it runs. */
+function guarded(provider: CodemodeProvider, nested: (namespace: string, member: string) => void): CodemodeProvider {
+  return {
+    ...provider,
+    tools: Object.fromEntries(Object.entries(provider.tools).map(([member, entry]) => [member, {
+      ...entry,
+      execute: async (...args: Parameters<typeof entry.execute>) => {
+        nested(provider.name, member);
+
+        return await entry.execute(...args);
+      },
+    }])),
+  };
+}
+
 export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
   const { rt, webSearch } = options;
   // The running program's channel, read per provider call: a detach changes the owning job mid-program.
@@ -42,7 +60,10 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
   const stateProvider = createStateCodemodeProvider(rt.actor.programState);
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
 
-  const webProvider = createWebCodemodeProvider({ provider: webSearch, files: rt.storage, sessions: options.browserSessions, prelude: { source: BROWSER_PRELUDE } });
+  const webProvider = createWebCodemodeProvider({
+    provider: webSearch, files: rt.storage, sessions: options.browserSessions,
+    prelude: options.browserSessions === undefined ? { missing: 'this program holds no browser session; a share\'s viewer drives none of its owner\'s' } : { source: BROWSER_PRELUDE },
+  });
 
   const executorProviders = (rt.executionRouter?.getProviders() ?? []).map((p) => {
     const wrapped: typeof p.tools = {};
@@ -119,7 +140,9 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
         if (options.extraProviders) providers.push(...options.extraProviders());
         providers.push(webProvider, ...executorProviders);
-        const bound = [...options.reach.narrowProviders([toolsProvider]), ...providersInWorkMode(mode, options.reach.narrowProviders(providers))];
+        const reached = [...options.reach.narrowProviders([toolsProvider]), ...providersInWorkMode(mode, options.reach.narrowProviders(providers))];
+        const { nested } = options;
+        const bound = nested === undefined ? reached : reached.map((provider) => guarded(provider, nested));
 
         const built = createCodeTool({
           // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.

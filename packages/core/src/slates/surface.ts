@@ -13,6 +13,7 @@ import { grantAdmits } from './capability-graph';
 import { AI_RUN_MEMBER, slateAddressImpact } from './members';
 import type { Impact } from '@agent-core/core/facets';
 import type { ShareGrant } from './sharing';
+import { WEB_SANDBOX_IMPACTS } from '../operations/web';
 
 /** The executor a program reaches as `workspace`; a one-name path is its member, as `workspace.readFile` is in a program. */
 const WORKSPACE_EXECUTOR = 'workspace';
@@ -32,7 +33,15 @@ export const SlateCallRequestSchema = v.strictObject({
    * `null` only for the actor's own direct call.
    */
   invocation: v.nullable(v.pipe(v.string(), v.minLength(1))),
+  /**
+   * Asks only whether the call may run, with no arguments: a slate's class drives a browser member locally, where its
+   * CDP socket lives, and asks first, so the host decides as it decides every call and records it.
+   */
+  authorize: v.optional(v.literal(true)),
 });
+
+/** The `web` members a slate's class runs in its own isolate, each after the host authorizes it. */
+export const SLATE_DRIVEN_MEMBERS: readonly string[] = Object.keys(WEB_SANDBOX_IMPACTS);
 
 export type SlateCallRequest = v.InferOutput<typeof SlateCallRequestSchema>;
 
@@ -220,9 +229,14 @@ function routed(id: string, request: SlateCallRequest, chain: readonly string[])
   return Effect.flatMap(route(id, request, chain), (found) => {
     const impact = slateAddressImpact(address);
 
-    return impact === null || (found.kind === 'namespace' && !slateReaches(address))
-      ? Effect.fail(refused)
-      : Effect.succeed({ route: found, address, impact });
+    if (impact === null || (found.kind === 'namespace' && !slateReaches(address))) return Effect.fail(refused);
+
+    // Only what the class runs itself is asked about alone: what runs at the host answers for itself.
+    if (request.authorize === true && !(found.kind === 'namespace' && address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(address.member))) {
+      return Effect.fail(new KinuError('bad_input', `${address.namespace}.${address.member} runs at the host; only ${SLATE_DRIVEN_MEMBERS.map((member) => `web.${member}`).join(', ')} are authorized and run by the class`));
+    }
+
+    return Effect.succeed({ route: found, address, impact });
   });
 }
 
@@ -262,4 +276,20 @@ function admitViewer(call: SlateCall, input: ViewerCallInput): Effect.Effect<Sla
   if (found.kind === 'agent') return Effect.succeed({ ...call, route: { ...found, viewer: input.viewer.subject } });
 
   return entry.impact === call.impact ? Effect.succeed(call) : Effect.fail(refused);
+}
+
+/**
+ * A member a granted call reaches inside itself, as a crafted tool's program does: admitted only as the grant names
+ * it at the impact the surface gives it, and never a member the surface refuses outright.
+ */
+export function admitNestedViewerCall(grant: ShareGrant, slate: string, address: SlateAddress): void {
+  return settleSync(nestedViewerCall(grant, slate, address));
+}
+
+function nestedViewerCall(grant: ShareGrant, slate: string, address: SlateAddress): Effect.Effect<void, KinuError> {
+  const impact = slateExcludes(address) ? null : slateAddressImpact(address);
+
+  return impact !== null && grantAdmits(grant, slate, address.namespace, address.member)?.impact === impact
+    ? Effect.void
+    : Effect.fail(new KinuError('denied', `Slate ${slate} does not grant ${address.namespace}.${address.member} to viewers`));
 }

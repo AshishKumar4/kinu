@@ -298,6 +298,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   }): Promise<ServedSlate>;
   portReservations(workspace: string): Promise<DurabilityReservation[]>;
   programOnWhiteboard(input: { workspace: string; owner: string; program: string }): Promise<string>;
+  craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }>;
   forgetActivation(workspace: string): Promise<void>;
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
   drivePreview(url: string): Promise<PreviewAnswer>;
@@ -343,6 +344,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   revoke(share: string): Promise<ProbeAnswer>;
   stopped(): Promise<boolean>;
   drive(session: string): Promise<string>;
+  driveShared(session: string, approved: readonly string[], claim: { userId: string | null; source: string; consented: boolean }): Promise<{ answer: string; dialed: number }>;
 }
 
 

@@ -158,7 +158,7 @@ import {
   type OperationProfile,
   agentRoleSwitch, executorNamespace, toolsNamespace, createStateCodemodeProvider, runWorkModeInvocation, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
-  narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
+  narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
@@ -194,7 +194,7 @@ import {
   type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
-import { codemodeLauncher, type ProgramLaunch } from "./codemode-sandbox";
+import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
@@ -203,6 +203,7 @@ import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallRe
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
+import type { SlateDispatchContext } from "./slates/host";
 import { diagnostics, KinuError, refusalOf, refusing, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
@@ -452,6 +453,16 @@ interface WorkspaceTitleInputs {
  * unreachable; every other class is the turn's own fault. */
 const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable', 'timeout', 'io']);
 
+/** A namespace member a slate calls: run it, or, when the host asks only whether it may, refuse as running it would. */
+async function slateMember(
+  providers: readonly CodemodeProvider[], route: Extract<SlateRoute, { kind: 'namespace' }>, context: SlateDispatchContext,
+): Promise<JsonValue> {
+  if (!context.authorizeOnly) return await callCodemodeMember(providers, route.namespace, route.member, route.args) ?? null;
+  requireCodemodeMember(providers, route.namespace, route.member);
+
+  return null;
+}
+
 /** Where a slate's `connectBrowser`, `pageTools` and `callPageTool` run: in its class's isolate, which holds the socket. */
 const SLATE_BROWSER_DRIVER = "a slate drives a browser from its class (this.env.workspace.web.connectBrowser); its page asks the class";
 
@@ -542,7 +553,13 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (refusal) return settle(Effect.fail(new KinuError(refusal.reason, refusal.error)));
 
-    return super.alarm();
+    return this.recoverLostJobs().then(async () => { await super.alarm(); });
+  }
+
+  /** Each alarm, the keepAlive heartbeat a running job's fiber holds among them, asks whether a job's work went silent. */
+  private async recoverLostJobs(): Promise<void> {
+    await settleLogged('jobs.lost_recovery_failed', { doing: 'recover the background jobs whose work stopped answering', otherwise: 'io' },
+      () => this.jobAuthorities.recoverLost(), { workspace: this.name });
   }
   /** Actor kind for the operational dataset's `agentKind` dimension. Abstract because a
    * bundler may rewrite `constructor.name`. */
@@ -2571,6 +2588,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected workspaceJobPorts(owner: string | null): WorkspaceJobPorts {
     return {
       clock: this.jobClock(),
+      alive: jobContextAnswers,
       jobOutput: (frame) => { this.broadcastToActor(owner, JSON.stringify(frame)); },
       // Only this request's device work moves; parallel foreground commands remain stoppable.
       onDetached: (jobId, requestIds) => {
@@ -2955,8 +2973,10 @@ export abstract class ActorAgent extends Agent<Env> {
    * role, so a slate never reaches more than the actor it calls as.
    */
   private dispatchHostedSlateCall(
-    name: string, rest: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode,
+    hops: readonly [SlateCallerHop, ...SlateCallerHop[]], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext,
   ): Effect.Effect<JsonValue, KinuError> {
+    const [{ name }, ...rest] = hops;
+
     return Effect.gen({ self: this }, function* () {
       if (rest.length > 0) {
         return yield* new KinuError('denied', 'A caller path names one hosted actor; a nested path names an actor no directory holds.');
@@ -2986,10 +3006,10 @@ export abstract class ActorAgent extends Agent<Env> {
         const reach = slateToolReach(authority.reach);
 
         if (route.kind === 'tool') {
-          return this.callSlateTool({ rt: actor.runtime, providers: surface.providers, reach, route, mode: authority.mode });
+          return this.callSlateTool({ rt: actor.runtime, providers: surface.providers, reach, route, mode: authority.mode, context });
         }
 
-        return await callCodemodeMember(reach.narrowProviders(providersInWorkMode(authority.mode, surface.providers)), route.namespace, route.member, route.args) ?? null;
+        return await slateMember(reach.narrowProviders(providersInWorkMode(authority.mode, surface.providers)), route, context);
       }));
     });
   }
@@ -3012,14 +3032,19 @@ export abstract class ActorAgent extends Agent<Env> {
    * One capability route, run as this actor, narrowed by its own current role.
    * Not `@callable`: reached on the stub transport only.
    */
-  slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode): Promise<JsonValue> {
+  slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Promise<JsonValue> {
     return settle(Effect.gen({ self: this }, function* () {
+      // Only a namespace member is checked without running it; anything else asked about alone would run.
+      if (context.authorizeOnly && route.kind !== 'namespace') {
+        return yield* new KinuError('bad_input', `A ${route.kind} route runs at the host; it is not authorized to run elsewhere`);
+      }
+
       // Hops resolve hosted actors through the directory, inside this object, so an unreachable
       // name is refused here rather than as a rejected RPC deeper down.
       const [next, ...rest] = path;
 
       if (next !== undefined) {
-        return yield* this.dispatchHostedSlateCall(next.name, rest, route, mode);
+        return yield* this.dispatchHostedSlateCall([next, ...rest], route, mode, context);
       }
 
       switch (route.kind) {
@@ -3027,7 +3052,7 @@ export abstract class ActorAgent extends Agent<Env> {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces()));
           const providers = providersInWorkMode(authority.mode, this.slateNamespaces());
 
-          return (yield* Effect.promise(async () => callCodemodeMember(slateToolReach(authority.reach).narrowProviders(providers), route.namespace, route.member, route.args))) ?? null;
+          return yield* Effect.promise(async () => slateMember(slateToolReach(authority.reach).narrowProviders(providers), route, context));
         }
 
         case 'tool': {
@@ -3035,7 +3060,7 @@ export abstract class ActorAgent extends Agent<Env> {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, providers));
 
           return yield* Effect.promise(async () => this.callSlateTool({
-            rt: this.rt, providers, reach: slateToolReach(authority.reach), route, mode: authority.mode,
+            rt: this.rt, providers, reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
           }));
         }
 
@@ -3137,25 +3162,30 @@ export abstract class ActorAgent extends Agent<Env> {
     return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
   }
 
-  protected codemodeLaunch(actor: string): (online: boolean) => ProgramLaunch {
+  /** `actor` is whose browser sessions the program's egress reaches; null reaches only a new Kitesurf browser. */
+  protected codemodeLaunch(actor: string | null): (online: boolean) => ProgramLaunch {
     const workspace = this.workspaceName();
 
     return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor } : null });
   }
 
-  /** A crafted tool: a native tool is its own namespace on a slate's surface, never a member of `tools`. */
+  /**
+   * A crafted tool: a native tool is its own namespace on a slate's surface, never a member of `tools`. Every member
+   * its program reaches passes `context.nested` first, and a viewer's program holds no browser session of this actor's.
+   */
   private async callSlateTool(input: {
     rt: HostedActor['runtime']; providers: CodemodeProvider[];
-    reach: ToolSurfaceNarrowing; route: Extract<SlateRoute, { kind: 'tool' }>; mode: WorkMode;
+    reach: ToolSurfaceNarrowing; route: Extract<SlateRoute, { kind: 'tool' }>; mode: WorkMode; context: SlateDispatchContext;
   }): Promise<JsonValue> {
-    const { rt, providers, reach, route, mode } = input;
+    const { rt, providers, reach, route, mode, context } = input;
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
 
     const factory = createCodemodeToolFactory({
-      launch: this.codemodeLaunch(rt.actor.actorId), rt,
+      launch: this.codemodeLaunch(context.viewer ? null : rt.actor.actorId), rt,
       workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
-      browserSessions: this.browserSessionsFor(rt.actor.actorId),
+      ...(!context.viewer && { browserSessions: this.browserSessionsFor(rt.actor.actorId) }),
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
+      nested: context.nested,
     });
 
     return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}), route.name, route.input)) ?? null;

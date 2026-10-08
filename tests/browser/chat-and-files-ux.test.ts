@@ -4202,3 +4202,29 @@ describe('the composer while a turn runs and under a status row', () => {
     });
   });
 });
+
+describe('the Environment cards', () => {
+  // Staging, 2026-10-08: at the inspector's default width every card ran past the panel's right edge.
+  test('fit a panel as narrow as the inspector', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 340, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-env-card="sandbox"] [data-env-size]');
+
+      // Each card inside the page, and everything drawn in a card inside the card: its size choice ran past it.
+      const past = await page.$$eval('[data-env-card]', (cards) => cards.flatMap((card) => {
+        const edge = card.getBoundingClientRect().right;
+        const drawn = [...card.querySelectorAll('*')].filter((inner) => inner.getClientRects().length > 0);
+        const furthest = Math.max(edge, ...drawn.map((inner) => inner.getBoundingClientRect().right));
+
+        return [
+          [card.getAttribute('data-env-card'), Math.round(edge - document.documentElement.clientWidth)],
+          [`${card.getAttribute('data-env-card') ?? ''} contents`, Math.round(furthest - edge)],
+        ];
+      }).filter(([, beyond]) => Number(beyond) > 0));
+
+      expect(past).toEqual([]);
+    });
+  });
+});

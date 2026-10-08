@@ -226,4 +226,23 @@ it("a slate's class connects the browser its caller opened, through the eval pro
   expect(await probe.drive('not-mine')).toContain('browser not-mine is not one this agent opened');
   // A Kitesurf browser is opened for the call itself.
   expect(await probe.drive('kitesurf')).toContain('Browser Run started a Kitesurf browser');
+  // Each was authorized at the host before the class dialed, so the slate's graph names it as any call it made.
+  const graph = v.parse(GraphSchema, answer(await probe.operationAs('root', { op: 'graph', id: 'driver' })));
+
+  expect(graph.namespaces.find((row) => row.namespace === 'web')?.members).toContainEqual(expect.objectContaining({ member: 'connectBrowser', impact: 'execute' }));
+});
+
+it("a share's viewer drives a browser from the class only as the grant allows, and never the owner's session", async () => {
+  const ungranted = subject('driver-ungranted');
+  await ungranted.start();
+
+  // Not granted: refused at the host before the class dials, so no browser opens on the owner's account.
+  expect(await ungranted.driveShared('kitesurf', [], CLAIM)).toEqual({ answer: expect.stringContaining('does not grant web.connectBrowser to viewers'), dialed: 0 });
+
+  const granted = subject('driver-granted');
+  await granted.start();
+
+  // Granted: a new Kitesurf browser, and still none of the owner's own sessions.
+  expect(await granted.driveShared('kitesurf', ['connectBrowser'], CLAIM)).toEqual({ answer: expect.stringContaining('Browser Run started a Kitesurf browser'), dialed: 1 });
+  expect(await granted.driveShared('owned-session', ['connectBrowser'], CLAIM)).toEqual({ answer: expect.stringContaining('browser owned-session is not one this agent opened'), dialed: 0 });
 });

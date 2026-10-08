@@ -144,7 +144,7 @@ export { ObservedOrchestrator as OrchestratorAgent };
 /** `slateAs` is absent on purpose: `Rpc.Result` over its recursive `JsonValue` is TS2589; the probe
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator,
+  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
   'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
@@ -161,6 +161,34 @@ type TerminalDrive =
 
 const RemovedValueSchema = v.object({
   id: v.string(), removed: v.boolean(), port: v.nullable(v.number()),
+});
+
+/**
+ * A crafted tool that lists its runner's browsers, writes who ran it, and reads the file back. A member it holds none
+ * of throws; a refused one answers its refusal as the value, as every member does for a program to branch on.
+ */
+const HELPER = [
+  'async (input) => {',
+  '  let browsers = null;',
+  '  try { browsers = await web.browsers({}); } catch {}',
+  '  const wrote = await workspace.writeFile("ran-by.txt", input.who);',
+  '  return { browsers, wrote, read: await workspace.readFile("ran-by.txt") };',
+  '}',
+].join('\n');
+
+/** A slate whose class runs the crafted tool: as its `run` method for a program, as its page for a visitor. */
+const RUNNER = [
+  'import { SlateObject } from "kinu:slate";',
+  'export class Slate extends SlateObject {',
+  '  async run(who) { return await this.env.workspace.tools.helper({ who }); }',
+  '  async fetch() { return Response.json(await this.env.workspace.tools.helper({ who: "viewer" })); }',
+  '}',
+].join('\n');
+
+const SharedValueSchema = v.object({ share: v.object({ handle: v.string() }) });
+
+const GraphValueSchema = v.object({
+  namespaces: v.array(v.object({ namespace: v.string(), members: v.array(v.object({ member: v.string(), impact: v.string() })) })),
 });
 
 /** Every call names the workspace, so nothing the test holds pins this object across
@@ -271,6 +299,37 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     ].join('\n'));
 
     return target.runProgram(input.program);
+  }
+
+  /**
+   * The owner's program makes the crafted tool `helper`, then runs it through the `runner` slate's class; the slate is
+   * shared granting the tool alone, and a consented viewer opens its page, which runs the tool too.
+   */
+  async craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await target.runProgram(`await workspace.createTool("helper", "Lists browsers and writes who ran it", ${JSON.stringify(HELPER)}); return null;`);
+    await this.writeSlateFile(target, '/slates/runner/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Runner' } }));
+    await this.writeSlateFile(target, '/slates/runner/server.ts', RUNNER);
+    const owner = await target.runProgram('return await workspace.slates.runner.run("owner");');
+    const owned = workspaceOwner(this.env, input.workspace);
+    const graph = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'graph', id: 'runner' });
+
+    if (!graph.ok) throw new Error(`slate graph refused: ${graph.reason}: ${graph.error}`);
+
+    const reached = v.parse(GraphValueSchema, graph.value).namespaces
+      .flatMap((row) => row.members.map((member) => `${row.namespace}.${member.member}:${member.impact}`));
+
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, {
+      op: 'share', id: 'runner', visibility: 'public', approved: [{ slate: 'runner', namespace: 'tools', member: 'helper' }],
+    });
+
+    if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
+    const { handle } = v.parse(SharedValueSchema, shared.value).share;
+    const page = await target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, new Request('https://share.invalid/'), '/');
+
+    return { owner, reached, viewer: await page.text() };
   }
 
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {

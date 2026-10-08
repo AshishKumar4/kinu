@@ -17,7 +17,7 @@ import type { EvalTarget } from './target';
 export type TrialPlace = {
   readonly taskFiles: readonly string[];
   readonly task: string;
-  readonly matrix: Pick<EvalMatrix, 'models' | 'arms' | 'trials'>;
+  readonly matrix: Pick<EvalMatrix, 'models' | 'arms' | 'trials' | 'firstSlot'>;
   readonly model: string;
   readonly arm: string;
   readonly trial: number;
@@ -27,15 +27,16 @@ export type TrialPlace = {
 export function trialSlot(place: TrialPlace): EvalAccount {
   const files = [...place.taskFiles].sort();
   const taskAt = files.indexOf(`${place.task}.eval.ts`);
-  const { models, arms, trials } = place.matrix;
+  const { models, arms, trials, firstSlot } = place.matrix;
 
   if (taskAt === -1) throw new Error(`task ${place.task} is not evals/tasks/${place.task}.eval.ts, so it has no place in the run's matrix`);
   const needed = files.length * models.length * arms.length * trials;
-  const slot = ((taskAt * models.length + models.indexOf(place.model)) * arms.length + arms.indexOf(place.arm)) * trials + place.trial;
+  const half = EVAL_TRIAL_ACCOUNTS / 2;
+  const slot = firstSlot - 1 + ((taskAt * models.length + models.indexOf(place.model)) * arms.length + arms.indexOf(place.arm)) * trials + place.trial;
   const account = parseEvalAccount(`trial-${String(slot)}`);
 
-  if (needed > EVAL_TRIAL_ACCOUNTS || account === null) {
-    throw new Error(`the run's matrix needs ${String(needed)} trial accounts, and a deployment has trial-1 to trial-${String(EVAL_TRIAL_ACCOUNTS)}`);
+  if (needed > half || account === null) {
+    throw new Error(`the run's matrix needs ${String(needed)} trial accounts, and its half of a deployment's has trial-${String(firstSlot)} to trial-${String(firstSlot - 1 + half)}`);
   }
 
   return account;

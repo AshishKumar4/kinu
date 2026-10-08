@@ -6,7 +6,7 @@ import type { NamespaceFs } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
-import { SLATE_METHOD_NAME_SOURCE, type SlateProcess, type SlateProject } from '@kinu.run/core';
+import { SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, type SlateProcess, type SlateProject } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
@@ -217,6 +217,18 @@ export function slateRunnerSource(
     '    },',
     '  });',
     BROWSER_PRELUDE,
+    // Each runs here, where its socket lives, once the host has authorized it as it authorizes every call: the
+    // caller's role now, a share's grant, and the slate's recorded reach. A refusal never dials.
+    `  for (const member of ${JSON.stringify(SLATE_DRIVEN_MEMBERS)}) {`,
+    '    const local = web[member];',
+    '    web[member] = async (...args) => {',
+    '      const invocation = invocations.getStore();',
+    '      if (invocation === undefined) throw new Error(`workspace.web.${member} is called outside a slate method; there is no invocation to run it under`);',
+    '      const result = await stub.call(["web", member], [], invocation, true);',
+    '      if (!result.ok) throw new SlateRefusal(result);',
+    '      return local(...args);',
+    '    };',
+    '  }',
     '  return web;',
     '}',
     'function workspaceSurface(stub) {',

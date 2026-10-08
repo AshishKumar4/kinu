@@ -164,10 +164,31 @@ run_project() {
     --reporter=default --reporter=junit --outputFile="$REPORT_DIR/junit-$project.xml" \
     "${EMPTY_SELECTION[@]}" "$@"
 }
+# EACH PROJECT KEEPS ITS OWN LOG, and a run stopped by its deadline names the case
+# files that never reported. On 2026-10-08 the tier ran past its 1800 s bound and
+# its output held only the fleet project's tail, so nothing said which case hung.
+unfinished_cases() {
+  local file
+  for file in tests/first-run/*.first-run.ts; do
+    grep -qE "(✓|❯|↓|×) +first-run-(fleet|cases) +$file" "$REPORT_DIR"/first-run-*.log 2>/dev/null || echo "  $file"
+  done
+}
+stopped() {
+  echo "first-run: stopped before these case files reported:" >&2
+  unfinished_cases >&2
+  local project
+  for project in first-run-fleet first-run-cases; do
+    echo "── the last lines of $project ──" >&2
+    tail -n 40 "$REPORT_DIR/$project.log" >&2 2>/dev/null
+  done
+  kill "${FLEET_PID:-}" "${CASES_PID:-}" 2>/dev/null
+  exit 124
+}
+trap stopped TERM INT
 set +e
-KINU_EVAL_ACCOUNT=$FLEET_ACCOUNT KINU_TOKEN=$FLEET_TOKEN run_project first-run-fleet "$@" &
+KINU_EVAL_ACCOUNT=$FLEET_ACCOUNT KINU_TOKEN=$FLEET_TOKEN run_project first-run-fleet "$@" > >(tee "$REPORT_DIR/first-run-fleet.log") 2>&1 &
 FLEET_PID=$!
-KINU_EVAL_ACCOUNT=$CASES_ACCOUNT KINU_TOKEN=$CASES_TOKEN run_project first-run-cases "$@" &
+KINU_EVAL_ACCOUNT=$CASES_ACCOUNT KINU_TOKEN=$CASES_TOKEN run_project first-run-cases "$@" > >(tee "$REPORT_DIR/first-run-cases.log") 2>&1 &
 CASES_PID=$!
 wait "$FLEET_PID"
 FLEET_STATUS=$?
