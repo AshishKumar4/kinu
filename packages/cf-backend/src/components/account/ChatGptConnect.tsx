@@ -18,13 +18,12 @@ import { inputCls } from "@/components/ui/form";
 /** How often a waiting sign-in is read. */
 const SIGN_IN_POLL_MS = 2_000;
 
-/** SIWC UI guidelines' wording and link. */
+/** SIWC UI guidelines' wording; the usage link is the sign-in welcome's, not every model's. */
 export function ChatGptPlanUsage() {
   return (
     <span className="inline-flex shrink-0 items-center gap-1 p-meta p-text-3">
       <BrandMark brand="openai" size={11} bare />
-      Using ChatGPT plan ·
-      <a href={CHATGPT_USAGE_URL} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">Manage usage</a>
+      Using ChatGPT plan
     </span>
   );
 }

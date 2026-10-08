@@ -39,11 +39,11 @@
 // and is ended. Measured 2026-09-24: `bun test` of unit-pc-agent-exec left
 // nine 30 MB supervisors and a `sleep 20`, and the run reported success.
 
-import { appendFileSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tolerate } from '@kinu.run/core/obs';
-import { procFile, processStartTicks } from './process-owner';
+import { procFile, processStartTicks, procUid } from './process-owner';
 
 /** Seconds between SIGTERM at the bound and SIGKILL, for a child that ignores the first. */
 export const KILL_AFTER_SECONDS = 5;
@@ -180,7 +180,7 @@ export async function endLeftovers(mark: string): Promise<string[]> {
     // raised its privileges has it owned by root, and the user's own systemd refuses the read.
     if (!Number.isSafeInteger(pid) || (processStartTicks(pid) ?? 0) < since) continue;
 
-    if (statSync(`/proc/${name}/environ`, { throwIfNoEntry: false })?.uid !== uid) continue;
+    if (procUid(pid, 'environ') !== uid) continue;
     const environ = await laidOut(pid, 'environ');
 
     if (environ !== undefined && `\0${environ}`.includes(entry)) {
