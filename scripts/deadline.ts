@@ -215,18 +215,50 @@ async function endSession(leader: number): Promise<string[]> {
 async function endWhere(matches: (fields: readonly string[]) => boolean): Promise<string[]> {
   const left: string[] = [];
 
-  for (const name of tolerate(() => readdirSync('/proc'), 'enoent') ?? []) {
-    const stat = /^\d+$/u.test(name) ? procFile(name, 'stat') : undefined;
-    const fields = stat?.slice(stat.lastIndexOf(')') + 2).split(' ') ?? [];
+  for (const pid of liveWhere(matches)) {
+    const ended = await end(pid);
 
-    if (fields[0] !== undefined && fields[0] !== 'Z' && matches(fields)) {
-      const ended = await end(Number(name));
-
-      if (ended !== undefined) left.push(ended);
-    }
+    if (ended !== undefined) left.push(ended);
   }
 
   return left;
+}
+
+/** Every live process, not a zombie, whose `/proc/<pid>/stat` fields after the command name satisfy `matches`. */
+function liveWhere(matches: (fields: readonly string[]) => boolean): number[] {
+  return (tolerate(() => readdirSync('/proc'), 'enoent') ?? []).flatMap((name) => {
+    const stat = /^\d+$/u.test(name) ? procFile(name, 'stat') : undefined;
+    const fields = stat?.slice(stat.lastIndexOf(')') + 2).split(' ') ?? [];
+
+    return fields[0] !== undefined && fields[0] !== 'Z' && matches(fields) ? [Number(name)] : [];
+  });
+}
+
+/** Each live process of the session `leader` started, as `<pid> <state> <wait channel> <command>`: what a run killed for
+ *  its silence was waiting on, read before the kill ends it. */
+function waitingIn(leader: number): string[] {
+  return liveWhere((fields) => Number(fields[3]) === leader).map((pid) => {
+    const stat = procFile(pid, 'stat') ?? '';
+    const command = procFile(pid, 'cmdline')?.split('\0').join(' ').trim().slice(0, 200) ?? '';
+
+    return `${String(pid)} ${stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3)} ${procFile(pid, 'wchan') ?? '?'} ${command}`;
+  });
+}
+
+/** The live children of `parent` whose command line holds `word`. */
+export function childrenRunning(parent: number, word: string): number[] {
+  return liveWhere((fields) => Number(fields[1]) === parent).filter((pid) => procFile(pid, 'cmdline')?.split('\0').includes(word) === true);
+}
+
+/** Resolves once none of `pids` runs: each has exited, whether or not its parent has reaped it yet. */
+export async function exitOf(pids: readonly number[]): Promise<void> {
+  const running = (pid: number): boolean => {
+    const stat = procFile(pid, 'stat');
+
+    return stat !== undefined && stat.slice(stat.lastIndexOf(')') + 2)[0] !== 'Z';
+  };
+
+  while (pids.some(running)) await Bun.sleep(10);
 }
 
 /** How often the watchdog asks how long the run has been silent. */
@@ -392,6 +424,7 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
 
   // Until the pipes close, not only until the child exits: a process holding one keeps the run open.
   let noticed = -1;
+  let waiting: string[] = [];
 
   const watchdog = setInterval(() => {
     const silentFrom = Math.max(lastOutput, searchedAt);
@@ -404,6 +437,7 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
 
     if (killed || searching || silent < run.seconds * 1000) return;
     killed = true;
+    waiting = waitingIn(child.pid);
     signalGroup('SIGTERM');
     setTimeout(() => {
       signalGroup('SIGKILL');
@@ -433,7 +467,7 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
   const measured = { leftovers, seconds, longestSilence: longestSilence / 1000, stdout };
 
   if (killed) {
-    const line = deadlineLine(run, seconds);
+    const line = [deadlineLine(run, seconds), ...waiting.length === 0 ? [] : ['it was waiting in:', ...waiting.map((each) => `  ${each}`)]].join('\n');
 
     if (stdio !== 'pipe') console.error(`\n${line}`);
 
