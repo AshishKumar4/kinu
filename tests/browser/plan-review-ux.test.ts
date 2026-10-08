@@ -6,10 +6,8 @@ import { unruledClasses, withGallery, type Gallery } from '../../scripts/gallery
 
 type Mode = 'dark' | 'light';
 
-/** The viewer's floating action strip, as Kinu narrows it: the copy control
- *  moved into the document header, so an editable plan shows one button and a
- *  settled plan shows none — and the strip itself must then stop spending its
- *  margin above the first block. */
+/** The viewer's floating action strip, as Kinu narrows it: an editable plan shows its one global-comment button
+ *  and a settled plan shows none, and the strip itself must then stop spending its margin above the first block. */
 const ACTION_STRIP = '[data-plan-document] [data-print-region="article"] > [data-print-hide]';
 
 /** Every styled element of the review. A code fence's classes are highlighter handles (`pn-code`,
@@ -23,6 +21,8 @@ interface ActionStrip {
 
 interface DesktopPlan extends ActionStrip {
   readonly mode: string | undefined;
+  /** The header's controls, by their text. */
+  readonly headerControls: readonly string[];
   readonly title: string;
   readonly titleCodeCount: number;
   readonly headingCount: number;
@@ -63,6 +63,8 @@ interface WorkspacePlan {
   readonly overflow: number;
   readonly scrimDisplay: string;
   readonly railDismissed: boolean;
+  /** Where the decision bar sits as the Work tab opens on the plan, before anything scrolls. */
+  readonly footerInView: boolean;
 }
 
 /** What the header promoted, and what the document kept. */
@@ -149,6 +151,7 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
 
     return {
       mode: document.documentElement.dataset.mode,
+      headerControls: [...document.querySelectorAll<HTMLElement>('[data-plan-actions] button')].map((button) => button.textContent?.trim() ?? ''),
       title: title.textContent ?? '',
       titleCodeCount: title.querySelectorAll('code').length,
       headingCount: document.querySelectorAll('h1').length,
@@ -168,7 +171,7 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
 
   const unruledClosed = await page.evaluate(unruledClasses, PLAN_CLASSES, '', []);
 
-  await page.click('[data-plan-annotations-toggle]');
+  await page.click('[data-plan-comments-toggle]');
   await page.waitForSelector('[data-annotation-panel="true"]');
 
   const unruledOpen = await page.evaluate(unruledClasses, PLAN_CLASSES, '', []);
@@ -185,7 +188,7 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
     };
   });
 
-  await page.click('[data-plan-annotations-toggle]');
+  await page.click('[data-plan-comments-toggle]');
   await page.waitForFunction(() => document.querySelector('[data-annotation-panel="true"]') === null);
   await page.close();
 
@@ -212,7 +215,7 @@ async function observeMobile(newPage: Gallery['newPage'], origin: string): Promi
     };
   });
 
-  await page.click('[data-plan-annotations-toggle]');
+  await page.click('[data-plan-comments-toggle]');
   await page.waitForSelector('[data-annotation-panel="true"]');
 
   const rail = await page.$eval('[data-annotation-panel="true"]', (panel) => ({
@@ -224,7 +227,7 @@ async function observeMobile(newPage: Gallery['newPage'], origin: string): Promi
   // The panel's OWN close control: the narrow-container scrim carries the same
   // label for the same action and is display:none at this viewport, so the
   // selector names which one this assertion is about.
-  await page.click('[data-annotation-panel="true"] button[aria-label="Close annotations"]');
+  await page.click('[data-annotation-panel="true"] button[aria-label="Close comments"]');
   await page.waitForFunction(() => document.querySelector('[data-annotation-panel="true"]') === null);
   await page.close();
 
@@ -247,15 +250,18 @@ async function observeWorkspace(newPage: Gallery['newPage'], origin: string): Pr
 
     if (!root || !plan) throw new Error('WorkspacePage did not mount the real plan document');
 
+    const footer = document.querySelector<HTMLElement>('[data-plan-footer]')?.getBoundingClientRect();
+
     return {
       title: document.querySelector('[data-plan-title] h1, h1[data-plan-title]')?.textContent ?? '',
+      footerInView: footer !== undefined && footer.top >= 0 && footer.bottom <= innerHeight,
       rootWidth: Math.round(root.getBoundingClientRect().width),
       documentWidthBefore: Math.round(plan.getBoundingClientRect().width),
       overflow: document.documentElement.scrollWidth - innerWidth,
     };
   });
 
-  await page.click('[data-plan-annotations-toggle]');
+  await page.click('[data-plan-comments-toggle]');
   await page.waitForSelector('[data-annotation-panel="true"]');
 
   const opened = await page.evaluate(() => {
@@ -285,7 +291,7 @@ async function observeWorkspace(newPage: Gallery['newPage'], origin: string): Pr
   // The toggle's handler is a synchronous React state change, committed
   // before the click resolves, so the rail's presence is read at once: a
   // rail still open here is the lost dismissal, not a page still working.
-  await page.click('[data-plan-annotations-toggle]');
+  await page.click('[data-plan-comments-toggle]');
 
   const railDismissed = await page.evaluate(
     () => document.querySelector('[data-annotation-panel="true"]') === null,
@@ -462,7 +468,8 @@ describe('the plan review document, as a browser lays it out', () => {
       expect(plan.codeBorder).toBe('solid');
       expect(plan.codeOverflow).toBe('auto');
       expect(plan.overflow).toBe(0);
-      // An editable plan keeps the global-comment control; Copy lives in the header.
+      // The header offers the comments and the two marking modes, no Copy; the document keeps the global comment.
+      expect(plan.headerControls).toEqual(['Comments 0', 'Comment', 'Remove']);
       expect(plan.actionStripButtons).toBe(1);
       expect(plan.actionStripDisplay).not.toBe('none');
       // Wide enough for the rail to sit BESIDE the document, so there is
@@ -485,6 +492,8 @@ describe('the plan review document, as a browser lays it out', () => {
 
   test('the real WorkspacePage route keeps the rail over its narrow Work column', () => {
     expect(observed.workspace.title).toBe('Repair the applyCoupon eligibility guard');
+    // The decision is in reach as the plan opens, however long the plan.
+    expect(observed.workspace.footerInView).toBe(true);
     expect(observed.workspace.rootWidth).toBeLessThan(500);
     expect(observed.workspace.railPosition).toBe('absolute');
     expect(observed.workspace.railWidth).toBeLessThanOrEqual(observed.workspace.rootWidth);
@@ -575,6 +584,11 @@ async function decisionOpens(page: Page, label: string): Promise<void> {
     .some((button) => button.textContent?.includes(name) === true && !button.disabled), {}, label);
 }
 
+/** Presses the decision named `label`. */
+const pressDecision = (page: Page, label: string): Promise<void> => page.evaluate((name) => {
+  [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].find((button) => button.textContent?.includes(name))?.click();
+}, label);
+
 const landedSaves = async (page: Page) => v.parse(v.array(v.array(v.string())),
   JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryAnnotationsSaved ?? '[]')));
 
@@ -605,7 +619,7 @@ describe('annotating a plan', () => {
       expect(await page.evaluate(() => document.documentElement.dataset.galleryAnnotationsMostInFlight)).toBe('1');
 
       // The decision saves the comments once more before it is sent.
-      await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].find((button) => button.textContent?.includes('Request changes'))?.click());
+      await pressDecision(page, 'Request changes');
       await page.waitForFunction(() => document.documentElement.dataset.galleryAnnotationsWaiting === '1');
       await page.evaluate(() => window.dispatchEvent(new Event('gallery:annotation-save')));
       await page.waitForFunction(() => (document.documentElement.dataset.galleryPlanFeedback ?? '').length > 0);
@@ -630,6 +644,89 @@ describe('annotating a plan', () => {
       await page.waitForFunction(() => JSON.parse(document.documentElement.dataset.galleryAnnotationsSaved ?? '[]').length === 1);
       expect(await landedSaves(page)).toEqual([['Cover the guest cart first', 'Keep the refusal shape']]);
       expect(await page.evaluate(() => document.body.innerText.includes('the plan store is busy'))).toBe(false);
+      await page.close();
+    });
+  });
+});
+
+/** Each comment in the open panel: its id, where it came from, its replies, and what the owner can do with it. */
+const commentCards = (page: Page) => page.$$eval('[data-annotation-panel="true"] [data-annotation-id]', (cards) => cards.map((card) => ({
+  id: card.getAttribute('data-annotation-id'),
+  place: card.querySelector('[data-annotation-place]')?.textContent ?? null,
+  replies: [...card.querySelectorAll('[data-comment-reply]')].map((reply) => ({
+    by: reply.getAttribute('data-comment-reply'), fresh: reply.querySelector('[data-comment-reply-new]') !== null,
+  })),
+  controls: [...card.querySelectorAll('button')].map((button) => button.textContent?.trim() ?? ''),
+})));
+
+/**
+ * The agent answers the owner's comments in their threads. A plan sent back shows the replies as they land, marked
+ * unread until the comments are opened; the next revision carries the threads read-only, and the owner's reply in
+ * one is saved through the review's admission and sent with the next decision.
+ */
+describe('comment threads', () => {
+  test('a sent-back plan marks the agent\'s unread replies, and its comments show each reply under its comment', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openFrame(newPage, origin, { frame: 'planreview', mode: 'dark', viewport: { width: 1280, height: 900 }, params: { plan: 'replied' } });
+      await page.waitForSelector('[data-plan-review-root]');
+      expect(await page.$('[data-plan-comments-unread]')).not.toBeNull();
+
+      await page.click('[data-plan-comments-toggle]');
+      await page.waitForSelector('[data-annotation-panel="true"] [data-comment-reply]');
+      expect(await commentCards(page)).toEqual([
+        { id: 'gallery-plan-scope', place: null, replies: [{ by: 'agent', fresh: true }], controls: [] },
+        { id: 'gallery-plan-all', place: null, replies: [{ by: 'agent', fresh: true }], controls: [] },
+      ]);
+      expect(await page.$('[data-plan-comments-unread]')).toBeNull();
+      await page.close();
+    });
+  });
+
+  test('the next revision carries its threads read-only, and the owner\'s reply in one is saved and sent back', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openFrame(newPage, origin, { frame: 'planreview', mode: 'light', viewport: { width: 1280, height: 900 }, params: { plan: 'threads' } });
+      await page.waitForSelector('[data-plan-review-root]');
+      await page.click('[data-plan-comments-toggle]');
+      await page.waitForSelector('[data-annotation-panel="true"] [data-comment-reply]');
+
+      expect(await commentCards(page)).toEqual([
+        { id: 'gallery-plan-scope', place: 'From revision 1', replies: [{ by: 'agent', fresh: true }], controls: ['Reply'] },
+        { id: 'gallery-plan-all', place: 'From revision 1', replies: [{ by: 'agent', fresh: true }], controls: ['Reply'] },
+      ]);
+      expect(await decisionEnabled(page, 'Approve')).toBe(true);
+
+      await page.click('[data-annotation-id="gallery-plan-all"] [data-comment-reply-open]');
+      await page.type('[data-annotation-id="gallery-plan-all"] textarea[aria-label="Reply"]', 'Fine; keep the route as it is.');
+      await page.$$eval('[data-annotation-id="gallery-plan-all"] button', (buttons) => {
+        const send = buttons.find((button) => button.textContent?.trim() === 'Reply' && !button.hasAttribute('data-comment-reply-open'));
+
+        if (!(send instanceof HTMLElement)) throw new Error('the reply composer has no Reply control');
+        send.click();
+      });
+      await page.waitForFunction(() => JSON.parse(document.documentElement.dataset.galleryAnnotationsSaved ?? '[]').length === 1);
+      expect(await landedSaves(page)).toEqual([['Fine; keep the route as it is.']]);
+      await decisionOpens(page, 'Request changes');
+      expect(await decisionEnabled(page, 'Approve')).toBe(false);
+
+      await pressDecision(page, 'Request changes');
+      await page.waitForFunction(() => (document.documentElement.dataset.galleryPlanFeedback ?? '').length > 0);
+      const feedback = await page.evaluate(() => document.documentElement.dataset.galleryPlanFeedback ?? '');
+
+      expect(feedback).toContain('Comment gallery-plan-all on the whole plan, from revision 1: Split the route change');
+      expect(feedback).toContain("  - Owner's reply: Fine; keep the route as it is.");
+      expect(feedback).not.toContain('gallery-plan-scope');
+      await page.close();
+    });
+  });
+
+  test('a comment on the whole plan is admitted as the review stores it, and sends', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await openFrame(newPage, origin, { frame: 'planreview', mode: 'dark', viewport: { width: 1280, height: 900 } });
+      await page.waitForSelector('[data-plan-review-root]');
+      await addGlobalComment(page, 'Ship the guard alone first.');
+      await page.waitForFunction(() => JSON.parse(document.documentElement.dataset.galleryAnnotationsSaved ?? '[]').length === 1);
+      expect(await page.evaluate(() => document.querySelector('[role="alert"]')?.textContent ?? null)).toBeNull();
+      await decisionOpens(page, 'Request changes');
       await page.close();
     });
   });
@@ -704,10 +801,6 @@ describe('the composer under the workspace plan', () => {
 
 const decisions = (page: Page): Promise<number> => page.evaluate(() => Number(document.documentElement.dataset.galleryDecisions ?? '0'));
 
-const pressApprove = (page: Page): Promise<void> => page.evaluate(() => {
-  [...document.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')].find((button) => button.textContent?.includes('Approve'))?.click();
-});
-
 /**
  * A decision is one at a time: pressed twice before it answers, it is sent once, and the plan's controls hold until it
  * answers. A decision that fails says why and can be taken again.
@@ -742,10 +835,10 @@ describe('deciding a plan', () => {
 
       const failing = await open('fail-first');
       await failing.waitForSelector('[data-plan-decisions]');
-      await pressApprove(failing);
+      await pressDecision(failing, 'Approve');
       await failing.waitForFunction(() => document.body.textContent?.includes('review-fixture-rpc-failed'));
       await decisionOpens(failing, 'Approve');
-      await pressApprove(failing);
+      await pressDecision(failing, 'Approve');
       await failing.waitForFunction(() => document.documentElement.dataset.galleryDecisions === '2');
       await failing.close();
     });

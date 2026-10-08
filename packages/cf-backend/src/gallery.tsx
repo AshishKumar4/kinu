@@ -51,7 +51,7 @@ import { QualityView } from "@/components/surfaces/evolution-panels";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
-import { admitReviewAnnotations, FEEDBACK_ENDPOINT } from "@kinu.run/core";
+import { admitReviewAnnotations, FEEDBACK_ENDPOINT, reviewFeedbackText } from "@kinu.run/core";
 import { CLIENT_ERROR_ENDPOINT } from "@kinu.run/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AgentsNavProvider } from "@/hooks/use-agents-nav";
@@ -1877,7 +1877,8 @@ let annotationSavesInFlight = 0;
 async function galleryAnnotationSave(args?: unknown[]): Promise<JsonValue> {
   const [, , annotations] = v.parse(v.tuple([v.string(), v.number(), v.array(v.looseObject({ text: v.optional(v.string()) }))]), args);
   // The store's own admission, so the gallery refuses what the workspace would.
-  const admitted = admitReviewAnnotations({ value: annotations, kept: galleryAgentPlan.annotations.filter((note) => note.revision !== undefined) });
+  const carried = galleryAgentPlan.annotations.filter((note) => note.revision !== undefined);
+  const admitted = admitReviewAnnotations({ value: annotations, kept: carried });
 
   if (Result.isFailure(admitted)) return { ok: false, error: admitted.failure.error };
   const root = document.documentElement;
@@ -1902,6 +1903,7 @@ async function galleryAnnotationSave(args?: unknown[]): Promise<JsonValue> {
   const landed = v.parse(v.array(v.array(v.string())), JSON.parse(root.dataset.galleryAnnotationsSaved ?? "[]"));
 
   root.dataset.galleryAnnotationsSaved = JSON.stringify([...landed, annotations.map((annotation) => annotation.text ?? "")]);
+  galleryAgentPlan = { ...galleryAgentPlan, annotations: [...carried, ...admitted.success] };
 
   return { ok, plan: v.parse(JsonValueSchema, galleryAgentPlan) };
 }
@@ -2041,11 +2043,14 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
     args,
   );
 
-  document.documentElement.dataset.galleryPlanFeedback = feedback ?? "";
+  // What the store sends the agent: the revision's own comments, rendered by the review.
+  const sent = decision === "request_changes" ? [reviewFeedbackText(galleryAgentPlan.annotations), feedback ?? ""].filter(Boolean).join("\n\n") : feedback ?? "";
+
+  document.documentElement.dataset.galleryPlanFeedback = sent;
   galleryAgentPlan = {
     ...galleryAgentPlan,
     status: decision === "approve" ? "approved" : "changes_requested",
-    feedback: feedback ?? null,
+    feedback: sent === "" ? null : sent,
     handoffAccepted: true,
     updatedAt: Date.now(),
   };
