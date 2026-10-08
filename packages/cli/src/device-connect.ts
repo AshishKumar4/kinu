@@ -573,13 +573,10 @@ function startInstalledDaemon(session: boolean, runtime?: string): Effect.Effect
 
     if (!pid) return launch;
 
-    const claimed = yield* Effect.catch(claimDaemonPid(pid), (failure) => Effect.andThen(
-      Effect.sync(() => { tolerate(() => launch.child.kill('SIGTERM'), 'esrch'); }),
-      Effect.fail(failure),
-    ));
+    const claimed = yield* Effect.catch(claimDaemonPid(pid), (failure) => Effect.andThen(stopChild(launch.child), Effect.fail(failure)));
 
     if (!claimed) {
-      tolerate(() => launch.child.kill('SIGTERM'), 'esrch');
+      yield* stopChild(launch.child);
 
       return yield* new KinuError(
         'unavailable',
@@ -690,12 +687,50 @@ function stopRunningDaemon(): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     const pid = yield* runningDaemonPid();
 
-    if (pid && (yield* processIsInstalledDaemon(pid))) {
-      yield* io(`stopping the device daemon (pid ${pid})`, () => tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch'));
-    }
+    if (pid && (yield* processIsInstalledDaemon(pid))) yield* stopInstalledDaemon(pid);
 
     yield* io(`removing the device daemon pidfile at ${PID_PATH}`, () => { rmSync(PID_PATH, { force: true }); });
   });
+}
+
+/**
+ * A stopped daemon drains before it exits (`exitWhenQuiet`), and until it exits the machine runs two. So a connect that
+ * stops one waits for its exit, with no deadline, before it goes on: two connects at once left two daemons running
+ * after both returned (3 in 120 runs of "concurrent connects leave one daemon owner", a8baa8c24, 2026-10-08).
+ */
+function stopChild(child: ChildProcess): Effect.Effect<void> {
+  return Effect.promise(() => {
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    const exited = Promise.withResolvers<void>();
+
+    child.once('exit', () => { exited.resolve(); });
+    tolerate(() => child.kill('SIGTERM'), 'esrch');
+
+    return exited.promise;
+  });
+}
+
+/** How often a connect looks again for a daemon it stopped that is not its own child; the wait ends on the exit. */
+const STOP_POLL_MS = 50;
+
+/** The installed daemon a pidfile names, stopped as {@link stopChild} stops a child: the wait ends when it is gone. */
+function stopInstalledDaemon(pid: number): Effect.Effect<void, KinuError> {
+  return Effect.andThen(
+    io(`stopping the device daemon (pid ${pid})`, () => tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch')),
+    Effect.tryPromise({
+      try: () => waitForAnswer(async () => (stillInstalledDaemon(pid) ? undefined : true), { intervalMs: STOP_POLL_MS }),
+      catch: (cause) => toKinuError({ doing: `waiting for the device daemon (pid ${pid}) to exit`, cause, otherwise: 'io' }),
+    }),
+  );
+}
+
+/** On Linux by its command line, which an exited daemon's zombie or a reused pid no longer carries; elsewhere by presence. */
+function stillInstalledDaemon(pid: number): boolean {
+  if (process.platform === 'linux') {
+    return (tolerate(() => readFileSync(`/proc/${pid}/cmdline`, 'utf-8'), 'enoent') ?? '').split('\0').includes(SCRIPT_PATH);
+  }
+
+  return tolerate(() => process.kill(pid, 0), 'esrch') !== undefined;
 }
 
 const PS_NO_SUCH_PROCESS = 1;
