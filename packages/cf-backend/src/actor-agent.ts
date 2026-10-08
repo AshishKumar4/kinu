@@ -726,7 +726,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** The reply tool's deps while the owner's sent-back review awaits answers; absent otherwise. */
   protected planReplyDeps(): ReplyToCommentToolDeps | undefined {
-    return this.planActions.awaitingReply() ? { reply: (comment, text) => this.planActions.reply(comment, text) } : undefined;
+    return this.planActions.awaitingReply(this.turnDrivingMetadata())
+      ? { reply: (comment, text) => this.planActions.reply(comment, text, this.turnDrivingMetadata()) }
+      : undefined;
   }
 
   /** An agent's window reviews that agent's plans, which live in its own isolate; the root's window, the root's. */

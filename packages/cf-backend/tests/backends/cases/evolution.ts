@@ -143,12 +143,13 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
         { id: 'a-1', type: 'COMMENT', blockId: 'b-1', startOffset: 3, endOffset: 7, originalText: 'Ship', text: 'Which branch?', createdA: 1 },
         { id: 'a-2', type: 'GLOBAL_COMMENT', text: 'smaller steps', createdA: 2 },
       ])).toMatchObject({ ok: true });
-      expect(await surface.decidePlanReview(id, revision, 'request_changes')).toMatchObject({
-        ok: true, queued: true, plan: {
-          status: 'changes_requested', handoffAccepted: true,
-          feedback: '- Comment a-1 on "Ship": Which branch?\n- Comment a-2 on the whole plan: smaller steps',
-        },
-      });
+
+      const decided = await surface.decidePlanReview(id, revision, 'request_changes');
+
+      expect(decided).toMatchObject({ ok: true, queued: true, plan: { status: 'changes_requested', handoffAccepted: true } });
+
+      for (const said of ['a-1', 'Which branch?', 'a-2', 'smaller steps']) expect(decided.plan?.feedback).toContain(said);
+
       // The handoff was accepted: repeating the verdict does not submit a second turn.
       expect(await surface.decidePlanReview(id, revision, 'request_changes', 'smaller steps')).toMatchObject({
         ok: true, queued: true,

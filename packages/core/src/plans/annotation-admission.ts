@@ -43,9 +43,12 @@ const TextPositionSchema = v.strictObject({
 
 const MathTargetSchema = v.strictObject({ blockId: NonEmptyStringSchema, tex: v.string(), displayMode: v.boolean() });
 
+/** The latest instant a JavaScript date holds, so every note's time renders. */
+const LAST_DATE = 8.64e15;
+
 const noteFields = {
   id: NonEmptyStringSchema,
-  createdA: NonNegativeNumberSchema,
+  createdA: v.pipe(NonNegativeNumberSchema, v.maxValue(LAST_DATE)),
   revision: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
 };
 

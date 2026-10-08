@@ -245,6 +245,19 @@ function noteLine(note: Exclude<ReviewAnnotation, NoteReply>): string {
 }
 
 /**
+ * Whether `notes`, as the next revision would carry them (each stamped with `revision`), fit the annotation budget and,
+ * beside `content`, the stored row: a write admits only a list its revision can still carry.
+ */
+function carryRefusal(content: string, notes: readonly ReviewAnnotation[], revision: number): string | null {
+  const carried = byteLength(JSON.stringify(notes.map((note) => note.revision === undefined ? { ...note, revision } : note)));
+
+  if (carried > MAX_PLAN_ANNOTATIONS_BYTES) return `the review's comments would exceed the maximum size of ${String(MAX_PLAN_ANNOTATIONS_BYTES / 1024)} KiB`;
+
+  return byteLength(content) + carried > MAX_PLAN_REVIEW_ROW_BYTES
+    ? `plan content and annotations exceed the stored row size of ${String(MAX_PLAN_REVIEW_ROW_BYTES)} bytes` : null;
+}
+
+/**
  * Whether a turn may offer `submit_plan`: any Plan turn, which a submission from the harness then refuses with its
  * reason; and in Build, only the owner's own turn or their review's feedback turn, so no harness turn is offered it.
  */
@@ -257,9 +270,16 @@ function planSubmissionAllowed(driving: JsonObject | undefined): boolean {
   return turnAuthor({ metadata: driving }) === 'operator' || driving?.kinuEvent === 'plan_feedback';
 }
 
-/** Whether `plan`, the active revision, was sent back with comments the agent may answer: the reply tool's gate. */
-export function planAwaitingReply(plan: PlanReview | null): boolean {
-  return plan?.status === 'changes_requested' && freshNotes(plan.annotations).some((note) => note.type !== 'REPLY' || note.author === 'owner');
+/**
+ * Whether a turn may answer comments of `plan`, the active revision: it was sent back with comments, and the turn is the
+ * owner's own or that revision's feedback turn. The reply tool's gate, and its check when called.
+ */
+export function planAwaitingReply(plan: PlanReview | null, driving: JsonObject | undefined): boolean {
+  if (plan?.status !== 'changes_requested' || !planSubmissionAllowed(driving)) return false;
+
+  if (driving?.kinuEvent === 'plan_feedback' && (driving.planId !== plan.id || driving.revision !== plan.revision)) return false;
+
+  return freshNotes(plan.annotations).some((note) => note.type !== 'REPLY' || note.author === 'owner');
 }
 
 /** The owner's comments and replies written on this revision, each under its id so the agent can answer it. */
@@ -490,11 +510,11 @@ export class PlanReviewStore {
     }
 
     // The reviewer writes only this revision's own notes; the carried threads stay as they were.
-    const encoded = JSON.stringify([...carried, ...written]);
+    const merged = [...carried, ...written];
+    const tooBig = carryRefusal(current.content, merged, revision);
 
-    if (byteLength(current.content) + byteLength(encoded) > MAX_PLAN_REVIEW_ROW_BYTES) {
-      return { ok: false, error: `plan content and annotations exceed the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };
-    }
+    if (tooBig !== null) return { ok: false, error: tooBig, plan: current };
+    const encoded = JSON.stringify(merged);
 
     const now = this.now();
     void this.sql`UPDATE plan_reviews SET annotations_json=${encoded}, updated_at=${now}
@@ -554,6 +574,9 @@ export class PlanReviewStore {
   /** The agent's reply in a comment's thread, on the revision the owner sent back. */
   reply(sessionId: string, comment: string, text: string): PlanReviewResult {
     const current = this.getActive(sessionId);
+    const said = text.trim();
+
+    if (said === '') return { ok: false, error: 'a reply has text', plan: current };
 
     if (current?.status !== 'changes_requested') {
       return { ok: false, error: 'no plan review is waiting for replies: replies answer the comments of a revision the owner sent back', plan: current };
@@ -563,12 +586,12 @@ export class PlanReviewStore {
       return { ok: false, error: `plan ${current.id} revision ${String(current.revision)} has no comment ${comment}; the review feedback names each comment's id`, plan: current };
     }
 
-    const reply: NoteReply = { id: `reply-${nanoid(10)}`, type: 'REPLY', inReplyTo: comment, text: text.trim(), author: 'agent', createdA: this.now() };
-    const encoded = JSON.stringify([...current.annotations, reply]);
+    const reply: NoteReply = { id: `reply-${nanoid(10)}`, type: 'REPLY', inReplyTo: comment, text: said, author: 'agent', createdA: this.now() };
+    const notes = [...current.annotations, reply];
+    const tooBig = carryRefusal(current.content, notes, current.revision);
 
-    if (byteLength(current.content) + byteLength(encoded) > MAX_PLAN_REVIEW_ROW_BYTES || byteLength(encoded) > MAX_PLAN_ANNOTATIONS_BYTES) {
-      return { ok: false, error: 'the review holds no more replies: its stored row is full', plan: current };
-    }
+    if (tooBig !== null) return { ok: false, error: `the review holds no more replies: ${tooBig}`, plan: current };
+    const encoded = JSON.stringify(notes);
 
     void this.sql`UPDATE plan_reviews SET annotations_json=${encoded}, updated_at=${reply.createdA}
       WHERE actor_id=${this.actorId} AND id=${current.id} AND revision=${current.revision} AND status='changes_requested'`;
@@ -689,12 +712,19 @@ export class PlanReviewActions {
     return this.announced(this.store.decide(id, revision, decision, feedback));
   }
 
-  reply(comment: string, text: string): PlanReviewResult {
+  /** `driving`: the calling turn's metadata. */
+  reply(comment: string, text: string, driving: JsonObject | undefined): PlanReviewResult {
+    const active = this.store.getActive(CHAT_SESSION_ID);
+
+    if (!planAwaitingReply(active, driving)) {
+      return { ok: false, error: 'only the owner\'s own turn, or the feedback turn of the revision they sent back, answers its comments', plan: active };
+    }
+
     return this.announced(this.store.reply(CHAT_SESSION_ID, comment, text));
   }
 
-  awaitingReply(): boolean {
-    return planAwaitingReply(this.store.getActive(CHAT_SESSION_ID));
+  awaitingReply(driving: JsonObject | undefined): boolean {
+    return planAwaitingReply(this.store.getActive(CHAT_SESSION_ID), driving);
   }
 
   dismiss(id: string, revision: number, stopRunning?: (keyPrefix: string) => void): PlanReviewResult {

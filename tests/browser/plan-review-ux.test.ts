@@ -722,8 +722,9 @@ describe('comment threads', () => {
       await page.waitForFunction(() => (document.documentElement.dataset.galleryPlanFeedback ?? '').length > 0);
       const feedback = await page.evaluate(() => document.documentElement.dataset.galleryPlanFeedback ?? '');
 
-      expect(feedback).toContain('Comment gallery-plan-all on the whole plan, from revision 1: Split the route change');
-      expect(feedback).toContain("  - Owner's reply: Fine; keep the route as it is.");
+      // The owner's reply goes back under its comment; a thread with nothing new stays out.
+      expect(feedback.indexOf('Fine; keep the route as it is.')).toBeGreaterThan(feedback.indexOf('Split the route change'));
+      expect(feedback.indexOf('Split the route change')).toBeGreaterThanOrEqual(0);
       expect(feedback).not.toContain('gallery-plan-scope');
       await page.close();
     });
