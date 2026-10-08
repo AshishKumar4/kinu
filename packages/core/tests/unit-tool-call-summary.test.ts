@@ -6,15 +6,15 @@ import { clip, describeToolCall, summarizeToolCall, toolCallEffect } from '../sr
 describe('tool call summaries — the unified agents tool', () => {
   test('agents calls retain their action and distinguishing input', () => {
     const calls: { input: JsonObject; facts: string[] }[] = [
-      { input: { action: 'hire', agent: 'scout', role: 'researcher — landscape' }, facts: ['hire', 'scout', 'researcher — landscape'] },
-      { input: { action: 'hire', role: 'researcher' }, facts: ['hire', 'researcher'] },
-      { input: { action: 'hire', scope: 'workspace', mission: 'summarize papers' }, facts: ['hire', 'workspace', 'summarize papers'] },
-      { input: { action: 'hire', agent: 'scout', message: 'Audit the CLI surface' }, facts: ['hire', 'scout', 'Audit the CLI surface'] },
-      { input: { action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the CLI surface' }, facts: ['hire', 'task', 'auditor'] },
-      { input: { action: 'msg', agent: 'scout', topic: 'fyi' }, facts: ['msg', 'scout', 'fyi'] },
-      { input: { action: 'msg', event_id: 'ev-1', message: 'here you go' }, facts: ['msg', 'here you go'] },
-      { input: { action: 'dismiss', agent: 'arch-auditor' }, facts: ['dismiss', 'arch-auditor'] },
-      { input: { action: 'list' }, facts: ['list'] },
+      { input: { op: 'hire', name: 'scout', role: 'researcher — landscape' }, facts: ['hire', 'scout', 'researcher — landscape'] },
+      { input: { op: 'hire', role: 'researcher' }, facts: ['hire', 'researcher'] },
+      { input: { op: 'hireWorkspace', mission: 'summarize papers' }, facts: ['hire', 'workspace', 'summarize papers'] },
+      { input: { op: 'assign', agent: 'scout', message: 'Audit the CLI surface' }, facts: ['assign', 'scout', 'Audit the CLI surface'] },
+      { input: { op: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the CLI surface' }, facts: ['hire', 'task', 'auditor'] },
+      { input: { op: 'message', agent: 'scout', topic: 'fyi' }, facts: ['message', 'scout', 'fyi'] },
+      { input: { op: 'reply', eventId: 'ev-1', message: 'here you go' }, facts: ['reply', 'here you go'] },
+      { input: { op: 'dismiss', agent: 'arch-auditor' }, facts: ['dismiss', 'arch-auditor'] },
+      { input: { op: 'list' }, facts: ['list'] },
     ];
 
     const summaries = calls.map(({ input, facts }) => {
@@ -36,16 +36,16 @@ describe('tool call summaries — builtins', () => {
   });
 
   test('memory and web name their subject', () => {
-    expect(summarizeToolCall('memory', { action: 'search', query: 'deploy' })).toContain('deploy');
-    expect(summarizeToolCall('memory', { action: 'save', content: 'the deploy target is staging' }))
+    expect(summarizeToolCall('memory', { op: 'search', query: 'deploy' })).toContain('deploy');
+    expect(summarizeToolCall('memory', { op: 'note', content: 'the deploy target is staging' }))
       .toContain('the deploy target is staging');
-    expect(summarizeToolCall('memory', { action: 'conversations' })).toBe('conversations');
-    expect(summarizeToolCall('memory', { action: 'remember', key: 'user.tz', value: 'UTC' }))
+    expect(summarizeToolCall('memory', { op: 'listConversations' })).toBe('listConversations');
+    expect(summarizeToolCall('memory', { op: 'remember', key: 'user.tz', value: 'UTC' }))
       .toContain('user.tz');
-    expect(summarizeToolCall('memory', { action: 'forget', key: 'deploy.target' })).toContain('deploy.target');
-    expect(summarizeToolCall('web', { action: 'search', query: 'workers ai session affinity' }))
+    expect(summarizeToolCall('memory', { op: 'forget', key: 'deploy.target' })).toContain('deploy.target');
+    expect(summarizeToolCall('web', { op: 'search', query: 'workers ai session affinity' }))
       .toContain('workers ai session affinity');
-    expect(summarizeToolCall('web', { action: 'fetch', url: 'https://example.com/docs' }))
+    expect(summarizeToolCall('web', { op: 'fetch', url: 'https://example.com/docs' }))
       .toContain('https://example.com/docs');
   });
 
@@ -62,12 +62,12 @@ describe('tool call summaries — builtins', () => {
   });
 
   test('native descriptions retain the target and distinguish reading from editing', () => {
-    const read = describeToolCall('file', { action: 'read', path: '/workspace/package.json' });
-    const edit = describeToolCall('file', { action: 'edit', path: '/workspace/package.json' });
+    const read = describeToolCall('file', { op: 'read', path: '/workspace/package.json' });
+    const edit = describeToolCall('file', { op: 'edit', path: '/workspace/package.json' });
     expect(read).toContain('package.json');
     expect(edit).toContain('package.json');
     expect(edit).not.toBe(read);
-    expect(describeToolCall('agents', { action: 'hire', agent: 'scout' })).toContain('scout');
+    expect(describeToolCall('agents', { op: 'assign', agent: 'scout' })).toContain('scout');
   });
 });
 
@@ -76,7 +76,7 @@ describe('tool call summaries — truthfulness', () => {
     expect(summarizeToolCall('file', undefined)).toBe('');
     expect(summarizeToolCall('shell', {})).toBe('');
     expect(summarizeToolCall('shell', 'git status')).toBe('');
-    expect(summarizeToolCall('agents', { action: 'hire', agent: 'scout' })).toBe('hire scout');
+    expect(summarizeToolCall('agents', { op: 'assign', agent: 'scout' })).toBe('assign scout');
   });
 
   test('unknown (MCP / crafted) tools show a lone string argument and nothing else', () => {
@@ -97,32 +97,33 @@ describe('tool call summaries — truthfulness', () => {
 
 describe('toolCallEffect — consequence controls activity density', () => {
   test('known mutations remain prominent', () => {
-    expect(toolCallEffect('file', { action: 'write', path: '/workspace/report.md' })).toBe('mutate');
-    expect(toolCallEffect('file', { action: 'edit', path: '/workspace/src/auth.ts' })).toBe('mutate');
-    expect(toolCallEffect('tasks', { action: 'update', id: 't3', status: 'done' })).toBe('mutate');
-    expect(toolCallEffect('memory', { action: 'remember', key: 'deploy.target' })).toBe('mutate');
-    expect(toolCallEffect('agents', { action: 'swarm', task: 'audit it' })).toBe('mutate');
+    expect(toolCallEffect('file', { op: 'write', path: '/workspace/report.md' })).toBe('mutate');
+    expect(toolCallEffect('file', { op: 'edit', path: '/workspace/src/auth.ts' })).toBe('mutate');
+    expect(toolCallEffect('tasks', { op: 'update', id: 't3', status: 'done' })).toBe('mutate');
+    expect(toolCallEffect('memory', { op: 'remember', key: 'deploy.target' })).toBe('mutate');
+    expect(toolCallEffect('agents', { op: 'swarm', task: 'audit it' })).toBe('mutate');
     // `mode` with a role mutates actor_config via changeActiveRole.
-    expect(toolCallEffect('tasks', { action: 'mode', role: 'researcher' })).toBe('mutate');
-    expect(toolCallEffect('tasks', { action: 'mode' })).toBe('read');
+    expect(toolCallEffect('tasks', { op: 'switchRole', role: 'researcher' })).toBe('mutate');
+    expect(toolCallEffect('tasks', { op: 'role' })).toBe('read');
 
   });
   test('known observations collapse into the compact timeline', () => {
-    expect(toolCallEffect('file', { action: 'read', path: '/workspace/report.md' })).toBe('read');
-    expect(toolCallEffect('web', { action: 'search', query: 'deploy' })).toBe('read');
-    expect(toolCallEffect('memory', { action: 'search', query: 'deploy' })).toBe('read');
+    expect(toolCallEffect('file', { op: 'read', path: '/workspace/report.md' })).toBe('read');
+    expect(toolCallEffect('web', { op: 'search', query: 'deploy' })).toBe('read');
+    expect(toolCallEffect('memory', { op: 'search', query: 'deploy' })).toBe('read');
   });
 
-  test('network fetches and delegation remain consequential', () => {
-    expect(toolCallEffect('web', { action: 'fetch', url: 'https://example.com' })).toBe('mutate');
-    expect(toolCallEffect('agents', { action: 'hire' })).toBe('mutate');
-    expect(toolCallEffect('agents', { action: 'list' })).toBe('read');
+  test('a fetch and a screenshot read; delegation is consequential', () => {
+    expect(toolCallEffect('web', { op: 'fetch', url: 'https://example.com' })).toBe('read');
+    expect(toolCallEffect('web', { op: 'screenshot', url: 'https://example.com' })).toBe('read');
+    expect(toolCallEffect('agents', { op: 'assign' })).toBe('mutate');
+    expect(toolCallEffect('agents', { op: 'list' })).toBe('read');
   });
 
   test('programs and unclassified contracts remain explicitly unknown', () => {
     expect(toolCallEffect('shell', { command: 'node inspect.js' })).toBe('unknown');
     expect(toolCallEffect('eval', { code: 'return await workspace.files.read("a")' })).toBe('unknown');
-    expect(toolCallEffect('crafted_unknown', { action: 'write' })).toBe('unknown');
+    expect(toolCallEffect('crafted_unknown', { op: 'write' })).toBe('unknown');
     expect(toolCallEffect('file', 'read a')).toBe('unknown');
   });
 });

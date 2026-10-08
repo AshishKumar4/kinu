@@ -24,7 +24,7 @@ function searching(node: (run: RecordedGatewayRun) => Response | Promise<Respons
     return requestOf(run).messages.some((message) => message.role === 'tool')
       ? chatCompletion(run, 'Searching.')
       : toolCallCompletion(run, {
-        tool: 'agents', args: { action: 'swarm', task: 'Name one way to tokenize faster.', preset: 'ideate', branches, depth: 1 },
+        tool: 'agents', args: { op: 'swarm', task: 'Name one way to tokenize faster.', preset: 'ideate', branches, depth: 1 },
       }, 'swarm_0');
   });
 }

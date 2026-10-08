@@ -88,7 +88,7 @@ export class FakeBrowserRun extends WorkerEntrypoint {
 /** The web members a slate's host answers; with no Browser Run of its own, only the browser members' refusals. */
 const PROBE_WEB = createWebCodemodeProvider({
   provider: createDefaultWebSearchProvider({ fetch: asFetchFunction(async () => new Response('', { status: 404 })), browser: { missing: 'the probe renders nothing' } }),
-  files: null, sessions: { missing: 'the probe opens no browser' }, prelude: { missing: 'a slate drives a browser from its class' },
+  files: null, prelude: { missing: 'a slate drives a browser from its class' },
 });
 
 export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {

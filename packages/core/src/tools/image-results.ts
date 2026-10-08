@@ -1,31 +1,12 @@
 /**
- * Images a tool hands the model. A native tool's carrier ({@link imageCarrier}), an eval's with its `failures` beside
+ * Images a tool hands the model. A native tool's carrier (`types/tool-images.ts` imageCarrier), an eval's with its `failures` beside
  * it, reaches the model as its text and one `file` part per image, which Anthropic Messages and
  * OpenAI Responses carry inside a tool result; `providers/tool-result-images.ts` carries them on Chat Completions.
  */
 import type { ToolResultOutput } from '@ai-sdk/provider-utils';
 import * as v from 'valibot';
 import { isJsonObject, JsonValueSchema, type JsonValue } from '../utils/json';
-
-export interface ToolImage {
-  readonly mediaType: string;
-  /** Base64. */
-  readonly data: string;
-}
-
-const ToolImageSchema = v.object({ mediaType: v.string(), data: v.string() });
-
-/** Held by a native tool's carrier alone: application data that names `output` and `images` is not one, and keeps every
- *  field. */
-const IMAGE_CARRIER = 'kinu/images';
-
-const ImageCarrierSchema = v.object({ type: v.literal(IMAGE_CARRIER), output: JsonValueSchema, images: v.array(ToolImageSchema) });
-
-export type ImageCarrier = v.InferOutput<typeof ImageCarrierSchema>;
-
-export function imageCarrier(output: JsonValue, images: readonly ToolImage[]): ImageCarrier {
-  return { type: IMAGE_CARRIER, output, images: [...images] };
-}
+import { ImageCarrierSchema, type ToolImage } from '../types/tool-images';
 
 const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+=*)$/u;
 

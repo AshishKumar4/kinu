@@ -10,7 +10,7 @@ test('a hired agent\'s inheriting swarm starts each worker from that agent\'s co
     // The hire's first step starts the swarm; every other call, a worker's included, answers.
     return request.tools.includes('agents') && !request.messages.some((message) => message.role === 'tool')
       ? toolCallCompletion(run, { tool: 'agents', args: {
-        action: 'swarm', preset: 'custom', from: 'ideate', label: 'naming', task: 'Name the release.',
+        op: 'swarm', preset: 'custom', from: 'ideate', label: 'naming', task: 'Name the release.',
         branches: 1, depth: 1, config: { context: 'inherit' },
       } }, 'call_0')
       : chatCompletion(run, 'done');

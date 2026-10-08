@@ -401,7 +401,7 @@ describe('LocalAgentClient', () => {
               if (gated) {
                 controller.enqueue({
                   type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
-                  input: JSON.stringify({ action: 'search', query: 'probe' }),
+                  input: JSON.stringify({ op: 'search', query: 'probe' }),
                 });
                 await gate;
                 controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });

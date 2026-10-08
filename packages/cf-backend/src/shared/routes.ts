@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
 import {
-  err, json, safeJson, retryTransientDO,
+  err, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
   LiveShareCreatedSchema,
@@ -15,7 +15,6 @@ import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
 import { deriveUserId } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
-import type { SharedBlueprintReceipt } from '../user/profile';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
 import type { ErrorCode } from '@kinu.run/core/obs';
@@ -90,11 +89,11 @@ sharedRoutes.use('/api/shared/*', ownerGate());
 
 sharedRoutes.get('/api/shared', async (c) => json({ body: await library(c.env, c.get('identity'), c.get('owner')) }));
 
-sharedRoutes.post('/api/shared/publish', async (c) => publish(c.req.raw, c.env, c.get('identity'), c.get('owner')));
+sharedRoutes.post('/api/shared/publish', async (c) => publish(c.req.raw, c.env, c.get('identity')));
 
 sharedRoutes.post('/api/shared/fork', async (c) => fork(c.req.raw, c.env, c.get('identity')));
 
-sharedRoutes.post('/api/shared/live', async (c) => shareLive(c.req.raw, c.env, c.get('identity'), c.get('owner')));
+sharedRoutes.post('/api/shared/live', async (c) => shareLive(c.req.raw, c.env, c.get('identity')));
 
 sharedRoutes.post('/api/shared/revoke', async (c) => revoke(c.req.raw, c.env, c.get('identity')));
 
@@ -135,42 +134,30 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
 
   const received: SharedRow[] = [];
 
-  // A refusal from the owner's object drops the row, so a revoked blueprint is not offered for forking.
-  const receipts = await userDO.sharesReceived_list(owner);
+  // The cards their owners sent: listed without waking a single owner's workspace. A share revoked since is gone
+  // once its removal lands; one opened before then refuses at its owner's object.
+  for (const { workspace, shareId, card } of await userDO.sharesReceived_list(owner)) {
+    const row = { share: shareId, title: card.title, description: card.description, createdAt: card.createdAt, workspace, owner: card.owner };
 
-  for (const receipt of receipts) {
-    const object = workspaceOwner(env, receipt.workspace);
-    const live = await object.readLiveShare(receipt.shareId);
-
-    if (live.ok) {
+    if (card.kind === 'live') {
       received.push({
-        id: receipt.shareId, kind: 'live', share: receipt.shareId,
-        title: live.value.title, description: live.value.description, createdAt: live.value.record.createdAt,
-        visibility: live.value.record.visibility,
-        workspace: receipt.workspace, owner: receipt.ownerEmail, fork: live.value.record.grant.fork !== false,
+        ...row, id: shareId, kind: 'live',
+        ...(card.visibility !== undefined && { visibility: card.visibility }), ...(card.fork !== undefined && { fork: card.fork }),
       });
       continue;
     }
 
-    const reading = await object.readBlueprint(receipt.shareId);
+    const id = await mintBlueprintId(env, workspace, shareId);
 
-    if (!reading.ok) continue;
-    const id = await mintBlueprintId(env, receipt.workspace, receipt.shareId);
-
-    if (id === null) continue;
-
-    received.push({
-      id, kind: 'blueprint', share: receipt.shareId, title: reading.value.view.title,
-      description: reading.value.view.description, createdAt: reading.value.view.createdAt,
-      workspace: receipt.workspace, owner: receipt.ownerEmail,
-    });
+    if (id !== null) received.push({ ...row, id, kind: 'blueprint' });
   }
 
   return { slates, mine, received };
 }
 
-function listed(answer: { readonly listing?: 'pending' }): { listing?: 'pending' } {
-  return answer.listing === undefined ? {} : { listing: answer.listing };
+/** Behind when any write behind the answer could not reach the owner's tile, which is what its cards are sent from. */
+function listed(...writes: ReadonlyArray<{ readonly listing?: 'pending' }>): { listing?: 'pending' } {
+  return writes.some((write) => write.listing === 'pending') ? { listing: 'pending' } : {};
 }
 
 function slateRefusalStatus(reason: ErrorCode): number {
@@ -181,7 +168,7 @@ function slateRefusalStatus(reason: ErrorCode): number {
   return 409;
 }
 
-async function publish(request: Request, env: Env, identity: AuthIdentity, owner: UserCaller): Promise<Response> {
+async function publish(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
   const body = await safeJson(request, PublishBody);
 
   if (!body) return err(400, 'Body must be { workspace, slate, version, include?, emails? }');
@@ -199,6 +186,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
 
   if (id === null) return err(503, 'This deployment cannot sign blueprint links: CREDENTIAL_ENCRYPTION_KEY is not set.');
   const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
+  const writes: Array<{ readonly listing?: 'pending' }> = [published];
   let users: readonly string[] = share.users;
 
   if (emails.length > 0) {
@@ -206,19 +194,12 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
     const recorded = await owned.shareBlueprintWith(share.id, named);
 
     if (!recorded.ok) return err(409, recorded.error);
+    writes.push(recorded);
     users = v.parse(v.object({ users: v.array(v.string()) }), recorded.value).users;
-
-    const receipt: SharedBlueprintReceipt = {
-      ownerUserId: identity.userId, ownerEmail: identity.email, workspace: body.workspace, shareId: share.id,
-    };
-
-    for (const user of named) {
-      const recipient = env.UserDO.get(env.UserDO.idFromName(user.userId));
-      await retryTransientDO('sharesReceived_add', () => recipient.sharesReceived_add(owner, receipt));
-    }
   }
 
-  return json({ body: { id, share: share.id, users, published: published.value, ...listed(published) } }, { status: 201 });
+  // Each person named gets their card from the owner's account, sent from the tile this write pushed.
+  return json({ body: { id, share: share.id, users, published: published.value, ...listed(...writes) } }, { status: 201 });
 }
 
 async function fork(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
@@ -264,7 +245,7 @@ const LiveShareBody = v.object({
 const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
 
 /** `emails` names users on a `users` share; `approved` is the mutating grant the dialog checked. */
-async function shareLive(request: Request, env: Env, identity: AuthIdentity, owner: UserCaller): Promise<Response> {
+async function shareLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
   const body = await safeJson(request, LiveShareBody);
 
   if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork? }');
@@ -282,24 +263,17 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity, own
 
   const { share, url } = v.parse(LiveShareCreatedSchema, created.value);
   const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
+  const writes: Array<{ readonly listing?: 'pending' }> = [created];
 
   if (share.visibility === 'users' && emails.length > 0) {
     const named = await Promise.all(emails.map(async (email) => ({ userId: await deriveUserId(email), email })));
     const recorded = await owned.shareLiveWith(share.id, named);
 
     if (!recorded.ok) return err(409, recorded.error);
-
-    const receipt: SharedBlueprintReceipt = {
-      ownerUserId: identity.userId, ownerEmail: identity.email, workspace: body.workspace, shareId: share.id,
-    };
-
-    for (const user of named) {
-      const recipient = env.UserDO.get(env.UserDO.idFromName(user.userId));
-      await retryTransientDO('sharesReceived_add', () => recipient.sharesReceived_add(owner, receipt));
-    }
+    writes.push(recorded);
   }
 
-  return json({ body: { share, url, ...listed(created) } }, { status: 201 });
+  return json({ body: { share, url, ...listed(...writes) } }, { status: 201 });
 }
 
 /** A live share and a blueprint link revoke alike: the owner's object knows which it holds. */

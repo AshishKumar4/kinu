@@ -1,14 +1,14 @@
 diff --git a/packages/core/src/events/recorder.ts b/packages/core/src/events/recorder.ts
 --- a/packages/core/src/events/recorder.ts
 +++ b/packages/core/src/events/recorder.ts
-@@ -374,8 +374,8 @@ export class RunEventRecorder {
-       return this.sql<{ payload: string }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+@@ -382,8 +382,8 @@ export class RunEventRecorder {
+       return this.sql<{ event_index: number }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
 -        SELECT ${this.actorId}, ${ev.runId}, COALESCE(MAX(event_index), -1) + 1, ${ev.type},
 -          json_set(${JSON.stringify(ev)}, '$.eventIndex', COALESCE(MAX(event_index), -1) + 1), ${ev.timestamp}
 +        SELECT ${this.actorId}, ${ev.runId}, COALESCE(MAX(event_index), 0) + 1, ${ev.type},
 +          json_set(${JSON.stringify(ev)}, '$.eventIndex', COALESCE(MAX(event_index), 0) + 1), ${ev.timestamp}
          FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${ev.runId}
-         RETURNING payload`[0];
+         RETURNING event_index`[0];
      }), (stored) => {
        if (stored === undefined) return Effect.fail(new KinuError('io', 'a persisted run event returned no row'));
  

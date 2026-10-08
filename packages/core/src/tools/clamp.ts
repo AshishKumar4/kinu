@@ -14,7 +14,8 @@ import { headEnd, tailStart } from '../utils/text';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import type { Storage } from '../types/primitives';
 import { assertJsonValue, JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
-import { imageCarrier, imageModelOutput, takeImages } from './image-results';
+import { imageModelOutput, takeImages } from './image-results';
+import { imageCarrier } from '../types/tool-images';
 import { diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import { successfulToolOutcome } from './outcome';
 

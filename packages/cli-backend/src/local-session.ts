@@ -74,8 +74,8 @@ import { ActorSession, type ActorTurnLease,
   createDefaultWebSearchProvider, createWebCodemodeProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
-  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider,
-  createReportCodemodeProvider, REPORT_TOOL, type ReportToolDeps,
+  agentRoleSwitch, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider,
+  createReportCodemodeProvider, REPORT_TOOL, type ReportDeps,
   MissionGovernor,
   observeSystemPromptHash,
   type DynamicContext,
@@ -2053,13 +2053,9 @@ export class LocalAgentSession {
     return this._webSearchProvider;
   }
 
-  /** `web.*` in eval. A program here runs in this process, which holds no Browser Run socket client. */
+  /** `web.*` in eval. A program here runs in this process, which holds no Browser Run socket client, so no browser sessions. */
   private webNamespace(): CodemodeProvider {
-    const missing = 'Browser sessions run on the hosted backend; the CLI has rendered fetches and screenshots only';
-
-    return createWebCodemodeProvider({
-      provider: this.getWebSearchProvider(), files: this.rt.storage, sessions: { missing }, prelude: { missing },
-    });
+    return createWebCodemodeProvider({ provider: this.getWebSearchProvider(), files: this.rt.storage });
   }
 
   /** Skill bodies already in the turn's prompt, so a mid-turn steer adds only new ones. */
@@ -2337,7 +2333,7 @@ export class LocalAgentSession {
   /** Peer transport, roots only; absent, `reply` does not exist and ask/send reach subordinates only. */
   private peersDeps: PeersToolDeps | null = null;
   /** Report transport, subordinates only. */
-  private reportDeps: ReportToolDeps | null = null;
+  private reportDeps: ReportDeps | null = null;
   /** Automatic turn-end relay for a subordinate, distinct from the model's own {@link reportDeps}. */
   private parentRelay: LocalParentRelay | null = null;
 
@@ -2365,7 +2361,7 @@ export class LocalAgentSession {
     this.peersDeps = deps;
   }
 
-  setReport(deps: ReportToolDeps): void {
+  setReport(deps: ReportDeps): void {
     this.reportDeps = deps;
   }
 
@@ -2534,6 +2530,10 @@ export class LocalAgentSession {
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, facts: this.factsStore, actor: this.rt.actor, conversations: this.ownConversations(),
         vectorStore: null,
+      })),
+      createFileCodemodeProvider(() => ({
+        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory,
+        ledger: this.actorSession.orchestrator.acc.files, budget: this.actorSession.orchestrator.acc.context,
       })),
       createTasksCodemodeProvider(
         this.taskList,

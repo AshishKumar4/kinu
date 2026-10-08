@@ -905,8 +905,8 @@ export KINU_ORIGIN="${KINU_URL%/}"
 EVAL_BASELINE_ORIGIN="https://kinu.run"
 
 # THE STATISTICS, on GitHub (L19). scripts/evals-dispatch.ts starts
-# .github/workflows/evals.yml for this build from the branch on GitHub that
-# holds it: every eval task ten times on staging, which must be serving this
+# .github/workflows/evals.yml for this build from main, which must hold it
+# (the eval environment accepts only main): every eval task ten times on staging, which must be serving this
 # build, and on production, the baseline, and its Verdict job fails on a
 # regression between the two. Not awaited: the report names the run and the
 # record keeps its id, since a promotion waits for its verdict.
@@ -914,13 +914,13 @@ KINU_EVALS_RUN=""
 KINU_EVALS_URL=""
 KINU_EVALS_WHY=""
 dispatch_evals() {
-  local answer branch
+  local answer
   if ! answer="$(bun "$KINU_ROOT/scripts/evals-dispatch.ts" "$KINU_SHA")"; then
     KINU_EVALS_WHY="$answer"
     return 1
   fi
-  read -r KINU_EVALS_RUN KINU_EVALS_URL branch <<<"$answer"
-  report dispatched "the evals of $KINU_SHA from $branch, every task ten times on staging against production" "$KINU_EVALS_URL"
+  read -r KINU_EVALS_RUN KINU_EVALS_URL <<<"$answer"
+  report dispatched "the evals of $KINU_SHA from main, every task ten times on staging against production" "$KINU_EVALS_URL"
 }
 
 # THE EVAL ACCOUNTS' PROVIDER KEYS (scripts/eval-provider-keys.ts), stored before any eval starts, on each deployment

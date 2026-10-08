@@ -52,14 +52,14 @@ type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
 const isToolCallEnd = (event: RunEvent): event is ToolCallEnd => event.type === 'tool_call_end';
 
 /** The args a `file` call carried — the surface the write is addressed through. */
-const FileArgsSchema = v.looseObject({ action: v.optional(v.string()), path: v.optional(v.string()) });
+const FileArgsSchema = v.looseObject({ op: v.optional(v.string()), path: v.optional(v.string()) });
 
-function fileCall(calls: readonly ToolCallEnd[], action: string, path: string): ToolCallEnd | undefined {
+function fileCall(calls: readonly ToolCallEnd[], op: string, path: string): ToolCallEnd | undefined {
   return calls.find((call) => {
     if (call.name !== 'file') return false;
     const args = v.safeParse(FileArgsSchema, call.args);
 
-    return args.success && args.output.action === action && args.output.path === path;
+    return args.success && args.output.op === op && args.output.path === path;
   });
 }
 

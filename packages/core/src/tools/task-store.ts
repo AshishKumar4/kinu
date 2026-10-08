@@ -7,8 +7,7 @@ import * as v from 'valibot';
 import type { ActiveRoster } from '../types/dynamic-context';
 import { sqlCheckList } from '../identity/schema';
 import { taskPlanScope, type TaskPlan } from './task-plan-scope';
-
-export const TASK_STATUSES = ['open', 'active', 'done', 'dropped'] as const;
+import { TASK_STATUSES } from '../operations/tasks';
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 

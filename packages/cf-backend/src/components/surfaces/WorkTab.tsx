@@ -220,7 +220,7 @@ function WorkReview({ item, owner, rpc, planRpc, onReviewActor, resource, onRetr
       )}
       <div className="min-h-0 flex-1">
         <Suspense fallback={<div className="flex justify-center py-8"><Loader size="sm" /></div>}>
-          <PlanReviewView plan={item.plan} rpc={item.owner.name === "main" ? rpc : planRpc} readOnly={!mine || item.plan.status !== "pending"} />
+          <PlanReviewView plan={item.plan} rpc={item.owner.name === "main" ? rpc : planRpc} readOnly={!mine || item.owner.retired || item.plan.status !== "pending"} />
         </Suspense>
       </div>
     </div>

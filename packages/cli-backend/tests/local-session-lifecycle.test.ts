@@ -397,8 +397,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       { type: 'response.output_text.delta', item_id: 'msg_1', delta: said },
       { type: 'response.output_item.done', output_index: 1, item: { type: 'message', id: 'msg_1' } },
       { type: 'response.output_item.added', output_index: 2, item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'file', arguments: '' } },
-      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', output_index: 2, delta: '{"action":"read","path":"notes.md"}' },
-      { type: 'response.output_item.done', output_index: 2, item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'file', arguments: '{"action":"read","path":"notes.md"}', status: 'completed' } },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', output_index: 2, delta: '{"op":"read","path":"notes.md"}' },
+      { type: 'response.output_item.done', output_index: 2, item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'file', arguments: '{"op":"read","path":"notes.md"}', status: 'completed' } },
       done,
     ];
 
@@ -988,7 +988,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         const path = /\*\*slates\*\* `([^`]+)`/u.exec(system)?.[1] ?? 'the index names no path';
 
         return {
-          content: [{ type: 'tool-call', toolCallId: 'load-skill', toolName: 'file', input: JSON.stringify({ action: 'read', path }) }],
+          content: [{ type: 'tool-call', toolCallId: 'load-skill', toolName: 'file', input: JSON.stringify({ op: 'read', path }) }],
           finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [],
         };
       }
@@ -1074,7 +1074,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('end() waits for a detached job to settle instead of closing the database under it', async () => {
     const { db, rt, session } = setup('unused', fakeModel('slow answer'));
-    const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'finish the interrupted exploration' });
+    const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: 'finish the interrupted exploration' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-s', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f3', 'bg:agents', '{"phase":"running","jobId":"bgjob-s","kind":"agents"}', 1)`);
 
@@ -1115,7 +1115,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true }, clock,
     });
 
-    const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
+    const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-hang', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fh', 'bg:agents', '{"phase":"running","jobId":"bgjob-hang","kind":"agents"}', 1)`);
 
@@ -1136,7 +1136,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 50, wakesAfterTurn: true },
     });
 
-    const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'edit the target file' });
+    const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: 'edit the target file' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, label, work_mode, status, input_json, created_at)
       VALUES ('${rt.actor.actorId}', 'bgjob-quiet', 'agents', 'mcts: edit the target file', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fq', 'bg:agents', '{"phase":"running","jobId":"bgjob-quiet","kind":"agents"}', 1)`);
@@ -1202,7 +1202,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true }, clock,
     });
 
-    const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
+    const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-e', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fe', 'bg:agents', '{"phase":"running","jobId":"bgjob-e","kind":"agents"}', 1)`);
 
@@ -1222,7 +1222,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 2_000, wakesAfterTurn: true }, clock,
     });
 
-    const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
+    const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-2x', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f2x', 'bg:agents', '{"phase":"running","jobId":"bgjob-2x","kind":"agents"}', 1)`);
 
@@ -1339,7 +1339,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('a native file read authorizes workspace.writeFile in the same CLI turn', async () => {
     const model = toolSequenceModel([
-      { name: 'file', input: { action: 'read', path: 'shared.txt' } },
+      { name: 'file', input: { op: 'read', path: 'shared.txt' } },
       {
         name: 'eval',
         input: { code: 'return await workspace.writeFile("shared.txt", "changed by codemode");' },
@@ -1363,7 +1363,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       },
       {
         name: 'file',
-        input: { action: 'write', path: 'shared.txt', content: 'changed by native file' },
+        input: { op: 'write', path: 'shared.txt', content: 'changed by native file' },
       },
     ]);
 
@@ -1658,7 +1658,7 @@ describe('a swarm child\'s inherited context', () => {
         if (offered.includes('agents')) {
           const stream = step === 0
             ? toolCallStream('agents', {
-              action: 'swarm', task: SEARCH_TASK, preset: 'custom', from: 'optimise', label: 'inherited', branches: 1, depth: 2,
+              op: 'swarm', task: SEARCH_TASK, preset: 'custom', from: 'optimise', label: 'inherited', branches: 1, depth: 2,
               objective: { kind: 'scalar', metric: 'ms', unit: 'ms', direction: 'minimise', scale: 'linear', target: 1, verify: { kind: 'exec-ratio', spec: { params: { n: 3 }, reference: REFERENCE, body: BODY, targetOps: 3, lowerBoundOps: 1 } } },
               config: { unit: { kind: 'answer' }, context: 'inherit', expand: 'sample', score: { kind: 'verify' }, advance: { kind: 'best-first' }, carry: { kind: 'none' } },
             }, usage)

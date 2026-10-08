@@ -148,7 +148,7 @@ test('an ask spliced into genesis survives the skills it activates', async () =>
     const call = v.parse(ToolCallSchema, message.tool_calls?.[0]);
 
     const args = v.parse(v.pipe(v.string(), v.parseJson(), v.object({
-      action: v.literal('write'), path: v.string(), content: v.string(),
+      op: v.literal('write'), path: v.string(), content: v.string(),
     })), call.function.arguments);
 
     expect(args.path).toBe(`/slates/${HELLO_SLATE_ID}/${file}`);
@@ -251,7 +251,7 @@ function hiredAndWaiting(ask: string, hired: { readonly id: string; readonly age
     { role: 'user', content: ask },
     { role: 'assistant', content: 'Calling agents.', tool_calls: [{
       id: hired.id, type: 'function',
-      function: { name: 'agents', arguments: JSON.stringify({ action: 'hire', lifetime: 'task', role: 'task', mission: hired.mission }) },
+      function: { name: 'agents', arguments: JSON.stringify({ op: 'hire', lifetime: 'task', role: 'task', mission: hired.mission }) },
     }] },
     { role: 'tool', tool_call_id: hired.id, content: JSON.stringify({ status: 'working', agent: hired.agent, lifetime: 'task', role: 'task' }) },
     { role: 'assistant', content: 'WAITING' },
@@ -296,7 +296,7 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
     const hired = await reply([{ role: 'user', content: RELAY_MISSION }]);
 
     expect(hired.tool_calls?.map((made) => made.function.arguments)).toEqual([
-      JSON.stringify({ action: 'hire', lifetime: 'task', role: 'task', mission: sayWordMission(TREE_DEEP_WORD) }),
+      JSON.stringify({ op: 'hire', lifetime: 'task', role: 'task', mission: sayWordMission(TREE_DEEP_WORD) }),
     ]);
 
     const messages = [

@@ -35,11 +35,11 @@ function hiringGateway() {
 
     if (!request.tools.includes('report')) {
       return step === 0
-        ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'researcher', agent: 'counter', mission: 'Count the paths.' } }, 'start')
+        ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'researcher', name: 'counter', mission: 'Count the paths.' } }, 'start')
         : chatCompletion(run, 'Handed off.');
     }
 
-    return step === 0 ? toolCallCompletion(run, { tool: 'tasks', args: { action: 'list' } }, 'inspect') : chatCompletion(run, 'Counted.');
+    return step === 0 ? toolCallCompletion(run, { tool: 'tasks', args: { op: 'list' } }, 'inspect') : chatCompletion(run, 'Counted.');
   });
 }
 

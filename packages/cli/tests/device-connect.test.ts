@@ -66,7 +66,10 @@ afterEach(async () => {
     if (daemon !== null) await killAndAwaitExit(daemon);
   }
 
-  for (const proc of sleepers.splice(0)) proc.kill();
+  for (const proc of sleepers.splice(0)) {
+    proc.kill('SIGKILL');
+    await proc.exited;
+  }
 
   await Promise.all(stubs.splice(0).map((server) => server.stop(true)));
   await Promise.all(updateHubs.splice(0).map((hub) => hub.close()));

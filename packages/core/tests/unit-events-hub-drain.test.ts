@@ -121,7 +121,7 @@ describe('buildDrainBatch — peer messages', () => {
     expect(batch.text).toContain('[peer_agent] from peer agent (scout)');
     expect(batch.text).toContain('What changed upstream?');
     // There is no `peers` tool on any backend; the tool is `agents`.
-    expect(batch.text).toContain("agents({action:'msg', event_id:'pe1'");
+    expect(batch.text).toContain("agents({op:'reply', eventId:'pe1'");
     expect(batch.text).not.toContain('peers({');
   });
 

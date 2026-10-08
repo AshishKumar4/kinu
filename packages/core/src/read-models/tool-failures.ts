@@ -67,7 +67,7 @@ function attribute(reason: string): Pick<ToolFailure, 'reason' | 'refused' | 'wo
 
 export interface ToolFailure {
   readonly tool: string;
-  readonly action: string | null;
+  readonly op: string | null;
   /** An `ErrorCode`, `exit_<N>`, a shell exit code name, `threw`, `returned_error`,
    *  `failed_without_error`, or `unclassified`. */
   readonly reason: string;
@@ -86,8 +86,8 @@ export function classifyToolFailure(
 
   if (inner !== undefined) return classifyBindingFailure(inner);
   const args = v.safeParse(JsonObjectSchema, row.args);
-  const action = args.success ? v.safeParse(v.string(), args.output.action) : null;
-  const base = { tool: row.name, action: action?.success ? action.output : null };
+  const op = args.success ? v.safeParse(v.string(), args.output.op) : null;
+  const base = { tool: row.name, op: op?.success ? op.output : null };
   const outcome = row.outcome;
 
   if (outcome === undefined) {
@@ -113,12 +113,12 @@ function classifyBindingFailure(failure: BindingFailure): ToolFailure {
     ? EXEC_REASON_BY_EXIT.get(exit) ?? 'exit_' + String(exit)
     : failure.reason ?? 'unclassified';
 
-  return { tool: failure.tool, action: failure.action, ...attribute(reason) };
+  return { tool: failure.tool, op: failure.op, ...attribute(reason) };
 }
 
-/** `tool·action·reason`; action omitted when the tool has none. */
+/** `tool·op·reason`; op omitted when the tool has one operation. */
 export function toolFailureKey(f: ToolFailure): string {
-  return f.action === null ? `${f.tool}·${f.reason}` : `${f.tool}·${f.action}·${f.reason}`;
+  return f.op === null ? `${f.tool}·${f.reason}` : `${f.tool}·${f.op}·${f.reason}`;
 }
 
 export interface ToolFailureCensus {

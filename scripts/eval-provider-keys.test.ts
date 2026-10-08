@@ -5,7 +5,6 @@ import * as v from 'valibot';
 import { validateCredential, validateCredentialKey } from '@kinu.run/core';
 import { childEnv, scratchDir } from '@kinu.run/test-utils';
 import { catalogCredKey } from '../packages/core/src/providers/catalog';
-import { REVIEW_KEYED_MODEL } from '../evals/src/config';
 import { provisionEvalProviderKeys } from './eval-provider-keys';
 
 const KEY = 'sk-eval-provider-key-never-printed';
@@ -55,7 +54,7 @@ const deployment = Bun.serve({
     '/api/user/profile': () => Response.json({ email: 'eval-service@kinu.run' }),
     // A provider whose catalogue probe fails is absent with a failure beside it, its key still stored (registry.ts).
     '/api/user/models': () => Response.json({
-      models: [{ spec: MODEL, provider: 'opencode-go' }, { spec: REVIEW_KEYED_MODEL, provider: 'openrouter' }]
+      models: [{ spec: MODEL, provider: 'opencode-go' }]
         .filter((model) => !catalogueDown && store.has(catalogCredKey(model.provider))),
       failures: catalogueDown ? [{ provider: 'opencode-go', error: 'catalogue probe failed' }] : [],
     }),
@@ -134,15 +133,14 @@ describe('eval-service provider keys on every deployment it drives', () => {
       refuseStores = refused;
 
       const run = Bun.spawn([process.execPath, join(import.meta.dir, 'eval-provider-keys.ts'), origin], {
-        env: childEnv({ HOME: homeWithKeys({ 'opencode-go.bearer': KEY, 'openrouter.bearer': KEY }), KINU_EVAL_WEB_IDENTITY: IDENTITY, KINU_EVAL_MODELS: MODEL }),
+        env: childEnv({ HOME: homeWithKeys({ 'opencode-go.bearer': KEY }), KINU_EVAL_WEB_IDENTITY: IDENTITY, KINU_EVAL_MODELS: MODEL }),
         stdout: 'pipe', stderr: 'pipe',
       });
 
       const [status, stdout, stderr] = await Promise.all([run.exited, new Response(run.stdout).text(), new Response(run.stderr).text()]);
 
       expect(status).toBe(refused ? 1 : 0);
-      // The reviewer is a model the pass runs too.
-      expect(`${stdout}${stderr}`).toContain(refused ? 'storing opencode-go.bearer for eval-service answered 500' : `lists every eval model: ${MODEL}, ${REVIEW_KEYED_MODEL}`);
+      expect(`${stdout}${stderr}`).toContain(refused ? 'storing opencode-go.bearer for eval-service answered 500' : `lists every eval model: ${MODEL}`);
       expect(`${stdout}${stderr}`).not.toContain(KEY);
     }
   });

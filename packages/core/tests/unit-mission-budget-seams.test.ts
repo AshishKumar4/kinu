@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scriptedTurnModel, createTestActorsOver, unobservedSearchSeams } from '@kinu.run/test-utils';
+import { scriptedTurnModel, createTestActorsOver, present, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { swarmSeats } from './helpers-actor-host';
 import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
@@ -29,6 +29,7 @@ function handoff(): SubordinateHandoff {
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { buildDrainBatch } from '../src/events/hub/drain';
 import type { KinuEvent } from '../src/events/hub/types';
+import { temporaryPortStub } from './helpers-agents';
 
 function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   const db = new Database(':memory:');
@@ -131,6 +132,12 @@ function searchableDeps(opts: {
       status: async () => ({}),
       message: recordHandoff('send'),
       dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),
+      // A task-lifetime hire is offered only where its port is wired.
+      temporary: { ...temporaryPortStub, start: async (request) => {
+        spawns.push(`task:${request.role}`);
+
+        return await temporaryPortStub.start();
+      } },
     },
     budget: opts.budget,
   };
@@ -160,7 +167,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     governor.activate(['nightly']);
 
     const deps = searchableDeps({ budget: governor });
-    const result = v.parse(SearchReportSchema, await sandbox(deps).swarm({ task: 'explore', ...TWO_BRANCHES }));
+    const result = v.parse(SearchReportSchema, await sandbox(deps).swarm('explore', TWO_BRANCHES));
     expect(result.report.expansions).toBe(2);
     expect(result.report.tokens).toBe(RUN_TOKENS);
 
@@ -175,7 +182,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     governor.activate(['nightly']);
 
     const deps = searchableDeps({ budget: governor });
-    await sandbox(deps).swarm({ task: 'explore', ...TWO_BRANCHES, budget_tokens: 5_000, budget_label: 'sweep' });
+    await sandbox(deps).swarm('explore', { ...TWO_BRANCHES, budgetTokens: 5_000, budgetLabel: 'sweep' });
 
     expect(governor.snapshot('sweep')[0]?.spent.tokens).toBe(RUN_TOKENS);
     expect(governor.snapshot('sweep')[0]?.parent).toBe('nightly');
@@ -190,7 +197,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
 
     const out = v.parse(
       SearchBudgetSchema,
-      await sandbox(deps).swarm({ task: 'x', ...TWO_BRANCHES, budget_tokens: 1_000, budget_label: 'sweep' }),
+      await sandbox(deps).swarm('x', { ...TWO_BRANCHES, budgetTokens: 1_000, budgetLabel: 'sweep' }),
     );
 
     expect(out.mission_budget?.label).toBe('sweep');
@@ -206,15 +213,15 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     const spawns: string[] = [];
     const ns = sandbox(searchableDeps({ budget: governor, spawns }));
 
-    for (const [member, input] of [
-      ['swarm', { task: 'x', ...TWO_BRANCHES }],
-      ['hire', { role: 'r', mission: 'm' }],
-      ['hire', { agent: 'helper', message: 'm' }],
+    for (const [member, args] of [
+      ['swarm', ['x', TWO_BRANCHES]],
+      ['hire', ['r', 'm']],
+      ['assign', ['helper', 'm']],
       // An exhausted label must not mint a task-lifetime agent either.
-      ['hire', { lifetime: 'task', role: 'auditor', mission: 'm' }],
-      ['msg', { agent: 'helper', message: 'm' }],
+      ['hire', ['auditor', 'm', { lifetime: 'task' }]],
+      ['message', ['helper', 'm']],
     ] as const) {
-      const refusal = v.parse(BudgetRefusalSchema, await ns[member](input));
+      const refusal = v.parse(BudgetRefusalSchema, await present(ns[member], `agents.${member}`)(...args));
       expect(refusal.error).toBe('budget_exhausted');
       expect(refusal.seam).toBe('spawn');
       expect(refusal.label).toBe('nightly');
@@ -231,13 +238,13 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
 
     const ns = sandbox(searchableDeps({ budget: governor }));
     expect(await ns.list({})).toMatchObject({ subordinates: [] });
-    expect(await ns.dismiss({ agent: 'helper' })).toMatchObject({ ok: true });
+    expect(await ns.dismiss('helper')).toMatchObject({ ok: true });
   });
 
   test('no governor and no scope leave the search path unbudgeted, and identically so', async () => {
     const governor = newGovernor();
-    const withGovernorNoScope = await sandbox(searchableDeps({ budget: governor })).swarm({ task: 'x', ...TWO_BRANCHES });
-    const withoutGovernor = await sandbox(searchableDeps({})).swarm({ task: 'x', ...TWO_BRANCHES });
+    const withGovernorNoScope = await sandbox(searchableDeps({ budget: governor })).swarm('x', TWO_BRANCHES);
+    const withoutGovernor = await sandbox(searchableDeps({})).swarm('x', TWO_BRANCHES);
 
     // Node ids are minted per run; an unscoped governor must add no key, ledger row or charge.
     expect(v.parse(SearchReportSchema, withGovernorNoScope))
@@ -267,7 +274,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
 
     const out = v.parse(
       SearchReportSchema,
-      await sandbox(deps).swarm({ task: 'explore', ...TWO_BRANCHES }),
+      await sandbox(deps).swarm('explore', TWO_BRANCHES),
     );
 
     // Two nodes really ran and reported tokens, so a zero ledger cannot pass.
@@ -290,7 +297,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
     governor.activate(['nightly']);
 
     const deps = searchableDeps({ budget: governor, usage: 'silent' });
-    const out = v.parse(SearchReportSchema, await sandbox(deps).swarm({ task: 'explore', ...TWO_BRANCHES }));
+    const out = v.parse(SearchReportSchema, await sandbox(deps).swarm('explore', TWO_BRANCHES));
     expect(out.report.expansions).toBe(2);
     expect(out.report.tokens).toBeNull();
 
@@ -308,8 +315,8 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
 
     const deps = searchableDeps({ budget: governor });
 
-    const out = v.parse(SearchReportSchema, await sandbox(deps).swarm({
-      task: 'explore', preset: 'custom', from: 'ideate', label: 'toolless',
+    const out = v.parse(SearchReportSchema, await sandbox(deps).swarm('explore', {
+      preset: 'custom', from: 'ideate', label: 'toolless',
       config: { unit: { kind: 'thought' } }, branches: 2, depth: 1,
     }));
 

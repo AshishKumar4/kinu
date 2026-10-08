@@ -1,17 +1,17 @@
 import { D as encodeCanonicalJson, L as isObjectRecord, P as isJsonObject, T as compareCanonicalText, _ as ContentRef, f as RecordCodec, g as Revision, j as TextId, k as AgentCoreError, o as isMember, y as Digest } from "../../chunks/core-BjYGo1CC.js";
 import { i as ActorActivation, o as requireSynchronousResult, s as ActorRecoveryState } from "../../chunks/actors-DJsP1nFM.js";
-import { I as PackageId } from "../../chunks/runtime-z1yMP0an.js";
-import { u as WriteRecordId } from "../../chunks/facets-D01bKQBL.js";
-import { A as Tenant, B as WorkspaceId, E as encodeScopeRef, F as ProjectId, I as RoleName, L as ShareOfferId, M as GuestTrustId, N as MembershipId, O as Project, P as PrincipalId, R as TeamId, a as ShareOffer, h as Role, i as GuestTrust, j as Principal, k as Team, r as Workspace, t as IdentityRepository, u as Membership, x as encodeSubjectRef, z as TenantId } from "../../chunks/identity-CoqhjOFj.js";
-import { A as Binding, D as InvalidationWatermark, E as Grant, F as subjectKey, I as GrantId, N as domainKey, P as scopeKey, _ as TargetAuthorityPermitDenial, a as watermarkKey, c as AuthorityChangeSet, g as requireAuthenticatedAuthorityPermit, k as ScopeEpoch, l as assertAuthorityClosure, s as createTenantControlBootstrapPlan, t as TenantAuthorityTransactionPort, v as TargetAuthorityPermitRequest, w as AuthorityPermit, y as TargetLeaseEvidence } from "../../chunks/authority-BbHaDuhf.js";
-import { G as RunStoragePort, U as RUN_RECORD_KINDS, q as ownRunStorageBackend } from "../../chunks/runs-CRnZ9IFu.js";
+import { I as PackageId } from "../../chunks/runtime-RV2NCfR2.js";
+import { u as WriteRecordId } from "../../chunks/facets-ftoqxDdS.js";
+import { A as Tenant, B as WorkspaceId, E as encodeScopeRef, F as ProjectId, I as RoleName, L as ShareOfferId, M as GuestTrustId, N as MembershipId, O as Project, P as PrincipalId, R as TeamId, a as ShareOffer, h as Role, i as GuestTrust, j as Principal, k as Team, r as Workspace, t as IdentityRepository, u as Membership, x as encodeSubjectRef, z as TenantId } from "../../chunks/identity-Bq_lzdgu.js";
+import { A as Binding, D as InvalidationWatermark, E as Grant, F as subjectKey, I as GrantId, N as domainKey, P as scopeKey, _ as TargetAuthorityPermitDenial, a as watermarkKey, c as AuthorityChangeSet, g as requireAuthenticatedAuthorityPermit, k as ScopeEpoch, l as assertAuthorityClosure, s as createTenantControlBootstrapPlan, t as TenantAuthorityTransactionPort, v as TargetAuthorityPermitRequest, w as AuthorityPermit, y as TargetLeaseEvidence } from "../../chunks/authority-CWNYeNXi.js";
+import { G as RunStoragePort, U as RUN_RECORD_KINDS, q as ownRunStorageBackend } from "../../chunks/runs-tw1bp7NI.js";
 import { i as InvocationId, n as CorrelationId, t as AuditRecordId } from "../../chunks/interaction-references-D9spp037.js";
-import { At as PackageLock, Nt as PackageRelease, jt as MetadataSnapshot } from "../../chunks/definition-COokGikL.js";
-import { F as PreEffectReceipt, H as DetachedEffectExecution, P as AttemptReceipt, R as receiptContentRetention, Y as InvocationPublicationOutbox, dt as InvocationError, g as MediatedReplayRecord } from "../../chunks/invocations-Cpv8tzSW.js";
-import { _ as ByteRange, a as TransientContentAccess, c as ContentStore, d as ContentRecordCustody, f as ContentRetention, g as requireOperationTime, h as requireCollectionTime, l as ContentStat, o as TransientContentLease, s as TransientContentLeaseState, u as ContentOwnerEdge, v as MediaHint } from "../../chunks/content-DYlOXpyu.js";
-import { C as TenantBootstrapAnchorRecord, d as ProtocolRecordStorage, g as CommandDispatcher, m as CommandIngress, u as ProtocolPersistenceAdapter, w as createTenantBootstrapCommand } from "../../chunks/public-B8XBKjQB.js";
-import "../../chunks/protocol-COrEPSqG.js";
-import { _ as DELETABLE_WORKSPACE_RECORD_KINDS, b as validateWorkspacePointerAdvance, g as authorityPermitReferenceCodec, o as mediationInvocationCodecs, t as TargetPermitMediationAggregate, v as WORKSPACE_RECORD_KINDS, x as validateWorkspaceUnique, y as validateStoredWorkspaceRecord } from "../../chunks/composition-CxmTB6HT.js";
+import { At as PackageLock, Nt as PackageRelease, jt as MetadataSnapshot } from "../../chunks/definition-v-bZG98F.js";
+import { F as PreEffectReceipt, H as DetachedEffectExecution, P as AttemptReceipt, R as receiptContentRetention, Y as InvocationPublicationOutbox, dt as InvocationError, g as MediatedReplayRecord } from "../../chunks/invocations-CQ3BhsZE.js";
+import { _ as ByteRange, a as TransientContentAccess, c as ContentStore, d as ContentRecordCustody, f as ContentRetention, g as requireOperationTime, h as requireCollectionTime, l as ContentStat, o as TransientContentLease, s as TransientContentLeaseState, u as ContentOwnerEdge, v as MediaHint } from "../../chunks/content-BC5qOQ4P.js";
+import { C as TenantBootstrapAnchorRecord, d as ProtocolRecordStorage, g as CommandDispatcher, m as CommandIngress, u as ProtocolPersistenceAdapter, w as createTenantBootstrapCommand } from "../../chunks/public-Bw0UfPon.js";
+import "../../chunks/protocol-Br_F24EA.js";
+import { _ as DELETABLE_WORKSPACE_RECORD_KINDS, b as validateWorkspacePointerAdvance, g as authorityPermitReferenceCodec, o as mediationInvocationCodecs, t as TargetPermitMediationAggregate, v as WORKSPACE_RECORD_KINDS, x as validateWorkspaceUnique, y as validateStoredWorkspaceRecord } from "../../chunks/composition-ttL2Zhkn.js";
 //#region src/substrates/sqlite/sqlite.ts
 var sqliteMutationCapabilityBrand = Symbol("agent-core.sqlite-mutation");
 var sqliteMutationCapabilityMarker = true;
@@ -4254,6 +4254,16 @@ var SqliteTenantAuthorityPermitStore = class extends TenantAuthorityTransactionP
 	}
 	issue(transaction, permit) {
 		return this.#permits.issue(transaction, permit);
+	}
+	/**
+	* The same bounded prune the target-side store offers, over the issued rows this
+	* Tenant writes. Issued rows are the other half of every mediated call's residue, and a
+	* retention sweep that can reach only the target side leaves the issuing side to grow
+	* without bound; forwarding keeps the inner store private while making this store
+	* prunable by exactly one driver shape.
+	*/
+	prune(transaction, before, limit, after = "") {
+		return this.#permits.prune(transaction, before, limit, after);
 	}
 	requireTransaction(transaction) {
 		if (!(transaction instanceof TransactionalSqlite) || !hasSameSqliteProvenance(this.database, transaction)) throw new TypeError("Tenant authority transaction belongs to another SQLite owner");

@@ -2,15 +2,17 @@ import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // `lifetime:'task'` hires through the public surfaces (native dispatch and sandbox namespace). A hire returns at once;
 // its answer is one `subordinate_report` on the hirer's rail, which wakes it, and the child retires after its turn.
 import { Database } from 'bun:sqlite';
-import type { ModelMessage } from 'ai';
+import { asSchema, type ModelMessage } from 'ai';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, deriveChildDelegationBudget, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, renderAgentsToolDescription, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsToolAction, type AgentsToolInput, type CodemodeResult, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles } from '../src/index';
-import { dispatchAgentsAction, parseAgentsToolInput } from '../src/delegation/agents-tool';
+import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, deriveChildDelegationBudget, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsToolInput, type CodemodeResult, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles } from '../src/index';
+import { dispatchAgentsAction } from '../src/delegation/agents-tool';
+import { createAgentsTool } from '../src/delegation/agents-operations';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
 import type { ActorReference } from '../src/identity/actor-handle';
 import { createTestActors, present } from '@kinu.run/test-utils';
+import type { JsonObject } from '../src/utils/json';
 
 const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
 
@@ -46,7 +48,7 @@ const NOW = 1_700_000_000_000;
 
 type SandboxMember = (...args: unknown[]) => Promise<CodemodeResult>;
 
-type SandboxNamespace = Partial<Record<AgentsToolAction, SandboxMember>>;
+type SandboxNamespace = Partial<Record<string, SandboxMember>>;
 
 const HANDOFF: SubordinateHandoff = {
   eventId: 'evt-1',
@@ -259,15 +261,19 @@ function makeScene(options: {
       const provider = createAgentsCodemodeProvider(() => deps);
       const members: SandboxNamespace = {};
 
-      for (const action of agentsActionsFor(deps)) {
-        const entry = provider.tools[action];
-
-        if (entry) members[action] = entry.execute;
-      }
+      for (const [name, entry] of Object.entries(provider.tools)) members[name] = entry.execute;
 
       return members;
     },
   };
+}
+
+/** What the native `agents` tool says of a call its schema refuses, or null when it takes it. */
+function nativeRefusal(deps: AgentsToolDeps, input: JsonObject): string | null {
+  const checked = v.parse(v.object({ success: v.boolean(), error: v.optional(v.instance(Error)) }),
+    present(asSchema(createAgentsTool(deps).inputSchema).validate, 'the agents tool validates').call(null, input));
+
+  return checked.success ? null : checked.error?.message ?? '';
 }
 
 /** A task hire, which returns at once with its child working. */
@@ -365,10 +371,10 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     expect(scene.calls).toEqual([`spawn:${TEMP_NAME}`, `assign:${TEMP_NAME}`, `dismiss:${TEMP_NAME}:true`]);
   });
 
-  test('the same call from codemode takes NO action field and starts identically', async () => {
+  test('the same hire from codemode starts identically', async () => {
     const scene = makeScene();
     const hire = present(scene.sandbox().hire, 'the codemode hire entry');
-    expect(v.parse(WorkingOutcome, await hire({ lifetime: 'task', role: 'auditor', mission: 'Is the migration reversible?' })))
+    expect(v.parse(WorkingOutcome, await hire('auditor', 'Is the migration reversible?', { lifetime: 'task' })))
       .toMatchObject({ status: 'working', agent: TEMP_NAME, lifetime: 'task' });
   });
 
@@ -474,7 +480,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     const scene = makeScene();
     expect(await scene.call({ action: 'list' })).toEqual({
       subordinates: [],
-      note: 'No helper agents yet: create one with action:"hire".',
+      note: 'No helper agents yet: create one with op:"hire".',
     });
 
     await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
@@ -709,15 +715,15 @@ describe('the two hire targets are decided by `role`', () => {
       .toEqual([['researcher', 'durable']]);
   });
 
-  test('the advertised variants state the lifetime the dispatch routes on', () => {
+  test('the advertised hire states the lifetime the dispatch routes on', () => {
     const scene = makeScene();
-    const description = renderAgentsToolDescription(scene.deps);
-    expect(description).toContain('lifetime:"task"');
-    expect(description).not.toContain('context_ref');
-    const types = createAgentsCodemodeProvider(() => scene.deps).types ?? '';
-    expect(types).toContain('role: string;');
-    expect(types).toContain('lifetime?: "durable" | "task";');
-    expect(types).not.toContain('context_ref');
+    const hire = JSON.stringify(asSchema(createAgentsTool(scene.deps).inputSchema).jsonSchema);
+    expect(hire).toContain('"lifetime"');
+    expect(hire).not.toContain('context_ref');
+    const declared = present(createAgentsCodemodeProvider(() => scene.deps).declarations?.hire, 'agents.hire is declared').full;
+    expect(declared).toContain('hire(role: string, mission: string, options?: {');
+    expect(declared).toContain('lifetime?: "durable" | "task";');
+    expect(declared).not.toContain('context_ref');
   });
 });
 
@@ -739,12 +745,10 @@ describe('bulk material travels by path, not by field', () => {
 
   test('the retired fields are refused by name before any agent is created', () => {
     const scene = makeScene();
-    expect(() => parseAgentsToolInput({ input: {
-      action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Summarise', context_ref: ['/spill/missing.txt'],
-    } })).toThrow('unknown field "context_ref"');
-    expect(() => parseAgentsToolInput({ input: {
-      action: 'hire', agent: 'researcher', message: 'Survey auth', deadline_hint: 'today',
-    } })).toThrow('unknown field "deadline_hint"');
+    expect(nativeRefusal(scene.deps, { op: 'hire', lifetime: 'task', role: 'auditor', mission: 'Summarise', context_ref: ['/spill/missing.txt'] }))
+      .toContain('unknown field "context_ref"');
+    expect(nativeRefusal(scene.deps, { op: 'assign', agent: 'researcher', message: 'Survey auth', deadline_hint: 'today' }))
+      .toContain('unknown field "deadline_hint"');
     expect(scene.calls).toEqual([]);
     expect(scene.roster.list()).toEqual([]);
   });
@@ -753,9 +757,9 @@ describe('bulk material travels by path, not by field', () => {
 describe('the rung is structural, and so is its absence', () => {
   test('without the port the task lifetime is absent from the surface and denied at the seam', async () => {
     const scene = makeScene({ withoutTemporary: true });
-    const types = createAgentsCodemodeProvider(() => scene.deps).types ?? '';
-    expect(types).toContain('hire(');
-    expect(types).not.toContain('lifetime');
+    const declared = present(createAgentsCodemodeProvider(() => scene.deps).declarations?.hire, 'agents.hire is declared').full;
+    expect(declared).toContain('hire(');
+    expect(declared).not.toContain('lifetime');
     const pending = scene.call({ action: 'hire', lifetime: 'task', role: 'auditor', mission: 'go' });
     await expect(pending).rejects.toMatchObject({ code: 'denied' });
     await expect(pending).rejects.toThrow('lifetime:"task"');
@@ -790,13 +794,10 @@ describe('the rung is structural, and so is its absence', () => {
     // Both advertised remedies must survive the model-facing parse, or the refusal teaches an unwinnable retry.
     const remedy = delegationDepthRefusal({ depth: DELEGATION_MAX_DEPTH, maxDepth: 0 }).error;
     expect(remedy).toContain('config:{context:"inherit"}');
-    expect(remedy).toContain('`hire` naming `agent`');
+    expect(remedy).toContain('agents({op:"assign", agent, message})');
     expect(remedy).not.toContain('ask by');
-    expect(parseAgentsToolInput({ input: { action: 'hire', agent: 'a', message: 'm' } }))
-      .toMatchObject({ action: 'hire', agent: 'a', message: 'm' });
-    expect(parseAgentsToolInput({ input: { action: 'swarm', task: 't', config: { context: 'inherit' } } }))
-      .toMatchObject({ action: 'swarm', task: 't', config: { context: 'inherit' } });
-    expect(() => parseAgentsToolInput({ input: { action: 'swarm', task: 't', context: 'fork' } })).toThrow();
+    const scene = makeScene();
+    expect(nativeRefusal(scene.deps, { op: 'assign', agent: 'a', message: 'm' })).toBeNull();
   });
 
   test('a task child is a real agent: it can hire a role of its own until the cap', () => {

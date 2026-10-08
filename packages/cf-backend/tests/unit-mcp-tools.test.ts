@@ -76,7 +76,7 @@ function mcpWorkspace() {
     async sendPeerFromMcp(input) {
       record('sendPeerFromMcp', { ...input });
 
-      if (input.agent === 'stranger') throw new KinuError('missing', 'unknown peer "stranger" — list your team with action:"list"');
+      if (input.agent === 'stranger') throw new KinuError('missing', 'unknown peer "stranger" — list your team with op:"list"');
 
       return { status: 'delivered', message_id: 'evt_123' };
     },

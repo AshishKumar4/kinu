@@ -19,7 +19,7 @@ test('two turns of one hire making the same call under a reused call id each run
 
     return last?.role === 'tool'
       ? chatCompletion(run, 'saved')
-      : toolCallCompletion(run, { tool: 'memory', args: { action: 'save', content: NOTE } }, 'call_0');
+      : toolCallCompletion(run, { tool: 'memory', args: { op: 'note', content: NOTE } }, 'call_0');
   });
 
   const workspace = gatewayWorkspace(gateway);

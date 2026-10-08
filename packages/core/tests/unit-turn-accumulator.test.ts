@@ -50,20 +50,20 @@ describe('TurnAccumulator', () => {
     // Without the action, dispatcher-tool failures are indistinguishable.
     const toolEvents: Array<{ args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => { toolEvents.push(e); } });
-    a.recordToolCall({ toolCallId: 'fixture-4', toolName: 'file', input: { action: 'edit', path: 'src/a.ts' }, success: true, output: { ok: true } });
-    expect(toolEvents[0].args).toEqual({ action: 'edit', path: 'src/a.ts' });
+    a.recordToolCall({ toolCallId: 'fixture-4', toolName: 'file', input: { op: 'edit', path: 'src/a.ts' }, success: true, output: { ok: true } });
+    expect(toolEvents[0].args).toEqual({ op: 'edit', path: 'src/a.ts' });
   });
 
   test('recordToolCall — a big argument is DIGESTED, not stored whole', () => {
     // A `write` body must not be stored twice.
     const toolEvents: Array<{ args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => { toolEvents.push(e); } });
-    a.recordToolCall({ toolCallId: 'fixture-5', toolName: 'file', input: { action: 'write', content: 'x'.repeat(5000) }, success: true, output: { ok: true } });
+    a.recordToolCall({ toolCallId: 'fixture-5', toolName: 'file', input: { op: 'write', content: 'x'.repeat(5000) }, success: true, output: { ok: true } });
     const args = toolEvents[0].args;
     expect(args).toBeTypeOf('string');
     expect(String(args).length).toBeLessThan(1000);
 
-    expect(String(args)).toContain('"action":"write"');
+    expect(String(args)).toContain('"op":"write"');
   });
 
   test('recordToolCall — failure records {error}, flips hadError, passes error to the sink', () => {

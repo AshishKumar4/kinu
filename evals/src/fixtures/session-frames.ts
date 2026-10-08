@@ -47,7 +47,7 @@ export const FILE_TURN_CHUNKS: readonly UIMessageChunk[] = [
     type: 'tool-input-available',
     toolCallId: 'call-1',
     toolName: 'file',
-    input: { action: 'write', path: 'note.txt', content: 'public session ok' },
+    input: { op: 'write', path: 'note.txt', content: 'public session ok' },
   },
   { type: 'tool-output-available', toolCallId: 'call-1', output: 'Wrote note.txt' },
   { type: 'finish-step' },

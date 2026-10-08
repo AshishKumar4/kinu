@@ -1,19 +1,18 @@
-// Behavior tests for the `memory` tool's `conversations` action over the same
-// ConversationSearchStore on both backends.
+// The `memory` tool's conversation operations over the same ConversationSearchStore on both backends.
 import { describe, test, expect } from 'bun:test';
 import { seedTranscriptEntry, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   buildBuiltinTools,
-  type MemoryToolInput,
   type JsonValue,
 } from '../src/index';
 import { conversationsFor, createTestRuntime } from './helpers';
+import type { JsonObject } from '../src/utils/json';
 
 function setup() {
   const { rt, stores } = createTestRuntime();
   const tools = buildBuiltinTools({ rt, conversations: conversationsFor(rt, stores.history) });
-  const memoryExec = toolExecute<MemoryToolInput, JsonValue>(tools.memory);
+  const memoryExec = toolExecute<JsonObject, JsonValue>(tools.memory);
   let row = 0;
 
   // One message and its transcript entry published together; `recorded_at` is wall-clock, so it is set explicitly.
@@ -33,9 +32,8 @@ function setup() {
   return { memoryExec, insert };
 }
 
-describe('memory tool — conversations action', () => {
+describe('memory tool — conversations', () => {
   const SearchResultSchema = v.object({
-    mode: v.string(),
     hits: v.array(v.object({
       messageId: v.string(),
       conversationId: v.string(),
@@ -44,7 +42,6 @@ describe('memory tool — conversations action', () => {
   });
 
   const ScrollResultSchema = v.object({
-    mode: v.string(),
     messages: v.array(v.object({
       content: v.string(),
       anchor: v.optional(v.literal(true)),
@@ -52,7 +49,6 @@ describe('memory tool — conversations action', () => {
   });
 
   const BrowseResultSchema = v.object({
-    mode: v.string(),
     conversations: v.array(v.object({ conversationId: v.string(), preview: v.string() })),
   });
 
@@ -63,16 +59,15 @@ describe('memory tool — conversations action', () => {
 
     const res = v.parse(
       SearchResultSchema,
-      await memoryExec({ action: 'conversations', query: 'cloudflare tunnel' }),
+      await memoryExec({ op: 'searchConversations', query: 'cloudflare tunnel' }),
     );
 
-    expect(res.mode).toBe('search');
     expect(res.hits.length).toBe(1);
     expect(res.hits[0].messageId).toBe(id);
     expect(res.hits[0].conversationId).toBe('proj');
   });
 
-  test('scrolls a window around a hit when around_message_id is set', async () => {
+  test('reads a window around a hit', async () => {
     const { memoryExec, insert } = setup();
     await insert('proj', 'user', 'before');
     const anchor = await insert('proj', 'assistant', 'anchor message');
@@ -80,33 +75,31 @@ describe('memory tool — conversations action', () => {
 
     const res = v.parse(
       ScrollResultSchema,
-      await memoryExec({ action: 'conversations', around_message_id: anchor, window: 1 }),
+      await memoryExec({ op: 'readConversation', messageId: anchor, window: 1 }),
     );
 
-    expect(res.mode).toBe('scroll');
     expect(res.messages.map((m) => m.content)).toEqual(['before', 'anchor message', 'after']);
     expect(res.messages[1].anchor).toBe(true);
   });
 
-  test('browses archived conversation roots when no query or anchor is given', async () => {
+  test('lists archived conversations, newest first', async () => {
     const { memoryExec, insert } = setup();
     await insert('a', 'user', 'first conversation kickoff');
     await insert('b', 'user', 'second conversation kickoff');
-    const res = v.parse(BrowseResultSchema, await memoryExec({ action: 'conversations' }));
-    expect(res.mode).toBe('browse');
+    const res = v.parse(BrowseResultSchema, await memoryExec({ op: 'listConversations' }));
     expect(res.conversations.map((conversation) => conversation.conversationId)).toEqual(['b', 'a']);
     expect(res.conversations[1].preview).toBe('first conversation kickoff');
   });
 
   test('returns a clean error for an unknown anchor id', async () => {
     const { memoryExec } = setup();
-    await expect(memoryExec({ action: 'conversations', around_message_id: 'missing' }))
+    await expect(memoryExec({ op: 'readConversation', messageId: 'missing' }))
       .rejects.toMatchObject({ code: 'missing', message: expect.stringContaining('missing') });
   });
 
-  test('save and search actions are unchanged', async () => {
+  test('a missing required field is refused by name', async () => {
     const { memoryExec } = setup();
-    await expect(memoryExec({ action: 'search' })).rejects.toThrow('memory.search requires `query`.');
-    await expect(memoryExec({ action: 'save' })).rejects.toThrow('memory.save requires `content`.');
+    await expect(memoryExec({ op: 'search' })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('"query" is required') });
+    await expect(memoryExec({ op: 'note' })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('"content" is required') });
   });
 });

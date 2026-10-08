@@ -57,7 +57,7 @@ async function reopened(rt: CLIRuntime, links: readonly string[]): Promise<numbe
   const shown = present(file.toModelOutput, 'the image output');
 
   return await Promise.all(links.map(async (path) => {
-    const output = JSON.stringify(await shown({ toolCallId: path, input: {}, output: await read({ action: 'read', path }) }));
+    const output = JSON.stringify(await shown({ toolCallId: path, input: {}, output: await read({ op: 'read', path }) }));
 
     return Array.from({ length: SHOTS }, (_, n) => n).find((n) => output.includes(screenshot(n))) ?? -1;
   }));
@@ -70,7 +70,7 @@ function screenReads(): ReadableStream<LanguageModelV2StreamPart> {
       controller.enqueue({ type: 'stream-start', warnings: [] });
 
       for (let n = 0; n < SHOTS; n++) {
-        controller.enqueue({ type: 'tool-call', toolCallId: `shot_${String(n)}`, toolName: 'file', input: JSON.stringify({ action: 'read', path: `shots/screen-${String(n)}.png` }) });
+        controller.enqueue({ type: 'tool-call', toolCallId: `shot_${String(n)}`, toolName: 'file', input: JSON.stringify({ op: 'read', path: `shots/screen-${String(n)}.png` }) });
       }
 
       controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
@@ -173,7 +173,7 @@ describe('older screenshots leave as links, priced for the model serving the req
         const searched = prompt.some((message) => message.role === 'tool' && JSON.stringify(message.content).includes('agents'));
 
         return answer(searched ? textStream('Searched.', usage) : toolCallStream('agents', {
-          action: 'swarm', task: SEARCH_TASK, preset: 'custom', from: 'ideate', label: 'inherited-screens', tier: 'fast', branches: 1,
+          op: 'swarm', task: SEARCH_TASK, preset: 'custom', from: 'ideate', label: 'inherited-screens', tier: 'fast', branches: 1,
           config: { context: 'inherit' },
         }, usage));
       },
@@ -220,7 +220,7 @@ describe('older screenshots leave as links, priced for the model serving the req
         const searched = prompt.some((message) => message.role === 'tool' && JSON.stringify(message.content).includes('agents'));
 
         return answer(searched ? textStream('Searched.', usage) : toolCallStream('agents', {
-          action: 'swarm', task: SEARCH_TASK, preset: 'custom', from: 'ideate', label: 'inherited-screens', branches: 1,
+          op: 'swarm', task: SEARCH_TASK, preset: 'custom', from: 'ideate', label: 'inherited-screens', branches: 1,
           config: { context: 'inherit' },
         }, usage));
       },

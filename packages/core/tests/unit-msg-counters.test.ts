@@ -16,7 +16,7 @@ import { Database } from 'bun:sqlite';
 import { createTestRuntime, toolExecute, createTestActorsOver } from '@kinu.run/test-utils';
 import {
   createAgentsTool,
-  type AgentsToolInput, type AgentsToolDeps,
+  type AgentsToolDeps,
   type PeersToolDeps, type TeamToolDeps,
   ROOT_DELEGATION_BUDGET,
   type SubordinateDelivery, type SubordinateRosterEntry,
@@ -26,6 +26,7 @@ import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { receivePeerMessage } from '../src/events/ingress/peer';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { makeSqlExec } from './helpers';
+import type { JsonObject } from '../src/utils/json';
 
 type ToolResult = object | string | number | boolean | null | undefined;
 
@@ -51,7 +52,7 @@ function linesFor(logger: { emitted: readonly RecordedLog[] }, event: string): r
 function agentsTool(deps: Omit<AgentsToolDeps, 'mode' | 'swarms'>) {
   const entry = createAgentsTool({ mode: 'build', swarms: true, ...deps });
 
-  return toolExecute<AgentsToolInput, ToolResult>(entry);
+  return toolExecute<JsonObject, ToolResult>(entry);
 }
 
 interface Call { action: string }
@@ -138,8 +139,8 @@ describe('agents.msg.sent', () => {
     const { deps, calls } = makePeers();
     const execute = agentsTool({ peers: deps });
 
-    await execute({ action: 'msg', agent: 'scout', message: 'first' });
-    await execute({ action: 'msg', agent: 'scout', message: 'second one' });
+    await execute({ op: 'message', agent: 'scout', message: 'first' });
+    await execute({ op: 'message', agent: 'scout', message: 'second one' });
 
     const sent = linesFor(logger, 'agents.msg.sent');
     expect(calls).toHaveLength(2);
@@ -181,12 +182,12 @@ describe('agents.msg.sent', () => {
 
     const team = makeTeam('queued');
 
-    await agentsTool({ peers: queued.deps })({ action: 'msg', agent: 'scout', message: 'a' });
-    await agentsTool({ peers: refused.deps })({ action: 'msg', agent: 'scout', message: 'b' });
-    await agentsTool({ peers: queued.deps })({ action: 'msg', event_id: 'pe1', message: 'c' });
-    await agentsTool({ peers: queued.deps })({ action: 'hire', agent: 'scout', message: 'd' });
-    await agentsTool({ team: team.deps })({ action: 'msg', agent: 'researcher', message: 'e' });
-    await agentsTool({ team: team.deps })({ action: 'hire', agent: 'researcher', message: 'f' });
+    await agentsTool({ peers: queued.deps })({ op: 'message', agent: 'scout', message: 'a' });
+    await agentsTool({ peers: refused.deps })({ op: 'message', agent: 'scout', message: 'b' });
+    await agentsTool({ peers: queued.deps })({ op: 'reply', eventId: 'pe1', message: 'c' });
+    await agentsTool({ peers: queued.deps })({ op: 'assign', agent: 'scout', message: 'd' });
+    await agentsTool({ team: team.deps })({ op: 'message', agent: 'researcher', message: 'e' });
+    await agentsTool({ team: team.deps })({ op: 'assign', agent: 'researcher', message: 'f' });
 
     expect(linesFor(logger, 'agents.msg.sent').map((line) => [
       line.fields.action, line.fields.transport, line.fields.addressing, line.fields.outcome,
@@ -210,7 +211,7 @@ describe('agents.msg.sent', () => {
     const logger = recording();
     const { deps } = makePeers({ send: async () => { throw new Error('hub down'); } });
 
-    await expect(agentsTool({ peers: deps })({ action: 'msg', agent: 'scout', message: 'x' }))
+    await expect(agentsTool({ peers: deps })({ op: 'message', agent: 'scout', message: 'x' }))
       .rejects.toThrow('hub down');
 
     expect(linesFor(logger, 'agents.msg.sent')[0]?.fields).toMatchObject({
@@ -228,10 +229,10 @@ describe('agents.msg.sent', () => {
     const team = makeTeam('starts_now');
     const execute = agentsTool({ peers: deps, team: team.deps });
 
-    await execute({ action: 'msg', agent: 'scout', message: secret });
-    await execute({ action: 'msg', agent: 'researcher', message: secret });
-    await execute({ action: 'msg', event_id: 'pe1', message: secret });
-    await execute({ action: 'hire', agent: 'scout', message: secret });
+    await execute({ op: 'message', agent: 'scout', message: secret });
+    await execute({ op: 'message', agent: 'researcher', message: secret });
+    await execute({ op: 'reply', eventId: 'pe1', message: secret });
+    await execute({ op: 'assign', agent: 'scout', message: secret });
 
     const lines = linesFor(logger, 'agents.msg.sent');
     expect(lines).toHaveLength(4);

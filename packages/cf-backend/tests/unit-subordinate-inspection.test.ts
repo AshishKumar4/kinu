@@ -202,7 +202,7 @@ describe('owner reads of retained subordinate paths', () => {
     const child = fixture.child(fixture.main, 'child');
     const events = new RunEventRecorder(fixture.sql, child);
     events.emit('kept', { type: 'run_start', agentId: 'child' });
-    events.emit('kept', { type: 'tool_call_end', name: 'agents', toolCallId: 'hire-1', args: { action: 'hire', lifetime: 'task' }, result: { status: 'completed', answer: 'deep' }, outcome: { success: true } });
+    events.emit('kept', { type: 'tool_call_end', name: 'agents', toolCallId: 'hire-1', args: { op: 'assign', lifetime: 'task' }, result: { status: 'completed', answer: 'deep' }, outcome: { success: true } });
 
     for (const action of ['retire', 'release'] as const) {
       fixture.directory.apply(actorReferenceOf(fixture.main), [], { action, name: 'child', reference: actorReferenceOf(child) });

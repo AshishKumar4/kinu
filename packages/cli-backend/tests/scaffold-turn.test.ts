@@ -206,7 +206,7 @@ describe('a promoted scaffold drives a local turn', () => {
     try {
       await installScaffold(rt, { version: 1, status: 'current', code: `async function run() {
         await host.defaultInference();
-        await host.callTool('memory', { action: 'search', query: 'anything' });
+        await host.callTool('memory', { op: 'search', query: 'anything' });
         await host.emit({ type: 'text_delta', text: 'program follow-up' });
         await host.emit({ type: 'step_finish', stepIndex: 2 });
       }` });
@@ -237,16 +237,16 @@ describe('a promoted scaffold drives a local turn', () => {
     await installScaffold(rt, {
       version: 1, status: 'current',
       code: `async function run({ task }) {
-        const result = await host.callTool('memory', { action: 'search', query: 'anything' });
-        await host.emit({ type: 'text_delta', text: 'tool returned ' + typeof result });
+        const result = await host.callTool('memory', { op: 'search', query: 'anything' });
+        await host.emit({ type: 'text_delta', text: 'tool returned ' + (Array.isArray(result?.hits) ? 'hits' : JSON.stringify(result)) });
       }`,
     });
 
     await session.send('use a tool', { id: crypto.randomUUID() });
 
-    // A dispatch that dropped the args would answer with an error object, not a string.
+    // A dispatch that dropped the args would answer with a refusal, not the search's hits.
     expect(events.some((e) => e.type === 'tool-call' && e.toolName === 'memory')).toBe(true);
-    expect(streamed(events)).toBe('tool returned string');
+    expect(streamed(events)).toBe('tool returned hits');
   });
 });
 

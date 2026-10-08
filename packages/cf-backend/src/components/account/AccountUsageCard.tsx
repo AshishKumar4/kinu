@@ -28,7 +28,8 @@ function LimitRow({ report, now }: { report: LimitReport; now: number }) {
             <li key={window.name} className="space-y-0.5">
               <p className="p-meta p-text-2">{limitWindowText(window, now)}</p>
               {share !== undefined && (
-                <div className="h-1 overflow-hidden rounded-full bg-[var(--c-elevated)]" aria-hidden="true">
+                <div role="meter" aria-label={window.name} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(share * 100)}
+                  className="h-1 overflow-hidden rounded-full bg-[var(--c-elevated)]">
                   <div className={`h-full rounded-full ${share >= 0.9 ? "bg-[var(--c-danger)]" : "bg-[var(--c-accent)]"}`} style={{ width: `${String(Math.round(share * 100))}%` }} />
                 </div>
               )}
@@ -44,7 +45,7 @@ function AccountRow({ row, now, live }: { row: AccountSpend; now: number; live: 
   const cost = row.usd === undefined ? "unpriced" : `${fmtUsd(row.usd)}${row.unpricedCalls > 0 ? "+" : ""}`;
 
   return (
-    <div className="px-4 py-2.5">
+    <li data-usage-account={row.provider === null ? "" : `${row.provider}@${row.account ?? ""}`} className="px-4 py-2.5">
       <div className="flex items-baseline gap-2 p-row-text">
         <span className="min-w-0 flex-1 break-words font-medium p-text">
           {row.provider === null ? "No account recorded" : `${row.provider} · ${row.account ?? ""}`}
@@ -58,7 +59,7 @@ function AccountRow({ row, now, live }: { row: AccountSpend; now: number; live: 
           {row.quota.windows.map((window) => <li key={window.measure}>{quotaWindowText(window, now)}</li>)}
         </ul>
       )}
-    </div>
+    </li>
   );
 }
 
@@ -94,13 +95,13 @@ function SpendTable({ usage }: { usage: AccountUsage }) {
       {usage.accounts.length === 0
         ? <p className="p-row-text p-text-3">No model call has been recorded yet.</p>
         : (
-          <div className="p-group">
+          <ul className="p-group">
             {usage.accounts.map((row) => (
               <AccountRow key={`${row.provider ?? ""}@${row.account ?? ""}`} row={row} now={now} live={live.has(`${row.provider ?? ""}@${row.account ?? ""}`)} />
             ))}
-          </div>
+          </ul>
         )}
-      <p className="p-meta p-text-3">
+      <p data-usage-scope className="p-meta p-text-3">
         Across {usage.workspaces} workspace{usage.workspaces === 1 ? "" : "s"}, at API rates from the models.dev catalog;
         a subscription is billed by its plan instead.
       </p>

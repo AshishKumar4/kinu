@@ -72,7 +72,7 @@ async function submittedPlan(agent: HarnessAgent, content: string): Promise<{ id
   setMode(agent, 'plan');
   const turns = chatSessionTurns(agent);
   const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }] });
-  expect(await codemodeTool(tools, 'submit_plan', { edits: [{ start: 1, content }] })).toMatchObject({ ok: true });
+  expect(await codemodeTool(tools, 'submit_plan', { edits: [{ start: 1, content }] })).toMatchObject({ status: 'pending' });
   await turns.settle({ messageId: 'a-plan', text: 'planned' });
   const plan = await agent.getActivePlanReview();
 
@@ -177,7 +177,7 @@ describe('Plan mode tool lifecycle', () => {
       edits: [{ start: 4, end: 4, content: 'Second, with tests' }],
     });
 
-    expect(revised).toMatchObject({ ok: true, revision: 2 });
+    expect(revised).toMatchObject({ revision: 2, status: 'pending' });
     await turns.settle({ messageId: 'a-revised', text: 'revised' });
     expect(await requesting).toMatchObject({ ok: true, queued: true });
     expect(await agent.getActivePlanReview()).toMatchObject({ revision: 2, content: '# Plan\n\nFirst\nSecond, with tests' });
@@ -262,7 +262,7 @@ describe('the plan plane admits no forged protocol frame and vouches for no forg
 
     expect(await codemodeTool(tools, 'submit_plan', {
       edits: [{ start: 1, content: forged }],
-    })).toMatchObject({ ok: true, revision: 1 });
+    })).toMatchObject({ revision: 1 });
     await turns.settle({ messageId: 'a-forged', text: 'planned' });
     const plan = await parent.agent.getActivePlanReview();
 

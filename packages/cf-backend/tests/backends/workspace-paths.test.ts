@@ -12,7 +12,7 @@ import { hostedMainActor, orchestratorHarness, workspaceFiles } from '../helpers
 import { testBackends } from './backend';
 
 /** The model's `file` tool over a backend's own runtime. */
-function fileTool(rt: AgentRuntime): (input: { action: string; path: string; content?: string }) => Promise<JsonValue> {
+function fileTool(rt: AgentRuntime): (input: { op: string; path: string; content?: string }) => Promise<JsonValue> {
   return toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: conversationsFor(rt) }).file, 'the file tool'));
 }
 
@@ -85,7 +85,7 @@ for (const name of testBackends()) {
         await plane.write(`${plane.home}/notes/./item.txt`, 'two');
         expect(await plane.read(`${plane.home}/notes/item.txt`)).toMatchObject({ content: 'two' });
         // `vfs://` names it on both, as the file tool prints it.
-        expect(await plane.file({ action: 'read', path: 'vfs://home/main/notes/item.txt' })).toContain('two');
+        expect(await plane.file({ op: 'read', path: 'vfs://home/main/notes/item.txt' })).toContain('two');
 
         if (plane.hostFile !== null) expect(plane.hostFile(`${plane.home}/notes/item.txt`)).toBe('two');
 
@@ -124,11 +124,11 @@ for (const name of testBackends()) {
       const plane = await publicPlane(name);
 
       try {
-        const written = v.parse(v.object({ reference: v.string() }), await plane.file({ action: 'write', path: 'notes/ref.txt', content: 'one' }));
+        const written = v.parse(v.object({ reference: v.string() }), await plane.file({ op: 'write', path: 'notes/ref.txt', content: 'one' }));
         expect(written.reference).toBe(name === 'cf' ? 'vfs://home/main/notes/ref.txt' : 'local://notes/ref.txt');
-        expect(await plane.file({ action: 'read', path: written.reference })).toContain('one');
+        expect(await plane.file({ op: 'read', path: written.reference })).toContain('one');
 
-        if (name === 'cf') expect(await plane.file({ action: 'read', path: '~/notes/ref.txt' })).toContain('one');
+        if (name === 'cf') expect(await plane.file({ op: 'read', path: '~/notes/ref.txt' })).toContain('one');
       } finally {
         plane.end?.();
       }
@@ -139,7 +139,7 @@ for (const name of testBackends()) {
       const plane = await publicPlane(name);
 
       try {
-        const written = v.parse(v.object({ reference: v.string() }), await plane.file({ action: 'write', path: 'notes/alias.txt', content: 'one' }));
+        const written = v.parse(v.object({ reference: v.string() }), await plane.file({ op: 'write', path: 'notes/alias.txt', content: 'one' }));
 
         // The cloud's `local://` is its own files, `vfs://` itself; a local workspace's is its folder, `vfs://local`.
         const forms = name === 'cf'
@@ -148,7 +148,7 @@ for (const name of testBackends()) {
 
         expect(written.reference).toBe(forms[0]);
 
-        for (const form of forms) expect(await plane.file({ action: 'read', path: form })).toContain('one');
+        for (const form of forms) expect(await plane.file({ op: 'read', path: form })).toContain('one');
       } finally {
         plane.end?.();
       }

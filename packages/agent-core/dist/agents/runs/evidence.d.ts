@@ -1,13 +1,15 @@
 import { ContentRef } from "../../core/index.js";
 import type { OperationRef } from "../../facets/index.js";
-import type { ReceiptId } from "../../invocation-references/index.js";
-import type { AttemptReceiptOutcome, Receipt } from "../../invocations/index.js";
+import type { EffectAttemptId, ReceiptId } from "../../invocation-references/index.js";
+import type { AttemptReceiptOutcome, EffectAttempt, PreparedInvocation, PreparedInvocationHeader, Receipt } from "../../invocations/index.js";
 import type { AuditRecordId, EventId, InvocationId, RouteReservationId } from "../../interaction-references/index.js";
-import type { TreeMergePolicy } from "../../definition/index.js";
 import type { LeaseToken } from "./lease.js";
 import type { TurnAdmissionHandle } from "./handle.js";
 import type { RunBranchId, RunId } from "./id.js";
 import type { RunCommit } from "./commit.js";
+import type { AgentPolicyId } from "../id.js";
+import type { AgentPolicyRevisionRecord } from "../source.js";
+import type { SourcePin } from "./pins.js";
 import type { TurnId } from "../../execution-references/index.js";
 export interface ReceiptCommitEvidence {
     readonly kind: "receipt";
@@ -102,6 +104,30 @@ export interface ForcedCancellationEvidence {
     readonly event: EventId;
     readonly audit: AuditRecordId;
 }
+/**
+ * SPEC §7.3's `InvocationAuthority` as the Run plane reads it off a stored PreparedInvocation:
+ * the Principal the invocation was prepared for. The mediation plane carries it as a
+ * structural reference, and this is the shape of that reference the Run plane depends on.
+ */
+export interface ControlInvocationAuthority {
+    readonly kind: "initiator" | "delegated";
+    readonly tenant: string;
+    readonly principal: string;
+}
+/**
+ * The fields of a stored §7.4 EffectAttempt a control commit is read against. It is the
+ * stored record itself, narrowed by `Pick` to the fields that do not depend on the mediation
+ * plane's own lease and admission references, so no second shape of the attempt exists.
+ */
+export type ControlEffectAttempt = Pick<EffectAttempt<never, never>, "id" | "invocation" | "itemIndex">;
+/**
+ * The fields of a stored §7.3 PreparedInvocation a control commit is read against: the
+ * invocation identity, the pinned Operation (whose impact it declares), the authority it was
+ * prepared under, and its item count. Narrowed by `Pick` from the record itself, as above.
+ */
+export interface ControlPreparedInvocation extends Pick<PreparedInvocation<never, ControlInvocationAuthority, never, never>, "itemCount"> {
+    readonly header: Pick<PreparedInvocationHeader<never, ControlInvocationAuthority, never, never>, "id" | "operation" | "authority">;
+}
 export declare abstract class RunEvidencePort<Transaction> {
     abstract receipt(transaction: Transaction, receipt: ReceiptId, audit: AuditRecordId): ReceiptCommitEvidence | undefined;
     abstract delivery(transaction: Transaction, reservation: RouteReservationId, audit: AuditRecordId): DeliveryCommitEvidence | undefined;
@@ -114,6 +140,10 @@ export declare abstract class RunEvidencePort<Transaction> {
      * every rule about what a commit may stand on stays in `validateCommitWriter`.
      */
     abstract storedReceipt(transaction: Transaction, receipt: ReceiptId): Receipt | undefined;
+    /** The §7.4 EffectAttempt this id names, exactly as recorded; it decides nothing. */
+    abstract storedAttempt(transaction: Transaction, attempt: EffectAttemptId): ControlEffectAttempt | undefined;
+    /** The §7.3 PreparedInvocation this id names, exactly as recorded; it decides nothing. */
+    abstract storedInvocation(transaction: Transaction, invocation: InvocationId): ControlPreparedInvocation | undefined;
     /**
      * The handle a Turn published for one admitted item (SPEC §5.6), or none where no Turn
      * published it. Publication is what detaches an item from its Turn to a Run, and which
@@ -131,13 +161,17 @@ export declare abstract class RunEvidencePort<Transaction> {
 }
 export declare abstract class RunMergePort<Transaction> {
     abstract verifyConcat(transaction: Transaction, commit: RunCommit, target: RunCommit, source: RunCommit): boolean;
-    abstract verifyTree(transaction: Transaction, commit: RunCommit, target: RunCommit, source: RunCommit): boolean;
     /**
-     * The `policies.treeMerge` the merge's own pinned PolicySet declares, or nothing where the
-     * Blueprint declared none (SPEC §5.2.1, §9.2). Absence is not a fourth setting: it says
-     * the platform's branches own disjoint Environments, and a merge that would need a side
-     * is refused rather than guessed. The declaration is read through this seam because a
-     * merge names its effective PolicySet by pin and the Run plane holds no PolicySet store.
+     * Whether the merge's `treeResolution.base` names the one common-ancestor tree of its two
+     * parents (§5.2.1). Everything else about the tree — the Environment, the declared policy,
+     * and the per-path conflicts — the Run plane derives from the decoded trees itself.
      */
-    abstract declaredTreeMerge(transaction: Transaction, commit: RunCommit): TreeMergePolicy | undefined;
+    abstract verifyTreeBase(transaction: Transaction, commit: RunCommit, target: RunCommit, source: RunCommit): boolean;
+    /**
+     * The source revision record for exactly this effective-policy id and revision, or nothing
+     * where none exists. It retrieves and decides nothing: the Run plane compares the record
+     * against the pin and reads `policies.treeMerge` (§5.2.1, §9.2) off the prefetched bytes
+     * whose digest is the pinned one, so the declaration a merge follows is the pinned one.
+     */
+    abstract effectivePolicy(transaction: Transaction, pin: SourcePin<AgentPolicyId>): AgentPolicyRevisionRecord | undefined;
 }

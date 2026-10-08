@@ -53,7 +53,7 @@ describe('the instruction desk on a Durable Object', () => {
 
       return next === undefined
         ? chatCompletion(run, 'Read both.')
-        : toolCallCompletion(run, { tool: 'file', args: { action: 'read', path: next } }, `read_${results.length}`);
+        : toolCallCompletion(run, { tool: 'file', args: { op: 'read', path: next } }, `read_${results.length}`);
     });
 
     const workspace = gatewayWorkspace(gateway);

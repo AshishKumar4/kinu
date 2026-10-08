@@ -12,7 +12,7 @@ function modelCallingFile() {
 
     return {
       content: call
-        ? [{ type: 'tool-call', toolCallId: 'native-file-refusal', toolName: 'file', input: JSON.stringify({ action: 'transmogrify', path: '/' }) }]
+        ? [{ type: 'tool-call', toolCallId: 'native-file-refusal', toolName: 'file', input: JSON.stringify({ op: 'transmogrify', path: '/' }) }]
         : [{ type: 'text', text: 'done' }],
       finishReason: { unified: call ? 'tool-calls' : 'stop', raw: undefined },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -54,7 +54,7 @@ const RefusalSchema = v.object({ reason: v.string(), error: v.string() });
 test('a delegated turn sends the same typed native error feedback in its NEXT provider request', async () => {
   // A hired child's delegated turn on the platform gateway; its `file` tool is built over the child's runtime by the
   // production builder, so the refusal is the loop's own, not a fixture's.
-  const gateway = scriptedGateway([{ tool: 'file', args: { action: 'transmogrify', path: '/' } }]);
+  const gateway = scriptedGateway([{ tool: 'file', args: { op: 'transmogrify', path: '/' } }]);
   const workspace = gatewayWorkspace(gateway);
 
   const child = await hostedSubordinateHarness(workspace, {

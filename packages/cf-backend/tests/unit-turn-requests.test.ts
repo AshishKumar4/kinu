@@ -128,7 +128,7 @@ describe('the context number a page reads back', () => {
 
 describe('a turn read back request by request', () => {
   test('each step reads as the list the provider received, paired with what came back', async () => {
-    const gateway = scriptedGateway([{ tool: 'file', args: { action: 'write', path: '/workspace/notes.txt', content: 'hello' } }], 'All written.');
+    const gateway = scriptedGateway([{ tool: 'file', args: { op: 'write', path: '/workspace/notes.txt', content: 'hello' } }], 'All written.');
     const harness = gatewayWorkspace(gateway);
     await catalogTurn(harness.agent, 'Write hello to notes.txt.');
     const turnId = latestTurnId(harness);

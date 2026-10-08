@@ -20,7 +20,6 @@ export declare abstract class ViewPosition {
     abstract admitsAttributed(): boolean;
     /** The wire label, which survives only inside this module's decoder. */
     abstract get label(): string;
-    equals(other: ViewPosition): boolean;
 }
 export interface DecisionPlacementInit {
     /** JSON Pointer into the rendered View body, in §6.2's pointer vocabulary. */

@@ -87,8 +87,8 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
     const step = calls++;
 
     const steps: ScriptedTurnResult['content'][] = [
-      [{ type: 'tool-call', toolName: 'file', toolCallId: 'call-file', input: JSON.stringify({ action: 'write', path: 'plan.txt', content: FILE_TEXT }) }],
-      [{ type: 'tool-call', toolName: 'agents', toolCallId: 'call-msg', input: JSON.stringify({ action: 'msg', agent: 'researcher', message: MESSAGE }) }],
+      [{ type: 'tool-call', toolName: 'file', toolCallId: 'call-file', input: JSON.stringify({ op: 'write', path: 'plan.txt', content: FILE_TEXT }) }],
+      [{ type: 'tool-call', toolName: 'agents', toolCallId: 'call-msg', input: JSON.stringify({ op: 'message', agent: 'researcher', message: MESSAGE }) }],
     ];
 
     const content = steps[step] ?? [{ type: 'text', text: ANSWER }];
@@ -142,7 +142,7 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
   expect(attribute('turn.step', 'gen_ai.usage.output_tokens')).toEqual([1, 1, 1]);
   expect(attribute('turn.tool_call', 'gen_ai.tool.name')).toEqual(['file', 'agents']);
   expect(attribute('turn.tool_call', 'kinu.step')).toEqual([0, 1]);
-  expect(attribute('turn.delegation', 'kinu.delegation.action')).toEqual(['msg']);
+  expect(attribute('turn.delegation', 'kinu.delegation.action')).toEqual(['message']);
   expect(attribute('turn.delegation', 'kinu.step')).toEqual([1]);
   expect(attribute('turn.settled', 'kinu.turn.steps')).toEqual([3]);
   expect(attribute('turn.settled', 'kinu.turn.outcome')).toEqual(['completed']);

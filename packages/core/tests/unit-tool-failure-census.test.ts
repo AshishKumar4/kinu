@@ -64,11 +64,11 @@ function cliResult(reason: string, error: string): ToolCallEnd['result'] {
 describe('a clean call is not a failure', () => {
   test('a successful call classifies as null, on both result shapes', () => {
     expect(classifyToolFailure(call({
-      name: 'file', toolCallId: 't1', args: { action: 'read', path: 'src/a.ts' },
+      name: 'file', toolCallId: 't1', args: { op: 'read', path: 'src/a.ts' },
       result: 'export const a = 1;\n',
     }))).toBeNull();
     expect(classifyToolFailure(call({
-      name: 'file', toolCallId: 't2', args: { action: 'write', path: 'src/a.ts' },
+      name: 'file', toolCallId: 't2', args: { op: 'write', path: 'src/a.ts' },
       result: { ok: true, path: 'src/a.ts', bytes: 20, action: 'created' },
     }))).toBeNull();
   });
@@ -91,12 +91,12 @@ describe('the action is attributed, not just the tool', () => {
   test('a `file` refusal names the action and the reason the tool computed', () => {
     const failure = classifyToolFailure(call({
       name: 'file', toolCallId: 't1',
-      args: { action: 'edit', path: 'src/greet.ts' },
+      args: { op: 'edit', path: 'src/greet.ts' },
       outcome: { success: false, reason: 'not_found' }, result: cfResult('not_found', 'old_text was not found in src/greet.ts'),
     }));
 
     expect(failure).toEqual({
-      tool: 'file', action: 'edit', reason: 'not_found', refused: true, workFailed: false, runtimeMissing: false,
+      tool: 'file', op: 'edit', reason: 'not_found', refused: true, workFailed: false, runtimeMissing: false,
     });
     expect(failure && toolFailureKey(failure)).toBe('file·edit·not_found');
   });
@@ -104,12 +104,12 @@ describe('the action is attributed, not just the tool', () => {
   test('the CLI JSON-string shape attributes identically to the cf object shape', () => {
     // The eval tier's shape: a bare string to any reader that only narrows to an object.
     const object = classifyToolFailure(call({
-      name: 'file', toolCallId: 't1', args: { action: 'edit', path: 'a.ts' },
+      name: 'file', toolCallId: 't1', args: { op: 'edit', path: 'a.ts' },
       outcome: { success: false, reason: 'ambiguous' }, result: cfResult('ambiguous', 'old_text appears 3 times in a.ts'),
     }));
 
     const string = classifyToolFailure(call({
-      name: 'file', toolCallId: 't2', args: { action: 'edit', path: 'a.ts' },
+      name: 'file', toolCallId: 't2', args: { op: 'edit', path: 'a.ts' },
       outcome: { success: false, reason: 'ambiguous' }, result: cliResult('ambiguous', 'old_text appears 3 times in a.ts'),
     }));
 
@@ -123,7 +123,7 @@ describe('the action is attributed, not just the tool', () => {
       outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'Error (exit 1)\n--- stdout ---\n1 fail\n',
     }));
 
-    expect(failure?.action).toBeNull();
+    expect(failure?.op).toBeNull();
     expect(failure && toolFailureKey(failure)).toBe('shell·exit_1');
   });
 
@@ -134,7 +134,7 @@ describe('the action is attributed, not just the tool', () => {
     }));
 
     expect(failure).toEqual({
-      tool: 'file', action: null, reason: 'unread', refused: true, workFailed: false, runtimeMissing: false,
+      tool: 'file', op: null, reason: 'unread', refused: true, workFailed: false, runtimeMissing: false,
     });
   });
 });
@@ -146,7 +146,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
       'unread', 'stale', 'bad_input',
     ]) {
       const failure = classifyToolFailure(call({
-        name: 'file', toolCallId: 't1', args: { action: 'edit' },
+        name: 'file', toolCallId: 't1', args: { op: 'edit' },
         outcome: v.parse(ToolOutcomeSchema, { success: false, reason }), result: cfResult(reason, 'refused: ' + reason),
       }));
 
@@ -158,7 +158,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
     // Things that went wrong, not decisions the tool made, so they stay in the candidate-defect bucket.
     for (const reason of ['missing', 'io']) {
       expect(classifyToolFailure(call({
-        name: 'file', toolCallId: 't1', args: { action: 'read' },
+        name: 'file', toolCallId: 't1', args: { op: 'read' },
         outcome: v.parse(ToolOutcomeSchema, { success: false, reason }), result: cfResult(reason, 'failed: ' + reason),
       }))).toMatchObject({ reason, refused: false, workFailed: false });
     }
@@ -232,7 +232,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
   test('the four parts are disjoint and exhaustive', () => {
     // Each failure lands in exactly one bucket, so the four numbers decompose rather than overlap.
     const census = censusToolFailures([
-      call({ name: 'file', toolCallId: 't1', args: { action: 'edit' },
+      call({ name: 'file', toolCallId: 't1', args: { op: 'edit' },
         outcome: { success: false, reason: 'not_found' }, result: cfResult('not_found', 'no anchor') }),
       call({ name: 'shell', toolCallId: 't2', args: { command: 'node x.js' },
         outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'Error (exit 1)\n' }),
@@ -298,19 +298,19 @@ describe('the census over a run', () => {
   test('counts by tool·action·reason, heaviest first, over FAILURES not calls', () => {
     // Built over failures only; over every row it would describe tool usage, not failures.
     const rows = [
-      call({ name: 'file', toolCallId: 't1', args: { action: 'read' }, result: 'ok\n' }),
-      call({ name: 'file', toolCallId: 't2', args: { action: 'read' }, result: 'ok\n' }),
-      call({ name: 'file', toolCallId: 't3', args: { action: 'read' }, result: 'ok\n' }),
+      call({ name: 'file', toolCallId: 't1', args: { op: 'read' }, result: 'ok\n' }),
+      call({ name: 'file', toolCallId: 't2', args: { op: 'read' }, result: 'ok\n' }),
+      call({ name: 'file', toolCallId: 't3', args: { op: 'read' }, result: 'ok\n' }),
       call({
-        name: 'file', toolCallId: 't4', args: { action: 'edit' },
+        name: 'file', toolCallId: 't4', args: { op: 'edit' },
         outcome: { success: false, reason: 'not_found' }, result: cfResult('not_found', 'no match'),
       }),
       call({
-        name: 'file', toolCallId: 't5', args: { action: 'edit' },
+        name: 'file', toolCallId: 't5', args: { op: 'edit' },
         outcome: { success: false, reason: 'not_found' }, result: cliResult('not_found', 'no match'),
       }),
       call({
-        name: 'file', toolCallId: 't6', args: { action: 'write' },
+        name: 'file', toolCallId: 't6', args: { op: 'write' },
         outcome: { success: false, reason: 'unread' }, result: cfResult('unread', 'not read yet'),
       }),
       call({ name: 'shell', toolCallId: 't7', args: { command: 'bun test' }, outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'fail' }),
@@ -342,7 +342,7 @@ describe('the census over a run', () => {
 
   test('a clean run reports no failures and no mix', () => {
     const census = censusToolFailures([
-      call({ name: 'file', toolCallId: 't1', args: { action: 'read' }, result: 'ok\n' }),
+      call({ name: 'file', toolCallId: 't1', args: { op: 'read' }, result: 'ok\n' }),
     ]);
 
     expect(census).toMatchObject({ byKey: [], refused: 0, workFailed: 0, broke: 0 });

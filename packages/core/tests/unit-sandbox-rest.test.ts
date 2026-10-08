@@ -1,6 +1,12 @@
 import { expect, test } from 'bun:test';
 import { createSandboxExecutor, type SandboxHandle, type SandboxRestAnswer } from '../src/execution/sandbox';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
+import { executorNamespace } from '../src/tools/executor-operations';
+import { namespaceDeclaration } from '../src/tools/operation-surfaces';
+
+/** An executor's namespace as the model reads it. */
+const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {}, new Set());
+
 
 function boxAnswering(answer: SandboxRestAnswer): SandboxHandle & { readonly asked: string[] } {
   const asked: string[] = [];
@@ -29,7 +35,7 @@ test('the namespace declares rest beside the process calls, and each answer reac
   const refused = boxAnswering({ kind: 'refused', reason: 'no rest ask is pending: the sandbox is in use or already resting' });
   const answer = async (box: SandboxHandle, given: string) => await createSandboxExecutor(box).tools['rest']?.execute(given);
 
-  expect(createSandboxExecutor(resting).types).toContain("function rest(answer: 'now' | 'keep'): Promise<string | Refusal>;");
+  expect(declared(createSandboxExecutor(resting))).toContain('rest(answer: "now" | "keep"): Promise<string | Refusal>;');
   expect(await answer(resting, 'now')).toContain('saved its workspace and stopped');
   expect(await answer(kept, 'keep')).toContain('asks again after about 40 minutes');
   expect(JSON.stringify(await answer(refused, 'now'))).toContain('no rest ask is pending');
