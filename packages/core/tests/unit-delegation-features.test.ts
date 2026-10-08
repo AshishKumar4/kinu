@@ -3,10 +3,11 @@ import {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,
 } from '../src/evolution/delegation-features';
 import type { ToolCallRecord } from '../src/evolution/types';
+import { compactToolCall } from '../src/evolution/tool-call-record';
 import type { JsonObject } from '../src/utils/json';
 
 const call = (name: string, args: JsonObject = {}): ToolCallRecord =>
-  ({ name, args, result: null });
+  compactToolCall({ name, args, result: null });
 
 const write = (path: string): ToolCallRecord =>
   call('eval', { code: `await workspace.writeFile("${path}", body);` });

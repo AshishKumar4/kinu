@@ -132,8 +132,8 @@ const CORROBORATING_CORRECTION = 0.8;
 type EffectiveRating = Pick<TurnRating, 'score' | 'corrected' | 'wrong' | 'source'>;
 
 /** Read-only calls prove nothing about whether the turn's work landed, so the pattern extractor skips them. */
-function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'args'>): boolean {
-  return call.name === 'memory' && v.is(v.picklist(['recall', 'search', 'searchConversations', 'readConversation', 'listConversations']), call.args.op);
+function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'op'>): boolean {
+  return call.name === 'memory' && v.is(v.picklist(['recall', 'search', 'searchConversations', 'readConversation', 'listConversations']), call.op);
 }
 
 export class EvolutionEngine {
@@ -771,7 +771,7 @@ export class EvolutionEngine {
     if (meaningfulCalls.length === 0) return;
 
     const callSummary = meaningfulCalls
-      .map(tc => `${tc.name}(${evidenceWindow(JSON.stringify(tc.args), EVIDENCE_BUDGETS.patternToolCall)}) -> ${evidenceWindow(JSON.stringify(tc.result), EVIDENCE_BUDGETS.patternToolCall)}`)
+      .map(tc => `${tc.name}(${tc.argsWindow}) -> ${tc.resultWindow ?? 'null'}`)
       .join('\n');
 
     // The answer is persisted before it is applied, so a replay applies what was

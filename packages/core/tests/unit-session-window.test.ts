@@ -1,4 +1,5 @@
 // SessionWindow — the durable evolution window + pending outcome review.
+import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestSql, present } from '@kinu.run/test-utils';
 import { initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore } from '../src/evolution/session-window';
@@ -63,7 +64,7 @@ describe('SessionWindow — the open window', () => {
     const win = newStore();
 
     const turn = aTurn(0, {
-      toolCalls: [{ name: 'shell', args: { cmd: 'ls' }, result: { stdout: 'a\nb' } }],
+      toolCalls: [compactToolCall({ name: 'shell', args: { cmd: 'ls' }, result: { stdout: 'a\nb' } })],
       usage: { input: 10, output: 5, cacheRead: 2 },
       hadError: true,
       sessionId: 'conv-1',
@@ -120,10 +121,11 @@ describe('SessionWindow — the open window', () => {
 
   test('a turn that cannot be encoded fails its append instead of vanishing from the window', () => {
     const win = newStore();
-    const args: JsonObject = {};
-    args.self = args;
+    const cycle: JsonObject = {};
+    cycle.self = cycle;
+    const turn = Object.assign(aTurn(0), { cycle });
 
-    expect(() => win.append(aTurn(0, { toolCalls: [{ name: 'eval', args }] }), { awaitsFollowup: false, now: 1000 }))
+    expect(() => win.append(turn, { awaitsFollowup: false, now: 1000 }))
       .toThrow(TypeError);
     expect(win.size()).toBe(0);
   });
