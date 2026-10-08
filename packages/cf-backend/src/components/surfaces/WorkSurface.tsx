@@ -193,7 +193,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const pages: PageTab[] = [
     ...(props.slates ?? []).map((slate) => ({
       key: slateSurface(slate.id), title: slate.title, Icon: SparkleIcon,
-      action: props.workspace === undefined ? undefined : <ShareSlateControl workspace={props.workspace} slate={slate} rpc={props.rpc} />,
+      // Share is the open Slate's, as it was beside the strip: what is on screen is what is shared.
+      action: props.workspace === undefined || slate.id !== openSlate ? undefined : <ShareSlateControl workspace={props.workspace} slate={slate} rpc={props.rpc} />,
     })),
     ...ports.map((port) => ({
       key: `preview:${port.executor}:${port.port}` as const,

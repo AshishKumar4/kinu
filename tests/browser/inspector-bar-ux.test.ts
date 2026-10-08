@@ -122,6 +122,28 @@ describe('the inspector bar keeps the workspace in reach', () => {
   });
 });
 
+describe('sharing the open Slate', () => {
+  test('its tab carries Share, which opens the share dialog for that Slate', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('button[aria-label="Board"]', SOON);
+        await page.click('button[aria-label="Board"]');
+        await page.waitForSelector('button[aria-label="Board"][aria-current="true"]', SOON);
+
+        const share = await required(page, 'body', 'button', 'Share Board');
+
+        await page.hover('button[aria-label="Board"]');
+        await share.click();
+        await page.waitForSelector('[role="dialog"]', SOON);
+      } finally { await page.close(); }
+    });
+  });
+});
+
 describe('the Environment panel', () => {
   test('the Linux container is the cloud computer: its card is a control by that name that opens its terminal', async () => {
     await withGallery(async ({ newPage, origin }) => {
