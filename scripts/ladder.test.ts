@@ -688,8 +688,8 @@ describe('a deploy\'s armada rows', () => {
       atDeploy: here.every((gate) => atDeploy.has(gate.run)), local: localDeployGates(deployOrder()).filter((gate) => !onArmada(gate)).length,
     }).toEqual({
       rows: [
-        'preflight bun scripts/preflight.ts', 'source bun test --timeout=0 scripts/deadline-capability.test.ts', 'upload bun run gate:infra', 'post-publish bun run gate:first-run',
-        'post-publish bun run gate:devbox-e2e', 'post-publish bash scripts/product-flows-tier.sh', 'soak bash scripts/eval-pass-tier.sh',
+        'preflight bun scripts/preflight.ts', 'source bun test --timeout=0 scripts/deadline-capability.test.ts', 'upload bun run gate:infra',
+        'post-publish bun run gate:devbox-e2e',
       ],
       reasons: true, atDeploy: true, local: here.length,
     });

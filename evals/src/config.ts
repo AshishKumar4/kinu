@@ -10,34 +10,21 @@ export const DEFAULT_MODELS: readonly [string, ...string[]] = [
   'opencode-go/muse-spark-1.3-contributor',
 ];
 
-/**
- * The owner's ChatGPT Pro logins the reviewer runs on (2026-10-07), first to last, each the eval identity's own ChatGPT
- * sign-in on a deployment, asked of the owner only when the deployment lacks it (`evals/scripts/reviewer-sign-in.ts`).
- */
-export const REVIEW_ACCOUNTS = ['ashishkmr472', 'aksnip4284'] as const;
-
-export type ReviewAccount = (typeof REVIEW_ACCOUNTS)[number];
-
-/** GPT 6.1 Sol through ChatGPT on one of {@link REVIEW_ACCOUNTS}, and the login it is served on: a menu names no account,
- *  so the spec is never listed, and it is the reviewer's once its login is held. */
-export function reviewLogin(account: ReviewAccount) {
-  return { spec: `chatgpt@${account}/gpt-6.1-sol`, key: accountCredentialKey(CHATGPT_CRED_KEY, account) } as const;
-}
+const REVIEW_ACCOUNT = 'ashishkmr472';
 
 /**
- * GPT 6.1 Sol through the `openrouter.bearer` key every eval account holds (`scripts/eval-provider-keys.ts`, which
- * requires it listed): the reviewer's last resort, when neither ChatGPT login is held. Staging listed it on 2026-10-07.
+ * The model that reads a run rather than being measured by it: the diagnosis, the trajectory review and the judge of
+ * what no check computes. GPT 6.1 Sol through ChatGPT on the owner's one Pro login (the owner, 2026-10-08), the eval
+ * identity's own sign-in on a deployment (`evals/scripts/reviewer-sign-in.ts`), served once `key` is held: a menu names
+ * no account, so `spec` is never listed. Without it a review fails; no paid route stands in.
  */
-export const REVIEW_KEYED_MODEL = 'openrouter/openai/gpt-6.1-sol';
+export const REVIEW_LOGIN = {
+  account: REVIEW_ACCOUNT,
+  spec: `chatgpt@${REVIEW_ACCOUNT}/gpt-6.1-sol`,
+  key: accountCredentialKey(CHATGPT_CRED_KEY, REVIEW_ACCOUNT),
+} as const;
 
-/**
- * The model that reads a run rather than being measured by it, the owner's choice (2026-10-07): the diagnosis, the
- * trajectory review and the judge of what no check computes. GPT 6.1 Sol, first choice first; a review runs on the
- * first its deployment lists for the eval identity, and falls back to the others it lists (`reviewerModels`).
- */
-export const REVIEW_MODELS: readonly string[] = [...REVIEW_ACCOUNTS.map((account) => reviewLogin(account).spec), REVIEW_KEYED_MODEL];
-
-/** A reviewer `KINU_EVAL_REVIEW_MODEL` names in place of {@link REVIEW_MODELS}, or null. */
+/** A reviewer `KINU_EVAL_REVIEW_MODEL` names in place of {@link REVIEW_LOGIN}, or null. */
 export function reviewModelOverride(env: Env): string | null {
   const named = env.KINU_EVAL_REVIEW_MODEL?.trim() ?? '';
 

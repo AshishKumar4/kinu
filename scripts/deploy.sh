@@ -634,6 +634,9 @@ if [ "$KINU_RESET" = "1" ]; then
   echo ""
   echo -e "${BOLD}Step 2b: Resetting $KINU_WORKER${NC}"
   KINU_RESET_RECORD="$(mktemp -t kinu-reset.XXXXXX.json)"
+  # Eval-service's credentials, the reviewer's login among them, outlive the reset: restored once the build serves.
+  bun "$KINU_ROOT/scripts/credential-checkpoint.ts" save "$KINU_URL" \
+    || { publish_red "eval-service's credentials were not captured, as the line above says, so nothing was reset or deployed"; return 1; }
   bun "$KINU_ROOT/scripts/reset.ts" wipe "$KINU_ENV" "$KINU_RESET_RECORD" \
     || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped, and a deploy with --reset finishes it from its record"; return 1; }
   KINU_RECORD_ARGS=("$KINU_RESET_RECORD")
@@ -926,8 +929,8 @@ export KINU_ORIGIN="${KINU_URL%/}"
 EVAL_BASELINE_ORIGIN="https://kinu.run"
 
 # THE STATISTICS, on GitHub (L19). scripts/evals-dispatch.ts starts
-# .github/workflows/evals.yml for this build from the branch on GitHub that
-# holds it: every eval task ten times on staging, which must be serving this
+# .github/workflows/evals.yml for this build from main, which must hold it
+# (the eval environment accepts only main): every eval task ten times on staging, which must be serving this
 # build, and on production, the baseline, and its Verdict job fails on a
 # regression between the two. Not awaited: the report names the run and the
 # record keeps its id, since a promotion waits for its verdict.
@@ -935,13 +938,13 @@ KINU_EVALS_RUN=""
 KINU_EVALS_URL=""
 KINU_EVALS_WHY=""
 dispatch_evals() {
-  local answer branch
+  local answer
   if ! answer="$(bun "$KINU_ROOT/scripts/evals-dispatch.ts" "$KINU_SHA")"; then
     KINU_EVALS_WHY="$answer"
     return 1
   fi
-  read -r KINU_EVALS_RUN KINU_EVALS_URL branch <<<"$answer"
-  report dispatched "the evals of $KINU_SHA from $branch, every task ten times on staging against production" "$KINU_EVALS_URL"
+  read -r KINU_EVALS_RUN KINU_EVALS_URL <<<"$answer"
+  report dispatched "the evals of $KINU_SHA from main, every task ten times on staging against production" "$KINU_EVALS_URL"
 }
 
 # THE EVAL ACCOUNTS' PROVIDER KEYS (scripts/eval-provider-keys.ts), stored before any eval starts, on each deployment
@@ -969,7 +972,11 @@ start_soak() {
 # of the owner here, in the foreground, and only for a login the deployment does not hold, so only after a reset wiped
 # it. The soak's provisioning runs detached and cannot ask. A login not approved is a notice in the report, never a red:
 # the reviewer explains a run, and the build is not what it measures.
-if [ "$KINU_SERVING" = "1" ]; then bun "$KINU_ROOT/evals/scripts/reviewer-sign-in.ts" "$KINU_EVAL_ORIGIN"; fi
+if [ "$KINU_SERVING" = "1" ]; then
+  bun "$KINU_ROOT/scripts/credential-checkpoint.ts" restore "$KINU_EVAL_ORIGIN" \
+    || step_red provision "eval-service's credentials" "the checkpoint was not restored, as the line above says; its file stays for the next deploy to finish"
+  bun "$KINU_ROOT/evals/scripts/reviewer-sign-in.ts" "$KINU_EVAL_ORIGIN"
+fi
 
 if [ "$KINU_PROMOTE" = "1" ]; then
   if [ -z "$KINU_TIERS_WHY" ]; then
