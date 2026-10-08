@@ -259,18 +259,25 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   /** Asserts the actor once, after the last await; keeps only the messages this context names. */
   async materializeAll(references: readonly MessageReference[]): Promise<ModelMessage[]> {
     const messages: ModelMessage[] = [];
-    const named = new Map<string, SealedMessage>();
+    let named = 0;
 
     for (const reference of references) {
       const message = this.sealed.get(reference.messageId)?.message ?? await this.materialize(reference);
-      const sealed = this.sealed.get(reference.messageId);
       messages.push(message);
 
-      if (sealed?.message === message) named.set(reference.messageId, sealed);
+      if (this.sealed.get(reference.messageId)?.message === message) named += 1;
     }
 
     this.actor.assertCurrent();
-    this.sealed = named;
+
+    // A step that only appended names everything the cache holds: it is kept, not rebuilt over the whole context.
+    if (named !== this.sealed.size || named !== references.length) {
+      this.sealed = new Map(references.flatMap((reference, index) => {
+        const sealed = this.sealed.get(reference.messageId);
+
+        return sealed?.message === messages[index] ? [[reference.messageId, sealed] as const] : [];
+      }));
+    }
 
     return messages;
   }

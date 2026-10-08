@@ -28,10 +28,10 @@ permissions:
 # `.github/actions/setup-lean/**` and the two workflow files, neither
 # `scripts/lean-citations.ts` nor `lean/check-traceability.mjs` — two of the four
 # gates, including the one that reads the widest corpus — is a trigger path at
-# all, so editing a gate does not run it. On a pull request, `ci.yml`'s
-# `verify-lean` job is skipped (`push` to `main` only), so this workflow is the
-# ONLY thing standing behind those files, and a broken citation added to
-# `docs/FORMAL-SPEC.md` would reach `main` with no Lean gate having run.
+# all, so editing a gate does not run it. This workflow is the ONLY Lean gate
+# GitHub runs, so it is the only thing standing behind those files, and a broken
+# citation added to `docs/FORMAL-SPEC.md` would reach `main` with no Lean gate
+# having run.
 #
 # Enumerating the real union is the same thing as not filtering — the citation
 # corpus is every tracked text file — so there is no filter at all, rather than

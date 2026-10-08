@@ -8,8 +8,6 @@ name: Flake sweep
 
 permissions:
   contents: read
-  # The report opens with main's latest CI verdict, read through `gh run list`.
-  actions: read
 
 on:
   workflow_dispatch:
@@ -34,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The CI tier's suites run on a full clone in ci.yml; the sweep runs them the same way.
+          # The CI tier's suites run on a full clone on armada; the sweep runs them the same way.
           fetch-depth: 0
           persist-credentials: false
 

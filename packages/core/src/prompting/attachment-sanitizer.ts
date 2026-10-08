@@ -71,7 +71,8 @@ export async function sanitizeAttachmentsForModel(
         const replacement = await sanitizeUserText(message.content, policy);
         out.push(replacement === null ? message : { ...message, content: replacement });
       }
-    } else if (message.role === 'assistant' && Array.isArray(message.content)) {
+    } else if (message.role === 'assistant' && Array.isArray(message.content) && message.content.some((part) => part.type === 'file')) {
+      // Only a file part can carry an attachment: the rest of a long turn's answers pass without a copy or an await.
       out.push(await sanitizeAssistantMessage(message, message.content, policy));
     } else {
       out.push(message);

@@ -366,8 +366,8 @@ assert.match(packageJson.scripts.lint, /^bun run test:anti-slop$/u);
 assert.match(packageJson.scripts.check, /^bun run lint && /u);
 assert.doesNotMatch(packageJson.scripts.lint, /--quiet|--allow|--fix|baseline/u);
 
-// The strict gate must provably run in CI. ci.yml runs the ladder's ci tier, which
-// `scripts/ladder.test.ts` proves over the parsed workflow; here, the ci tier claims `bun run lint`
+// The strict gate must provably run in CI. CI on armada runs the ladder's ci tier, which
+// `scripts/ladder.test.ts` proves over `.armada.json`; here, the ci tier claims `bun run lint`
 // (the lint half of `bun run check`, its own ladder row since 2026-09-15 so its closure is keyed
 // apart from the typecheck's). `LADDER` is data in a module raw Node cannot load, so its rows are
 // read off the syntax tree: each object literal's `run` and `tier`.

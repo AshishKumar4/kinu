@@ -1,23 +1,68 @@
 #!/usr/bin/env bash
 #
-# A push runs the static `local` tier on the pushed tree, a few minutes. The test suites run on GitHub CI's
-# parallel runners for the pushed commit, and a release deploys only a commit whose CI is green (deploy.sh).
+# A push to main or integration/** is proved by CI's whole tier on armada for the pushed commit (L25): the verdict
+# armada stored for that exact commit if it has one, else `armada run`, and it is refused unless every row is green.
+# A stored red is not run again. Any other push runs the static `local` tier on the pushed tree, a few minutes.
 #
 # NEVER --no-verify.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 source scripts/repo-runtime.sh
 
-# The tier proves the checked-out tree, so it must be the tree being pushed: a push of
-# another branch from this worktree once ran the tier on main and refused a green commit.
+zero=0000000000000000000000000000000000000000
 head="$(git rev-parse HEAD)"
-while read -r _ local_sha _ _; do
-  if [ "$local_sha" != "0000000000000000000000000000000000000000" ] && [ "$local_sha" != "$head" ]; then
+armada="$PWD/node_modules/.bin/armada"
+proved=()
+local_tier=0
+while read -r _ local_sha remote_ref _; do
+  case "$remote_ref" in
+    refs/heads/main | refs/heads/integration/*)
+      [ "$local_sha" = "$zero" ] || proved+=("$local_sha")
+      continue
+      ;;
+  esac
+  local_tier=1
+  # The tier proves the checked-out tree, so it must be the tree being pushed: a push of
+  # another branch from this worktree once ran the tier on main and refused a green commit.
+  if [ "$local_sha" != "$zero" ] && [ "$local_sha" != "$head" ]; then
     printf 'pre-push: this push sends %s, but the tier proves the checked-out %s.\n' "$local_sha" "$head" >&2
     printf 'Push from a worktree that has that commit checked out.\n' >&2
     exit 1
   fi
 done
+[ "${#proved[@]}" -gt 0 ] || local_tier=1
+
+for sha in $(printf '%s\n' "${proved[@]}" | sort -u); do
+  if [ ! -x "$armada" ]; then
+    printf 'pre-push: a push to main or integration/** is proved on armada, which this checkout has not installed: bun install --frozen-lockfile\n' >&2
+    exit 1
+  fi
+  stored="$("$armada" verdict "$sha" --json 2>/dev/null)"
+  case "$?" in
+    0) printf 'pre-push: armada already proved %s green\n' "$sha"; continue ;;
+    1)
+      "$armada" verdict "$sha" >&2
+      printf '\npre-push: armada proved %s red. Fix it in a new commit; a run of the same commit is not repeated here.\n' "$sha" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$stored" != "null" ]; then
+    "$armada" verdict "$sha" --json >&2
+    printf 'pre-push: armada could not say whether %s is proved\n' "$sha" >&2
+    exit 1
+  fi
+  log="$(git rev-parse --git-dir)/push-armada-${sha:0:12}.log"
+  printf 'pre-push: proving %s on armada, about 15 minutes; follow it with: tail -f %s\n' "$sha" "$log"
+  if "$armada" run "$sha" > "$log" 2>&1; then
+    tail -n 3 "$log"
+    continue
+  fi
+  tail -n 60 "$log" >&2
+  printf '\npre-push: armada did not prove %s green; full transcript: %s\n' "$sha" "$log" >&2
+  exit 1
+done
+
+[ "$local_tier" = 1 ] || exit 0
 # Untracked files count: the gates' corpus includes untracked, non-ignored files (scripts/sources.ts).
 if [ -n "$(git status --porcelain=v1)" ]; then
   printf 'pre-push: the working tree has uncommitted or untracked changes, so the tier would not prove the pushed commit.\n' >&2

@@ -119,7 +119,7 @@ describe('ladder-cache — the green path', () => {
     const ran: string[] = [];
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const enabled = cacheEnabled({ changedFrom: 'HEAD', noCache: false });
+      const enabled = cacheEnabled({ noCache: false });
 
       if (!enabled) {
         const run = Bun.spawnSync(['bun', 'scripts/a.ts'], { cwd: fx.root, env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
@@ -131,11 +131,11 @@ describe('ladder-cache — the green path', () => {
 
     expect(ran).toEqual(['executed']);
     expect(entries(fx.store)).toHaveLength(1);
-    expect(cacheEnabled({ changedFrom: 'HEAD', noCache: true })).toBe(false);
+    expect(cacheEnabled({ noCache: true })).toBe(false);
   });
 
   // m2081, m1912: every CI part reran its whole assigned suites, so an unchanged suite was proved again on each push.
-  test('a CI part reuses an unchanged row\'s green proof with the file walls it measured; a hammer run never does', () => {
+  test('a CI row reuses an unchanged row\'s green proof with the file walls it measured; a hammer run never does', () => {
     const fx = fixture({ 'scripts/a.test.ts': GREEN });
     const repo = fx.repo();
     const run = 'bun scripts/a.test.ts';
@@ -146,11 +146,10 @@ describe('ladder-cache — the green path', () => {
     const again = planGate({ run, inputs: DERIVED, repo: fx.repo(), tools: fx.tools, store: fx.store });
 
     expect({
-      source: cacheEnabled({ ciPart: 'source-3', noCache: false }),
-      upload: cacheEnabled({ ciPart: 'upload', noCache: false }),
-      hammer: cacheEnabled({ ciPart: 'hammer-2', noCache: false }),
+      row: cacheEnabled({ hammer: false, noCache: false }),
+      hammer: cacheEnabled({ hammer: true, noCache: false }),
       reused: again.kind === 'hit' ? { revision: again.entry.revision, timings: again.entry.timings } : again.kind,
-    }).toEqual({ source: true, upload: true, hammer: false, reused: { revision: 'a'.repeat(40), timings: { 'scripts/a.test.ts': 3.5 } } });
+    }).toEqual({ row: true, hammer: false, reused: { revision: 'a'.repeat(40), timings: { 'scripts/a.test.ts': 3.5 } } });
   });
 
   test('after a green run, a rerun hits every cacheable gate and names the hash, the revision and the closure size', () => {

@@ -37,7 +37,7 @@ bun test packages/cli-backend/tests
 
 Multi-file ladder rows, the spine, the live tier and `scripts/test.sh` use Bun's native `--isolate`. The core, backend and CLI use `--parallel`, which implies the same isolation. On Bun 1.4.0, measured 2026-10-01, one fixture installed a module mock and a global; the second expected the real module and no global. The old devbox command ran 1 pass, 1 fail. With `--isolate`, both passed; the local shell entry point also passed both. Isolation changes no suite population.
 
-Before merging, use `node_modules/.bin/bun run scripts/ladder.ts --changed=<base>`: Bun's `--changed` and Vitest's `--changed` select unchanged tests whose imported product changed. The commit hook uses `--changed=HEAD`. Worker pools also use their row's existing input closure as native `forceRerunTriggers`, because Vitest cannot follow `SELF` into the Worker. A changed run stores no complete-suite cache proof; CI remains unfiltered. Branch refs containing `/` survive glob expansion.
+Before merging, use `node_modules/.bin/bun run scripts/ladder.ts --changed=<base>`: Bun's `--changed` and Vitest's `--changed` select unchanged tests whose imported product changed. Worker pools also use their row's existing input closure as native `forceRerunTriggers`, because Vitest cannot follow `SELF` into the Worker. A changed run stores no complete-suite cache proof; CI remains unfiltered. Branch refs containing `/` survive glob expansion.
 
 ## The counts, measured 2026-08-19
 
