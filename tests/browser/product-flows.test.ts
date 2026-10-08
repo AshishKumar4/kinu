@@ -11,14 +11,14 @@ import { resolveWebIdentity } from '../../evals/src/session';
 import { withBrowser } from '../../scripts/live-app-harness';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
+  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
   writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
-  type AgentPlanVerdict, type AgentReturnVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
+  type AgentPlanVerdict, type AgentReturnVerdict, type WorkspaceProposalVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
-import { FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, STORM_FILES } from '../../scripts/flows-script';
+import { FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, PROPOSED_WORKSPACE, STORM_FILES } from '../../scripts/flows-script';
 import { rowVerdicts } from '../../scripts/row-verdicts';
 
 interface FlowVerdicts {
@@ -26,6 +26,7 @@ interface FlowVerdicts {
   firstAnswer: FirstAnswerVerdict | null;
   agentReturn: AgentReturnVerdict | null;
   agentPlan: AgentPlanVerdict | null;
+  proposal: WorkspaceProposalVerdict | null;
   panel: PanelVerdict | null;
   stamped: StampedCardVerdict | null;
   writtenFile: WrittenFileVerdict | null;
@@ -39,7 +40,7 @@ interface FlowVerdicts {
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
   driveOpens: null, slateOpens: null, slateShare: null,
 };
 
@@ -74,6 +75,7 @@ beforeAll(async () => {
     observed.firstAnswer = await attempt('first-answer', () => workspaceGetsFirstAnswer(target));
     observed.agentReturn = await attempt('agent-return', () => agentIsThereOnReturn(target));
     observed.agentPlan = await attempt('agent-plan', () => agentPlanIsReviewedInItsPane(target));
+    observed.proposal = await attempt('workspace-proposal', () => agentProposesAWorkspace(target));
     observed.panel = await attempt('panel', () => rightPanelKeepsItsState(target));
     observed.stamped = await attempt('stamped', () => eachPaneKeepsItsTranscript(target));
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
@@ -122,6 +124,24 @@ describe("an agent made with '+' has its plan reviewed beside its own pane", () 
     expect(flow.planReviewShown).toBeTrue();
     expect(flow.approveControl).toMatch(/approve/iu);
     expect(flow.planStatus).toBe('Approved');
+  });
+});
+
+describe('a workspace the agent proposes exists only once its owner approves it', () => {
+  test('the owner sees its name and the SOUL.md approving writes, and nothing exists before the approval', () => {
+    const flow = verdictOf(observed.proposal, 'workspace-proposal');
+
+    expect(flow.cardTitle).toContain(PROPOSED_WORKSPACE.name);
+    expect(flow.cardSoul).toContain(PROPOSED_WORKSPACE.brief);
+    expect(flow.cardSoul).toContain(PROPOSED_WORKSPACE.soul);
+    expect(flow.existedBeforeApproval).toBeFalse();
+  });
+
+  test('approved, it is on the account under its proposed name, and the agent that asked has its link', () => {
+    const flow = verdictOf(observed.proposal, 'workspace-proposal');
+
+    expect(flow.created?.displayName).toBe(PROPOSED_WORKSPACE.name);
+    expect(flow.link).toContain(`/workspace/${flow.created?.name ?? '(none)'}`);
   });
 });
 

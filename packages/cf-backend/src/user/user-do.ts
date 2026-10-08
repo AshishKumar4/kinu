@@ -70,6 +70,11 @@ export class UserDO extends Agent<Env> {
     this.initTables();
   }
 
+  /** Every gated RPC waits for this (`startBeforeRpc`); the MCP dials it starts are not awaited. */
+  override onStart(): void {
+    this.mcpServers.start();
+  }
+
   private readonly host: UserObjectHost = {
     ctx: this.ctx, env: this.env,
     sqlx: (query, ...bindings) => this.sqlx(query, ...bindings),

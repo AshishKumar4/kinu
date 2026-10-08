@@ -385,7 +385,7 @@ A test that passes and fails on one tree is a flake. A row runs each suite once,
 | Program | Repeats | Runs where | Verdict |
 |---|---|---|---|
 | `bun scripts/flake-gate.ts` | each test file the commit adds or changes, 6 times (3 for one that drives Chrome), through the row that claims it | commit tier, every commit | gate: one red run fails the commit, named `RED` or `FLAKE` |
-| `bun run sweep:flakes` | every suite the CI tier runs, beside its row's siblings, 3 times under `--randomize` with recorded seeds | nightly on GitHub (`flake-sweep.yml`, in 4 parts: `--shard=<part>/4`), and on request (`--only=<row label>` for one row) | a red run: each flaky or red test, after main's latest CI verdict |
+| `bun run sweep:flakes` | every suite the CI tier runs, beside its row's siblings, 3 times under `--randomize` with recorded seeds | nightly on armada (`scripts/nightly-sweeps.ts`, 16 parts: `--shard=<part>/16`), and on request (`--only=<row label>` for one row) | a red run: each flaky or red test, after main's latest CI verdict |
 
 Neither one retries or quarantines. A red run is the only evidence of the race or leak behind it, so each flake is fixed at its root. The gate keeps every red run's output under `bench-artifacts/flake-gate/`, and the sweep writes its report under `bench-artifacts/flake-sweep/`. A merge repeats only the test files that differ from every parent. A file it takes whole from one side was already repeated by that side's own commits.
 

@@ -21,12 +21,14 @@ export interface AgentSelfPorts {
   readonly budget: () => MissionGovernor;
   readonly cancelTrigger: AgentSelfHost['cancelTrigger'];
   readonly armCompactNow: () => void;
+  /** The cloud's owner-approved workspace creation; a local session has none. */
+  readonly proposeWorkspace?: AgentSelfHost['proposeWorkspace'];
 }
 
 export function agentSelfHost(ports: AgentSelfPorts): AgentSelfHost {
   const { rt } = ports;
 
-  return {
+  const host: AgentSelfHost = {
     proposeCurriculumTasks: (count) => proposeCurriculumTasks(rt, count),
     listCurriculumTasks: async (status) => listProposedTasks(rt, status),
     setCurriculumTaskStatus: async (id, status) => {
@@ -45,4 +47,6 @@ export function agentSelfHost(ports: AgentSelfPorts): AgentSelfHost {
     getQuality: async (days) => qualitySeries(rt.storage.sql, rt.actor, days === undefined ? {} : { days }),
     armCompactNow: ports.armCompactNow,
   };
+
+  return ports.proposeWorkspace === undefined ? host : { ...host, proposeWorkspace: ports.proposeWorkspace };
 }

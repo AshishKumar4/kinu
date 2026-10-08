@@ -9,7 +9,7 @@ import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
 import {
   HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
-  type SlateCallResult, type TerminalEffectName, type TerminalEffectPhase,
+  type SlateAnswer, type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import {
   createCompositeLogger,
@@ -288,7 +288,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** How the agent's last answer's block, its last ask and the answer named as the workspace's resolve, as a preview
    *  and as a page's `workspace` call: `ok`, or the refusal's reason. */
   async answerSlates(agent: string): Promise<AgentSlateUi> {
-    const reason = (result: SlateCallResult) => (result.ok ? 'ok' : result.reason);
+    const reason = (result: SlateAnswer<unknown>) => (result.ok ? 'ok' : result.reason);
     // A page's own call resolves its source first, so a block that resolves is refused only for the authority lent to it.
     const call = async (id: string) => reason(await this.slateCallAs(ROOT_SLATE_CALLER, id, 'workspace', { path: ['exists'], args: ['/home'], invocation: null }));
     const { items } = await this.agentStores(agent).historyPage({});

@@ -101,7 +101,7 @@ import {
   // Spend governor is opt-in: no label means no cap.
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   normalizeUsage, priceCall, type Usage,
-  generateReported, type GenerateRequest,
+  generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
   WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
@@ -200,13 +200,14 @@ import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import type { AgentStoreBroker } from "./agent-facets";
-import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
+import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel, SlateSurfaceValue } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
 import type { SlateDispatchContext } from "./slates/host";
 import { diagnostics, KinuError, refusalOf, refusing, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
+import type { McpToolSurface } from "./user/mcp-servers";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import type { WorkspaceTerminal } from "./workspace-host";
@@ -442,6 +443,7 @@ export interface UntimedArms {
 
 export interface ActorDynamicContextExtras {
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
+  readonly failingSlates?: () => readonly string[];
   readonly extraMissingCapabilities?: () => readonly MissingCapability[];
 }
 
@@ -2965,7 +2967,7 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   private dispatchHostedSlateCall(
     hops: readonly [SlateCallerHop, ...SlateCallerHop[]], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext,
-  ): Effect.Effect<JsonValue, KinuError> {
+  ): Effect.Effect<SlateSurfaceValue, KinuError> {
     const [{ name }, ...rest] = hops;
 
     return Effect.gen({ self: this }, function* () {
@@ -3024,7 +3026,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * One capability route, run as this actor, narrowed by its own current role.
    * Not `@callable`: reached on the stub transport only.
    */
-  slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Promise<JsonValue> {
+  slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Promise<SlateSurfaceValue> {
     return settle(Effect.gen({ self: this }, function* () {
       // Only a namespace member is checked without running it; anything else asked about alone would run.
       if (context.authorizeOnly && route.kind !== 'namespace') {
@@ -3058,9 +3060,17 @@ export abstract class ActorAgent extends Agent<Env> {
         case 'mcp': {
           // The role admits MCP tools by descriptor key, same as `toolAllowed(d.toolKey)` in native turns.
           const { stub, caller } = yield* Effect.promise(async () => this.userHub());
-          const surface = v.parse(McpToolSurfaceSchema, JSON.parse(yield* Effect.promise(async () => stub.userMcp_toolDescriptors(caller))));
+          const surface = async (): Promise<McpToolSurface> => v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
+          let offered = yield* Effect.promise(surface);
+
+          // A slate call is not a turn opening: a server the user object is still dialling is waited for, once.
+          if (offered.unavailable.some((row) => row.server === route.server)) {
+            yield* Effect.promise(async () => stub.userMcp_warmConnections(caller));
+            offered = yield* Effect.promise(surface);
+          }
+
           // A server is named as the actor's programs name it, so a fork reaches its forker's server of that name.
-          const descriptor = surface.descriptors.find((d) => d.serverName === route.server && d.name === route.tool);
+          const descriptor = offered.descriptors.find((d) => d.serverName === route.server && d.name === route.tool);
 
           if (descriptor === undefined) return yield* new KinuError('missing', `${route.server} offers no tool ${route.tool} to this actor`);
           // Enforce `readOnly` grants here so a read grant cannot write through a non-read-only tool.
@@ -3121,7 +3131,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async slateAiRun(
     route: Extract<SlateRoute, { kind: 'ai' }>,
     actor?: ActorHandle,
-  ): Promise<JsonValue> {
+  ): Promise<SlateSurfaceValue> {
     let profile: ResolvedTurnProfile;
 
     try {
@@ -3143,6 +3153,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (route.system !== undefined) input.system = route.system;
 
+    if (route.stream === true) return this.slateAiStream({ model, prompt: route.prompt, ...(route.system !== undefined && { system: route.system }) }, spec);
+
     const answer = await generateReported(input, {
       spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       spec,
@@ -3151,6 +3163,28 @@ export abstract class ActorAgent extends Agent<Env> {
     const usage = normalizeUsage(answer.usage);
 
     return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
+  }
+
+  /**
+   * `ai.stream`: the answer's text as UTF-8 bytes, each written as the model writes it, which the slate's class reads as
+   * text. Its spend is filed once the stream drains, as any streamed call's is; a reader that stops early ends the call.
+   */
+  private slateAiStream(request: StreamRequest, spec: string): ReadableStream<Uint8Array> {
+    const chunks = streamTextReported(request, {
+      spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations }, spec,
+    });
+
+    const encoder = new TextEncoder();
+
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const next = await chunks.next();
+
+        if (next.done === true) controller.close();
+        else controller.enqueue(encoder.encode(next.value));
+      },
+      async cancel() { await chunks.return(undefined); },
+    });
   }
 
   /** `actor` is whose browser sessions the program's egress reaches; null reaches only a new Kitesurf browser. */
@@ -3283,6 +3317,7 @@ export abstract class ActorAgent extends Agent<Env> {
       }),
       files: () => ({
         vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
+        slate: (operation) => this.slate(operation),
       }),
       // `this.taskList` is the store the turn's snapshot reads; the role switch is the native `tasks` tool's.
       tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null) }),
@@ -3803,6 +3838,7 @@ export abstract class ActorAgent extends Agent<Env> {
         facts: this.facts,
         webSearch: this.ownedModelServices.getWebSearchProvider(),
         jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() },
+        slate: (operation) => this.slate(operation),
       };
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
@@ -4277,6 +4313,7 @@ export abstract class ActorAgent extends Agent<Env> {
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: () => this.subordinateDelegates(),
       approvals: extras.approvals,
+      ...(extras.failingSlates !== undefined && { failingSlates: extras.failingSlates }),
     });
   }
 

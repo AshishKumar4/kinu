@@ -18,6 +18,9 @@ import { WEB, WEB_SANDBOX_IMPACTS } from '../operations/web';
 /** `workspace.ai.run({ prompt, system?, tier? })`: a model call, never the `shell` tool, whose run was renamed. */
 export const AI_RUN_MEMBER = 'run';
 
+/** `workspace.ai.stream({ prompt, system?, tier? })`: the same call, its text handed over as it is written. */
+export const AI_STREAM_MEMBER = 'stream';
+
 /** A tool call's chip: whether it only looked. */
 export type ActionEffect = 'read' | 'mutate';
 
@@ -76,8 +79,8 @@ export function slateAddressImpact(address: { readonly namespace: string; readon
 
   if (address.namespace === 'agent' && address.member === 'send') return 'externalSend';
 
-  // `ai` has one member; any other is no model call, and no namespace of the actor's either.
-  if (address.namespace === 'ai') return address.member === AI_RUN_MEMBER ? 'execute' : null;
+  // `ai` has two members, one call answered whole or as it is written; any other is no model call, and no namespace of the actor's either.
+  if (address.namespace === 'ai') return address.member === AI_RUN_MEMBER || address.member === AI_STREAM_MEMBER ? 'execute' : null;
 
   return namespaceMemberImpact(address.namespace, address.member);
 }
