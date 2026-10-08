@@ -83,10 +83,12 @@ test("a hosted agent's turn ends with its answer while its title model runs", as
   });
 });
 
-test("a hosted agent's failed turn ends on one error, shown once", async () => {
+test("a hosted agent's failed turn ends on one error, shown once, and still names it from its brief", async () => {
   const { seen, shown } = await firstTask(() => new Response('', { status: 400 }));
 
-  expect([seen.length, shown.length]).toEqual([1, 1]);
+  // The turn that opened the agent's chat names it however that turn ended: a later turn's words never do.
+  expect({ ended: seen.filter((entry) => entry !== 'title model').length, shown: shown.length, named: seen.includes('title model') })
+    .toEqual({ ended: 1, shown: 1, named: true });
 });
 
 test('a task admitted while the drain runs another is run by that drain', async () => {

@@ -9,7 +9,7 @@ import { MEMORY_PATH } from '@kinu.run/core';
 import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import { AGENT_HOME, agentDbPath, updateConfigFile } from '../src/config';
-import { inspectLocalSubordinate, readLocalMemory, searchLocalMemory } from '../src/local-inspection';
+import { getLocalAgentState, inspectLocalSubordinate, readLocalMemory, searchLocalMemory } from '../src/local-inspection';
 import { present } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 
@@ -21,22 +21,25 @@ const NAME = `inspection-${Date.now()}`;
 
 const MEMORY_NAME = `inspection-memory-${Date.now()}`;
 
+const STATUS_NAME = `inspection-status-${Date.now()}`;
+
 afterAll(async () => {
   await updateConfigFile((config) => {
     if (config.agents) {
       delete config.agents[NAME];
       delete config.agents[MEMORY_NAME];
+      delete config.agents[STATUS_NAME];
     }
   });
 });
 
-async function say(db: Database, actor: ActorHandle, id: string, content: string): Promise<void> {
+async function say(db: Database, actor: ActorHandle, said: { id: string; content: string; session?: string }): Promise<void> {
   const history = new SessionHistory({
     sql: makeSql(db), actor, transactionSync: (write) => db.transaction(write)(),
     files: () => Promise.reject(new Error('a short message stores no file')),
   });
 
-  await seedTranscriptEntry(history, CHAT_SESSION_ID, { id, origin: 'input', message: { role: 'user', content } });
+  await seedTranscriptEntry(history, said.session ?? CHAT_SESSION_ID, { id: said.id, origin: 'input', message: { role: 'user', content: said.content } });
 }
 
 describe('local inspection of a subordinate', () => {
@@ -53,13 +56,35 @@ describe('local inspection of a subordinate', () => {
     const directory = new WorkspaceActorDirectory(makeSql(db), { workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '' });
     const main = directory.main();
     const helper = directory.create({ parent: main, name: 'ask-refiner-a1', creationId: 'lane/ask-refiner-a1', origin: 'evolution', lifetime: 'task' });
-    await say(db, main, 'owner-words', 'the owner asked');
-    await say(db, helper, 'helper-words', 'the refiner answered');
+    await say(db, main, { id: 'owner-words', content: 'the owner asked' });
+    await say(db, helper, { id: 'helper-words', content: 'the refiner answered' });
     db.close();
 
     const read = await inspectLocalSubordinate(NAME, { path: [], view: 'history', page: {}, actor: helper.actorId });
 
     expect(read).toMatchObject({ view: 'history', page: { items: [{ content: 'the refiner answered' }] } });
+  });
+});
+
+// The cloud's status fold (core `agentStatusFacts`): the messages are the chat transcript's, not every session's rows.
+describe('local inspection of status', () => {
+  test('counts the chat transcript as the cloud status does, not every kept session', async () => {
+    await createCliAgent({
+      name: STATUS_NAME, mode: 'local', purpose: 'keep counts honest',
+      baseUrl: 'http://localhost:0/v1', auth: 'Bearer offline', model: 'openai-compatible/offline-model',
+    });
+
+    const db = workspaceDatabase(agentDbPath(STATUS_NAME));
+    const identity = db.query<{ id: string; owner_user_id: string | null }, []>('SELECT id, owner_user_id FROM workspace_identity').get();
+
+    if (identity === null) throw new Error('the created workspace has no identity row');
+    const main = new WorkspaceActorDirectory(makeSql(db), { workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '' }).main();
+    await say(db, main, { id: 'first', content: 'one' });
+    await say(db, main, { id: 'second', content: 'two' });
+    await say(db, main, { id: 'aside', content: 'kept in another session', session: 'side-session' });
+    db.close();
+
+    expect((await getLocalAgentState(STATUS_NAME)).status.messageCount).toBe(2);
   });
 });
 

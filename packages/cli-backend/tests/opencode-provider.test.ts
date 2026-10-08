@@ -277,6 +277,7 @@ describe('OpenCode provider', () => {
     const model = provider.createModel('openai/gpt-5.6-sol', {
       env: {},
       sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
+      workspaceAffinity: 'kinu-test',
     });
 
     await tryCall(model);
@@ -306,6 +307,7 @@ describe('OpenCode provider', () => {
     const model = throughStack(provider, 'openai/gpt-5.6-sol', {
       env: {},
       sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
+      workspaceAffinity: 'kinu-test',
     });
 
     await generateText({ model, prompt: 'hello', maxOutputTokens: 16, maxRetries: 0 });
@@ -341,7 +343,7 @@ describe('OpenCode provider', () => {
     }), '']).join('\n');
 
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl, spawn: makeSpawn(listed) }));
-    const deps = { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
+    const deps = { env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
 
     await expect(generateText({ model: throughStack(provider, 'opencode-go/glm-5', deps), prompt: 'hi', maxRetries: 0 })).rejects.toThrow();
     const zen = await generateText({ model: throughStack(provider, 'opencode/glm-5', deps), prompt: 'hi', maxRetries: 0 });
@@ -361,6 +363,7 @@ describe('OpenCode provider', () => {
     const model = provider.createModel('openai/gpt-5.6-sol', {
       env: {},
       sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
+      workspaceAffinity: 'kinu-test',
     });
 
     // An endpoint with storage off resolves no item id, so a step sent by reference reaches the model as nothing.
@@ -399,6 +402,7 @@ describe('OpenCode provider', () => {
     const model = provider.createModel('openai/gpt-5.4-nano', {
       env: {},
       sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
+      workspaceAffinity: 'kinu-test',
     });
 
     await tryCall(model);
@@ -431,6 +435,7 @@ describe('OpenCode provider', () => {
     const model = provider.createModel('openai/sdk-routed-model', {
       env: {},
       sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
+      workspaceAffinity: 'kinu-test',
     });
 
     await tryCall(model);
@@ -455,7 +460,7 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl, spawn: makeSpawn(output) }));
 
     for (const id of ['openai/gpt-5.6-sol', 'openai/claude-routed', 'openai/reasoner']) {
-      await tryCall(provider.createModel(id, { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false }));
+      await tryCall(provider.createModel(id, { env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false }));
     }
 
     expect(requests).toEqual([
@@ -485,6 +490,7 @@ describe('OpenCode provider', () => {
     const deps = {
       env: {},
       sessionAffinity: 'kinu-test',
+      workspaceAffinity: 'kinu-test',
       getAuth: async () => null,
       hasCredential: async () => false,
     };

@@ -1,5 +1,6 @@
 import { WarningCircleIcon } from "@phosphor-icons/react";
 import { cloudflareReconnectPath } from "@/lib/user-api";
+import { connectCloudflareInHelper } from "@/lib/connect-window";
 
 interface CloudflareAIConnectNoticeProps {
   returnTo: string;
@@ -18,6 +19,7 @@ export function CloudflareAIConnectNotice({
           <p>{message}</p>
           <a
             href={cloudflareReconnectPath(returnTo)}
+            onClick={(event) => { if (connectCloudflareInHelper(returnTo)) event.preventDefault(); }}
             className="inline-flex items-center rounded-md border p-border px-2 py-1 p-t-control p-warning p-card-hover"
           >
             Connect Cloudflare Workers AI

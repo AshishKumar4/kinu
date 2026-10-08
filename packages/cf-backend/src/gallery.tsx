@@ -24,7 +24,7 @@ import {
 import "virtual:kinu-theme.css";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
+import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { AlternateTakeSet, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import {
@@ -78,6 +78,7 @@ import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
 import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateCapabilityGraph } from "@kinu.run/core";
 import UserSettingsPage from "@/pages/UserSettingsPage";
+import ConnectedPage from "@/pages/ConnectedPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
@@ -314,6 +315,18 @@ const CHATGPT_DEVICE = new URLSearchParams(location.search).get("chatgpt") === "
 
 const MODELS_FAIL = new URLSearchParams(location.search).get("models") === "fail";
 
+/** `&cloudflare=off`: an account that has not connected Cloudflare, so its providers offer the connect. */
+const CLOUDFLARE_OFF = new URLSearchParams(location.search).get("cloudflare") === "off";
+
+/** Workers AI's models, which an account offers only once Cloudflare is connected. */
+const WORKERS_AI_MODELS = CLOUDFLARE_OFF ? [] : [{ spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] }];
+
+/** `&route=` is the app's own address for the wizard (`/welcome?step=providers`), as a sign-in returns to it. */
+const WELCOME_ROUTE = new URLSearchParams(location.search).get("route") ?? "/welcome";
+
+/** Where a sign-in ending on the connected page began (`&next=`). */
+const CONNECTED_NEXT = new URLSearchParams(location.search).get("next") ?? "/";
+
 const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
 
 /** `&snapshot=failed`: the workspace's first read fails, so nothing has loaded. */
@@ -460,7 +473,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
     // Different effort lists per model: the tier levels are the model's, never a fixed three.
     return fixtureJson({
       models: [
-        { spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] },
+        ...WORKERS_AI_MODELS,
         { spec: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", provider: "anthropic", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
         ...settingsChatGptSignedIn ? [{ spec: "chatgpt/gpt-5.5", label: "GPT-5.5", provider: "chatgpt", reasoningEfforts: [] }] : [],
         ...settingsSavedCredentials.has("groq.bearer")
@@ -907,6 +920,14 @@ const ANONYMOUS_WORKSPACE = frame === 'workspacepage'
 
 if (ANONYMOUS_WORKSPACE) STUB.set('/api/user/profile', null);
 
+// The session's own read in setup, as stub data for the same reason: `&noname=1` signed in with Cloudflare, which
+// shares no name.
+if (frame === "welcome") {
+  STUB.set("/api/auth/me", new URLSearchParams(location.search).get("noname") === "1"
+    ? { user: { id: "new", email: "new@example.com", provider: "cloudflare", signedInWith: "Cloudflare", displayName: null } }
+    : { user: { id: "owner", email: "owner@example.com", provider: "google", signedInWith: "Google", displayName: "Owner" } });
+}
+
 function rosterRead(search: URLSearchParams): Promise<Response> {
   if (SESSION_EXPIRED) return Promise.resolve(fixtureJson({ error: "Sign in again." }, 401));
 
@@ -943,6 +964,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) {
     return userSettingsFixture(path, method, init?.body);
   }
+
 
   if (connectFixtureActive && path.startsWith("/api/user/devices")) {
     const answer = deviceConnectFixture(path, method, init?.body);
@@ -1325,7 +1347,7 @@ window.WebSocket = new Proxy(RealWebSocket, {
 
 /** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo; `turn_claim` is the root's claim as it changes; `head_stream` and `head_activity` are a swarm head's live paint and landed step. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity"]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity", "subordinate_event", "model_fallback"]),
   reads: v.optional(v.array(v.string())),
   claim: v.optional(JsonObjectSchema),
   headId: v.optional(v.string()),
@@ -1339,6 +1361,13 @@ const GalleryPushFrameSchema = v.object({
   steerId: v.optional(v.string()),
   status: v.optional(v.string()),
   atStep: v.optional(v.number()),
+  // An agent given work or reporting on it (`subordinate_event`), at the time it happened.
+  subordinate: v.optional(v.string()),
+  content: v.optional(v.string()),
+  task: v.optional(v.string()),
+  timestamp: v.optional(v.number()),
+  // Another model taking over a turn (`model_fallback`).
+  message: v.optional(v.string()),
 });
 
 window.addEventListener("gallery:push-frame", (event: Event) => {
@@ -1708,6 +1737,18 @@ const SLATES_THREAD: UIMessage[] = [
   msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [{ type: "text", text: "Added an expiry column." }] }),
 ];
 
+/* `?transcript=page`: an answer whose own page the chat draws in place, and which the person may keep as a slate. */
+const PAGE_THREAD: UIMessage[] = [
+  msg({ id: "pg-u1", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Show me this week's coupon redemptions." }] }),
+  msg({
+    id: "pg-a1", role: "assistant", createdAt: NOW - 4 * 60e3,
+    parts: [{ type: "text", text: "Here they are, by code.\n\n<slate-ui name=\"redemptions\">\n<title>Coupon redemptions</title>\n<ul><li>SAVE20</li></ul>\n</slate-ui>\n\nSAVE20 leads." }],
+  }),
+];
+
+/** The pages the person kept, as `/slates` would list them. */
+const GALLERY_KEPT_PAGES: { id: string; title: string }[] = [];
+
 /* `?transcript=refused`: a turn the provider refused, as a reload reads it back. */
 const REFUSED_THREAD: UIMessage[] = [
   msg({ id: "rf-u1", role: "user", createdAt: NOW - 3 * 60e3, parts: [{ type: "text", text: "Plan the quarterly offsite." }] }),
@@ -1723,6 +1764,8 @@ function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "refused") seedGalleryChat(REFUSED_THREAD);
 
   if (transcript === "slates") seedGalleryChat(SLATES_THREAD);
+
+  if (transcript === "page") seedGalleryChat(PAGE_THREAD);
 }
 
 /** As the Durable Object broadcasts it after the walk-back. */
@@ -1763,8 +1806,8 @@ function galleryPortListing(executor: string | undefined): GalleryListing | null
 /** `&slates=3`: three slates, whose tabs overflow the strip. */
 function gallerySlates() {
   return {
-    slates: ["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
-      .map((title) => ({ id: title.toLowerCase(), title })),
+    slates: [...["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
+      .map((title) => ({ id: title.toLowerCase(), title })), ...GALLERY_KEPT_PAGES],
     problems: [],
   };
 }
@@ -1918,10 +1961,23 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   },
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
-  // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture.
-  previewSlate: (args?: unknown[]) => ({
-    ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
-  }),
+  // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture. An answer's
+  // page is served by the runner, so it reports its height; these slates stand for a server of their own.
+  previewSlate: (args?: unknown[]) => {
+    const [id] = v.parse(v.tuple([v.string()]), args);
+
+    return { ok: true, value: { url: new URL(id, SLATE_GALLERY_URL).href, port: 8789, sized: ephemeralSlateAddress(id) !== null } };
+  },
+  // Keeping an answer's page: the kept slate is listed under the page's title, and the listing moves.
+  slate: (args?: unknown[]) => {
+    const [operation] = v.parse(v.tuple([v.object({ op: v.literal("save"), page: v.string() })]), args);
+    const kept = { id: "coupon-redemptions", title: operation.page === "pg-a1/redemptions" ? "Coupon redemptions" : operation.page };
+
+    GALLERY_KEPT_PAGES.push(kept);
+    queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listSlates"] })); });
+
+    return { ok: true, value: kept };
+  },
   listPendingConsents: galleryConsents,
   inspectWork: galleryOwedWork,
   // The seed is the whole conversation, so the storage walk is exhausted at once.
@@ -2152,32 +2208,32 @@ const GALLERY_GITHUB: WorkspaceGitHubView = {
 };
 
 const GALLERY_AGENTS: PanelAgent[] = [
-  { key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
+  { colour: 0, key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
     actorId: galleryActorId(WORKSPACE_PAGE_NAME), figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } },
-  { key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
+  { colour: 1, key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
     figures: { tokens: 12_400, usd: 0.03, activeMs: 3 * 60_000, cacheEma: 0.88 } },
-  { key: galleryActorId("perf"), label: "Should checkout support gift cards?", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
+  { colour: 2, key: galleryActorId("perf"), label: "Should checkout support gift cards?", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
     figures: { tokens: 31_000, usd: 0.07, activeMs: 9 * 60_000, cacheEma: 0.9 } },
-  { key: galleryActorId("i18n"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "i18n" }, tab: true, input: true,
+  { colour: 3, key: galleryActorId("i18n"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "i18n" }, tab: true, input: true,
     figures: { tokens: 8_200, activeMs: 2 * 60_000, cacheEma: null } },
-  { key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true,
+  { colour: 4, key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true,
     figures: { tokens: 22_600, usd: 0.05, activeMs: 4 * 60_000, cacheEma: 0.86 } },
-  { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true,
+  { colour: 5, key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true,
     actorId: galleryActorId("coupon-auditor"), figures: { tokens: 48_900, usd: 0.11, activeMs: 7 * 60_000, cacheEma: 0.91 } },
-  { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "a-scout", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true,
+  { colour: 6, key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "a-scout", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true,
     figures: { tokens: 6_100, activeMs: 45_000, cacheEma: null } },
-  { key: "a-copy", label: "Changelog writer", category: "hired", activity: "idle", parent: galleryActorId("docs"), open: { kind: "chat", path: "docs/changelog" }, tab: false, input: true,
+  { colour: 7, key: "a-copy", label: "Changelog writer", category: "hired", activity: "idle", parent: galleryActorId("docs"), open: { kind: "chat", path: "docs/changelog" }, tab: false, input: true,
     figures: { tokens: 2_100, activeMs: 30_000, cacheEma: null } },
-  { key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "main",
+  { colour: 0, key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false,
     figures: { tokens: 9_800, activeMs: 94_000, cacheEma: null } },
-  { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "main",
+  { colour: 0, key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false, actorId: "swarm-actor-h1", figures: { activeMs: 0, cacheEma: null } },
-  { key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "main",
+  { colour: 0, key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false, figures: { activeMs: 0, cacheEma: null } },
-  { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "main", open: { kind: "chat", path: "refiner" }, tab: false, input: false,
+  { colour: 8, key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "main", open: { kind: "chat", path: "refiner" }, tab: false, input: false,
     figures: { tokens: 2_300, usd: 0.004, activeMs: 20_000, cacheEma: 0.5 } },
-  { key: "a-sampler", label: "Prompt sampler", category: "hired", activity: "idle", parent: "a-refine", open: { kind: "chat", path: "refiner/sampler" }, tab: false, input: true,
+  { colour: 9, key: "a-sampler", label: "Prompt sampler", category: "hired", activity: "idle", parent: "a-refine", open: { kind: "chat", path: "refiner/sampler" }, tab: false, input: true,
     figures: { tokens: 900, activeMs: 8_000, cacheEma: null } },
 ];
 
@@ -2185,12 +2241,12 @@ const NO_GALLERY_FIGURES = { activeMs: 0, cacheEma: null };
 
 /** Main, the page's chats, and the fixture's agents when asked for. */
 function galleryWorkspaceAgents(): PanelAgent[] {
-  const created = GALLERY_SUBS.map((sub): PanelAgent => ({
-    key: sub.actorId, label: sub.displayName || codenameFor(sub.name), category: "user", activity: "idle", parent: "main",
+  const created = GALLERY_SUBS.map((sub, index): PanelAgent => ({
+    colour: index + 1, key: sub.actorId, label: sub.displayName || codenameFor(sub.name), category: "user", activity: "idle", parent: "main",
     open: { kind: "chat", path: sub.name }, tab: true, input: true, actorId: sub.actorId, figures: NO_GALLERY_FIGURES,
   }));
 
-  const main: PanelAgent = { key: "main", label: GALLERY_MAIN_TITLE.value, category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: NO_GALLERY_FIGURES };
+  const main: PanelAgent = { colour: 0, key: "main", label: GALLERY_MAIN_TITLE.value, category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: NO_GALLERY_FIGURES };
 
   return AGENTS_PANEL ? [...GALLERY_AGENTS, ...created.filter((agent) => !GALLERY_AGENTS.some((fixed) => fixed.key === agent.key))] : [main, ...created];
 }
@@ -3427,10 +3483,10 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
 
 /** The bar over fixture chats: working, waiting, failed. */
 const GALLERY_CHATS: readonly PanelAgent[] = [
-  { key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
-  { key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
-  { key: galleryActorId("agent-4f2c"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
-  { key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { colour: 0, key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { colour: 1, key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { colour: 2, key: galleryActorId("agent-4f2c"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { colour: 3, key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
 ];
 
 function GalleryWorkspaceHeader({ active = "main" }: { active?: string }) {
@@ -4498,7 +4554,7 @@ const GALLERY_SLATE_ID = "sandbox-probe";
 /** Gallery-only previewSlate fixture. It exercises SlateFrame, not a deployed preview origin. */
 const slateRpc: Rpc = async <T,>(method: string, args?: Parameters<Rpc>[1]): Promise<T> => {
   if (method === "previewSlate") {
-    return rpcResult({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } }).json<T>();
+    return rpcResult({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } }).json<T>();
   }
 
   return stubRpc<T>(method, args);
@@ -6720,7 +6776,9 @@ async function mount() {
     // `&panel=providers|mcp|cli` picks the modal's body.
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
     // `&step=0..3` picks the wizard panel.
-    ["welcome", { node: <WelcomeFrame />, entries: ["/welcome"] }],
+    ["welcome", { node: <WelcomeFrame />, entries: [WELCOME_ROUTE] }],
+    // Where a sign-in ends in its helper window.
+    ["connected", { node: <ConnectedPage />, entries: [`${APP_ROUTES.connected}?${new URLSearchParams({ next: CONNECTED_NEXT }).toString()}`] }],
     // `&view=list` seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],

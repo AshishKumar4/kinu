@@ -147,6 +147,9 @@ export const AGENT_METRICS_SCHEMA = defineSchema({
     { name: 'priced' },
     // Delivery attempt, separating rows from incidents; 0 where the producer counts none.
     { name: 'attempts' },
+    // `actor.startup` only: the workspace's activation ordinal (`identity/activations.ts`). Activations are counted as
+    // its deltas, so a dropped row loses no count; 0 on every other row.
+    { name: 'activation' },
   ],
 });
 

@@ -141,7 +141,7 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  parseModelSpec, specModelInfo, assembleActorTurn, withCompactionTrigger, promptCacheKey, vfsTurnSkills, type AssembledTurn, type TurnAssemblyRequest, type TurnAssemblySources,
+  parseModelSpec, specModelInfo, assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, type AssembledTurn, type TurnAssemblyRequest, type TurnAssemblySources,
   type ModelWindow, type AgentsMdSources,
   ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
@@ -1010,6 +1010,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
     agentName: () => this.actorHandle().name,
+    workspaceId: () => this.actorHandle().workspaceId,
     appTitle: 'Kinu',
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
@@ -4204,7 +4205,7 @@ export abstract class ActorAgent extends Agent<Env> {
       identity: async () => reads.identity,
       artifacts: () => this.turnArtifacts(),
       taskPlan: () => Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(input.item) }),
-      cacheKey: () => promptCacheKey(this.ownedModelServices.affinityKey, CHAT_SESSION_ID),
+      conversationKey: () => conversationKey(this.ownedModelServices.affinityKey, CHAT_SESSION_ID),
       budget: this.budget,
       operations: this.modelOperations,
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },

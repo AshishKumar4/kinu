@@ -5,7 +5,7 @@ import { APICallError, wrapLanguageModel, type LanguageModel, type LanguageModel
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, diagnostics, KinuError, settle, tolerate, type ErrorCode } from '../obs/index';
-import { chatgptCatalogRows, shownCatalogRows } from './codex';
+import { chatgptCatalogRows, chatgptSessionHeaders, shownCatalogRows } from './codex';
 import { asFetchFunction } from './fetch-shim';
 import { withCallAccount } from './quota';
 import type { AuthRequest, AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
@@ -351,7 +351,8 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
       });
 
       const model = lazyModel('openai.responses', modelId, async () => (await import('@ai-sdk/openai'))
-        .createOpenAI({ baseURL: CHATGPT_BASE_URL, apiKey: 'chatgpt-plan', fetch: customFetch }).responses(modelId));
+        .createOpenAI({ baseURL: CHATGPT_BASE_URL, apiKey: 'chatgpt-plan', headers: chatgptSessionHeaders(deps), fetch: customFetch })
+        .responses(modelId));
 
       return wrapLanguageModel({ model, middleware: [statelessResponses(true), PLAN_REQUEST, streamedGenerate, {
         specificationVersion: 'v4',

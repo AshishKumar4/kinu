@@ -38,7 +38,7 @@ const COMPACTED = sse([
 
 function deps(fetchFn: typeof fetch): ModelCallDeps {
   return {
-    env: {}, sessionAffinity: 'kinu-test', fetch: fetchFn,
+    env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', fetch: fetchFn,
     getAuth: async () => ({ headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } }),
     hasCredential: async (key) => key === ANTHROPIC_CRED_KEY,
   };
@@ -62,7 +62,7 @@ async function turn(modelId: string, history: ModelMessage[], extra: Partial<Cha
     system: 'You are Kinu.',
     history,
     tools: {},
-    cache: { providerId: 'anthropic', modelId, sessionKey: 'kinu-test' },
+    cache: { providerId: 'anthropic', modelId },
     observeStream: async (stream) => {
       for await (const chunk of stream) shown.push(chunk);
     },
@@ -217,7 +217,7 @@ async function openaiTurn(modelId: string, history: ModelMessage[]): Promise<Tur
   const shown: UIMessageChunk[] = [];
 
   const routed: ModelCallDeps = {
-    env: {}, sessionAffinity: 'kinu-test', fetch: mock.fetch,
+    env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', fetch: mock.fetch,
     getAuth: async () => ({ headers: { Authorization: 'Bearer sk-test' } }),
     hasCredential: async (key) => key === OPENAI_CRED_KEY,
   };

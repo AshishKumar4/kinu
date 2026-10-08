@@ -97,103 +97,126 @@ class CanaryTelemetry {
   }
 }
 
-/**
- * An activation the object began on a new script version without logging `actor.startup` (staging 143fc79d, 2026-10-08:
- * the canary's object served its first alarm on the new version at 08:14:15.951Z and logged its next startup at 08:19:16Z,
- * and a step was lost between): the first invocation on each new version, where no startup sits within a minute of it.
- */
-function unloggedActivations(rows: readonly TelemetryEvent[], startups: readonly TelemetryEvent[]): TelemetryEvent[] {
-  const invocations = rows.filter((row) => row.$metadata.type === 'cf-worker-event' && row.$workers.scriptVersion?.id !== undefined);
-  const firsts: TelemetryEvent[] = [];
-  const seen = new Set<string>();
-
-  // A version's first invocation only: a rollout flips an object between two versions for seconds (06:31Z, 14 flips).
-  for (const current of invocations) {
-    const version = `${current.$workers.durableObjectId ?? ''}:${current.$workers.scriptVersion?.id ?? ''}`;
-
-    if (seen.has(version)) continue;
-    seen.add(version);
-
-    if (seen.size === 1 || startups.some((startup) => Math.abs(startup.timestamp - current.timestamp) <= 60_000)) continue;
-    firsts.push({ ...current, source: { ...current.source, event: 'activation.unlogged_startup' } });
-  }
-
-  return firsts;
+/** One activation by its ordinal (`core/src/identity/activations.ts`); `at` is null for one only a gap in the ordinals shows. */
+export interface CanaryActivation {
+  readonly ordinal: number;
+  readonly at: number | null;
+  readonly version: string | null;
 }
 
-function activationDisruptions(rows: readonly TelemetryEvent[], window: CanaryWindow, touches: readonly CanaryTouch[]) {
-  const logged = rows.filter((row) => row.source.event === 'actor.startup');
-  const startups = [...logged, ...unloggedActivations(rows, logged)].sort((a, b) => a.timestamp - b.timestamp);
+/**
+ * The workspace's activations: the ring the driver read at its last touch, or, when it could not, the ordinals on the
+ * startup rows telemetry kept, each gap standing for an activation whose row was lost. Never a count of rows.
+ */
+export function canaryActivations(ring: readonly CanaryActivation[] | null, startups: readonly TelemetryEvent[]): CanaryActivation[] {
+  if (ring !== null) return [...ring].sort((a, b) => a.ordinal - b.ordinal);
+  const seen = new Map<number, CanaryActivation>();
+
+  for (const row of startups) {
+    const ordinal = row.source.fields.activation;
+
+    if (ordinal !== undefined && !seen.has(ordinal)) seen.set(ordinal, { ordinal, at: row.timestamp, version: row.$workers.scriptVersion?.id ?? null });
+  }
+
+  const ordinals = [...seen.keys()];
+
+  if (ordinals.length === 0) return [];
+  const [low, high] = [Math.min(...ordinals), Math.max(...ordinals)];
+
+  return Array.from({ length: high - low + 1 }, (_, offset) => seen.get(low + offset) ?? { ordinal: low + offset, at: null, version: null });
+}
+
+function inWindow(activations: readonly CanaryActivation[], index: number, window: CanaryWindow): boolean {
+  const at = activations[index]?.at ?? null;
+
+  if (at !== null) return at >= window.from && at <= window.to;
+  const before = activations.slice(0, index).reverse().find((activation) => activation.at !== null)?.at ?? Number.NEGATIVE_INFINITY;
+  const after = activations.slice(index + 1).find((activation) => activation.at !== null)?.at ?? Number.POSITIVE_INFINITY;
+
+  return before <= window.to && after >= window.from;
+}
+
+/** The rows that tell how `current` began and how the one before it ended. */
+function activationRows(rows: readonly TelemetryEvent[], at: {
+  readonly previous: CanaryActivation; readonly current: CanaryActivation; readonly nextAt: number;
+  readonly currentRow: TelemetryEvent | undefined; readonly previousRow: TelemetryEvent | undefined;
+}) {
+  if (at.current.at === null) return { before: [], during: [], priorOutcomes: [] };
+  const from = at.previous.at ?? Number.NEGATIVE_INFINITY;
+  const to = at.current.at;
+  const sameRequest = (row: TelemetryEvent, other: TelemetryEvent | undefined) => other?.$metadata.requestId !== undefined && row.$metadata.requestId === other.$metadata.requestId;
+  const before = rows.filter((row) => !sameRequest(row, at.currentRow) && ((row.timestamp >= from && row.timestamp < to) || sameRequest(row, at.previousRow)));
+  // Fiber recovery can log before onStart, in the same initializing invocation.
+  const during = rows.filter((row) => (row.timestamp >= to && row.timestamp < at.nextAt) || sameRequest(row, at.currentRow));
+  const requests = new Set(before.map((row) => row.$metadata.requestId).filter((id) => id !== undefined));
+
+  const priorOutcomes = rows.filter((row) => row.$metadata.type === 'cf-worker-event' && row.$workers.outcome !== undefined && row.$workers.outcome !== 'ok'
+    && ((row.timestamp >= from && row.timestamp < to) || (row.$metadata.requestId !== undefined && requests.has(row.$metadata.requestId))));
+
+  return { before, during, priorOutcomes };
+}
+
+/** Whether a deploy ended the activation before `current`: a new build, a resume on one, or the code-updated reset. */
+function deployEvidence(previous: CanaryActivation, current: CanaryActivation, before: readonly TelemetryEvent[], during: readonly TelemetryEvent[]) {
+  const changedVersion = previous.version !== null && current.version !== null && previous.version !== current.version;
+  const resumedOnNewBuild = during.filter((row) => row.source.event === 'turn.resumed' && row.source.fields.sameBuild === 'no');
+  const resetRows = before.filter(codeUpdated);
+
+  return { changedVersion, resumedOnNewBuild, resetRows, deploy: changedVersion || resumedOnNewBuild.length > 0 || resetRows.length > 0 };
+}
+
+function activationDisruptions(rows: readonly TelemetryEvent[], activations: readonly CanaryActivation[], window: CanaryWindow, touches: readonly CanaryTouch[]) {
   const disruptions = [];
+  const startupRow = (ordinal: number) => rows.find((row) => row.source.event === 'actor.startup' && row.source.fields.activation === ordinal);
 
-  for (let index = 1; index < startups.length; index++) {
-    const previous = startups[index - 1];
-    const current = startups[index];
+  for (let index = 1; index < activations.length; index++) {
+    if (!inWindow(activations, index, window)) continue;
+    const previous = activations[index - 1];
+    const current = activations[index];
+    const currentRow = startupRow(current.ordinal);
 
-    if (current.timestamp < window.from || current.timestamp > window.to) continue;
-    const next = startups[index + 1];
+    const { before, during, priorOutcomes } = activationRows(rows, {
+      previous, current, nextAt: activations[index + 1]?.at ?? window.to + 1, currentRow, previousRow: startupRow(previous.ordinal),
+    });
 
-    const previousRows = rows.filter((row) => row.$workers.durableObjectId === previous.$workers.durableObjectId
-      && (current.$metadata.requestId === undefined || row.$metadata.requestId !== current.$metadata.requestId)
-      && (row.timestamp >= previous.timestamp && row.timestamp < current.timestamp
-        || (previous.$metadata.requestId !== undefined && row.$metadata.requestId === previous.$metadata.requestId)));
+    const { changedVersion, resumedOnNewBuild, resetRows, deploy } = deployEvidence(previous, current, before, during);
 
-    // Fiber recovery can log before onStart, in the same initializing invocation.
-    const activationRows = rows.filter((row) => row.$workers.durableObjectId === current.$workers.durableObjectId
-      && (next?.$metadata.requestId === undefined || row.$metadata.requestId !== next.$metadata.requestId)
-      && (row.timestamp >= current.timestamp && row.timestamp < (next?.timestamp ?? window.to + 1)
-        || (current.$metadata.requestId !== undefined && row.$metadata.requestId === current.$metadata.requestId)));
-
-    const previousRequests = new Set(previousRows.map((row) => row.$metadata.requestId).filter((id) => id !== undefined));
-
-    const priorOutcomes = rows.filter((row) => row.$workers.durableObjectId === previous.$workers.durableObjectId
-      && row.$metadata.type === 'cf-worker-event' && row.$workers.outcome !== undefined && row.$workers.outcome !== 'ok'
-      && ((row.timestamp >= previous.timestamp && row.timestamp < current.timestamp)
-        || (row.$metadata.requestId !== undefined && previousRequests.has(row.$metadata.requestId))));
-
-    const oldVersion = previous.$workers.scriptVersion?.id;
-    const newVersion = current.$workers.scriptVersion?.id;
-    const changedVersion = oldVersion !== undefined && newVersion !== undefined && oldVersion !== newVersion;
-    const resumedOnNewBuild = activationRows.filter((row) => row.source.event === 'turn.resumed' && row.source.fields.sameBuild === 'no');
-
-    const resetRows = previousRows.filter(codeUpdated);
-
-    const deploy = changedVersion || resumedOnNewBuild.length > 0 || resetRows.length > 0;
-
-    const invocation = current.$workers.eventType ?? activationRows.find((row) => row.$metadata.type === 'cf-worker-event'
-      && row.$metadata.requestId !== undefined && row.$metadata.requestId === current.$metadata.requestId)?.$workers.eventType;
+    const invocation = currentRow?.$workers.eventType ?? during.find((row) => row.$metadata.type === 'cf-worker-event'
+      && row.$metadata.requestId !== undefined && row.$metadata.requestId === currentRow?.$metadata.requestId)?.$workers.eventType;
 
     const request = invocation === 'fetch' || invocation === 'rpc' || invocation === 'jsrpc';
-    const own = touches.find((touch) => current.timestamp >= touch.from && current.timestamp <= touch.to);
-    const fibers = activationRows.filter((row) => row.source.event === 'fiber.recovered');
+    const own = current.at === null ? undefined : touches.find((touch) => (current.at ?? 0) >= touch.from && (current.at ?? 0) <= touch.to);
+    const fibers = during.filter((row) => row.source.event === 'fiber.recovered');
+    const endedBy = deploy ? 'deploy' : 'eviction';
     const requestSource = own === undefined ? 'other-or-unattributed-request' : 'driver-touch-by-time';
 
-    disruptions.push({ at: iso(current.timestamp), previousStartupAt: iso(previous.timestamp),
-      endedBy: deploy ? 'deploy' : 'eviction',
+    disruptions.push({ ordinal: current.ordinal, at: current.at === null ? null : iso(current.at), previousStartupAt: previous.at === null ? null : iso(previous.at),
+      endedBy: current.at === null && !deploy ? 'unknown' : endedBy,
       evictionOutcomes: deploy ? [] : [...new Set(priorOutcomes.map((row) => row.$workers.outcome ?? 'unavailable'))],
-      evictionDetail: deploy || priorOutcomes.length > 0 ? null : 'silent',
-      deployEvidence: { changedVersion, oldVersion: oldVersion ?? null, newVersion: newVersion ?? null,
+      evictionDetail: deploy || priorOutcomes.length > 0 || current.at === null ? null : 'silent',
+      deployEvidence: { changedVersion, oldVersion: previous.version, newVersion: current.version,
         resumedSameBuildNo: resumedOnNewBuild.map(evidence), codeUpdatedReset: resetRows.map(evidence) },
       resumedBy: { invocation: invocation ?? 'unavailable', alarm: invocation === 'alarm', fiberRecovery: fibers.length > 0,
         request: request ? requestSource : null,
         driverTouch: own ?? null },
-      startup: evidence(current), previousNonOkInvocations: priorOutcomes.map(evidence), fibers: fibers.map(evidence) });
+      startup: currentRow === undefined ? null : evidence(currentRow), previousNonOkInvocations: priorOutcomes.map(evidence), fibers: fibers.map(evidence) });
   }
 
   return disruptions;
 }
 
-function idleReport(rows: readonly TelemetryEvent[], window: CanaryWindow | null) {
+function idleReport(rows: readonly TelemetryEvent[], activations: readonly CanaryActivation[], window: CanaryWindow | null) {
   if (window === null) return null;
   const idle = rows.filter((row) => row.timestamp >= window.from && row.timestamp <= window.to);
-  const startups = idle.filter((row) => row.source.event === 'actor.startup');
+  const startups = activations.filter((_, index) => inWindow(activations, index, window));
   const invocations = idle.filter((row) => row.$metadata.type === 'cf-worker-event');
   const alarms = invocations.filter((row) => row.$workers.eventType === 'alarm');
 
   return { window: { from: iso(window.from), to: iso(window.to) }, target: 0,
     startups: startups.length, alarms: alarms.length, otherInvocations: invocations.length - alarms.length,
     invocations: invocations.length, byType: countBy(invocations.map((row) => row.$workers.eventType ?? 'unavailable'), 0),
-    startupEvidence: startups.map(evidence), invocationEvidence: invocations.map(evidence),
+    startupEvidence: startups.map((activation) => ({ ordinal: activation.ordinal, at: activation.at === null ? null : iso(activation.at), version: activation.version })),
+    invocationEvidence: invocations.map(evidence),
     unfinishedArms: idle.filter((row) => row.source.event === 'wake.unfinished_arms').map((row) => ({ at: iso(row.timestamp),
       arms: Object.entries(row.source.fields).filter(([, on]) => on === true).map(([arm]) => arm) })) };
 }
@@ -206,6 +229,8 @@ export interface CanaryTelemetryRequest {
   readonly idle: CanaryWindow | null;
   readonly touches: readonly CanaryTouch[];
   readonly helperActors: readonly string[];
+  /** The ring the driver read at its last touch; null when it could not. */
+  readonly activations: readonly CanaryActivation[] | null;
 }
 
 export async function measureCanaryTelemetry(request: CanaryTelemetryRequest) {
@@ -255,16 +280,20 @@ export async function measureCanaryTelemetry(request: CanaryTelemetryRequest) {
   if (namedStartups.some((row) => row.$workers.eventType === undefined)) client.limitations.push('Some startups lack their triggering eventType; the first invocation may be unclassifiable.');
 
   const hours = (request.active.to - request.active.from) / HOUR_MS;
-  const disruptions = activationDisruptions(rows, request.active, request.touches);
+  const activations = canaryActivations(request.activations, namedStartups);
+
+  if (request.activations === null) client.limitations.push('The activation ring could not be read; activations come from the ordinals on surviving startup rows, a gap for each lost one.');
+
+  const disruptions = activationDisruptions(rows, activations, request.active, request.touches);
   const fiberEvents = active.filter((row) => row.source.event.startsWith('fiber.'));
-  const idle = idleReport(rows, request.idle);
+  const idle = idleReport(rows, activations, request.idle);
 
   const complete = objects.length > 0 && client.failures.length === 0 && client.acceptedSampling === 1
     && !client.limitations.some((limitation) => limitation.startsWith('Telemetry remains'));
 
   return { complete, objects, queries: client.queries, sampling: { largestSeen: client.maxSamplingSeen, accepted: client.acceptedSampling,
     sampledOrCappedWindowsAreSubdivided: true }, failures: client.failures, limitations: client.limitations,
-    fieldSources: { activation: 'actor.startup fields.workspace + $workers.durableObjectId',
+    fieldSources: { activation: 'the workspace activation ring (ordinal, started_at, version), else actor.startup fields.activation; object id from actor.startup fields.workspace',
       endedBy: '$workers.scriptVersion.id across startups; turn.resumed fields.sameBuild=no; code-updated reset text; previous $workers.outcome',
       resumedBy: 'startup $workers.eventType (measured jsrpc, not only rpc); fiber.recovered within activation; driver touch windows by time',
       invocationTime: 'cf-worker-event timestamp is the platform row time, not an isolate termination id; successful invocations do not prove eviction.',
@@ -272,15 +301,15 @@ export async function measureCanaryTelemetry(request: CanaryTelemetryRequest) {
       hosted: hostedResumes.map((row) => ({ actor: row.source.fields.actor, object: row.$workers.durableObjectId ?? null,
         matchesWorkspaceObject: row.$workers.durableObjectId !== undefined && objects.includes(row.$workers.durableObjectId),
         isCanaryHelper: request.helperActors.includes(row.source.fields.actor ?? '') })),
-      unavailable: ['The API exposes no activation/eviction id or explicit silent-eviction reason.',
+      unavailable: ['The API exposes no explicit silent-eviction reason.',
         'Request attribution to the driver is temporal, not a unique driver request-id match.',
         'A lost isolate may print a marker without committing its result; only durable output is observable.'] },
     classificationNotes: {
-      endedBy: 'Every startup after the first is one disruption. Deploy wins over eviction; eviction outcome buckets can overlap if the previous activation had multiple non-ok outcomes.',
+      endedBy: 'Every activation after the first is one disruption. Deploy wins over eviction; eviction outcome buckets can overlap if the previous activation had multiple non-ok outcomes.',
       resumedBy: 'Alarm and fiber recovery can both apply to one activation. Request includes the measured platform jsrpc type. These are resumption mechanisms, not termination causes.',
     },
     active: { window: { from: iso(request.active.from), to: iso(request.active.to) }, hours,
-      startups: active.filter((row) => row.source.event === 'actor.startup').length,
+      startups: activations.filter((_, index) => inWindow(activations, index, request.active)).length,
       disruptions: disruptions.length, perActiveHour: hours > 0 ? disruptions.length / hours : null,
       endedBy: countBy(disruptions.flatMap((row) => {
         if (row.endedBy === 'deploy') return ['deploy'];
@@ -336,13 +365,19 @@ export function telemetryFindings(measured: CanaryTelemetryMeasurement): CanaryF
   const idle = measured.idle;
 
   if (idle !== null) {
-    const idleCounts = [{ name: 'idle.startups', count: idle.startups, rows: idle.startupEvidence },
-      { name: 'idle.alarm-invocations', count: idle.alarms, rows: idle.invocationEvidence.filter((row) => row.eventType === 'alarm') },
+    const cause = 'The workspace object was invoked after all work ended and the driver disconnected; target is zero.';
+
+    if (idle.startups > 0) {
+      findings.push({ name: 'idle.startups', kind: 'defect', cause,
+        evidence: idle.startupEvidence.map((activation) => ({ at: activation.at, event: 'activation', count: 1, detail: `ordinal ${String(activation.ordinal)} on ${activation.version ?? 'an unnamed build'}` })) });
+    }
+
+    const invoked = [{ name: 'idle.alarm-invocations', count: idle.alarms, rows: idle.invocationEvidence.filter((row) => row.eventType === 'alarm') },
       { name: 'idle.other-invocations', count: idle.otherInvocations, rows: idle.invocationEvidence.filter((row) => row.eventType !== 'alarm') }];
 
-    for (const item of idleCounts) {
+    for (const item of invoked) {
       if (item.count === 0) continue;
-      findings.push({ name: item.name, kind: 'defect', cause: 'The workspace object was invoked after all work ended and the driver disconnected; target is zero.',
+      findings.push({ name: item.name, kind: 'defect', cause,
         evidence: item.rows.map((row) => ({ at: row.at, event: row.event, count: 1,
           detail: `${row.eventType ?? 'unknown'} ${row.outcome ?? ''}; RPC ${row.rpcMethods.join(', ')}` })) });
     }

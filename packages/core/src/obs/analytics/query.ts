@@ -13,6 +13,21 @@ function weightedCount(): string {
   return 'SUM(_sample_interval)';
 }
 
+/**
+ * Activations of a workspace in its group, counted from the ordinals its `actor.startup` rows carry rather than from the
+ * rows, which were dropped (`identity/activations.ts`); needs the rows filtered to {@link numberedStartup}. Not weighted:
+ * a sampled-away row is one more row the ordinals already count.
+ */
+function activationCount(): string {
+  const ordinal = doubleColumn(AGENT_METRICS_SCHEMA, 'activation');
+
+  return `MAX(${ordinal}) - MIN(${ordinal}) + 1`;
+}
+
+function numberedStartup(): readonly string[] {
+  return [`${blobColumn(AGENT_METRICS_SCHEMA, 'event')} = 'actor.startup'`, `${doubleColumn(AGENT_METRICS_SCHEMA, 'activation')} > 0`];
+}
+
 function weightedSum<S extends AnalyticsSchema>(schema: S, metric: DoubleName<S>): string {
   return `SUM(_sample_interval * ${doubleColumn(schema, metric)})`;
 }
@@ -207,9 +222,9 @@ export function controlPlaneMetricsQueries(
         { as: 'workspace', expression: indexColumn(agent) },
         { as: 'hour', expression: "toStartOfInterval(timestamp, INTERVAL '1' HOUR)" },
       ],
-      metrics: [{ as: 'startups', expression: weightedCount() }],
+      metrics: [{ as: 'startups', expression: activationCount() }],
       since,
-      where: [...scoped('event'), `${blobColumn(agent, 'event')} = 'actor.startup'`],
+      where: [...scoped('event'), ...numberedStartup()],
       orderBy: 'startups',
       limit: PANEL_ROW_LIMIT,
     }),
@@ -249,9 +264,9 @@ export function fleetAlertQueries(): FleetAlertQueries {
         { as: 'workspace', expression: indexColumn(agent) },
         { as: 'hour', expression: "toStartOfInterval(timestamp, INTERVAL '1' HOUR)" },
       ],
-      metrics: [{ as: 'startups', expression: weightedCount() }],
+      metrics: [{ as: 'startups', expression: activationCount() }],
       since: "'3' HOUR",
-      where: [kind('event'), `${blobColumn(agent, 'event')} = 'actor.startup'`],
+      where: [kind('event'), ...numberedStartup()],
       orderBy: 'startups',
       limit: 500,
     }),

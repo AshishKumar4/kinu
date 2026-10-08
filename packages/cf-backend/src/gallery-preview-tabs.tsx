@@ -93,7 +93,7 @@ export function PreviewTabsGallery() {
   const rpc: Rpc = useCallback(<T,>(method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
     const reply = (value: ReplyValue): Effect.Effect<T> => Effect.promise(() => new Response(JSON.stringify(value)).json<T>());
 
-    if (method === 'previewSlate') return yield* reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
+    if (method === 'previewSlate') return yield* reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } });
 
     if (method === 'getExecutorDiff') document.documentElement.dataset.galleryDiffReads = `${document.documentElement.dataset.galleryDiffReads ?? ''} ${String(args?.[0])}`.trim();
 

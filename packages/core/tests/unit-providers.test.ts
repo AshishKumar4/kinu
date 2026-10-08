@@ -42,7 +42,7 @@ describe('ProviderRegistry', () => {
     };
   }
 
-  const baseDeps = (): ModelCallDeps => ({ env: {}, sessionAffinity: 'kinu-test', ...createTestAuth() });
+  const baseDeps = (): ModelCallDeps => ({ env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', ...createTestAuth() });
 
   test('register + resolve', () => {
     const r = createProviderRegistry();

@@ -1,7 +1,7 @@
 /** Ownership of `:name` is proven before any workspace route runs, and only then indexed. */
 import type { MiddlewareHandler } from 'hono';
 import { Result } from 'effect';
-import { err } from '@kinu.run/core';
+import { err, type Activation } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { observeWorkspaceUse } from '../control-plane/index-feed';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
@@ -9,6 +9,7 @@ import { rawParam, type ApiVariables, type FamilyEnv } from './context';
 
 export interface WorkspaceAgent {
   evalAbortActivation(): Promise<void>;
+  activations(): Promise<readonly Activation[]>;
 }
 
 interface OwnedWorkspace {

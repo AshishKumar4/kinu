@@ -58,36 +58,37 @@ function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
   return role === 'user' || role === 'assistant' || role === 'system' ? role : null;
 }
 
-/** Every table read here is created by `initWorkspaceSchema`, so a failed read means a broken workspace
- * and throws rather than answering with a fabricated identity. */
-export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus> {
-  const { sql, actor } = deps;
+/** What a status says of an actor from its workspace's storage and SOUL.md alone, folded the same on every backend and
+ * in the CLI's read-only inspection. */
+export type AgentStatusFacts = Omit<AgentStatus, 'displayName' | 'model' | 'reasoningEffort'>;
+
+/** Every table read here is created by `initWorkspaceSchema`, so a failed read means a broken workspace and throws
+ * rather than answering with a fabricated identity. `name` stands in only for a missing identity row. */
+export function agentStatusFacts(sql: SqlExecutor, actor: ActorHandle, soul: string | null, name: string): AgentStatusFacts {
   actor.assertCurrent();
-  const soul = await deps.soul();
-  const purpose = missionOf(soul) ?? '';
 
   const identity = sql<{ name: string; created_at: number }>`
     SELECT name, created_at FROM workspace_identity LIMIT 1`;
 
-
-  const messageCount = readSessionTranscript(sql, actor, CHAT_SESSION_ID, null).count();
-
   const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes
     WHERE actor_id = ${actor.actorId}`;
 
-
   return {
-    name: identity[0]?.name ?? deps.name,
-    displayName: deps.displayName,
-    purpose,
+    name: identity[0]?.name ?? name,
+    purpose: missionOf(soul) ?? '',
     soul: soul ?? '',
     createdAt: identity[0]?.created_at ?? 0,
     scaffoldVersion: getCurrentScaffoldVersion(sql, actor) ?? 0,
     searchNodeCount: searchNodes[0]?.c ?? 0,
-    messageCount,
-    model: deps.model,
-    reasoningEffort: deps.reasoningEffort,
+    messageCount: readSessionTranscript(sql, actor, CHAT_SESSION_ID, null).count(),
     forkLineage: readForkLineage(sql),
+  };
+}
+
+export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus> {
+  return {
+    ...agentStatusFacts(deps.sql, deps.actor, await deps.soul(), deps.name),
+    displayName: deps.displayName, model: deps.model, reasoningEffort: deps.reasoningEffort,
   };
 }
 

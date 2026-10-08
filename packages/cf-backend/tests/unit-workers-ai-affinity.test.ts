@@ -5,7 +5,7 @@ import { userCredentialSource } from './helpers/user-credentials';
 import { CHAT_COMPLETION_BODY } from '@kinu.run/test-utils';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { agentAffinityKey, asFetchFunction } from '@kinu.run/core';
+import { actorAffinity, asFetchFunction, type ModelAffinity } from '@kinu.run/core';
 
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
@@ -18,7 +18,7 @@ function fakeUserDOStub() {
   });
 }
 
-async function captureWorkersAIRequest(conversation: string) {
+async function captureWorkersAIRequest(affinity: ModelAffinity) {
   const captured: Array<{ url: string; headers: Headers }> = [];
 
   const reg = createAgentProviderRegistry({
@@ -33,7 +33,7 @@ async function captureWorkersAIRequest(conversation: string) {
   });
 
   await generateText({
-    model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', conversation),
+    model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', affinity),
     prompt: 'ping',
   });
   expect(captured).toHaveLength(1);
@@ -46,7 +46,7 @@ async function captureWorkersAIRequest(conversation: string) {
 
 describe('Workers AI session affinity (REST path)', () => {
   test("the call's conversation is emitted as the x-session-affinity header", async () => {
-    const req = await captureWorkersAIRequest(agentAffinityKey('jarvis'));
+    const req = await captureWorkersAIRequest(actorAffinity({ name: 'jarvis', workspaceId: 'workspace' }));
     expect(req.headers.get('x-session-affinity')).toBe('kinu-jarvis');
     expect(req.headers.get('authorization')).toBe('Bearer cf-user-token');
     expect(req.url.startsWith(`${ACCOUNT_BASE_URL}/`)).toBe(true);
@@ -68,7 +68,7 @@ describe('Workers AI session affinity (REST path)', () => {
     });
 
     const result = await generateText({
-      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'),
+      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }),
       prompt: 'ping',
       maxRetries: 0,
     });

@@ -3,7 +3,7 @@ import { shows, sightEvidence, type Sight } from '../src/sight';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
 import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
-import { answerShows, answersWithSlates, madeNoApp, readAnswer } from './ephemeral';
+import { answerShows, answersWithSlates, madeNoApp, madeNoPrototype, readAnswer } from './ephemeral';
 
 // The agent's choice between the two kinds of slate. First a pick-one card in the chat: the venues that fit the team,
 // each with the total the checker computes, one click to pick, and the agent acting on the pick it is sent. That is
@@ -78,6 +78,7 @@ date, the headcount and the total.`,
     verify: async (verifier) => {
       await answersWithSlates(verifier, 1);
       await madeNoApp(verifier);
+      await madeNoPrototype(verifier);
 
       await verifier.check('offers-the-venues-that-fit', () => answerShows(verifier, NAMES, offersTheVenuesThatFit));
 

@@ -34,7 +34,11 @@ function refusedOnce() {
   let calls = 0;
 
   const workspace = gatewayWorkspace(stubAiBinding((run) => {
-    if (!JSON.stringify(requestOf(run).messages).includes(ASK)) return chatCompletion(run, '{"title":"Deploy notes"}');
+    // The naming model is asked the same words: only the turn's own calls count.
+    if (!JSON.stringify(requestOf(run).messages).includes(ASK) || JSON.stringify(requestOf(run).messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) {
+      return chatCompletion(run, '{"title":"Deploy notes"}');
+    }
+
     calls += 1;
 
     return calls === 1 ? Response.json({ error: { message: 'Bad Request' } }, { status: 400 }) : chatCompletion(run, 'Answered once.');

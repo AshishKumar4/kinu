@@ -1443,6 +1443,36 @@ export const PLATFORM_CATALOG = {
       + 'in which case the timeout is measuring the neighbour rather than the work.',
   },
 
+  'do.facet.cpu_ms': {
+    subject: 'Active CPU time a Durable Object facet from a loaded Worker may spend: the default, whatever its parent declares',
+    limit: { value: 30_000, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: '~/kinu-logs/research/FACET-CPU-LIMIT-1008.md §1',
+    date: '2026-10-08',
+    trigger: 'a facet spending about 30 s of CPU on work no newer call into it is waiting for',
+    onBreach: 'the facet is reset and the call rejects in its caller; the parent keeps running',
+    observable: [
+      { context: 'the call into the facet, parent limits.cpu_ms unset', message: 'Worker exceeded CPU time limit.' },
+      { context: 'the call into the facet, parent limits.cpu_ms 300000', message: 'Durable Object exceeded its CPU time limit and was reset.' },
+    ],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: 'yielding CPU burn in a facet, parent limits.cpu_ms unset', value: 31_538, unit: 'ms' },
+      { scenario: 'yielding CPU burn in a facet, parent limits.cpu_ms 300000', value: 32_564, unit: 'ms' },
+      { scenario: 'same, again (§5 long)', value: 32_018, unit: 'ms' },
+      { scenario: '200 slices of 0.42 s, each inside its own call into the facet: all ran (§5 lexical)', value: 84_000, unit: 'ms' },
+      { scenario: '200 slices of one long call, each resumed by a call into the facet that waits for it: all ran (§5 permit)', value: 110_000, unit: 'ms' },
+    ],
+    notes:
+      'The parent\'s limits.cpu_ms (300000 here) does not reach its facets. A call into the facet that starts a piece of '
+      + 'work and waits for it gives that piece a budget of its own, even when the piece is a continuation of a longer '
+      + 'call (§5): so long work in a facet is paced by calls into it. Unmeasured (§2): WorkerCode limits.cpuMs, which the '
+      + 'Dynamic Workers docs say can only lower the plan\'s. In production (§3) a hired agent\'s turn, run inside the '
+      + 'one call that hands it over, was killed after 22 steps.',
+  },
+
   'do.facet.abort_reuses_isolate': {
     subject:
       'ctx.facets.abort(name) rejects pending work but REUSES the same isolate, only rotating the '

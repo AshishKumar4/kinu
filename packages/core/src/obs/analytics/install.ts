@@ -27,7 +27,7 @@ const PUBLISHABLE_TEXT = [
 ] as const;
 
 const PUBLISHABLE_NUMBERS = [
-  'durationMs', 'ttftMs', 'steps', 'toolCalls', 'affected',
+  'durationMs', 'ttftMs', 'steps', 'toolCalls', 'affected', 'activation',
 ] as const;
 
 assertPublishableNames('the diagnostics sink allowlist', [
@@ -133,6 +133,7 @@ function agentRow(
     usd: 0,
     priced: 0,
     attempts: 0,
+    activation: count(fields, 'activation'),
   };
 }
 

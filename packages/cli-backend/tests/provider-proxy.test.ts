@@ -118,7 +118,7 @@ describe('web-UI-connected providers reach local agents', () => {
     const resolver = resolverWith(networkFetch({ credentials: [{ key: 'openrouter.bearer' }], recorded }));
 
     const result = await generateText({
-      model: resolver.resolveModel('openrouter/anthropic/claude-x', 'kinu-test'),
+      model: resolver.resolveModel('openrouter/anthropic/claude-x', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }),
       prompt: 'hello',
     });
 
@@ -139,7 +139,7 @@ describe('web-UI-connected providers reach local agents', () => {
       { openrouterApiKey: 'sk-local' },
     );
 
-    const result = await generateText({ model: resolver.resolveModel('openrouter/anthropic/claude-x', 'kinu-test'), prompt: 'hello' });
+    const result = await generateText({ model: resolver.resolveModel('openrouter/anthropic/claude-x', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hello' });
 
     expect(result.text).toBe('direct');
     expect(recorded.some((r) => r.url.endsWith('/api/user/ai/proxy/forward'))).toBe(false);
@@ -198,7 +198,7 @@ describe('several accounts of a web-connected provider', () => {
       credentials: [{ key: 'openrouter.bearer' }, { key: 'openrouter.bearer@work' }], recorded,
     }));
 
-    const result = await generateText({ model: resolver.resolveModel('openrouter@work/anthropic/claude-x', 'kinu-test'), prompt: 'hello' });
+    const result = await generateText({ model: resolver.resolveModel('openrouter@work/anthropic/claude-x', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hello' });
 
     expect(result.text).toBe('proxied');
     expect(forwardedCredential(recorded)).toBe('openrouter.bearer@work');
@@ -211,7 +211,7 @@ describe('several accounts of a web-connected provider', () => {
       credentials: [{ key: 'openrouter.bearer' }, { key: 'openrouter.bearer@work' }], recorded: chosen,
     }), undefined, (provider) => (provider === 'openrouter' ? 'work' : undefined));
 
-    await generateText({ model: withChoice.resolveModel('openrouter/anthropic/claude-x', 'kinu-test'), prompt: 'hello' });
+    await generateText({ model: withChoice.resolveModel('openrouter/anthropic/claude-x', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hello' });
     expect(forwardedCredential(chosen)).toBe('openrouter.bearer@work');
 
     const unchosen: Recorded[] = [];
@@ -220,7 +220,7 @@ describe('several accounts of a web-connected provider', () => {
       credentials: [{ key: 'openrouter.bearer' }, { key: 'openrouter.bearer@work' }], recorded: unchosen,
     }));
 
-    await generateText({ model: withoutChoice.resolveModel('openrouter/anthropic/claude-x', 'kinu-test'), prompt: 'hello' });
+    await generateText({ model: withoutChoice.resolveModel('openrouter/anthropic/claude-x', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hello' });
     expect(forwardedCredential(unchosen)).toBe('openrouter.bearer');
   });
 });

@@ -358,6 +358,7 @@ async function accountTurn(
   const deps: ModelCallDeps = {
     env: {},
     sessionAffinity: 'kinu-test',
+    workspaceAffinity: 'kinu-test',
     async getAuth(key) { return stored.get(key) ?? null; },
     async hasCredential(key) { return stored.has(key); },
     async listCredentialKeys() { return [...stored.keys()]; },

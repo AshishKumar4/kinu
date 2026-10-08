@@ -59,7 +59,7 @@ import { ActorSession, type ActorTurnLease,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
-  assembleActorTurn, runHeadInference, withCompactionTrigger, promptCacheKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
+  assembleActorTurn, runHeadInference, withCompactionTrigger, conversationKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, subordinateTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
   terminalEffect,
@@ -69,7 +69,7 @@ import { ActorSession, type ActorTurnLease,
   type ActorToolsetDeps,
   turnArtifactBodies, artifactOverrides, currentArtifacts, type TurnOpening,
   turnReasonForMetadata, type TurnReason,
-  agentAffinityKey, bindRoute, routedLlm,
+  actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   actorNamespaces, SURFACE_POLICY, type SurfaceActor,
@@ -903,7 +903,7 @@ export class LocalAgentSession {
 
     const resolver = this.modelResolver;
 
-    return testModel({ spec, resolve: (named, conversation) => resolver.resolveModel(named, conversation), report: this.modelCallSink, signal });
+    return testModel({ spec, resolve: (named, affinity) => resolver.resolveModel(named, affinity), report: this.modelCallSink, signal });
   }
 
   /** `caller` has no default: the model passes `'self'`, and core refuses a self cancel of an
@@ -1655,7 +1655,7 @@ export class LocalAgentSession {
     return {
       catalog: this.modelCatalog,
       normalize: (spec) => this.profiles().normalizeSpec(spec),
-      resolve: (spec) => (resolver ? resolver.resolveModel(spec, this.conversation()) : this.defaultModel('this static-model session')),
+      resolve: (spec) => (resolver ? resolver.resolveModel(spec, this.affinity()) : this.defaultModel('this static-model session')),
       ...(resolver && {
         routed: { credentialFor: (spec) => resolver.credentialFor(spec), countInputTokens: (spec, request) => resolver.countInputTokens(spec, request) },
       }),
@@ -1702,7 +1702,7 @@ export class LocalAgentSession {
       identity: async () => this.promptIdentity(),
       artifacts: () => this.currentTurnArtifacts(),
       taskPlan: () => null,
-      cacheKey: () => this.compactionKey(),
+      conversationKey: () => this.compactionKey(),
       budget: this.budget,
       operations: this.modelOperations,
       scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
@@ -1727,8 +1727,7 @@ export class LocalAgentSession {
   /** What this turn owes, via core's `declareTerminalRoster`; this session supplies values, never
    *  decisions, so the CLI cannot drift from the Durable Object. */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
-    // A child titles from its brief, as a hosted actor does; the workspace mission names only the root.
-    const mission = this.rt.actor.parentActorId === null ? missionOf(soulIn(this.rt.space)) : null;
+    const root = this.rt.actor.parentActorId === null;
 
     // Decided on the live turn: `shouldGate` reads RAM a restart lacks, so the row's existence carries it.
     const gated = this.rt.shell !== undefined
@@ -1766,9 +1765,12 @@ export class LocalAgentSession {
       parts.advisor = projectJsonValue({ value: this.actorSession.advisorSnapshot(scoped, input.reachableTools) });
     }
 
-    parts.autoTitle = { mission };
+    // The workspace mission names the root. A child is named once, from its brief (the turn that opened its
+    // conversation), however that turn ended: a later turn's words ("Continue") are no name for it.
+    if (root) parts.autoTitle = { mission: missionOf(soulIn(this.rt.space)) };
+    else if (input.opensConversation()) parts.autoTitle = { mission: input.userText, standIn: true };
     // The workspace's own conversation compresses into its facts; a hire's does not, as on cf.
-    parts.sleepTime = this.rt.actor.parentActorId === null;
+    parts.sleepTime = root;
 
     // One claimed effect; the sequence id is the parent's dedupe key, so a replay is recognised.
     if (input.owedReport !== null && relay !== null) {
@@ -2019,12 +2021,16 @@ export class LocalAgentSession {
 
   /** The conversation every model call of this workspace is routed and cached under (`kinu-<name>`). */
   private conversation(): string {
-    return agentAffinityKey(this.agentName());
+    return this.affinity().sessionAffinity;
   }
 
-  /** This session's conversation: its prompt cache and its compaction state are kept under it. */
+  private affinity(): ModelAffinity {
+    return actorAffinity({ name: this.agentName(), workspaceId: this.rt.actor.workspaceId });
+  }
+
+  /** This session's conversation: its compaction state is kept under it. */
   private compactionKey(): string {
-    return promptCacheKey(this.conversation(), this.sessionId);
+    return conversationKey(this.conversation(), this.sessionId);
   }
 
   /** Key-less by default (DuckDuckGo + local HTML→markdown); a stored `tavily` credential upgrades search. */
@@ -2057,7 +2063,7 @@ export class LocalAgentSession {
         rt: this.rt,
         compose: () => this.composeNextRequest(),
         profile: () => this.routingProfile([...Object.keys(this.tools), ...codemodeCapabilitiesFor(this.codemodeProviders('build'))]),
-        bindModel: spec => this.modelResolver?.resolveModel(spec, this.conversation()) ?? this.defaultModel('scaffold model lane'),
+        bindModel: spec => this.modelResolver?.resolveModel(spec, this.affinity()) ?? this.defaultModel('scaffold model lane'),
         modelContext: spec => this.modelCatalog.contextFor(spec),
         tools: () => this.rolloutTools(callScope ?? currentOperationProfile(this.rt.actor)?.turnId ?? WORKSPACE_RUN_ID),
         callScope,
@@ -2404,7 +2410,7 @@ export class LocalAgentSession {
 
     return bindRoute({
       normalize: (spec) => this.profiles().normalizeSpec(spec),
-      resolve: (spec) => (modelResolver ? modelResolver.resolveModel(spec, this.conversation()) : this.defaultModel(`${resolution.source} model lane`)),
+      resolve: (spec) => (modelResolver ? modelResolver.resolveModel(spec, this.affinity()) : this.defaultModel(`${resolution.source} model lane`)),
     }, resolution);
   }
   /** Precedence is core's `resolveRoutingProfile`, shared with the Cloudflare backend. Asked per call:
@@ -2437,7 +2443,7 @@ export class LocalAgentSession {
 
   /** A static-model session answers only for its own model; other specs are refused by name. */
   private resolveModelForSpec(spec: string): LanguageModel {
-    if (this.modelResolver) return this.modelResolver.resolveModel(spec, this.conversation());
+    if (this.modelResolver) return this.modelResolver.resolveModel(spec, this.affinity());
 
     if (this.profiles().normalizeSpec(spec) === STATIC_MODEL_SPEC) {
       return this.defaultModel(`the ${spec} model`);
@@ -2480,7 +2486,7 @@ export class LocalAgentSession {
     const spec = this.actorSession.profile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());
 
     if (this.cachedModel && this.cachedModelSpec === spec) return this.cachedModel;
-    const model = this.modelResolver ? this.modelResolver.resolveModel(spec, this.conversation()) : this.defaultModel("this static-model session");
+    const model = this.modelResolver ? this.modelResolver.resolveModel(spec, this.affinity()) : this.defaultModel("this static-model session");
     this.cachedModel = model;
     this.cachedModelSpec = spec;
     // Start the lookup at claim time: `kinu exec` runs one turn, and a lazy lookup would never land in time.
@@ -2672,7 +2678,7 @@ export class LocalAgentSession {
       identity: async () => ({ ...(await this.promptIdentity()), agent: actor.stores.config.getDisplayName() ?? actor.record.name }),
       artifacts: () => artifactOverrides(currentArtifacts(this.rt.storage.sql, actor.handle)),
       taskPlan: () => null,
-      cacheKey: () => promptCacheKey(this.conversation(), actor.record.actorId),
+      conversationKey: () => conversationKey(this.conversation(), actor.record.actorId),
       operations: this.modelOperations,
       scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       attachmentBudget: actor.session.orchestrator.acc.context,

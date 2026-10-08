@@ -33,7 +33,7 @@ export function SlateFallbackFrame({ rpc }: { rpc: Rpc }) {
     if (method === "previewSlate") {
       return new Response(JSON.stringify({
         ok: true,
-        value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } },
+        value: { url: SLATE_GALLERY_URL, port: 8789, sized: false },
       })).json<T>();
     }
 
