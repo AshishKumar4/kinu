@@ -40,7 +40,7 @@ import type {
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
 } from './slate-durability-shapes';
-import type { JsonValue, SlateCallResult } from '@kinu.run/core';
+import type { JsonValue, SlateSurfaceResult } from '@kinu.run/core';
 
 interface SlateActorRootRpc extends Rpc.DurableObjectBranded {
   craftedSlate(): Promise<string>;
@@ -262,7 +262,7 @@ interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
   craftedFromNode(workspace: string): Promise<CraftedFromNodeObservation>;
   agentWorkspaceAnswer(workspace: string, agent: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
   agentWorkspaceListing(workspace: string, agent: string): Promise<RelayedAnswer<readonly { readonly key: string; readonly kind: string }[]>>;
-  slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateCallResult>>;
+  slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateSurfaceResult>>;
   programHostAnswer(workspace: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
   swarmJobNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
   jobWindowArmed(workspace: string, count: number): Promise<void>;
@@ -349,6 +349,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   revoke(share: string): Promise<ProbeAnswer>;
   stopped(): Promise<boolean>;
   drive(session: string): Promise<string>;
+  typed(say: string): Promise<string>;
   driveShared(session: string, approved: readonly string[], claim: { userId: string | null; source: string; consented: boolean }): Promise<{ answer: string; dialed: number }>;
 }
 

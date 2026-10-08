@@ -101,7 +101,7 @@ import {
   // Spend governor is opt-in: no label means no cap.
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   normalizeUsage, priceCall, type Usage,
-  generateReported, type GenerateRequest,
+  generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
   WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
@@ -199,7 +199,7 @@ import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import type { AgentStoreBroker } from "./agent-facets";
-import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
+import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel, SlateSurfaceValue } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
@@ -2975,7 +2975,7 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   private dispatchHostedSlateCall(
     hops: readonly [SlateCallerHop, ...SlateCallerHop[]], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext,
-  ): Effect.Effect<JsonValue, KinuError> {
+  ): Effect.Effect<SlateSurfaceValue, KinuError> {
     const [{ name }, ...rest] = hops;
 
     return Effect.gen({ self: this }, function* () {
@@ -3033,7 +3033,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * One capability route, run as this actor, narrowed by its own current role.
    * Not `@callable`: reached on the stub transport only.
    */
-  slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Promise<JsonValue> {
+  slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Promise<SlateSurfaceValue> {
     return settle(Effect.gen({ self: this }, function* () {
       // Only a namespace member is checked without running it; anything else asked about alone would run.
       if (context.authorizeOnly && route.kind !== 'namespace') {
@@ -3131,7 +3131,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async slateAiRun(
     route: Extract<SlateRoute, { kind: 'ai' }>,
     actor?: ActorHandle,
-  ): Promise<JsonValue> {
+  ): Promise<SlateSurfaceValue> {
     let profile: ResolvedTurnProfile;
 
     try {
@@ -3153,6 +3153,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (route.system !== undefined) input.system = route.system;
 
+    if (route.stream === true) return this.slateAiStream({ model, prompt: route.prompt, ...(route.system !== undefined && { system: route.system }) }, spec);
+
     const answer = await generateReported(input, {
       spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       spec,
@@ -3161,6 +3163,28 @@ export abstract class ActorAgent extends Agent<Env> {
     const usage = normalizeUsage(answer.usage);
 
     return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
+  }
+
+  /**
+   * `ai.stream`: the answer's text as UTF-8 bytes, each written as the model writes it, which the slate's class reads as
+   * text. Its spend is filed once the stream drains, as any streamed call's is; a reader that stops early ends the call.
+   */
+  private slateAiStream(request: StreamRequest, spec: string): ReadableStream<Uint8Array> {
+    const chunks = streamTextReported(request, {
+      spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations }, spec,
+    });
+
+    const encoder = new TextEncoder();
+
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const next = await chunks.next();
+
+        if (next.done === true) controller.close();
+        else controller.enqueue(encoder.encode(next.value));
+      },
+      async cancel() { await chunks.return(undefined); },
+    });
   }
 
   /** `actor` is whose browser sessions the program's egress reaches; null reaches only a new Kitesurf browser. */

@@ -220,7 +220,8 @@ export function slateRunnerSource(
     '      }',
     '      return stub.call(path, args, invocation).then((result) => {',
     '        if (!result.ok) throw new SlateRefusal(result);',
-    '        return result.value;',
+    // `ai.stream` answers its text as UTF-8 bytes, which is all that crosses the host's RPC; the class reads text.
+    '        return result.value instanceof ReadableStream ? result.value.pipeThrough(new TextDecoderStream()) : result.value;',
     '      });',
     '    },',
     '    get(_fn, name) {',

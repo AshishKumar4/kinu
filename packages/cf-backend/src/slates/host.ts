@@ -18,7 +18,7 @@ import {
   escapeHtml, publicPage, UsageSchema, usageTotal,
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
-  type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
+  type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
   type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
   type MissionGovernor, type WorkspaceOverviewShare, slateCapabilityGraph, type SlateCapabilityGraph,
   ephemeralSlateAddress, type EphemeralSlateAddress,
@@ -61,7 +61,7 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   readonly ctx: DurableObjectState;
   readonly workspace: string;
   /** Runs as the caller: its own providers, role reach, read models and gates. */
-  dispatch(caller: SlateCaller, route: SlateCapabilityRoute, context: SlateDispatchContext): Promise<JsonValue>;
+  dispatch(caller: SlateCaller, route: SlateCapabilityRoute, context: SlateDispatchContext): Promise<SlateSurfaceValue>;
   /** The actor whose browser sessions the caller's slate drives, as that actor's eval programs do; null for a share's
    *  viewer, whose grant no CDP socket passes through. */
   browserActor(caller: SlateCaller): Promise<string | null>;
@@ -91,6 +91,15 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
  */
 function heldKey(caller: SlateCaller, id: string): string {
   return ephemeralSlateAddress(id) === null ? `${slateCallerKey(caller)}#${id}` : `page#${id}`;
+}
+
+/** A viewer's answer is JSON: routing refuses a viewer every streamed member, so a stream here is a routing fault. */
+function viewerAnswer(result: SlateSurfaceResult): SlateCallResult {
+  if (!result.ok) return result;
+
+  return result.value instanceof ReadableStream
+    ? { ok: false, ...refusalOf(new KinuError('io', 'A share viewer\'s call answered a stream')) }
+    : { ...result, value: result.value };
 }
 
 /** The one surface every slate is given, as its process sees it. */
@@ -809,7 +818,7 @@ export class SlateHost {
   }
 
   /** Every call a slate makes, routed and held to its caller's reach as of now: a held stub proves its slate, nothing more. */
-  async surfaceCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
+  async surfaceCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateSurfaceResult> {
     try {
       const parsed = v.safeParse(SlateCallRequestSchema, request);
 
@@ -898,7 +907,7 @@ export class SlateHost {
       // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
       const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.live.live(input.share).grant, id, { namespace, member }); };
 
-      const result = await this.run(caller, call.route, { nested, ...(request.authorize && { authorizeOnly: true }) }, viewer);
+      const result = viewerAnswer(await this.run(caller, call.route, { nested, ...(request.authorize && { authorizeOnly: true }) }, viewer));
       row = { ...row, ok: result.ok };
 
       if (result.ok) this.debitShare(share, result.value);
@@ -909,11 +918,11 @@ export class SlateHost {
     }
   }
 
-  private async run(caller: SlateCaller, route: SlateRoute, context: SlateDispatchContext, viewer?: SlateViewer): Promise<SlateCallResult> {
+  private async run(caller: SlateCaller, route: SlateRoute, context: SlateDispatchContext, viewer?: SlateViewer): Promise<SlateSurfaceResult> {
     switch (route.kind) {
       case 'namespace': {
         const value = await this.deps.dispatch(caller, route, context);
-        const refused = answeredRefusal(value);
+        const refused = value instanceof ReadableStream ? null : answeredRefusal(value);
 
         return refused === null ? { ok: true, value } : { ok: false, ...refused };
       }

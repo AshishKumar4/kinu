@@ -246,3 +246,9 @@ it("a share's viewer drives a browser from the class only as the grant allows, a
   expect(await granted.driveShared('kitesurf', ['connectBrowser'], CLAIM)).toEqual({ answer: expect.stringContaining('Browser Run started a Kitesurf browser'), dialed: 1 });
   expect(await granted.driveShared('owned-session', ['connectBrowser'], CLAIM)).toEqual({ answer: expect.stringContaining('browser owned-session is not one this agent opened'), dialed: 0 });
 });
+
+it('a slate\'s class reads ai.stream a piece at a time, as the model writes it, through the binding its calls cross', async () => {
+  const probe = env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName('typist'));
+
+  expect(JSON.parse(await probe.typed('live'))).toEqual(['Typ', 'ing ', 'live']);
+});
