@@ -504,6 +504,8 @@ export {
 
 export { createStateCodemodeProvider } from './tools/state-operations';
 
+export { executorNamespace } from './tools/executor-operations';
+
 export { DB, type AppColumnType } from './operations/db';
 
 export { STATE } from './operations/state';

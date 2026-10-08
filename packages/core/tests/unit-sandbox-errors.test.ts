@@ -20,6 +20,7 @@ import { createSandboxExecutor } from '../src/execution/sandbox';
 import { createParentExecutor } from '../src/execution/parent';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
 import { createStateCodemodeProvider } from '../src/tools/state-operations';
+import { executorNamespace } from '../src/tools/executor-operations';
 import { createAgentsCodemodeProvider } from '../src/delegation/agents-operations';
 import { createReportCodemodeProvider } from '../src/tools/report-operations';
 import { createMemoryCodemodeProvider } from '../src/tools/memory-operations';
@@ -150,12 +151,12 @@ test('every member of every namespace refuses with the one declared Refusal, and
   const inline: InlineExecutorDeps = { filesOwner: 'agent', vfs: refusingDouble(), memory: refusingDouble(), craftStore: refusingDouble(), shell: refusingDouble() };
 
   const namespaces = [
-    createInlineExecutor({ ...inline, slate: refusingDouble() }),
-    createNimbusWorkspaceExecutor({ box: refusingDouble(), inline }),
-    createSandboxExecutor(refusingDouble(), { previewHostSuffix: 'preview.test' }),
-    createSandboxExecutor(),
-    createParentExecutor({ handle: refusingDouble() }),
-    createDeviceTunnelExecutor(refusingDouble()),
+    executorNamespace(createInlineExecutor({ ...inline, slate: refusingDouble() })),
+    executorNamespace(createNimbusWorkspaceExecutor({ box: refusingDouble(), inline })),
+    executorNamespace(createSandboxExecutor(refusingDouble(), { previewHostSuffix: 'preview.test' })),
+    executorNamespace(createSandboxExecutor()),
+    executorNamespace(createParentExecutor({ handle: refusingDouble() })),
+    executorNamespace(createDeviceTunnelExecutor(refusingDouble())),
     { name: CRAFTED_TOOL_NAMESPACE, types: '', tools: nativeToolFunctions(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }), undefined) },
     createStateCodemodeProvider(refusingDouble()),
     createAgentsCodemodeProvider(() => refusingDouble()),
@@ -171,7 +172,7 @@ test('every member of every namespace refuses with the one declared Refusal, and
   // What the model reads: every member declared as a signature or a const (native tools by their schemas), and every
   // declared result admitting a Refusal.
   const undeclared = namespaces.filter((namespace) => namespace.name !== CRAFTED_TOOL_NAMESPACE).flatMap((namespace) => Object.keys(namespace.tools)
-    .filter((member) => !('declarations' in namespace && namespace.declarations?.[member] !== undefined)
+    .filter((member) => namespace.declarations?.[member] === undefined
       && ![` ${member}(`, `const ${member}:`].some((form) => (namespace.types ?? '').includes(form)))
     .map((member) => `${namespace.name}.${member}`));
 

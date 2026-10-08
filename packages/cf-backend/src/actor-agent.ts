@@ -156,7 +156,7 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
-  agentRoleSwitch, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
+  agentRoleSwitch, executorNamespace, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
@@ -457,7 +457,7 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, co
   }
 
   const providers: CodemodeProvider[] = [
-    ...(runtime.executionRouter?.getProviders() ?? []),
+    ...(runtime.executionRouter?.getProviders() ?? []).map(executorNamespace),
     // A slate's visitor writes nothing into the workspace and holds no browser.
     createWebCodemodeProvider({ provider: webSearch, files: null }),
     createDbCodemodeProvider(actor.stores.appData),
@@ -3170,7 +3170,7 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   protected slateNamespaces(): CodemodeProvider[] {
     return [
-      ...(this.rt.executionRouter?.getProviders() ?? []),
+      ...(this.rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
       createWebCodemodeProvider({ provider: this.ownedModelServices.getWebSearchProvider(), files: null }),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
       ...this.turnCodemodeProviders(),

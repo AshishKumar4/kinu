@@ -20,6 +20,12 @@ import type { CraftedTool } from '../src/types/craft';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
+import { executorNamespace } from '../src/tools/executor-operations';
+import { namespaceDeclaration } from '../src/tools/operation-surfaces';
+
+/** An executor's namespace as the model reads it. */
+const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {}, new Set());
+
 
 const ToolSummarySchema = v.object({
   name: v.string(),
@@ -507,7 +513,7 @@ describe('workspace.slates', () => {
   test('an absent host is omitted from callable and declared capabilities', () => {
     const exec = buildExec(createTestRuntime().rt);
     expect(exec.tools.slates).toBeUndefined();
-    expect(exec.types).not.toContain('const slates');
+    expect(declared(exec)).not.toContain('slates');
   });
 
   test('invalid operation fields are refused before the available host is called', async () => {

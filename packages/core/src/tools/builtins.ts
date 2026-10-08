@@ -9,7 +9,6 @@ import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ConversationRecall } from '../memory/conversation-search';
-import type { ExecutorProviderSurface } from '../execution/types';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins, narrowToolSurface,
 } from './registry';
@@ -18,6 +17,8 @@ import { withClampedToolResult } from './clamp';
 import { withCheckedInput, withCheckedInputs } from './tool-schema';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 import { codemodeInputSchema } from './sandbox-contract';
+import { executorNamespace } from './executor-operations';
+import type { CodemodeProvider } from '../types/codemode';
 import { serveReport, type ReportDeps } from './report-operations';
 import { createFileTool } from './file-operations';
 import { serveShell } from './shell-operations';
@@ -53,7 +54,7 @@ export interface CodemodeSurface {
    * native definition, so the tools prefix stays the same in every workspace. The dynamic block declares them.
    */
   readonly external: () => ToolSet;
-  readonly providers: ExecutorProviderSurface[];
+  readonly providers: CodemodeProvider[];
   /** Where a program's relative paths start, its `process.cwd()`: the runtime's own (`PathPlanes.cwd`). */
   readonly cwd: string;
 }
@@ -69,7 +70,7 @@ export function codemodeSurface(
     native,
     craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
     external: () => withCheckedInputs(external()),
-    providers: rt.executionRouter?.getProviders() ?? [],
+    providers: (rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
     cwd: rt.planes.cwd,
   };
 }

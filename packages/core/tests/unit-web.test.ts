@@ -37,17 +37,7 @@ function createNodeCodemodeBuilder(codemodeProviders: CodemodeProvider[] = []): 
     const codemode = surface.craftedTools();
     const nsBindings: Record<string, Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>> = {};
 
-    for (const provider of surface.providers) {
-      const namespace: Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>> = {};
-
-      for (const [toolName, entry] of Object.entries(provider.tools)) {
-        namespace[toolName] = async (...args) => await entry.execute(...args);
-      }
-
-      nsBindings[provider.name] = namespace;
-    }
-
-    for (const provider of codemodeProviders) {
+    for (const provider of [...surface.providers, ...codemodeProviders]) {
       const namespace: Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>> = {};
 
       for (const [toolName, entry] of Object.entries(provider.tools)) {

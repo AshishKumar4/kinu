@@ -352,26 +352,6 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     };
   }
 
-  const types = `/** Your workspace: the files the \`file\` tool reads and the \`workspace\` shell. */
-declare namespace workspace {
-  function readFile(path: string): Promise<string | Refusal>;
-  function writeFile(path: string, content: string): Promise<string | Refusal>;
-  function readdir(path: string): Promise<string[] | Refusal>;
-  function exists(path: string): Promise<boolean | Refusal>;
-  /** The workspace shell; its working directory persists across calls. */
-  function exec(command: string, options?: { cwd?: string; name?: string }): Promise<string | Refusal>;
-  /** Your crafted tools. */
-  function listTools(): Promise<Array<{ name: string; description: string; qualityScore: number }> | Refusal>;
-  /** ${CREATE_TOOL_CONTRACT} */
-  function createTool(
-    name: string, description: string, code: string
-  ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;
-  ${slate === undefined ? '' : `/** Slates in this workspace; read vfs://skills/slates/SKILL.md first, which names the \`$\` members.
-   * \`await workspace.slates.board.addStroke(stroke)\` runs the board slate's \`addStroke\`. */
-  const slates: { readonly [id: string]: { readonly [member: string]: (...args: unknown[]) => Promise<unknown> } };
-`}
-}`;
-
   const provider: ExecutorProvider = {
     name: TOOL_REACH.slate.codemode,
     kind: 'workspace',
@@ -385,7 +365,6 @@ declare namespace workspace {
     connect: async () => {},
     disconnect: async () => {},
     tools: withVfsGuidance(vfs, tools),
-    types,
     positionalArgs: true,
     // No inbound TCP surface here; Worker slates use their separate host.
     async exposePort(port) {
@@ -429,7 +408,6 @@ export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts)
     connect: session.connect,
     disconnect: session.disconnect,
     tools: { ...inline.tools, ...session.tools },
-    types: (inline.types ?? '').replace(/\n}\s*$/, `${session.types}\n}`),
     exposePort: session.exposePort,
     unexposePort: session.unexposePort,
     listExposedPorts: session.listExposedPorts,

@@ -7,7 +7,6 @@ import { KINU_NODE_MODULE_SOURCE, requireBuild, type ToolSurfaceNarrowing } from
 import type {
   CodemodeProvider,
   CodemodeBuilder,
-  ExecutorProvider,
   JsonValue,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -65,7 +64,7 @@ interface ExecuteSuccess {
 export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): CodemodeBuilder {
   return (surface) => {
     const bound: CodemodeProvider[] = [
-      ...surface.providers.map(adaptExecutorProvider),
+      ...surface.providers,
       ...(deps.extraProviders ?? []),
     ];
 
@@ -161,30 +160,6 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
         }
       }, options.abortSignal),
     }), () => surface.craftedTools().map(({ name, description }) => ({ name, description })));
-  };
-}
-
-function adaptExecutorProvider(
-  provider: Pick<ExecutorProvider, 'name' | 'tools' | 'types' | 'positionalArgs'>,
-): CodemodeProvider {
-  const tools: CodemodeProvider['tools'] = {};
-
-  for (const [name, executorTool] of Object.entries(provider.tools)) {
-    tools[name] = {
-      description: executorTool.description,
-      execute: async (...args) => {
-        const result = await executorTool.execute(...args);
-
-        return result === undefined ? undefined : decodeJsonValue({ value: result });
-      },
-    };
-  }
-
-  return {
-    name: provider.name,
-    tools,
-    types: provider.types,
-    positionalArgs: provider.positionalArgs,
   };
 }
 

@@ -207,6 +207,14 @@ function callInput(op: Operation, args: readonly JsonValue[]): JsonObject {
   })), ...options.output };
 }
 
+/** An operation's input as the positional arguments it is called with: the inverse of {@link callInput}. */
+export function callArgs(op: Operation, input: JsonObject): JsonValue[] {
+  const { required, optional } = fieldsOf(op);
+  const options = Object.fromEntries(optional.flatMap((key) => (input[key] === undefined ? [] : [[key, input[key]]])));
+
+  return [...required.map((key) => input[key] ?? null), ...(Object.keys(options).length === 0 ? [] : [options])];
+}
+
 /** `name(required…, options?): Promise<output | Refusal>`, each type rendered by codemode from the field's own schema. */
 function operationDeclaration(op: Operation): string {
   const { required, optional } = fieldsOf(op);
