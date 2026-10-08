@@ -163,7 +163,8 @@ export interface RunTimelineDeps {
   readonly sql: SqlExecutor;
   /** Evolution and search reads are actor-scoped, as `run_events` is. */
   readonly actor: ActorHandle;
-  readonly events: RunEventRecorder;
+  /** Where the runs are: the actor's own recorder, or one it reads across an isolate. */
+  readonly events: Pick<RunEventRecorder, 'listRunsBefore' | 'read'>;
   readonly jobs: BackgroundJobStore;
   /** The in-flight run, the default focus. */
   readonly currentRunId: string | null;

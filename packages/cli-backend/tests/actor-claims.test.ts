@@ -7,7 +7,7 @@ import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
 import {
-  ActorSession, EvolutionEngine, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
+  ActorSession, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
   contextMount, localContextTree, withMountTable, createFileTool, TurnContextBudget, WORKSPACE_ROOT, cloudPlanes, type JsonObject } from '@kinu.run/core';
 import type {
@@ -74,7 +74,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null,
     orchestration: {
-      engine: new EvolutionEngine(runtime, stores.history, { enabled: false }), eventLog: new EventLog(eventSql, handle),
+      engine: new EvolutionEngine(runtime, historyTurnPairs(stores.history), { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: () => {},
         enqueueTurn: async () => { throw new Error('this fixture must not enqueue another turn'); },

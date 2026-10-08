@@ -368,6 +368,11 @@ export class AgentDatabase {
     };
   }
 
+  /** Its runs, as the Runs panel, `/runs`, MCP and the CLI read a workspace's. */
+  runs(): RunEventRecorder {
+    return this.actorHost().bindStores(this.reference()).stores.eventRecorder;
+  }
+
   /** Its newest `limit` model steps, newest first, and the newest the provider measured. */
   steps(limit: number): AgentSteps {
     const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;

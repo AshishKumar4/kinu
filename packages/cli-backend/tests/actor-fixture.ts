@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import {
-  ActorSession, EventLog, EvolutionEngine, WorkspaceActorDirectory,
+  ActorSession, EventLog, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory,
   BUILTIN_PROFILE_CATALOG, actorReferenceOf, createAgentStores, profileCatalogDigest,
   collectDynamicContext, createActorHost, defaultLoopOrigin, explorationActorKey,
   captureOperationProfile, initRunEventTables, promptCacheKey, runHeadInference, vfsTurnSkills,
@@ -128,7 +128,7 @@ export function localTestActorHost(
         turnInFlight: () => false,
         setTimer: () => { throw new Error('this fixture host must not schedule background work'); },
       },
-      engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: false }),
+      engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: false }),
       eventLog: new EventLog(exec, bound.handle),
     }),
     contextEvents: (bound) => bound.stores.eventRecorder,
@@ -223,7 +223,7 @@ export function headLoopSeams(
       turnInFlight: () => session.inFlight,
       setTimer: () => { throw new Error('this fixture session must not schedule background work'); },
     },
-    engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
+    engine: new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false }),
     eventLog: new EventLog(execOver(rt), handle),
   }, });
 

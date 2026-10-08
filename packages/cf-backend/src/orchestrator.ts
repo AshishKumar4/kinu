@@ -174,8 +174,8 @@ import {
   type HeadStep,
   buildPendingActions, type PendingAction,
   type Page, type PageRequest,
-  getRunTimeline, type TimelineSpan,
-  getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
+  getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
+  getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
   LiveReadsNotice, readsMovedByFiles, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
@@ -3852,12 +3852,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   @callable()
   async getRunTimeline(opts?: { runId?: string; limit?: number }): Promise<TimelineSpan[]> {
+    // Main's runs are its own isolate's: the run in focus and its events are read there, the rest here.
+    const main = this.actorHandle().actorId;
+    const calls = await this.agentCalls(main);
+    const recent = (await calls.listRuns(this.agentSnapshot(main), { limit: 1 })).items;
+    const runId = opts?.runId ?? recent[0]?.runId;
+    const events = runId === undefined ? [] : await calls.runEvents(this.agentSnapshot(main), runId, { limit: boundedInt(opts?.limit, RUN_TIMELINE_MAX, 1, RUN_TIMELINE_MAX) });
+
     return getRunTimeline({
       sql: this.boundSql,
       actor: this.actorHandle(),
-      events: this.eventRecorder,
+      events: { listRunsBefore: () => [...recent], read: () => events },
       jobs: this.jobs,
-      currentRunId: this._currentRunId,
+      currentRunId: null,
     }, opts);
   }
 
@@ -4351,19 +4358,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** For resume, pass the last seen `since` index; returns events strictly after it. */
+  /** For resume, pass the last seen `since` index; returns events strictly after it. A turn's run is main's, in its own
+   *  isolate; any other (a branch head's, the workspace's own lanes) is this object's. */
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
-    return getRunEvents(this.eventRecorder, runId, opts);
+    const main = this.actorHandle().actorId;
+    const turn = await (await this.agentCalls(main)).runEvents(this.agentSnapshot(main), runId, opts ?? null);
+
+    return turn.length > 0 ? turn : getRunEvents(this.eventRecorder, runId, opts);
   }
 
   /** Not @callable: serves the run-event routes. */
   async getRunEventText(runId: string, opts?: RunEventQuery): Promise<StoredRunEvent[]> {
-    return getRunEventText(this.eventRecorder, runId, opts);
+    const main = this.actorHandle().actorId;
+    const turn = await (await this.agentCalls(main)).runEventText(this.agentSnapshot(main), runId, opts ?? null);
+
+    return turn.length > 0 ? turn : getRunEventText(this.eventRecorder, runId, opts);
   }
 
-  /** Not @callable: the web UI uses `getRunSummaries`; serves `/runs`, MCP and CLI. */
+  /** Not @callable: the web UI uses `getRunSummaries`; serves `/runs`, MCP and CLI. Every run that starts is a turn of
+   *  main's, in its own isolate. */
   async listRuns(request?: PageRequest): Promise<Page<RunListEntry>> {
-    return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
+    const main = this.actorHandle().actorId;
+
+    return await (await this.agentCalls(main)).listRuns(this.agentSnapshot(main), request ?? null);
   }
 
   @callable()
@@ -4442,7 +4459,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async getRunSummaries(request?: PageRequest): Promise<Page<RunSummary>> {
-    return getRunSummaries(this.eventRecorder, request?.cursor ?? null, request?.limit);
+    const main = this.actorHandle().actorId;
+
+    return await (await this.agentCalls(main)).runSummaries(this.agentSnapshot(main), request ?? null);
   }
 
   async accountSpend(): Promise<AccountSpend[]> {

@@ -6,7 +6,7 @@ import {
   AgentOpenTurns, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
   BUILTIN_TOOL_NAMES, announcementOf,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
-  type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, localMissionScope, readMissionLabels,
+  type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
 } from '@kinu.run/core';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
 import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, TurnOpening } from '@kinu.run/core';
@@ -319,7 +319,7 @@ export class AgentTurns {
       reviewsTurns: actor.session.reviewsTurns,
       ...(prepared.trial !== undefined && { trial: prepared.trial }),
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
-      ...(run === undefined && this.chatMission(turn.reference.actorId, turn) !== null && { missionLabels: readMissionLabels(turn.request.driving) }),
+      ...(this.chatMission(turn.reference.actorId, turn).length > 0 && { missionLabels: this.chatMission(turn.reference.actorId, turn) }),
       trace: run?.reportStep !== undefined || run?.reportDelta !== undefined,
       resume: run?.resume !== undefined,
       reportMessages: run?.reportMessages !== undefined,
@@ -376,23 +376,26 @@ export class AgentTurns {
   }
 
   async guard(actorId: string, turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) {
-    const turn = this.turn(actorId, turnId);
-
-    return await (turn.request.run?.inference.mission?.port ?? this.chatMission(actorId, turn))?.guard(...args) ?? null;
+    return await this.missionPort(actorId, turnId)?.guard(...args) ?? null;
   }
 
   async debit(actorId: string, turnId: string, ...args: Parameters<MissionBudgetPort['debit']>): Promise<void> {
-    const turn = this.turn(actorId, turnId);
-
-    await (turn.request.run?.inference.mission?.port ?? this.chatMission(actorId, turn))?.debit(...args);
+    await this.missionPort(actorId, turnId)?.debit(...args);
   }
 
-  /** A chat turn under a mission of the workspace's spends there, model call by model call, as it did in this object. */
-  private chatMission(actorId: string, turn: OpenTurn): MissionBudgetPort | null {
+  /** A run spends through its own mission. Main's chat turn spends through the workspace's governor under the labels its
+   *  call names, as it did in this object: its last step's charge may land after its turn closed here. */
+  private missionPort(actorId: string, turnId: string): MissionBudgetPort | null {
     const governor = this.deps.missions(actorId);
-    const labels = readMissionLabels(turn.request.driving);
 
-    return turn.request.run === undefined && governor !== null && labels.length > 0 ? localMissionScope(governor, labels)?.port ?? null : null;
+    if (governor !== null) return { guard: async (seam, labels) => governor.guard(seam, labels), debit: async (tokens, opts) => { governor.debit(tokens, opts); } };
+
+    return this.turn(actorId, turnId).request.run?.inference.mission?.port ?? null;
+  }
+
+  /** Main's chat turn names its missions when it is prepared under any. */
+  private chatMission(actorId: string, turn: OpenTurn): readonly string[] {
+    return turn.request.run === undefined && this.deps.missions(actorId) !== null ? readMissionLabels(turn.request.driving) : [];
   }
 
   async program(actorId: string, turnId: string, ...[code, providers, opts]: Parameters<Executor['execute']>) {

@@ -19,7 +19,9 @@ import { FacetChat } from './agent-chat';
 import type {
   AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
   JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation,
+  Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
 } from '@kinu.run/core';
+import { getRunEvents, getRunEventText, getRunSummaries, listRuns } from '@kinu.run/core';
 
 export type { AgentWorkspace } from './agent-turn';
 
@@ -114,6 +116,12 @@ export interface AgentFacetCalls {
   newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]>;
   /** Where its chat stands between turns, for its window and its workspace's tile; `contextWindow` is its model's. */
   standing(snapshot: AgentSnapshot, contextWindow: number | null): Promise<AgentStanding>;
+  /** Its runs, newest first, plain or folded with each run's provenance and usage, and one run's events; the workspace's
+   *  own agent's are its workspace's runs. */
+  listRuns(snapshot: AgentSnapshot, request: PageRequest | null): Promise<Page<RunListEntry>>;
+  runSummaries(snapshot: AgentSnapshot, request: PageRequest | null): Promise<Page<RunSummary>>;
+  runEvents(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<RunEvent[]>;
+  runEventText(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<StoredRunEvent[]>;
   /** Its newest model steps, for the activity its workspace's window reads. */
   steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps>;
   /** A turn's request and response by its answer's id, for a rating its workspace records; null for none. */
@@ -325,6 +333,22 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async standing(snapshot: AgentSnapshot, contextWindow: number | null): Promise<AgentStanding> {
     return this.open(snapshot).standing(contextWindow);
+  }
+
+  async listRuns(snapshot: AgentSnapshot, request: PageRequest | null): Promise<Page<RunListEntry>> {
+    return listRuns(this.open(snapshot).runs(), request?.cursor ?? null, request?.limit);
+  }
+
+  async runSummaries(snapshot: AgentSnapshot, request: PageRequest | null): Promise<Page<RunSummary>> {
+    return getRunSummaries(this.open(snapshot).runs(), request?.cursor ?? null, request?.limit);
+  }
+
+  async runEvents(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<RunEvent[]> {
+    return getRunEvents(this.open(snapshot).runs(), runId, query ?? undefined);
+  }
+
+  async runEventText(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<StoredRunEvent[]> {
+    return getRunEventText(this.open(snapshot).runs(), runId, query ?? undefined);
   }
 
   async steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps> {
