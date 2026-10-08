@@ -19,7 +19,7 @@ import { joinedOnlyByItself } from './agents-sdk';
  */
 const databases = new WeakMap<Database, Map<string, Database>>();
 
-/** Models a suite scripts, by the conversation (`agentAffinityKey`) their calls are routed under. */
+/** Models a suite scripts, by the session (`actorAffinity`'s) their calls are routed under. */
 const scriptedModels = new Map<string, () => LanguageModel>();
 
 const shippedProviderRegistry = shippedRegistry.createAgentProviderRegistry;
@@ -31,7 +31,7 @@ const registered = mock.module('../../src/providers/agent-registry', () => ({
   createAgentProviderRegistry: (deps: shippedRegistry.AgentProviderDeps): shippedRegistry.AgentProviderRegistry => {
     const registry = shippedProviderRegistry(deps);
 
-    return { ...registry, resolveModel: (spec, conversation) => scriptedModels.get(conversation)?.() ?? registry.resolveModel(spec, conversation) };
+    return { ...registry, resolveModel: (spec, conversation) => scriptedModels.get(conversation.sessionAffinity)?.() ?? registry.resolveModel(spec, conversation) };
   },
 }));
 

@@ -36,7 +36,7 @@ import {
   type ActorHost, type HostedActor, type SubordinateSeed,
 } from '@kinu.run/core';
 import {
-  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, agentAffinityKey,
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, actorAffinity,
   type AgentRuntime, type LLM,
   type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type RoleCatalog, type SqlExecutor,
@@ -253,7 +253,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   get modelFactory(): (() => LanguageModel) | undefined { return this._modelFactory; }
   set modelFactory(factory: (() => LanguageModel) | undefined) {
     this._modelFactory = factory;
-    scriptConversationModel(agentAffinityKey(this.name), factory ?? null);
+    // Main's isolate routes its calls under its record's name, which is this workspace's.
+    scriptConversationModel(actorAffinity({ name: this.name, workspaceId: '' }).sessionAffinity, factory ?? null);
   }
   override getModel(): LanguageModel {
     return this.modelFactory?.() ?? super.getModel();
@@ -334,7 +335,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     // Any read through main's window copies its roster rows into its own database.
     await this.harnessMainHistory();
-    const { actor, history } = agentHistory({ agent: this }, main);
+    const { actor, history } = agentHistory({ agent: this, db: present(activationStorage.get(this.ctx), 'the activation\'s storage') }, main);
 
     if ((await history.materialize()).entries.length > 0) return;
     await history.replaceHistory(messages, { author: actor.actorId, via: 'session', turnId: null, stage: false, assertOwner: () => {} });
@@ -955,8 +956,8 @@ export function agentHistory(harness: Pick<ActorHarness<HarnessOrchestratorAgent
 
 /** Main's own isolate's database, where its conversation, turns, runs, steers and plans are kept (D9); opened by any
  *  read through its window. */
-export function mainDatabase(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'db'>): Database {
-  return agentDatabase(workspaceMainActor(harness.db).actorId);
+export function mainDatabase(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>): Database {
+  return ownDatabase(harness, workspaceMainActor(harness.db).actorId);
 }
 
 /** Main as its own isolate's database holds it, to address its rows as core's stores do; opened through its window. */
