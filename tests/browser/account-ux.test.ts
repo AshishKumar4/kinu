@@ -504,7 +504,8 @@ describe('account panels', () => {
     });
   });
 
-  test('an account with no name starts blank, wears its email\'s letter, and moves on without saving an empty name', async () => {
+  // Production, 2026-10-08: its one sign-in, Cloudflare, shares no name for most accounts; nothing guesses one.
+  test('an account its provider shared no name for starts blank, says which provider, wears its email\'s letter, and saves no empty name', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'welcome&step=0&noname=1', 'dark', 'desktop');
 
@@ -512,6 +513,7 @@ describe('account panels', () => {
         await page.waitForSelector('[aria-label="Your name"]');
         expect(await page.$eval('[aria-label="Your name"]', (el) => (el instanceof HTMLInputElement ? el.value : null))).toBe('');
         expect(await page.$eval('[data-welcome-step="profile"] [data-avatar]', (el) => el.textContent?.trim())).toBe('N');
+        await page.waitForFunction(() => (document.querySelector('[data-welcome-step="profile"]')?.textContent ?? '').includes('Cloudflare'));
 
         // Typed and cleared again: Next moves on, and no empty name reaches the account.
         await page.type('[aria-label="Your name"]', 'x');

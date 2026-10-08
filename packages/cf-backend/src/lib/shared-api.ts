@@ -57,9 +57,10 @@ export function forkLiveShare(input: { live: string; ownerWorkspace: string; wor
   return api(BlueprintForkSchema, 'POST', '/api/shared/fork', input);
 }
 
-const MeSchema = v.object({ user: v.nullable(v.object({ email: v.string() })) });
+const MeSchema = v.object({ user: v.nullable(v.object({ email: v.string(), signedInWith: v.optional(v.nullable(v.string()), null) })) });
 
-export function signedInEmail(): Promise<string | null> {
+/** The signed-in session as `/api/auth/me` answers it; null when no one is signed in. */
+function signedIn(): Promise<v.InferOutput<typeof MeSchema>['user']> {
   return settle(Effect.gen(function* () {
     const res = yield* Effect.promise(async () => fetch('/api/auth/me', { signal: AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) }));
 
@@ -67,8 +68,17 @@ export function signedInEmail(): Promise<string | null> {
 
     if (!res.ok) return yield* Effect.die(new Error(`GET /api/auth/me → ${res.status} ${yield* Effect.promise(async () => errorDetail(res))}`));
 
-    return v.parse(MeSchema, yield* Effect.promise(async () => res.json())).user?.email ?? null;
+    return v.parse(MeSchema, yield* Effect.promise(async () => res.json())).user;
   }));
+}
+
+/** The provider this session signed in with, by name ("Cloudflare"); null for a sign-in that is no provider's. */
+export async function signedInWith(): Promise<string | null> {
+  return (await signedIn())?.signedInWith ?? null;
+}
+
+export async function signedInEmail(): Promise<string | null> {
+  return (await signedIn())?.email ?? null;
 }
 
 /** Answers the row and its URL (null where this deployment cannot sign one). */
