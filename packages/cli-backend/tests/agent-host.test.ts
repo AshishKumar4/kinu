@@ -592,7 +592,7 @@ function replyingModel(answer: string) {
 
 function askedEventId(prompt: LanguageModelV2CallOptions['prompt']): string | null {
   const matches = [...renderPromptText(prompt)
-    .matchAll(/the sender awaits your answer[\s\S]*?event_id:'([^']+)'/gu)];
+    .matchAll(/the sender awaits your answer[\s\S]*?eventId:'([^']+)'/gu)];
 
   return matches[matches.length - 1]?.[1] ?? null;
 }
