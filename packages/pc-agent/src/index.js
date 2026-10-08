@@ -1577,8 +1577,12 @@ publishState().catch(abandonStartup);
 
 
 child.once('exit', (code, signal) => {
+  // A cancellation is only an end the kill caused. A command can exit on its own after the cancel arrives and before
+  // this supervisor reaps it, and a signal to that exited, unreaped group still reports delivered; a sandbox's
+  // launcher reports its killed namespace as 128 + SIGKILL.
+  const killed = signal === 'SIGKILL' || (sandboxPid > 0 && code === 137);
   const finishAfterDrain = () => {
-    if (cancellationRequested && cancellationSignalDelivered) {
+    if (cancellationRequested && cancellationSignalDelivered && killed) {
       // This confirms only the owned process group. A command can use setsid
       // to escape that group; same-uid supervision cannot honestly claim it
       // terminated such a detached descendant.
