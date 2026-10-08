@@ -11,7 +11,7 @@ import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
-import { deleteR2Prefix, r2BucketExists, restApiToken } from './cloudflare-rest';
+import { deleteR2Prefix, restApiToken } from './cloudflare-rest';
 import { runWrangler, wranglerProvesAbsence, deleteContainerApps, containerAppIds, publishTeardown, runTeardownOnce, delay } from './fixtures/r2-bench/deploy-substrate';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import artifact from '../packages/devbox/block-lower/upstream.json';
@@ -220,17 +220,16 @@ async function main(): Promise<void> {
       requireEqual(containerAppIds(REPO, [app], () => undefined), []);
       },
       bucket: async () => {
-      const named = { accountId: ACCOUNT, bucket: worker, token: rest };
-
-      if (!await r2BucketExists(named)) return;
-      await deleteR2Prefix({ ...named, prefix: '' });
+      if (!runWrangler(REPO, ['r2', 'bucket', 'list']).includes(worker)) return;
+      await deleteR2Prefix({ accountId: ACCOUNT, bucket: worker, prefix: '', token: rest });
       const accessKeyId = process.env['R2_ACCESS_KEY_ID'];
       const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
 
       if (accessKeyId !== undefined && secretAccessKey !== undefined) await drainBucketResidue(r2ResiduePlane({ accountId: ACCOUNT, accessKeyId, secretAccessKey }), worker);
       runWrangler(REPO, ['r2', 'bucket', 'delete', worker]);
+      const buckets = runWrangler(REPO, ['r2', 'bucket', 'list']);
 
-      if (await r2BucketExists(named)) throw new Error('the bucket still exists after deletion');
+      if (buckets.includes(worker)) throw new Error('the bucket is still listed after deletion');
       },
     });
 
