@@ -549,6 +549,9 @@ export async function hireOutbound(request: Request): Promise<Response> {
   // The child's lane: `report` is deps-gated (core's `DEPS_GATED_TOOLS`), so only a hired actor carries it.
   if (toolNames(body).includes('report')) return await childLane(run, body, results);
 
+  // A plan's feedback reaches a hired agent on the owner's lane, so without `report`: it answers.
+  if (lastUser(body).includes('The owner requested changes to plan')) return textBody(body.model ?? HIRE_CHILD_MODEL, CHILD_ANSWER);
+
   if (body.model === HIRE_DURABLE_MODEL) return await durableLane(run, body, results);
 
   return rootLane(run, body, results);
