@@ -34,7 +34,7 @@ it('hosted Plan analysis reads files and keeps research state without writes or 
   } });
 
   const built = await root.code('build', [
-    'await workspace.writeFile();',
+    "await workspace.writeFile('plan-data.txt', 'changed');",
     'return await (await fetch("https://network.example.test/")).text();',
   ].join('\n'));
 
