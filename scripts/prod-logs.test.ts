@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
+import { canaryActivations } from './durability-canary-telemetry';
 import { idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
 
 const HOUR = 3_600_000;
@@ -166,4 +167,16 @@ test('activations are the ordinals\' deltas, so a dropped startup row loses no c
   expect(ordinalHours([hour(1, 4, 6), hour(2, 9, 9), hour(1, 1, 1, 'quiet')]).map((row) => [row.object, row.startups])).toEqual([
     ['canary', 3], ['canary', 3], ['quiet', 1],
   ]);
+});
+
+const startup = (timestamp: number, activation: number) => ({
+  timestamp, source: { event: 'actor.startup', code: '', cause: '', fields: { activation } }, $workers: { scriptVersion: { id: 'v' } }, $metadata: {},
+});
+
+// Staging 2026-10-08: the canary's object started six times and telemetry kept four of the startup rows.
+test('a dropped startup row is an activation still: the ordinals count it, at an unknown time', () => {
+  const read = canaryActivations(null, [startup(10, 3), startup(40, 6), startup(20, 4)]);
+
+  expect(read.map((activation) => [activation.ordinal, activation.at])).toEqual([[3, 10], [4, 20], [5, null], [6, 40]]);
+  expect(canaryActivations([{ ordinal: 9, at: 5, version: null }], [startup(10, 3)])).toEqual([{ ordinal: 9, at: 5, version: null }]);
 });
