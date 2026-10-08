@@ -1668,6 +1668,25 @@ describe('how a settled turn ended', () => {
       await page.close();
     });
   });
+
+  // The final walk on 04a4dd0ab: a refused turn left the owner's message alone after a reload.
+  test('a turn the provider refused shows the refusal in its words where a reload reads it, with its retry', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=refused`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('#chat [data-turn-failure]');
+
+      const failure = await page.$eval('#chat [data-turn-failure]', (row) => ({
+        words: row.querySelector('code')?.textContent ?? '',
+        retry: [...row.querySelectorAll('button')].some((button) => /retry/i.test(button.textContent ?? '')),
+      }));
+
+      expect(failure.words).toContain('Go usage limit exceeded');
+      expect(failure.retry).toBe(true);
+      await page.close();
+    });
+  });
 });
 
 /** A redirect that ran as a branch leaves takes to compare: the chip names the current one, the comparison cycles

@@ -51,8 +51,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'runProgram');
     Reflect.deleteProperty(this, 'forgetActivation');
     Reflect.deleteProperty(this, 'pendingNimbusTasks');
+    Reflect.deleteProperty(this, 'executorRows');
     Reflect.deleteProperty(this, 'runShell');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'runShell']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell']);
   }
 
   async portReservations(): Promise<DurabilityReservation[]> {
@@ -63,6 +64,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       owner: reservation.owner,
       capability: reservation.capability,
     }));
+  }
+
+  /** The workspace executor's terminal rows, as a reload reads them. */
+  async executorRows(): Promise<Array<{ stdout: string; stdout_len: number }>> {
+    return (await this.getExecutorOutput('workspace')).map(({ stdout, stdout_len }) => ({ stdout, stdout_len }));
   }
 
   /** Nimbus's pending tasks as this object's Lifecycle holds them, and the alarm that wakes the next. */
@@ -138,7 +144,8 @@ export { ObservedOrchestrator as OrchestratorAgent };
 /** `slateAs` is absent on purpose: `Rpc.Result` over its recursive `JsonValue` is TS2589; the probe
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator, 'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'runShell'>;
+  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
+  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -335,6 +342,10 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
   async pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }> {
     return (await this.workspaceTarget(workspace)).pendingNimbusTasks();
+  }
+
+  async executorOutputs(workspace: string): Promise<Array<{ stdout: string; stdout_len: number }>> {
+    return (await this.workspaceTarget(workspace)).executorRows();
   }
 
   /** A `null` answer is the edge declining the hostname, a fixture fault, so it throws. */

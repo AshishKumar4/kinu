@@ -7,6 +7,7 @@ import Sidebar from "./Sidebar";
 import { SidebarRail } from "./SidebarRail";
 import { FeedbackButton } from "./FeedbackButton";
 import { KinuLogo } from "./ui/KinuLogo";
+import { composing } from "./ui/form";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
 import { AgentsNavProvider, useAgentsNav } from "@/hooks/use-agents-nav";
 import { AppBackground } from "./AppBackground";
@@ -34,6 +35,16 @@ function Shell() {
   // A workspace's bar carries the menu button itself: one bar on a phone, not two.
   const ownBar = useMatch({ path: "/workspace/:agentId", end: false }) !== null;
   useEffect(() => { if (entries > 0 && !window.matchMedia("(min-width: 768px)").matches) setDrawerOpen(true); }, [entries]);
+
+  // Dismissed as a dialog is: an Escape a field inside it took for itself stays the field's.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !event.defaultPrevented && !composing(event)) setDrawerOpen(false); };
+
+    document.addEventListener("keydown", onKey);
+
+    return () => document.removeEventListener("keydown", onKey);
+  }, [drawerOpen]);
 
   return (
     <WorkspaceRosterProvider>
@@ -69,7 +80,7 @@ function Shell() {
       {drawerOpen && (
         <div className="fixed inset-0 z-50 animate-fade-in md:hidden">
           <div className="p-scrim absolute inset-0" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
-          <aside data-drawer className="absolute inset-y-0 left-0 w-72 max-w-[85vw] p-sidebar border-r p-border p-shadow-overlay">
+          <aside data-drawer role="dialog" aria-modal="true" aria-label="Menu" className="absolute inset-y-0 left-0 w-72 max-w-[85vw] p-sidebar border-r p-border p-shadow-overlay">
             <Sidebar />
           </aside>
         </div>

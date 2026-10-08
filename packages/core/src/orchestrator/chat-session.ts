@@ -16,7 +16,7 @@ import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { attempt, attemptInItsWords, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, type Refusal } from '../obs/index';
+import { attempt, attemptInItsWords, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle as settleEffect, settleLogged, toKinuError, type Refusal } from '../obs/index';
 import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
@@ -52,7 +52,7 @@ import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
 import { subordinateTurnContext } from '../subordinates/support';
 import { taskTurnEnding, type OwedReport, type TaskTurnEnding } from '../subordinates/temporary';
-import { TURN_END_METADATA_KEY } from '../read-models/background-event';
+import { TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tools/task-store';
 import { inheritedAsModelMessage } from '../heads/head-inference';
@@ -192,9 +192,13 @@ export interface OwedTerminalEffectsInput {
 }
 
 async function answerMetadata(
-  ports: ChatSessionPorts, turnId: string, texts: () => Promise<readonly string[]>, ending: string,
+  ports: ChatSessionPorts, turnId: string, texts: () => Promise<readonly string[]>, end: RunEndClassification,
 ): Promise<JsonObject | null> {
-  const metadata: JsonObject = { ...await ports.answerMetadata?.(turnId, texts), ...(ending === 'incomplete' && { [TURN_END_METADATA_KEY]: ending }) };
+  const metadata: JsonObject = {
+    ...await ports.answerMetadata?.(turnId, texts),
+    ...(end.reason === 'incomplete' && { [TURN_END_METADATA_KEY]: end.reason }),
+    ...(end.error !== undefined && { [TURN_FAILURE_METADATA_KEY]: end.error }),
+  };
 
   return Object.keys(metadata).length === 0 ? null : metadata;
 }
@@ -1066,7 +1070,10 @@ export class ChatSession {
       const interrupted = lease.signal.aborted;
 
       if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
-      this.closeRun(classifyRunEnd({ completed: false, interrupted, errorText: message.slice(0, 500) }), lease);
+      const end = classifyRunEnd({ completed: false, interrupted, errorText: message.slice(0, 500) });
+
+      this.closeRun(end, lease);
+      await this.recordFailure(end, lease);
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
 
@@ -1205,7 +1212,7 @@ export class ChatSession {
     const finalText = execution.claim === null ? execution.finalTextReference
       : await this.actorSession.recordTranscriptText(execution.claim, 'answer', fullText, execution.outputReferences);
 
-    const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), end.reason);
+    const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), end);
 
     const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
       id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
@@ -1241,12 +1248,11 @@ export class ChatSession {
     if (!('committed' in commit)) {
       const message = renderThrownChain({ cause: commit.failure });
       this.actorSession.orchestrator.acc.hadError = true;
-      this.closeRun(classifyRunEnd({
-        completed: false,
-        interrupted: false,
-        errorText: runError ?? message.slice(0, 500),
-      }), lease);
+      const failed = classifyRunEnd({ completed: false, interrupted: false, errorText: runError ?? message.slice(0, 500) });
+
+      this.closeRun(failed, lease);
       diagnostics.failure('turn.persist_failed', commit.failure);
+      await this.recordFailure(failed, lease);
       // Not durable, so the terminal event carries no final answer.
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
@@ -1403,6 +1409,21 @@ export class ChatSession {
         }),
       };
     }
+  }
+
+  /** A turn that failed before its answer was recorded leaves one carrying the failure, where a reload reads it. */
+  private async recordFailure(end: RunEndClassification, lease: ActorTurnLease): Promise<void> {
+    if (end.error === undefined || this.transcript.has(this.messageId)) return;
+
+    await settleLogged('turn.failure_unrecorded', { doing: 'recording the turn\'s failure on its answer', otherwise: 'io' }, async () => {
+      const metadata = await answerMetadata(this.ports, lease.turnId, async () => [], end);
+
+      const answer = await this.transcript.prepareAssistant({
+        id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: [], finalText: null, ...(metadata !== null && { metadata }),
+      });
+
+      this.transaction(() => this.persist(answer));
+    });
   }
 
   /** Public rows contain references only; output bytes committed before this terminal transaction. */

@@ -24,6 +24,7 @@ import {
   type AgentClientEvent,
   type AgentClientSendOptions,
   type AgentClientStatus,
+  type AgentTranscriptMessage,
   type DeviceConsentDecision,
   type ForkPoint,
   type PendingDeviceConsent,
@@ -44,7 +45,7 @@ import {
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
 import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
-import { contextWindowForSpec, describeProviderError, EMPTY_MODEL_MENU, specWithoutAccount, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
+import { contextWindowForSpec, describeProviderError, EMPTY_MODEL_MENU, specWithoutAccount, turnFailure, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { loadActiveProfile } from '../default-model';
 import { canonicalProjectRoot } from '../config';
@@ -688,7 +689,7 @@ function ChatScene({
       let historyFailure: string | null = null;
 
       try {
-        history = await candidate.history();
+        history = shownHistory(await candidate.history());
         historyBoundary = bufferedEvents.length;
       } catch (error) {
         historyFailure = errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: error })}`);
@@ -1576,7 +1577,7 @@ function ChatScene({
       try {
         if (!skipHydrationRef.current) {
           try {
-            const history = await client.history();
+            const history = shownHistory(await client.history());
 
             if (!abort.signal.aborted && history.length > 0) {
               setMessages([welcomeMessage(client.agentName), ...history]);
@@ -2264,6 +2265,15 @@ function phaseLineLabel(isProcessing: boolean, turnPhase: string | null, nextTie
 /** Plain text: the TUI styles system messages itself. */
 function errorLine(message: string): string {
   return `Error: ${describeProviderError({ cause: message })}`;
+}
+
+/** History as the live turn drew it: an answer whose turn failed is followed by the failure's error line. */
+function shownHistory(history: readonly AgentTranscriptMessage[]): DisplayMessage[] {
+  return history.flatMap((row): DisplayMessage[] => {
+    const failure = turnFailure({ metadata: row.metadata });
+
+    return failure === null ? [row] : [row, { id: `${row.id}-failure`, role: 'system', content: errorLine(failure) }];
+  });
 }
 
 function lastUrlFromMessages(messages: DisplayMessage[]): string | null {

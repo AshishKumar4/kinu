@@ -97,8 +97,33 @@ class CanaryTelemetry {
   }
 }
 
+/**
+ * An activation the object began on a new script version without logging `actor.startup` (staging 143fc79d, 2026-10-08:
+ * the canary's object served its first alarm on the new version at 08:14:15.951Z and logged its next startup at 08:19:16Z,
+ * and a step was lost between): the first invocation on each new version, where no startup sits within a minute of it.
+ */
+function unloggedActivations(rows: readonly TelemetryEvent[], startups: readonly TelemetryEvent[]): TelemetryEvent[] {
+  const invocations = rows.filter((row) => row.$metadata.type === 'cf-worker-event' && row.$workers.scriptVersion?.id !== undefined);
+  const firsts: TelemetryEvent[] = [];
+  const seen = new Set<string>();
+
+  // A version's first invocation only: a rollout flips an object between two versions for seconds (06:31Z, 14 flips).
+  for (const current of invocations) {
+    const version = `${current.$workers.durableObjectId ?? ''}:${current.$workers.scriptVersion?.id ?? ''}`;
+
+    if (seen.has(version)) continue;
+    seen.add(version);
+
+    if (seen.size === 1 || startups.some((startup) => Math.abs(startup.timestamp - current.timestamp) <= 60_000)) continue;
+    firsts.push({ ...current, source: { ...current.source, event: 'activation.unlogged_startup' } });
+  }
+
+  return firsts;
+}
+
 function activationDisruptions(rows: readonly TelemetryEvent[], window: CanaryWindow, touches: readonly CanaryTouch[]) {
-  const startups = rows.filter((row) => row.source.event === 'actor.startup');
+  const logged = rows.filter((row) => row.source.event === 'actor.startup');
+  const startups = [...logged, ...unloggedActivations(rows, logged)].sort((a, b) => a.timestamp - b.timestamp);
   const disruptions = [];
 
   for (let index = 1; index < startups.length; index++) {

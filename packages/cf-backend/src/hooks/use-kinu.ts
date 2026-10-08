@@ -47,7 +47,7 @@ import {
   type SessionRecovery,
 } from "@kinu.run/core";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
-import { terminalChatError, type ChatTurnError } from "@kinu.run/core";
+import { terminalChatError, turnFailure, type ChatTurnError } from "@kinu.run/core";
 import { turnLiveness, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
 import { jobPhase, type InspectedWork } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
@@ -732,9 +732,12 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
   // is down the turn is the SDK's to rejoin, not a failed one.
   const standingStreamError = connectionStatus === "connected" ? streamError : undefined;
 
-  const chatError = frameError ?? (standingStreamError === undefined
+  const turnError = frameError ?? (standingStreamError === undefined
     ? null
     : { body: standingStreamError.message || String(standingStreamError), refused: false });
+
+  // A failure the newest answer records is drawn on it, where a reload finds it too.
+  const chatError = turnError?.refused === false && turnFailure({ metadata: messages.at(-1)?.metadata }) !== null ? null : turnError;
 
   const clearChatError = useCallback(() => {
     setFrameError(null);

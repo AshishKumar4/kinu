@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
-import { delegatedTaskMetadata, followJobOutput, summarizeSteps, TURN_END_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
+import { delegatedTaskMetadata, followJobOutput, summarizeSteps, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -1698,8 +1698,19 @@ const SLATES_THREAD: UIMessage[] = [
   msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [{ type: "text", text: "Added an expiry column." }] }),
 ];
 
+/* `?transcript=refused`: a turn the provider refused, as a reload reads it back. */
+const REFUSED_THREAD: UIMessage[] = [
+  msg({ id: "rf-u1", role: "user", createdAt: NOW - 3 * 60e3, parts: [{ type: "text", text: "Plan the quarterly offsite." }] }),
+  msg({
+    id: "rf-a1", role: "assistant", createdAt: NOW - 3 * 60e3, parts: [],
+    metadata: { [TURN_FAILURE_METADATA_KEY]: "opencode-go is rate-limited until 2026-10-17 00:18 UTC (in 8d 15h): Go usage limit exceeded" },
+  }),
+];
+
 function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
+
+  if (transcript === "refused") seedGalleryChat(REFUSED_THREAD);
 
   if (transcript === "slates") seedGalleryChat(SLATES_THREAD);
 }

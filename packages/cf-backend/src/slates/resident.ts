@@ -357,8 +357,11 @@ function isPageEntry(browser: string): boolean {
   return browser.endsWith('.html');
 }
 
-/** Zero-specificity defaults so a page reads as part of the answer it sits in, until its own styles say otherwise. */
-const PAGE_BASE = ':where(html){background:transparent;color:var(--c-text);font:16px/1.625 var(--font-ui,system-ui,sans-serif)}:where(body){margin:0}';
+/**
+ * Zero-specificity defaults so a page reads as part of the answer it sits in, until its own styles say otherwise. A page
+ * no host embeds (a share's own host) is given no `--c-text`, so its text is the canvas's own for the scheme `fit` sets.
+ */
+const PAGE_BASE = ':where(html){background:transparent;color:var(--c-text,CanvasText);font:16px/1.625 var(--font-ui,system-ui,sans-serif)}:where(body){margin:0}';
 
 const PAGE_PREAMBLE = `${IMPORT_MAP}<style>${PAGE_BASE}</style><script type="module">import { fit } from "kinu:slate"; fit();</script>`;
 

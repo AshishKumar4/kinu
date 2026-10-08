@@ -32,7 +32,7 @@ import {
 } from "@kinu.run/core";
 import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
 import { redactPayload, redactSecrets, segmentBySteers } from "@kinu.run/core";
-import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage } from "@kinu.run/core";
+import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure } from "@kinu.run/core";
 import { ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import type { UnavailableDevice } from "@/hooks/use-kinu";
@@ -140,6 +140,23 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
           </button>
           <div ref={prose} className="prose-thinking mt-1 ml-3.5" data-folded={expanded ? undefined : ""} data-overflows={long ? "" : undefined}><MarkdownContent content={text} /></div>
         </>
+      )}
+    </div>
+  );
+}
+
+/** A settled answer's failure as its turn recorded it, a provider's refusal in the provider's words. */
+function FailedTurnRow({ message, live, onRetry }: { message: UIMessage; live: boolean; onRetry: (() => void) | undefined }) {
+  const failure = live ? null : turnFailure({ metadata: message.metadata });
+
+  if (failure === null) return null;
+
+  return (
+    <div className="flex items-start gap-2 p-row-text p-text-2" role="status" data-turn-failure>
+      <WarningCircleIcon size={14} className="shrink-0 mt-0.5 p-danger" weight="fill" />
+      <code className="min-w-0 flex-1 p-t-code break-all">{failure}</code>
+      {onRetry !== undefined && (
+        <button onClick={onRetry} className="shrink-0 p-t-control p-accent hover:opacity-90 cursor-pointer">Retry this turn</button>
       )}
     </div>
   );
@@ -481,7 +498,7 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
 // referential identity and skips re-rendering.
 export const MessageView = memo(function MessageView({
   message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
-  signalState, steers, onOpenChangeNote, answerSlates,
+  signalState, steers, onOpenChangeNote, answerSlates, onRetry,
 }: {
   message: UIMessage;
   /** Resolved once by the thread owner (`threadLiveTail`), passed to the last row only; null means history. */
@@ -498,6 +515,8 @@ export const MessageView = memo(function MessageView({
   onOpenChangeNote?: (source: string, anchor: DiffAnchor | undefined) => void;
   /** The chat an answer's `<slate-ui>` blocks resolve in; absent, a transcript shows their source. */
   answerSlates?: AnswerChat | undefined;
+  /** Re-runs this answer's turn: the newest answer's, when it failed. */
+  onRetry?: (() => void) | undefined;
 }) {
   const isUser = message.role === "user";
   const isLive = tail !== null;
@@ -649,6 +668,7 @@ export const MessageView = memo(function MessageView({
         </Fragment>
       ))}
       {!isLive && endedMidWork({ metadata: message.metadata }) && <StoppedMidWorkRow />}
+      <FailedTurnRow message={message} live={isLive} onRetry={onRetry} />
       {!isLive && <ChangedSlates message={message} />}
       {!isLive && (
         <div className="flex items-center gap-2">

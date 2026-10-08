@@ -3,7 +3,7 @@ import { spyOn } from 'bun:test';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { EventLog } from '../src/events/hub/log';
 import type { SpendGate } from '../src/mission-budget';
-import { ChatSession, type SessionEvent } from '../src/orchestrator/chat-session';
+import { ChatSession, type ChatSessionPorts, type SessionEvent } from '../src/orchestrator/chat-session';
 import { initPendingSendTables, PendingSendStore } from '../src/orchestrator/inbox';
 import { initTerminalEffectTable } from '../src/orchestrator/terminal-effects';
 import { TerminalTransitions } from '../src/orchestrator/terminal-transition';
@@ -20,6 +20,8 @@ export async function sessionFixture(input: {
   readonly tracing?: AgentTracing;
   readonly actorId?: ReturnType<typeof crypto.randomUUID>;
   readonly main?: boolean;
+  /** Ports a case answers itself, in place of the fixture's. */
+  readonly ports?: Partial<Pick<ChatSessionPorts, 'prepareTurn' | 'owedTerminalEffects'>>;
 }) {
   const { rt, testSql } = createTestRuntime();
   const db = testSql.db;
@@ -92,6 +94,7 @@ export async function sessionFixture(input: {
       driverGate: () => null, armTurnWake: async () => {},
       taskList: () => actor.stores.taskList, hasPendingAsyncWake: () => false,
       steerSkills: async () => null, stillOwed: () => true,
+      ...input.ports,
     },
   });
 
