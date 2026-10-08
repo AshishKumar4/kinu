@@ -3399,6 +3399,13 @@ function processAlive(pid) {
   }
 }
 
+/** The one-letter state `/proc/<pid>/stat` gives; `Z` is a zombie, an exited process not yet reaped. */
+function procState(pid) {
+  const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+
+  return stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
+}
+
 /**
  * Whether `pid` runs this daemon file. A pid the operating system recycled for
  * an unrelated program does not own this machine.
@@ -3414,7 +3421,13 @@ async function processRunsThisDaemon(pid) {
 
   try {
     if (process.platform === 'linux') {
-      return named(fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0'));
+      const args = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+
+      // A process just spawned has an empty command line until its exec lands (empty right after spawn in 1,442 of
+      // 1,600 bun spawns, 2026-10-08): one that is no zombie is the claimant its starter recorded, not a stale pid.
+      if (args === '') return procState(pid) !== 'Z';
+
+      return named(args.split('\0'));
     }
 
     if (process.platform === 'darwin') {

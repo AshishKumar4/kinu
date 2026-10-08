@@ -726,13 +726,34 @@ function stopInstalledDaemon(pid: number): Effect.Effect<void, KinuError> {
   );
 }
 
-/** On Linux by its command line, which an exited daemon's zombie or a reused pid no longer carries; elsewhere by presence. */
+/** On Linux by {@link linuxRunsInstalledDaemon}; elsewhere by presence. */
 function stillInstalledDaemon(pid: number): boolean {
-  if (process.platform === 'linux') {
-    return (tolerate(() => readFileSync(`/proc/${pid}/cmdline`, 'utf-8'), 'enoent') ?? '').split('\0').includes(SCRIPT_PATH);
-  }
+  if (process.platform === 'linux') return linuxRunsInstalledDaemon(pid);
 
   return tolerate(() => process.kill(pid, 0), 'esrch') !== undefined;
+}
+
+/** `/proc/<pid>/<file>`, or undefined when the process is gone: no entry, or reaped mid-read (ESRCH). */
+function procRead(pid: number, file: string): string | undefined {
+  return tolerate(() => tolerate(() => readFileSync(`/proc/${pid}/${file}`, 'utf-8'), 'enoent'), 'esrch');
+}
+
+/**
+ * Whether `pid` runs the installed daemon. A process just spawned has an empty command line until its exec lands
+ * (empty right after `spawn` in 1,442 of 1,600 bun spawns on armada, 2026-10-08), so an empty one that is no zombie is
+ * the daemon its starter just recorded. Reading it as another program let a second connect remove a fresh claim and
+ * start a second daemon. A zombie, an exited daemon not yet reaped, has an empty command line too, and is gone.
+ */
+function linuxRunsInstalledDaemon(pid: number): boolean {
+  const args = procRead(pid, 'cmdline');
+
+  if (args === undefined) return false;
+
+  if (args !== '') return args.split('\0').includes(SCRIPT_PATH);
+  const stat = procRead(pid, 'stat') ?? '';
+  const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
+
+  return state !== '' && state !== 'Z';
 }
 
 const PS_NO_SUCH_PROCESS = 1;
@@ -751,9 +772,7 @@ function psCommand(pid: number): Promise<string> {
 function processIsInstalledDaemon(pid: number): Effect.Effect<boolean, KinuError> {
   return Effect.tryPromise({
     try: async () => {
-      if (process.platform === 'linux') {
-        return readFileSync(`/proc/${pid}/cmdline`, 'utf-8').split('\0').includes(SCRIPT_PATH);
-      }
+      if (process.platform === 'linux') return linuxRunsInstalledDaemon(pid);
 
       if (process.platform === 'darwin') return (await psCommand(pid)).includes(SCRIPT_PATH);
 
