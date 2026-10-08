@@ -627,6 +627,9 @@ export async function agentPlanIsReviewedInItsPane(target: FlowTarget): Promise<
     await page.evaluate(`${planMode}?.click()`);
     await until(page, "the agent pane's composer in Plan", `${planMode}?.getAttribute('aria-pressed') === 'true'`);
     await sendAndSettle(page, AGENT_PLAN_ASK);
+    // What the turn left in the pane, said before the wait: a turn that ended without a plan says why here.
+    const said = v.parse(v.string(), await page.evaluate(`(document.querySelector('#chat')?.innerText ?? '').slice(-1200)`));
+    process.stderr.write(`  the agent's pane after its turn: ${said.replace(/\s+/gu, ' ')}\n`);
     await until(page, "the agent's plan, decidable beside its pane", PLAN_DECISION_LIVE);
     const planReviewShown = await page.evaluate(`document.querySelector('#inspector [data-plan-body]') !== null`) === true;
 
