@@ -11,7 +11,7 @@ import { renderUnverifiedInstructions } from '../prompt';
 import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { stepContextLimit, type ModelWindow } from '../context-window';
-import { renderFactsBlock, type FactsStore } from '../memory/facts';
+import { renderFactsBlock, unifiedFacts, type Fact, type FactsStore } from '../memory/facts';
 import { Cause, Effect } from 'effect';
 import { diagnostics, settle, toKinuError } from '../obs/index';
 import { STEER_SKILLS_HEADING, TURN_SKILLS_HEADING } from '../utils/prompt-sections';
@@ -151,7 +151,10 @@ export function filterToolSetBySkills(tools: ToolSet, activeSkills: ActiveSkillS
   return allowed === null ? tools : Object.fromEntries(Object.entries(tools).filter(([name]) => allowed(name)));
 }
 
-/** Rendered fresh each turn so it never enters the cacheable prefix. */
-export function renderFactsForTurn(facts: FactsStore): string | undefined {
-  return renderFactsBlock(facts.recentTopK(20), { maxChars: 2000 }) || undefined;
+/**
+ * Rendered fresh each step, so it never enters the cacheable prefix, from the workspace's newest facts and the account's,
+ * which the turn read once (`TurnAssemblySources.accountFacts`): the block's bytes change only when a fact does.
+ */
+export function renderFactsForTurn(facts: FactsStore, account: readonly Fact[] = []): string | undefined {
+  return renderFactsBlock(unifiedFacts(facts.recentTopK(20), account), { maxChars: account.length === 0 ? 2000 : 3000 }) || undefined;
 }

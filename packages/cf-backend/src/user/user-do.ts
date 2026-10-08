@@ -32,6 +32,8 @@ import { DeviceHelloSchema, UserDevices, type DeviceCancellationOutcome } from '
 import { UserTerminals } from './terminals';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
 import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-servers';
+import { UserAccountMemory } from './account-memory';
+import type { AccountMemoryView, AccountNoteHit, AccountProposal, Fact, SqlValue } from '@kinu.run/core';
 import {
   UserSessions, CLI_AGENT_WEBSOCKET_CAPABILITY, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
@@ -86,6 +88,11 @@ export class UserDO extends Agent<Env> {
   private readonly sessions = new UserSessions({ ...this.host, sql: (query, ...values) => this.sql(query, ...values), accountName: () => this.name, getProfile: (caller) => this.profile.getProfile(caller), workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name) });
 
   private readonly mcpServers = new UserMcpServers({ ...this.host, mcp: this.mcp, vault: this.credentials });
+
+  private readonly accountMemory = new UserAccountMemory({
+    ...this.host,
+    sql: <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => this.ctx.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray(),
+  });
 
   private readonly shareCards = new ShareCardJobs({
     sql: this.ctx.storage.sql,
@@ -508,6 +515,38 @@ export class UserDO extends Agent<Env> {
 
   userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {
     return this.mcpServers.userMcp_list(caller);
+  }
+
+  accountMemory_facts(caller: UserCaller): Promise<Fact[]> {
+    return this.accountMemory.accountMemory_facts(caller);
+  }
+
+  accountMemory_searchNotes(caller: UserCaller, query: string, limit: number): Promise<AccountNoteHit[]> {
+    return this.accountMemory.accountMemory_searchNotes(caller, query, limit);
+  }
+
+  accountMemory_propose(caller: UserCaller, proposal: AccountProposal, agent: string): Promise<string> {
+    return this.accountMemory.accountMemory_propose(caller, proposal, agent);
+  }
+
+  accountMemory_view(caller: UserCaller): Promise<AccountMemoryView> {
+    return this.accountMemory.accountMemory_view(caller);
+  }
+
+  accountMemory_decide(caller: UserCaller, id: string, decision: 'accept' | 'decline'): Promise<boolean> {
+    return this.accountMemory.accountMemory_decide(caller, id, decision);
+  }
+
+  accountMemory_put(caller: UserCaller, key: string, value: JsonValue, workspace?: string): Promise<string> {
+    return this.accountMemory.accountMemory_put(caller, key, value, workspace);
+  }
+
+  accountMemory_forget(caller: UserCaller, key: string): Promise<boolean> {
+    return this.accountMemory.accountMemory_forget(caller, key);
+  }
+
+  accountMemory_forgetNote(caller: UserCaller, id: string): Promise<boolean> {
+    return this.accountMemory.accountMemory_forgetNote(caller, id);
   }
 
   userMcp_presets(caller: UserCaller): Promise<McpPresetAvailability[]> {

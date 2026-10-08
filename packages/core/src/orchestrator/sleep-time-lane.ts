@@ -7,9 +7,10 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { FactsStore } from '../memory/facts';
 import {
-  applySleepTimeUpdate, runSleepTimeCompute, SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
+  accountProposals, applySleepTimeUpdate, runSleepTimeCompute, SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type SleepTimeUpdate, type SleepTimeWindow,
 } from '../memory/sleep-time-compute';
+import type { AccountMemory } from '../memory/account';
 import { attempt, diagnostics, settle, type KinuError } from '../obs/index';
 import type { SessionTranscript } from '../session/transcript';
 import type { LLM, RawSqlExec, SqlExecutor } from '../types/primitives';
@@ -43,6 +44,8 @@ export interface SleepTimeLaneDeps {
   /** Wakes the actor at `nextWakeAt`. */
   readonly armWake: () => void;
   readonly workspace: string;
+  /** The account's memory, where one is wired: the pass reads its facts and proposes to it, never writes it. */
+  readonly account?: () => AccountMemory | undefined;
 }
 
 function idleReason(window: SleepTimeWindow | null): string {
@@ -182,12 +185,25 @@ export class SleepTimeLane {
 
     return Effect.gen({ self: this }, function* () {
       const stored = this.recordedUpdate(key);
+      const account = this.deps.account?.();
+
+      // A user object that does not answer costs this run its account section, never the workspace's facts.
+      const accountFacts = stored !== undefined || account === undefined
+        ? undefined
+        : yield* attempt({ doing: "reading the account's facts the pass proposes against", otherwise: 'unavailable' }, async () => await account.facts()).pipe(
+          Effect.catch((failure) => Effect.sync(() => {
+            diagnostics.failure('memory.account_read_failed', failure, { workspace: this.deps.workspace });
+
+            return undefined;
+          })),
+        );
 
       const update = stored ?? (yield* attempt({ doing: 'compressing the recent turns into agent facts', otherwise: 'unavailable' }, () => runSleepTimeCompute(this.deps.llm(), {
         turns: window.turns,
         currentFacts: this.deps.facts.all()
           .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
           .map((fact) => ({ key: fact.key, value: fact.value, confidence: fact.confidence })),
+        ...(accountFacts !== undefined && { accountFacts: accountFacts.map((fact) => ({ key: fact.key, value: fact.value })) }),
       })));
 
       if (stored === undefined) {
@@ -207,9 +223,24 @@ export class SleepTimeLane {
       diagnostics.event('memory.facts_compressed', {
         workspace: this.deps.workspace, upserted: summary.upserted, decayed: summary.decayed, skipped: summary.skipped,
       });
+
+      // After the commit: a proposal the user object does not take is logged, and the workspace's facts stand. A
+      // replay files the same proposals again; the account keeps one pending proposal per key and value.
+      if (account !== undefined) yield* this.propose(account, accountProposals(update, window.turns));
     }).pipe(Effect.tapError((failure) => Effect.sync(() => {
       if (isDefinitiveTerminalFailure(failure.code)) this.deps.transactionSync(() => { this.finish(key); });
       diagnostics.failure('memory.fact_compression_failed', failure);
+    })));
+  }
+
+  private propose(account: AccountMemory, proposals: ReturnType<typeof accountProposals>): Effect.Effect<void> {
+    return Effect.forEach(proposals, (proposal) => attempt(
+      { doing: 'proposing an account fact for the owner to approve', otherwise: 'unavailable' }, async () => await account.propose(proposal),
+    ).pipe(Effect.match({
+      onSuccess: () => undefined,
+      onFailure: (failure) => { diagnostics.failure('memory.account_proposal_failed', failure, { workspace: this.deps.workspace }); },
+    })), { discard: true }).pipe(Effect.tap(() => Effect.sync(() => {
+      if (proposals.length > 0) diagnostics.event('memory.account_proposed', { workspace: this.deps.workspace, proposed: proposals.length });
     })));
   }
 

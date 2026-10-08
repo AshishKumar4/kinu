@@ -102,6 +102,9 @@ export const ForkFactRowSchema = v.object({
   confidence: v.number(),
   source: v.nullable(v.string()),
   last_observed_at: v.number(),
+  importance: v.number(),
+  veracity: v.string(),
+  origin_json: v.nullable(v.string()),
 });
 
 /** One of the `db` tool's tables, as its declaration's JSON text (the store checks it as it checks any declaration),

@@ -1,18 +1,19 @@
 /** The memory operations served over an agent's stores, natively and as `memory.*`. */
 import { Effect } from 'effect';
-import type { Memory, MemorySearchResult } from '../types/primitives';
+import type { Memory } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { VectorStore } from '../memory/vector-store';
-import { reciprocalRankFusion } from '../memory/vector-store';
+import { createNoopVectorStore } from '../memory/vector-store';
 import { appendMemoryNote } from '../memory/note';
-import { normalizeFactKey, searchFacts, type FactSearchHit, type FactsStore } from '../memory/facts';
+import { normalizeFactKey, unifiedFacts, type Fact, type FactsStore, type MemoryScope } from '../memory/facts';
+import type { AccountMemory } from '../memory/account';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
 import type { ConversationRecall } from '../memory/conversation-search';
 import { KinuError, renderThrownChain, toKinuError } from '../obs/index';
 import { serve, type Served } from '../operations/operation';
 import { codemodeNamespace } from './operation-surfaces';
 import type { CodemodeProvider } from '../types/codemode';
-import { MEMORY } from '../operations/memory';
+import { MEMORY, MEMORY_WITH_ACCOUNT } from '../operations/memory';
 
 export interface MemoryDeps {
   readonly memory: Memory;
@@ -23,10 +24,19 @@ export interface MemoryDeps {
   readonly actor: ActorHandle;
   /** Bound to this actor, so recall reads only its rows. */
   readonly conversations: ConversationRecall;
+  /** The account's memory: reads join both scopes, and a write may ask for the account. Absent, no call names a scope. */
+  readonly account?: AccountMemory;
 }
 
-/** Read per call, so a rebound store applies; the facts gate is read once, as a FactsStore never changes in a session. */
+/**
+ * Read per call, so a rebound store applies; the facts and account gates are read once, as neither changes in a session.
+ * Where the account is wired, `MEMORY_WITH_ACCOUNT` is served: reads answer from both scopes and say which.
+ */
 export function serveMemory(deps: () => MemoryDeps): readonly Served[] {
+  const { facts, account } = deps();
+
+  if (facts !== undefined && account !== undefined) return [...servedFacts(deps, facts, account), ...servedRecall(deps)];
+
   const served = [
     serve(MEMORY.note, async ({ content }) => {
       const { memory, actor } = deps();
@@ -35,15 +45,9 @@ export function serveMemory(deps: () => MemoryDeps): readonly Served[] {
 
       return { saved: true as const };
     }),
-    serve(MEMORY.search, async ({ query }) => await searchMemory(deps(), query)),
-    serve(MEMORY.searchConversations, ({ query, limit }) => recalled(() => deps().conversations.search(query, limit ?? 5)).pipe(Effect.map((hits) => ({ hits })))),
-    serve(MEMORY.readConversation, ({ messageId, window, maxChars }) => recalled(() => deps().conversations.scroll(messageId, window ?? 5, maxChars)).pipe(
-      Effect.flatMap((view) => (view === null ? Effect.fail(new KinuError('missing', `no message with id ${messageId}`)) : Effect.succeed(view))),
-    )),
-    serve(MEMORY.listConversations, ({ limit }) => recalled(() => deps().conversations.browse(limit ?? 10)).pipe(Effect.map((conversations) => ({ conversations })))),
+    serve(MEMORY.search, async ({ query }) => unlabelled(await searchMemory(deps(), query))),
+    ...servedRecall(deps),
   ];
-
-  const { facts } = deps();
 
   if (facts === undefined) return served;
 
@@ -51,60 +55,109 @@ export function serveMemory(deps: () => MemoryDeps): readonly Served[] {
     serve(MEMORY.remember, async ({ key, value, confidence }) => {
       const stored = normalizeFactKey(key);
 
-      facts.upsert(stored, value, { confidence });
+      facts.upsert(stored, value, { confidence, origin: { by: 'agent', agent: deps().actor.name } });
 
       return { key: stored };
     }),
     serve(MEMORY.recall, async ({ key }) => {
       const fact = facts.recall(normalizeFactKey(key));
 
-      return fact === null ? null : { key: fact.key, value: fact.value, confidence: fact.confidence, source: fact.source, lastObservedAt: fact.lastObservedAt };
+      return fact === null ? null : factAnswer(fact);
     }),
-    serve(MEMORY.forget, async ({ key }) => {
-      const stored = normalizeFactKey(key);
-      const existed = facts.recall(stored) !== null;
-
-      facts.forget(stored);
-
-      return { key: stored, existed };
-    }),
+    serve(MEMORY.forget, async ({ key }) => forgotten(facts, key, deps().actor.name)),
     ...served,
   ];
 }
 
-type SearchHit = { readonly ref: string; readonly text: string; readonly score: number };
+/** The conversation reads, the same in every wiring. */
+function servedRecall(deps: () => MemoryDeps): Served[] {
+  return [
+    serve(MEMORY.searchConversations, ({ query, limit }) => recalled(() => deps().conversations.search(query, limit ?? 5)).pipe(Effect.map((hits) => ({ hits })))),
+    serve(MEMORY.readConversation, ({ messageId, window, maxChars }) => recalled(() => deps().conversations.scroll(messageId, window ?? 5, maxChars)).pipe(
+      Effect.flatMap((view) => (view === null ? Effect.fail(new KinuError('missing', `no message with id ${messageId}`)) : Effect.succeed(view))),
+    )),
+    serve(MEMORY.listConversations, ({ limit }) => recalled(() => deps().conversations.browse(limit ?? 10)).pipe(Effect.map((conversations) => ({ conversations })))),
+  ];
+}
 
-async function searchMemory({ memory, vectorStore, facts }: MemoryDeps, query: string): Promise<{ semantic: boolean; hits: SearchHit[] }> {
-  if (vectorStore?.available === true) {
-    const lexical = async (q: string, k: number): Promise<LexicalHit[]> => (await memory.search(q, k)).map((r) => ({
-      // The vector store's chunk id, so RRF fuses both.
-      id: `${r.path}:${r.startLine}-${r.endLine}`, path: r.path, startLine: r.startLine, endLine: r.endLine, score: r.score, snippet: r.snippet,
-    }));
+/** Facts and notes where the account is wired: an account write is a proposal, and a read says which scope answered. */
+function servedFacts(deps: () => MemoryDeps, facts: FactsStore, account: AccountMemory): Served[] {
+  return [
+    serve(MEMORY_WITH_ACCOUNT.remember, async ({ key, value, confidence, scope }) => {
+      const stored = normalizeFactKey(key);
 
-    const hits = await hybridSearch(query, lexical, vectorStore, { finalK: 10, rehydrate: memorySnippetRehydrator(memory), facts });
+      if (scope === 'account') return { key: stored, pending: true as const, proposal: await account.propose({ kind: 'fact', key: stored, value }) };
+      facts.upsert(stored, value, { confidence, origin: { by: 'agent', agent: deps().actor.name } });
 
-    return { semantic: true, hits: hits.map((h) => ({ ref: h.label ?? `${h.path}:${h.startLine}-${h.endLine}`, text: h.snippet, score: h.rrfScore })) };
-  }
-
-  const notes = await memory.search(query, 10);
-  const noteHit = (r: MemorySearchResult): SearchHit => ({ ref: `${r.path}:${r.startLine}-${r.endLine}`, text: r.snippet, score: r.score });
-
-  if (facts === undefined) return { semantic: false, hits: notes.map(noteHit) };
-
-  // Facts fuse through the same RRF as the hybrid path.
-  const merged = reciprocalRankFusion<(MemorySearchResult & { id: string; kind: 'note' }) | (FactSearchHit & { kind: 'fact' })>([
-    notes.map((r) => ({ ...r, id: `${r.path}:${r.startLine}-${r.endLine}`, kind: 'note' as const })),
-    searchFacts(facts, query, 10).map((f) => ({ ...f, kind: 'fact' as const })),
-  ]).slice(0, 10);
-
-  return {
-    semantic: false,
-    hits: merged.map((m) => {
-      const hit = m.sources[0];
-
-      return hit.kind === 'note' ? noteHit(hit) : { ref: `fact: ${hit.key}`, text: hit.snippet, score: m.rrfScore };
+      return { key: stored };
     }),
-  };
+    serve(MEMORY_WITH_ACCOUNT.recall, async ({ key }) => {
+      const stored = normalizeFactKey(key);
+      const own = facts.recall(stored);
+
+      if (own !== null) return { ...factAnswer(own), scope: 'workspace' as const };
+      const shared = (await account.facts()).find((fact) => fact.key === stored);
+
+      return shared === undefined ? null : { ...factAnswer(shared), scope: 'account' as const };
+    }),
+    serve(MEMORY_WITH_ACCOUNT.forget, async ({ key }) => forgotten(facts, key, deps().actor.name)),
+    serve(MEMORY_WITH_ACCOUNT.note, async ({ content, scope }) => {
+      if (scope === 'account') return { pending: true as const, proposal: await account.propose({ kind: 'note', content }) };
+      const { memory, actor } = deps();
+
+      await appendMemoryNote(memory, content, { by: actor.name });
+
+      return { saved: true as const };
+    }),
+    serve(MEMORY_WITH_ACCOUNT.search, async ({ query }) => await searchMemory(deps(), query)),
+  ];
+}
+
+function factAnswer(fact: Fact) {
+  return { key: fact.key, value: fact.value, confidence: fact.confidence, source: fact.source, lastObservedAt: fact.lastObservedAt };
+}
+
+function forgotten(facts: FactsStore, key: string, agent: string) {
+  const stored = normalizeFactKey(key);
+  const existed = facts.recall(stored) !== null;
+
+  facts.forget(stored, { by: 'agent', agent });
+
+  return { key: stored, existed };
+}
+
+type SearchHit = { readonly ref: string; readonly text: string; readonly score: number; readonly scope: MemoryScope };
+
+/** A search where no account is wired names no scope: its schema has none. */
+function unlabelled(found: { semantic: boolean; hits: SearchHit[] }) {
+  return { semantic: found.semantic, hits: found.hits.map(({ ref, text, score }) => ({ ref, text, score })) };
+}
+
+/**
+ * Both scopes as one ranked list (`unifiedFacts`): an account fact whose key this workspace holds is not a hit. The
+ * account is read inside its arm, so a user object that does not answer costs the account's hits, never the search.
+ */
+async function searchMemory({ memory, vectorStore, facts, account }: MemoryDeps, query: string): Promise<{ semantic: boolean; hits: SearchHit[] }> {
+  const scoped = facts === undefined && account === undefined
+    ? undefined
+    : async () => unifiedFacts(facts?.all() ?? [], account === undefined ? [] : await account.facts());
+
+  const accountNotes = account === undefined ? undefined : async (q: string, limit: number) => await account.searchNotes(q, limit);
+
+  // Without a semantic index, the vector arm is skipped and the rest fuse alike.
+  const index = vectorStore?.available === true ? vectorStore : createNoopVectorStore();
+
+  const lexical = async (q: string, k: number): Promise<LexicalHit[]> => (await memory.search(q, k)).map((r) => ({
+    // The vector store's chunk id, so RRF fuses both.
+    id: `${r.path}:${r.startLine}-${r.endLine}`, path: r.path, startLine: r.startLine, endLine: r.endLine, score: r.score, snippet: r.snippet,
+  }));
+
+  const hits = await hybridSearch(query, lexical, index, {
+    finalK: 10, rehydrate: memorySnippetRehydrator(memory),
+    ...(scoped !== undefined && { facts: scoped }), ...(accountNotes !== undefined && { accountNotes }),
+  });
+
+  return { semantic: index.available, hits: hits.map((h) => ({ ref: h.label ?? `${h.path}:${h.startLine}-${h.endLine}`, text: h.snippet, score: h.rrfScore, scope: h.scope })) };
 }
 
 /** A recall store that fails is named as unavailable, with its own words. */

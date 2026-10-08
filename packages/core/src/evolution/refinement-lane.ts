@@ -597,7 +597,7 @@ function routeFact(
     };
   }
 
-  const outcome = deps.facts.upsert(edit.key, edit.value, { source: `refinement:${request.id}` });
+  const outcome = deps.facts.upsert(edit.key, edit.value, { source: `refinement:${request.id}`, origin: { by: 'background' } });
 
   return {
     kind: 'fact',

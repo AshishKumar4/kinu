@@ -7,7 +7,7 @@ import {
 } from '../src/index';
 import { createTestFactsStore, createJSONLLM, createScriptedLLM, present } from '@kinu.run/test-utils';
 
-const ONE_TURN = [{ task: 't', output: 'o', toolCalls: [] }];
+const ONE_TURN = [{ task: 't', output: 'o', toolCalls: [], ownerWords: 't' }];
 
 describe('sleepTimeDue', () => {
   test('a workspace\'s first turn never runs, whatever else is true', () => {
@@ -77,8 +77,8 @@ describe('sleepTimeWindow', () => {
     expect(window.newestId).toBe('a2');
     expect(window.inputPending).toBe(false);
     expect(window.turns).toEqual([
-      { task: 'hello', output: 'first', toolCalls: [] },
-      { task: 'now deploy\nalso check the tests', output: 'second', toolCalls: ['workspace.exec'] },
+      { task: 'hello', output: 'first', toolCalls: [], ownerWords: 'hello' },
+      { task: 'now deploy\nalso check the tests', output: 'second', toolCalls: ['workspace.exec'], ownerWords: 'now deploy\nalso check the tests' },
     ]);
   });
 
@@ -124,7 +124,7 @@ describe('Sleep-time compute', () => {
     });
 
     const update = await runSleepTimeCompute(judge, {
-      turns: [{ task: 'configure deploy', output: '...', toolCalls: ['workspace.exec'] }],
+      turns: [{ task: 'configure deploy', output: '...', toolCalls: ['workspace.exec'], ownerWords: 'configure deploy' }],
       currentFacts: [],
     });
 
@@ -137,8 +137,8 @@ describe('Sleep-time compute', () => {
 
     await runSleepTimeCompute(judge, {
       turns: [
-        { task: 'first ask', output: 'first answer', toolCalls: [] },
-        { task: 'second ask', output: 'second answer', toolCalls: ['workspace.exec', 'memory.save'] },
+        { task: 'first ask', output: 'first answer', toolCalls: [], ownerWords: 'first ask' },
+        { task: 'second ask', output: 'second answer', toolCalls: ['workspace.exec', 'memory.save'], ownerWords: 'second ask' },
       ],
       currentFacts: [],
     });

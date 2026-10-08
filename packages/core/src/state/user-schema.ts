@@ -5,6 +5,7 @@ import type { SqlExec } from '../types/primitives';
 import { initExperienceLibraryTables } from '../experience/library';
 import { initDeviceInflightTable } from '../execution/device-inflight';
 import { initEgressVaultTables } from '../safety/egress-vault';
+import { initAccountMemoryTables } from '../memory/account';
 import { initWorkspaceCapabilityTables } from '../safety/workspace-capability';
 import { diagnostics } from '../obs/log';
 
@@ -36,6 +37,8 @@ export interface WorkspaceKeyedRows {
 }
 
 export function initUserTables(sql: SqlExec): void {
+  // The account's memory: its facts in the same `agent_facts` a workspace's world model uses (memory/account.ts).
+  initAccountMemoryTables((ddl) => { sql.exec(ddl); });
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_schema_meta (
       key   TEXT PRIMARY KEY,

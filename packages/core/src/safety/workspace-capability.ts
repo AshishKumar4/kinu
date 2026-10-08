@@ -69,6 +69,13 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'shares': 'owner_only',
   /** The owner's Drive as the web UI manages it. Owner-only: workspaces already reach it via their `/shared` mount. */
   'drive': 'owner_only',
+  /** The account's memory as every agent of it reads it, with the workspace's own. */
+  'memory.account.read': 'workspace',
+  /** Proposing an account fact or note, which waits for the owner; it writes nothing until accepted. */
+  'memory.account.propose': 'workspace',
+  /** Accepting, editing, promoting and forgetting the account's memory. Owner-only: an agent that could accept its own
+   *  proposal would write what every workspace of the account reads. */
+  'memory.account.manage': 'owner_only',
 } as const satisfies Record<string, CapabilityFloor>;
 
 export type WorkspaceCapability = keyof typeof WORKSPACE_CAPABILITY_TIERS;
