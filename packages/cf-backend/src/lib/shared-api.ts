@@ -74,7 +74,7 @@ export function signedInEmail(): Promise<string | null> {
 /** Answers the row and its URL (null where this deployment cannot sign one). */
 export function shareLive(input: {
   workspace: string; slate: string; visibility: LiveShareVisibility; emails?: string[];
-  approved: { slate: string; binding: string; member: string }[];
+  approved: { slate: string; namespace: string; member: string }[];
   fork?: boolean;
 }): Promise<LiveShareCreated & { listing?: 'pending' }> {
   return api(v.object({ ...LiveShareCreatedSchema.entries, listing: Listing }), 'POST', '/api/shared/live', input);

@@ -64,24 +64,24 @@ export const WORKSPACE = {
     }),
   }),
   startProcess: ws({
-    name: 'startProcess', help: 'Start a background process; answers its pid.', impact: 'execute', output: Text,
+    name: 'startProcess', help: 'Start a background process; answers its pid.', impact: 'administer', output: Text,
     input: v.strictObject({
       command: Command, cwd: v.optional(v.string()),
       timeoutMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))), env: v.optional(v.record(v.string(), v.string())),
     }),
   }),
-  killProcess: ws({ name: 'killProcess', help: 'Stop a background process.', impact: 'execute', input: v.strictObject({ pid: v.number() }), output: Text }),
+  killProcess: ws({ name: 'killProcess', help: 'Stop a background process.', impact: 'administer', input: v.strictObject({ pid: v.number() }), output: Text }),
   logs: ws({
     name: 'logs', help: 'A background process\'s recent output.', impact: 'observe', output: Text,
     input: v.strictObject({ pid: v.number(), lines: v.optional(v.number()), bytes: v.optional(v.number()) }),
   }),
   exposePort: ws({
-    name: 'exposePort', impact: 'mutate', input: v.strictObject({ port: Port }), output: Text,
+    name: 'exposePort', impact: 'administer', input: v.strictObject({ port: Port }), output: Text,
     help: 'A public URL for a port a process serves, then whether it was reached.',
   }),
-  unexposePort: ws({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'mutate', input: v.strictObject({ port: Port }), output: Text }),
+  unexposePort: ws({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: Port }), output: Text }),
   listPorts: ws({ name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: v.strictObject({}), output: Text }),
-  installRuntime: ws({ name: 'installRuntime', help: 'Install a language runtime, by spec.', impact: 'mutate', input: v.strictObject({ spec: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
+  installRuntime: ws({ name: 'installRuntime', help: 'Install a language runtime, by spec.', impact: 'administer', input: v.strictObject({ spec: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
   listRuntimes: ws({ name: 'listRuntimes', help: 'The installed language runtimes.', impact: 'observe', input: v.strictObject({}), output: Text }),
 } as const;
 
@@ -105,20 +105,20 @@ export const SANDBOX = {
   deleteFile: sb({ name: 'deleteFile', help: 'Delete a file in the sandbox.', impact: 'mutate', input: v.strictObject({ path: Path }), output: Text }),
   exists: sb({ name: 'exists', help: '"true" or "false".', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
   startProcess: sb({
-    name: 'startProcess', help: 'A supervised background process; answers JSON {processId, restartable: true}.', impact: 'execute',
+    name: 'startProcess', help: 'A supervised background process; answers JSON {processId, restartable: true}.', impact: 'administer',
     input: v.strictObject({ command: Command, cwd: v.optional(v.string()) }), output: Text,
   }),
-  stopProcess: sb({ name: 'stopProcess', help: 'Stop a supervised process.', impact: 'execute', input: v.strictObject({ processId: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
+  stopProcess: sb({ name: 'stopProcess', help: 'Stop a supervised process.', impact: 'administer', input: v.strictObject({ processId: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
   listProcesses: sb({ name: 'listProcesses', help: 'JSON rows {processId, pid, status, restartable, command}.', impact: 'observe', input: v.strictObject({}), output: Text }),
   rest: sb({
-    name: 'rest', help: '"now" saves and stops the sandbox, ending what runs; "keep" runs on until it asks again.', impact: 'execute',
+    name: 'rest', help: '"now" saves and stops the sandbox, ending what runs; "keep" runs on until it asks again.', impact: 'administer',
     input: v.strictObject({ answer: v.picklist(['now', 'keep']) }), output: Text,
   }),
   exposePort: sb({
-    name: 'exposePort', help: 'A public URL for a port the sandbox serves.', impact: 'mutate',
+    name: 'exposePort', help: 'A public URL for a port the sandbox serves.', impact: 'administer',
     input: v.strictObject({ port: Port, name: v.optional(v.string()) }), output: Text,
   }),
-  unexposePort: sb({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'mutate', input: v.strictObject({ port: Port }), output: Text }),
+  unexposePort: sb({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: Port }), output: Text }),
   listPorts: sb({ name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: v.strictObject({}), output: Text }),
 } as const;
 

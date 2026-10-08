@@ -247,7 +247,7 @@ export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((na
  * trees fail closed at depth 2. `protected` members stay unreachable. */
 const ACTOR_AGENT_RPC_SURFACE = [
   'deleteWorkspaceFile',
-  'slateBindingDispatch',
+  'slateCallDispatch',
   'closeRevokedCliSockets',
   'closeRevokedSessionSockets',
   'repushWorkspaceCapability',
@@ -327,7 +327,7 @@ const ORCHESTRATOR_METHODS = [
   'applyActorDirectory',
   // A browser cannot mint a caller.
   'slateAs',
-  'slateBindingCallAs',
+  'slateCallAs',
   // An isolate running an actor's turn, or a slate, calls the actor's operations here.
   'callOperation',
   'listOperations',

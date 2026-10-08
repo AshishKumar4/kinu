@@ -199,7 +199,7 @@ import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import type { AgentStoreBroker } from "./agent-facets";
-import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
+import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
@@ -452,11 +452,15 @@ interface WorkspaceTitleInputs {
  * unreachable; every other class is the turn's own fault. */
 const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable', 'timeout', 'io']);
 
+/** Where a slate's `connectBrowser`, `pageTools` and `callPageTool` run: in its class's isolate, which holds the socket. */
+const SLATE_BROWSER_DRIVER = "a slate drives a browser from its class (this.env.workspace.web.connectBrowser); its page asks the class";
+
 /**
- * A hosted actor's binding reaches only its own files, tables, tasks and facts, never the
+ * A slate calling as a hosted actor reaches only that actor's own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
  */
-function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, conversations: ConversationRecall) {
+function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearchProvider; readonly sessions: BrowserSessions }, conversations: ConversationRecall) {
+  const webSearch = web.search;
   // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
   const runtime = actor.runtime;
 
@@ -466,8 +470,8 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, co
 
   const providers: CodemodeProvider[] = [
     ...(runtime.executionRouter?.getProviders() ?? []).map(executorNamespace),
-    // A slate's visitor writes nothing into the workspace and holds no browser.
-    createWebCodemodeProvider({ provider: webSearch, files: null }),
+    // A slate's web writes nothing into the workspace, since a share visitor may call it; its browser is the actor's own.
+    createWebCodemodeProvider({ provider: webSearch, files: null, sessions: web.sessions, prelude: { missing: SLATE_BROWSER_DRIVER } }),
     createDbCodemodeProvider(actor.stores.appData),
     createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
     createMemoryCodemodeProvider(() => ({
@@ -2945,43 +2949,42 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * Descend one binding hop; the target answers with its own surface narrowed by its own current
-   * role, so a binding never reaches more than the actor holding it.
+   * Descend one caller hop; the target answers with its own surface narrowed by its own current
+   * role, so a slate never reaches more than the actor it calls as.
    */
-  private dispatchHostedSlateBinding(
-    name: string, rest: readonly SlateCallerHop[], route: SlateBindingRoute, mode: WorkMode,
+  private dispatchHostedSlateCall(
+    name: string, rest: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode,
   ): Effect.Effect<JsonValue, KinuError> {
     return Effect.gen({ self: this }, function* () {
       if (rest.length > 0) {
-        return yield* new KinuError('denied', 'A binding path names one hosted actor; a nested path names an actor no directory holds.');
+        return yield* new KinuError('denied', 'A caller path names one hosted actor; a nested path names an actor no directory holds.');
       }
 
-      const entry = this.actorDirectoryStore().apply(
-        actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
-      );
-
-      return yield* Effect.promise(async () => this.actorHost().run(entry.reference, async (actor) => {
+      return yield* Effect.promise(async () => this.actorHost().run(this.hostedSlateCaller(name), async (actor) => {
         if (route.kind === 'ai') {
           // A hosted actor runs the model call through its own profile, resolved now.
           return await this.slateAiRun(route, actor.handle);
         }
 
         if (route.kind === 'agent') {
-          throw new KinuError('denied', 'a hosted actor has no inbox of its own; the agent binding answers on the workspace actor');
+          throw new KinuError('denied', 'a hosted actor has no inbox of its own; agent.send answers on the workspace actor');
         }
 
-        if (route.kind !== 'namespace' && route.kind !== 'tool' && route.kind !== 'codemode') {
+        if (route.kind !== 'namespace' && route.kind !== 'tool') {
           // Hosted actors hold no MCP servers or slate read model; those belong to the main actor.
           throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
         }
 
-        const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider(), this.agentStores(actor.handle.actorId).conversations());
+        const surface = hostedActorSurface(actor, {
+          search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(actor.handle.actorId),
+        }, this.agentStores(actor.handle.actorId).conversations());
+
         // Narrow by the child's own durable, per-actor role, in the mode that role leaves the caller.
         const authority = await this.hostedSlateAuthority(actor, mode, surface.providers, Object.keys(surface.native));
         const reach = slateToolReach(authority.reach);
 
         if (route.kind === 'tool') {
-          return this.callSlateTool({ rt: actor.runtime, native: toolsInWorkMode(authority.mode, surface.native), providers: surface.providers, reach, route, mode: authority.mode });
+          return this.callSlateTool({ rt: actor.runtime, providers: surface.providers, reach, route, mode: authority.mode });
         }
 
         return await callCodemodeMember(reach.narrowProviders(providersInWorkMode(authority.mode, surface.providers)), route.namespace, route.member, route.args) ?? null;
@@ -2989,23 +2992,36 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
+  /** The actor a slate's caller path names: this one, or the hosted actor its one hop names; a nested path names none. */
+  protected slateCallerActorId(path: readonly SlateCallerHop[]): string | null {
+    const [next, ...rest] = path;
+
+    if (next === undefined) return this.actorHandle().actorId;
+
+    return rest.length > 0 ? null : this.hostedSlateCaller(next.name).actorId;
+  }
+
+  /** The hosted actor a caller path's one hop names, from this actor's directory. */
+  private hostedSlateCaller(name: string) {
+    return this.actorDirectoryStore().apply(actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name }).reference;
+  }
+
   /**
    * One capability route, run as this actor, narrowed by its own current role.
    * Not `@callable`: reached on the stub transport only.
    */
-  slateBindingDispatch(path: readonly SlateCallerHop[], route: SlateBindingRoute, mode: WorkMode): Promise<JsonValue> {
+  slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode): Promise<JsonValue> {
     return settle(Effect.gen({ self: this }, function* () {
       // Hops resolve hosted actors through the directory, inside this object, so an unreachable
       // name is refused here rather than as a rejected RPC deeper down.
       const [next, ...rest] = path;
 
       if (next !== undefined) {
-        return yield* this.dispatchHostedSlateBinding(next.name, rest, route, mode);
+        return yield* this.dispatchHostedSlateCall(next.name, rest, route, mode);
       }
 
       switch (route.kind) {
-        case 'namespace':
-        case 'codemode': {
+        case 'namespace': {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces()));
           const providers = providersInWorkMode(authority.mode, this.slateNamespaces());
 
@@ -3017,7 +3033,7 @@ export abstract class ActorAgent extends Agent<Env> {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, providers));
 
           return yield* Effect.promise(async () => this.callSlateTool({
-            rt: this.rt, native: this.getRawToolsForWorkMode(authority.mode), providers, reach: slateToolReach(authority.reach), route, mode: authority.mode,
+            rt: this.rt, providers, reach: slateToolReach(authority.reach), route, mode: authority.mode,
           }));
         }
 
@@ -3025,7 +3041,8 @@ export abstract class ActorAgent extends Agent<Env> {
           // The role admits MCP tools by descriptor key, same as `toolAllowed(d.toolKey)` in native turns.
           const { stub, caller } = yield* Effect.promise(async () => this.userHub());
           const surface = v.parse(McpToolSurfaceSchema, JSON.parse(yield* Effect.promise(async () => stub.userMcp_toolDescriptors(caller))));
-          const descriptor = surface.descriptors.find((d) => d.serverId === route.server && d.name === route.tool);
+          // A server is named as the actor's programs name it, so a fork reaches its forker's server of that name.
+          const descriptor = surface.descriptors.find((d) => d.serverName === route.server && d.name === route.tool);
 
           if (descriptor === undefined) return yield* new KinuError('missing', `${route.server} offers no tool ${route.tool} to this actor`);
           // Enforce `readOnly` grants here so a read grant cannot write through a non-read-only tool.
@@ -3074,17 +3091,17 @@ export abstract class ActorAgent extends Agent<Env> {
     }));
   }
 
-  /** The one adapter between a slate's `agent` binding and the turn inbox. */
+  /** The one adapter between a slate's `agent.send` and the turn inbox. */
   private slateInbox(): AgentInbox {
     return this.orch.inbox;
   }
 
   /**
-   * One `ai` binding call: resolve the profile as this actor's turn would, run one model call
+   * One `ai.run` call from a slate: resolve the profile as this actor's turn would, run one model call
    * under a `slate` spend row. `actor` is the hosted actor hopped to, or absent for this actor.
    */
   private async slateAiRun(
-    route: Extract<SlateBindingRoute, { kind: 'ai' }>,
+    route: Extract<SlateRoute, { kind: 'ai' }>,
     actor?: ActorHandle,
   ): Promise<JsonValue> {
     let profile: ResolvedTurnProfile;
@@ -3124,11 +3141,12 @@ export abstract class ActorAgent extends Agent<Env> {
     return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor } : null });
   }
 
+  /** A crafted tool: a native tool is its own namespace on a slate's surface, never a member of `tools`. */
   private async callSlateTool(input: {
-    rt: HostedActor['runtime']; native: ToolSet; providers: CodemodeProvider[];
-    reach: ToolSurfaceNarrowing; route: Extract<SlateBindingRoute, { kind: 'tool' }>; mode: WorkMode;
+    rt: HostedActor['runtime']; providers: CodemodeProvider[];
+    reach: ToolSurfaceNarrowing; route: Extract<SlateRoute, { kind: 'tool' }>; mode: WorkMode;
   }): Promise<JsonValue> {
-    const { rt, native, providers, reach, route, mode } = input;
+    const { rt, providers, reach, route, mode } = input;
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
 
     const factory = createCodemodeToolFactory({
@@ -3138,7 +3156,7 @@ export abstract class ActorAgent extends Agent<Env> {
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
     });
 
-    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, native), route.name, route.input)) ?? null;
+    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}), route.name, route.input)) ?? null;
   }
 
   /** Workspace read models belong to the root; the orchestrator supplies them. */
@@ -3147,7 +3165,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * A binding call's authority. Its mode is the caller's as the actor's role leaves it, resolved now from `requested`:
+   * A slate call's authority. Its mode is the caller's as the actor's role leaves it, resolved now from `requested`:
    * a role that imposes Plan (a planner) holds every call to Plan, while a Build app keeps its own mode through another
    * turn's Plan. Its reach is the in-flight turn's profile while one runs (not the cached one, which outlives its turn),
    * else that same resolution over native, codemode and the given MCP tools.
@@ -3190,14 +3208,28 @@ export abstract class ActorAgent extends Agent<Env> {
   ): Promise<A> {
     if (actor !== null) {
       return await this.actorHost().run(actor, async (hosted) => {
-        const surface = hostedActorSurface(hosted, this.ownedModelServices.getWebSearchProvider(), this.agentStores(hosted.handle.actorId).conversations());
+        const surface = hostedActorSurface(hosted, {
+          search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
+        }, this.agentStores(hosted.handle.actorId).conversations());
+
         const authority = await this.hostedSlateAuthority(hosted, requested, surface.providers, Object.keys(surface.native));
 
         return await reachedIn(authority, [...surface.providers, createStateCodemodeProvider(hosted.runtime.actor.programState)], surface.native, use);
       });
     }
 
-    const providers = [...this.slateNamespaces(), createStateCodemodeProvider(this.rt.actor.programState)];
+    // The actor's own surface, as its eval has it: a screenshot is saved into its workspace, and it delegates.
+    const providers = [
+      ...(this.rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
+      createWebCodemodeProvider({
+        provider: this.ownedModelServices.getWebSearchProvider(), files: this.rt.storage,
+        sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: { missing: SLATE_BROWSER_DRIVER },
+      }),
+      createAgentsCodemodeProvider(() => this.getAgentsToolDeps(requested)),
+      ...this.turnCodemodeProviders(),
+      createStateCodemodeProvider(this.rt.actor.programState),
+    ];
+
     const mcp = await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog));
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
 
@@ -3233,14 +3265,17 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * Namespaces a slate binding may reach: the build-turn sandbox surfaces minus `tools`/`state`.
-   * Read per call: executors attach and detach while this object lives.
+   * The eval namespaces a slate's surface reaches, as this actor's programs reach them, less `agents`, `tools` and
+   * `state`; the host refuses what else only the agent does. Read per call: executors attach and detach while this
+   * object lives.
    */
   protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
-      createWebCodemodeProvider({ provider: this.ownedModelServices.getWebSearchProvider(), files: null }),
-      createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
+      createWebCodemodeProvider({
+        provider: this.ownedModelServices.getWebSearchProvider(), files: null, sessions: this.browserSessionsFor(this.rt.actor.actorId),
+        prelude: { missing: SLATE_BROWSER_DRIVER },
+      }),
       ...this.turnCodemodeProviders(),
     ];
   }
@@ -4342,7 +4377,7 @@ export abstract class ActorAgent extends Agent<Env> {
     readonly actor: ActorHandle;
     readonly availableTools: readonly string[];
     readonly workMode: WorkMode;
-    /** A binding's named tier overrides the actor's assignment for this call. */
+    /** An `ai.run` call's named tier overrides the actor's assignment for this call. */
     readonly explicitTier?: string | undefined;
   }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
     const inputs = await this.profileInputs();

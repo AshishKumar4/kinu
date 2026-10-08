@@ -62,7 +62,7 @@ export const SPEND_SOURCE_DETAIL = {
     + 'repair. Neither returns a usage field of any kind, so these are counted '
     + 'and never measured, which is what the coverage fraction below is made of',
   advisor: 'the turn reviewer: one call after a turn ends, when it is switched on',
-  slate: 'an authored slate\'s `ai` binding: one call per `shell`, at the tier the binding or the call named',
+  slate: 'an authored slate\'s `ai.run`: one call per run, at the tier the call named',
   warming: 'keeping an idle prompt-cache prefix alive: one zero-output replay of the last request, '
     + 'at most three per idle stretch (providers/cache-warming.ts)',
   test: 'a model\'s Test button: one request asking for one word through the path a turn takes',

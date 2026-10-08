@@ -36,7 +36,7 @@ export const FLOW_SLATE = { title: 'Flow probe', id: 'flow', page: 'browser flow
 
 /** The slate row's one turn. */
 export const SLATE_ASK = `Use the file tool to create a slate at ${SLATES_ROOT}/${FLOW_SLATE.id}/. `
-  + `Write package.json with main "server.ts", browser "client.tsx" and slate {"title":"${FLOW_SLATE.title}","port":8788,"bindings":{}}. `
+  + `Write package.json with main "server.ts", browser "client.tsx" and slate {"title":"${FLOW_SLATE.title}","port":8788}. `
   + 'Write server.ts with a Slate whose bump(by) method adds to a count and returns it. '
   + `Write client.tsx as a React page headed <h1>${FLOW_SLATE.page}</h1> with a Bump button that calls slate.bump. `
   + 'Start its preview. Reply with the preview URL.';
@@ -68,7 +68,7 @@ const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
   {
     text: 'Writing the slate.',
     toolCall: { name: 'file', arguments: { op: 'write', path: `${SLATES_ROOT}/${FLOW_SLATE.id}/package.json`, content: JSON.stringify({
-      name: FLOW_SLATE.id, main: 'server.ts', browser: 'client.tsx', slate: { title: FLOW_SLATE.title, port: 8788, bindings: {} },
+      name: FLOW_SLATE.id, main: 'server.ts', browser: 'client.tsx', slate: { title: FLOW_SLATE.title, port: 8788 },
     }, null, 2) } },
   },
   {

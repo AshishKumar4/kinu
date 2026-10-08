@@ -1,102 +1,84 @@
 /**
- * Read-only versus mutating per (binding, member); unnamed members are mutating (fail closed). An operation's effect is
- * its impact: observing reads, anything else acts. `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
+ * What each namespace member a slate calls does, as its catalog operation's impact: a member the catalog keeps from
+ * slates is the agent's alone, and an executor member it does not declare is `administer` (fail closed).
+ * `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
  */
-import * as v from 'valibot';
-import type { JsonObject } from '../utils/json';
+import type { Impact } from '@agent-core/core/facets';
 import type { Operation } from '../operations/operation';
+import { AGENTS_IMPACTS } from '../operations/agents';
+import { DB } from '../operations/db';
+import { DEVICE, SANDBOX, WORKSPACE } from '../operations/executors';
+import { FILE } from '../operations/file';
 import { MEMORY } from '../operations/memory';
 import { TASKS } from '../operations/tasks';
-import { WEB } from '../operations/web';
-import { FILE } from '../operations/file';
-import { AGENTS_IMPACTS } from '../operations/agents';
+import { WEB, WEB_SANDBOX_IMPACTS } from '../operations/web';
 
-export type SlateMemberEffect = 'read' | 'mutate';
-
-const effectOfImpact = (impact: Operation['impact']): SlateMemberEffect => (impact === 'observe' ? 'read' : 'mutate');
-
-/** Each operation a slate may reach, by name, with its effect. */
-function effects(ops: Readonly<Record<string, Operation>>): Readonly<Record<string, SlateMemberEffect>> {
-  return Object.fromEntries(Object.values(ops).filter((op) => op.slate).map((op) => [op.name, effectOfImpact(op.impact)]));
-}
-
-const EXECUTOR_MEMBER_EFFECTS = {
-  readFile: 'read', readdir: 'read', exists: 'read', stat: 'read', listTools: 'read',
-  writeFile: 'mutate', mkdir: 'mutate', remove: 'mutate', exec: 'mutate', createTool: 'mutate', slate: 'mutate', git: 'mutate',
-} as const satisfies Readonly<Record<string, SlateMemberEffect>>;
-
-export const MEMORY_MEMBER_EFFECTS = effects(MEMORY);
-
-export const TASKS_MEMBER_EFFECTS = effects(TASKS);
-
-/** An `ai` binding's one member, `env.<name>.run({ prompt, system?, tier? })`: a model call, never a tool's name. */
+/** `workspace.ai.run({ prompt, system?, tier? })`: a model call, never the `shell` tool, whose run was renamed. */
 export const AI_RUN_MEMBER = 'run';
 
-export const WEB_MEMBER_EFFECTS = effects(WEB);
+/** A tool call's chip: whether it only looked. */
+export type ActionEffect = 'read' | 'mutate';
 
-/** Per native operation, named by `op`. */
+const impacts = (ops: Readonly<Record<string, Operation>>, slate: boolean): Readonly<Record<string, Impact>> => Object.fromEntries(
+  Object.values(ops).filter((op) => !slate || op.slate).map((op) => [op.name, op.impact]),
+);
+
+/** The eval namespaces' members a slate reaches, each with its impact; a member absent here is the agent's alone. */
+const SLATE_MEMBER_IMPACTS = {
+  memory: impacts(MEMORY, true),
+  tasks: impacts(TASKS, true),
+  web: { ...impacts(WEB, true), ...WEB_SANDBOX_IMPACTS },
+  db: impacts(DB, true),
+} as const satisfies Readonly<Record<string, Readonly<Record<string, Impact>>>>;
+
+/** An executor's own members (`workspace`, `sandbox`, `device`), by name across them. */
+const EXECUTOR_MEMBER_IMPACTS = { ...impacts(DEVICE, true), ...impacts(SANDBOX, true), ...impacts(WORKSPACE, true) };
+
+const effectOfImpact = (impact: Impact): ActionEffect => (impact === 'observe' ? 'read' : 'mutate');
+
+function effects(table: Readonly<Record<string, Impact>>): Readonly<Record<string, ActionEffect>> {
+  return Object.fromEntries(Object.entries(table).map(([name, impact]) => [name, effectOfImpact(impact)]));
+}
+
+/** Per native operation, as each capability tool's `op` names it. */
 export const NATIVE_ACTION_EFFECTS = {
-  file: effects(FILE),
-  memory: MEMORY_MEMBER_EFFECTS,
-  tasks: Object.fromEntries(Object.values(TASKS).map((op) => [op.name, effectOfImpact(op.impact)])),
-  web: WEB_MEMBER_EFFECTS,
-  agents: Object.fromEntries(Object.entries(AGENTS_IMPACTS).map(([op, impact]) => [op, effectOfImpact(impact)])),
-} as const satisfies Readonly<Record<string, Readonly<Record<string, SlateMemberEffect>>>>;
+  file: effects(impacts(FILE, false)),
+  memory: effects(impacts(MEMORY, false)),
+  tasks: effects(impacts(TASKS, false)),
+  web: effects(impacts(WEB, false)),
+  agents: effects(AGENTS_IMPACTS),
+} as const satisfies Readonly<Record<string, Readonly<Record<string, ActionEffect>>>>;
 
-/** Tools with one undifferentiated `call` member have no read shape, so `call` is mutating. */
-export const TOOL_ACTION_EFFECTS = {
-  file: NATIVE_ACTION_EFFECTS.file,
-  memory: NATIVE_ACTION_EFFECTS.memory,
-  tasks: NATIVE_ACTION_EFFECTS.tasks,
-  web: NATIVE_ACTION_EFFECTS.web,
-  run: { call: 'mutate' },
-  eval: { call: 'mutate' },
-  report: { call: 'mutate' },
-  agents: { call: 'mutate' },
-} as const satisfies Readonly<Record<string, Readonly<Record<string, SlateMemberEffect>>>>;
+const lookup = <T>(table: Readonly<Record<string, T>>, name: string): T | undefined => Object.entries(table).find(([key]) => key === name)?.[1];
 
-/** A member the table does not name is mutating: fail closed. */
-function effectOf(table: Readonly<Record<string, SlateMemberEffect>>, member: string): SlateMemberEffect {
-  return Object.hasOwn(table, member) ? table[member] : 'mutate';
+/** A namespace's member, or an executor's; `null` for one the agent keeps from slates. */
+function namespaceMemberImpact(namespace: string, member: string): Impact | null {
+  const table = lookup<Readonly<Record<string, Impact>>>(SLATE_MEMBER_IMPACTS, namespace);
+
+  if (table !== undefined) return lookup(table, member) ?? null;
+
+  return lookup<Impact>(EXECUTOR_MEMBER_IMPACTS, member) ?? 'administer';
 }
 
-function actionTable(tool: string): Readonly<Record<string, SlateMemberEffect>> | undefined {
-  return Object.entries(TOOL_ACTION_EFFECTS).find(([name]) => name === tool)?.[1];
-}
+/**
+ * What a call on a slate's surface does; `null` for a member kept from slates. An MCP tool sends with your
+ * credentials unless its server marks it read-only, which only the server's own listing says.
+ */
+export function slateAddressImpact(address: { readonly namespace: string; readonly member: string }): Impact | null {
+  const [head] = address.namespace.split('.');
 
-/** `rpc` members are read models; `agent` and `ai` members are always acts. */
-export function memberEffect(
-  kind: 'namespace' | 'memory' | 'tasks' | 'web' | 'rpc' | 'agent' | 'ai',
-  member: string,
-): SlateMemberEffect {
-  switch (kind) {
-    case 'namespace': return effectOf(EXECUTOR_MEMBER_EFFECTS, member);
-    case 'memory': return effectOf(MEMORY_MEMBER_EFFECTS, member);
-    case 'tasks': return effectOf(TASKS_MEMBER_EFFECTS, member);
-    case 'web': return effectOf(WEB_MEMBER_EFFECTS, member);
-    case 'rpc': return 'read';
-    case 'agent':
-    case 'ai': return 'mutate';
+  switch (head) {
+    case 'slates':
+    case 'reads': return 'observe';
+    case 'mcp': return 'externalSend';
+    case 'tools': return 'execute';
+    default: break;
   }
-}
 
-/** The operation a capability tool's call names; `call` otherwise, or when the input names none. */
-export function toolActionMember(tool: string, input: JsonObject): string {
-  const actions = actionTable(tool);
+  if (address.namespace === 'agent' && address.member === 'send') return 'externalSend';
 
-  if (actions === undefined || (Object.keys(actions).length === 1 && 'call' in actions)) return 'call';
+  // `ai` has one member; any other is no model call, and no namespace of the actor's either.
+  if (address.namespace === 'ai') return address.member === AI_RUN_MEMBER ? 'execute' : null;
 
-  return v.is(v.string(), input.op) ? input.op : 'call';
-}
-
-export function toolActionEffect(tool: string, member: string): SlateMemberEffect {
-  const actions = actionTable(tool);
-
-  return actions === undefined ? 'mutate' : effectOf(actions, member);
-}
-
-export function toolMembers(tool: string): readonly string[] {
-  const actions = actionTable(tool);
-
-  return actions === undefined ? ['call'] : Object.keys(actions);
+  return namespaceMemberImpact(address.namespace, address.member);
 }

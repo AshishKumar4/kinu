@@ -154,7 +154,7 @@ test('an ask spliced into genesis survives the skills it activates', async () =>
     expect(args.path).toBe(`/slates/${HELLO_SLATE_ID}/${file}`);
 
     if (file === 'package.json') expect(JSON.parse(args.content)).toMatchObject({
-      main: 'server.ts', slate: { title: 'Hello', port: 8787, bindings: {} },
+      main: 'server.ts', slate: { title: 'Hello', port: 8787 },
     });
     messages.push(
       { role: 'assistant', content: message.content ?? '', tool_calls: message.tool_calls ?? [] },

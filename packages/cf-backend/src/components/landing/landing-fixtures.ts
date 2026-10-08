@@ -293,7 +293,7 @@ export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview |
   };
 }
 
-export const SLATE_SUMMARY: SlateSummary = { id: 'support-queue', title: 'Support queue', bindings: ['ISSUES'] };
+export const SLATE_SUMMARY: SlateSummary = { id: 'support-queue', title: 'Support queue' };
 
 /** Production preview hostname shape: `<port>-<sandbox>-<token>` under the app's zone. */
 export const SLATE_PREVIEW_URL = 'https://8789-support-queue-sample.kinu.run/';
@@ -308,12 +308,12 @@ export const SLATE_MESSAGES: UIMessage[] = [
     id: 'landing-slate-agent',
     role: 'assistant',
     parts: [
-      { type: 'reasoning', text: 'A slate under /slates/support-queue with one MCP binding to the GitHub connection, narrowed to list_issues. The server fetches through env.ISSUES and the client draws the charts.' },
+      { type: 'reasoning', text: 'A slate under /slates/support-queue. The server reads the GitHub connection through this.env.workspace.mcp.github.list_issues and the client draws the charts.' },
       { type: 'tool-file', toolCallId: 'landing-slate-manifest', state: 'output-available', input: { op: 'write', path: '/slates/support-queue/package.json' }, output: 'ok' },
       { type: 'tool-file', toolCallId: 'landing-slate-server', state: 'output-available', input: { op: 'write', path: '/slates/support-queue/server.ts' }, output: 'ok' },
       { type: 'tool-file', toolCallId: 'landing-slate-client', state: 'output-available', input: { op: 'write', path: '/slates/support-queue/client.tsx' }, output: 'ok' },
       { type: 'tool-eval', toolCallId: 'landing-slate-preview', state: 'output-available', input: { code: "// Boot the preview and hand back its URL\nreturn await workspace.slates['support-queue'].$preview();" }, output: JSON.stringify({ url: SLATE_PREVIEW_URL, port: 8789 }) },
-      { type: 'text', text: 'The dashboard is open in the Support queue tab. It reads issues through the ISSUES binding, which only reaches `list_issues` on your GitHub connection.' },
+      { type: 'text', text: 'The dashboard is open in the Support queue tab. It reads issues with `list_issues` on your GitHub connection, as you.' },
     ],
   },
 ];

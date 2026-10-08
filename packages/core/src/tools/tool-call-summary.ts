@@ -4,7 +4,7 @@
  */
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { redactSecrets } from '../safety/secret-patterns';
-import { NATIVE_ACTION_EFFECTS, type SlateMemberEffect } from '../slates/members';
+import { NATIVE_ACTION_EFFECTS, type ActionEffect } from '../slates/members';
 import * as v from 'valibot';
 
 /** Chip budget: must fit one line beside the name, runtime badge and duration. */
@@ -25,7 +25,7 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined): 
 
   if (!parsed.success) return 'unknown';
   const op = str(parsed.output, 'op');
-  const ops: Readonly<Record<string, SlateMemberEffect>> | undefined = Object.entries(NATIVE_ACTION_EFFECTS).find(([name]) => name === toolName)?.[1];
+  const ops: Readonly<Record<string, ActionEffect>> | undefined = Object.entries(NATIVE_ACTION_EFFECTS).find(([name]) => name === toolName)?.[1];
 
   return ops !== undefined && Object.hasOwn(ops, op) ? ops[op] : 'unknown';
 }

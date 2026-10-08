@@ -1,6 +1,6 @@
 /** The web: search, a page as Markdown, a screenshot, and remote browser sessions a program drives. */
 import * as v from 'valibot';
-import { defineOperation } from './operation';
+import { defineOperation, type Impact } from './operation';
 
 /** Kitesurf has no session to keep: `connectBrowser` starts one per program under this id. */
 export const KITESURF_SESSION_ID = 'kitesurf';
@@ -15,6 +15,10 @@ const SessionView = v.strictObject({ id: v.string(), liveView: v.string() });
 
 /** Search, fetch and screenshot observe: the page a fetch spills or the image a screenshot saves is incidental, so a
  *  shared slate's viewer may use all three without approval (an owner decision). */
+/** The browser members a program's sandbox holds (`connectBrowser`, `pageTools`, `callPageTool`), by impact; a slate drives
+ *  a page through them as a program does. */
+export const WEB_SANDBOX_IMPACTS = { connectBrowser: 'execute', pageTools: 'observe', callPageTool: 'execute' } as const satisfies Readonly<Record<string, Impact>>;
+
 export const WEB = {
   search: defineOperation({
     ns: 'web', name: 'search', help: 'Search the web.', impact: 'observe', availability: 'both', slate: true,
@@ -59,16 +63,16 @@ export const WEB = {
   openBrowser: defineOperation({
     ns: 'web', name: 'openBrowser',
     help: 'A browser for connectBrowser. Chrome: kept across programs and turns until closed or idle 20 min; liveView lets the owner watch or take over (a login, a captcha), so give it to them; lab enables the page\'s WebMCP tools. Kitesurf: lighter, with WebMCP; each connect starts a browser that ends with its program, and it has no Live View.',
-    impact: 'execute', availability: 'code', slate: false,
+    impact: 'execute', availability: 'code', slate: true,
     input: v.strictObject({ browser: v.optional(described(v.picklist(['chrome', 'kitesurf']), 'Default chrome.')), lab: v.optional(described(v.boolean(), 'Chrome only.')) }),
     output: v.strictObject({ id: v.string(), liveView: v.nullable(v.string()) }),
   }),
   browsers: defineOperation({
-    ns: 'web', name: 'browsers', help: 'Your open Chrome sessions.', impact: 'observe', availability: 'code', slate: false,
+    ns: 'web', name: 'browsers', help: 'Your open Chrome sessions.', impact: 'observe', availability: 'code', slate: true,
     input: v.strictObject({}), output: v.array(SessionView),
   }),
   closeBrowser: defineOperation({
-    ns: 'web', name: 'closeBrowser', help: 'Close a Chrome session.', impact: 'mutate', availability: 'code', slate: false,
+    ns: 'web', name: 'closeBrowser', help: 'Close a Chrome session.', impact: 'mutate', availability: 'code', slate: true,
     input: v.strictObject({ id: v.pipe(v.string(), v.nonEmpty()) }), output: v.null(),
   }),
 } as const;

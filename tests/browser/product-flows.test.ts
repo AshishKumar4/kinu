@@ -12,7 +12,7 @@ import { withBrowser } from '../../scripts/live-app-harness';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
-  slateOpensFromMyStuff, slateSharesWithNoBindings, slateShowsItsPreview, workspaceGetsFirstAnswer,
+  slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
   writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
   type AgentReturnVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
@@ -81,7 +81,7 @@ beforeAll(async () => {
     observed.drive = await attempt('drive', () => driveKeepsWhatIsDone(target));
     observed.driveOpens = await attempt('drive-opens', () => driveOpens(target));
     observed.slateOpens = await attempt('slate-opens', () => slateOpensFromMyStuff(target));
-    observed.slateShare = await attempt('slate-share', () => slateSharesWithNoBindings(target));
+    observed.slateShare = await attempt('slate-share', () => slateSharesReachingNothing(target));
   });
 
   process.stderr.write(`product-flows at ${origin}: ${JSON.stringify({ observed, broke: broken() }, null, 2)}\n`);
@@ -246,7 +246,7 @@ describe('a slate opens from My stuff on its own tab', () => {
   });
 });
 
-describe('a slate with no bindings shares from its tile, and stops (#25)', () => {
+describe('a slate that reaches nothing of its owner\'s shares from its tile, and stops (#25)', () => {
   test('the dialog draws no Reach row and states only the request limit', () => {
     const shared = verdictOf(observed.slateShare, 'slate-share');
 

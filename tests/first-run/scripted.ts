@@ -255,7 +255,7 @@ const codemodeCraft: Script = (request) => latest(request) !== CRAFT_ASK ? null 
 
 /** The slate the slate case builds: its manifest, and a server answering GET /ping and nothing else. */
 const HELLO_SLATE_FILES = {
-  'package.json': JSON.stringify({ main: 'server.ts', slate: { title: 'Hello', port: 8787, bindings: {} } }, null, 2),
+  'package.json': JSON.stringify({ main: 'server.ts', slate: { title: 'Hello', port: 8787 } }, null, 2),
   'server.ts': [
     'import { SlateObject } from "kinu:slate";',
     '',

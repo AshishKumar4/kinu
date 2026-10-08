@@ -112,11 +112,11 @@ Native MCP invocations use the MCP envelope's declared `isError` flag. A true
 flag raises `McpToolError` with the original protocol response kept.
 Transport exceptions also reject. No error class or process exit is inferred
 from remote content. Namespace adapters return the original MCP error envelope
-as a branchable value, and slate MCP bindings keep their protocol unchanged.
+as a branchable value, and a slate's MCP calls keep their protocol unchanged.
 A successful response containing `reason`, `error`, or nested `isError`
 fields remains data.
 
-Slate namespace bindings return `{ ok: true, value }` for successful command
+A slate's namespace calls return `{ ok: true, value }` for successful command
 text and `{ ok: false, reason, error }` for structural failures. File contents,
 process logs and MCP payloads are not interpreted as command failures.
 

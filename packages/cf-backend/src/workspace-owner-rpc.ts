@@ -3,7 +3,7 @@
 
 import type {
   BlueprintBundle, BlueprintFork, JsonValue, LiveShareRecord, OperationCaller, OperationListing, OperationResult, ShareViewerClaim, SlateAnswer,
-  SlateBindingRequest, SlateCallResult, SlateOperation, SlateShareRecord,
+  SlateCallRequest, SlateCallResult, SlateOperation, SlateShareRecord,
 } from '@kinu.run/core';
 import type { BlueprintReading, ShareUser } from '@kinu.run/core/slates';
 import type { SlateCaller } from './slates/bindings';
@@ -12,7 +12,7 @@ import type { ObjectNamespace } from '@kinu.run/core';
 /** Slate operations made as a caller; the browser's `@callable slate` mints the root caller locally. */
 export interface WorkspaceOwnerRpc {
   slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult>;
-  slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult>;
+  slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateCallResult>;
   /** An actor's operation, by `ns.op`, as eval runs it; refused when the actor does not reach it now. */
   callOperation(caller: OperationCaller, id: string, input: JsonValue, call: { readonly callId: string }): Promise<OperationResult>;
   listOperations(caller: OperationCaller): Promise<readonly OperationListing[]>;

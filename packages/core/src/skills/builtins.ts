@@ -77,7 +77,7 @@ A slate is a directory \`/slates/<id>/\`. \`/slates\` is the workspace's, not on
 
 \`\`\`json
 { "main": "server.ts", "browser": "client.tsx",
-  "slate": { "title": "Deploy checklist", "bindings": { "agent": { "kind": "agent" } }, "inline": { "height": 320 } } }
+  "slate": { "title": "Deploy checklist", "inline": { "height": 320 } } }
 \`\`\`
 
 \`main\` exports the server class. \`browser\` exports the React component. You may put both in one \`slate.tsx\`: point \`main\` and \`browser\` at the same file. The build splits it, so keep server code out of the component and React out of the class.
@@ -149,18 +149,19 @@ Broadcast from any method by calling every watcher. The client reconnects when t
 
 Also from \`kinu:slate\`: \`useSlate()\` returns the stub; \`useHostContext()\` returns \`{ theme: "dark" | "light", styles: { variables }, containerDimensions: { width, height }, display: "inline" | "pane" }\`. Kinu's colour tokens are set on \`:root\` before your component mounts (\`var(--c-bg)\`, \`var(--c-text)\`, \`var(--c-accent)\`, \`var(--c-border)\`, \`var(--c-surface)\`, ...), so a slate looks native in both themes with no CSS of its own. \`resize(height)\` asks the chat card for a height when the automatic measurement is wrong.
 
-Neither side reaches the network. The server reaches the world only through bindings.
+Neither side reaches the network. Both reach the world only through \`workspace\`.
 
-## Bindings
+## workspace: your reach, as you
 
-A binding is a capability of YOURS handed to the slate under a name in \`slate.bindings\`; the server calls it as \`this.env.NAME.member(...)\`. Each call runs with your reach at that moment, gated as your own call would be. Call bindings from inside methods: a binding called from the constructor or from module top level is refused, because there is no request to run it under. \`this.storage\` has no such rule.
+Every slate gets one \`workspace\`: the namespaces your \`eval\` programs reach, called as you, as of each call and gated as your own call would be. The server has it as \`this.env.workspace\`; a page imports it from \`kinu:slate\`. Call it from inside methods: a call from the constructor or from module top level is refused, because there is no request to run it under. \`this.storage\` has no such rule. There is nothing to declare: \`package.json\` names no capabilities.
 
-- \`{ "kind": "agent" }\`: \`env.agent.send({ text, data? })\` puts a message in your inbox as an event of kind \`slate\`. This is the one way a slate reaches you; use it when a user acts and you should react.
-- \`{ "kind": "ai", "tier"?: "<tier>" }\`: \`env.ai.run({ prompt, system?, tier? })\` runs one model call through your catalog and tiers and answers \`{ text, model, tier, usage }\`. A binding that declares a tier is pinned to it.
-- \`{ "kind": "namespace", "namespace": "workspace", "paths": ["/home/main/data"] }\`: \`readFile\`, \`writeFile\`, \`editFile\`, \`readdir\`, \`exists\` under those prefixes only. Without \`paths\`, the whole namespace with all its members.
-- \`{ "kind": "memory" | "tasks" | "web" }\`, \`{ "kind": "tool", "name": "file" }\`, \`{ "kind": "mcp", "server": "..." }\`, \`{ "kind": "rpc", "methods": [...] }\` for read models, \`{ "kind": "app", "id": "<other slate>" }\` to call another slate's methods.
+- \`workspace.memory.*\`, \`workspace.tasks.*\`, \`workspace.web.*\`, \`workspace.db.*\`, and each executor's members (\`workspace.workspace.readFile(path)\`, or \`workspace.readFile(path)\` for short), as a program calls them.
+- \`workspace.web.openBrowser()\` then \`workspace.web.connectBrowser(id)\` drive a browser from the class, as in a program: a session you opened, or a new Kitesurf one. A page asks its class.
+- \`workspace.agent.send({ text, data? })\` puts a message in your inbox as an event of kind \`slate\`. This is the one way a slate reaches you; use it when a user acts and you should react.
+- \`workspace.ai.run({ prompt, system?, tier? })\` runs one model call through your catalog and tiers and answers \`{ text, model, tier, usage }\`.
+- \`workspace.mcp.<server>.<tool>(args)\` calls a tool of a connected MCP server, \`workspace.tools.<name>(input)\` a crafted tool, \`workspace.reads.<model>()\` a read model, and \`workspace.slates.<id>.<method>(...args)\` another slate's method.
 
-A slate cannot bind \`agents\` or \`eval\`; it never delegates or steers you.
+A slate never delegates, steers you, makes tools or changes slates: \`agents\`, \`eval\`, your own \`agent\` controls, \`report\`, \`createTool\` and the \`$\` lifecycle are yours alone. What a slate has called is what \`$graph()\` shows and a share can grant.
 
 ## A choice card in the chat
 
@@ -172,7 +173,7 @@ export class Slate extends SlateObject {
   async options() { return (await this.storage.get("options")) ?? []; }
   async choose(option: string) {
     await this.storage.put("chosen", option);
-    await this.env.agent.send({ text: \`The user chose \${option}.\`, data: { option } });
+    await this.env.workspace.agent.send({ text: \`The user chose \${option}.\`, data: { option } });
   }
 }
 // client.tsx
@@ -205,7 +206,7 @@ For a view that needs no files of its own, write the page into your answer as a 
 </slate-ui>
 \`\`\`
 
-The chat draws it in place once your answer is stored. The block is HTML only, with the theme's tokens set on \`:root\` as for any slate. \`workspace\` is your reach as of each call: its own members (\`readFile\`, \`writeFile\`, ...) and \`workspace.memory\`, \`workspace.tasks\`, \`workspace.web\`, \`workspace.db\`; \`workspace.agent.send({ text, data? })\` reaches your inbox as a \`slate\` event. Give each block in an answer its own name. It has no storage, sql, versions or \`$share\`: a UI that needs those is a slate with files.
+The chat draws it in place once your answer is stored. The block is HTML only, with the theme's tokens set on \`:root\` as for any slate. \`workspace\` is the same reach as any slate's, as of each call; \`workspace.agent.send({ text, data? })\` reaches your inbox as a \`slate\` event. Give each block in an answer its own name. It has no storage, sql, versions or \`$share\`: a UI that needs those is a slate with files.
 
 ## Working with a slate
 
@@ -214,8 +215,8 @@ In \`eval\`, \`workspace.slates.<id>\` is the same stub the client gets: \`await
 - \`workspace.slates.<id>.$preview()\` compiles and boots it and returns \`{ url, port, inline }\`; the chat and the work surface load the same URL. The URL is durable: it is the same on every launch and keeps working after eviction. Compile errors come back as \`bad_input\` with the file and line: fix and preview again. Edits reload the running slate; \`this.storage\` and \`this.sql\` keep their data across the reload.
 - \`workspace.slates.<id>.$methods()\` lists the methods its class exports.
 - \`workspace.slates.<id>.$remove()\` ends a slate: its process, its URL, its \`this.sql\` and its files. Committed versions stay.
-- \`$commit()\` freezes the source as a version, \`$history(after?)\` lists the versions oldest first (pass the answer's \`next\` to continue), \`$restore(version)\` puts one's source back, and \`workspace.slates.$fork(version)\` copies one into a new slate. \`workspace.slates.$list()\` answers \`{ slates: [{ id, title, bindings }], problems: [{ id, reason, error }] }\`: every slate, and why any failed to load.
-- Only the workspace's own agent shares, never a hired one. \`$graph()\` lists what each of a slate's members reaches. \`$share({ visibility: 'users' | 'public', approved: [{ slate, binding, member }], fork? })\` makes a live share: read members are granted, and a mutating member only when \`approved\` names it. \`$inspect(version, include?)\` shows what a blueprint of a committed version ships and \`$publish(version, include?)\` publishes it; \`include\` names top-level paths. \`workspace.slates.$shares()\` lists blueprints, \`$liveShares()\` live shares, \`$viewerRequests(share)\` a share's viewer requests, and \`$unshare(share)\` revokes one.
+- \`$commit()\` freezes the source as a version, \`$history(after?)\` lists the versions oldest first (pass the answer's \`next\` to continue), \`$restore(version)\` puts one's source back, and \`workspace.slates.$fork(version)\` copies one into a new slate. \`workspace.slates.$list()\` answers \`{ slates: [{ id, title }], problems: [{ id, reason, error }] }\`: every slate, and why any failed to load.
+- Only the workspace's own agent shares, never a hired one. \`$graph()\` lists each namespace member a slate has called, with its impact (\`observe\`, \`mutate\`, \`externalSend\`, \`execute\`, ...). \`$share({ visibility: 'users' | 'public', approved: [{ slate, namespace, member }], fork? })\` makes a live share: observing members are granted, and a member that acts only when \`approved\` names it. Exercise a slate before you share it: what it never called is not in its graph. \`$inspect(version, include?)\` shows what a blueprint of a committed version ships and \`$publish(version, include?)\` publishes it; \`include\` names top-level paths. \`workspace.slates.$shares()\` lists blueprints, \`$liveShares()\` live shares, \`$viewerRequests(share)\` a share's viewer requests, and \`$unshare(share)\` revokes one.
 - Make the UI usable on a phone: one column, large touch targets. Never \`alert()\` or \`confirm()\`; the sandbox blocks them.
 - Do not import \`RpcTarget\`; pass functions, not classes.
 `;

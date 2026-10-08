@@ -1,11 +1,11 @@
-/** Admission never runs the source; the forker binds each requirement on the unmapped-bindings panel. */
+/** Admission never runs the source; the fork lands on a panel naming what it calls on the forker's surface. */
 import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon } from "@phosphor-icons/react";
 import { showing, detach } from "@kinu.run/core/obs";
-import { workspaceDisplayTitle } from "@kinu.run/core";
+import { workspaceDisplayTitle, type BlueprintFork } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
@@ -15,8 +15,11 @@ import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
 
 const NEW_WORKSPACE = "\u0000new";
 
-function forkedSlatePath(workspace: string, slate: string): string {
-  return `/workspace/${encodeURIComponent(workspace)}?slate=${encodeURIComponent(slate)}&unmapped=1`;
+/** `reaches` is the fork's requirements, one namespace each, for its landing panel. */
+function forkedSlatePath(fork: BlueprintFork): string {
+  const reaches = fork.requirements.map((requirement) => requirement.name).join(",");
+
+  return `/workspace/${encodeURIComponent(fork.workspace)}?slate=${encodeURIComponent(fork.slate)}&reaches=${encodeURIComponent(reaches)}`;
 }
 
 export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
@@ -59,7 +62,7 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
         ? (yield* Effect.promise(async () => forkBlueprint({ blueprint, workspace })))
         : (yield* Effect.promise(async () => forkLiveShare({ live: live?.share ?? '', ownerWorkspace: live?.workspace ?? '', workspace })));
 
-      yield* Effect.promise(async () => navigate(forkedSlatePath(fork.workspace, fork.slate)));
+      yield* Effect.promise(async () => navigate(forkedSlatePath(fork)));
     }), showing((chain) => {
       setErr(chain);
       setBusy(false);
@@ -80,7 +83,7 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
       </>}
     >
       <p className="text-xs p-text-2 leading-relaxed">
-        <span className="font-medium p-text">{title}</span> lands as a new slate with every binding unmapped. Nothing runs until you connect each requirement and open it.
+        <span className="font-medium p-text">{title}</span> lands as a new slate that calls your own workspace, as you. Nothing runs until you open it.
       </p>
       {roster === null && err === null && <div className="flex justify-center py-4"><Loader size="sm" /></div>}
       {roster !== null && (

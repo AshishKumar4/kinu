@@ -8,6 +8,7 @@ import { SqliteSlateStore } from '../src/slates/store';
 import { SlateShareStore } from '../src/slates/shares';
 import { WorkspaceSlates } from '../src/slates/runtime';
 import { WorkspaceBlueprints } from '../src/slates/blueprints';
+import type { SlateUsage } from '../src/slates/capability-graph';
 import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpers';
 
 async function slatePlane(name: string) {
@@ -26,8 +27,10 @@ async function slatePlane(name: string) {
 
   let now = 1_000;
   const shares = new SlateShareStore(exec, () => now++);
+  // What each slate called as its owner ran it, as the host records it.
+  const usage = new Map<string, SlateUsage[]>();
 
-  return { ws, vfs, store, content, slates, shares, blueprints: new WorkspaceBlueprints({ slates, content, shares }) };
+  return { ws, vfs, store, content, slates, shares, usage, blueprints: new WorkspaceBlueprints({ slates, content, shares, usage: (slate) => usage.get(slate) ?? [] }) };
 }
 
 test('a blueprint carries the included tree and its requirements, and admits with every requirement unsatisfied', async () => {
@@ -41,8 +44,12 @@ test('a blueprint carries the included tree and its requirements, and admits wit
     owner.vfs.mkdir(root + '/src', { recursive: true });
     owner.vfs.writeFile(root + '/package.json', JSON.stringify({
       name: 'issues', description: 'Triage issues', main: 'src/server.ts',
-      slate: { title: 'Issue triage', bindings: { GITHUB: { kind: 'mcp', server: 'github' }, my_files: { kind: 'namespace', namespace: 'workspace' }, PEER: { kind: 'app', id: 'other' } } },
+      slate: { title: 'Issue triage' },
     }));
+    owner.usage.set('issues', [
+      { namespace: 'mcp.github', member: 'read_issue' }, { namespace: 'mcp.github', member: 'create_issue' },
+      { namespace: 'slates.other', member: 'count' }, { namespace: 'workspace', member: 'readFile' },
+    ]);
     owner.vfs.writeFile(root + '/src/server.ts', 'export default { fetch() { return new Response("issues"); } };');
     owner.vfs.writeFile(root + '/data/cache.json', '{"stale":true}');
     const version = await owner.slates.commit(id);
@@ -57,9 +64,7 @@ test('a blueprint carries the included tree and its requirements, and admits wit
     ]);
     expect(inspection.title).toBe('Issue triage');
     expect(inspection.warnings).toEqual([]);
-    expect(inspection.bindings.map((binding) => [binding.name, binding.kind, binding.credentialed])).toEqual([
-      ['GITHUB', 'mcp', true], ['my_files', 'namespace', true], ['PEER', 'app', false],
-    ]);
+    expect(inspection.reaches).toEqual(['mcp.github', 'slates.other', 'workspace']);
 
     const published = await owner.blueprints.publish('issues', version.id.value, ['src']);
     expect(published.share).toMatchObject({ slate: 'issues', included: ['package.json', 'src'], revokedAt: null, users: [] });
@@ -73,14 +78,16 @@ test('a blueprint carries the included tree and its requirements, and admits wit
     expect(Object.keys(bundle.blobs).length).toBe(2);
     expect(bundle.tree).not.toContain('cache.json');
     expect(bundle.skeleton.bindings.map((requirement) => requirement.name + '@' + requirement.facet)).toEqual([
-      'github@kinu.slate.mcp', 'my-files@kinu.slate.namespace', 'peer@kinu.slate.app',
+      'mcp.github@kinu.slate.mcp', 'slates.other@kinu.slate.slates', 'workspace@kinu.slate.workspace',
     ]);
+    // The publication fixed what it requires: later calls of the slate's do not change it.
+    owner.usage.set('issues', [{ namespace: 'memory', member: 'recall' }]);
+    expect(owner.blueprints.read(published.share.id).view.reaches).toEqual(['mcp.github', 'slates.other', 'workspace']);
 
     const fork = await forker.blueprints.admit('forker', bundle);
     expect(fork.requirements).toEqual([
-      { name: 'github', facet: 'kinu.slate.mcp' }, { name: 'my-files', facet: 'kinu.slate.namespace' }, { name: 'peer', facet: 'kinu.slate.app' },
+      { name: 'mcp.github', facet: 'kinu.slate.mcp' }, { name: 'slates.other', facet: 'kinu.slate.slates' }, { name: 'workspace', facet: 'kinu.slate.workspace' },
     ]);
-    expect(fork.bindings.map((binding) => binding.name)).toEqual(['GITHUB', 'my_files', 'PEER']);
     const landed = slateDirectory(new SlateId(fork.slate));
     expect(forker.vfs.readFileString(landed + '/src/server.ts')).toContain('"issues"');
     expect(forker.vfs.exists(landed + '/data')).toBe(false);
@@ -124,23 +131,22 @@ test('a whole-tree publication exports the vendored skeleton and a secret shape 
   }
 });
 
-test('requirement names are canonical and collisions refuse to publish', async () => {
+test('a requirement reads back as its namespace verbatim, as the slate\'s code calls it', async () => {
   const owner = await slatePlane('owner');
-
-  const commit = async (id: string, bindings: Record<string, { kind: 'memory' | 'tasks' }>) => {
-    const root = slateDirectory(new SlateId(id));
-    owner.vfs.mkdir(root, { recursive: true });
-    owner.vfs.writeFile(root + '/package.json', JSON.stringify({ main: 'a.js', slate: { bindings } }));
-    owner.vfs.writeFile(root + '/a.js', '');
-
-    return (await owner.slates.commit(new SlateId(id))).id.value;
-  };
+  const root = slateDirectory(new SlateId('mixed'));
+  const reaches = ['mcp.My_Files', 'slates.budget.board', 'mcp.my files', 'mcp.files-2'];
+  owner.vfs.mkdir(root, { recursive: true });
+  owner.vfs.writeFile(root + '/package.json', JSON.stringify({ main: 'a.js' }));
+  owner.vfs.writeFile(root + '/a.js', '');
+  owner.usage.set('mixed', reaches.map((namespace) => ({ namespace, member: 'read' })));
 
   try {
-    const fine = await owner.blueprints.publish('fine', await commit('fine', { My_Files: { kind: 'memory' } }));
-    expect(owner.blueprints.bundle(fine.share.id).skeleton.bindings.map((requirement) => requirement.name)).toEqual(['my-files']);
-    await expect(owner.blueprints.publish('clash', await commit('clash', { FILES: { kind: 'memory' }, files: { kind: 'tasks' } }))).rejects.toThrow('same requirement');
-    await expect(owner.blueprints.publish('digit', await commit('digit', { '1st': { kind: 'memory' } }))).rejects.toThrow('cannot be published');
+    const published = await owner.blueprints.publish('mixed', (await owner.slates.commit(new SlateId('mixed'))).id.value);
+
+    // The skeleton keeps its requirements in its own order.
+    expect([...owner.blueprints.read(published.share.id).view.reaches].sort()).toEqual([...reaches].sort());
+    expect(owner.blueprints.bundle(published.share.id).skeleton.bindings.map((requirement) => requirement.facet).sort())
+      .toEqual(['kinu.slate.mcp', 'kinu.slate.mcp', 'kinu.slate.mcp', 'kinu.slate.slates']);
   } finally {
     owner.ws.db.close();
   }

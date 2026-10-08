@@ -41,7 +41,7 @@ test('Plan blocks slate source restoration and authored calls without converting
   const files = workspaceFiles(agent);
   const path = '/slates/app/server.ts';
   await files.mkdir('/slates/app', { recursive: true });
-  await writeText(files, '/slates/app/package.json', JSON.stringify({ main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' }, PEER: { kind: 'app', id: 'app' } } } }));
+  await writeText(files, '/slates/app/package.json', JSON.stringify({ main: 'server.ts' }));
   await writeText(files, path, 'first');
   const committed = await agent.slate({ op: 'commit', id: 'app' });
 
@@ -53,11 +53,11 @@ test('Plan blocks slate source restoration and authored calls without converting
   const planCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' } satisfies typeof ROOT_SLATE_CALLER;
   expect(await agent.slateAs(planCaller, { op: 'restore', id: 'app', version: version.id })).toMatchObject({ ok: false, reason: 'denied' });
   expect(await agent.slateAs(planCaller, { op: 'call', id: 'app', method: 'shell' })).toMatchObject({ ok: false, reason: 'denied' });
-  expect(await agent.slateBindingCallAs(planCaller, 'app', 'PEER', { member: 'shell', args: [], invocation: null })).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await agent.slateCallAs(planCaller, 'app', 'workspace', { path: ['slates', 'peer', 'shell'], args: [], invocation: null })).toMatchObject({ ok: false, reason: 'denied' });
   expect(await readText(files, path)).toBe('second');
   // The retained Build app has separate invocation authority from this Plan turn.
-  expect(await agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'app', 'FILES', { member: 'readFile', args: [path], invocation: null })).toEqual({ ok: true, value: 'second' });
-  expect(await agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'app', 'FILES', { member: 'writeFile', args: [path, 'build app wrote'], invocation: null })).toMatchObject({ ok: true });
+  expect(await agent.slateCallAs(ROOT_SLATE_CALLER, 'app', 'workspace', { path: ['readFile'], args: [path], invocation: null })).toEqual({ ok: true, value: 'second' });
+  expect(await agent.slateCallAs(ROOT_SLATE_CALLER, 'app', 'workspace', { path: ['writeFile'], args: [path, 'build app wrote'], invocation: null })).toMatchObject({ ok: true });
   expect(await readText(files, path)).toBe('build app wrote');
   await chatSessionTurns(agent).settle({ messageId: 'done', text: 'Plan ready.', requestId: 'done' });
   expect(await agent.slateAs(planCaller, { op: 'restore', id: 'app', version: version.id })).toMatchObject({ ok: false, reason: 'denied' });
