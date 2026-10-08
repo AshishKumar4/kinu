@@ -11,10 +11,10 @@ import { resolveWebIdentity } from '../../evals/src/session';
 import { withBrowser } from '../../scripts/live-app-harness';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
+  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
   writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
-  type AgentReturnVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
+  type AgentPlanVerdict, type AgentReturnVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
@@ -25,6 +25,7 @@ interface FlowVerdicts {
   welcome: WelcomeVerdict | null;
   firstAnswer: FirstAnswerVerdict | null;
   agentReturn: AgentReturnVerdict | null;
+  agentPlan: AgentPlanVerdict | null;
   panel: PanelVerdict | null;
   stamped: StampedCardVerdict | null;
   writtenFile: WrittenFileVerdict | null;
@@ -38,7 +39,7 @@ interface FlowVerdicts {
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
   driveOpens: null, slateOpens: null, slateShare: null,
 };
 
@@ -72,6 +73,7 @@ beforeAll(async () => {
     observed.welcome = await attempt('welcome', () => reachesHome(target));
     observed.firstAnswer = await attempt('first-answer', () => workspaceGetsFirstAnswer(target));
     observed.agentReturn = await attempt('agent-return', () => agentIsThereOnReturn(target));
+    observed.agentPlan = await attempt('agent-plan', () => agentPlanIsReviewedInItsPane(target));
     observed.panel = await attempt('panel', () => rightPanelKeepsItsState(target));
     observed.stamped = await attempt('stamped', () => eachPaneKeepsItsTranscript(target));
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
@@ -109,6 +111,17 @@ describe('a workspace made from the home page answers its mission', () => {
 
   test('the mission stays its brief, never replayed as a message the person sent', () => {
     expect(verdictOf(observed.firstAnswer, 'first-answer').missionSent).toBe(false);
+  });
+});
+
+describe("an agent made with '+' has its plan reviewed beside its own pane", () => {
+  test('its Plan turn brings the plan back for review there, and approving it records the decision', () => {
+    const flow = verdictOf(observed.agentPlan, 'agent-plan');
+
+    expect(flow.pane).toContain('/agents/');
+    expect(flow.planReviewShown).toBeTrue();
+    expect(flow.approveControl).toMatch(/approve/iu);
+    expect(flow.planStatus).toBe('Approved');
   });
 });
 

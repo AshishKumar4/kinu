@@ -73,6 +73,10 @@ export interface AgentToolCall {
   readonly activity: readonly AgentTurnActivity[];
   readonly turnId: string;
   readonly mode: WorkMode;
+  /** The turn's lane and its author-stamped metadata, as the agent admitted it: a workspace that restarted rebuilds
+   *  the turn from these, not from its id. */
+  readonly parentDriven: boolean;
+  readonly driving?: JsonObject;
   readonly callId: string;
   readonly name: string;
   readonly input: JsonValue;

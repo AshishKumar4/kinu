@@ -8,7 +8,7 @@
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { actorReferenceOf, isSubordinateOrigin, ownerCaller, type ArchiveCursor, type Clock, type PlanEdit, type PlanReviewResult } from '@kinu.run/core';
+import { actorReferenceOf, isSubordinateOrigin, ownerCaller, type ArchiveCursor, type Clock } from '@kinu.run/core';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
@@ -47,7 +47,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'submitChildPlan', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'ageJobFiber', 'jobWatchState', 'jobRows'];
+    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'ageJobFiber', 'jobWatchState', 'jobRows'];
 
     for (const name of reads) Reflect.deleteProperty(this, name);
 
@@ -233,13 +233,6 @@ export class HireOrchestrator extends ProductionOrchestrator {
   }
 
   /** The agent's chat as its pane reads it: the brief, and the answer its turn recorded. */
-  /** What the agent's Plan turn submits, through the same workspace call its tool makes. */
-  async submitChildPlan(name: string, edits: PlanEdit[]): Promise<PlanReviewResult> {
-    const [row] = this.probeState.storage.sql.exec<{ actor_id: string }>('SELECT actor_id FROM workspace_actors WHERE name = ?', name).toArray();
-
-    return await this.hostedPlanSubmit(row?.actor_id ?? name, edits);
-  }
-
   async childTranscript(name: string): Promise<string[]> {
     const rows = this.probeState.storage.sql.exec<{ actor_id: string }>('SELECT actor_id FROM workspace_actors WHERE name = ?', name).toArray();
     const lines: string[] = [];
@@ -332,7 +325,7 @@ const WireLogSchema = v.looseObject({
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
-    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'submitChildPlan' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'
+    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'
     | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'ageJobFiber' | 'jobWatchState' | 'jobRows'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
@@ -462,14 +455,6 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     const target = await this.target(workspace);
 
     await target.driveOwedWork();
-  }
-
-  async submitChildPlan(workspace: string, name: string, edits: PlanEdit[]): Promise<PlanReviewResult> {
-    return await (await this.target(workspace)).submitChildPlan(name, edits);
-  }
-
-  async childLines(workspace: string, name: string): Promise<string[]> {
-    return await (await this.target(workspace)).childTranscript(name);
   }
 
   async archiveSections(workspace: string): Promise<ArchiveSections> {

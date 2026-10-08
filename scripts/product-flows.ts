@@ -31,7 +31,7 @@ import { beatWorkspace, webHeaders, type PublicWebIdentity } from '../evals/src/
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import {
-  FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
+  AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
@@ -594,6 +594,55 @@ async function agentPresence(page: Page, workspace: string, agent: string, actor
       sidebar: shown(document.querySelector(`[data-sidebar-agents="${input.workspace}"] [data-agent-row="${input.actorId}"]`)),
     };
   }, { workspace, agent, actorId }));
+}
+
+/** The agent-plan row: the pane the owner reviewed in, the review it saw there and the decision it took. */
+export interface AgentPlanVerdict {
+  readonly pane: string;
+  readonly planReviewShown: boolean;
+  readonly approveControl: string;
+  readonly planStatus: string;
+}
+
+const PLAN_STATUS = `(document.querySelector('#inspector [data-plan-status]')?.textContent ?? '').trim()`;
+
+const PLAN_DECISION_LIVE = `[...document.querySelectorAll('#inspector [data-plan-decisions] button:not([disabled])')]
+  .some((button) => button.getClientRects().length > 0)`;
+
+/**
+ * An agent made with '+', asked in Plan mode in its own pane: the plan its turn submits comes back for review in the
+ * inspector beside that pane and is approved through that agent's window (D9), as the workspace's own plan is through
+ * the workspace's. Hosted turns need a deployed Worker, so this is a deployed tier's row, not the live app's.
+ */
+export async function agentPlanIsReviewedInItsPane(target: FlowTarget): Promise<AgentPlanVerdict> {
+  const workspace = await createFlowWorkspace(target, 'agent-plan');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    await startNewChat(page);
+    const pane = v.parse(v.string(), await page.evaluate('location.pathname'));
+    const planMode = `[...document.querySelectorAll('#chat [aria-label="Turn mode"] button')].find((button) => /^plan$/iu.test(button.textContent?.trim() ?? ''))`;
+
+    await page.evaluate(`${planMode}?.click()`);
+    await until(page, "the agent pane's composer in Plan", `${planMode}?.getAttribute('aria-pressed') === 'true'`);
+    await sendAndSettle(page, AGENT_PLAN_ASK);
+    await until(page, "the agent's plan, decidable beside its pane", PLAN_DECISION_LIVE);
+    const planReviewShown = await page.evaluate(`document.querySelector('#inspector [data-plan-body]') !== null`) === true;
+
+    const approveControl = v.parse(v.string(), await page.evaluate(`(() => {
+      const approve = [...document.querySelectorAll('#inspector [data-plan-decisions] button:not([disabled])')]
+        .find((button) => /approve/iu.test(button.getAttribute('aria-label') ?? button.textContent ?? ''));
+      approve?.click();
+      return approve === undefined ? '' : (approve.getAttribute('aria-label') ?? approve.textContent ?? '').trim();
+    })()`));
+
+    await until(page, 'the approval, recorded on the plan', `${PLAN_STATUS} === 'Approved'`);
+
+    return { pane, planReviewShown, approveControl, planStatus: v.parse(v.string(), await page.evaluate(PLAN_STATUS)) };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
 }
 
 export interface AgentReturnVerdict {

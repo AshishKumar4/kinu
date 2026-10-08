@@ -204,7 +204,7 @@ export interface ContextMeasureRow {
 }
 
 export interface ContextMeasures {
-  readonly provider: (ContextMeasureRow & { readonly step: Extract<RunEvent, { type: 'step_finish' }> }) | null;
+  readonly provider: ContextMeasureRow | null;
   readonly gate: (Omit<ContextMeasureRow, 'tokens'> & { readonly tokens: number | null; readonly contextWindow: number | null }) | null;
 }
 
@@ -379,18 +379,21 @@ export class RunEventRecorder {
     return Effect.flatMap(Effect.sync(() => {
       this.actor.assertCurrent();
 
-      return this.sql<{ payload: string }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+      return this.sql<{ event_index: number }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
         SELECT ${this.actorId}, ${ev.runId}, COALESCE(MAX(event_index), -1) + 1, ${ev.type},
           json_set(${JSON.stringify(ev)}, '$.eventIndex', COALESCE(MAX(event_index), -1) + 1), ${ev.timestamp}
         FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${ev.runId}
-        RETURNING payload`[0];
+        RETURNING event_index`[0];
     }), (stored) => {
       if (stored === undefined) return Effect.fail(new KinuError('io', 'a persisted run event returned no row'));
 
       return Effect.sync(() => {
         if (ev.type === 'scaffold_promotion' || ev.type === 'scaffold_rollback') markStoreChanged(this.sql);
 
-        return parseStoredRunEvent(stored.payload);
+        // The event just written is this isolate's typed value; only a read from storage is parsed (parseStoredRunEvent).
+        const event: RunEvent = { ...ev, eventIndex: stored.event_index };
+
+        return event;
       });
     });
   }
@@ -743,12 +746,10 @@ export class RunEventRecorder {
   readContextMeasures(): ContextMeasures {
     this.actor.assertCurrent();
 
-    const provider = this.sql<{ tokens: number; ts: string; seq: number; payload: string }>`
-      SELECT json_extract(payload, '$.usage.input') AS tokens, ts, rowid AS seq, payload FROM run_events
+    const provider = this.sql<{ tokens: number; ts: string; seq: number }>`
+      SELECT json_extract(payload, '$.usage.input') AS tokens, ts, rowid AS seq FROM run_events
       WHERE actor_id = ${this.actorId} AND type = 'step_finish' AND json_extract(payload, '$.usage.input') IS NOT NULL
       ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
-
-    const step = provider === undefined ? null : parseStoredRunEvent(provider.payload);
 
     const gate = this.sql<{ tokens: number | null; contextWindow: number | null; ts: string; seq: number }>`
       SELECT json_extract(payload, '$.tokens') AS tokens, json_extract(payload, '$.contextWindow') AS contextWindow, ts, rowid AS seq
@@ -756,10 +757,23 @@ export class RunEventRecorder {
       ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
 
     return {
-      provider: provider === undefined || step?.type !== 'step_finish'
-        ? null : { tokens: provider.tokens, at: provider.ts, seq: provider.seq, step },
+      provider: provider === undefined ? null : { tokens: provider.tokens, at: provider.ts, seq: provider.seq },
       gate: gate === undefined ? null : { tokens: gate.tokens, contextWindow: gate.contextWindow, at: gate.ts, seq: gate.seq },
     };
+  }
+
+  /** The newest step a provider measured, whole: read for the cache report, not on each step's context fill. */
+  newestMeasuredStep(): Extract<RunEvent, { type: 'step_finish' }> | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND type = 'step_finish' AND json_extract(payload, '$.usage.input') IS NOT NULL
+      ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
+
+    const step = row === undefined ? null : parseStoredRunEvent(row.payload);
+
+    return step?.type === 'step_finish' ? step : null;
   }
 
   /**

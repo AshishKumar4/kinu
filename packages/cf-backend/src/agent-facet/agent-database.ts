@@ -14,6 +14,7 @@ import {
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
+  PlanReviewStore, type PlanReview,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
@@ -335,6 +336,15 @@ export class AgentDatabase {
       texts: answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])),
       workMode: bound.stores.claims.latestTurn()?.workMode ?? 'plan',
     };
+  }
+
+  /** Its plans, newest first, read as its history is: a retained retired agent's too, and no chat is started. */
+  planReviews(): readonly PlanReview[] {
+    return new PlanReviewStore(this.sql, this.readable().actor).listPage(CHAT_SESSION_ID, { limit: 50 }).items;
+  }
+
+  activePlan(): PlanReview | null {
+    return new PlanReviewStore(this.sql, this.readable().actor).getActive(CHAT_SESSION_ID);
   }
 
   messageCount(): number {

@@ -81,9 +81,12 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
 
   return {
     rpc,
-    send(prompt: string) {
+    /** As the composer sends it; `mode` rides the message as its turn's mode. */
+    send(prompt: string, mode?: 'plan' | 'build') {
+      const message = { id: 'hire-msg-input', role: 'user', parts: [{ type: 'text', text: prompt }], ...(mode !== undefined && { metadata: { kinuMode: mode } }) };
+
       socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST, id: 'hire-msg-client', init: {
-        method: 'POST', body: JSON.stringify({ messages: [{ id: 'hire-msg-input', role: 'user', parts: [{ type: 'text', text: prompt }] }], trigger: 'submit-message' }),
+        method: 'POST', body: JSON.stringify({ messages: [message], trigger: 'submit-message' }),
       } }));
     },
     completed: () => {

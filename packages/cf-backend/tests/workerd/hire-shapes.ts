@@ -7,6 +7,9 @@ export const CHILD_ANSWER = 'CHILD-ANSWER-42';
 
 export const HIRE_MISSION = 'HIRE-BRIEF-ONE-LINE';
 
+/** The owner's Plan-mode ask in a hired agent's own pane. */
+export const HIRE_PLAN_ASK = 'Plan the ledger audit.';
+
 export const NEST_MISSION = 'HIRE-NEST-BRIEF';
 
 export const NEST_RELAY = 'RELAYED';
