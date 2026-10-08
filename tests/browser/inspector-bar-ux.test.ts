@@ -4,10 +4,35 @@
  * a PC that is not connected offered rather than listed.
  */
 import { describe, expect, test } from 'bun:test';
-import type { Page } from 'puppeteer';
+import type { ElementHandle, Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
 
 const TOOL_NAMES = ['Work', 'Changes', 'Files', 'Swarms', 'Agent', 'Environment', 'Activity'];
+
+/** The harness waits forever by default; a control that never comes fails here instead. */
+const SOON = { timeout: 10_000 };
+
+/**
+ * The control in `scope` that the accessibility tree names `name` with `role`, or null. Read from the tree itself:
+ * `::-p-aria` under a CSS scope answers every descendant in this Puppeteer, so it cannot tell a name from its absence.
+ */
+async function control(page: Page, scope: string, role: string, name: string): Promise<ElementHandle | null> {
+  for (const candidate of await page.$$(`${scope} :is(button, a[href], [role])`)) {
+    const read = await page.accessibility.snapshot({ root: candidate, interestingOnly: false });
+
+    if (read?.role === role && read.name === name) return candidate;
+  }
+
+  return null;
+}
+
+async function required(page: Page, scope: string, role: string, name: string): Promise<ElementHandle> {
+  const found = await control(page, scope, role, name);
+
+  if (found === null) throw new Error(`no ${role} named ${JSON.stringify(name)} in ${scope}`);
+
+  return found;
+}
 
 /**
  * Each of the bar's tools by name: `reachable` when its centre is on screen and a press there lands on it, `hidden`
@@ -47,9 +72,9 @@ describe('the inspector bar keeps the workspace in reach', () => {
         await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
         await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
         await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
-        await page.waitForSelector('button[aria-label="Show workspace"]');
+        await page.waitForSelector('button[aria-label="Show workspace"]', SOON);
         await page.tap('button[aria-label="Show workspace"]');
-        await page.waitForSelector('button[aria-label="Arrived app"]');
+        await page.waitForSelector('button[aria-label="Arrived app"]', SOON);
 
         const reach = await toolsInReach(page);
 
@@ -65,7 +90,7 @@ describe('the inspector bar keeps the workspace in reach', () => {
         });
 
         await page.touchscreen.tap(box.x, box.y);
-        await page.waitForSelector('[data-env-card]');
+        await page.waitForSelector('button[aria-label="Environment"][aria-current="true"]', SOON);
       } finally { await page.close(); }
     });
   });
@@ -77,14 +102,9 @@ describe('the inspector bar keeps the workspace in reach', () => {
       try {
         await page.setViewport({ width: 1440, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('button[aria-label="Tally"]');
+        await page.waitForSelector('button[aria-label="Tally"]', SOON);
 
-        const tool = await page.waitForSelector('button[aria-label="Environment"]');
-
-        if (tool === null) throw new Error('no Environment tool');
-        const read = await page.accessibility.snapshot({ root: tool, interestingOnly: false });
-
-        expect({ role: read?.role, name: read?.name }).toEqual({ role: 'button', name: 'Environment' });
+        const tool = await required(page, 'body', 'button', 'Environment');
 
         // The name appears beside the pointer, outside the bar: a tooltip, not an attribute only a mouse rest reveals.
         const named = () => [...document.querySelectorAll('body *')].some((element) => {
@@ -96,7 +116,7 @@ describe('the inspector bar keeps the workspace in reach', () => {
 
         expect(await page.evaluate(named)).toBe(false);
         await tool.hover();
-        await page.waitForFunction(named, { timeout: 5_000 });
+        await page.waitForFunction(named, SOON);
       } finally { await page.close(); }
     });
   });
@@ -110,17 +130,16 @@ describe('the Environment panel', () => {
       try {
         await page.setViewport({ width: 1280, height: 1000 });
         await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="sandbox"]');
+        await page.waitForSelector('[data-env-card="sandbox"]', SOON);
 
-        const card = await page.$('[data-env-card="sandbox"] ::-p-aria([name="Cloud computer"][role="button"])');
-
-        if (card === null) throw new Error('the cloud computer has no control by its name');
+        const card = await required(page, '[data-env-card="sandbox"]', 'button', 'Cloud computer');
 
         // From the keyboard: the control takes focus and Enter selects it, so its pane offers its terminal and screen.
         await card.focus();
         await page.keyboard.press('Enter');
-        await page.waitForSelector('::-p-aria([name="Desktop"][role="tab"])');
-        expect(await card.evaluate((button) => button.getAttribute('aria-pressed'))).toBe('true');
+        await page.waitForSelector('[data-env-card="sandbox"] [aria-pressed="true"]', SOON);
+        expect(await control(page, 'body', 'tab', 'Terminal')).not.toBeNull();
+        expect(await control(page, 'body', 'tab', 'Desktop')).not.toBeNull();
       } finally { await page.close(); }
     });
   });
@@ -132,14 +151,11 @@ describe('the Environment panel', () => {
       try {
         await page.setViewport({ width: 1100, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=environment&offline=device`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="workspace"]');
+        await page.waitForSelector('[data-env-card="workspace"]', SOON);
 
         expect(await page.$('[data-env-card="device"]')).toBeNull();
-        const offer = await page.$('::-p-aria([name="Connect your PC"][role="button"])');
-
-        if (offer === null) throw new Error('nothing offers to connect a PC');
-        await offer.click();
-        await page.waitForSelector('[role="dialog"]');
+        await (await required(page, 'body', 'button', 'Connect your PC')).click();
+        await page.waitForSelector('[role="dialog"]', SOON);
         expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
       } finally { await page.close(); }
     });
@@ -152,14 +168,14 @@ describe('the Environment panel', () => {
       try {
         await page.setViewport({ width: 1280, height: 1000 });
         await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="sandbox"]');
-        await page.click('[data-env-card="sandbox"] ::-p-aria([name="Cloud computer"][role="button"])');
-        await page.click('::-p-aria([name="Desktop"][role="tab"])');
+        await page.waitForSelector('[data-env-card="sandbox"]', SOON);
+        await (await required(page, '[data-env-card="sandbox"]', 'button', 'Cloud computer')).click();
+        await (await required(page, 'body', 'tab', 'Desktop')).click();
 
-        const frame = await page.waitForSelector('iframe[title="Cloud computer\'s desktop"]');
-        const link = await page.waitForSelector('::-p-aria([name="Open Cloud computer\'s desktop in a new tab"])');
+        const frame = await page.waitForSelector('iframe[title="Cloud computer\'s desktop"]', SOON);
+        const link = await required(page, 'body', 'link', 'Open Cloud computer\'s desktop in a new tab');
 
-        if (frame === null || link === null) throw new Error('the desktop or its new-tab link is missing');
+        if (frame === null) throw new Error('the desktop is not framed');
 
         const [src, href, target] = await Promise.all([
           frame.evaluate((element) => (element instanceof HTMLIFrameElement ? element.src : '')),

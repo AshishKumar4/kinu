@@ -149,18 +149,24 @@ test('preview tabs lead the fixed surfaces and their URL can be copied and opene
         await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('[aria-label="Dashboard"]');
 
-        const tabs = await page.$eval('[aria-label="Dashboard"]', (first) => {
-          const box = first.parentElement;
+        // The bar is whatever holds both the first preview and Activity; its tabs are read in the order it draws them.
+        const previews = ['Dashboard', 'Sandbox app', 'Device app'];
+        const surfaces = ['Work', 'Changes', 'Files', 'Swarms', 'Agent', 'Environment', 'Activity'];
 
-          if (!(box instanceof HTMLElement)) throw new Error('the tab strip is not an element');
+        const tabs = await page.$eval('[aria-label="Dashboard"]', (first, known) => {
+          let bar = first.parentElement;
 
-          return [...box.querySelectorAll<HTMLElement>('button')].map((tab) => tab.getAttribute('aria-label'));
-        });
+          while (bar !== null && bar.querySelector('[aria-label="Activity"]') === null) bar = bar.parentElement;
+
+          if (bar === null) throw new Error('no bar holds both the preview and Activity');
+
+          return [...bar.querySelectorAll('button')].map((tab) => tab.getAttribute('aria-label') ?? '').filter((name) => known.includes(name));
+        }, [...previews, ...surfaces]);
 
         expect(tabs[0]).toBe('Dashboard');
-        const previews = ['Dashboard', 'Sandbox app', 'Device app'];
-        const lastPreview = Math.max(...tabs.flatMap((name, index) => previews.includes(name ?? '') ? [index] : []));
-        const firstSurface = tabs.findIndex((name) => !previews.includes(name ?? ''));
+        const lastPreview = Math.max(...tabs.flatMap((name, index) => previews.includes(name) ? [index] : []));
+        const firstSurface = tabs.findIndex((name) => surfaces.includes(name));
+        expect(firstSurface).toBeGreaterThan(-1);
         expect(lastPreview).toBeLessThan(firstSurface);
 
         await page.click('[aria-label="Dashboard"]');

@@ -2797,23 +2797,25 @@ test('code retains syntax colors through streaming and long sidebar titles stay 
   });
 });
 
-test('workspace tabs past the edge stay reachable by scrolling the strip sideways', async () => {
+test('page tabs past the edge stay reachable by scrolling the strip sideways', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
-    await page.setViewport({ width: 390, height: 844 });
-    await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('[aria-label="Work"]');
+    // The default inspector width with three slates: their tabs share the bar with the workspace's pinned tools.
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[aria-label="Tally"]');
 
-    // The tabs' own container, capped narrower than its tabs so the last one starts out of view.
-    const reach = await page.$eval('[aria-label="Work"]', (tab) => {
-      const row = tab.parentElement;
+    // The tabs' own scroller: the nearest container around the first page that scrolls sideways.
+    const reach = await page.$eval('[aria-label="Board"]', (tab) => {
+      let scroller = tab.parentElement;
 
-      if (row === null) throw new Error('the Work tab has no container');
-      row.setAttribute('style', 'max-width: 120px');
-      const tabs = [...row.querySelectorAll<HTMLElement>('button[aria-label]')];
-      const last = tabs.at(-1);
+      while (scroller !== null && getComputedStyle(scroller).overflowX !== 'auto') scroller = scroller.parentElement;
 
-      if (last === undefined) throw new Error('the strip has no tabs');
+      if (scroller === null) throw new Error('the page tabs have no scrolling container');
+      const row = scroller;
+      const last = row.querySelector<HTMLElement>('button[aria-label="Tally"]');
+
+      if (last === null) throw new Error('the strip has no Tally tab');
 
       const inView = (): boolean => {
         const box = last.getBoundingClientRect();
