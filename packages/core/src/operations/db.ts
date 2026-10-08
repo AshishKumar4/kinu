@@ -151,7 +151,7 @@ const dbOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, 
 export const DB = {
   createTable: dbOp({
     name: 'createTable', impact: 'mutate',
-    help: 'Declare a table. No db operation takes SQL: each statement is built from its arguments against the table\'s declared '
+    help: 'Declare a table. No operation takes SQL: each statement is built from its arguments against the table\'s declared '
       + 'columns. Re-declaring the same shape does nothing, and a different shape under an existing name is refused. '
       + "`blob` columns take and return base64, `json` columns any JSON document. `scope: 'actor'` rows are yours alone, "
       + "`scope: 'workspace'` rows every agent's here.",

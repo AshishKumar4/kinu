@@ -145,20 +145,22 @@ export function statedInput(stated: JsonSchema): v.LooseObjectSchema<v.ObjectEnt
   return input;
 }
 
-/** Validated in full on every call; the model is given `stated` and the field's own description. */
-export function opaque<S extends v.GenericSchema>(schema: S, stated: JsonSchema) {
-  const root = v.custom<unknown>(() => true);
+/**
+ * Checked in full on every call and passed on as it was sent, for an engine that reads its own wire form; the model is
+ * given `stated` and the field's own description.
+ */
+export function opaque(schema: v.GenericSchema, stated: JsonSchema) {
+  const root = v.custom<JsonValue>((value) => v.is(JsonValueSchema, value));
 
   OPAQUE.set(root, stated);
 
-  return v.pipe(root, v.rawTransform<unknown, v.InferOutput<S>>(({ dataset, addIssue, NEVER }) => {
+  return v.pipe(root, v.rawCheck(({ dataset, addIssue }) => {
+    if (!dataset.typed) return;
     const parsed = v.safeParse(schema, dataset.value);
 
-    if (parsed.success) return parsed.output;
+    if (parsed.success) return;
 
     for (const issue of parsed.issues) addIssue({ message: `${v.getDotPath(issue) ?? 'value'}: ${issue.message}` });
-
-    return NEVER;
   }));
 }
 
@@ -166,7 +168,7 @@ function jsonSchemaOf(schema: v.GenericSchema, forTypes: boolean): JsonSchema {
   const { $schema: _dialect, ...document } = toJsonSchema(schema, {
     errorMode: 'throw',
     // Checked on every call, or (readonly) a type alone; a schema has no words for them.
-    ignoreActions: ['trim', 'check', 'guard', 'finite', 'raw_transform', 'transform', 'readonly'],
+    ignoreActions: ['trim', 'check', 'raw_check', 'guard', 'finite', 'raw_transform', 'transform', 'readonly'],
     overrideSchema: ({ valibotSchema }) => {
       if (valibotSchema === JsonValueSchema) return forTypes ? { enum: [JSON_VALUE_MARK] } : { description: 'Any JSON value.' };
 

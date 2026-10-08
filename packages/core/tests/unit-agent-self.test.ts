@@ -166,10 +166,10 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
     const scaffold = called(p, "proposeScaffold");
-    expect(await scaffold("", "code")).toEqual(refused("rationale must be a non-empty string"));
-    expect(await scaffold("a rationale", 42)).toEqual(refused("code must be a non-empty string"));
-    expect(await scaffold("a rationale", "code", -1)).toEqual(refused("baseVersion must be a non-negative integer"));
-    expect(await scaffold("a rationale", "code", 1.5)).toEqual(refused("baseVersion must be a non-negative integer"));
+    expect(await scaffold("", "code")).toEqual(refused('"rationale"'));
+    expect(await scaffold("a rationale", 42)).toEqual(refused('"code"'));
+    expect(await scaffold("a rationale", "code", { baseVersion: -1 })).toEqual(refused('"baseVersion"'));
+    expect(await scaffold("a rationale", "code", { baseVersion: 1.5 })).toEqual(refused('"baseVersion"'));
     expect(host.calls).toEqual([]);
   });
 

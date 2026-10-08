@@ -3,7 +3,7 @@
 // meet errors that name it, and the declaration the model reads states the contract they broke.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createInlineExecutor, explainSandboxError, renderCodemodeDescription } from '../src/index';
+import { createInlineExecutor, executorNamespace, explainSandboxError, renderCodemodeDescription } from '../src/index';
 import { createTestRuntime } from './helpers';
 import { RECORDED_ATTEMPTS } from './fixtures/crafted-file-attempts';
 
@@ -73,7 +73,7 @@ describe('saving a tool that reads a file', () => {
     const { db, provider } = workspaceOf();
 
     try {
-      const declared = renderCodemodeDescription([provider], {});
+      const declared = renderCodemodeDescription([executorNamespace(provider)], {});
 
       expect(declared).toContain('async (args) => JSON.parse(await workspace.readFile(args.path))');
       expect(declared).toContain('not an eval script');

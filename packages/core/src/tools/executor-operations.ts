@@ -18,9 +18,12 @@ import { callArgs, codemodeNamespace } from './operation-surfaces';
 /** Each executor's declared members, by the executor's name. */
 const DECLARED = new Map<string, Readonly<Record<string, Operation>>>([['workspace', WORKSPACE], ['sandbox', SANDBOX], ['parent', PARENT], ['device', DEVICE]]);
 
-/** A shell call's arguments, with what the running program's backend says its shell calls carry. */
-function withExecContext(op: Operation, args: readonly JsonValue[]): unknown[] {
-  const context = op.name === 'exec' ? programExecContext() : undefined;
+/**
+ * A shell call's arguments, with what its backend says a program's shell calls carry, or else the call's own stop
+ * signal: a caller outside eval stops its command by cancelling the call.
+ */
+function withExecContext(op: Operation, args: readonly JsonValue[], signal: AbortSignal | undefined): unknown[] {
+  const context = op.name === 'exec' ? programExecContext() ?? (signal === undefined ? undefined : { signal }) : undefined;
 
   if (context === undefined) return [...args];
   const [command, options] = args;
@@ -35,7 +38,7 @@ function forwarded(provider: Pick<ExecutorProviderSurface, 'name' | 'tools'>, op
 
     if (member === undefined) return [];
 
-    return [serve(op, (input) => Effect.flatMap(Effect.promise(() => member.execute(...withExecContext(op, callArgs(op, v.parse(JsonObjectSchema, projectJsonValue({ value: input })))))), (answer) => {
+    return [serve(op, (input, { signal }) => Effect.flatMap(Effect.promise(() => member.execute(...withExecContext(op, callArgs(op, v.parse(JsonObjectSchema, projectJsonValue({ value: input }))), signal))), (answer) => {
       const refusal = answeredRefusal(projectJsonValue({ value: answer }));
 
       if (refusal !== null) return Effect.fail(new KinuError(refusal.reason ?? 'io', refusal.error, refusal.execution === undefined ? undefined : { execution: refusal.execution }));

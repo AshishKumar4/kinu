@@ -32,7 +32,7 @@ test('each actor reaches its own state: what one saves, another does not read', 
   }).toEqual({ root: { value: 'the root draft' }, hosted: { value: null } });
 });
 
-test('a Plan caller lists only what Plan permits, and a write is refused as unreached', async () => {
+test('a Plan caller lists only what Plan permits, and a write is refused', async () => {
   const workspace = orchestratorHarness();
   const plan = { actorId: workspaceActorId(workspace.db), turnId: null, mode: 'plan' as const };
   const ids = (await workspace.agent.listOperations(plan)).map(({ id }) => id);
@@ -40,14 +40,14 @@ test('a Plan caller lists only what Plan permits, and a write is refused as unre
   expect(ids).toContain('state.get');
   expect(ids).toContain('memory.recall');
   expect(ids).not.toContain('memory.remember');
-  await expect(workspace.agent.callOperation(plan, 'memory.remember', { key: 'k', value: 'v' }, call())).rejects.toMatchObject({ code: 'missing' });
+  await expect(workspace.agent.callOperation(plan, 'memory.remember', { key: 'k', value: 'v' }, call())).rejects.toMatchObject({ code: 'denied' });
 });
 
 test('a call its caller cancels stops, and its answer is the cancellation', async () => {
   const workspace = orchestratorHarness();
   const root = { actorId: workspaceActorId(workspace.db), turnId: null, mode: 'build' as const };
   const running = call();
-  const answered = workspace.agent.callOperation(root, 'shell.run', { command: 'sleep 30' }, running);
+  const answered = workspace.agent.callOperation(root, 'workspace.exec', { command: 'sleep 30' }, running);
 
   await workspace.agent.cancelOperation(running.callId);
 

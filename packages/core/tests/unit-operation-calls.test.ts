@@ -40,15 +40,16 @@ describe('callOperation', () => {
     await expect(callOperation(providers, 'state.get', { name: 'draft' }, CALL)).rejects.toMatchObject({ code: 'bad_input' });
   });
 
-  test('a member the work mode left out is not reached, though its namespace is', async () => {
+  test('Plan refuses an operation it does not permit, and lists only what it does', async () => {
     const note = (name: string, impact: 'observe' | 'mutate') => serve(defineOperation({
       ns: 'notes', name, help: `${name} a note.`, impact, availability: 'code', slate: false, input: v.strictObject({}), output: v.string(),
     }), async () => name);
 
     const providers = providersInWorkMode('plan', [codemodeNamespace('notes', [note('read', 'observe'), note('write', 'mutate')])]);
 
-    await expect(runWorkModeInvocation('plan', () => callOperation(providers, 'notes.write', {}, CALL))).rejects.toMatchObject({ code: 'missing' });
+    await expect(runWorkModeInvocation('plan', () => callOperation(providers, 'notes.write', {}, CALL))).rejects.toMatchObject({ code: 'denied' });
     expect(await runWorkModeInvocation('plan', () => callOperation(providers, 'notes.read', {}, CALL))).toEqual({ value: 'read' });
+    expect(runWorkModeInvocation('plan', () => listOperations(providers)).map(({ id }) => id)).toEqual(['notes.read']);
   });
 
   test('a tool is one record: a program and a caller outside eval run the same execute on the same object', async () => {

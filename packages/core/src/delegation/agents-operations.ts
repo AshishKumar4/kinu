@@ -223,17 +223,13 @@ export function createAgentsTool(deps: AgentsToolDeps) {
  */
 export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): CodemodeProvider {
   const { mode } = deps();
-  const namespace = codemodeNamespace('agents', serveAgents(() => ({ ...deps(), mode })));
 
-  return {
-    ...namespace,
-    tools: Object.fromEntries(Object.entries(namespace.tools).map(([name, member]) => [name, {
-      ...member,
-      execute: async (...args: unknown[]) => await settle(Effect.catchCause(Effect.promise(() => member.execute(...args)), (failed) => {
-        const cause = Cause.squash(failed);
+  return codemodeNamespace('agents', serveAgents(() => ({ ...deps(), mode })).map((served) => ({
+    ...served,
+    run: async (input, call) => await settle(Effect.catchCause(Effect.promise(() => served.run(input, call)), (failed) => {
+      const cause = Cause.squash(failed);
 
-        return cause instanceof MissionBudgetExhausted ? Effect.succeed(projectJsonValue({ value: cause.refusal })) : Effect.failCause(failed);
-      })),
-    }])),
-  };
+      return cause instanceof MissionBudgetExhausted ? Effect.succeed({ value: projectJsonValue({ value: cause.refusal }) }) : Effect.failCause(failed);
+    })),
+  })));
 }

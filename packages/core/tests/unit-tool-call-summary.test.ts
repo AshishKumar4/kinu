@@ -12,7 +12,7 @@ describe('tool call summaries — the unified agents tool', () => {
       { input: { op: 'assign', agent: 'scout', message: 'Audit the CLI surface' }, facts: ['assign', 'scout', 'Audit the CLI surface'] },
       { input: { op: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the CLI surface' }, facts: ['hire', 'task', 'auditor'] },
       { input: { op: 'message', agent: 'scout', topic: 'fyi' }, facts: ['message', 'scout', 'fyi'] },
-      { input: { op: 'reply', eventId: 'ev-1', message: 'here you go' }, facts: ['msg', 'here you go'] },
+      { input: { op: 'reply', eventId: 'ev-1', message: 'here you go' }, facts: ['reply', 'here you go'] },
       { input: { op: 'dismiss', agent: 'arch-auditor' }, facts: ['dismiss', 'arch-auditor'] },
       { input: { op: 'list' }, facts: ['list'] },
     ];

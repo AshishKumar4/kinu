@@ -9,7 +9,7 @@ import { jsonSchemaToType } from '@cloudflare/codemode/json-schema';
 import type { JsonSchema } from '@valibot/to-json-schema';
 import { Effect } from 'effect';
 import { KinuError, settle, settleSync } from '../obs/index';
-import { permitInPlan } from '../execution/work-mode';
+import { currentWorkMode, permitInPlan } from '../execution/work-mode';
 import type { CodemodeProvider, MemberDeclaration } from '../types/codemode';
 import type { WorkMode } from '../types/turn';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
@@ -325,9 +325,14 @@ function reachedOperations(providers: readonly CodemodeProvider[]): readonly Ser
   return providers.flatMap((provider) => (provider.operations ?? []).filter((served) => Object.hasOwn(provider.tools, served.op.name)));
 }
 
-/** The operations `providers` reach, for a caller outside eval: each id, what it does, and its input's schema. */
+/**
+ * The operations `providers` reach in the current work mode, for a caller outside eval: each id, what it does, and its
+ * input's schema. One Plan refuses is not listed.
+ */
 export function listOperations(providers: readonly CodemodeProvider[]): readonly OperationListing[] {
-  return reachedOperations(providers).map(({ op }) => ({ id: operationId(op), help: op.help, impact: op.impact, inputSchema: inputJsonSchema(op) }));
+  return reachedOperations(providers)
+    .filter(({ op }) => currentWorkMode() !== 'plan' || allowedInPlan(op))
+    .map(({ op }) => ({ id: operationId(op), help: op.help, impact: op.impact, inputSchema: inputJsonSchema(op) }));
 }
 
 /**
