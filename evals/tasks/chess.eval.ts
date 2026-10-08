@@ -4,6 +4,9 @@ import { Seeded } from './seeded';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask, type EvalPart } from '../src/task';
 import type { Evidence, EvalVerifier, SlateClient } from '../src/verifier';
+import { ElementHandle } from 'puppeteer';
+import type { SlateView } from '../src/browser';
+import { builtItself, buildsClean, slateQuality, type DrawnSlate } from './slate-quality';
 
 // The workshop-evals chess task: a complete engine authored without a chess package, extended
 // twice. chess.js stays in the checker, comparing legal moves, positions and status on curated
@@ -53,6 +56,41 @@ type ChessClient = SlateClient<(typeof METHODS)[number]>;
 const SLATE_ID = 'chess';
 
 const TITLE = 'Chess';
+
+/** The board drawn: its page says whose move it is. */
+const DRAWN: DrawnSlate = { id: SLATE_ID, names: [], done: (sight) => /\b(?:white|black)\b/iu.test(sight.text) };
+
+/** The placement field of the start position after 1. e4. */
+const PAWN_TO_E4 = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR';
+
+/** The board as a person's screen reader hears it: each square's button, by the square its name starts with. */
+async function squares(view: SlateView): Promise<Record<string, string>> {
+  return v.parse(v.record(v.string(), v.string()), await view.frame.evaluate(() => {
+    const named: Record<string, string> = {};
+
+    for (const control of document.querySelectorAll('button, [role="button"], [role="gridcell"]')) {
+      const name = (control.getAttribute('aria-label') ?? control.getAttribute('title') ?? control.textContent ?? '').trim();
+      const square = /^([a-h][1-8])\b/iu.exec(name)?.[1]?.toLowerCase();
+
+      if (square !== undefined) named[square] = name;
+    }
+
+    return named;
+  }));
+}
+
+/** Press the square whose accessible name starts with `square`, as a person's pointer does. */
+async function pressSquare(view: SlateView, square: string): Promise<boolean> {
+  const control = await view.frame.evaluateHandle((wanted) => [...document.querySelectorAll('button, [role="button"], [role="gridcell"]')]
+    .find((element) => (element.getAttribute('aria-label') ?? element.getAttribute('title') ?? element.textContent ?? '').trim().toLowerCase()
+      .startsWith(wanted)) ?? null, square);
+
+  if (!(control instanceof ElementHandle)) return false;
+  await control.click();
+  await control.dispose();
+
+  return true;
+}
 
 const MISSION = 'A shared chess workspace where a friend and I play, import games and share our own.';
 
@@ -498,7 +536,11 @@ It needs a stable server RPC taking and returning plain data, so I can verify it
 - legalMoves() -> { moves: Array<{ from, to, promotion? }> }   every legal move and nothing else
 - move({ from, to, promotion? }) -> { ok: true, fen } | { ok: false, error: "ILLEGAL_MOVE" }
   A refused move changes nothing.
-- status() -> { turn: "w" | "b", inCheck, checkmate, stalemate, gameOver }`,
+- status() -> { turn: "w" | "b", inCheck, checkmate, stalemate, gameOver }
+
+Its page shows the game as it stands and says whose move it is. Every square on the board is a button
+whose accessible name says the square and what stands on it, like "e1 white king" or "e4 empty", and
+pressing a piece and then a square plays that move.`,
     verify: async verifier => {
       await verifier.check("starts-from-the-standard-position", async () => {
         const api = verifier.slate(SLATE_ID, METHODS);
@@ -514,6 +556,27 @@ It needs a stable server RPC taking and returning plain data, so I can verify it
             sameList(moves, oracleMoves(new Chess())) && refusals.ok,
           evidence: { started, status, moveCount: moves.length, refusals: refusals.refusals },
         };
+      });
+      await verifier.check('the-board-shows-the-game', () => verifier.browse(async (browser) => {
+        const board = await squares(await browser.workSurface(SLATE_ID));
+        const said = (square: string) => board[square] ?? '';
+
+        return {
+          pass: Object.keys(board).length === 64 && /white/iu.test(said('e1')) && /king/iu.test(said('e1'))
+            && /black/iu.test(said('d8')) && /queen/iu.test(said('d8')) && /empty/iu.test(said('e4')),
+          evidence: { squares: Object.keys(board).length, e1: said('e1'), d8: said('d8'), e4: said('e4') },
+        };
+      }));
+      await verifier.check('a-pressed-move-is-played', async () => {
+        const pressed = await verifier.browse(async (browser) => {
+          const view = await browser.workSurface(SLATE_ID);
+
+          return { from: await pressSquare(view, 'e2'), to: await pressSquare(view, 'e4') };
+        });
+
+        const { fen } = v.parse(FenSchema, await verifier.slate(SLATE_ID, METHODS)('fen'));
+
+        return { pass: pressed.from && pressed.to && fen.split(' ')[0] === PAWN_TO_E4, evidence: { pressed, fen } };
       });
       await checkCurated(verifier, "agrees-with-the-oracle-on-the-hard-positions", BASE_STATUS, CURATED);
       await verifier.check("agrees-with-the-oracle-on-perft-positions", async () => {
@@ -550,6 +613,7 @@ It needs a stable server RPC taking and returning plain data, so I can verify it
 
         return { pass: divergence === null, evidence: { divergence, expected: oracle.fen() } };
       });
+      await slateQuality(verifier, DRAWN);
     },
     verifyAfterEviction: async (verifier) => {
       await verifier.check('the-game-is-shared-across-connections', async () => {
@@ -574,6 +638,8 @@ It needs a stable server RPC taking and returning plain data, so I can verify it
 
 Everything that already worked keeps working.`,
     verify: async verifier => {
+      await builtItself(verifier);
+      await buildsClean(verifier, DRAWN);
       await verifier.check("imports-known-games-to-the-right-positions", async () => {
         const api = verifier.slate(SLATE_ID, METHODS);
         const failures: Record<string, Evidence> = {};
@@ -681,6 +747,8 @@ same pieces on the same squares, the same castling rights and the same en passan
 available. The moves of a game loaded with loadPgn count; loadFen and newGame start afresh.
 Everything that already worked keeps working.`,
     verify: async verifier => {
+      await builtItself(verifier);
+      await buildsClean(verifier, DRAWN);
       await verifier.check("detects-threefold-repetition-and-the-fifty-move-rule", async () => {
         const api = verifier.slate(SLATE_ID, METHODS);
         const oracle = new Chess();

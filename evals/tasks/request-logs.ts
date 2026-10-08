@@ -3,6 +3,7 @@ import { WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
 import type { EvalPart, SeedFile } from '../src/task';
 import { matchesReference, type EvalVerifier, type Script, type SlateClient } from '../src/verifier';
 import { Seeded } from './seeded';
+import { builtItself, buildsClean, slateQuality, type DrawnSlate } from './slate-quality';
 
 // API gateway request logs, dropped into the workspace one file per day the way a log shipper
 // would. The agent builds an analyser that reads the files, a new day and a rule change arrive,
@@ -253,6 +254,21 @@ const SLOWEST_ON_THE_SLOW_DAY = (() => {
   return top.route;
 })();
 
+/** The logs page as a dashboard of the latest day: each route's row shows its requests and its p95. */
+function dashboard(logs: Logs): DrawnSlate {
+  const latest = logs.days.at(-1)?.date ?? '';
+  const routes = routesOn(logs, latest);
+
+  return {
+    id: 'logs', names: routes.map((row) => row.route),
+    done: (sight) => routes.every((row) => (sight.regions[row.route] ?? []).some((region) => {
+      const numbers: string[] = region.text.replace(/(\d)[,\u202f ](?=\d{3}\b)/gu, '$1').match(/\d+/gu) ?? [];
+
+      return numbers.includes(String(row.requests)) && numbers.includes(String(row.p95Ms));
+    })),
+  };
+}
+
 // ── The task ─────────────────────────────────────────────────────────
 
 export const requestLogs: EvalPart = {
@@ -286,7 +302,10 @@ Its server methods take and return plain data, so I can check it:
   One entry per log file, by date.
 - slowest({ from, to, n }) -> { routes: Array<{ route, requests, p95Ms }> }
   Pooling every request from the day \`from\` through the day \`to\`, the n routes with the highest
-  p95, ties by route.`,
+  p95, ties by route.
+
+Its page is the dashboard I open in the morning: the latest day, each of its routes with its requests,
+errors and p95 in milliseconds.`,
     verify: async (verifier) => {
       const logs: Logs = { days: FIRST_DAYS, rules: FIRST_RULES };
 
@@ -305,6 +324,8 @@ Its server methods take and return plain data, so I can check it:
           await slate('slowest', { from: '2027-06-03', to: '2027-06-03', n: 1 });
         },
       });
+
+      await slateQuality(verifier, dashboard(logs));
     },
   }, {
     seed: [fileOf(JUNE_4)],
@@ -327,6 +348,9 @@ count anywhere, not as requests and not as skipped lines, and a 429 now counts a
           },
         });
       });
+
+      await builtItself(verifier);
+      await buildsClean(verifier, dashboard({ days: [...FIRST_DAYS, JUNE_4, JUNE_5], rules: TURN_2_RULES }));
     },
     verifyAfterEviction: async (verifier) => {
       await sameAsReference(verifier, 'the-new-rules-survive-an-eviction', {

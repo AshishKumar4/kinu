@@ -3,6 +3,7 @@ import { WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
 import { shows, sightEvidence, type Sight } from '../src/sight';
 import type { EvalPart, EvidenceCall } from '../src/task';
 import { matchesReference, SlateRefusal, type EvalCheckOutcome, type EvalVerifier, type Normalize, type Script, type SlateClient } from '../src/verifier';
+import { builtItself, buildsClean, slateQuality, type DrawnSlate } from './slate-quality';
 
 // Two slates that depend on each other: a ledger of team expenses, and a budget board that reads
 // the ledger by calling it, slate to slate, instead of keeping its own copy. The board gets a page, checked
@@ -321,6 +322,13 @@ const AFTER_PAGE: readonly Step[] = [TURN_1, COVER_DESIGN, [spendLate]];
 
 const AFTER_EUROS: readonly Step[] = [...AFTER_PAGE, [spendEuros], RATE_2];
 
+/** The board's page once `history` has run: every team with a budget that month on it, as the books have it. */
+async function boardPage(history: readonly Step[]): Promise<DrawnSlate> {
+  const rows = (await booksAfter(history)).status(QUESTION_MONTH);
+
+  return { id: 'board', names: TEAMS, done: (seen) => misreadings(seen, rows).length === 0 };
+}
+
 // ── The page ─────────────────────────────────────────────────────────
 
 const COVER = /\bcover\b/i;
@@ -407,6 +415,10 @@ Leave both empty when you are done: I will enter the expenses and budgets myself
       await sameAsReference(verifier, 'ledger-rejects-bad-expenses', { history: [[recordFebruaryAndMarch]], script: refuseBadExpenses, currency: false });
       await sameAsReference(verifier, 'board-reports-budgets-against-spending', { history: [[recordFebruaryAndMarch, refuseBadExpenses]], script: setBudgets, currency: false });
       await sameAsReference(verifier, 'board-reads-new-expenses-from-the-ledger', { history: [[recordFebruaryAndMarch, refuseBadExpenses, setBudgets]], script: spendMore, currency: false });
+
+      await builtItself(verifier);
+
+      for (const id of ['ledger', 'board']) await buildsClean(verifier, { id, names: [], done: () => true });
     },
   }, {
     prompt: `I've entered our expenses and budgets. Give the board a page I can work from. It opens on the
@@ -496,6 +508,8 @@ how far over budget the team is, in dollars, and which of its expenses that mont
           };
         });
       });
+
+      await slateQuality(verifier, await boardPage(AFTER_PAGE));
     },
   }, {
     seed: [{ path: RATES_PATH, content: `${JSON.stringify(FIRST_RATE)}\n` }],
@@ -516,6 +530,9 @@ asked.`,
           slate: slates(verifier), reference: (await booksAfter(AFTER_EUROS)).client(), script: readTheMonth, normalize: normalizer(true),
         });
       });
+
+      await builtItself(verifier);
+      await buildsClean(verifier, await boardPage(AFTER_EUROS));
     },
     verifyAfterEviction: async (verifier) => {
       await sameAsReference(verifier, 'expenses-survive-an-eviction', { history: AFTER_EUROS, script: listEverything, currency: true });
@@ -550,6 +567,9 @@ return the following ones, or null on the last page. limit is 1 to 50; answer an
 
       await sameAsReference(verifier, 'board-still-reports-the-month', { history: AFTER_EUROS, script: readTheMonth, currency: true });
       await verifier.check('the-page-still-shows-the-month', () => pageShows(verifier, AFTER_EUROS));
+
+      await builtItself(verifier);
+      await buildsClean(verifier, await boardPage(AFTER_EUROS));
     },
     verifyAfterEviction: async (verifier) => {
       await verifier.check('pages-survive-an-eviction', () => pagesMatch(verifier, AFTER_EUROS));

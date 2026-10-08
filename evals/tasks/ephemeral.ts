@@ -31,10 +31,11 @@ export async function madeNoApp(verifier: EvalVerifier): Promise<void> {
 /** What a prototype leaves in a turn whose answer is its own page: a page or a server of its own, or a browser on one. */
 const PROTOTYPE = /\.html\b|\$preview\(|openBrowser|connectBrowser|screenshot|http\.server|npx serve|\bvite\b/;
 
-/** A one-off view is written straight into the answer: no prototype page, server or browser check comes before it. */
-export async function madeNoPrototype(verifier: EvalVerifier): Promise<void> {
+/** A one-off view is written straight into the answer: no prototype page, server or browser check comes before it.
+ *  `prototype` is what one leaves, where the turn's own work may write a page (`slate-quality.ts`). */
+export async function madeNoPrototype(verifier: EvalVerifier, prototype = PROTOTYPE): Promise<void> {
   await verifier.check('built-no-prototype', async () => {
-    const steps = (await verifier.turnToolCalls()).filter((call) => PROTOTYPE.test(call.name) || PROTOTYPE.test(call.args));
+    const steps = (await verifier.turnToolCalls()).filter((call) => prototype.test(call.name) || prototype.test(call.args));
 
     return { pass: steps.length === 0, evidence: { steps: steps.map((step) => `${step.name}: ${step.args.slice(0, 240)}`) } };
   });
