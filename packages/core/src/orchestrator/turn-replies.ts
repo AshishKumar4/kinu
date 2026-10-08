@@ -10,9 +10,16 @@
 import * as v from 'valibot';
 import type { BroadcastEvent } from '../types/backend-host';
 
+/**
+ * Its own buffer, not the stream's: a stream errored drops what it held unread, and a reader of a stopped turn keeps
+ * every word written before the stop, then reads why it stopped.
+ */
 interface Reply {
-  readonly controller: ReadableStreamDefaultController<Uint8Array>;
-  closed: boolean;
+  readonly pieces: Uint8Array[];
+  /** How it ended, once it has: `failure` is why, when the turn did not finish. */
+  end: { readonly failure: string | null } | null;
+  /** Its reader, waiting for the next piece or the end. */
+  wake: (() => void) | null;
 }
 
 /** A card that moved past pending: the moments a message lands, or is let go. */
@@ -29,17 +36,21 @@ export class TurnReplies {
 
   /** The reply to the message whose card is `cardId`, as UTF-8 bytes; its reader cancelling it lets it go. */
   open(cardId: string): ReadableStream<Uint8Array> {
-    let reply: Reply | null = null;
+    const reply: Reply = { pieces: [], end: null, wake: null };
 
-    const stream = new ReadableStream<Uint8Array>({
-      start: (controller) => {
-        reply = { controller, closed: false };
-        this.#waiting.set(cardId, reply);
+    this.#waiting.set(cardId, reply);
+
+    return new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        while (reply.pieces.length === 0 && reply.end === null) await new Promise<void>((resolve) => { reply.wake = resolve; });
+        const piece = reply.pieces.shift();
+
+        if (piece !== undefined) controller.enqueue(piece);
+        else if (reply.end?.failure == null) controller.close();
+        else controller.error(new Error(reply.end.failure));
       },
-      cancel: () => { if (reply !== null) this.#forget(reply); },
-    });
-
-    return stream;
+      cancel: () => { this.#forget(reply); },
+    }, { highWaterMark: 0 });
   }
 
   /**
@@ -68,7 +79,10 @@ export class TurnReplies {
 
   /** A text delta of `turnId`'s answer. */
   feed(turnId: string, delta: string): void {
-    for (const reply of this.#landed.get(turnId) ?? []) reply.controller.enqueue(encoder.encode(delta));
+    for (const reply of this.#landed.get(turnId) ?? []) {
+      reply.pieces.push(encoder.encode(delta));
+      this.#wake(reply);
+    }
   }
 
   /** `turnId` ended; `failure` is why, when it did not finish (a Stop included). Its first word is kept. */
@@ -82,15 +96,20 @@ export class TurnReplies {
   }
 
   #close(reply: Reply, failure: string | null): void {
-    if (reply.closed) return;
-    reply.closed = true;
+    if (reply.end !== null) return;
+    reply.end = { failure };
+    this.#wake(reply);
+  }
 
-    if (failure === null) reply.controller.close();
-    else reply.controller.error(new Error(failure));
+  #wake(reply: Reply): void {
+    const wake = reply.wake;
+
+    reply.wake = null;
+    wake?.();
   }
 
   #forget(reply: Reply): void {
-    reply.closed = true;
+    reply.end ??= { failure: null };
 
     for (const [card, waiting] of this.#waiting) if (waiting === reply) this.#waiting.delete(card);
 
