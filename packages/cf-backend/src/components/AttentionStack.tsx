@@ -19,8 +19,8 @@ export interface AttentionStackProps {
   readonly rpc: Rpc;
   /** The hook's own resolution: it drops the consent from its read once the answer lands. */
   readonly resolveConsent: (consentId: string, choice: ConsentChoice) => Promise<void>;
-  /** Re-read the queue so an answered row leaves the read too, not only the stack. */
-  readonly onDecided: () => void;
+  /** Re-read the queue so an answered row leaves the read too, not only the stack; it reports its own failure. */
+  readonly onDecided: () => Promise<void>;
   /** A plan is decided in its review, under Work. */
   readonly onReview: () => void;
 }
@@ -193,7 +193,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
     if (front.kind === "action" && front.action.kind !== "plan_review") {
       mark(front.key);
       setChosen(null);
-      onDecided();
+      yield* Effect.promise(() => onDecided());
     }
   }), (failed) => Effect.sync(() => {
     setError({ key: front.key, message: `Could not record the answer: ${renderThrownChain({ cause: Cause.squash(failed) })}` });

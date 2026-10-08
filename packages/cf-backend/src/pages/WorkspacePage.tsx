@@ -32,7 +32,7 @@ import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
 import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, SteerBubble } from "@/components/MessageView";
 import { ProgrammaticTurnCard } from "@/components/ProgrammaticTurnCard";
-import { AttentionStack } from "@/components/AttentionStack";
+import { AttentionStack, type AttentionStackProps } from "@/components/AttentionStack";
 import { foldEventTurns, placeEvents, subordinateEventRow, type PlacedEvent } from "@/components/ChatEvents";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { cloudPlanes, filesFocusOf, hasComparableTakes, referencePrefixes, WORKSPACE_ROOT, type FilesFocus } from "@kinu.run/core";
@@ -473,6 +473,12 @@ interface AgentPlanWindow {
 
 const AgentPlanWindowContext = createContext<(window: AgentPlanWindow | null) => void>(() => {});
 
+/** The workspace's asks and the stack's calls, so an agent's own pane stacks the asks it raised (`ownerAsks`). */
+const AttentionContext = createContext<{
+  readonly reads: Parameters<typeof ownerAsks>[0];
+  readonly stack: Omit<AttentionStackProps, "asks">;
+} | null>(null);
+
 /** The plan the work surface reviews and the RPC its decisions go through: the workspace's own on the main pane, the
  *  shown agent's from its pane otherwise. */
 function useReviewedPlan(subName: string | undefined, root: AgentPlanWindow) {
@@ -532,6 +538,7 @@ function SubordinateChatColumn({
   const setInput = ui.setDraft;
   usePlanApprovedMode(state.activePlan, ui.setMode);
   const showPlanWindow = useContext(AgentPlanWindowContext);
+  const attention = useContext(AttentionContext);
 
   useEffect(() => { showPlanWindow({ plan: state.activePlan, rpc: state.rpc }); }, [showPlanWindow, state.activePlan, state.rpc]);
   useEffect(() => () => { showPlanWindow(null); }, [showPlanWindow]);
@@ -626,6 +633,9 @@ function SubordinateChatColumn({
           liveness={state.liveness}
           onRecover={state.recoverTurn}
           onStop={stop}
+          attention={attention !== null && state.paneActorId !== null
+            ? <AttentionStack asks={ownerAsks(attention.reads, { raisedBy: state.paneActorId })} {...attention.stack} />
+            : undefined}
           mode={{ value: ui.mode, onChange: ui.setMode }}
           modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={(...args: Parameters<typeof state.setModel>) => detach(Effect.promise(async () => state.setModel(...args)))} size="xs"
             effort={{ value: as?.reasoningEffort ?? null, onChange: pickEffort }} />}
@@ -840,6 +850,16 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     setSurface(next);
     workbench.current?.reveal();
   }, []);
+
+  // The stack answers through the workspace's own calls on every pane: one queue, whichever pane asks.
+  const { rpc: workspaceRpc, resolveConsent, refreshPendingActions } = state;
+
+  const attentionCalls = useMemo((): Omit<AttentionStackProps, "asks"> => ({
+    rpc: workspaceRpc,
+    resolveConsent,
+    onDecided: refreshPendingActions,
+    onReview: () => show("Work"),
+  }), [workspaceRpc, resolveConsent, refreshPendingActions, show]);
 
   // A chat file link, or a `?file=<reference>` landing, opens Files on the file it names.
   const [filesFocus, setFilesFocus] = useState<FilesFocus | null>(null);
@@ -1127,8 +1147,10 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             )}
             {shownNode === null && (subName ? (
               <AgentPlanWindowContext.Provider value={reviewed.showAgentWindow}>
-                <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
-                  input={shownAgent?.input ?? true} />
+                <AttentionContext.Provider value={{ reads: state, stack: attentionCalls }}>
+                  <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
+                    input={shownAgent?.input ?? true} />
+                </AttentionContext.Provider>
               </AgentPlanWindowContext.Provider>
             ) : (
             <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${agentId}/main`}
@@ -1216,8 +1238,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 onStop={handleStop}
                 onBranch={handleBranch}
                 attention={(
-                  <AttentionStack asks={ownerAsks(state)} rpc={state.rpc} resolveConsent={state.resolveConsent}
-                    onDecided={() => detach(Effect.promise(async () => state.refreshPendingActions()))} onReview={() => show("Work")} />
+                  <AttentionStack asks={ownerAsks(state)} {...attentionCalls} />
                 )}
                 mode={{ value: ui.mode, onChange: setChatMode }}
                 attachments={{

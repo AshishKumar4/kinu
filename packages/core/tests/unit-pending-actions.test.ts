@@ -146,7 +146,7 @@ describe('a plan awaiting a decision', () => {
     const [action] = buildPendingActions({
       ...EMPTY,
       pendingPlans: [{
-        owner: 'courier', id: 'plan-9', revision: 2, updatedAt: 7000,
+        owner: 'courier', actor: 'actor-courier', id: 'plan-9', revision: 2, updatedAt: 7000,
         content: '# Courier rollout\n\nStage the rollout and verify the receipt.',
       }],
     });
@@ -158,6 +158,7 @@ describe('a plan awaiting a decision', () => {
       detail: 'Submitted by courier',
       at: 7000,
       planRef: { owner: 'courier', id: 'plan-9', revision: 2 },
+      raisedBy: 'actor-courier',
     });
   });
 
@@ -165,7 +166,7 @@ describe('a plan awaiting a decision', () => {
     const [action] = buildPendingActions({
       ...EMPTY,
       pendingPlans: [{
-        owner: 'main', id: 'plan-1', revision: 1, updatedAt: 1000,
+        owner: 'main', actor: 'actor-main', id: 'plan-1', revision: 1, updatedAt: 1000,
         content: '\n\n  \n## Ship the fix\nBody.',
       }],
     });
@@ -237,6 +238,19 @@ describe('the attention stack the chat shows', () => {
     });
 
     expect(asks.map((ask) => ask.key)).toEqual(['action:pricing', 'consent:c-1', 'action:push', 'action:plan']);
+  });
+
+  test('an agent\'s own pane stacks only the asks it raised; the workspace\'s own stay with the workspace', () => {
+    const reads = {
+      pendingActions: [row('push', 'deferred_action', 30), { ...row('plan:courier:p:1', 'plan_review', 20), raisedBy: 'actor-courier' },
+        { ...row('plan:scout:p:1', 'plan_review', 10), raisedBy: 'actor-scout' }],
+      pendingConsents: [consent('c-1', 40)],
+    };
+
+    expect(ownerAsks(reads, { raisedBy: 'actor-courier' }).map((ask) => ask.key)).toEqual(['action:plan:courier:p:1']);
+    expect(ownerAsks(reads).map((ask) => [ask.key, ask.raisedBy])).toEqual([
+      ['consent:c-1', null], ['action:push', null], ['action:plan:courier:p:1', 'actor-courier'], ['action:plan:scout:p:1', 'actor-scout'],
+    ]);
   });
 
   test('holds exactly what holds the inspector open', () => {

@@ -2097,7 +2097,8 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
   // Answered by the root; the header renders the roster title, never `mission`.
   const [name] = v.parse(v.tuple([v.string()]), args);
   const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
-  const actor = latest?.name ?? "agent-0";
+  // A fixture's agent (the coupon auditor) is answered as itself, so its pane is its own actor's.
+  const actor = latest?.name ?? name;
 
   return {
     value: {
@@ -2298,7 +2299,10 @@ const MIXED_ASKS: PendingAction[] = [
   { id: "park-write", kind: "deferred_action", title: "Replace src/pricing-service.ts", detail: null, at: NOW - 150_000, write: { path: "src/pricing-service.ts" } },
   { id: "proposal-pricing", kind: "workspace_proposal", title: "Create workspace “Pricing watch”", detail: "Watch competitor pricing and note each change.", at: NOW - 240_000,
     proposal: { name: "Pricing watch", brief: "Watch competitor pricing and note each change.", soul: "# Pricing watch\n\nKeep notes short." } },
-  { id: "plan:main:pl-1:1", kind: "plan_review", title: "Review the plan: Repair the applyCoupon eligibility guard", detail: null, at: NOW - 300_000, planRef: { owner: "main", id: "pl-1", revision: 1 } },
+  { id: "plan:main:pl-1:1", kind: "plan_review", title: "Review the plan: Repair the applyCoupon eligibility guard", detail: null, at: NOW - 300_000,
+    planRef: { owner: "main", id: "pl-1", revision: 1 }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME) },
+  { id: "plan:coupon-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit every coupon rule", detail: "Submitted by coupon-auditor", at: NOW - 200_000,
+    planRef: { owner: "coupon-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("coupon-auditor") },
   { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 

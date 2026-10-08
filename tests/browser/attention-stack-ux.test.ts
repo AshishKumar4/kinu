@@ -91,10 +91,10 @@ test('only what waits on the owner is stacked, newest first; an older card can b
     await opened(page, origin, '&asks=mixed&consent=waiting');
     await page.waitForSelector('[data-attention-stack]');
 
-    // The version under trial waits on nobody: it stays in Work.
-    expect(await page.$eval('[data-attention-stack]', (stack) => stack.getAttribute('data-attention-count'))).toBe('6');
+    // The version under trial waits on nobody: it stays in Work. The workspace's pane stacks its agents' asks too.
+    expect(await page.$eval('[data-attention-stack]', (stack) => stack.getAttribute('data-attention-count'))).toBe('7');
     expect(await stacked(page)).toEqual(['action:park-publish', 'action:park-push', 'action:park-write']);
-    expect(await page.$eval('[data-attention-behind="action:park-write"]', (strip) => strip.textContent)).toContain('+3');
+    expect(await page.$eval('[data-attention-behind="action:park-write"]', (strip) => strip.textContent)).toContain('+4');
 
     await page.click('[data-attention-behind="action:park-write"]');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-write');
@@ -121,6 +121,23 @@ test('a refused answer keeps its card open and says why; the next try lands', as
     await answer(page, 'Approve');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-push');
     expect(await decisions(page)).toEqual([['park-publish', 'approved']]);
+    await page.close();
+  });
+});
+
+test('an agent\'s own pane stacks the asks that agent raised, and none of the workspace\'s', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await opened(page, origin, '&asks=mixed&consent=waiting');
+    await page.waitForSelector('[data-attention-stack]');
+    await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/checkout-fixes/agents/coupon-auditor'); });
+
+    const pane = '[data-agent-pane="checkout-fixes/agents/coupon-auditor"]';
+
+    await page.waitForSelector(`${pane} [data-attention-stack]`);
+    expect(await page.$$eval(`${pane} [data-attention-card], ${pane} [data-attention-behind]`, (cards) => cards.map((card) => card.getAttribute('data-attention-card') ?? card.getAttribute('data-attention-behind'))))
+      .toEqual(['action:plan:coupon-auditor:pa-1:1']);
+    expect(await page.$eval(`${pane} [data-attention-card]`, (card) => card.textContent)).toContain('Audit every coupon rule');
     await page.close();
   });
 });
