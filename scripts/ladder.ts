@@ -29,7 +29,7 @@
  * hooks installed at all.
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
@@ -2899,11 +2899,10 @@ export function productFlowsTierCommand(source = readFileSync(resolve(root, PROD
  * packages, 41 of 42 CLI files, the root suites and both Layergate runs.
  */
 /** Why no live-app row can run on a pull request: each boots the product's own dev server. */
-const LIVE_APP_AT_CI = 'needs the account\'s own dev credentials in PROCESS env for the product\'s dev server to '
-  + 'boot at all — measured 2026-09-17, `vite dev` exits "error when starting dev server" '
-  + 'with no CLOUDFLARE_API_TOKEN, and the credential path 503s without the cf-backend '
-  + 'secrets. Only the deploy\'s source-phase run on armada passes them (DEPLOY_SECRETS), never a '
-  + 'CI tier run, so it runs there, in a container of its own with workerd, Chrome and its scripted model.';
+const LIVE_APP_AT_CI = 'boots the product\'s own dev server, workerd, Chrome and a scripted model for minutes, which '
+  + 'answers for the tree being deployed rather than a push: it runs in the deploy\'s source-phase job on armada '
+  + '(ARMADA_DEPLOY_ROWS), in a container of its own. The boot is offline (KINU_DEV_OFFLINE) and mints its own keys, '
+  + 'so it needs no credential (measured 2026-10-08 with none passed: every row booted).';
 
 /**
  * Deploy rows armada runs, one job per phase at the deploy's exact SHA (`armadaPhase`): each reads the commit and the
@@ -2919,10 +2918,6 @@ export const ARMADA_DEPLOY_ROWS: readonly string[] = [
   'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
   'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
 ];
-
-/** The armada secrets a deploy's phase run passes (`armada run --secrets`): the live-app rows' dev credentials, which
- *  `writeDeploySecrets` turns into the `.dev.vars` files the harness reads. The CI tier's runs never get them. */
-export const DEPLOY_SECRETS = ['KINU_LIVE_APP_DEV_VARS', 'KINU_LIVE_APP_CLOUDFLARE_TOKEN'] as const;
 
 /** The rows of `phases` that armada runs. */
 export function armadaPhaseRows(phases: readonly DeployPhase[]): Gate[] {
@@ -3063,17 +3058,6 @@ function phasesNamed(asked: string | undefined): DeployPhase[] | undefined {
   const phases = DEPLOY_PHASES.filter((candidate) => names.includes(candidate));
 
   return asked === undefined || phases.length !== names.length ? undefined : phases;
-}
-
-/** In a container running a deploy row: the live-app rows' `.dev.vars`, from the secrets the deploy's run passed.
- *  Both files are ignored by git, so the checkout stays clean. */
-function writeDeploySecrets(): void {
-  const backend = process.env['KINU_LIVE_APP_DEV_VARS'];
-  const token = process.env['KINU_LIVE_APP_CLOUDFLARE_TOKEN'];
-
-  if (backend !== undefined) writeFileSync(resolve(root, 'packages/cf-backend/.dev.vars'), backend.endsWith('\n') ? backend : `${backend}\n`);
-
-  if (token !== undefined) writeFileSync(resolve(root, '.dev.vars'), `CLOUDFLARE_API_TOKEN=${token}\n`);
 }
 
 /** A deploy runs only what CI cannot, and the preflight of this machine, not CI's inode/temp check. */
@@ -3557,14 +3541,14 @@ const ArmadaReportSchema = v.object({
 });
 
 /**
- * A deploy phase's armada rows, as one armada job at this exact SHA (`armadaPlan`) with the deploy's secrets, each row's
+ * A deploy phase's armada rows, as one armada job at this exact SHA (`armadaPlan`), each row's
  * verdict into the deploy's report as one run here would put it. Answers the rows that are not green: red, or never
  * graded because the run could not grade them.
  */
 async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
   const sha = fullRevision();
   const phase = phases.join(',');
-  const argv = [resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}`, `--secrets=${DEPLOY_SECRETS.join(',')}`, '--', `--deploy-phase=${phase}`];
+  const argv = [resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}`, '--', `--deploy-phase=${phase}`];
 
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
   const run = Bun.spawn(argv, { cwd: root, stdout: 'pipe', stderr: 'inherit' });
@@ -3604,7 +3588,7 @@ async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[]
     if (report !== '') {
       recordRed(report, {
         phase: gate.phase ?? 'source', what: gate.label, command: gate.run, verdict: verdict === undefined ? 'not graded' : `exit ${String(verdict.exitCode)}`,
-        reproduce: `node_modules/.bin/armada run ${sha} --secrets=${DEPLOY_SECRETS.join(',')} -- --deploy-phase=${phase}`, finding: found, output: verdict?.output ?? said.slice(-4000),
+        reproduce: `node_modules/.bin/armada run ${sha} -- --deploy-phase=${phase}`, finding: found, output: verdict?.output ?? said.slice(-4000),
       });
     }
   }
@@ -3927,7 +3911,6 @@ if (import.meta.main) {
 
   if (ciRow !== undefined && (tier !== 'ci' || rowGate === undefined)) throw new Error('unknown CI row or a non-CI tier: ' + ciRow);
 
-  if (rowGate !== undefined && ARMADA_DEPLOY_ROWS.includes(rowGate.run)) writeDeploySecrets();
   const chosen = rowGate === undefined ? declared : [rowGate];
   const tracked = trackedTestFiles();
   const changedByRun = new Map<string, Gate>();
