@@ -5,22 +5,65 @@ import { Effect } from 'effect';
 import { settleSync, tolerate } from '../obs/index';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from './actor-handle';
-import { nanoid } from '../utils/nanoid';
 
 const WorkspaceTitleSchema = v.object({ title: v.string() });
 
-/** URL-safe slug capped at 24 chars. Private: callers mint names via {@link mintSubordinateName}. */
+/** A name is said and typed, and its home's path shows it whole. */
+const AGENT_NAME_LENGTH = 24;
+
+/** URL-safe slug capped at {@link AGENT_NAME_LENGTH}. Private: callers mint names via {@link mintAgentName}. */
 function slugifyName(text: string): string {
   return text.toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
-    .slice(0, 24)
+    .slice(0, AGENT_NAME_LENGTH)
     .replace(/-+$/, '');
 }
 
-/** Slugified role plus a random suffix so children of one role never collide; stays within `spawnSubordinate`'s 64-char lowercase contract. */
-export function mintSubordinateName(role: string): string {
-  return `${slugifyName(role) || 'subordinate'}-${nanoid(6)}`;
+/** Words a request is made of that say nothing of its work. */
+const FILLER_WORDS = new Set([
+  'a', 'about', 'all', 'also', 'am', 'an', 'and', 'any', 'are', 'as', 'at', 'be', 'been', 'but', 'by', 'can', 'could',
+  'did', 'do', 'does', 'each', 'every', 'for', 'from', 'get', 'go', 'have', 'hello', 'help', 'here', 'hey', 'hi', 'how', 'im', 'in',
+  'into', 'is', 'it', 'its', 'just', 'let', 'lets', 'look', 'make', 'me', 'my', 'need', 'of', 'ok', 'okay', 'on', 'or',
+  'our', 'please', 'should', 'so', 'some', 'that', 'the', 'their', 'them', 'then', 'there', 'these', 'they', 'this',
+  'those', 'to', 'up', 'us', 'want', 'was', 'we', 'what', 'when', 'where', 'which', 'who', 'why', 'will', 'with',
+  'would', 'you', 'your',
+]);
+
+/** The words of a name drawn from a brief: enough to tell agents apart, few enough to say. */
+const BRIEF_NAME_WORDS = 3;
+
+/** A short name from what an agent was first asked: its first telling words, slugged ("fix-coupon-expiry"). */
+export function nameFromBrief(brief: string): string | null {
+  const words = (brief.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]+/g) ?? [])
+    .filter((word) => !FILLER_WORDS.has(word) && !/^[a-z]$/.test(word));
+
+  let name = '';
+
+  for (const word of words.slice(0, BRIEF_NAME_WORDS)) {
+    const longer = name === '' ? word : `${name}-${word}`;
+
+    if (longer.length > AGENT_NAME_LENGTH) break;
+    name = longer;
+  }
+
+  // A first word past the cap is cut, not dropped.
+  if (name === '') name = slugifyName(words[0] ?? '');
+
+  return name === '' ? null : name;
+}
+
+/**
+ * A new child's name, one no actor of its workspace has had: its brief's first telling words, else its role's, numbered
+ * on a clash ("fix-coupon-expiry-2"). Unique in the workspace, it can be the child's home (`/home/<name>`).
+ */
+export function mintAgentName(input: { readonly brief: string | null; readonly role: string }, taken: (name: string) => boolean): string {
+  const base = (input.brief === null ? null : nameFromBrief(input.brief)) ?? (slugifyName(input.role) || 'agent');
+  let name = base;
+
+  for (let clash = 2; taken(name); clash += 1) name = `${base}-${String(clash)}`;
+
+  return name;
 }
 
 export interface SuggestedWorkspaceIdentity {

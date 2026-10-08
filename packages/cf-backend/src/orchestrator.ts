@@ -23,7 +23,7 @@ import {
   vfsTurnSkills, promptCacheKey, captureOperationProfile, type AgentRuntime, type RunTurnSources,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
   createTeamToolDeps, currentDateForPrompt, delegationExhausted,
-  mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
+  agentNamer, withHeadCaptureRecording, DelegatedTurnRunners,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
@@ -1241,7 +1241,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       originContext: () => this.agentStores(actor.handle.actorId).workingContext(),
       // The workspace's purpose, shared by every actor in it.
       ownMission: () => this.ownMission(),
-      createName: mintSubordinateName,
+      createName: agentNamer(this.workspaceActors(), roster),
       rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',
@@ -4837,14 +4837,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Blank `displayName` is intentional: the first-interaction title policy reads it
-   * (`SubordinateAgent.onChatResponse`). Route by `name`, a stable slug.
+   * (`SubordinateAgent.onChatResponse`). Route by `name`, a stable slug drawn from `opening`, the words the chat is
+   * opened with, which are sent to it once it exists.
    */
-  @callable() async createSubordinateAgent(): Promise<{
+  @callable() async createSubordinateAgent(opening?: string): Promise<{
     name: string;
     displayName: string;
     subordinate: SubordinateRosterEntry;
   }> {
-    const result = await this.getTeamToolDeps().create({});
+    const result = await this.getTeamToolDeps().create({ ...(opening !== undefined && { brief: opening }) });
 
     return {
       ...result,

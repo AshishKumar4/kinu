@@ -491,11 +491,13 @@ is an *Accepted and ignored* measurement.
 ## Isolation
 
 A host-provisioned actor owns its home, mode `0o755`, and its tmp, mode
-`0o700`, in one global view. Both belong to the actor's own uid. The kind is in
-the name: `/home/head-<id>` for a head or a swarm node (a swarm node's actor is a
-head) and `/home/sub-<slug>` for a subordinate, so one namespace holds every
-hosted kind. `headAgentName` and `subordinateAgentName` in `vfs/agent-home.ts`
-derive the names. One provisioner (`facetHomeProvisioner`) applies the layout on
+`0o700`, in one global view. Both belong to the actor's own uid. A head or a
+swarm node (a swarm node's actor is a head) lives at `/home/head-<id>`. A
+subordinate lives under its own name, one no actor of the workspace had before
+(`/home/fix-coupon-expiry`), or at `/home/sub-<id>` when its name was had or is
+shaped like a derived home (`main`, `sub-…`, `head-…`), so one namespace holds
+every hosted kind.
+`actorHomeName` in `vfs/agent-home.ts` derives them all. One provisioner (`facetHomeProvisioner`) applies the layout on
 both backends through the uid-0 `SqliteVFS` view. The hosted backend runs it on
 the object that owns the workspace, in the isolate every hosted actor runs in.
 

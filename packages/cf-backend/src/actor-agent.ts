@@ -136,7 +136,7 @@ import {
   type SubordinateReportStatus, type SubordinateReportOrigin,
   type SubordinateEventResult,
   // One minting rule for every subordinate, on either backend
-  mintSubordinateName,
+  agentNamer,
   // Subordinate tree depth cap: derived per child, never stated by one
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
@@ -900,7 +900,7 @@ export abstract class ActorAgent extends Agent<Env> {
       roster.ensureSchema();
 
       return createTemporaryAgentPort({
-        roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
+        roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: agentNamer(this.actorDirectoryStore(), roster),
         afterTurn: (child, work) => {
           this.detachOwned(Effect.promise(async () => {
             await this.agentTurnSettled(child);
@@ -922,7 +922,7 @@ export abstract class ActorAgent extends Agent<Env> {
       inheritedContext: () => this.readInheritedContext(),
       originContext: () => this.turnOriginContext(),
       ownMission: () => this.ownMission(),
-      createName: mintSubordinateName,
+      createName: agentNamer(this.actorDirectoryStore(), this.subordinateRoster),
       rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',

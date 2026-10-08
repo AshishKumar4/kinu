@@ -137,7 +137,8 @@ export {
   applyWorkspaceTitle,
   deriveWorkspaceTitle,
   fallbackWorkspaceIdentity,
-  mintSubordinateName,
+  mintAgentName,
+  nameFromBrief,
   parseWorkspaceTitle,
   planWorkspaceTitle, autoTitleMayReplace, nameOriginOf, persistAutoTitle, titleActorFromMessage,
   resolveWorkspaceTitle,
@@ -584,6 +585,7 @@ export { SubordinateRosterStore, initSubordinateRosterTable, subordinateTitle } 
 export {
   admitSubordinateReport,
   admitSubordinateTask,
+  agentNamer,
   createTeamToolDeps,
   describeSubordinateHandoff,
   normalizeReportContent,

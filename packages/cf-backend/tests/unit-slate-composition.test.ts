@@ -179,7 +179,7 @@ test('a slate\'s MCP call follows connection identity and the owner allowlist', 
       name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', roleId: 'task', mission: 'Read issues',
     });
 
-    const asChild = await childCaller(actor.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'issue-reader');
+    const asChild = await childCaller(actor.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'issue-reader');
     expect(await on('renamed-github', 'read_issue', asChild)).toMatchObject({ ok: false, reason: 'denied' });
   } finally {
     user.close();
@@ -300,7 +300,7 @@ test('a hired agent makes a slate where slates live, restores it with the main a
   await own.mkdir(dir, { recursive: true });
   await writeText(own, `${dir}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: 'Widgets', runtime: 'worker' } }));
   await writeText(own, `${dir}/server.ts`, first);
-  const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'builder');
+  const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'builder');
   const committed = await parent.agent.slateAs(asChild, { op: 'commit', id: 'widgets' });
 
   if (!committed.ok) throw new Error(committed.reason + ': ' + committed.error);
@@ -346,7 +346,7 @@ test('a hosted actor cannot restore source that its own filesystem authority can
   // Same uid as the binding below, so an EACCES here and a denial there are one fact.
   await expect(writeText(child.actor.runtime.storage.vfs, path, 'blocked'))
     .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-  const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'slate-author');
+  const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'slate-author');
   const restored = await reopened.agent.slateAs(asChild, { op: 'restore', id: 'root-app', version: version.id });
   expect(await readText(workspaceFiles(reopened.agent), path)).toBe(current);
   expect(restored).toMatchObject({ ok: false, reason: 'denied' });
@@ -364,7 +364,7 @@ test('a slate calling as a hosted actor reaches its own files and role, never th
     roleId: 'task', mission: 'Read what you may',
   });
 
-  const agentName = actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey });
+  const agentName = actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey });
   const childHome = agentHome(agentName);
   const asChild = await childCaller(parent.db, agentName, 'reader-1');
 
@@ -411,7 +411,7 @@ test('a slate\'s file and memory calls use the caller\'s own plane and lose reac
     name: 'native-reader', displayName: 'Native reader', nameOrigin: 'user', roleId: 'task', mission: 'Read',
   });
 
-  const caller = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'native-reader');
+  const caller = await childCaller(parent.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'native-reader');
   const read = async () => JSON.stringify(await surface(parent.agent, caller, 'native-reader')(['readFile'], ['/home/main/slate-note.txt']));
   const memory = (asCaller: SlateCaller, member: string, args: JsonValue[]) => surface(parent.agent, asCaller, 'native-reader')(['memory', member], args);
 
@@ -439,7 +439,7 @@ test("a class's browser member is authorized at the host by its caller's role as
     name: 'driver', displayName: 'Driver', nameOrigin: 'user', roleId: 'task', mission: 'Drive',
   });
 
-  const caller = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'driver');
+  const caller = await childCaller(parent.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'driver');
 
   const authorize = (asCaller: SlateCaller, path: string[]) =>
     parent.agent.slateCallAs(asCaller, 'driver', 'workspace', { path, args: [], invocation: null, authorize: true });
@@ -500,7 +500,7 @@ test('workspace read models are the root\'s own reads; a hosted actor holds none
 
   const call = (caller: SlateCaller) => surface(parent.agent, caller, 'status')(['reads', 'getExecutors']);
   expect(await call(ROOT_SLATE_CALLER)).toMatchObject({ ok: true, value: expect.any(Array) });
-  expect(await call(await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'peeker'))).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await call(await childCaller(parent.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'peeker'))).toMatchObject({ ok: false, reason: 'denied' });
 });
 
 test('source capture does not retain a previous caller supplementary group', async () => {
@@ -620,7 +620,7 @@ test('a slate\'s agent.send delivers one inbox signal naming the slate', async (
     name: 'pager-1', displayName: 'Pager', nameOrigin: 'user', roleId: 'task', mission: 'Page',
   });
 
-  const asChild = await childCaller(actor.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'pager-1');
+  const asChild = await childCaller(actor.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'pager-1');
 
   expect(await surface(actor.agent, asChild, 'pager')(['agent', 'send'], [{ text: 'x' }]))
     .toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('no inbox of its own') });

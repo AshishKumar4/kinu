@@ -43,32 +43,38 @@ function bundleSql(database: Database): SqlDatabase {
 }
 
 describe('facet agent names share one namespace without colliding', () => {
-  test('each kind prefixes its own id', () => {
-    expect(actorHomeName({ origin: 'agent', storageKey: 'researcher-abc123' })).toBe('sub-researcher-abc123');
-    expect(actorHomeName({ origin: 'swarm', storageKey: 'aX9bK2cD3eF4gH5iJ6kL7m' })).toBe('head-aX9bK2cD3eF4gH5iJ6kL7m');
-
+  test('a hire keyed by its own name lives under it; every other key is behind its kind', () => {
+    expect(actorHomeName({ origin: 'agent', name: 'fix-coupon-expiry', storageKey: 'fix-coupon-expiry' })).toBe('fix-coupon-expiry');
+    // Hired before names keyed homes, or named as a cousin was: keyed by its id.
+    expect(actorHomeName({ origin: 'agent', name: 'researcher', storageKey: 'researcher-abc123' })).toBe('sub-researcher-abc123');
+    expect(actorHomeName({ origin: 'swarm', name: 'exp:aX9', storageKey: 'aX9bK2cD3eF4gH5iJ6kL7m' })).toBe('head-aX9bK2cD3eF4gH5iJ6kL7m');
+    // A head is never housed by its name.
+    expect(actorHomeName({ origin: 'swarm', name: 'planner', storageKey: 'planner' })).toBe('head-planner');
   });
 
-  test('one id in two kinds is two homes', () => {
+  test('one key in three kinds is three homes', () => {
     const homes = new Set([
-      agentHome(actorHomeName({ origin: 'agent', storageKey: 'worker-1' })),
-      agentHome(actorHomeName({ origin: 'swarm', storageKey: 'worker-1' })),
+      agentHome(actorHomeName({ origin: 'agent', name: 'worker-1', storageKey: 'worker-1' })),
+      agentHome(actorHomeName({ origin: 'agent', name: 'worker', storageKey: 'worker-1' })),
+      agentHome(actorHomeName({ origin: 'swarm', name: 'exp:worker-1', storageKey: 'worker-1' })),
     ]);
 
-    expect(homes.size).toBe(2);
+    expect(homes.size).toBe(3);
   });
 
   test('a hostile facet id never becomes a path outside /home', () => {
-    expect(() => actorHomeName({ origin: 'agent', storageKey: '../escape' })).toThrow('not a usable agent name');
-    expect(() => actorHomeName({ origin: 'agent', storageKey: 'a; rm -rf /' })).toThrow('not a usable agent name');
-    expect(() => actorHomeName({ origin: 'swarm', storageKey: "a'; rm -rf /" })).toThrow('not a usable agent name');
-    expect(() => actorHomeName({ origin: 'swarm', storageKey: '../../etc' })).toThrow('not a usable agent name');
+    expect(() => actorHomeName({ origin: 'agent', name: '../escape', storageKey: '../escape' })).toThrow('not a usable agent name');
+    expect(() => actorHomeName({ origin: 'agent', name: 'escape', storageKey: '../escape' })).toThrow('not a usable agent name');
+    expect(() => actorHomeName({ origin: 'agent', name: 'rm', storageKey: 'a; rm -rf /' })).toThrow('not a usable agent name');
+    expect(() => actorHomeName({ origin: 'swarm', name: 'exp:a', storageKey: "a'; rm -rf /" })).toThrow('not a usable agent name');
+    expect(() => actorHomeName({ origin: 'swarm', name: 'exp:etc', storageKey: '../../etc' })).toThrow('not a usable agent name');
   });
 
   test('the longest valid subordinate slug still provisions', () => {
     // Subordinate slugs may be 64 chars; the kind prefix must not push them out of the namespace.
-    expect(agentHome(actorHomeName({ origin: 'agent', storageKey: 'a'.repeat(64) }))).toBe(`/home/sub-${'a'.repeat(64)}`);
-    expect(agentTmpRoot(actorHomeName({ origin: 'agent', storageKey: 'a'.repeat(64) }))).toBe(`/tmp/sub-${'a'.repeat(64)}`);
+    expect(agentHome(actorHomeName({ origin: 'agent', name: 'a'.repeat(64), storageKey: 'a'.repeat(64) }))).toBe(`/home/${'a'.repeat(64)}`);
+    expect(agentHome(actorHomeName({ origin: 'agent', name: 'a', storageKey: 'a'.repeat(64) }))).toBe(`/home/sub-${'a'.repeat(64)}`);
+    expect(agentTmpRoot(actorHomeName({ origin: 'agent', name: 'a', storageKey: 'a'.repeat(64) }))).toBe(`/tmp/sub-${'a'.repeat(64)}`);
   });
 });
 
@@ -80,8 +86,8 @@ describe('a subordinate and a head provision like a node', () => {
       const bundle = createWorkspaceBundle(database);
       const privileged = await bundle.privileged();
       const provision = facetHomeProvisioner({ ...privileged, sql: bundleSql(database) });
-      const sub = await provision(actorHomeName({ origin: 'agent', storageKey: 'researcher-abc123' }));
-      const head = await provision(actorHomeName({ origin: 'swarm', storageKey: 'aX9bK2cD3eF4gH5iJ6kL7m' }));
+      const sub = await provision(actorHomeName({ origin: 'agent', name: 'researcher', storageKey: 'researcher' }));
+      const head = await provision(actorHomeName({ origin: 'swarm', name: 'exp:aX9', storageKey: 'aX9bK2cD3eF4gH5iJ6kL7m' }));
 
       if (sub.isolation !== 'private-home' || head.isolation !== 'private-home') {
         throw new Error('a facet provisioner must hand back a credential');
@@ -115,7 +121,7 @@ describe('a subordinate and a head provision like a node', () => {
     try {
       const bundle = createWorkspaceBundle(database);
       const privileged = await bundle.privileged();
-      const sub = await facetHomeProvisioner({ ...privileged, sql: bundleSql(database) })(actorHomeName({ origin: 'agent', storageKey: 'notes-abc123' }));
+      const sub = await facetHomeProvisioner({ ...privileged, sql: bundleSql(database) })(actorHomeName({ origin: 'agent', name: 'notes', storageKey: 'notes-abc123' }));
 
       if (sub.isolation !== 'private-home') throw new Error('a facet provisioner must hand back a credential');
       const asSub = await bundle.asAgent(sub);

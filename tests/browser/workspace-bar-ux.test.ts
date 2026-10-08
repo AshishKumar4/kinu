@@ -52,7 +52,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
   /** Kept equal to the gallery's two-frame refusal, so a chain it stopped chaining fails the equality. */
   const CREATE_REFUSAL_CHAIN = 'the workspace refused the new agent: subordinate quota exhausted';
 
-  test('+ asks the workspace question; the first message opens the chat as the current tab and is sent once', async () => {
+  test('+ asks the workspace question; the first message opens and names the chat as the current tab and is sent once', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
       const sends = () => page.evaluate(() => Number(document.documentElement.dataset.galleryChatSends ?? '0'));
@@ -65,7 +65,8 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await page.type('[data-new-chat] textarea', 'Audit the coupon rules');
       await page.click('[data-new-chat] button[type="submit"]');
       await waitForNewChatOpen(page);
-      await page.waitForSelector('[data-agent-pane^="checkout-fixes/agents/"] textarea');
+      // Named from its first words, which the workspace is asked to name it by.
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/audit-coupon-rules"] textarea');
       await page.waitForFunction((from) => Number(document.documentElement.dataset.galleryChatSends ?? '0') === from + 1, {}, before);
 
       // The opening is spent: leaving the chat and coming back sends nothing again.
@@ -234,7 +235,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
 
       await page.waitForFunction(() => (document.documentElement.dataset.galleryModelCalls ?? '').includes('setReasoningEffort'));
       const calls = await page.evaluate(() => JSON.parse(document.documentElement.dataset.galleryModelCalls ?? '[]'));
-      expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'agent-1'] }]);
+      expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'audit-coupon-rules'] }]);
       await page.close();
     });
   });

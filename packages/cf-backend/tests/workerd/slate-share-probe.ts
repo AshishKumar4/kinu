@@ -232,7 +232,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
    */
   async previewAsHire(): Promise<{ preview: SlateCallResult; removed: SlateCallResult; left: boolean }> {
     const identity = { uid: 2001, gid: 2001 };
-    const home = provisionAgentHome(this.vfs.as(CRED_KERNEL), actorHomeName({ origin: 'agent', storageKey: 'builder' }), identity);
+    const home = provisionAgentHome(this.vfs.as(CRED_KERNEL), actorHomeName({ origin: 'agent', name: 'builder', storageKey: 'builder' }), identity);
     const hire: SlateCaller = { path: [{ name: 'builder' }], cred: agentCred(identity), workMode: 'build' };
     const dir = slateDirectory(new SlateId('widgets'));
     const files = this.vfs.as(hire.cred);

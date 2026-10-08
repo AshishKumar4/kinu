@@ -8,7 +8,8 @@ import {
   planWorkspaceTitle, autoTitleMayReplace, nameOriginOf, persistAutoTitle, codenameFor,
   renderSoulMarkdown,
   summarizeSoul,
-  mintSubordinateName,
+  mintAgentName,
+  nameFromBrief,
   workspaceSlug,
   type NameOrigin,
   type WorkspaceTitleState,
@@ -302,31 +303,37 @@ describe('automatic workspace titling — applying it', () => {
   });
 });
 
-describe('a minted subordinate name', () => {
-  const slugOf = (name: string): string => name.slice(0, name.lastIndexOf('-'));
+describe('a minted agent name', () => {
+  const free = (): boolean => false;
 
-  test('lowercases, hyphenates, trims and caps the role at 24 characters', () => {
-    expect(slugOf(mintSubordinateName('Research Rust Frameworks'))).toBe('research-rust-frameworks');
-    expect(slugOf(mintSubordinateName('  Build a Benchmark!!  '))).toBe('build-a-benchmark');
-    expect(slugOf(mintSubordinateName('A'.repeat(40)))).toBe('a'.repeat(24));
+  test('is the first telling words of what the agent was first asked', () => {
+    expect(nameFromBrief('Fix the coupon expiry check in pricing.ts')).toBe('fix-coupon-expiry');
+    expect(nameFromBrief('Hey, can you look into why checkout is slow on mobile?')).toBe('checkout-slow-mobile');
+    expect(nameFromBrief('  Audit   the café RULES!! ')).toBe('audit-cafe-rules');
+    // Words are kept whole while they fit; one longer than a name is cut.
+    expect(nameFromBrief('Internationalization localization pipeline')).toBe('internationalization');
+    expect(nameFromBrief('Supercalifragilisticexpialidocious')).toBe('supercalifragilisticexpi');
   });
 
-  test('a role that slugifies to nothing is named for what it is', () => {
-    expect(mintSubordinateName('!!!')).toMatch(/^subordinate-[a-z0-9]{6}$/);
-    expect(mintSubordinateName('')).toMatch(/^subordinate-[a-z0-9]{6}$/);
+  test('a brief with no telling words leaves the name to the role', () => {
+    expect(nameFromBrief('Can you do this for me?')).toBeNull();
+    expect(nameFromBrief('日本語のみ')).toBeNull();
+    expect(mintAgentName({ brief: 'Can you do this for me?', role: 'Research Rust Frameworks' }, free)).toBe('research-rust-frameworks');
+    expect(mintAgentName({ brief: null, role: 'ask-auditor' }, free)).toBe('ask-auditor');
+    expect(mintAgentName({ brief: null, role: '!!!' }, free)).toBe('agent');
+  });
+
+  test('a name the workspace has had is numbered until it is new', () => {
+    const had = new Set(['fix-coupon-expiry', 'fix-coupon-expiry-2']);
+
+    expect(mintAgentName({ brief: 'Fix the coupon expiry check', role: 'task' }, (name) => had.has(name))).toBe('fix-coupon-expiry-3');
   });
 
   test('satisfies the name contract spawnSubordinate enforces', () => {
-    // Same predicate core/subordinates applies; this is the only producer of these names.
-    for (const role of ['Research Rust Frameworks', 'ask-auditor', 'A'.repeat(40), '!!!']) {
-      expect(mintSubordinateName(role)).toMatch(/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/);
+    const contract = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
+    for (const brief of ['Fix the coupon expiry check', 'A'.repeat(40), '--- ## Notes ---', null]) {
+      expect(mintAgentName({ brief, role: 'Research Rust Frameworks' }, free)).toMatch(contract);
     }
-  });
-
-  test('two children of one role do not collide', () => {
-    const minted = new Set(Array.from({ length: 64 }, () => mintSubordinateName('auditor')));
-    expect(minted.size).toBe(64);
-
-    for (const name of minted) expect(name).toMatch(/^auditor-[a-z0-9]{6}$/);
   });
 });

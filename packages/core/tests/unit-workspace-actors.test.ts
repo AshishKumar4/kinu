@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { createTestSql } from '@kinu.run/test-utils';
 import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory, whenActorTakesInput } from '../src/identity/workspace-actors';
+import { explorationActorKey } from '../src/identity/actor-key';
+import { actorHomeName } from '../src/vfs/agent-home';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
 
@@ -45,6 +47,33 @@ describe('one workspace actor directory', () => {
     expect(directory.resolveChild(right, 'researcher')?.actorId).toBe(b.actorId);
     expect(a.actorId).not.toBe(b.actorId);
     expect(directory.resolveChild(main, 'researcher')).toBeNull();
+  });
+
+  test('a hire is keyed and housed by a name the workspace never had; a cousin\'s, a reused one, or a derived home\'s shape is not', () => {
+    const { directory } = workspace('workspace', 'owner');
+    const main = directory.createMain({ name: 'steady-valley' });
+    const hire = (parent: typeof main, name: string) => directory.describe(directory.create({ parent, name, origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() }));
+    const fresh = hire(main, 'fix-coupon-expiry');
+
+    expect([fresh.storageKey, actorHomeName(fresh), directory.nameTaken('fix-coupon-expiry')]).toEqual(['fix-coupon-expiry', 'fix-coupon-expiry', true]);
+
+    // A cousin's name keys nothing: one home per name.
+    const cousin = hire(directory.open(fresh.actorId), 'fix-coupon-expiry');
+    expect([cousin.storageKey, actorHomeName(cousin)]).toEqual([cousin.actorId, `sub-${cousin.actorId}`]);
+
+    // Shaped like the homes keys derive (`main`, `sub-…`, `head-…`), so never one's own.
+    expect(['main', 'sub-auditor', 'head-1'].map((name) => hire(main, name)).map((row) => row.storageKey === row.actorId)).toEqual([true, true, true]);
+
+    // Released, its name may be given again, never its key: what it kept stays its own.
+    const first = directory.apply(main, [], { action: 'register', name: 'reader', origin: 'agent', lifetime: 'durable', creationId: 'first' });
+    directory.apply(main, [], { action: 'retire', name: 'reader', reference: first.reference });
+    directory.apply(main, [], { action: 'release', name: 'reader', reference: first.reference });
+    const again = directory.apply(main, [], { action: 'register', name: 'reader', origin: 'agent', lifetime: 'durable', creationId: 'again' });
+    expect([first.storageKey, again.storageKey]).toEqual(['reader', again.reference.actorId]);
+
+    // A swarm worker is keyed by its id, whatever it is named.
+    const head = directory.describe(directory.create({ parent: main, name: explorationActorKey('n1'), origin: 'swarm', lifetime: 'task', creationId: 'n1' }));
+    expect(head.storageKey).toBe(head.actorId);
   });
 
   test('foreign and forged handles cannot act as a parent', () => {

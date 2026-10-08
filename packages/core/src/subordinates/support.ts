@@ -12,7 +12,8 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { DelegationBudget } from './depth';
 import { SubordinateRosterStore } from './roster';
 import { requireSubordinateActorName } from '../identity/actor-key';
-import { codenameFor, type NameOrigin } from '../identity/naming';
+import { codenameFor, mintAgentName, type NameOrigin } from '../identity/naming';
+import type { WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { ActorReference } from '../identity/actor-handle';
 import { finishSubordinateBirth, type SubordinateBirth, type SubordinateSeed } from './birth';
 import type { WorkMode } from '../types/turn';
@@ -329,13 +330,24 @@ interface SubordinateStatusView {
 }
 
 
+/**
+ * Names a parent's new hires ({@link mintAgentName}): free in the workspace's directory, and in the parent's own roster,
+ * where a birth waits before its directory row exists.
+ */
+export function agentNamer(
+  directory: Pick<WorkspaceActorDirectory, 'nameTaken'>, roster: Pick<SubordinateRosterStore, 'get'>,
+): (role: string, brief: string | null) => string {
+  return (role, brief) => mintAgentName({ role, brief }, (name) => directory.nameTaken(name) || roster.get(name) !== null);
+}
+
 /** Roster transitions precede facet admission and are restored exactly if it fails; broadcasts follow both. */
 export function createTeamToolDeps(deps: {
   /** Derived by its parent, never chosen here. */
   delegation: DelegationBudget;
   roster: SubordinateRosterStore;
   runtime: SubordinateRuntime;
-  createName(role: string): string;
+  /** From what the hire was first asked (its brief), else its role ({@link agentNamer}). */
+  createName(role: string, brief: string | null): string;
   now(): number;
   inheritedContext(): Promise<SerializedMessage[]>;
   originContext?(): Promise<readonly ModelMessage[]>;
@@ -371,6 +383,8 @@ export function createTeamToolDeps(deps: {
     role?: RoleId;
     tier?: TierId;
     mission?: string;
+    /** An owner's agent: the words it was opened with, which name it. */
+    brief?: string;
     inheritedContext?: SerializedMessage[];
   }, ownerCreated: boolean, mode: WorkMode | null): Effect.Effect<{
     name: string;
@@ -397,7 +411,9 @@ export function createTeamToolDeps(deps: {
 
     const typedName = input.name?.trim();
     const named = typedName !== undefined && typedName !== '';
-    const name = named ? typedName : deps.createName(roleLabel);
+    // A model's hire is named from its mission; an owner's agent from the words it was opened with, not the
+    // workspace's mission it inherits.
+    const name = named ? typedName : deps.createName(roleLabel, ownerCreated ? optionalText(input.brief) ?? null : mission);
     requireSubordinateActorName(name);
 
     if (deps.roster.get(name)) return yield* Effect.die(new Error(`subordinate "${name}" already exists`));

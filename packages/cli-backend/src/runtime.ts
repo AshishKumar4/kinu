@@ -649,7 +649,7 @@ async function buildCLIHeadRuntime(
 
   if (opts.actorBinding.origin !== 'swarm') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
-  const physicalName = actorHomeName({ origin: opts.actorBinding.origin, storageKey: actor.storageKey });
+  const physicalName = actorHomeName({ origin: opts.actorBinding.origin, name: actor.name, storageKey: actor.storageKey });
 
   const stores = createAgentStores(() => sql, () => actor, (write) => parent.storage.transactionSync(write), () => parent.filesForActor(actor));
 

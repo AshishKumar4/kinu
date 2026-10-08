@@ -34,6 +34,11 @@ export function isSubordinateOrigin(origin: ActorOrigin): origin is 'user' | 'ag
   return origin === 'user' || origin === 'agent' || origin === 'evolution';
 }
 
+/** Read as a home `actorHomeName` derives from a key (`main`, `sub-<key>`, `head-<key>`), so never one's own. */
+function mimicsDerivedHome(name: string): boolean {
+  return name === 'main' || name.startsWith('sub-') || name.startsWith('head-');
+}
+
 /** The preset for a child made with `origin`; only an agent-made hire chooses its lifetime. */
 function actorPreset(origin: Exclude<ActorOrigin, 'system'>, lifetime: ActorProfile['lifetime']): ActorProfile {
   switch (origin) {
@@ -277,12 +282,20 @@ export class WorkspaceActorDirectory {
 
     if (this.childRow(parent.actorId, name)) throw new KinuError('denied', 'The sibling name already exists.');
     const actorId = crypto.randomUUID();
-    this.insert({ actorId, parentActorId: parent.actorId, name, storageKey: actorId, profile: actorPreset(input.origin, input.lifetime), creationId, ended: null });
+    // A hire whose name no actor of this workspace has had is keyed, and so housed (`actorHomeName`), by that name;
+    // a cousin's name, or one used before, keys nothing, and the fresh id does.
+    const storageKey = isSubordinateOrigin(input.origin) && !mimicsDerivedHome(name) && !this.nameTaken(name) ? name : actorId;
+    this.insert({ actorId, parentActorId: parent.actorId, name, storageKey, profile: actorPreset(input.origin, input.lifetime), creationId, ended: null });
     const row = this.retained(actorId);
 
     if (!row) throw new KinuError('io', 'The child actor was not recorded.');
 
     return this.issue(row);
+  }
+
+  /** Some actor of this workspace, under any parent, live or gone, has had `name` as its name or its key. */
+  nameTaken(name: string): boolean {
+    return this.sql<{ taken: number }>`SELECT 1 AS taken FROM workspace_actors WHERE name = ${name} OR storage_key = ${name} LIMIT 1`.length > 0;
   }
 
   /** Null when there is no bindable child; decided on row state, not by catching `open`'s `missing`. */
@@ -500,7 +513,6 @@ export class WorkspaceActorDirectory {
   }
 }
 
-/** Keyed by the immutable storage key, never the name, so renames and reused names never share a directory. */
 /** Hired agents below `actorId`, deepest first. */
 export function subordinateDescendants(actors: readonly WorkspaceActor[], actorId: string): readonly WorkspaceActor[] {
   const below: WorkspaceActor[] = [];
@@ -518,6 +530,10 @@ export function subordinateDescendants(actors: readonly WorkspaceActor[], actorI
   return below;
 }
 
+/**
+ * Keyed by the immutable storage key: a hire's name only when no actor of the workspace had it before (`create`), so
+ * renames and reused names never share a directory.
+ */
 export function actorStateRoot(storageKey: string): string {
   return `.kinu/agents/${encodeURIComponent(storageKey)}`;
 }

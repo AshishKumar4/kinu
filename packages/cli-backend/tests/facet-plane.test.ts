@@ -26,7 +26,7 @@ function rootRuntime(state: string, cwd = scratchDir('facet-plane-folder')): Loc
 /** A child over its root's database: same handle, same file, its own actor row. */
 function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): CLIRuntime {
   const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), origin: 'agent', lifetime: 'durable' });
-  const facet = actorHomeName({ origin: 'agent', storageKey: binding.storageKey });
+  const facet = actorHomeName({ origin: 'agent', name: binding.name, storageKey: binding.storageKey });
   const child = createCLIRuntime(root.db, { llm: null, cwd: parent.cwd, facet, actorBinding: binding });
 
   return shareLocalWorkspacePlane(child, parent);
@@ -46,7 +46,7 @@ describe('local actor file-plane identity', () => {
     mkdirSync(project);
     const root = rootRuntime(state, project);
     const child = childRuntime(root.rt, root, 'reader');
-    const key = actorHomeName({ origin: 'agent', storageKey: child.actor.storageKey });
+    const key = actorHomeName({ origin: 'agent', name: child.actor.name, storageKey: child.actor.storageKey });
     expect((await exec(child, 'pwd; echo "$HOME"; echo "$TMPDIR"')).stdout.trim().split('\n')).toEqual([
       resolve(project), join(state, 'home', key), join(state, 'home', key, 'tmp'),
     ]);
@@ -73,8 +73,8 @@ describe('local actor file-plane identity', () => {
     const one = childRuntime(root.rt, root, 'one');
     const two = childRuntime(root.rt, root, 'two');
     expect((await exec(one, 'echo keep > keep.txt')).exitCode).toBe(0);
-    const oneKey = actorHomeName({ origin: 'agent', storageKey: one.actor.storageKey });
-    const twoKey = actorHomeName({ origin: 'agent', storageKey: two.actor.storageKey });
+    const oneKey = actorHomeName({ origin: 'agent', name: one.actor.name, storageKey: one.actor.storageKey });
+    const twoKey = actorHomeName({ origin: 'agent', name: two.actor.name, storageKey: two.actor.storageKey });
     expect(existsSync(join(state, 'home', oneKey))).toBe(true);
     cleanupFacetScratch(state, oneKey);
     expect(existsSync(join(state, 'home', oneKey))).toBe(false);
