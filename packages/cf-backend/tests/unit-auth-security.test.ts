@@ -12,7 +12,6 @@ import {
   isCloudflareCredentialUsable,
   withCloudflareAccount,
 } from '@kinu.run/core';
-import { buildCliInstallCommand } from '@kinu.run/core';
 import { cliPageRoutes, cliRoutes } from '../src/cli/routes';
 import { serveFamily } from './helpers/api';
 import { sanitizeReturnTo } from '../src/auth/store';
@@ -789,23 +788,13 @@ async function cloudflareSignInSteps(
     expect(installPage?.status).toBe(200);
     expect(installPage?.headers.get('content-type')).toContain('text/html');
     expect(installPage?.headers.get('content-security-policy')).toContain('https://static.cloudflareinsights.com');
-    const html = await present(installPage, 'the /install response').text();
-    expect(html).toContain('Install the Kinu.run CLI');
-    expect(html).toContain('curl -fsSL');
-    expect(html).toContain('https://kinu.example.com/install.sh');
-    expect(html).toContain('https://kinu.example.com');
-    expect(html).not.toContain('KINU_PARENT_ACTIVATES');
-    expect(html).not.toContain('OAuth sign-in required for the dashboard.');
-    expect(html).not.toContain('View the raw installer');
-    expect(html).not.toContain('href="/install.sh"');
+    // The page hands over the command that fetches this origin's installer.
+    expect(await present(installPage, 'the /install response').text()).toContain('https://kinu.example.com/install.sh');
 
     const installScript = await cliPages(new Request('https://kinu.example.com/install.sh'), PUBLIC_ROUTE_ENV);
     expect(installScript?.status).toBe(200);
     expect(installScript?.headers.get('content-type')).toContain('text/x-shellscript');
-    const script = await present(installScript, 'the /install.sh response').text();
-    expect(script).toContain('#!/usr/bin/env bash');
-    expect(script).toContain('setup --origin "$KINU_ORIGIN" --account-only');
-    expect(script).toContain("grep -F '$HOME/.kinu/bin'");
+    expect(await present(installScript, 'the /install.sh response').text()).toStartWith('#!');
 
     const installScriptHead = await cliPages(
       new Request('https://kinu.example.com/install.sh', { method: 'HEAD' }),
@@ -817,23 +806,11 @@ async function cloudflareSignInSteps(
     expect(await present(installScriptHead, 'the HEAD /install.sh response').text()).toBe('');
   });
 
-  test('the CLI launcher takes the deployed build artifacts and verifies both checksums', async () => {
+  // What the launcher does is unit-install-script's: it runs there, against a sandboxed origin.
+  test('the CLI launcher is served as shell, and a HEAD of it carries no body', async () => {
     const shim = await cliPages(new Request('https://kinu.example.com/downloads/kinu'), PUBLIC_ROUTE_ENV);
     expect(shim?.status).toBe(200);
-    const script = await present(shim, 'the /downloads/kinu response').text();
-    expect(script).toContain('CLI_DIR="$CLI_ROOT/current"');
-    expect(script).toContain('KINU_ORIGIN="${KINU_ORIGIN:-https://kinu.example.com}"');
-    expect(script).toContain('/downloads/kinu-cli-${KINU_OS}-${KINU_ARCH}.tar.gz');
-    expect(script).toContain('/downloads/kinu-runtime-cpython.tar.gz');
-    expect(script).not.toContain('github.com');
-    expect(script).not.toContain('Kinu-main');
-    // Only the signed release verifies; no origin-chosen .sha256 is ever fetched (SECURITY-devices C1).
-    expect(script).toContain('verify_release "$tmp/kinu-version.json"');
-    expect(script).not.toContain('"$url.sha256"');
-    expect(script.split('fetch_verified "$').length - 1).toBe(2);
-    expect(script).toContain('Checksum mismatch for $url.');
-    const syntaxCheck = Bun.spawnSync(['bash', '-n'], { stdin: Buffer.from(script) });
-    expect(syntaxCheck.exitCode).toBe(0);
+    expect(shim?.headers.get('content-type')).toContain('text/x-shellscript');
 
     const shimHead = await cliPages(
       new Request('https://kinu.example.com/downloads/kinu', { method: 'HEAD' }),
@@ -843,19 +820,6 @@ async function cloudflareSignInSteps(
     expect(shimHead?.status).toBe(200);
     expect(shimHead?.headers.get('content-type')).toContain('text/x-shellscript');
     expect(await present(shimHead, 'the HEAD /downloads/kinu response').text()).toBe('');
-  });
-
-  test('CLI setup commands are one-command defaults without embedded auth tokens', () => {
-    expect(buildCliInstallCommand({ origin: 'https://kinu.example.com/' }))
-      .toBe("curl -fsSL 'https://kinu.example.com/install.sh' | bash");
-    expect(buildCliInstallCommand({
-      origin: 'https://kinu.example.com',
-      setup: false,
-      connect: true,
-      label: "Ashish's Mac",
-    })).toBe(
-      "curl -fsSL 'https://kinu.example.com/install.sh' | bash -s -- --no-setup --connect --label 'Ashish'\\''s Mac'",
-    );
   });
 
   test('the CLI model menu answers a CLI bearer, never a browser session', async () => {

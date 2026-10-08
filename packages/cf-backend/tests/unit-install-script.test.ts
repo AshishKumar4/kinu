@@ -15,7 +15,7 @@ import { serveFamily } from './helpers/api';
 import { staticRouteCliEnv } from './helpers/bindings';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell } from '@kinu.run/core';
-import { RELEASE_SIGNING_PUBLIC_KEY, generateReleaseSigningKey, signRelease } from '@kinu.run/core';
+import { generateReleaseSigningKey, signRelease } from '@kinu.run/core';
 import { RUN_MARK } from '../../../scripts/deadline';
 
 const ORIGIN = 'https://kinu.example.com';
@@ -252,7 +252,6 @@ describe('install.sh terminal handling', () => {
     const { home, stubBin } = await makeSandbox();
     writeFileSync(join(home, 'install.sh'), script);
     const install = buildCliInstallCommand({ origin: ORIGIN, setup: false });
-    expect(install).toBe(`curl -fsSL '${ORIGIN}/install.sh' | bash -s -- --no-setup`);
 
     // The calling shell's PATH lists ~/.local/bin, as a Fedora login shell does always and an Ubuntu one does once
     // the directory exists. The installer is that shell's child, so a directory the caller searches is its only reach.
@@ -315,7 +314,6 @@ describe('install.sh terminal handling', () => {
       origin: ORIGIN, setup: false, connect: true, label: "Ashish's Mac",
     });
 
-    expect(install).toContain("--connect --label 'Ashish'\\''s Mac'");
     writeFileSync(join(home, 'install.sh'), script);
 
     const run = spawnSync('bash', ['-c', install], {
@@ -377,18 +375,26 @@ describe('install.sh terminal handling', () => {
 /** Built at deploy time. A source install measured cold 2026-09-01: 13.35 s of a 16.08 s install, 950 packages, 1.9 GB. */
 describe('the CLI installs as a prebuilt artifact', () => {
 
-  test('every download is checksum-verified against the SIGNED release, with no way to skip it', async () => {
+  // The origin's own `.sha256` and the old checksum variables both agree with the swapped archive; only the signature does not.
+  test.each([
+    ['cli.tar.gz', 'kinu'],
+    ['runtime.tar.gz', 'runtime/kinu'],
+  ])('a %s other than the one the release signed is refused, whatever the origin or the environment says', async (name, member) => {
+    const script = await servedScript('/install.sh');
     const launcher = await servedScript('/downloads/kinu');
-    // Signature against the pinned key before any fetch; artifacts against the signed checksums, never the origin's .sha256 (C1).
-    expect(launcher).toContain('verify_release "$tmp/kinu-version.json"');
-    expect(launcher).toContain('fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz" "$tmp/kinu-version.json"');
-    expect(launcher).toContain('fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz" "$tmp/kinu-version.json"');
-    expect(launcher).toContain(`RELEASE_SIGNING_PUBLIC_KEY="\${KINU_RELEASE_SIGNING_PUBLIC_KEY:-${RELEASE_SIGNING_PUBLIC_KEY}}"`);
-    expect(launcher).not.toContain('curl -fsSL "$url.sha256"');
-    expect(launcher).toContain('[ "$actual" = "$expected" ] || die "Checksum mismatch for $url."');
-    // No environment variable can turn verification off.
-    expect(launcher).not.toContain('KINU_SOURCE_SHA256');
-    expect(launcher).not.toContain('KINU_CLI_SHA256');
+    const { home, stubBin } = await makeSandbox({ ambientBun: null, launcher });
+    // A well-formed archive, so only verification stands between it and the install.
+    const stage = join(home, 'stage', member);
+    writeFileSync(join(stage, 'swapped.txt'), 'not the signed build\n');
+    const tar = spawnSync('tar', ['-czf', join(home, name), '-C', join(stage, '..'), 'kinu'], { encoding: 'utf8' });
+
+    if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
+    const digest = createHash('sha256').update(readFileSync(join(home, name))).digest('hex');
+    writeFileSync(join(home, `${name}.sha256`), `${digest}  ${name}\n`);
+
+    const result = await runHeadlessInstall(script, home, stubBin, { KINU_CLI_SHA256: digest, KINU_SOURCE_SHA256: digest });
+    expect(result.exitCode).not.toBe(0);
+    expect(existsSync(join(home, '.kinu/cli/current/cli.js'))).toBe(false);
   });
 
   test('a release the pinned key did not sign is refused before any artifact lands (C1)', async () => {
