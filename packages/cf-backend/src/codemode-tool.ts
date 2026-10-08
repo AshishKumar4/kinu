@@ -1,4 +1,3 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The `eval` codemode tool, shared by every CF actor with a runtime. Crafted tools are re-read
  * from the surface on every call, so a tool saved mid-turn is callable on the next program.
@@ -7,35 +6,33 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool, type ToolSet } from 'ai';
-import { execCallArgs, readDeviceRequestChannel, type ActorHandle, type AgentsToolDeps, type CodemodeSurface, type DeviceRequestChannel, type ExecutionRouter } from "@kinu.run/core";
-import { executorNamespace, createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, toolsNamespace, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
+import { execCallArgs, readDeviceRequestChannel, type CodemodeSurface, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
+import { renderCodemodeDescription, nativeToolFunctions, toolsNamespace, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
 } from "./codemode-sandbox";
-import { BROWSER_PRELUDE } from './browser-prelude';
 
+/** One actor's program launcher; what each program reaches is its call's `CodemodeScope`. */
 export interface CodemodeFactoryOptions {
   launch: (online: boolean) => ProgramLaunch;
-  rt: { actor: ActorHandle; executionRouter?: Pick<ExecutionRouter, 'getProviders'>; storage: { vfs: VFS; home: string } };
   workspace: string;
-  webSearch: WebSearchProvider;
-  /** The actor's Chrome sessions, which `web.connectBrowser` in its programs reaches. */
-  /** Absent: the program holds no browser session, and the browser members it would drive refuse. */
-  browserSessions?: BrowserSessions;
-  /** Read per call so a re-bound model lands without a rebuild; omitted (heads) keeps `agents.*` out. */
-  agents?: () => AgentsToolDeps;
-  extraProviders?: () => CodemodeProvider[];
-  /** Asked before each member a program reaches runs, by namespace and member; it throws to refuse. */
-  nested?: (namespace: string, member: string) => void;
   onExecutorUsed?: (name: string) => void;
+}
+
+/** What one call's programs reach. */
+export interface CodemodeScope {
+  /** The actor's namespaces (`actorNamespaces`), built per program with each executor wrapped as given. */
+  readonly namespaces: (executor: (provider: ExecutorProviderSurface) => ExecutorProviderSurface) => CodemodeProvider[];
   /** Which namespaces the turn's role or allowed tools reach: none is bound past it. */
-  reach: ToolSurfaceNarrowing;
+  readonly reach: ToolSurfaceNarrowing;
+  /** Asked before each member a program reaches runs, by namespace and member; it throws to refuse. */
+  readonly nested?: (namespace: string, member: string) => void;
 }
 
 export interface CodemodeFactory {
-  toolFor(surface: CodemodeSurface): Tool;
-  callTool(surface: CodemodeSurface, name: string, input: JsonObject): Promise<JsonValue | undefined>;
+  toolFor(surface: CodemodeSurface, scope: CodemodeScope): Tool;
+  callTool(surface: CodemodeSurface, name: string, input: JsonObject, scope: CodemodeScope): Promise<JsonValue | undefined>;
 }
 
 /** `provider` with each member asking `nested` before it runs. */
@@ -54,18 +51,11 @@ function guarded(provider: CodemodeProvider, nested: (namespace: string, member:
 }
 
 export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
-  const { rt, webSearch } = options;
   // The running program's channel, read per provider call: a detach changes the owning job mid-program.
   let deviceRequests: DeviceRequestChannel | undefined;
-  const stateProvider = createStateCodemodeProvider(rt.actor.programState);
-  const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
 
-  const webProvider = createWebCodemodeProvider({
-    provider: webSearch, files: rt.storage, sessions: options.browserSessions,
-    prelude: options.browserSessions === undefined ? { missing: 'this program holds no browser session; a share\'s viewer drives none of its owner\'s' } : { source: BROWSER_PRELUDE },
-  });
-
-  const executorProviders = (rt.executionRouter?.getProviders() ?? []).map((p) => {
+  // Each executor as this factory's programs call it: `exec` carries the running program's device-request channel.
+  const programExecutor = (p: ExecutorProviderSurface): ExecutorProviderSurface => {
     const wrapped: typeof p.tools = {};
 
     for (const [name, entry] of Object.entries(p.tools)) {
@@ -83,23 +73,23 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       };
     }
 
-    return executorNamespace({ ...p, tools: wrapped });
-  });
+    return { ...p, tools: wrapped };
+  };
 
   return {
-    async callTool(surface, name, input) {
+    async callTool(surface, name, input, scope) {
       const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async () => {
         // A slate's call runs no program, so there is no eval to stop it with; `native` carries its Plan check.
         const functions = nativeToolFunctions(surface.native, undefined);
         const entry = Object.hasOwn(functions, name) ? functions[name] : undefined;
 
         if (entry !== undefined) {
-          if (!options.reach.allowsTool(name)) throw new KinuError('denied', `${name} is not within this actor's reach right now`);
+          if (!scope.reach.allowsTool(name)) throw new KinuError('denied', `${name} is not within this actor's reach right now`);
 
           return entry.execute(input);
         }
 
-        if (name === 'eval' || (!options.reach.allowsTool(name) && !options.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
+        if (name === 'eval' || (!scope.reach.allowsTool(name) && !scope.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
           throw new KinuError('denied', `${name} is not within this actor's reach right now`);
         }
 
@@ -107,7 +97,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
           throw new KinuError('missing', `tools has no member ${name}`);
         }
 
-        const execute = this.toolFor(surface).execute;
+        const execute = this.toolFor(surface, scope).execute;
 
         if (execute === undefined) throw new KinuError('unavailable', 'The codemode executor is not callable');
 
@@ -120,8 +110,8 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
       return call(input);
     },
-    toolFor(surface) {
-      const reach = (tools: ToolSet): ToolSet => Object.fromEntries(Object.entries(tools).filter(([name]) => options.reach.allowsTool(name)));
+    toolFor(surface, scope) {
+      const reach = (tools: ToolSet): ToolSet => Object.fromEntries(Object.entries(tools).filter(([name]) => scope.reach.allowsTool(name)));
 
       const reachable = reach(surface.native);
 
@@ -134,14 +124,9 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         // shadows an external one.
         const toolsProvider = toolsNamespace({ ...toolsInWorkMode(mode, reach(surface.external())), ...reachable }, signal);
 
-        const providers: CodemodeProvider[] = [stateProvider];
-
-        if (agentsProvider) providers.push(agentsProvider);
-
-        if (options.extraProviders) providers.push(...options.extraProviders());
-        providers.push(webProvider, ...executorProviders);
-        const reached = [...options.reach.narrowProviders([toolsProvider]), ...providersInWorkMode(mode, options.reach.narrowProviders(providers))];
-        const { nested } = options;
+        const providers = scope.namespaces(programExecutor);
+        const reached = [...scope.reach.narrowProviders([toolsProvider]), ...providersInWorkMode(mode, scope.reach.narrowProviders(providers))];
+        const { nested } = scope;
         const bound = nested === undefined ? reached : reached.map((provider) => guarded(provider, nested));
 
         const built = createCodeTool({

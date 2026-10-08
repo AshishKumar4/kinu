@@ -22,7 +22,7 @@ import { attempt, detach, diagnostics, renderThrownChain, settle, tolerate } fro
 import { Effect } from 'effect';
 import {
   AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
-  FileRestoreResultSchema, type FileCheckpointListing, type PlanReviewResult, type WorkspaceSpend,
+  FileRestoreResultSchema, ReasoningEffortSchema, type FileCheckpointListing, type PlanReviewResult, type WorkspaceSpend,
 } from '@kinu.run/core';
 import {
   ActivitySpendSchema,
@@ -73,8 +73,6 @@ import {
 } from './agent-client';
 import * as v from 'valibot';
 
-
-const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
 
 const EvolutionConfigSchema: v.GenericSchema<EvolutionConfigView> = v.object({
   learning: v.boolean(),

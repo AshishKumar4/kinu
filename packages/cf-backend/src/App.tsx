@@ -12,6 +12,7 @@ import PluginsPage from "./pages/PluginsPage";
 import DevicesPage from "./pages/DevicesPage";
 import BlueprintPage from "./pages/BlueprintPage";
 import LiveSharePage from "./pages/LiveSharePage";
+import ConnectedPage from "./pages/ConnectedPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { APP_ROUTES, needsOnboarding } from "@kinu.run/core";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
@@ -65,6 +66,8 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Outside the onboarding gate: a sign-in that ends here mid-setup must not land on the setup's first step. */}
+        <Route path={APP_ROUTES.connected} element={<ErrorBoundary label="connected"><ConnectedPage /></ErrorBoundary>} />
         <Route element={<AccountProvider><OnboardingGate /></AccountProvider>}>
           <Route path={APP_ROUTES.welcome} element={<ErrorBoundary label="welcome"><WelcomePage /></ErrorBoundary>} />
           <Route element={<Layout />}>

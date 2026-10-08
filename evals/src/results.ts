@@ -122,6 +122,28 @@ export function summarizePromptUsage(steps: readonly StepUsage[]) {
   };
 }
 
+/** Cache-read over prompt tokens, token-weighted over each run's requests but every actor's first, which nothing can be
+ *  cached for; null with no such request reporting both counts. */
+export function steadyCacheShare(runs: readonly (readonly StepUsage[])[]): number | null {
+  let prompt = 0, cached = 0;
+
+  for (const steps of runs) {
+    const started = new Set<string>();
+
+    for (const step of steps) {
+      const first = !started.has(step.actor);
+
+      started.add(step.actor);
+
+      if (first || step.inputTokens === null || step.cacheReadTokens === null) continue;
+      prompt += step.inputTokens;
+      cached += step.cacheReadTokens;
+    }
+  }
+
+  return prompt > 0 ? cached / prompt : null;
+}
+
 /** Each provider-reported request, oldest first. Missing counts stay unknown, never zero. */
 export function measurePromptUsage(ledgers: readonly ActorLedger[]) {
   const steps: StepUsage[] = [];

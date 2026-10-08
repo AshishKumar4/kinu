@@ -1,7 +1,7 @@
 import { basename } from 'node:path';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { redact } from './redact';
-import { parseResults, trials, type Assertion, type EvalFile, type HarnessRun } from './results';
+import { parseResults, steadyCacheShare, trials, type Assertion, type EvalFile, type HarnessRun } from './results';
 import { MEASURE_NAMES, shifts, type Measure, type Shift, type Spread } from './shifts';
 import { HARNESS_ERRORS } from './task';
 
@@ -74,6 +74,8 @@ export type AgentProfile = {
   meanWallTimeMs: number;
   meanCostUsd: number | null;
   cacheHitRate: number | null;
+  /** The same over every step but each actor's first in a run, which nothing can be cached for; null with no such step. */
+  steadyCacheHitRate: number | null;
   /** The share of tool calls that were `eval` (code mode) rather than a native tool; null with no calls. */
   evalCallShare: number | null;
 };
@@ -143,6 +145,8 @@ function profile(assertions: readonly Assertion[]): AgentProfile {
     meanWallTimeMs: mean(assertions.map((assertion) => assertion.duration)),
     meanCostUsd: cost === null ? null : cost / runs.length,
     cacheHitRate: cacheHitRate(assertions),
+    steadyCacheHitRate: steadyCacheShare(assertions.filter((assertion) => !hasInfrastructureFailure(assertion))
+      .map((assertion) => assertion.meta.harness.run.usage.metadata.steps)),
     evalCallShare: calls.length === 0 ? null : calls.filter((name) => name === 'eval').length / calls.length,
   };
 }
@@ -445,12 +449,22 @@ function worsened(row: ComparedRow): Shift[] {
   return row.shifts.filter((shift) => WORSE_HIGHER.has(shift.measure) && shift.rose && shift.pValue < SIGNIFICANCE);
 }
 
+/** oh-my-pi's steady cache rate, 95–100% over a conversation: below it a model that evals run on regresses whatever the
+ *  baseline did (the owner, 2026-10-08). Claude and ChatGPT spend the owner's plan and never run in a gate;
+ *  `evals/scripts/cache-probe.ts` measures them by hand. */
+export const CACHE_TARGET = 0.95;
+
+function belowCacheTarget(profiled: EvalComparison['profiles']): EvalComparison['profiles'] {
+  return profiled.filter(({ model, candidate }) => (model.startsWith('opencode-go/muse-') || model.startsWith('workers-ai/'))
+    && candidate.steadyCacheHitRate !== null && candidate.steadyCacheHitRate < CACHE_TARGET);
+}
+
 /** Whether a compared cohort's workspaces reset for memory significantly more often than the baseline's. */
 function resetMore(row: ComparedRow): boolean {
   return row.resetPValue < SIGNIFICANCE && row.candidate.resets > row.baseline.resets;
 }
 
-function verdictOf(rows: readonly EvalComparisonRow[]): EvalVerdict {
+function verdictOf(rows: readonly EvalComparisonRow[], profiled: EvalComparison['profiles']): EvalVerdict {
   const compared = rows.flatMap((row) => row.reason === null ? [row] : []);
 
   if (compared.length === 0) return 'inconclusive';
@@ -458,7 +472,7 @@ function verdictOf(rows: readonly EvalComparisonRow[]): EvalVerdict {
 
   if (moved.some((row) => passRate(row.candidate) < passRate(row.baseline)) || compared.some(resetMore)) return 'regressed';
 
-  if (compared.some((row) => worsened(row).length > 0)) return 'regressed';
+  if (compared.some((row) => worsened(row).length > 0) || belowCacheTarget(profiled).length > 0) return 'regressed';
 
   return moved.length > 0 ? 'improved' : 'unchanged';
 }
@@ -509,15 +523,17 @@ export function compareEvalResults(baselineText: string | null, candidateText: s
   }).sort((left, right) => left.taskId.localeCompare(right.taskId)
     || left.model.localeCompare(right.model) || left.arm.localeCompare(right.arm));
 
+  const profiled = profiles(baselineAssertions, candidateAssertions);
+
   return {
-    baseline, candidate, verdict: verdictOf(rows),
+    baseline, candidate, verdict: verdictOf(rows, profiled),
     changedFiles: baseline === null ? [] : questions.changedFiles?.(baseline.productSha, candidate.productSha) ?? [],
     rows,
     totals: {
       baseline: baselineText === null ? null : suiteTotals(baselineFiles, baselineAssertions),
       candidate: suiteTotals(candidateFiles, candidateAssertions),
     },
-    profiles: profiles(baselineAssertions, candidateAssertions),
+    profiles: profiled,
   };
 }
 
@@ -648,6 +664,8 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
     + `${MEASURE_LABEL[shift.measure].name} ${spreadOf(shift.measure, shift.baseline)} \u2192 ${spreadOf(shift.measure, shift.candidate)} `
     + `(p = ${shift.pValue.toFixed(2)})`) : []);
 
+  const uncached = belowCacheTarget(comparison.profiles).map(({ model, candidate }) => `${model} ${rate(candidate.steadyCacheHitRate)}`);
+
   switch (comparison.verdict) {
     case 'inconclusive': return `No task can be compared: ${[...new Set(comparison.rows.flatMap((row) => row.reason ?? []))].join(', ')}.`;
     case 'unchanged': return `No task moved beyond what ${shared.trials === null ? 'these' : String(shared.trials)} runs can tell apart from noise.`;
@@ -656,6 +674,7 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
       ...falls.length > 0 ? [`Fell: ${falls.join(', ')}.`] : [],
       ...resets.length > 0 ? [`Reset for memory more often: ${resets.join(', ')}.`] : [],
       ...worse.length > 0 ? [`Worse: ${worse.join(', ')}.`] : [],
+      ...uncached.length > 0 ? [`Steady cache hit below ${rate(CACHE_TARGET)}: ${uncached.join(', ')}.`] : [],
       ...rises.length > 0 ? [`Rose: ${rises.join(', ')}.`] : [],
     ].join(' ');
   }
@@ -786,14 +805,15 @@ function movedSection(rows: readonly EvalComparisonRow[], shared: Shared): strin
       + 'nor any check\u2019s pass rate.'],
     ...unrecorded.length > 0 ? ['', `Not compared, as not recorded for every trial on both sides: ${unrecorded.join('; ')}.`] : [],
     '', '_Medians, the middle half in brackets; a two-sided Mann\u2013Whitney test for the measures and Fisher\u2019s exact test for '
-      + 'the checks. The pass and reset rates decide the verdict, and so does a rise in model steps, tokens or malformed calls._', ''];
+      + 'the checks. The pass and reset rates decide the verdict, and so does a rise in model steps, tokens or malformed calls, '
+      + 'and a steady cache hit below 95% on Muse or Workers AI._', ''];
 }
 
 /** How the agent worked per model, the baseline in parentheses: information for a prompt or tool change. */
 function profileTable(profiled: EvalComparison['profiles']): string[] {
-  const lines = ['How the agent worked, per run over every task (information, not scored; the baseline in parentheses):', '',
-    '| Model | Runs | Model steps | Input tokens | Output tokens | Cache hit | Mean wall | Mean cost (USD) | `eval` share of tool calls |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
+  const lines = ['How the agent worked, per run over every task (information, not scored but for the steady cache hit; the baseline in parentheses):', '',
+    '| Model | Runs | Model steps | Input tokens | Output tokens | Cache hit | Steady cache hit | Mean wall | Mean cost (USD) | `eval` share of tool calls |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
 
   for (const { model, baseline: before, candidate: after } of profiled) {
     const cell = (value: (side: AgentProfile) => string) => `${value(after)}${before === null ? '' : ` (${value(before)})`}`;
@@ -801,7 +821,8 @@ function profileTable(profiled: EvalComparison['profiles']): string[] {
 
     lines.push(`| ${[model, String(after.runs), cell((side) => side.meanModelTurns.toFixed(1)),
       cell((side) => side.meanInputTokens === null ? '—' : tokens(side.meanInputTokens)), cell((side) => side.meanOutputTokens === null ? '—' : tokens(side.meanOutputTokens)),
-      cell((side) => rate(side.cacheHitRate)), cell((side) => seconds(side.meanWallTimeMs)), cell((side) => usd(side.meanCostUsd)), cell(share)].join(' | ')} |`);
+      cell((side) => rate(side.cacheHitRate)), cell((side) => rate(side.steadyCacheHitRate)), cell((side) => seconds(side.meanWallTimeMs)),
+      cell((side) => usd(side.meanCostUsd)), cell(share)].join(' | ')} |`);
   }
 
   return lines;

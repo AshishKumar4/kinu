@@ -24,9 +24,13 @@ export const mascotSeed = (workspace: string, chat: string): string => `${worksp
 
 export const MASCOT_COLOURS = HUES.length;
 
-/** Which of the {@link MASCOT_COLOURS} a chat's tile is drawn in. */
-export function mascotColour(seed: string): number {
-  return hashOf(seed) % HUES.length;
+/**
+ * Which of the {@link MASCOT_COLOURS} an agent's tile is drawn in: a workspace's agents take the palette in birth order
+ * (`PanelAgent.colour`) from a point its name picks, so {@link MASCOT_COLOURS} agents in a row never share one and an
+ * agent's never changes. A hash of each agent alone gave two of a workspace's few agents one colour.
+ */
+export function mascotColour(workspace: string, rank: number): number {
+  return (hashOf(workspace) + rank) % HUES.length;
 }
 
 type Face = "idle" | "working" | "waiting" | "failed" | "done";
@@ -51,9 +55,9 @@ function Eyes({ face }: { face: Face }) {
 }
 
 /** A chat's tile; its eyes carry its state. */
-export function ChatMascot({ seed, activity, size = 16 }: { seed: string; activity: AgentActivity | undefined; size?: number }) {
+export function ChatMascot({ seed, colour, activity, size = 16 }: { seed: string; colour: number; activity: AgentActivity | undefined; size?: number }) {
   const hash = hashOf(seed);
-  const hue = HUES[mascotColour(seed)] ?? HUES[0];
+  const hue = HUES[colour % HUES.length] ?? HUES[0];
   const id = `mascot${useId().replace(/[^\w-]/g, "")}`;
   const face = FACE[activity ?? "idle"];
   const status = STATUS[face];

@@ -1451,6 +1451,12 @@
     "secret TEXT NOT NULL",
     "created_at INTEGER NOT NULL"
   ],
+  "workspace_activations@packages/core/src/identity/activations.ts": [
+    "slot INTEGER PRIMARY KEY",
+    "ordinal INTEGER NOT NULL",
+    "started_at INTEGER NOT NULL",
+    "version TEXT"
+  ],
   "workspace_actors@packages/core/src/identity/workspace-actors.ts": [
     "actor_id TEXT PRIMARY KEY",
     "parent_actor_id TEXT REFERENCES workspace_actors(actor_id)",

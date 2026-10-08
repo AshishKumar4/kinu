@@ -19,7 +19,7 @@ export {
 export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
 
 export {
-  assembleActorTurn, withCompactionTrigger, promptCacheKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, metadataTier,
+  assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, metadataTier,
   type AssembledTurn, type RunTurnSources, type TurnSourcesBundle, type LocalTurnSources, type PinValues, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
 } from './orchestrator/turn-assembly';
 
@@ -45,6 +45,8 @@ export {
 } from './identity/effect-tombstones';
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
+
+export { initActivationTable, listActivations, recordActivation, type Activation } from './identity/activations';
 
 export { ChatHistoryEntrySchema } from './types/chat';
 
@@ -572,6 +574,11 @@ export {
 
 export { createAgentsCodemodeProvider, createAgentsTool, resumableAgentsInput } from './delegation/agents-operations';
 
+export {
+  actorNamespaces, hostedSurfaceActor, SURFACE_POLICY,
+  type SurfaceActor, type SurfaceCall, type SurfacePolicy, type SurfaceWeb,
+} from './delegation/actor-surface';
+
 export { AGENTS_OPS } from './operations/agents';
 
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
@@ -1014,7 +1021,7 @@ export {
   type NimbusSandboxHandle,
   type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
   EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS,
-  type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
+  type ExecutorCapability, type ExecutorKind, type ExecutorProvider, type ExecutorProviderSurface,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type ResourceLimits, type PreviewRouteCheck,
   type SandboxSize, type SandboxSizes,
@@ -1968,7 +1975,7 @@ export type {
   InstructionSourceView,
 } from './read-models/instruction-approvals';
 
-export { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
+export { agentStatusFacts, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
 
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 

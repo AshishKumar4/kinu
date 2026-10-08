@@ -64,6 +64,7 @@ describe('openai-compat cancellation', () => {
     const deps: ModelCallDeps = {
       env: {},
       sessionAffinity: 'kinu-test',
+      workspaceAffinity: 'kinu-test',
       fetch: fetchImpl,
       getAuth: async () => auth,
       hasCredential: async () => true,

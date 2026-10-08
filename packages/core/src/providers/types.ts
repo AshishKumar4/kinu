@@ -164,9 +164,14 @@ export interface ProviderDeps {
 
 /** A model is made for one conversation: providers route and cache on it, and OpenCode Go refuses a call without it. */
 export interface ModelCallDeps extends ProviderDeps {
-  /** Stable conversation identity (`agentAffinityKey`). */
+  /** Stable conversation identity (`actorAffinity`). */
   readonly sessionAffinity: string;
+  /** The workspace whose conversations share a static prompt prefix: ChatGPT's backend caches them under one session. */
+  readonly workspaceAffinity: string;
 }
+
+/** What routes one actor's model calls (`actorAffinity`). */
+export type ModelAffinity = Pick<ModelCallDeps, 'sessionAffinity' | 'workspaceAffinity'>;
 
 export interface ModelProvider {
   readonly id: string;

@@ -625,7 +625,7 @@ function DesignSelection({ kind }: { kind: string | null }) {
 }
 
 const MAIN_CHAT: PanelAgent = {
-  key: "main", label: "Main", category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null },
+  colour: 0, key: "main", label: "Main", category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null },
 };
 
 function Workspace({ wide, chatPane, inspector, chat, panel }: { wide: boolean; chatPane: boolean; inspector: number; chat: ReactNode; panel: ReactNode }) {

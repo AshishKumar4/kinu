@@ -40,7 +40,7 @@ export function bindingModel(
   const binding: Ai = Object.create(fake);
 
   const model = createWorkersAIProvider(binding).createModel(modelId, {
-    env: {}, sessionAffinity: affinity, getAuth: async () => null, hasCredential: async () => false,
+    env: {}, sessionAffinity: affinity, workspaceAffinity: affinity, getAuth: async () => null, hasCredential: async () => false,
   });
 
   return { model, runs };
@@ -80,7 +80,7 @@ export function sharedBindingModels(
   const binding: Ai = Object.create(fake);
 
   const models = affinities.map((affinity) => createWorkersAIProvider(binding).createModel('@cf/moonshotai/kimi-k2.6', {
-    env: {}, sessionAffinity: affinity, getAuth: async () => null, hasCredential: async () => false,
+    env: {}, sessionAffinity: affinity, workspaceAffinity: affinity, getAuth: async () => null, hasCredential: async () => false,
   }));
 
   return { models, binding, runs };

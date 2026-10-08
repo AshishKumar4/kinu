@@ -505,7 +505,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  async replay(share: string): Promise<SlateCallResult> {
+  async replay(share: string): Promise<SlateSurfaceResult> {
     return this.host.surfaceCall(
       { ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'workspace', { path: ['readFile'], args: ['/x'], invocation: this.lastCall },
     );

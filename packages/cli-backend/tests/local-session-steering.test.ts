@@ -1757,8 +1757,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
   function sandboxWith(deps: AgentsToolDeps) {
     const tool = createNodeCodemodeToolFactory({
       reach: narrowToolSurface(undefined),
-      extraProviders: [createAgentsCodemodeProvider(() => deps)],
-    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
+      namespaces: [createAgentsCodemodeProvider(() => deps)],
+    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 
     return (code: string, options?: ToolExecutionOptions<unknown>) =>
       toolExecute<{ code: string }, JsonValue>(tool)({ code }, options);
