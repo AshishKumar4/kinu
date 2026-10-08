@@ -636,6 +636,8 @@ export function mockAgentsSdk(): void {
 
           return await new Launcher({ ...workerContext(), props }, { LOADER: Object.create(inProcessWorkerLoader()) }).run(...args);
         },
+        // One process: a job's context always answers.
+        answer: async () => {},
       }),
     },
     tracing: {

@@ -60,11 +60,17 @@ async function openWorkerFromPanel(browser: TestChrome, plan: { origin: string; 
   await page.goto(`${plan.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-agents-counter]');
   await page.click('[data-agents-counter]');
-  // Swarm workers sit in their own group, folded until asked for.
+  // Swarm workers sit in their own group, folded until asked for. A folded group keeps its rows in the page, inert, and
+  // unfolds them over a transition: a row clicked before it settled took a click aimed where it no longer was, and the
+  // pane never came (staging, 2026-10-08, 3 of 4 runs). The group is waited open and still, as a person sees it.
   await page.waitForSelector('section[aria-label="Swarms"] [aria-expanded="false"]');
   await page.click('section[aria-label="Swarms"] [aria-expanded="false"]');
-  await page.waitForSelector(`[data-agent-row="${key}"]`);
-  await page.click(`[data-agent-row="${key}"]`);
+  await page.waitForFunction(() => {
+    const fold = document.querySelector('section[aria-label="Swarms"] .p-fold');
+
+    return fold !== null && !fold.hasAttribute('data-folded') && fold.getAnimations({ subtree: true }).length === 0;
+  });
+  await page.click(`section[aria-label="Swarms"] [data-agent-row="${key}"]`);
   const pane = `[data-agent-pane="node/${key}"]`;
   await page.waitForFunction((selector: string) => (document.querySelector(selector)?.textContent ?? '').includes('Task'), {}, pane);
 

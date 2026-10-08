@@ -194,7 +194,7 @@ import {
   type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
-import { codemodeLauncher, type ProgramLaunch } from "./codemode-sandbox";
+import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
@@ -553,7 +553,13 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (refusal) return settle(Effect.fail(new KinuError(refusal.reason, refusal.error)));
 
-    return super.alarm();
+    return this.recoverLostJobs().then(async () => { await super.alarm(); });
+  }
+
+  /** Each alarm, the keepAlive heartbeat a running job's fiber holds among them, asks whether a job's work went silent. */
+  private async recoverLostJobs(): Promise<void> {
+    await settleLogged('jobs.lost_recovery_failed', { doing: 'recover the background jobs whose work stopped answering', otherwise: 'io' },
+      () => this.jobAuthorities.recoverLost(), { workspace: this.name });
   }
   /** Actor kind for the operational dataset's `agentKind` dimension. Abstract because a
    * bundler may rewrite `constructor.name`. */
@@ -2582,6 +2588,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected workspaceJobPorts(owner: string | null): WorkspaceJobPorts {
     return {
       clock: this.jobClock(),
+      alive: jobContextAnswers,
       jobOutput: (frame) => { this.broadcastToActor(owner, JSON.stringify(frame)); },
       // Only this request's device work moves; parallel foreground commands remain stoppable.
       onDetached: (jobId, requestIds) => {

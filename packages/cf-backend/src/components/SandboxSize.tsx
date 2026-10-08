@@ -42,14 +42,18 @@ export function SandboxSizeRow({ rpc }: { rpc: Rpc }) {
   return (
     <div data-env-size className="space-y-1" onClick={(event) => event.stopPropagation()}
       title="A running sandbox restarts at the new size: files stay, supervised servers come back, a running command ends.">
-      <Choice
-        label="Sandbox size"
-        size="sm"
-        value={state.chosen ?? ACCOUNT_DEFAULT}
-        options={workspaceSizeOptions(state.account)}
-        onChange={(value) => detach(choose(value))}
-        disabled={pending !== null}
-      />
+      {/* A track that may shrink, and a trigger that may: the longest choice ran past the card (staging, 2026-10-08). */}
+      <div className="grid grid-cols-1">
+        <Choice
+          label="Sandbox size"
+          size="sm"
+          className="min-w-0"
+          value={state.chosen ?? ACCOUNT_DEFAULT}
+          options={workspaceSizeOptions(state.account)}
+          onChange={(value) => detach(choose(value))}
+          disabled={pending !== null}
+        />
+      </div>
       {state.startRefused !== null && (
         <div data-env-start-refused className="space-y-1">
           <div className="p-meta p-danger">{startRefusedNote(state.startRefused)}</div>
