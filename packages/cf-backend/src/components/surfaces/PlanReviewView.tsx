@@ -473,8 +473,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
         </div>
       </header>
 
-      {/* Isolated, so the viewer's raised layers stay under the sticky decision bar when it overlaps the document. */}
-      <div data-plan-body className="relative isolate flex flex-1 min-h-0">
+      <div data-plan-body className="relative flex flex-1 min-h-0">
         <div data-plan-scroll className="flex-1 min-w-0 overflow-y-auto px-4 py-8 sm:px-8 sm:py-10">
           <div data-plan-document className="plan-review-document mx-auto">
             <Viewer
@@ -533,8 +532,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
         />
       </div>
 
-      {/* Sticky, so the decision stays in reach when an ancestor, not the plan's own scroller, scrolls. */}
-      <footer data-plan-footer className="p-surface sticky bottom-0 z-10 shrink-0 border-t p-border px-4 py-3">
+      <footer data-plan-footer className="p-surface shrink-0 border-t p-border px-4 py-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           {error ? (
             <p role="alert" className="p-notice-danger p-meta px-3 py-2 sm:mr-auto">{error}</p>
