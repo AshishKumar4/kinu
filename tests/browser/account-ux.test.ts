@@ -457,8 +457,16 @@ describe('account panels', () => {
         // The wizard opens on the step its address names, as a sign-in returning to it reads it.
         await page.waitForFunction(() => document.querySelector('[data-welcome-step="providers"]')?.getAttribute('aria-hidden') !== 'true');
 
+        // The connect a reader sees on this step: the one drawn, of the links into Cloudflare's sign-in.
+        const connect = '[data-welcome-step="providers"] a[href*="/auth/cloudflare/start"]';
+        await page.waitForFunction((links) => [...document.querySelectorAll(links)].some((link) => link.getClientRects().length > 0), {}, connect);
         const opened = page.browser().waitForTarget((target) => target.opener() === page.target() && target.url().includes('/auth/cloudflare/start'));
-        await (await page.waitForSelector('::-p-text(Connect Cloudflare Workers AI)'))?.click();
+
+        await page.evaluate((links) => {
+          const link = [...document.querySelectorAll(links)].find((each) => each.getClientRects().length > 0);
+
+          if (link instanceof HTMLElement) link.click();
+        }, connect);
         const helper = await opened;
 
         // The sign-in is told to end on the connected page, and that page to send the owner back to this step.
