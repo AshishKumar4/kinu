@@ -310,6 +310,18 @@ describe('replay', () => {
     expect(ports.plans.snapshots.size).toBe(0);
   });
 
+  // Owner decision 2026-10-07: a plan belongs to the history, not to the model it was priced for.
+  test("the owner's fold survives a failover: another model replays it, and being under its own trigger clears nothing", async () => {
+    const { ports, outcomes, transform } = rig();
+    const messages = history(6, 500);
+
+    await transform(messages, { trigger: 'force' });
+    const served = await transform(messages, { model: 'other/fallback', contextWindow: 200_000 });
+
+    expect({ outcomes: outcomes.map((o) => o.outcome), kept: ports.plans.snapshots.has(SESSION), folded: served !== undefined })
+      .toEqual({ outcomes: ['planned', 'replayed'], kept: true, folded: true });
+  });
+
   test('a plan persisted for another session never applies', async () => {
     const { ports, transform } = rig();
     const messages = history(15, 3_000);

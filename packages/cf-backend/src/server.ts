@@ -55,7 +55,6 @@ export { OrchestratorAgent } from "./orchestrator";
 
 export { KinuDevbox } from "./kinu-devbox";
 
-export { CodexEgress } from "./egress/codex-egress";
 
 // Loopback egress for `eval` programs (codemode-egress.ts); absent, they have no network.
 export { CodemodeEgress } from "./codemode-egress";

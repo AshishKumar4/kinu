@@ -1,4 +1,4 @@
-// The device relay (docs/DEPLOYMENT.md § Codex egress).
+// The device relay (docs/DEPLOYMENT.md § Codex from the cloud).
 import * as v from 'valibot';
 import { base64ToBytes } from '../utils/base64';
 import { settle, tolerate } from '../obs/effect';

@@ -44,7 +44,7 @@ function fakeModel(answer: string): LanguageModel {
   });
 }
 
-async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean } = {}) {
+async function provision(opts: { provisionScaffold?: boolean } = {}) {
   const db = workspaceDatabase(scratchPath('scaffold-turn', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
@@ -59,6 +59,10 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'initial bootstrap'})`;
   }
 
+  return { db, rt };
+}
+
+function openSession(db: ReturnType<typeof workspaceDatabase>, rt: AgentRuntime, defaultAnswer: string) {
   const events: SessionEvent[] = [];
   const started = Promise.withResolvers<void>();
 
@@ -72,6 +76,12 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   });
 
   return { db, rt, session, events, started: started.promise };
+}
+
+async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean } = {}) {
+  const { db, rt } = await provision(opts);
+
+  return openSession(db, rt, defaultAnswer);
 }
 
 async function installScaffold(
@@ -243,8 +253,10 @@ describe('a promoted scaffold drives a local turn', () => {
 describe('a pending scaffold waits for the owner\'s decision', () => {
   test('opening a session heals a scaffold-less workspace (DO onStart parity)', async () => {
     // A workspace without scaffold/agent.js silently disables scaffold evolution; the session heals it as the DO does in onStart.
-    const { rt, session } = await setup('unused', { provisionScaffold: false });
+    // The session starts the heal as it opens, so the workspace is proved scaffold-less before it does.
+    const { db, rt } = await provision({ provisionScaffold: false });
     expect(await rt.identity.scaffold.exists()).toBe(false);
+    const { session } = openSession(db, rt, 'unused');
 
     await session.end();
 

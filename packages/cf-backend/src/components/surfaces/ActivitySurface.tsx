@@ -110,10 +110,7 @@ function Warning({ children }: { children: React.ReactNode }) {
 
 
 function servedBy({ modelId, route }: NonNullable<ActivitySnapshot["latest"]>): string {
-  let via = "";
-
-  if (route?.kind === "container") via = "via Kinu's container";
-  else if (route?.kind === "device") via = `via ${route.name ?? "a removed machine"}`;
+  const via = route === null ? "" : `via ${route.name ?? "a removed machine"}`;
 
   return [modelId ?? "", via].filter(Boolean).join(" ");
 }

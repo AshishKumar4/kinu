@@ -8,7 +8,6 @@ import type { AssistantContent, AssistantModelMessage, ModelMessage, ProviderMet
 import * as v from 'valibot';
 import type { JsonValue } from '../utils/json';
 import type { ProviderOptions } from './effort';
-import { CHARS_PER_TOKEN } from '../token-estimate';
 
 /** Where Kinu compacts, as a percentage of the context window: the ladder's trigger and the provider's. */
 export const COMPACTION_TRIGGER_PERCENT = 85;
@@ -52,7 +51,7 @@ export function serverCompactor(spec: string | undefined): ServerCompactor | nul
  * The threshold option, or undefined. A forced compaction (`/compact`, an overflow) passes the request's input.
  * OpenAI counts a replayed compaction item at its original size (6,504 tokens for one item, measured 2026-10-06), so a
  * request carrying one stays over the threshold and recompacts every time: it asks only once `sinceLatest`, what came
- * after the latest item, crosses the threshold itself.
+ * after the latest item priced for the serving model, crosses the threshold itself.
  */
 export function serverCompactionOptions(
   spec: string | undefined, contextWindow: number | null | undefined, forcedInput?: number, sinceLatest: number | null = null,
@@ -113,11 +112,11 @@ export function latestCompaction(messages: readonly ModelMessage[]): LatestCompa
   return null;
 }
 
-/** Estimated tokens after the latest OpenAI compaction item, or null when none is replayed. */
-export function sinceLatestCompaction(messages: readonly ModelMessage[]): number | null {
+/** What follows the latest OpenAI compaction item, or null when none is replayed. */
+export function sinceLatestCompaction(messages: readonly ModelMessage[]): ModelMessage[] | null {
   const latest = latestCompaction(messages);
 
-  return latest === null ? null : Math.ceil(JSON.stringify([...latest.parts.slice(latest.part + 1), ...messages.slice(latest.at + 1)]).length / CHARS_PER_TOKEN);
+  return latest === null ? null : [{ ...latest.message, content: latest.parts.slice(latest.part + 1) }, ...messages.slice(latest.at + 1)];
 }
 
 /** A part, chunk or stored part carrying a provider's summary (`by` that one only), by the mark its SDK adapter gives

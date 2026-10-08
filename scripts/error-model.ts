@@ -131,11 +131,6 @@ export const DECLARED = byFile([
     reason: 'the `Summarizer` @better-compact/core calls: a failed summary answers null, as the library\'s contract asks, and '
       + 'only a cancelled turn\'s abort is rethrown',
   }],
-  ['packages/cf-backend/src/egress/codex-egress-route.ts', {
-    mechanisms: ['throw'],
-    within: ['codexContainerFetch'],
-    reason: 'a `fetch` the AI SDK calls: its caller learns an abort or a refused route as the fetch\'s rejection, the fetch protocol',
-  }],
   ['packages/core/src/orchestrator/scaffold-host.ts', {
     mechanisms: ['throw', 'catch'],
     within: ['streamScaffoldChat'],

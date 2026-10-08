@@ -6,7 +6,7 @@
     "install": "scripts/armada/install.sh",
     "key": ["bun.lock", "bunfig.toml", "package.json", "packages/*/package.json", "patches/**", "third_party/mossaic/**", "scripts/mossaic-sdk.ts"]
   },
-  "env": { "PATH": "{workdir}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin" },
+  "env": { "PATH": "{workdir}/node_modules/.bin:/home/ci/.elan/bin:/usr/local/bin:/usr/bin:/bin" },
   "pool": 60,
   "plan": { "command": ["bun", "scripts/ladder.ts", "--ci-plan", "--ci-costs={timings}"] },
   "task": {

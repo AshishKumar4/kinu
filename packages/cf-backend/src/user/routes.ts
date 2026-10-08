@@ -415,7 +415,17 @@ userRoutes.delete('/api/user/chatgpt/sign-in', async (c) => {
   return json({ body: { cancelled: true } });
 });
 
-userRoutes.post('/api/user/chatgpt/paste/start', async (c) => json({ body: await c.get('stub').startChatGptPasteSignIn(c.get('owner')) }));
+userRoutes.post('/api/user/chatgpt/paste/start', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const body = await c.req.text();
+    const named = v.safeParse(v.object({ account: v.optional(v.string()) }), body === '' ? {} : safeJsonParse(body));
+
+    if (!named.success) return err(400, 'Body must be empty or { account }');
+
+    return json({ body: await c.get('stub').startChatGptPasteSignIn(c.get('owner'), named.output.account) });
+  },
+  catch: (cause) => toKinuError({ doing: 'starting the ChatGPT sign-in', cause, otherwise: 'unavailable' }),
+})));
 
 userRoutes.post('/api/user/chatgpt/paste/finish', async (c) => {
   const body = await safeJson(c.req.raw, v.object({ url: v.string() }));

@@ -8,7 +8,6 @@ import type { DeployRunDO } from "./src/deploy/deploy-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
 import type { CodemodeLauncher } from "./src/codemode-sandbox";
 import type { AgentWorkspaceRPC } from "./src/agent-facets";
-import type { CodexEgress } from "./src/egress/codex-egress";
 import type { SlateBinding } from "./src/slates/bindings";
 import type { MossaicShardDO, MossaicUserDO } from "./src/server";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
@@ -37,7 +36,6 @@ declare global {
     ControlPlaneDO: DurableObjectNamespace<ControlPlaneDO>;
     /** Native workspace container owner. */
     KinuDevbox: DurableObjectNamespace<KinuDevbox>;
-    CodexEgress: DurableObjectNamespace<CodexEgress>;
     /** One guided self-deployment per run (docs/SELF-DEPLOY.md § The Cloudflare door). */
     DeployRunDO: DurableObjectNamespace<DeployRunDO>;
     /** Mossaic Drive tenant objects (SDK-fixed names); optional, the `/shared` mount then states its absence. */

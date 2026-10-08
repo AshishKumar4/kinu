@@ -9,7 +9,7 @@ import {
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import type { CredentialSummary } from '../user/credentials';
-import { codexEgressFetch, deviceRouteFetch, type CodexEgressNamespace, type ModelRelayHub } from '../egress/codex-egress-route';
+import { deviceRouteFetch, type ModelRelayHub } from '../egress/model-relay-route';
 
 /**
  * Credential DO stub paired with the capability this context presents (owner, or workspace token resolved per call),
@@ -34,8 +34,7 @@ function isDirectAiBinding(binding: NonNullable<ProviderEnv['AI']>): binding is 
 }
 
 export interface AgentProviderDeps {
-  env: ProviderEnv & { readonly CodexEgress?: CodexEgressNamespace };
-  ownerUserId?: string | null;
+  env: ProviderEnv;
   /** Null for env-bound-only contexts (e.g. runtime.ts inline-branch fallback): getAuth is null, hasCredential false. */
   userDO?: UserCredentialSource | null;
   fetch?: typeof fetch;
@@ -44,7 +43,6 @@ export interface AgentProviderDeps {
   appTitle?: string;
   accountFor?: (providerId: string) => string | undefined;
   currentTurn?: (actor: ActorReference) => string | null;
-  codexContainer?: typeof fetch;
 }
 
 export interface AgentProviderRegistry {
@@ -104,15 +102,9 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
 
   const source = opts.userDO ?? null;
 
-  const container = opts.codexContainer ?? (opts.env.CodexEgress !== undefined && opts.ownerUserId
-    ? codexEgressFetch(opts.env.CodexEgress, opts.ownerUserId)
-    : undefined);
-
   const relayed = source === null ? null : {
     hub: source.stub, caller: () => resolveCaller(source), ...(opts.currentTurn !== undefined && { currentTurn: opts.currentTurn }),
   };
-
-  const codexEgress = relayed === null ? container : deviceRouteFetch({ ...relayed, provider: 'codex', container: container ?? opts.fetch ?? fetch });
 
   const registry = createModelRegistry({
     workersAi: createWorkersAIProvider(deploymentBinding),
@@ -127,7 +119,8 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
           : undefined),
       },
     }),
-    codex: createCodexProvider(codexEgress === undefined ? {} : { egress: codexEgress }),
+    // chatgpt.com refuses Workers: the account's connected machine carries every Codex call, or none does.
+    codex: createCodexProvider(relayed === null ? {} : { egress: deviceRouteFetch({ ...relayed, provider: 'codex' }) }),
     opencode: undefined,
     appTitle: opts.appTitle,
   });

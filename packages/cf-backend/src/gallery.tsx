@@ -3488,8 +3488,8 @@ function ChatMessages() {
       />
       <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-device", lastSeenAt: NOW }]} />
       <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
-      {/* The same card re-serving an older turn's outcome, as `sunlit-stone-4a20` answers a resume ACK. */}
-      <ChatErrorCard message="Unauthorized" replayed streaming={false} onRetry={() => {}} onDismiss={() => {}} />
+      {/* The runtime refusing this tab, as `sunlit-stone-4a20` answers a resume ACK. */}
+      <ChatErrorCard message="Unauthorized" refused streaming={false} onRetry={() => {}} onDismiss={() => {}} />
     </div>
   );
 }

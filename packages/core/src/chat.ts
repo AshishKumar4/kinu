@@ -29,9 +29,11 @@ import { applyCacheBreakpoints, hasCacheMarkers, type CacheBreakpointPlan, type 
 import { DEFAULT_CACHE_RETENTION, parseModelSpec, type CacheRetention } from './providers/types';
 import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
+import { ReplayProgress } from './prompting/replay-normalization';
 import { modelStepMessages } from './prompting/tool-error-feedback';
 import type { SpendGate } from './mission-budget';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality } from './prompting/attachment-sanitizer';
+import { messageTokens } from './prompting/media-tokens';
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import type { LostToolCall } from './tools/effect-claim';
@@ -707,6 +709,13 @@ async function admitRequest(opts: ChatOptions) {
   return { extensions, tools, window, assembly, primary, stepContext, initialContext, admitted };
 }
 
+/** What follows the latest OpenAI compaction item, priced for the model serving it; null when none is replayed. */
+function tokensSinceLatestCompaction(spec: string, messages: readonly ModelMessage[]): number | null {
+  const since = sinceLatestCompaction(messages);
+
+  return since === null ? null : messageTokens(spec, since);
+}
+
 /** Only the transform's own fold may call a model. */
 export async function measureTurnRequest(opts: ChatOptions): Promise<{ readonly tokens: number; readonly contextWindow: number | null } | null> {
   const { admitted, window } = await admitRequest({ ...opts, stepContext: undefined });
@@ -771,6 +780,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   /** The fallback serving the turn, once one took over. */
   let servingFallback: string | undefined;
   let calls = 0;
+  const replay = new ReplayProgress();
 
   const meter = opts.measureContext === true ? new TurnContextMeter({ system: cache.system, tools }) : undefined;
 
@@ -889,14 +899,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           budget: opts.budget,
           dynamic: opts.dynamicContext,
           destination: servingRoute,
+          replay,
           meter,
           context: stepContextPlane,
           turnStart,
         }, { stepNumber: stepOffset + stepNumber, messages, steps });
 
         const asked = (done: PrepareStepResult<ToolSet>) => {
-          const threshold = serverCompactor(current.spec) === 'openai'
-            ? serverCompactionOptions(current.spec, serving.contextWindow, opening ? forcedInput : undefined, sinceLatestCompaction(done?.messages ?? messages))
+          const threshold = current.spec !== undefined && serverCompactor(current.spec) === 'openai'
+            ? serverCompactionOptions(current.spec, serving.contextWindow, opening ? forcedInput : undefined, tokensSinceLatestCompaction(current.spec, done?.messages ?? messages))
             : undefined;
 
           const extra = mergeProviderOptions(trigger, threshold);

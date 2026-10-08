@@ -77,7 +77,7 @@ export interface CompactionExtensionDeps {
   attachments: AttachmentDeps;
 }
 
-/** One request's ladder: the model serving it prices its attachments and keys its plan. */
+/** One request's ladder: the model serving it prices its attachments; the plan it replays is the history's. */
 interface Ladder {
   readonly spec: LadderSpec & { readonly attachments: AttachmentPolicy };
   readonly codec: CodecOps;

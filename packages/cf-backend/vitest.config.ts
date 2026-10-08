@@ -295,7 +295,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
-['codex-egress-probe', async () => ({ ...workerCompatibility, modules: probeModules('codex-egress-probe.ts', probeRuntime), durableObjects: { CODEX_EGRESS_PROBE: { className: 'CodexEgressProbe', useSQLite: true }, CodexEgress: { className: 'CodexEgressProbe', useSQLite: true } }, })],
 ["hire-probe", async () => ({
           // A real hire: the child's `workers-ai/` tier arrives on the AI binding, the root's
           // `openai-compat` lane on outbound.
@@ -466,7 +465,6 @@ const runnerOptions = {
           SURFACE_CONTROL: { name: 'public-surface-probe', entrypoint: 'SurfaceControl' },
           DEPLOY_FAKE: { name: 'deploy-probe', entrypoint: 'DeployFakeControl' },
           UPDATES_PROBE: { name: 'deploy-probe', entrypoint: 'UpdatesProbe' },
-          CODEX_EGRESS_RECORDS: { name: 'codex-egress-probe', entrypoint: 'Records' },
           DEPLOY_DOOR_PROBE: { name: 'deploy-probe', entrypoint: 'DeployDoorProbe' },
         },
         durableObjects: {
@@ -503,7 +501,6 @@ const runnerOptions = {
           HIRE_PROBE: { className: 'HireProbeRoot', scriptName: 'hire-probe', useSQLite: true },
           // The probe's workspace itself, reached as the public route reaches it: an agent's pane is a socket on it.
           HIRE_WORKSPACE: { className: 'OrchestratorAgent', scriptName: 'hire-probe', useSQLite: true },
-          CODEX_EGRESS_PROBE: { className: 'CodexEgressProbe', scriptName: 'codex-egress-probe', useSQLite: true },
           SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
           DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', scriptName: 'delete-all-probe', useSQLite: true },
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },

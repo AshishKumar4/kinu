@@ -149,41 +149,41 @@ export function DeviceConsentCard({ consent, onResolve }: {
   );
 }
 
-/** Retry re-runs the failed turn instead of appending a duplicate user message.
- *  `replayed`: the server re-serves its last terminal record until a later turn supersedes it. */
-export function ChatErrorCard({ message, replayed, streaming, onRetry, onDismiss }: {
+/** Retry re-runs the failed turn instead of appending a duplicate user message. `refused`: the runtime refused this
+ *  tab, in its own words, which no turn caused and no retry of one answers. */
+export function ChatErrorCard({ message, refused, streaming, onRetry, onDismiss }: {
   message: string;
-  replayed?: boolean;
+  refused?: boolean;
   streaming: boolean;
   onRetry: () => void;
   onDismiss: () => void;
 }) {
   return (
-    <div className="rounded-xl border p-3 animate-fade-in p-elevated" data-chat-error={replayed ? "replayed" : "live"}
-      style={{ borderColor: replayed ? "var(--c-border)" : "var(--c-danger)" }}>
+    <div className="rounded-xl border p-3 animate-fade-in p-elevated" data-chat-error={refused ? "refused" : "live"}
+      style={{ borderColor: refused ? "var(--c-border)" : "var(--c-danger)" }}>
       <div className="flex items-start gap-2">
-        <WarningCircleIcon size={16} className={`shrink-0 mt-0.5 ${replayed ? "p-text-3" : "p-danger"}`} weight="fill" />
+        <WarningCircleIcon size={16} className={`shrink-0 mt-0.5 ${refused ? "p-text-3" : "p-danger"}`} weight="fill" />
         <div className="min-w-0 flex-1">
-          <div className="text-xs p-text font-medium">
-            {replayed
-              ? "This workspace was last left on a failed turn"
-              : "The last turn failed and produced no answer"}
-          </div>
-          <code className="block mt-1 p-t-code p-text-2 break-all p-card rounded-sm px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
-          <div className="p-meta p-text-3 mt-1.5">
-            {replayed
-              ? "This is the last turn's result. Retry runs that turn again."
-              : "Retry reuses this message in the same conversation."}
-          </div>
+          {refused
+            ? <div className="text-xs p-text font-medium break-all">This tab couldn't reconnect: {message}</div>
+            : (
+              <>
+                <div className="text-xs p-text font-medium">The last turn failed and produced no answer</div>
+                <code className="block mt-1 p-t-code p-text-2 break-all p-card rounded-sm px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
+                <div className="p-meta p-text-3 mt-1.5">Retry reuses this message in the same conversation.</div>
+              </>
+            )}
         </div>
       </div>
       <div className="flex items-center gap-2 mt-2.5 justify-end">
         <button onClick={onDismiss}
           className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text cursor-pointer">Dismiss</button>
-        <button onClick={onRetry} disabled={streaming}
-          className="px-2.5 py-1 p-t-control rounded-md p-accent-bg p-accent hover:opacity-90 disabled:opacity-40 cursor-pointer flex items-center gap-1">
-          <ArrowsClockwiseIcon size={11} />Retry this turn
-        </button>
+        {!refused && (
+          <button onClick={onRetry} disabled={streaming}
+            className="px-2.5 py-1 p-t-control rounded-md p-accent-bg p-accent hover:opacity-90 disabled:opacity-40 cursor-pointer flex items-center gap-1">
+            <ArrowsClockwiseIcon size={11} />Retry this turn
+          </button>
+        )}
       </div>
     </div>
   );
@@ -627,7 +627,7 @@ function SubordinateChatColumn({
           {state.chatError && (
             <ChatErrorCard
               message={state.chatError.body}
-              replayed={state.chatError.replayed}
+              refused={state.chatError.refused}
               streaming={live}
               onRetry={state.retryLastMessage}
               onDismiss={state.clearChatError}
@@ -1198,7 +1198,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
               {state.chatError && (
                 <ChatErrorCard
                   message={state.chatError.body}
-                  replayed={state.chatError.replayed}
+                  refused={state.chatError.refused}
                   streaming={live}
                   onRetry={state.retryLastMessage}
                   onDismiss={state.clearChatError}

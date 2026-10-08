@@ -35,7 +35,6 @@
     "./user-socket-probe.ts",
     "./public-surface-probe.ts",
     "./hire-probe.ts",
-    "./codex-egress-probe.ts",
     "./agent-facet-probe.ts",
     "./agent-facet-probe-agent.ts",
     "./slate-egress-probe.ts"

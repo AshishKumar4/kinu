@@ -1,4 +1,5 @@
 [
+  "movable packages/cf-backend/src/egress/model-relay-route.ts",
   "movable packages/cf-backend/src/user/binding-completions.ts",
   "movable packages/cf-backend/src/user/roster.ts"
 ]
