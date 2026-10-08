@@ -69,20 +69,6 @@ function effects(harness: Harness, turnId: string, messageId = 'a-1'): EffectRow
   ).all(workspaceMainActor(harness.db).actorId, ledgerOver(harness.db).sequenceId({ turnId, messageId }));
 }
 
-interface ClaimRow {
-  readonly turn_id: string;
-  readonly call_id: string;
-  readonly result_json: string | null;
-}
-
-/** Transition claims only: the table also holds tool claims and per-effect markers. */
-function transitionClaims(harness: Harness): ClaimRow[] {
-  return harness.db.query<ClaimRow, []>(
-    `SELECT turn_id, normalized_call_id AS call_id, result_json FROM tool_effect_claims
-     WHERE normalized_call_id LIKE 'terminal:response:%' ORDER BY turn_id, normalized_call_id`,
-  ).all();
-}
-
 /** One turn's tool claims by call id. */
 function toolClaims(harness: Harness, turnId: string): string[] {
   return harness.db.query<{ call_id: string }, [string]>(
@@ -162,38 +148,6 @@ function headsAnswering(report: ScriptedHeadReport): HarnessActorWorld['heads'] 
 }
 
 describe('an owed follow-up turn is a durable terminal effect', () => {
-  /** Queued is RAM: the row stays owed until the retry turn's own row is on disk. */
-  test('an overflow retry stays owed until its turn is on disk, across a refused dequeue', async () => {
-    const harness = orchestratorHarness();
-
-    await turns(harness).openInFlight('u-overflow');
-    harness.agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another activation is driving' });
-    const { turnId, messageId } = await turns(harness).settle({ messageId: 'a-overflow', status: 'error', error: OVERFLOW_ERROR });
-    await joinHarnessFibers();
-
-    const retry = () => effects(harness, turnId, messageId).find((row) => row.effect_key === `v1:overflow_retry:${messageId}`);
-    const transcript = historyOver(harness).transcript(CHAT_SESSION_ID);
-    const retryOnDisk = () => transcript.has(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}overflow-retry:${messageId}`);
-
-    expect(retryOnDisk()).toBe(false);
-    expect(retry()).toMatchObject({ status: 'pending' });
-
-    harness.agent.harnessRefuseDriving(null);
-    laterBy(1);
-    await harness.agent.terminalRetryPass();
-    await until(retryOnDisk, 'the retry turn reached the transcript');
-
-    laterBy(1);
-    await harness.agent.terminalRetryPass();
-
-    expect(retry()).toBeUndefined();
-    expect(transitionClaims(harness).filter((row) => row.turn_id === turnId)).toEqual([
-      { turn_id: turnId, call_id: `terminal:response:${messageId}`, result_json: '"settled"' },
-    ]);
-    // One retry turn: the replay that found it on disk queued no second.
-    expect((await harness.agent.listRuns()).items).toHaveLength(2);
-  });
-
   test('a rolled-back owed-turn effect reuses the follow-up still queued in RAM', async () => {
     const harness = cutAt('overflow_retry', 'after');
     await turns(harness).openInFlight('u-queue-cut');

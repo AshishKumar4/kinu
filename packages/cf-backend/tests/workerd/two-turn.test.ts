@@ -320,12 +320,6 @@ describe('two real turns over the HTTP model seam', () => {
     expect(done.runEnds).toEqual([{ runId: expect.any(String), reason: 'completed' }]);
   });
 
-  it('a Changes-tab send the loop refuses to drive takes its card row with it', async () => {
-    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-refused-driver'));
-
-    expect(await root.refusedChangeNotes()).toEqual({ sent: true, owed: { sends: 0, cards: 0 } });
-  });
-
   it('splices a mid-turn attachment into the next model call as a file part', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('attach-queue-driver'));
 

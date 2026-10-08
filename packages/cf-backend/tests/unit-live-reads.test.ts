@@ -232,30 +232,6 @@ test('a job\'s wake queued for Main reads working before its turn claims, and th
   expect(await activities(agent)).toEqual({ Main: 'idle' });
 });
 
-// A turn the driver refuses at dequeue settles to its producer and leaves the queue: it cannot read working past the pump.
-test('a wake the driver refuses reads idle once the pump has refused it, and the pump\'s end names the Agents panel', async () => {
-  const { agent } = orchestratorHarness();
-  const turns = chatSessionTurns(agent);
-  const named = namedReads(agent);
-  await agent.getWorkspaceSnapshot();
-  agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another activation is driving' });
-  endTick(agent);
-  named();
-
-  const woken = turns.enqueue('Background shell job bgjob-build completed.', WAKE);
-  const atEnqueue = activities(agent);
-  endTick(agent);
-  named();
-  expect(await atEnqueue).toEqual({ Main: 'working' });
-
-  await woken;
-  await turns.drainEnqueued();
-  endTick(agent);
-
-  expect(named()).toContain('listWorkspaceAgents');
-  expect(await activities(agent)).toEqual({ Main: 'idle' });
-});
-
 // An email to Main is held for the drain its delivery armed: Main owes it a turn from the delivery on.
 test('an email delivered to Main reads working until its drain takes it, and the delivery names the Agents panel', async () => {
   const { agent } = orchestratorHarness({ warmConnections: [], failWarm: null, titles: [], profile: { email: 'owner@example.com' } });

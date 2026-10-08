@@ -9,7 +9,7 @@ import type { LanguageModel } from 'ai';
 import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { fleetEnvForTest } from './helpers/analytics-plane';
 import {
-  makeEnv, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat, workspaceMainActor,
+  makeEnv, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { RunEventRecorder } from '@kinu.run/core';
@@ -51,13 +51,6 @@ function connection(agent: { broadcast: (message: string, exclude?: string[]) =>
   });
 
   return { wire, sent, frame: (holds) => frames.until(holds) };
-}
-
-/** The request is answered only when the words land, so a step driver waits for `queued` instead. */
-function queuedOnWire(steerId: string): (frames: readonly string[]) => boolean {
-  const queued = v.object({ type: v.literal('steer_status'), status: v.literal('queued'), steerId: v.literal(steerId) });
-
-  return (frames) => frames.some((raw) => v.is(queued, JSON.parse(raw)));
 }
 
 function chatRequest(id: string, text: string): string {
@@ -121,81 +114,6 @@ describe('a chat request through the production gate', () => {
     expect(tableNames()).not.toContain('actor_turn_inputs');
   });
 
-  test('a mid-turn send that lands leaves exactly one row, stamped where it landed', async () => {
-    const harness = orchestratorHarness();
-    const { agent } = harness;
-    const { wire, sent, frame } = connection(agent);
-    await agent.activateActor();
-    const gate = agent.harnessChatGate();
-    // Prepare opens the turn production-style, so the inbox reads busy and the splice takes the mid-turn arm.
-    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
-    const [liveRow] = (await userRows(harness));
-
-    // The drain at the step boundary commits the row and answers the request, not the admission.
-    const request = gate(wire, chatRequest('req-steer', 'check staging'));
-    await frame(queuedOnWire('input-req-steer'));
-    const stepped = await chatSessionTurns(agent).step(0, [{ role: 'user', content: 'the long job' }]);
-    await request;
-    const carried = stepped.flatMap((m) => m.role === 'user' && v.is(v.string(), m.content) ? [m.content] : []);
-    expect(carried.some((content) => content.includes('check staging'))).toBe(true);
-    expect((await userRows(harness))).toEqual([liveRow, 'input-req-steer']);
-    const appended = (await storedChat(harness)).find((m) => m.id === 'input-req-steer');
-    expect(v.is(v.object({ metadata: v.object({ kinuSteer: v.literal(true) }) }), appended)).toBe(true);
-    expect(JSON.parse(JSON.stringify(appended))).toMatchObject({ metadata: { kinuSteer: true, kinuSteerAtStep: 0 } });
-    expect(doneFrames(sent)).toEqual([{ id: 'req-steer', landed: 'mid-turn' }]);
-  });
-
-  test('a replay of the same request while the steer is pending asks for no second turn', async () => {
-    const { agent } = orchestratorHarness();
-    const { wire, sent, frame } = connection(agent);
-    await agent.activateActor();
-    const gate = agent.harnessChatGate();
-
-    // The replay finds the words held and is spent at once, asking for nothing.
-    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
-    const request = gate(wire, chatRequest('req-steer', 'check staging'));
-    await frame(queuedOnWire('input-req-steer'));
-    await gate(wire, chatRequest('req-steer', 'check staging'));
-
-    expect(doneFrames(sent)).toEqual([{ id: 'req-steer' }]);
-    const bodies = agent.harnessEnqueued.map((turn) => turn.text);
-    expect(bodies.filter((text) => text.includes('check staging'))).toHaveLength(0);
-
-    await chatSessionTurns(agent).step(0, [{ role: 'user', content: 'the long job' }]);
-    await request;
-    expect(doneFrames(sent)).toEqual([{ id: 'req-steer' }, { id: 'req-steer', landed: 'mid-turn' }]);
-  });
-
-  test('a second connection mid-turn is told what is resuming and reads the fresh transcript', async () => {
-    const harness = orchestratorHarness();
-    const { agent } = harness;
-    const { wire, frame } = connection(agent);
-    await agent.activateActor();
-    const gate = agent.harnessChatGate();
-
-    // The request stays open, as one to a running turn is; the second socket is what is measured.
-    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
-    const request = gate(wire, chatRequest('req-live', 'the long job'));
-    await frame(queuedOnWire('input-req-live'));
-    const [liveRow] = (await storedChat(harness)).filter((m) => m.role === 'user').map((m) => m.id);
-
-    const second = connection(agent);
-    await agent.onConnect(second.wire, { request: new Request('https://agent/connect') });
-    const frames = second.sent.map((raw) => v.parse(v.looseObject({ type: v.string(), messages: v.optional(v.array(v.object({ id: v.string() }))) }), JSON.parse(raw)));
-
-    // Told what is resuming before the current transcript, which includes the live turn's row.
-    const resumingAt = frames.findIndex((sentFrame) => sentFrame.type === 'cf_agent_stream_resuming');
-    const seedAt = frames.findIndex((sentFrame) => sentFrame.type === 'cf_agent_chat_messages');
-    expect(resumingAt !== -1 && resumingAt < seedAt).toBe(true);
-    const seed = frames[seedAt];
-    expect(seed?.messages?.map((m) => m.id)).toContain(liveRow);
-
-    // A resuming socket that closes releases the resume the handshake held.
-    await agent.onClose(second.wire, 1000, 'gone', true);
-    await chatSessionTurns(agent).step(0, [{ role: 'user', content: 'the long job' }]);
-    await request;
-  });
-
   test('a live turn records its fleet row at its own seal', async () => {
     const { agent } = orchestratorHarness(undefined, undefined, fleetEnvForTest(makeEnv()));
     await agent.activateActor();
@@ -237,18 +155,4 @@ describe('a chat request through the production gate', () => {
     expect(fleetRowKinds(agent)).not.toContain('turn');
   });
 
-  test('a refused send closes the request with the refusal and leaves nothing', async () => {
-    const harness = orchestratorHarness();
-    const { agent } = harness;
-    const { wire, sent } = connection(agent);
-    await agent.activateActor();
-    agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another session is driving this workspace' });
-
-    await agent.harnessChatGate()(wire, chatRequest('req-no', 'hello'));
-
-    const [done] = doneFrames(sent);
-    expect(done?.id).toBe('req-no');
-    expect(done?.error).toMatch(/another session is driving/);
-    expect(await userRows(harness)).toEqual([]);
-  });
 });

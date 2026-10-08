@@ -82,8 +82,9 @@ import {
   type WakeDriveResult,
   type WakeRows,
 } from './two-turn-shapes';
-import { CHAT_SESSION_ID, changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type SessionTranscript, type WorkMode } from '@kinu.run/core';
-import { renderThrownChain, type Refusal } from '@kinu.run/core/obs';
+import { CHAT_SESSION_ID, changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type WorkMode } from '@kinu.run/core';
+import type { ChatWire, ChatWireTransport } from '../../src/chat-transport';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { seedTranscriptEntry } from '@kinu.run/test-utils/transcript';
 import type { ToolSet } from 'ai';
 
@@ -173,7 +174,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'meterEnd');
     Reflect.deleteProperty(this, 'settleState');
     Reflect.deleteProperty(this, 'sleepTimeNow');
-    Reflect.deleteProperty(this, 'refuseDriving');
     Reflect.deleteProperty(this, 'refuseReservations');
     Reflect.deleteProperty(this, 'owedSends');
     Reflect.deleteProperty(this, 'latestClaimOutcome');
@@ -187,18 +187,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'cutTerminal');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseDriving', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'terminalState', 'alienEffect']);
-  }
-
-  /** What the loop's driver gate answers once refused, as when another activation holds the lease. */
-  private drivingRefused: Refusal | null = null;
-
-  protected override driverGate(): Refusal | null {
-    return this.drivingRefused ?? super.driverGate();
-  }
-
-  async refuseDriving(): Promise<void> {
-    this.drivingRefused = { reason: 'unavailable', error: 'another activation is driving' };
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'terminalState', 'alienEffect']);
   }
 
   /** A storage fault on every reservation the workspace writes while `refused`. */
@@ -426,25 +415,26 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return { cost: this.meter.end(null), historyReads };
   }
 
-  private countedTranscript: SessionTranscript | null = null;
+  private countedWire: ChatWire | null = null;
 
-  /** The production transcript, each whole-history read counted while the meter runs. */
-  protected override get chatTranscript(): SessionTranscript {
-    const transcript = super.chatTranscript;
+  /** The root room, each whole-history read (a call into main's own isolate) counted while the meter runs. */
+  protected override get chatTransport(): ChatWireTransport {
+    const transport = super.chatTransport;
+    const { wire } = transport;
 
-    if (this.countedTranscript !== transcript) {
-      const history = transcript.history.bind(transcript);
+    if (this.countedWire !== wire) {
+      const history = wire.history.bind(wire);
 
-      transcript.history = async (limit) => {
+      wire.history = async (limit) => {
         if (this.historyReads !== null) this.historyReads += 1;
 
         return await history(limit);
       };
 
-      this.countedTranscript = transcript;
+      this.countedWire = wire;
     }
 
-    return transcript;
+    return transport;
   }
 
 
@@ -514,29 +504,17 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     });
   }
 
+  /** Main's answers as its window reads them, from its own isolate. */
   private async assistantTexts(): Promise<string[]> {
-    const texts: string[] = [];
-
-    for (const entry of this.chatTranscript.entries()) {
-      if (entry.role !== 'assistant') continue;
-      const projected = await this.chatTranscript.project(entry.id);
-
-      if (projected !== null) texts.push(projected.content);
-    }
-
-    return texts;
+    return (await this.chatTransport.wire.history()).flatMap((message) => (message.role === 'assistant'
+      ? [message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')]
+      : []));
   }
 
   private async conversationRows(): Promise<ParityRows['assistantMessages']> {
-    const rows: ParityRows['assistantMessages'] = [];
-
-    for (const entry of this.chatTranscript.entries()) {
-      const message = await this.chatTranscript.message(entry.id);
-
-      if (message !== null) rows.push({ id: entry.id, position: entry.position, role: entry.role, content: JSON.stringify(message) });
-    }
-
-    return rows;
+    return (await this.chatTransport.wire.history()).map((message, position) => ({
+      id: message.id, position, role: message.role, content: JSON.stringify(message),
+    }));
   }
 
   /** The row a reset must restore so a replayed frame keeps its token. */
@@ -793,7 +771,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent' | 'readWorkspaceFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
-  & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
+  & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
   | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
@@ -1705,19 +1683,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       runEnds: await target.runEnds(),
       claimOutcome: await target.latestClaimOutcome(),
     };
-  }
-
-  /** A send the loop refuses to drive takes its card row with it. */
-  async refusedChangeNotes(): Promise<{ readonly sent: boolean; readonly owed: { readonly sends: number; readonly cards: number } }> {
-    const { target } = await this.claimQueueWorkspace('notes-refused');
-
-    await target.saveChangeNotes('workspace', [NOTE]);
-    await target.refuseDriving();
-    const sent = await target.sendChangeNotes(NOTED);
-
-    await awaitSettled(target);
-
-    return { sent: sent.ok, owed: await target.owedSends() };
   }
 
   /** The durable pending_steers row, not the socket, binds each replay to the turn. */

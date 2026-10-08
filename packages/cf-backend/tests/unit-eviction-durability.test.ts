@@ -381,23 +381,6 @@ describe('a sandbox lifecycle failure', () => {
     expect(turns[0]?.id).toContain('inc-1');
   });
 
-  test('a delivery that never landed is re-deliverable, which is what ends the retry loop', async () => {
-    const harness = orchestratorHarness();
-    const { agent } = harness;
-    // Another activation drives the conversation, so the turn the incident needs cannot run here.
-    agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another activation is driving' });
-
-    const refused = await agent.acceptSandboxLifecycleIncident(incident);
-    // `undelivered`, not `queued`: the box maps `queued` to `deliveredAt` and stops offering the row.
-    expect(refused).toMatchObject({ status: 'undelivered', duplicate: false });
-
-    agent.harnessRefuseDriving(null);
-    const retried = await agent.acceptSandboxLifecycleIncident(incident);
-
-    expect(retried).toMatchObject({ status: 'queued', duplicate: false });
-    expect(await programmaticTurns(harness)).toHaveLength(1);
-  });
-
   test('the agent is told what the stage costs it, and the incident id, and nothing else', async () => {
     const harness = orchestratorHarness();
     const { agent } = harness;

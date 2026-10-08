@@ -1,6 +1,6 @@
 /**
- * The one seam for running a turn on the hosted root and reading what it did; it names nothing about how the
- * turn is driven. Implemented by `chatSessionTurns` (actor-harness) over core's ChatSession.
+ * The one seam for running a turn on the workspace's own agent and reading what it did; it names nothing about how the
+ * turn is driven. Implemented by `chatSessionTurns` (actor-harness) over the agent's own isolate.
  */
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import type { ChatOptions, JsonObject } from '@kinu.run/core';
@@ -64,12 +64,10 @@ export interface TurnHarness {
   /** Run the newest admitted message as its own turn, as owed once the loop is free. */
   runQueuedMessage(): Promise<void>;
   prepare(input: TurnInput): Promise<PreparedRequest>;
-  /** Resume on a fresh activation and read the first resumed request, parked at its model call. */
+  /** Resume on a fresh isolate and read the first resumed request, parked at its model call. */
   resume(): Promise<PreparedRequest>;
   /** Park the next turn, whoever admits it, at its model call and return its request. */
   park(): Promise<PreparedRequest>;
-  /** The per-step request (dynamic context, cache breakpoints, pruning) for the prepared turn. */
-  step(stepNumber: number, messages: readonly ModelMessage[]): Promise<readonly ModelMessage[]>;
   /** Settle through the production spine; answers the opening and answer row ids. */
   settle(answer: ScriptedAnswer): Promise<SettledTurn>;
   /** Name the durable turn the next settle belongs to. */

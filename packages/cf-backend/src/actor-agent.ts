@@ -1976,9 +1976,8 @@ export abstract class ActorAgent extends Agent<Env> {
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
         enqueueTurn: (input) => this.enqueueMainTurn(input),
-        // Synchronous read plus same-tick buffer push means the observed turn's prepareStep drains
-        // the signal; a turn that settles first re-delivers it from settle().
-        turnInFlight: () => this.mainChatTurn() !== null,
+        // Main's turns run in its own isolate, whose steps never read this object's buffer: a signal is its next turn.
+        turnInFlight: () => false,
         // Its chat is its isolate's, which never ends.
         closed: () => false,
         // keepAliveWhile holds the DO through the debounce window and drain; if it dies anyway,
@@ -3982,19 +3981,6 @@ export abstract class ActorAgent extends Agent<Env> {
     ]);
 
     return { profileInputs, mcpTools, identity, catalog, choices };
-  }
-
-  /** Runs after the turn is open (`orch.beginTurn`, the run row) and before the first model call. */
-  /** Every durable row of the answer is keyed on this id. A harness that must read those rows
-   * back overrides this. */
-  protected mintAnswerId(): string {
-    return crypto.randomUUID();
-  }
-
-  /** Always allows: the platform serializes activations of one Durable Object. Overridable
-   * so a suite can state the refusal the loop answers a send with. */
-  protected driverGate(): Refusal | null {
-    return null;
   }
 
   /** The one override point for a harness to script a turn's model. */

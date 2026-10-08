@@ -69,14 +69,6 @@ const DynamicContextSchema = v.object({
   content: v.pipe(v.string(), v.includes('<dynamic_context')),
 });
 
-async function stepMessages(
-  agent: HarnessOrchestratorAgent, stepNumber: number, messages: readonly ModelMessage[],
-): Promise<ModelMessage[]> {
-  const carried = await chatSessionTurns(agent).step(stepNumber, messages);
-
-  return carried.filter((m) => !v.is(DynamicContextSchema, m));
-}
-
 
 describe('a message typed while the agent is working', () => {
   test('a Stop on the next activation stops the device work of the turn the evicted one was running', async () => {
@@ -107,7 +99,7 @@ describe('a message typed while the agent is working', () => {
     expect(turnAuthor(admitted[0])).toBe('operator');
     expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'build' });
     expect(steerFrames(h.frames)).toEqual([]);
-    expect(await stepMessages(h.agent, 0, turn.messages)).toEqual([...turn.messages]);
+    expect(turn.prompt.filter((m) => !v.is(DynamicContextSchema, m))).toEqual([...turn.messages]);
 
     // The words' reservation retires with the answer, in one transaction: nothing is left to redeliver.
     await turns.settle({ messageId: 'a-idle', text: 'ok' });
@@ -124,78 +116,6 @@ describe('a message typed while the agent is working', () => {
     expect(turnAuthor(admitted[0])).toBe('operator');
     expect(h.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'plan' });
     await chatSessionTurns(h.agent).settle({ messageId: 'a-plan', text: 'ok' });
-  });
-
-  test('is taken mid-turn, announced as queued, and reaches the model at the next step', async () => {
-    const h = steerHarness();
-    await h.startTurn();
-
-    await h.agent.send('also check staging', 'steer-staging');
-
-    // Announced before the model has it: the composer needs "we took your words" immediately.
-    expect(steerFrames(h.frames)).toEqual([
-      { type: 'steer_status', status: 'queued', steerId: expect.any(String), text: 'also check staging' },
-    ]);
-    expect((await h.appended())).toEqual([]);
-
-    // At the tail, after the latest results, which keeps role alternation provider-safe.
-    expect(await stepMessages(h.agent, 0, HISTORY)).toEqual([
-      ...HISTORY,
-      { role: 'user', content: 'also check staging' },
-    ]);
-
-    const landed = steerFrames(h.frames);
-    expect(landed.map((f) => f.status)).toEqual(['queued', 'landed']);
-    expect(landed[1].steerId).toBe(landed[0].steerId);
-  });
-
-  test('a steer that invokes a skill the turn does not carry brings its body to the next step', async () => {
-    // Skills resolve when the turn opens, so a mid-turn /skill invocation must still activate it.
-    const h = steerHarness();
-    await h.startTurn();
-
-    await h.agent.send('/slates now build a slate that answers GET /ping', 'steer-ping');
-
-    const carried = await stepMessages(h.agent, 0, HISTORY);
-    expect(carried[HISTORY.length]).toEqual({ role: 'user', content: '/slates now build a slate that answers GET /ping' });
-    const reference = carried[HISTORY.length + 1];
-    expect(reference?.role).toBe('user');
-    expect(JSON.stringify(reference?.content)).toContain('### slates');
-    expect(JSON.stringify(reference?.content)).toContain('fetch(request)');
-    expect((await h.appended()).filter((row) => row.role === 'user')).toHaveLength(1);
-  });
-
-  test('persists as a VERBATIM user row carrying the id and the step it landed in', async () => {
-    const h = steerHarness();
-    await h.startTurn();
-    await h.agent.send('also check staging', 'steer-1');
-    await stepMessages(h.agent, 4, HISTORY);
-
-    // A user row, because the walk-back fork cuts at a user message; the step index places it within the turn.
-    expect((await h.appended()).map((row) => JSON.parse(JSON.stringify(row)))).toEqual([{
-      id: steerFrames(h.frames)[0].steerId,
-      role: 'user',
-      parts: [{ type: 'text', text: 'also check staging' }],
-      metadata: { kinuSteer: true, kinuSteerAtStep: 4 },
-    }]);
-    expect(steerFrames(h.frames)[1]).toMatchObject({ status: 'landed', atStep: 4 });
-  });
-
-  test('two steers merge into one user message but persist as two rows', async () => {
-    const h = steerHarness();
-    await h.startTurn();
-    await h.agent.send('also check staging', 'steer-2');
-    await h.agent.send('and the logs', 'steer-3');
-
-    expect(await stepMessages(h.agent, 0, HISTORY)).toEqual([
-      ...HISTORY,
-      { role: 'user', content: 'also check staging\n\nand the logs' },
-    ]);
-    // One message to the model (role alternation), two rows in history (the fork pivot matches an individual user message).
-    expect((await h.appended()).map((m) => m.parts)).toEqual([
-      [{ type: 'text', text: 'also check staging' }],
-      [{ type: 'text', text: 'and the logs' }],
-    ]);
   });
 
   test('an empty steer is refused outright rather than sent as a blank turn', async () => {
@@ -243,20 +163,6 @@ describe('stopping a turn with a steer still pending', () => {
 
     expect(outcome).not.toHaveProperty('returnedSteers');
     expect(steerFrames(h.frames).map((f) => f.status)).toEqual(['queued']);
-    expect(await stepMessages(h.agent, 1, HISTORY)).toEqual([
-      ...HISTORY,
-      { role: 'user', content: 'change of plans' },
-    ]);
-  });
-
-  test('leaves a steer the model already read alone', async () => {
-    const h = steerHarness();
-    await h.startTurn();
-    await h.agent.send('also check staging', 'steer-4');
-    await stepMessages(h.agent, 0, HISTORY);
-
-    expect(await h.agent.cancelCurrentWork()).not.toHaveProperty('returnedSteers');
-    expect((await h.appended())).toHaveLength(1);
   });
 
   test('two queued steers become the next turn text in order once the abort settles', async () => {

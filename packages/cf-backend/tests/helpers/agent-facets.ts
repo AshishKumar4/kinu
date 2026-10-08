@@ -32,6 +32,30 @@ const registered = mock.module('../../src/providers/agent-registry', () => ({
 
 if (registered !== undefined) throw new Error('mock.module(agent-registry) must register synchronously');
 
+/** Isolates whose next answer row fails to write, as a failed commit does. */
+const undurableAnswers = new Set<string>();
+
+/** The isolate under `storageKey` fails to write its next answer row; the commit is one transaction, so nothing lands. */
+export function failNextAnswerWrite(storageKey: string): void {
+  undurableAnswers.add(storageKey);
+}
+
+function withUndurableAnswers(ctx: AgentContext, storageKey: string): AgentContext {
+  const { sql } = ctx.storage;
+  const exec = sql.exec.bind(sql);
+
+  sql.exec = (query, ...bindings) => {
+    if (undurableAnswers.has(storageKey) && query.includes('INSERT INTO conversation_entries') && bindings.includes('assistant')) {
+      undurableAnswers.delete(storageKey);
+      throw new Error(`the answer row ${String(bindings[2])} could not be written`);
+    }
+
+    return exec(query, ...bindings);
+  };
+
+  return ctx;
+}
+
 /** Every model call routed under `conversation`, in any isolate, is answered by `model`; null answers it as shipped. */
 export function scriptConversationModel(conversation: string, model: (() => LanguageModel) | null): void {
   if (model === null) scriptedModels.delete(conversation);
@@ -175,7 +199,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         ...placement.providers,
       };
 
-      const facet = new AgentFacet(makeCtx(db, placement.storageKey), env);
+      const facet = new AgentFacet(withUndurableAnswers(makeCtx(db, placement.storageKey), placement.storageKey), env);
       const lost = new AbortController();
 
       // A reset isolate fails every call it still held, as a dropped RPC does; a refusal crosses in its own words, as an
