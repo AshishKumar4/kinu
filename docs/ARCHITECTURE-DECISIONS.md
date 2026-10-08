@@ -1325,9 +1325,9 @@ Decided 2026-09-30 with Main. evals.yml's own conclusion is green whenever the
 run finished: its trial step continues on error, and the comparison never
 exits non-zero. So the staging deploy dispatches it naming the build it
 published (the API answers with the run's id, which the record keeps), from
-the branch on origin that holds the build nearest its tip, read from git:
-GitHub runs the evals.yml of the ref it is given, and main, behind the
-release, has none that takes a build. The run measures staging against
+main: the `eval` environment releases its secrets to main alone, and GitHub
+runs the evals.yml of the ref it is given, so main must hold the build, and a
+release pushes main first (2026-10-08). The run measures staging against
 production, and its `Verdict` job fails on an
 incomplete report or a regression. `promote.ts check` requires that job, by
 name, to have completed green, and says "no eval verdict yet" while the run has

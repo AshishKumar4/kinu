@@ -11,6 +11,7 @@ import { notInRegistry } from './workspace-ownership';
 
 import type { UserMcpServers } from './mcp-servers';
 import type { UserObjectHost } from './user-host';
+import type { ShareCardJobs } from './share-cards';
 
 /** Renewed as each fork frame lands, so this bounds the gap between frames, not the transfer. */
 const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
@@ -44,6 +45,8 @@ class WorkspaceReservationNotPendingError extends Error {
 
 export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
   readonly mcpServers: Pick<UserMcpServers, 'stopWorkspaceMcpCalls'>;
+  /** Brings a workspace's share recipients to the shares its overview names. */
+  readonly shareCards: Pick<ShareCardJobs, 'reconcile'>;
   nudgeUnreported(): void;
 }
 
@@ -180,7 +183,9 @@ export class UserWorkspaces {
       name, JSON.stringify(parsed), parsed.activity, parsed.decisionsWaiting,
     );
 
-    if (changed.length > 0) this.rosterChanged(name);
+    if (changed.length === 0) return;
+    this.rosterChanged(name);
+    await this.host.shareCards.reconcile(name, parsed.shares);
   }
 
   /** Uncapped enumeration of the active roster for server-side fans, where a page would drop targets. */
@@ -479,6 +484,8 @@ export class UserWorkspaces {
     this.host.mcpServers.stopWorkspaceMcpCalls(name);
     revokeWorkspaceCapability(this.host.ctx.storage.sql, name);
     this.rosterChanged(name);
+    // Its recipients lose their cards whether or not the destroy below lands.
+    await this.host.shareCards.reconcile(name, []);
     // Grants are read by name, so a surviving row would grant full_filesystem to a same-name recreate.
     this.deleteWorkspaceRows(name, 'before-destroy');
 

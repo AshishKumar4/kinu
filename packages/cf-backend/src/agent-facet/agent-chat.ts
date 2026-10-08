@@ -26,6 +26,12 @@ export interface FacetChatDeps {
   readonly storage: DurableObjectStorage;
 }
 
+/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's, and a plan's feedback or approval
+ *  (the owner's decision), in the owner's. */
+function parentDrivenTurn(item: ChatTurnInput): boolean {
+  return item.kind === 'programmatic' && item.metadata?.kinuEvent !== 'plan_feedback' && item.metadata?.kinuEvent !== 'plan_approved';
+}
+
 export class FacetChat {
   readonly session: ChatSession;
 
@@ -39,10 +45,11 @@ export class FacetChat {
   /** Whether the turn running answers the agent's hirer (a delegated task), not its owner. */
   private parentDriven = false;
 
-  /** The turn in flight's input, whose author decides whether it may submit a plan. */
-  private item: ChatTurnInput | null = null;
+  /** The turn's author-stamped metadata, which its tool calls carry: a plan it submits is judged by it. */
+  private driving: JsonObject | undefined;
 
-  private readonly planUpdates: BroadcastEvent[] = [];
+  /** Each plan update in the order its transition happened, delivered as soon as it happened. */
+  private planDelivery: Promise<void> = Promise.resolve();
 
   /** Its own plan reviews, in its own store: the owner reviews them through its window (D9). */
   readonly plans: PlanReviewActions;
@@ -61,7 +68,7 @@ export class FacetChat {
     const sql = actor.runtime.storage.sql;
 
     this.trigger = { state: createCompactionStateStore(sql, actor.handle), key: actor.record.actorId };
-    this.plans = new PlanReviewActions(actor.stores.planReviews, { broadcast: (event) => { this.planUpdates.push(event); } });
+    this.plans = new PlanReviewActions(actor.stores.planReviews, { broadcast: (event) => { this.announcePlan(event); } });
     this.spend = new FacetSpend(workspace);
 
     this.session = new ChatSession({
@@ -108,7 +115,11 @@ export class FacetChat {
   private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
     const { actor, database, workspace, providers } = this.deps;
     const live: LiveTurn = { dynamic: prepared.dynamic };
-    const tools = facetTurnTools(workspace, prepared, actor, { id: turn.id, mode: turn.mode, live, capture: new HeadCapture(), database });
+
+    const tools = facetTurnTools(workspace, prepared, actor, {
+      id: turn.id, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
+    });
+
     const { sources: bundle } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id });
 
     return await assembleActorTurn({
@@ -127,12 +138,15 @@ export class FacetChat {
   private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     const { actor, database, workspace } = this.deps;
     const mode = actor.session.workMode;
-    this.item = item;
-    // A plan's feedback or approval is the owner's decision, so its turn keeps the owner's lane, not the hirer's.
-    this.parentDriven = item.kind === 'programmatic' && item.metadata?.kinuEvent !== 'plan_feedback' && item.metadata?.kinuEvent !== 'plan_approved';
+    // The one place a turn's lane is decided; the workspace rebuilds a turn from this, never from its id.
+    this.parentDriven = parentDrivenTurn(item);
+    this.driving = authoredTurnMetadata(item);
     // The workspace reads the turn's sources for the tier it runs on, and the turn is assembled on that same tier.
     const explicitTier = metadataTier(item.metadata);
-    const prepared = await workspace.prepareChat({ turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, ...(explicitTier !== undefined && { explicitTier }) });
+
+    const prepared = await workspace.prepareChat({
+      turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, ...(explicitTier !== undefined && { explicitTier }),
+    });
 
     database.prepare(lease.turnId, prepared);
     this.reviewsTurns = prepared.reviewsTurns;
@@ -151,16 +165,14 @@ export class FacetChat {
     };
   }
 
-  /** The turn in flight's metadata, author-stamped as the root's is, for a plan it submits. */
-  drivingMetadata(): JsonObject | undefined {
-    return this.session.turnInFlight() && this.item !== null ? authoredTurnMetadata(this.item) : undefined;
+  private announcePlan(event: BroadcastEvent): void {
+    this.planDelivery = this.planDelivery.then(async () => { await this.deps.workspace.chatEvent({ type: 'broadcast', event }); });
   }
 
-  /** A plan action, then each update it announced, delivered to the agent's window before it answers. */
+  /** A plan action, answered once each update it announced has reached the agent's window. */
   async planned<A>(act: (plans: PlanReviewActions) => A | Promise<A>): Promise<A> {
     const result = await act(this.plans);
-
-    for (const event of this.planUpdates.splice(0)) await this.deps.workspace.chatEvent({ type: 'broadcast', event });
+    await this.planDelivery;
 
     return result;
   }

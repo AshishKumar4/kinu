@@ -125,9 +125,9 @@ describe('the Slate preview frame', () => {
         await serveSlate(page);
         await page.setViewport({ width: 720, height: 800 });
         await page.goto(`${origin}/gallery.html?frame=workslatefallback`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('button[title="Fallback Probe"][aria-current="true"]');
+        await page.waitForSelector('button[title="Fallback Probe"][aria-selected="true"]');
         await page.evaluate(() => { window.dispatchEvent(new Event('gallery:slate-unpublish')); });
-        await page.waitForSelector('button[aria-label="Work"][aria-current="true"]');
+        await page.waitForSelector('button[aria-label="Work"][aria-selected="true"]');
         expect(await page.$('button[title="Fallback Probe"]')).toBeNull();
       } finally {
         await page.close();
@@ -237,7 +237,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
 
         await page.click('[data-new-plan]');
         await page.waitForSelector('[data-plan-review-root]');
-        expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
+        expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-selected'))).toBe('true');
         await page.evaluate(() => {
           const button = [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Approve & implement'));
 
@@ -265,12 +265,12 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         // stays where it was and the strip raises the "Preview ready" chip —
         // only the reader's click on it navigates.
         await page.waitForSelector('[data-preview-ready]');
-        expect(await page.$eval('[aria-label="Report"]', el => el.getAttribute('aria-current'))).not.toBe('true');
+        expect(await page.$eval('[aria-label="Report"]', el => el.getAttribute('aria-selected'))).not.toBe('true');
         await page.click('[data-preview-ready]');
-        await page.waitForSelector('[aria-label="Report"][aria-current="true"]');
+        await page.waitForSelector('[aria-label="Report"][aria-selected="true"]');
         await page.click('[aria-label="Work"]');
         await page.click('[data-refresh-preview]');
-        expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
+        expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-selected'))).toBe('true');
         await page.click('[data-add-diff]');
         await page.waitForSelector('[aria-label="Changes"]');
         await page.click('[aria-label="Sandbox app"]');
@@ -301,7 +301,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.click('[data-new-plan]');
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Dashboard delivery'));
         await page.click('[aria-label="Device app"]');
-        await page.waitForSelector('[aria-label="Device app"][aria-current="true"]');
+        await page.waitForSelector('[aria-label="Device app"][aria-selected="true"]');
         // Neither a malformed reference nor one the workspace never issued may
         // move the user: the malformed one never becomes a reference at all,
         // and the stale one names a revision the read does not hold, so the
@@ -310,11 +310,11 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.click('[data-notify-stale]');
         await readCycleElapsed(page);
         expect(await page.$('[data-plan-review-root]')).toBeNull();
-        expect(await page.$eval('[aria-label="Device app"]', el => el.getAttribute('aria-current'))).toBe('true');
+        expect(await page.$eval('[aria-label="Device app"]', el => el.getAttribute('aria-selected'))).toBe('true');
         // The real reference: Work takes the user, the exact plan fills the
         // tab — foreign, so read-only with the way to its owner's conversation.
         await page.click('[data-notify-plan]');
-        await page.waitForSelector('[aria-label="Work"][aria-current="true"]');
+        await page.waitForSelector('[aria-label="Work"][aria-selected="true"]');
         await page.waitForSelector('[data-plan-review-root]');
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Courier rollout'));
         expect(await page.$('[data-plan-decisions]')).toBeNull();
@@ -336,7 +336,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.click('[aria-label="Sandbox app"]');
         await page.click('[data-worker-plan]');
         await page.click('[aria-label="Work"]');
-        await page.waitForSelector('[aria-label="Work"][aria-current="true"]');
+        await page.waitForSelector('[aria-label="Work"][aria-selected="true"]');
         // The nested review is still open — surfaces hide, they never unmount,
         // and the review lives in the tab across them. Back is the way out.
         await page.click('[data-back-to-work]');
@@ -716,7 +716,7 @@ describe('inline slate previews in the chat', () => {
         await page.waitForSelector('[data-inspector-expand]');
         await openFromChat(page, 'board');
         expect(await page.$('[data-inspector-collapse]')).not.toBeNull();
-        expect(await page.$('.p-tabstrip button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
+        expect(await page.$('.p-tabstrip button[aria-label="Board"][aria-selected="true"]')).not.toBeNull();
 
         // Shown beside the chat, the board's preview folds; moved off it, the preview comes back.
         expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', false]]);
@@ -822,7 +822,7 @@ describe('inline slate previews in the chat', () => {
         expect(await shown()).toBe('Chat');
         await openFromChat(page, 'board');
         expect(await shown()).toBe('Workspace');
-        expect(await page.$('.p-tabstrip button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
+        expect(await page.$('.p-tabstrip button[aria-label="Board"][aria-selected="true"]')).not.toBeNull();
 
         // The two panes never share the screen, so back in the chat the board's preview is still unfolded.
         await page.click('.p-bar [data-inspector-toggle]');

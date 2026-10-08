@@ -160,7 +160,7 @@ function lines(chunks: ReadableStream<UIMessageChunk>): ReadableStream<Uint8Arra
 function workspaceTools(
   workspace: AgentWorkspace,
   prepared: PreparedAgentTurn,
-  turn: { readonly id: string; readonly mode: WorkMode; readonly live: { dynamic: PreparedAgentTurn['dynamic'] }; readonly capture: HeadCapture; readonly database: AgentDatabase },
+  turn: FacetToolTurn,
 ): ToolSet {
   return Object.fromEntries(prepared.tools.map((descriptor) => {
     const entry = tool({
@@ -168,7 +168,8 @@ function workspaceTools(
       inputSchema: jsonSchema(descriptor.inputSchema),
       execute: async (input, { toolCallId }) => {
         const answer = await workspace.executeTool({
-          activity: turn.database.takeActivity(), turnId: turn.id, mode: turn.mode, callId: toolCallId, name: descriptor.name, input: decodeJsonValue({ value: input }),
+          activity: turn.database.takeActivity(), turnId: turn.id, mode: turn.mode, parentDriven: turn.parentDriven, ...(turn.driving !== undefined && { driving: turn.driving }),
+          callId: toolCallId, name: descriptor.name, input: decodeJsonValue({ value: input }),
         });
 
         turn.live.dynamic = answer.dynamic;
@@ -264,10 +265,18 @@ export function facetTurnSources(turn: {
   return { sources, trigger: compaction.trigger };
 }
 
-export function facetTurnTools(
-  workspace: AgentWorkspace, prepared: PreparedAgentTurn, actor: HostedActor,
-  turn: { readonly id: string; readonly mode: WorkMode; readonly live: LiveTurn; readonly capture: HeadCapture; readonly database: AgentDatabase },
-): ToolSet {
+/** A turn's tool calls carry its lane, so a workspace that restarted mid-turn rebuilds the same turn. */
+interface FacetToolTurn {
+  readonly id: string;
+  readonly mode: WorkMode;
+  readonly parentDriven: boolean;
+  readonly driving: JsonObject | undefined;
+  readonly live: LiveTurn;
+  readonly capture: HeadCapture;
+  readonly database: AgentDatabase;
+}
+
+export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgentTurn, actor: HostedActor, turn: FacetToolTurn): ToolSet {
   return withEffectClaims(workspaceTools(workspace, prepared, turn), {
     actor: actor.handle,
     sql: actor.runtime.storage.sql,
@@ -298,7 +307,7 @@ export async function runAgentTask(
     clock: REAL_CLOCK,
     sources,
     compaction: trigger,
-    tools: facetTurnTools(workspace, prepared, actor, { id: task.sequenceId, mode: task.mode, live, capture, database }),
+    tools: facetTurnTools(workspace, prepared, actor, { id: task.sequenceId, mode: task.mode, parentDriven: false, driving: undefined, live, capture, database }),
     opening: decodeModelMessageValues(prepared.opening),
     capture,
     isAborted: () => stop.aborted,

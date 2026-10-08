@@ -287,6 +287,8 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
 export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPayloads> {
   private readonly sources = new WeakMap<ModelMessage, MessageReference>();
 
+  private readonly renders = new WeakMap<ModelMessage, PreparedMessage>();
+
   /** In-memory lookup; the caller asserts the actor. */
   sourceOf(message: ModelMessage): MessageReference | null {
     return this.sources.get(message) ?? null;
@@ -357,10 +359,17 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
 
   /** A render-only copy named by its bytes (a spilled payload by their digest), so one row serves every request. */
   async prepareRender(message: ModelMessage): Promise<PreparedMessage> {
+    const known = this.renders.get(message);
+
+    if (known !== undefined) return known;
     const prepared = await this.prepare(message, '');
     const { role, contentKind, envelope, content: { payload } } = prepared;
+    const render = { ...prepared, id: `render:${sha256Hex(`${role}\n${contentKind}\n${JSON.stringify(envelope)}\n${payload.json ?? payload.digest}`)}` };
 
-    return { ...prepared, id: `render:${sha256Hex(`${role}\n${contentKind}\n${JSON.stringify(envelope)}\n${payload.json ?? payload.digest}`)}` };
+    // A step resends the same render copies; an inline one is a pure function of its message, a spilled one is not.
+    if (payload.path === null) this.renders.set(message, render);
+
+    return render;
   }
 
   insertRender(prepared: PreparedMessage): void {

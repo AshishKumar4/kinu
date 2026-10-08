@@ -8,7 +8,7 @@
 import * as v from 'valibot';
 import {
   CHAIN_BOTTOM, CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, JOB_COMMAND, JOB_MISSION, JOB_NOTED,
-  JOB_STARTED, NEST_MISSION, NEST_RELAY, REPORT_MARK, type ChildScript, type JobWatchState,
+  HIRE_PLAN_ASK, JOB_STARTED, NEST_MISSION, NEST_RELAY, REPORT_MARK, type ChildScript, type JobWatchState,
 } from './hire-shapes';
 
 export interface HireCall {
@@ -165,6 +165,10 @@ interface ReportToolArgs {
   readonly content: string;
 }
 
+interface SubmitPlanArgs {
+  readonly edits: readonly { readonly start: number; readonly content: string }[];
+}
+
 interface ShellToolArgs {
   readonly command: string;
   readonly runtime: 'workspace';
@@ -213,7 +217,7 @@ function textBody(model: string, text: string): Response {
   ]);
 }
 
-function toolCallBody(model: string, callId: string, name: string, args: AgentsToolArgs | ReportToolArgs | ShellToolArgs): Response {
+function toolCallBody(model: string, callId: string, name: string, args: AgentsToolArgs | ReportToolArgs | ShellToolArgs | SubmitPlanArgs): Response {
   return streamResponse([
     sse({
       id: callId, object: 'chat.completion.chunk', model,
@@ -549,8 +553,16 @@ export async function hireOutbound(request: Request): Promise<Response> {
   // The child's lane: `report` is deps-gated (core's `DEPS_GATED_TOOLS`), so only a hired actor carries it.
   if (toolNames(body).includes('report')) return await childLane(run, body, results);
 
-  // A plan's feedback reaches a hired agent on the owner's lane, so without `report`: it answers.
-  if (lastUser(body).includes('The owner requested changes to plan')) return textBody(body.model ?? HIRE_CHILD_MODEL, CHILD_ANSWER);
+  // The owner's Plan turn in a hired agent's pane submits its plan, and the feedback turn revises it, each once.
+  if (toolNames(body).includes('submit_plan') && (lastUser(body).includes(HIRE_PLAN_ASK) || lastUser(body).includes('The owner requested changes to plan'))) {
+    const model = body.model ?? HIRE_CHILD_MODEL;
+
+    if (body.messages?.at(-1)?.role === 'tool') return textBody(model, CHILD_ANSWER);
+
+    return lastUser(body).includes(HIRE_PLAN_ASK)
+      ? toolCallBody(model, 'hire-plan', 'submit_plan', { edits: [{ start: 1, content: '# Audit plan\n\n1. Read the ledger.' }] })
+      : toolCallBody(model, 'hire-plan-revised', 'submit_plan', { edits: [{ start: 3, content: '1. Read the ledger files: ledger.csv.' }] });
+  }
 
   if (body.model === HIRE_DURABLE_MODEL) return await durableLane(run, body, results);
 

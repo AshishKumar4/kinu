@@ -31,7 +31,7 @@ import {
   type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   isSubordinateOrigin,
   whenActorTakesInput,
-  type PlanEdit, type PlanReviewResult,
+  type PlanEdit, type PlanReview, type PlanReviewResult, actorReadHandle,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
@@ -1153,6 +1153,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
       ...(report !== undefined && { report }),
+      // The owner's own Plan turn, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
+      ...(turn.input.mode === 'plan' && !turn.parentDriven && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
     };
 
     const built = buildActorTools(deps);
@@ -2230,9 +2232,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** A hosted agent's Plan turn submits through this, into its own store (`submitPlan` on its turn's tool surface). */
-  protected async hostedPlanSubmit(actorId: string, edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
-    return await (await this.agentCalls(actorId)).submitPlan(this.agentSnapshot(actorId), edits);
+  /** A hosted agent's Plan turn submits into its own isolate's store, judged by the metadata the agent admitted it under. */
+  private async hostedPlanSubmit(turn: HostedTaskTurn, edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
+    const actorId = turn.actor.handle.actorId;
+    const result = await (await this.agentCalls(actorId)).submitPlan(this.agentSnapshot(actorId), edits, turn.driving);
+
+    if (result.ok) turn.actor.stores.config.setHoldsPlans();
+
+    return result;
+  }
+
+  /** Each agent's plans from its own isolate (D9); only an agent that has submitted one is asked, retired ones included. */
+  private async hostedPlans(): Promise<Map<string, readonly PlanReview[]>> {
+    const holders = this.workspaceActors().list({ retired: true })
+      .filter((row) => row.parentActorId !== null && actorReadHandle(this.boundSql, row).config.getHoldsPlans());
+
+    return new Map(await Promise.all(holders.map(async (row) => [row.actorId, await (await this.agentCalls(row.actorId)).planReviews(this.agentSnapshot(row.actorId))] as const)));
   }
 
   private hirerName(record: WorkspaceActor): string {
@@ -2898,6 +2913,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.boundSql,
       this.actorHandle(),
       this.workspaceActors().list({ retired: true }),
+      await this.hostedPlans(),
     );
   }
 
@@ -3530,10 +3546,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Host-owned: SLATE_READ_MODELS excludes this queue so a preview cannot counterfeit approvals. */
   @callable() async listPendingActions(): Promise<PendingAction[]> {
-    return this.pendingActions();
+    return this.pendingActions(await this.hostedPlans());
   }
 
-  private pendingActions(): PendingAction[] {
+  private pendingActions(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): PendingAction[] {
     // The queue row needs the unseen count, newest time, and how many entries offer keep/revert.
     const unseen = getUnseenChangelog(this.boundSql, this.rt.actor);
 
@@ -3546,8 +3562,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
-      pendingPlans: listPendingPlanReviews(this.boundSql),
+      pendingPlans: [...listPendingPlanReviews(this.boundSql), ...this.hostedPendingPlans(hostedPlans)].sort((a, b) => b.updatedAt - a.updatedAt),
     });
+  }
+
+  private hostedPendingPlans(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): { owner: string; id: string; revision: number; content: string; updatedAt: number }[] {
+    return [...hostedPlans].flatMap(([actorId, plans]) => plans
+      .filter((plan) => plan.status === 'pending')
+      .map((plan) => ({ owner: this.agentOf(actorId).name, id: plan.id, revision: plan.revision, content: plan.content, updatedAt: plan.updatedAt })));
   }
 
   /** Run-level swarm search ledger, newest-updated first; identifies the latest search without node ordering. */
@@ -4283,8 +4305,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const warms = this.eventRecorder.readRecentByType('model_call', windowLimit)
       .flatMap((e) => (e.type === 'model_call' && e.source === 'warming' ? [e] : []));
 
-    const measures = this.eventRecorder.readContextMeasures();
-    const newest = measures.provider?.step;
+    const newest = this.eventRecorder.newestMeasuredStep() ?? undefined;
     const deviceId = newest?.egress?.startsWith('device ') === true ? newest.egress.slice('device '.length) : null;
 
     return {
@@ -4302,7 +4323,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
       contextWindow: this.modelCatalog.contextWindow(),
-      fill: contextFill(measures, this.modelCatalog.contextWindow()),
+      fill: contextFill(this.eventRecorder.readContextMeasures(), this.modelCatalog.contextWindow()),
       // Every step in the window, reporting or not: `summarizeSteps` counts the
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
@@ -4961,16 +4982,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const pendingConsents = new DeviceConsentStore(this.boundSql).live(Date.now());
 
-    const [activePlan, listing] = await Promise.all([
+    const [activePlan, listing, hostedPlans] = await Promise.all([
       this.getActivePlanReview(),
       this.slates.list(ROOT_SLATE_CALLER),
+      this.hostedPlans(),
     ]);
 
     const pictures = this.pictures.digests();
     const shares = await this.slates.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
 
     const inputs = {
-      pendingActions: this.pendingActions(),
+      pendingActions: this.pendingActions(hostedPlans),
       pendingConsents,
       activePlan,
       slates: listing.slates.map((slate) => ({
