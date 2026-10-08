@@ -901,13 +901,13 @@ export class ChatSession {
         // Before the item leaves the queue, so it still counts as in flight to a message sent meanwhile; and so the
         // turn's own measure is the newer.
         await this.revision;
-        const reaskAt = this.queue[0]?.continuation?.reaskAt ?? null;
+        const reaskAt = this.reaskDeferredTo();
 
         // The re-opened turn waits out its backoff, and the wake that ends it asks again ({@link reaskDue}).
-        if (reaskAt !== null && this.ports.armTurnWake !== undefined && reaskAt > Date.now()) {
+        if (reaskAt !== null) {
           deferred = true;
           diagnostics.event('turn.reask_deferred', { turn: this.queue[0]?.turnId ?? 'unnamed', dueInMs: reaskAt - Date.now() });
-          await this.ports.armTurnWake(reaskAt);
+          await this.ports.armTurnWake?.(reaskAt);
           break;
         }
 
@@ -975,6 +975,13 @@ export class ChatSession {
 
       if (!deferred) this.ports.quiet?.();
     }
+  }
+
+  /** When the queue's head is a re-opened turn still inside its backoff, on a host whose wake can end it: that end. */
+  private reaskDeferredTo(): number | null {
+    const reaskAt = this.queue[0]?.continuation?.reaskAt ?? null;
+
+    return reaskAt !== null && this.ports.armTurnWake !== undefined && reaskAt > Date.now() ? reaskAt : null;
   }
 
   /** The wake a deferred re-ask armed: the pump asks it if its backoff is over, and defers it again if not. */
