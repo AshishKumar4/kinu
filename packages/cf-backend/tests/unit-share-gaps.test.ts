@@ -16,6 +16,7 @@ import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
 import { makeKv } from './helpers/kv';
 import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
+import { accountRoutes } from '../src/user/account-routes';
 import { serveFamily } from './helpers/api';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
@@ -64,6 +65,8 @@ interface World {
   readonly owner: ActorHarness<HarnessOrchestratorAgent>;
   readonly viewer: ActorHarness<HarnessOrchestratorAgent>;
   readonly ownerUser: TestUserDO;
+  /** pat@example.test's account, which a card for pat reaches. */
+  readonly viewerUser: TestUserDO;
   /** Each workspace object the edge acquired, by name. */
   readonly acquired: string[];
   readonly close: () => void;
@@ -146,7 +149,7 @@ async function twoUserWorld(): Promise<World> {
   await exerciseIssuesSlate(ownerSide.agent.agent);
 
   return {
-    env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user, acquired,
+    env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user, viewerUser: viewerSide.user, acquired,
     close: () => { ownerSide.user.close(); viewerSide.user.close(); resetRecordedMcp(); },
   };
 }
@@ -486,6 +489,85 @@ test("a named person's Drive holds the share's card from the owner's account, wa
   expect(revoked.status).toBe(200);
   await world.ownerUser.userDO.alarm();
   expect((await library()).received).toEqual([]);
+});
+
+/** What the person a share names holds, read as their Drive reads it. */
+async function heldBy(world: World, identity: AuthIdentity) {
+  const answer = present(await sharedRequest(world.env, identity, new Request('https://app.test/api/shared')), 'the library answer');
+
+  return (await jsonBody(answer, SharedLibrarySchema)).received;
+}
+
+/** The owner shares the issues slate with pat, live; the card is delivered only when the owner's alarm runs. */
+async function shareWithPat(world: World, owner: AuthIdentity) {
+  const shared = present(await sharedRequest(world.env, owner, post('/api/shared/live', {
+    workspace: 'issues-owner', slate: 'issues', visibility: 'users', emails: ['pat@example.test'],
+  })), 'the share answer');
+
+  expect(shared.status).toBe(201);
+
+  return await jsonBody(shared, LiveShareCreatedSchema);
+}
+
+/** The account delete as its route runs it: the typed email, then the forget sweep, then the object's teardown. */
+async function deleteAccount(world: World, owner: AuthIdentity): Promise<number> {
+  const request = new Request('https://app.test/api/user/account', {
+    method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: owner.email }),
+  });
+
+  return present(await serveFamily(accountRoutes, { identity: owner })(request, world.env), 'the delete answer').status;
+}
+
+test("an account deleted while a card's removal is pending tells that person to forget it", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const viewer = identityOf(VIEWER_ID, 'pat@example.test');
+  const created = await shareWithPat(world, owner);
+  await world.ownerUser.userDO.alarm();
+  expect(await heldBy(world, viewer)).toHaveLength(1);
+
+  // The revoke queues the card's removal and drops its sent row; the alarm that would deliver it never runs.
+  await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: created.share.id }));
+  expect(await deleteAccount(world, owner)).toBe(200);
+  expect(await heldBy(world, viewer)).toEqual([]);
+});
+
+test("a card's delivery retried after the account's withdrawal sends nothing, and the card stays forgotten", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const viewer = identityOf(VIEWER_ID, 'pat@example.test');
+  const recipient = world.viewerUser.userDO;
+  const put = recipient.shareCards_put.bind(recipient);
+  const refused = Promise.withResolvers<void>();
+  let puts = 0;
+
+  // The first delivery fails, so the driver retries it after a backoff the delete lands inside.
+  Object.assign(recipient, {
+    shareCards_put: async (...args: Parameters<typeof put>) => {
+      puts += 1;
+
+      if (puts > 1) return await put(...args);
+      refused.resolve();
+      throw new KinuError('unavailable', "pat's account is restarting");
+    },
+  });
+  // The longest backoff the driver draws, so its retry comes after the delete rather than racing it.
+  const random = Math.random;
+  Math.random = () => 0.999;
+
+  try {
+    await shareWithPat(world, owner);
+    const driving = world.ownerUser.userDO.alarm();
+    await refused.promise;
+    expect(await deleteAccount(world, owner)).toBe(200);
+    await Promise.allSettled([driving]);
+  } finally {
+    Math.random = random;
+  }
+
+  expect(await heldBy(world, viewer)).toEqual([]);
 });
 
 test("a share whose recipients' tile cannot be pushed says the list is behind, whichever write it was", async () => {
