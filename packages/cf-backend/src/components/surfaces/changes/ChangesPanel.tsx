@@ -6,7 +6,7 @@ import * as v from "valibot";
 import { Segmented } from "@/components/ui/Segmented";
 import { useWidthsReached } from "@/hooks/use-element-size";
 import {
-  changeBlocks, changeBody, inReadingOrder, vfsBasename, vfsDirname, type ChangeSet, type FileDiff, type ReviewAnnotation,
+  changeBlocks, changeBody, changeNoteAnchor, inReadingOrder, vfsBasename, vfsDirname, type ChangeNote, type ChangeSet, type FileDiff,
 } from "@kinu.run/core";
 import { ChangeMark, count, Counts, DiffBody, sinceLabel } from "./diff";
 import { FileTree, IconButton, MarkReviewed, Since, SourceMenu, Summary, typing } from "./parts";
@@ -223,7 +223,12 @@ function FileNotes({ path }: { path: string }) {
   const button = useRef<HTMLButtonElement>(null);
 
   if (notes === null) return null;
-  const onFile = notes.notes.filter((note) => note.anchor?.scope === "file" && note.anchor.path === path);
+
+  const onFile = notes.notes.filter((note) => {
+    const anchor = changeNoteAnchor(note);
+
+    return anchor?.scope === "file" && anchor.path === path;
+  });
 
   const write = (): void => {
     if (button.current === null) return;
@@ -313,11 +318,12 @@ function Expanded({ files, repositories, file, split, tree, notesShown, onNotes,
     cards.current.get(path)?.scrollIntoView({ block: "start", behavior: "smooth" });
   };
 
-  const reveal = (note: ReviewAnnotation): void => {
+  const reveal = (note: ChangeNote): void => {
     const mark = stack.current?.querySelector<HTMLElement>(`[data-note-mark="${CSS.escape(note.id)}"]`) ?? null;
+    const anchor = changeNoteAnchor(note);
 
     if (mark !== null) mark.scrollIntoView({ block: "center", behavior: "smooth" });
-    else if (note.anchor !== undefined) show(note.anchor.path);
+    else if (anchor !== undefined) show(anchor.path);
   };
 
   useEffect(() => {
@@ -515,10 +521,12 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
     setLayout(next);
   };
 
-  const revealInFile = (note: ReviewAnnotation): void => {
-    if (note.anchor === undefined) return;
+  const revealInFile = (note: ChangeNote): void => {
+    const anchor = changeNoteAnchor(note);
+
+    if (anchor === undefined) return;
     setNotesOpen(false);
-    go(note.anchor.path);
+    go(anchor.path);
     requestAnimationFrame(() => root.current?.querySelector(`[data-note-mark="${CSS.escape(note.id)}"]`)?.scrollIntoView({ block: "center" }));
   };
 

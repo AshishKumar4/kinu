@@ -422,9 +422,9 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('root mode facts describe submit_plan on the actual provider surface', async () => {
-    // A plain build turn is the static doctrine's default, so its block states no mode.
+    // The owner's Auto turn may submit a plan, which the static doctrine's default does not say, so its block does.
     const cases: readonly { mode: 'build' | 'plan'; installed: boolean; available: boolean; facts: string | null }[] = [
-      { mode: 'build', installed: true, available: false, facts: null },
+      { mode: 'build', installed: true, available: true, facts: 'Mode: build; submit_plan: available.' },
       { mode: 'plan', installed: true, available: true, facts: 'Mode: plan; submit_plan: available.' },
       { mode: 'plan', installed: false, available: false, facts: 'Mode: plan; submit_plan: unavailable.' },
     ];

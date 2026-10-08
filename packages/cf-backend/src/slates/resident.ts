@@ -220,8 +220,12 @@ export function slateRunnerSource(
     '      }',
     '      return stub.call(path, args, invocation).then((result) => {',
     '        if (!result.ok) throw new SlateRefusal(result);',
-    // `ai.stream` answers its text as UTF-8 bytes, which is all that crosses the host's RPC; the class reads text.
-    '        return result.value instanceof ReadableStream ? result.value.pipeThrough(new TextDecoderStream()) : result.value;',
+    // `ai.stream` answers its text as UTF-8 bytes, and `agent.ask` its reply: bytes are all a stream carries across the
+    // host's RPC, and the class reads text.
+    '        const value = result.value;',
+    '        if (value instanceof ReadableStream) return value.pipeThrough(new TextDecoderStream());',
+    '        if (value !== null && typeof value === "object" && value.reply instanceof ReadableStream) return { ...value, reply: value.reply.pipeThrough(new TextDecoderStream()) };',
+    '        return value;',
     '      });',
     '    },',
     '    get(_fn, name) {',
