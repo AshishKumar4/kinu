@@ -259,7 +259,6 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'file',
     summary: 'Read, list, stat, search, edit or write files in your workspace.',
     notes: [
-      'Read and edit workspace files with this tool, not with `cat`, `head`, `sed` or heredocs in a shell.',
       'Find before you read: `search` a file for the lines you need, then `read` around them. Read a large file in pages with `offset` and `limit`; a read that stops early names the offset that continues it.',
       'Read a file in this turn before you `edit` it. An edit matches the text as last read, and fails when its `old_text` is absent or occurs more than once: copy just enough to be unique.',
     ],

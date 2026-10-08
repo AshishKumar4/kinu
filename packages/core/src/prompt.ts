@@ -39,6 +39,7 @@ import {
   WORKSPACE_EXECUTOR_LINE,
   WORKSPACE_INSTRUCTIONS_SECTION,
   LEAD_RESPONSIBILITY,
+  TOOL_USE_SECTION,
   LEAD_BRIEF,
   LEAD_PARALLEL,
   LEAD_REVIEW,
@@ -55,7 +56,6 @@ import { SKILLS_VIEW, WORKSPACE_SKILLS_DIR } from './skills/types';
 import { PLATFORM_CATALOG } from './platform-catalog';
 import { sandboxSizeLabel } from './execution/sandbox';
 import type { SandboxSizes } from './execution/types';
-import { CRAFTED_TOOL_NAMESPACE } from './tools/sandbox-contract';
 
 export type { TurnReason, WorkMode } from './types/turn';
 
@@ -241,7 +241,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
   const parts: string[] = [render(PERSISTENCE_SECTION, {})];
 
   if (hasTool(tools, 'eval')) {
-    parts.push(render(CODE_EXECUTION_SECTION, { craftedNamespace: CRAFTED_TOOL_NAMESPACE }));
+    parts.push(render(CODE_EXECUTION_SECTION, {}));
   }
 
   if (hasTool(tools, 'agents') || hasTool(tools, 'report')) {
@@ -334,6 +334,9 @@ export function buildSystemPromptSync(
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
     renderExecutorSection(surface, render),
     renderToolsSection(surface, render),
+    hasTool(surface.builtinTools, 'file') && hasTool(surface.builtinTools, 'shell') && hasTool(surface.builtinTools, 'eval')
+      ? render(TOOL_USE_SECTION, { familyDelta: promptFamilyDelta(TOOL_USE_SECTION.id, surface.model.family) })
+      : '',
     renderAgentStateSection(surface, render),
     ...(lead ? [
       render(LEAD_RESPONSIBILITY, { hasTaskHire: surface.temporaryAsk }),

@@ -12,6 +12,7 @@ import builtinToolLine from "../prompts/builtin-tool-line.md" with { type: 'text
 import operatingGuidance from "../prompts/operating-guidance.md" with { type: 'text' };
 import roleSection from "../prompts/role-section.md" with { type: 'text' };
 import toolsSection from "../prompts/tools-section.md" with { type: 'text' };
+import toolUseSection from "../prompts/tool-use-section.md" with { type: 'text' };
 import workspaceExecutorLine from "../prompts/workspace-executor-line.md" with { type: 'text' };
 import sandboxExecutorLine from "../prompts/sandbox-executor-line.md" with { type: 'text' };
 import deviceExecutorLine from "../prompts/device-executor-line.md" with { type: 'text' };
@@ -34,11 +35,16 @@ import leadParallel from '../prompts/lead-parallel.md' with { type: 'text' };
 import leadReview from '../prompts/lead-review.md' with { type: 'text' };
 import leadInterruptions from '../prompts/lead-interruptions.md' with { type: 'text' };
 import leadDelivery from '../prompts/lead-delivery.md' with { type: 'text' };
-// GPT wording follows Codex's GPT-6.1 Sol instructions (THIRD_PARTY_NOTICES.md); Claude wording follows Claude Code's.
-import operatingKimi from '../prompts/operating-guidance.kimi.md' with { type: 'text' };
+// GPT wording follows Codex's instructions and Claude wording Claude Code's (THIRD_PARTY_NOTICES.md).
+import operatingGeneric from '../prompts/operating-guidance.generic.md' with { type: 'text' };
 import operatingGpt from '../prompts/operating-guidance.gpt.md' with { type: 'text' };
 import operatingClaude from '../prompts/operating-guidance.claude.md' with { type: 'text' };
 import operatingGemini from '../prompts/operating-guidance.gemini.md' with { type: 'text' };
+import operatingKimi from '../prompts/operating-guidance.kimi.md' with { type: 'text' };
+import toolUseGeneric from '../prompts/tool-use.generic.md' with { type: 'text' };
+import toolUseGpt from '../prompts/tool-use.gpt.md' with { type: 'text' };
+import toolUseClaude from '../prompts/tool-use.claude.md' with { type: 'text' };
+import outputGeneric from '../prompts/output-format.generic.md' with { type: 'text' };
 import outputGpt from '../prompts/output-format.gpt.md' with { type: 'text' };
 import outputClaude from '../prompts/output-format.claude.md' with { type: 'text' };
 import briefGpt from '../prompts/lead-brief.gpt.md' with { type: 'text' };
@@ -90,6 +96,13 @@ export const TOOLS_SECTION = definePromptSection(
   "tools/index",
   "{{builtins}}",
   toolsSection.trimEnd(),
+);
+
+/** How to use the tools above, worded per family; the index stays family-neutral. */
+export const TOOL_USE_SECTION = definePromptSection(
+  "tools/use",
+  '{{familyDelta}}',
+  toolUseSection.trimEnd(),
 );
 
 /** Hosted, `workspace` is the authoritative Nimbus session. The ceiling is prose fed
@@ -150,7 +163,7 @@ export const PERSISTENCE_SECTION = definePromptSection(
  * that. States only the two habits and where the contracts are. */
 export const CODE_EXECUTION_SECTION = definePromptSection(
   "state/code-execution",
-  "{{craftedNamespace}}",
+  "",
   codeExecutionSection.trimEnd(),
 );
 
@@ -205,34 +218,53 @@ export const LEAD_INTERRUPTION = definePromptSection('lead/interruptions', '', l
 
 export const LEAD_DELIVERY = definePromptSection('lead/delivery', '', leadDelivery.trimEnd());
 
-// A delta adds what one family needs on top of the base, which alone carries every behaviour (a generic
-// model gets only the base); no instruction sits in both. The familyDelta slot survives promotion.
-const FAMILY_DELTAS = new Map<string, Readonly<Partial<Record<PromptModelFamily, PromptSection<''>>>>>([
+// A family's wording for a section: GPT reads Codex's, Claude reads Claude Code's, any other model the generic
+// text, which alone carries every behaviour. Gemini and Kimi add their own lines to it. The familyDelta slot
+// survives promotion.
+const delta = (id: string, source: string) => definePromptSection(id, '', source.trimEnd());
+
+const OPERATING_GENERIC = delta('delta/operating-generic', operatingGeneric);
+
+const TOOL_USE_GENERIC = delta('delta/tool-use-generic', toolUseGeneric);
+
+const OUTPUT_GENERIC = delta('delta/output-generic', outputGeneric);
+
+const FAMILY_DELTAS = new Map<string, Readonly<Partial<Record<PromptModelFamily, readonly PromptSection<''>[]>>>>([
   [OPERATING_GUIDANCE.id, {
-    kimi: definePromptSection('delta/operating-kimi', '', operatingKimi.trimEnd()),
-    gpt: definePromptSection('delta/operating-gpt', '', operatingGpt.trimEnd()),
-    claude: definePromptSection('delta/operating-claude', '', operatingClaude.trimEnd()),
-    gemini: definePromptSection('delta/operating-gemini', '', operatingGemini.trimEnd()),
+    generic: [OPERATING_GENERIC],
+    gpt: [delta('delta/operating-gpt', operatingGpt)],
+    claude: [delta('delta/operating-claude', operatingClaude)],
+    gemini: [OPERATING_GENERIC, delta('delta/operating-gemini', operatingGemini)],
+    kimi: [OPERATING_GENERIC, delta('delta/operating-kimi', operatingKimi)],
+  }],
+  [TOOL_USE_SECTION.id, {
+    generic: [TOOL_USE_GENERIC],
+    gpt: [delta('delta/tool-use-gpt', toolUseGpt)],
+    claude: [delta('delta/tool-use-claude', toolUseClaude)],
+    gemini: [TOOL_USE_GENERIC],
+    kimi: [TOOL_USE_GENERIC],
   }],
   [OUTPUT_FORMAT_SECTION.id, {
-    gpt: definePromptSection('delta/output-gpt', '', outputGpt.trimEnd()),
-    claude: definePromptSection('delta/output-claude', '', outputClaude.trimEnd()),
+    generic: [OUTPUT_GENERIC],
+    gpt: [delta('delta/output-gpt', outputGpt)],
+    claude: [delta('delta/output-claude', outputClaude)],
+    gemini: [OUTPUT_GENERIC],
+    kimi: [OUTPUT_GENERIC],
   }],
   [LEAD_BRIEF.id, {
-    gpt: definePromptSection('delta/brief-gpt', '', briefGpt.trimEnd()),
+    gpt: [delta('delta/brief-gpt', briefGpt)],
   }],
 ]);
 
 export function promptFamilyDelta(sectionId: string, family: PromptModelFamily): string {
-  const delta = FAMILY_DELTAS.get(sectionId)?.[family];
-
-  return delta ? `\n${delta.render({})}` : '';
+  return (FAMILY_DELTAS.get(sectionId)?.[family] ?? []).map((section) => `\n${section.render({})}`).join('');
 }
 
 export const PROMPT_SECTIONS: readonly PromptSection<string>[] = [
   OPERATING_GUIDANCE,
   ROLE_SECTION,
   TOOLS_SECTION,
+  TOOL_USE_SECTION,
   EXECUTORS_SECTION,
   PERSISTENCE_SECTION,
   CODE_EXECUTION_SECTION,
