@@ -186,8 +186,18 @@ function swarmCandidates(ledger: CanaryLedger) {
 }
 
 export function measureCanaryLedger(ledger: CanaryLedger, load: CanaryLoad) {
-  const rootDone = answers(ledger.events, `${CANARY_PREFIX}_ROOT_DONE`);
-  const rootRuns = runs(ledger.events, rootDone);
+  // The root's own run is the one its load opened; any other run delivers something to it (a background job's result,
+  // a report), and the scripted model answers that one DONE too.
+  const asked = new Set(ledger.events.flatMap((event) => event.type === 'run_start'
+    && event.userMessage?.includes(`${CANARY_PREFIX} root steps=`) === true ? [event.runId] : []));
+
+  const rootDone = answers(ledger.events, `${CANARY_PREFIX}_ROOT_DONE`).filter((witness) => witness.runId === null || asked.has(witness.runId));
+  const allRuns = runs(ledger.events, rootDone);
+  const rootRuns = allRuns.filter((run) => asked.has(run.runId));
+
+  const deliveries = ledger.events.flatMap((event) => event.type === 'run_start' && !asked.has(event.runId)
+    ? [{ runId: event.runId, at: event.timestamp, causedBy: event.caused_by ?? null, ingress: event.ingress_kind ?? null, trigger: event.trigger_id ?? null }]
+    : []);
 
   const helperRecords = ledger.helpers.filter((helper) => helper.failure !== null || helper.events.some((event) =>
     event.type === 'run_start' && event.userMessage?.includes(`${CANARY_PREFIX} helper`) === true));
@@ -239,7 +249,7 @@ export function measureCanaryLedger(ledger: CanaryLedger, load: CanaryLoad) {
 
   return {
     ended, finishedAt,
-    root: { runsOpened: rootRuns.length, runs: rootRuns, completedDoneRuns: rootFinalRuns.filter((run) => run.reason === 'completed').length,
+    root: { runsOpened: rootRuns.length, runs: rootRuns, deliveries, completedDoneRuns: rootFinalRuns.filter((run) => run.reason === 'completed').length,
       completedEnds: rootFinalRuns.reduce((sum, run) => sum + run.completedEnds, 0),
       done: { count: rootDone.length, evidence: rootDone },
       markers: markers(Array.from({ length: load.steps }, (_, step) => canaryMarker('root', step)), shellWitnesses(ledger.events).filter((witness) => witness.marker.includes('_ROOT_'))) },
@@ -256,6 +266,54 @@ export function measureCanaryLedger(ledger: CanaryLedger, load: CanaryLoad) {
 }
 
 export type CanaryMeasurement = ReturnType<typeof measureCanaryLedger>;
+
+/**
+ * The missing markers a disruption bracketed: its startup fell between the step's witnessed neighbours. That step's shell
+ * call was in flight when its activation ended; the next request tells the model it was interrupted and may not have run
+ * (INTERRUPTED_TOOL_RESULT, a repair that rides the request and is never stored), and it is not run again. So it is the
+ * at-most-once cost of a disruption, at most one per disruption, not a lost step.
+ */
+export function interruptedSteps(measured: CanaryMeasurement['root']['markers'], disruptionsAt: readonly number[]) {
+  const seen = new Map(measured.counts.map((row) => [row.marker, row.at.flatMap((at) => at === null ? [] : [Date.parse(at)])]));
+  const step = (marker: string): number => Number(/_(\d+)$/u.exec(marker)?.[1] ?? Number.NaN);
+  const witnessed = [...seen].map(([marker, at]) => ({ step: step(marker), at: Math.min(...at) })).filter((row) => Number.isFinite(row.at));
+  const unused = [...disruptionsAt];
+  const interrupted: { marker: string; disruptionAt: string }[] = [];
+
+  for (const marker of measured.missing) {
+    const at = step(marker);
+    const before = Math.max(...witnessed.filter((row) => row.step < at).map((row) => row.at));
+    const after = Math.min(...witnessed.filter((row) => row.step > at).map((row) => row.at));
+    const index = unused.findIndex((disruption) => disruption > before && disruption < after);
+
+    if (index < 0) continue;
+    interrupted.push({ marker, disruptionAt: new Date(unused[index]).toISOString() });
+    unused.splice(index, 1);
+  }
+
+  return { interrupted, lost: measured.missing.filter((marker) => !interrupted.some((row) => row.marker === marker)) };
+}
+
+/** `owner`'s steps-lost finding, split once telemetry has placed the disruptions: those a disruption bracketed are its
+ *  cost, and only the rest stay lost. */
+export function withInterruptedSteps(findings: readonly CanaryFinding[], owner: string,
+  measured: CanaryMeasurement['root']['markers'], disruptionsAt: readonly number[]): CanaryFinding[] {
+  const { interrupted, lost } = interruptedSteps(measured, disruptionsAt);
+
+  if (interrupted.length === 0) return [...findings];
+  const rest = findings.filter((finding) => finding.name !== `${owner}.steps-lost`);
+
+  rest.push({ name: `${owner}.steps-interrupted`, kind: 'disruption',
+    cause: 'A disruption ended the activation with this step in flight; the model was told it was interrupted, and it was not run again.',
+    evidence: interrupted.map((row) => ({ at: row.disruptionAt, event: 'actor.startup', count: 1, detail: row.marker })) });
+
+  if (lost.length > 0) {
+    rest.push({ name: `${owner}.steps-lost`, kind: 'defect', cause: 'No committed shell output contains these planned markers, and no disruption bracketed them.',
+      evidence: [{ at: null, event: 'tool_call_end/result', count: lost.length, detail: lost.join(', ') }] });
+  }
+
+  return rest;
+}
 
 function markerFindings(owner: string, measured: CanaryMeasurement['root']['markers']): CanaryFinding[] {
   const findings: CanaryFinding[] = [];

@@ -77,7 +77,8 @@ export class TurnAccumulator {
   /** Last step's `finishReason`; `classifyRunEnd` reads `'tool-calls'` as stopped mid-work. */
   lastFinishReason: string | undefined = undefined;
   /** The turn's last request, for providers/cache-warming.ts. Held by reference, never copied. */
-  lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage } | undefined = undefined;
+  /** `fallback`: the spec that served it, where a fallback did. */
+  lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage; readonly fallback: string | undefined } | undefined = undefined;
   hadError = false;
   firstChunkSeen = false;
   startedAt = 0;
@@ -242,7 +243,7 @@ export class TurnAccumulator {
     const sent = ctx.request;
 
     if (sent?.body !== undefined && sent.sentAt !== undefined) {
-      this.lastRequest = { body: sent.body, sentAt: sent.sentAt, usage };
+      this.lastRequest = { body: sent.body, sentAt: sent.sentAt, usage, fallback: ctx.fallback };
     }
   }
 

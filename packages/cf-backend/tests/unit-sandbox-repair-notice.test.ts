@@ -10,7 +10,7 @@ import type { DevboxIncident, IncidentDisposition } from '@kinu.run/devbox';
 import type { KinuDevbox } from '../src/kinu-devbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import { lifecycleIncident } from '../src/sandbox-lifecycle';
-import { chatSessionTurns, orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, storedChat } from './helpers/actor-harness';
+import { chatSessionTurns, orchestratorHarness, unstartedOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, storedChat } from './helpers/actor-harness';
 // Relative paths: the devbox package's container harness and its disk chain's contract.
 import type { DiskChain, DiskChainPorts } from '../../devbox/src/disk-chain';
 import type { StoredValue } from '../../devbox/src/storage';
@@ -45,7 +45,7 @@ function filesChain(ports: DiskChainPorts): DiskChain {
       const state = await ports.readState();
       const at = ports.now();
       saved = new Map([...disk?.files ?? []].filter(([path]) => path.startsWith('/workspace/')));
-      await ports.writeState({ format: 'disk-chain/2', rev: (state?.rev ?? 0) + 1, base: { key: 'base', bytes: 1, committedAt: at }, deltas: [], committedAt: at }, state?.rev ?? null);
+      await ports.writeState({ format: 'disk-chain/2', rev: (state?.rev ?? 0) + 1, base: { key: 'base', bytes: 1, committedAt: at, digest: { sha256: '0'.repeat(64), partBytes: 1 } }, deltas: [], committedAt: at }, state?.rev ?? null);
 
       return { kind: 'committed', reason: undefined, bytes: 1, movedBytes: 1 };
     }),
@@ -155,4 +155,18 @@ describe('a service that does not come back on a wake', () => {
       });
     });
   }
+});
+
+// Staging beaf28a46, 2026-10-08: six boxes of deleted eval workspaces re-offered one incident every five minutes for
+// hours, because the gone workspace threw on it and a throw is `undelivered`.
+describe('an incident for a workspace that no longer exists', () => {
+  test('is refused, so its box stops offering it', async () => {
+    const gone = unstartedOrchestratorHarness({ workspace: 'deleted-eval' });
+
+    const answer = await gone.agent.acceptSandboxLifecycleIncident(lifecycleIncident({
+      incidentId: 'incident-1', stage: 'process', reason: 'the container stopped', processId: 'p1', port: undefined, at: 1,
+    }, 1));
+
+    expect(answer.status).toBe('rejected');
+  });
 });

@@ -1,11 +1,11 @@
-import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from "react";
+import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref, type RefObject } from "react";
 import { Loader } from "@cloudflare/kumo/components/loader";
-import { ArrowSquareOutIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, CaretRightIcon, CheckIcon, PushPinIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
 import type { Rpc, SlateCallResult } from "@kinu.run/core";
 import {
   buildSlateHostContext, isPreviewUrl, isSlateFrameMessage, PREVIEW_SANDBOX, slateFrameSrc,
-  slateInlineHeight, SLATE_HOST_CONTEXT_MESSAGE, SLATE_THEME_TOKENS,
+  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_THEME_TOKENS,
   SlateFrameMessageSchema, SLATE_UI_ATTRIBUTE,
 } from "@kinu.run/core";
 import { useElementSize } from "@/hooks/use-element-size";
@@ -16,11 +16,36 @@ import { Effect } from "effect";
 import { detach, showing } from "@kinu.run/core/obs";
 
 
+/** `sized`: the page reports its own height, as every page kinu:slate serves does; a slate's own server does not. */
+/** `broken`: its latest source does not build, and this URL serves the last that did. */
 const SlatePreviewSchema = v.strictObject({
   url: v.string(),
   port: v.number(),
-  inline: v.strictObject({ height: v.number() }),
+  sized: v.boolean(),
+  title: v.optional(v.string()),
+  broken: v.optional(v.string()),
 });
+
+/** Why a slate is not shown, said in the product's words: its own files at fault, or anything else as it came. */
+function refusalWords(id: string, refusal: { readonly reason: string; readonly error: string }): string {
+  return refusal.reason === 'bad_input' ? `${id} has a build error, and no working version to show yet.` : `${refusal.reason}: ${refusal.error}`;
+}
+
+/** Shown over a slate whose latest edit does not build: the version under it is the last that did. */
+function BrokenNotice({ title }: { title: string }) {
+  return <span role="status" data-slate-broken className="block p-notice-warning px-3 py-1.5 text-xs">{title} has a build error; showing the last working version.</span>;
+}
+
+const SavedSlateSchema = v.object({ id: v.string(), title: v.string() });
+
+/** Each slate's last height in the chat, so a card drawn again opens at its size and nothing below it moves. */
+const KNOWN_HEIGHTS = new Map<string, number>();
+
+/** A frame that never says its height: a slate's own server, or a page that failed before it could. */
+const UNSIZED_HEIGHT = 360;
+
+/** How long a loaded page that sizes itself is waited on before it is shown at the height of one that does not. */
+const SIZE_WAIT_MS = 4000;
 
 type SlatePreview = v.InferOutput<typeof SlatePreviewSchema>;
 
@@ -65,9 +90,49 @@ function usePainted(): boolean {
   return painted;
 }
 
-/** No chrome: the frame sits in the answer, and its fold and open controls show over it on hover, or always where
+/** An answer's page kept as a slate of the workspace's own, under its title: once kept, the control opens it. */
+function SaveControl({ name, save, open }: { name: string; save: () => Promise<SlateCallResult>; open?: (id: string) => void }) {
+  const [saved, setSaved] = useState<{ id: string; title: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const control = "p-text-3 hover:p-text p-1 shrink-0 inline-flex rounded-md transition-colors hover:bg-[var(--c-elevated)]";
+
+  const keep = useCallback(() => detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+    setBusy(true);
+    setFailed(null);
+    const result = yield* Effect.promise(save);
+
+    if (result.ok) setSaved(v.parse(SavedSlateSchema, result.value));
+    else setFailed(`${result.reason}: ${result.error}`);
+  }), showing(setFailed)), Effect.sync(() => { setBusy(false); }))), [save]);
+
+  if (saved !== null) {
+    return (
+      <button type="button" data-slate-saved={saved.id} onClick={() => open?.(saved.id)} disabled={open === undefined}
+        aria-label={`Saved as ${saved.title}; open it in the work surface`} title={`Saved as ${saved.title}`} className={`${control} p-accent`}>
+        <CheckIcon size={11} weight="bold" />
+      </button>
+    );
+  }
+
+  return (
+    <button type="button" data-slate-save onClick={keep} disabled={busy} aria-label={`Save ${name} as a slate`}
+      title={failed === null ? "Save as a slate of this workspace" : `Could not save: ${failed}`} className={`${control} ${failed === null ? "" : "p-danger"}`}>
+      <PushPinIcon size={11} />
+    </button>
+  );
+}
+
+/** No chrome: the frame sits in the answer, and its fold, save and open controls show over it on hover, or always where
  *  there is no hover. Folded, it is one quiet line naming it and why. */
-function SlateCard({ id, block, measure, children }: { id: string; block?: string; measure: Ref<HTMLSpanElement>; children: ReactNode }) {
+function SlateCard({ id, block, measure, save, children }: {
+  id: string;
+  block?: string;
+  measure: Ref<HTMLSpanElement>;
+  /** An answer's page only: a slate with files is the workspace's already. */
+  save?: () => Promise<SlateCallResult>;
+  children: ReactNode;
+}) {
   const inline = useContext(SlateInlineContext);
   const previews = inline?.chat?.previews;
   const [card, setCard] = useState<HTMLSpanElement | null>(null);
@@ -117,6 +182,7 @@ function SlateCard({ id, block, measure, children }: { id: string; block?: strin
           {folded && <code className="p-annotation p-text-3 truncate">{name}</code>}
           {why !== null && <span className="ml-auto shrink-0 pl-2 p-meta p-text-4">{why}</span>}
         </button>
+        {save !== undefined && <SaveControl name={name} save={save} open={openSlate} />}
         {openSlate !== undefined && (
           <button type="button" onClick={() => openSlate(id)} aria-label={`Open ${name} in the work surface`} title="Open in the work surface"
             className="p-text-3 hover:p-text p-1 shrink-0 inline-flex rounded-md transition-colors hover:bg-[var(--c-elevated)]">
@@ -129,6 +195,69 @@ function SlateCard({ id, block, measure, children }: { id: string; block?: strin
       </span>
     </span>
   );
+}
+
+/** The frame's style, whether its page has yet to say its height, and the height it last had. */
+interface InlineHeight {
+  readonly style: CSSProperties | undefined;
+  readonly waiting: boolean;
+  readonly known: number | undefined;
+}
+
+/**
+ * An in-chat frame's height: what its page last said, kept for the slate across redraws. A page that sizes itself is
+ * hidden until it has said, then drawn at that height with nothing inside it to scroll; one that stays silent past a
+ * bounded wait, or never sizes itself, is drawn at a fixed height.
+ */
+function useInlineHeight({ id, inline, sized, frame, previewOrigin, loaded, drawn }: {
+  id: string;
+  inline: boolean;
+  sized: boolean;
+  frame: RefObject<HTMLIFrameElement | null>;
+  previewOrigin: string | null;
+  loaded: boolean;
+  /** What a new drawing of the frame is keyed by: its height is heard again. */
+  drawn: string | null;
+}): InlineHeight {
+  // How many heights the page has said: the first is drawn at once, and each later one eases in.
+  const [said, setSaid] = useState<{ readonly height: number | null; readonly times: number }>({ height: null, times: 0 });
+  const [late, setLate] = useState(false);
+  const known = KNOWN_HEIGHTS.get(id);
+  const { height } = said;
+  const waiting = inline && sized && height === null && !late;
+
+  useEffect(() => {
+    setSaid({ height: null, times: 0 });
+    setLate(false);
+  }, [drawn]);
+
+  useEffect(() => {
+    if (!inline || previewOrigin === null) return;
+
+    const onMessage = (event: MessageEvent): void => {
+      if (!isSlateFrameMessage(event, frame.current?.contentWindow ?? null, previewOrigin)) return;
+      const next = Math.min(v.parse(SlateFrameMessageSchema, event.data).height, SLATE_INLINE_HEIGHT_LIMIT);
+      KNOWN_HEIGHTS.set(id, next);
+      setSaid((was) => (was.height === next ? was : { height: next, times: was.times + 1 }));
+    };
+
+    window.addEventListener('message', onMessage);
+
+    return () => window.removeEventListener('message', onMessage);
+  }, [inline, previewOrigin, id, frame]);
+
+  useEffect(() => {
+    if (!waiting || !loaded) return;
+    const timer = setTimeout(() => { setLate(true); }, SIZE_WAIT_MS);
+
+    return () => { clearTimeout(timer); };
+  }, [waiting, loaded]);
+
+  if (!inline) return { style: undefined, waiting, known };
+
+  if (waiting) return { style: { height: 0, visibility: 'hidden' }, waiting, known };
+
+  return { style: { height: height ?? known ?? UNSIZED_HEIGHT, ...(said.times <= 1 && { transition: 'none' }) }, waiting, known };
 }
 
 export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }: {
@@ -144,7 +273,6 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   const { attach, size } = useElementSize();
   const [preview, setPreview] = useState<SlatePreview | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const [height, setHeight] = useState<number | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
 
   // The iframe src snapshots this once via `contextRef`; later values go over postMessage.
@@ -165,13 +293,12 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
     let live = true;
     setPreview(null);
     setRefusal(null);
-    setHeight(null);
 
     detach(Effect.catchCause(Effect.map(Effect.promise(() => rpc<SlateCallResult>("previewSlate", [id])), (result) => {
       if (!live) return;
 
       if (!result.ok) {
-        setRefusal(`${result.reason}: ${result.error}`);
+        setRefusal(refusalWords(id, result));
 
         return;
       }
@@ -185,9 +312,6 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
       }
 
       setPreview(parsed.output);
-
-      if (display === 'inline') setHeight(slateInlineHeight(parsed.output.inline.height));
-
       notifyReady();
     }), showing((chain) => { if (live) setRefusal(chain); })));
 
@@ -214,23 +338,12 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
     window_.postMessage({ kinu: SLATE_HOST_CONTEXT_MESSAGE, context }, previewOrigin);
   }, [context, previewOrigin, loaded]);
 
-  useEffect(() => {
-    if (display !== 'inline' || previewOrigin === null) return;
-
-    const onMessage = (event: MessageEvent): void => {
-      if (!isSlateFrameMessage(event, frame.current?.contentWindow ?? null, previewOrigin)) return;
-      const message = v.parse(SlateFrameMessageSchema, event.data);
-      setHeight(slateInlineHeight(message.height));
-    };
-
-    window.addEventListener('message', onMessage);
-
-    return () => window.removeEventListener('message', onMessage);
-  }, [display, previewOrigin]);
-
   const pane = display === 'pane';
   const previewUrl = preview?.url;
+  const { style: frameStyle, waiting, known } = useInlineHeight({ id, inline: !pane, sized: preview?.sized === true, frame, previewOrigin, loaded, drawn: src });
+  const save = useMemo(() => (block === undefined ? undefined : async () => rpc<SlateCallResult>("slate", [{ op: 'save', page: id }])), [block, rpc, id]);
 
+  const notice = preview?.broken === undefined ? null : <BrokenNotice title={preview.title ?? id} />;
   let content: ReactNode = null;
 
   if (src !== null) {
@@ -241,8 +354,8 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
         src={src}
         title={id}
         onLoad={() => setLoaded(true)}
-        className={pane ? 'p-bg flex-1 min-h-0 w-full border-0' : 'w-full border-0 p-fold-frame'}
-        style={pane ? undefined : { height: height ?? 320 }}
+        className={pane ? 'p-bg flex-1 min-h-0 w-full border-0' : 'block w-full border-0 rounded-xl p-fold-frame'}
+        style={frameStyle}
         sandbox={PREVIEW_SANDBOX}
       />
     ) : (
@@ -257,6 +370,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   if (pane) {
     return (
       <div className="flex flex-col h-full min-h-0">
+        {notice}
         {refusal !== null && (
           <div className="p-notice-danger rounded-lg px-3 py-2 text-xs">
             <p className="break-words m-0">{refusal}</p>
@@ -276,14 +390,15 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   }
 
   return (
-    <SlateCard id={id} block={block} measure={attach}>
+    <SlateCard id={id} block={block} measure={attach} save={save}>
+      {notice}
       {refusal !== null && (
         <span className="block p-notice-danger px-3 py-2 text-xs">
           <span className="block break-words m-0">{refusal}</span>
         </span>
       )}
-      {content === null && refusal === null && (
-        <span className="flex justify-center py-8"><Loader /></span>
+      {(content === null || waiting) && refusal === null && (
+        <span className={`flex items-center justify-center ${known === undefined ? "py-8" : ""}`} style={known === undefined ? undefined : { height: known }}><Loader /></span>
       )}
       {content}
     </SlateCard>

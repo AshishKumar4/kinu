@@ -12,7 +12,7 @@ import {
 import { escapeHtml, json, KINU_USER_AGENT, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts } from './builtin';
-import { builtinSignInOn, grantOf, type SignInDeclarationEnv } from '@kinu.run/core/identity';
+import { builtinSignInOn, grantOf, OAUTH_PROVIDER_ENV, type SignInDeclarationEnv } from '@kinu.run/core/identity';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
@@ -600,16 +600,21 @@ interface PublicIdentity {
   id: string;
   email: string;
   provider?: string;
+  /** The provider's name as a person knows it; null for a sign-in that is not a provider's (a password). */
+  signedInWith: string | null;
   displayName: string | null;
 }
 
 function publicIdentity(identity: {
   userId: string; email: string; provider?: string; displayName?: string | null;
 }): PublicIdentity {
+  const provider = Object.entries(OAUTH_PROVIDER_ENV).find(([id]) => id === identity.provider)?.[1];
+
   return {
     id: identity.userId,
     email: identity.email,
     provider: identity.provider,
+    signedInWith: provider?.label ?? null,
     displayName: identity.displayName ?? null,
   };
 }

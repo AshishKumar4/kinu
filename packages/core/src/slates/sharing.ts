@@ -159,6 +159,10 @@ export function blueprintPagePath(id: string): string {
   return `/shared/blueprint/${encodeURIComponent(id)}`;
 }
 
+export function liveSharePagePath(workspace: string, share: string): string {
+  return `/shared/live/${encodeURIComponent(workspace)}/${encodeURIComponent(share)}`;
+}
+
 const SecretSightingSchema = v.object({
   path: v.string(), line: v.number(), pattern: v.string(), message: v.string(),
 });

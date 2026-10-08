@@ -19,6 +19,8 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
 import { workspaceOwner } from '../../src/workspace-owner-rpc';
 import { createCodemodeToolFactory } from '../../src/codemode-tool';
+import { BROWSER_PRELUDE } from '../../src/browser-prelude';
+import { actorNamespaces, SURFACE_POLICY } from '@kinu.run/core';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
 import type { JsonValue } from '@kinu.run/core';
 import type {
@@ -51,8 +53,33 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'runProgram');
     Reflect.deleteProperty(this, 'forgetActivation');
     Reflect.deleteProperty(this, 'pendingNimbusTasks');
+    Reflect.deleteProperty(this, 'executorRows');
     Reflect.deleteProperty(this, 'runShell');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'runShell']);
+    Reflect.deleteProperty(this, 'previewTabs');
+    Reflect.deleteProperty(this, 'failingSlates');
+    sealRpcSurface(this, [
+      ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs',
+      'failingSlates',
+    ]);
+  }
+
+  /** What the agent's next model step is told of slates that do not build. */
+  async failingSlates(): Promise<string[]> {
+    return [...this.extraDynamicContext().failingSlates?.() ?? []];
+  }
+
+  /** What the work surface's strip is drawn from: the workspace's listed preview ports, and the slates with their ports. */
+  async previewTabs(): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {
+    const listed = await this.getExposedPorts('workspace');
+    const slates = await this.slate({ op: 'list' });
+
+    if (!slates.ok) throw new Error(`slate list refused: ${slates.reason}: ${slates.error}`);
+
+    return {
+      ports: listed.ports.map((port) => ({ port: port.port, name: port.name ?? null })),
+      slates: v.parse(v.object({ slates: v.array(v.object({ id: v.string(), title: v.string(), port: v.optional(v.number()) })) }), slates.value)
+        .slates.map((slate) => ({ id: slate.id, title: slate.title, port: slate.port ?? null })),
+    };
   }
 
   async portReservations(): Promise<DurabilityReservation[]> {
@@ -63,6 +90,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       owner: reservation.owner,
       capability: reservation.capability,
     }));
+  }
+
+  /** The workspace executor's terminal rows, as a reload reads them. */
+  async executorRows(): Promise<Array<{ stdout: string; stdout_len: number }>> {
+    return (await this.getExecutorOutput('workspace')).map(({ stdout, stdout_len }) => ({ stdout, stdout_len }));
   }
 
   /** Nimbus's pending tasks as this object's Lifecycle holds them, and the alarm that wakes the next. */
@@ -77,13 +109,26 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** One program through this workspace's production `eval` tool, in Build mode; its answer as JSON. */
   async runProgram(code: string): Promise<string> {
     const factory = createCodemodeToolFactory({
-      reach: narrowToolSurface(undefined),
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null } : null }), rt: this.rt,
-      workspace: this.name, webSearch: createDefaultWebSearchProvider({ fetch, browser: { missing: 'this probe reaches no Browser Run' } }),
-      browserSessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} },
+      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null } : null }), workspace: this.name,
     });
 
-    const execute = toolsInWorkMode('build', { eval: factory.toolFor(codemodeSurface(this.rt, {})) }).eval?.execute;
+    const unreached = (): never => { throw new Error('this probe reaches no memory, files or tasks'); };
+
+    const eval_ = factory.toolFor(codemodeSurface(this.rt, {}), {
+      reach: narrowToolSurface(undefined),
+      // As a confined copy's programs run: state, tables, web and executors, with no memory, files or tasks to reach.
+      namespaces: (executor) => actorNamespaces({
+        executors: () => this.rt.executionRouter?.getProviders() ?? [],
+        web: {
+          search: createDefaultWebSearchProvider({ fetch, browser: { missing: 'this probe reaches no Browser Run' } }), files: this.rt.storage,
+          browser: { sessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} }, prelude: BROWSER_PRELUDE },
+        },
+        memory: unreached, files: unreached, tasks: unreached,
+        db: this.stores.appData, programState: this.rt.actor.programState, agents: null, self: null,
+      }, SURFACE_POLICY.confined, { executor }),
+    });
+
+    const execute = toolsInWorkMode('build', { eval: eval_ }).eval?.execute;
 
     if (execute === undefined) throw new Error('No callable eval tool');
 
@@ -138,7 +183,8 @@ export { ObservedOrchestrator as OrchestratorAgent };
 /** `slateAs` is absent on purpose: `Rpc.Result` over its recursive `JsonValue` is TS2589; the probe
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'runShell'>;
+  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
+  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -154,6 +200,49 @@ type TerminalDrive =
 
 const RemovedValueSchema = v.object({
   id: v.string(), removed: v.boolean(), port: v.nullable(v.number()),
+});
+
+/**
+ * A crafted tool that lists its runner's browsers, writes who ran it, and reads the file back. A member it holds none
+ * of throws; a refused one answers its refusal as the value, as every member does for a program to branch on.
+ */
+const HELPER = [
+  'async (input) => {',
+  '  let browsers = null;',
+  '  try { browsers = await web.browsers({}); } catch {}',
+  '  const wrote = await workspace.writeFile("ran-by.txt", input.who);',
+  '  return { browsers, wrote, read: await workspace.readFile("ran-by.txt") };',
+  '}',
+].join('\n');
+
+/** A slate whose class runs the crafted tool: as its `run` method for a program, as its page for a visitor. */
+const RUNNER = [
+  'import { SlateObject } from "kinu:slate";',
+  'export class Slate extends SlateObject {',
+  '  async run(who) { return await this.env.workspace.tools.helper({ who }); }',
+  '  async fetch() { return Response.json(await this.env.workspace.tools.helper({ who: "viewer" })); }',
+  '}',
+].join('\n');
+
+const SharedValueSchema = v.object({ share: v.object({ handle: v.string() }) });
+
+const LILT_GOOD = 'export default function App() { return <p data-words>lilt-good</p>; }';
+
+/** Two elements side by side with no parent: the compile error the owner's Lilt hit. */
+const LILT_BROKEN = 'export default function App() {\n  return <p>lilt</p>\n  <p>broken</p>;\n}';
+
+const LILT_FIXED = 'export default function App() { return <><p data-words>lilt-fixed</p></>; }';
+
+/** One step of the build flow, as the agent and the user each see it. */
+interface SlateBuildSeen {
+  readonly wrote: string | null;
+  readonly preview: string;
+  readonly serves: string | null;
+  readonly told: string[];
+}
+
+const GraphValueSchema = v.object({
+  namespaces: v.array(v.object({ namespace: v.string(), members: v.array(v.object({ member: v.string(), impact: v.string() })) })),
 });
 
 /** Every call names the workspace, so nothing the test holds pins this object across
@@ -266,6 +355,73 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return target.runProgram(input.program);
   }
 
+  /**
+   * The owner's program makes the crafted tool `helper`, then runs it through the `runner` slate's class; the slate is
+   * shared granting the tool alone, and a consented viewer opens its page, which runs the tool too.
+   */
+  async craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await target.runProgram(`await workspace.createTool("helper", "Lists browsers and writes who ran it", ${JSON.stringify(HELPER)}); return null;`);
+    await this.writeSlateFile(target, '/slates/runner/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Runner' } }));
+    await this.writeSlateFile(target, '/slates/runner/server.ts', RUNNER);
+    const owner = await target.runProgram('return await workspace.slates.runner.run("owner");');
+    const owned = workspaceOwner(this.env, input.workspace);
+    const graph = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'graph', id: 'runner' });
+
+    if (!graph.ok) throw new Error(`slate graph refused: ${graph.reason}: ${graph.error}`);
+
+    const reached = v.parse(GraphValueSchema, graph.value).namespaces
+      .flatMap((row) => row.members.map((member) => `${row.namespace}.${member.member}:${member.impact}`));
+
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, {
+      op: 'share', id: 'runner', visibility: 'public', approved: [{ slate: 'runner', namespace: 'tools', member: 'helper' }],
+    });
+
+    if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
+    const { handle } = v.parse(SharedValueSchema, shared.value).share;
+    const page = await target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, new Request('https://share.invalid/'), '/');
+
+    return { owner, reached, viewer: await page.text() };
+  }
+
+  async previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {
+    return (await this.workspaceTarget(workspace)).previewTabs();
+  }
+
+  /**
+   * The agent writes the `lilt` slate through its own `workspace.writeFile`, reading each file first as an agent must:
+   * `client.tsx` that builds, then one that does not. `phase` names which: `good`, `broken`, then `fixed`; each answers
+   * the write's own answer, what the preview says, what its client bundle serves, and what the next step is told.
+   */
+  async slateBuild(input: { workspace: string; owner: string; phase: 'good' | 'broken' | 'served' | 'fixed' }): Promise<SlateBuildSeen> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    if (input.phase === 'good') {
+      await this.claimWorkspace(target, input.workspace, input.owner);
+      await target.runProgram(`return await workspace.writeFile("/slates/lilt/package.json", ${JSON.stringify(JSON.stringify({ browser: 'client.tsx', slate: { title: 'Lilt' } }))});`);
+    }
+
+    const source = { good: LILT_GOOD, broken: LILT_BROKEN, fixed: LILT_FIXED, served: null }[input.phase];
+
+    const wrote = source === null ? null : await target.runProgram([
+      'const path = "/slates/lilt/client.tsx";',
+      'if (await workspace.exists(path)) await workspace.readFile(path);',
+      `return await workspace.writeFile(path, ${JSON.stringify(source)});`,
+    ].join('\n'));
+
+    const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: 'lilt' });
+    const shown = preview.ok ? v.parse(v.object({ url: v.string(), broken: v.optional(v.string()) }), preview.value) : null;
+    const client = shown === null ? null : await this.drivePreview(new URL('/__kinu/client.js', shown.url).href);
+
+    return {
+      wrote, preview: shown === null ? `refused: ${preview.ok ? '' : preview.error}` : shown.broken ?? 'builds',
+      serves: client === null ? null : ['lilt-good', 'lilt-fixed'].find((word) => client.body.includes(word)) ?? 'neither',
+      told: [...await target.failingSlates()],
+    };
+  }
+
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {
     return (await this.workspaceTarget(workspace)).portReservations();
   }
@@ -276,6 +432,10 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
   async pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }> {
     return (await this.workspaceTarget(workspace)).pendingNimbusTasks();
+  }
+
+  async executorOutputs(workspace: string): Promise<Array<{ stdout: string; stdout_len: number }>> {
+    return (await this.workspaceTarget(workspace)).executorRows();
   }
 
   /** A `null` answer is the edge declining the hostname, a fixture fault, so it throws. */

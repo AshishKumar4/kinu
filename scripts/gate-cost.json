@@ -509,17 +509,6 @@
       "loadAtStart": 4.61,
       "exit": 0
     },
-    "bun run gate:agents-fields": {
-      "wallSeconds": 0.52,
-      "cpuSeconds": 0.88,
-      "peakRssMb": 351.19,
-      "peakRunnable": 2,
-      "peakCpuThreads": 1.97,
-      "meanThreads": 1.7,
-      "samples": 8,
-      "loadAtStart": 4.45,
-      "exit": 0
-    },
     "bun run gate:mutation-fences": {
       "wallSeconds": 1.56,
       "cpuSeconds": 1.48,
@@ -938,7 +927,7 @@
       "loadAtStart": 6.19,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts": {
+    "bun test --timeout=0 --isolate scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/ladder-proofs.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts": {
       "wallSeconds": 42.79,
       "cpuSeconds": 24.41,
       "peakRssMb": 1367.9,
@@ -993,7 +982,7 @@
       "loadAtStart": 76.44,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts": {
+    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts": {
       "wallSeconds": 86.6,
       "cpuSeconds": 113.5,
       "peakRssMb": 5862.76,

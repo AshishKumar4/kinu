@@ -63,6 +63,8 @@ declare global {
     /** Analytics SQL API account (var) and token (secret); either absent ⇒ metrics view unconfigured. */
     CLOUDFLARE_ACCOUNT_ID?: string;
     ANALYTICS_SQL_API_TOKEN?: string;
+    /** What this deployment appends to a dataset NAME on the read path: '' in production, `_staging` under `env.staging`. */
+    ANALYTICS_DATASET_SUFFIX?: string;
     /** Workers Observability read token (secret) for the monitor's platform-kill signal. */
     KINU_OBS_TOKEN?: string;
     /** Containers-scoped token (secret) a box deletes its dead snapshots with (D65). */

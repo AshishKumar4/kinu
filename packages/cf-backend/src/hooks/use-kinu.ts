@@ -47,7 +47,7 @@ import {
   type SessionRecovery,
 } from "@kinu.run/core";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
-import { terminalChatError, type ChatTurnError } from "@kinu.run/core";
+import { terminalChatError, turnFailure, type ChatTurnError } from "@kinu.run/core";
 import { turnLiveness, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
 import { jobPhase, type InspectedWork } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
@@ -732,9 +732,12 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
   // is down the turn is the SDK's to rejoin, not a failed one.
   const standingStreamError = connectionStatus === "connected" ? streamError : undefined;
 
-  const chatError = frameError ?? (standingStreamError === undefined
+  const turnError = frameError ?? (standingStreamError === undefined
     ? null
     : { body: standingStreamError.message || String(standingStreamError), refused: false });
+
+  // A failure the newest answer records is drawn on it, where a reload finds it too.
+  const chatError = turnError?.refused === false && turnFailure({ metadata: messages.at(-1)?.metadata }) !== null ? null : turnError;
 
   const clearChatError = useCallback(() => {
     setFrameError(null);
@@ -1539,7 +1542,7 @@ function useWorkspaceReads(link: ChatLink) {
     } else if (msg.type === "signal_card") {
       const card = parseSignalCardEvent({ value: msg });
 
-      if (card) setSignalCards((current) => applySignalCard(current, card));
+      if (card) setSignalCards((current) => applySignalCard(current, card, Date.now()));
     } else if (msg.type === 'workspace_plan_updated') {
       const key = JSON.stringify(msg.reference);
 
@@ -1871,13 +1874,13 @@ function useWorkspaceReads(link: ChatLink) {
       subordinates,
       subordinateEvents,
       signalCards,
-      /** The server answers a blank displayName; the UI shows "New agent" until the titler lands. */
-      createSubordinate: async () => {
+      /** The server answers a blank displayName; the UI shows "New agent" until the titler lands. `opening` names it. */
+      createSubordinate: async (opening?: string) => {
         const result = await rpc<{
           name: string;
           displayName: string;
           subordinate: SubordinateRosterEntry;
-        }>("createSubordinateAgent", []);
+        }>("createSubordinateAgent", opening === undefined ? [] : [opening]);
 
         await writeRoster((current) => [
           ...current.filter((entry) => entry.name !== result.subordinate.name),

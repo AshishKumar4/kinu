@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, join, resolve } from "node:path";
@@ -602,6 +602,31 @@ describe("deploy gate", () => {
     expect(run.infraPhase).toBeNull();
   });
 
+  // A plain deploy runs no real-model eval (the owner, 2026-10-08): evals run on a quiet staging, dispatched by hand.
+  test("--evals is an option, and only a deploy given it dispatches evals.yml or starts the soak", () => {
+    expect(runDeploy({ option: "--gates-only", options: ["--evals"] }).status).toBe(0);
+
+    // As TEXT, as the post-deploy phase below is: the fixture's build fails on purpose, so no run reaches a serving build.
+    const lines = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8").split("\n").filter((line) => !line.trimStart().startsWith("#"));
+
+    // The `if` lines still open at `index`, its own line among them.
+    const guardsOf = (index: number) => lines.slice(0, index + 1)
+      .filter((line, at) => /^\s*if /u.test(line) && !lines.slice(at + 1, index + 1).some((later) => /^\s*fi\b/u.test(later)));
+
+    const asked = (index: number) => guardsOf(index).some((guard) => guard.includes('"$KINU_EVALS" = "1"'));
+    const callsOf = (name: string) => lines.flatMap((line, index) => line.includes(name) && !line.includes(`${name}()`) ? [index] : []);
+
+    // KINU_EVAL_KEYS stands for --evals only if it is set nowhere else.
+    const keysAsked = callsOf("KINU_EVAL_KEYS=1").every(asked);
+
+    for (const started of ["dispatch_evals", "start_soak", "provision_eval_keys"]) {
+      const calls = callsOf(started);
+
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.filter((call) => !asked(call) && !(keysAsked && guardsOf(call).some((guard) => guard.includes('"$KINU_EVAL_KEYS" = "1"'))))).toEqual([]);
+    }
+  });
+
   // The rehearsal path: every local phase, no build, no upload, no record.
   test("gates-only runs every local phase and mutates nothing", () => {
     const run = runDeploy({ option: "--gates-only" });
@@ -860,7 +885,7 @@ describe("one deploy path", () => {
    *  workflows AND the composite actions beside them. `release-config.test.ts`
    *  reads `.github/workflows` alone, and a composite action's `run:` body is a
    *  command this repository executes inside the job that holds the deploy
-   *  credential — `setup-lean` is one, which is why it is checksum-verified. */
+   *  credential, so a composite action added later is read here too. */
   const automationFiles = trackedFiles()
     .filter((file) => file.startsWith(".github/") && /\.ya?ml$/u.test(file));
 
@@ -913,9 +938,9 @@ describe("one deploy path", () => {
   test("every automation file GitHub executes is in the denominator", () => {
     expect(automationFiles, "the enumerator stopped listing the workflows")
       .toContain(".github/workflows/evals.yml");
-    expect(automationFiles, "the enumerator stopped listing the composite actions")
-      .toContain(".github/actions/setup-lean/action.yml");
-    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(3);
+    expect(automationFiles, "the enumerator stopped listing the secret scan")
+      .toContain(".github/workflows/security-scan.yml");
+    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(1);
     expect(automationSteps.length, "the parse read no run body").toBeGreaterThan(10);
 
     // Deploys are run by a person through `bun run deploy`; no workflow deploys.
@@ -1608,5 +1633,86 @@ describe("worker release artifact", () => {
 
     expect(lastAsset).toBeGreaterThan(-1);
     expect(firstModule).toBeGreaterThan(lastAsset);
+  });
+});
+
+// ── The smoke test's reads of the version it deployed (deploy-smoke.sh) ──
+
+const SMOKE = join(import.meta.dir, 'deploy-smoke.sh');
+
+/** A route the way an edge answers it while a new version propagates: the nth answer comes from the nth version
+ *  named (the last one thereafter), as the placeholder 503s or as a version answers 200; `null` names none. */
+function edge(answers: readonly (string | null)[]) {
+  let asked = 0;
+
+  const server = Bun.serve({
+    port: 0,
+    fetch: () => {
+      const version = answers[Math.min(asked, answers.length - 1)];
+
+      asked += 1;
+
+      return new Response(version === 'placeholder' ? '{"resetting":true}' : 'ok', {
+        status: version === 'placeholder' ? 503 : 200,
+        headers: version === null ? {} : { 'x-kinu-version': version },
+      });
+    },
+  });
+
+  return { url: `http://127.0.0.1:${String(server.port)}/downloads/kinu-worker.tar.gz`, asked: () => asked, stop: () => server.stop(true) };
+}
+
+const servers: { stop: () => void }[] = [];
+
+afterAll(() => {
+  for (const server of servers) server.stop();
+});
+
+/** `ours` and `not_ours` from deploy-smoke.sh, as deploy.sh calls them, against `url`, within a 6 s bound. */
+async function smoke(url: string): Promise<{ readonly status: string; readonly by: string; readonly finding: string }> {
+  const script = `source ${JSON.stringify(SMOKE)}
+KINU_PROPAGATION_SECONDS=6
+KINU_VERSION=cfcb250f
+ours /dev/null -I --max-time 5 ${JSON.stringify(url)}
+printf '%s\\n%s\\n%s' "$KINU_STATUS" "$KINU_ANSWERED_BY" "$(not_ours "the worker artifact route")"`;
+
+  // Not spawnSync: the route answers from this process.
+  const ran = Bun.spawn(['bash', '-c', script], { stdout: 'pipe', stderr: 'pipe' });
+  const [status = '', by = '', finding = ''] = (await new Response(ran.stdout).text()).split('\n');
+
+  await ran.exited;
+
+  return { status, by, finding };
+}
+
+describe('the smoke test reads the version it deployed', () => {
+  // 2026-10-08: the reset placeholder before b8340eebf answered the artifact route 503, 23 s after the deploy, between
+  // answers the new version gave; the smoke read that 503 as the build's.
+  test('asks again while a version it replaced answers, and judges its own version\'s answer', async () => {
+    const route = edge(['placeholder', 'placeholder', 'cfcb250f']);
+
+    servers.push(route);
+
+    expect({ ...await smoke(route.url), asked: route.asked() }).toEqual({ status: '200', by: 'cfcb250f', finding: '', asked: 3 });
+  });
+
+  test('names the version still answering at its bound, rather than judging that version\'s answer as the build\'s', async () => {
+    const route = edge(['placeholder']);
+
+    servers.push(route);
+
+    expect(await smoke(route.url)).toEqual({
+      status: '503', by: 'placeholder', finding: 'the worker artifact route was still answered by version placeholder, not this deploy\'s cfcb250f, after 6s',
+    });
+  });
+
+  test('judges at once an answer that names no version, as a failed connection or an edge error page is', async () => {
+    const route = edge([null, 'cfcb250f']);
+
+    servers.push(route);
+
+    expect({ ...await smoke(route.url), asked: route.asked() }).toEqual({
+      status: '200', by: '', finding: 'the worker artifact route answered 200 naming no version, so not as this deploy\'s version cfcb250f', asked: 1,
+    });
   });
 });

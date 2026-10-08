@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { workspaceOwner, type WorkspaceOwnerNamespace } from '../workspace-owner-rpc';
-import { relayedAnswer, type JsonValue, type SlateCallResult, type WorkMode } from '@kinu.run/core';
+import { relayedAnswer, type JsonValue, type SlateSurfaceResult, type WorkMode } from '@kinu.run/core';
 
 /** A registered actor name: every actor shares one root object, so the name, not a class, is the identity. */
 export interface SlateCallerHop {
@@ -49,9 +49,10 @@ interface SlateBindingEnv {
 
 /** Every call a slate makes returns through the owner's one route decision, as the caller. */
 export class SlateBinding extends WorkerEntrypoint<SlateBindingEnv, SlateBindingProps> {
-  call(path: string[], args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
+  /** `authorize` asks only whether the call may run: the class runs a browser member itself once it may. */
+  call(path: string[], args: JsonValue[], invocation: string | null, authorize?: boolean): Promise<SlateSurfaceResult> {
     const { workspace, id, name, caller } = this.ctx.props;
 
-    return relayedAnswer(workspaceOwner(this.env, workspace).slateCallAs(caller, id, name, { path, args, invocation }));
+    return relayedAnswer(workspaceOwner(this.env, workspace).slateCallAs(caller, id, name, { path, args, invocation, ...(authorize === true && { authorize: true }) }));
   }
 }

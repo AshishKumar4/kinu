@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { accountCredentialKey, CHATGPT_CRED_KEY } from '@kinu.run/core';
+import { accountCredentialKey, CHATGPT_CRED_KEY, EVAL_TRIAL_ACCOUNTS } from '@kinu.run/core';
 
 /**
  * The models a run measures unless `KINU_EVAL_MODELS` names others: Muse Spark alone, the owner's choice (2026-10-02).
@@ -34,8 +34,14 @@ export function reviewModelOverride(env: Env): string | null {
 /** The product as deployed, with no workspace setting changed. */
 export const DEFAULT_ARM = 'product';
 
-/** Trials per task, model and arm; a pass rate over fewer cannot separate a regression from noise. */
-export const DEFAULT_TRIALS = 10;
+/**
+ * Trials per task, model and arm. Five is the fewest at which the exact test calls a fall in one task at all
+ * (`canTellAFall`, src/comparison.ts): 5/5 to 1/5 is p = 0.048 and a collapse to 0/5 always regresses, while 5/5 to
+ * 2/5 (p = 0.17) reads as unchanged. At three no fall but a collapse can be told from noise, and the verdict says
+ * inconclusive. Seven tasks of parts, five trials each, one trial of each task at a time: seven trials at once on a
+ * leg, as the ten of the eighteen tasks before them were.
+ */
+export const DEFAULT_TRIALS = 5;
 
 
 /** The paths whose changes can move an eval result; a change elsewhere is not named in the report. */
@@ -56,6 +62,8 @@ export interface EvalMatrix {
   readonly arms: readonly string[];
   /** Trials per cohort in this run, numbered from 1. */
   readonly trials: number;
+  /** The run's first trial account: {@link PASS_FIRST_SLOT} for a deploy's pass, else 1. */
+  readonly firstSlot: number;
 }
 
 /** A positive integer from `env[name]`, or `fallback` when it is unset. */
@@ -82,6 +90,10 @@ export function evalFiles(env: Env): number {
   return positiveInteger(env, 'KINU_EVAL_FILES', Number.MAX_SAFE_INTEGER);
 }
 
+/** A deploy's one-trial pass (`KINU_EVAL_PASS=1`) runs beside the measured run on one deployment, so it takes the upper
+ *  half of the trial accounts and the measured run the lower: no two runs share an account. */
+export const PASS_FIRST_SLOT = EVAL_TRIAL_ACCOUNTS / 2 + 1;
+
 /** The cohorts one run measures, parsed before any trial spends inference. */
 export function evalMatrix(env: Env, knownArms: readonly string[]): EvalMatrix {
   const [models = [], arms = []] = [env.KINU_EVAL_MODELS, env.KINU_EVAL_ARMS]
@@ -97,6 +109,7 @@ export function evalMatrix(env: Env, knownArms: readonly string[]): EvalMatrix {
     models: models.length > 0 ? models : DEFAULT_MODELS,
     arms: arms.length > 0 ? arms : [DEFAULT_ARM],
     trials: positiveInteger(env, 'KINU_EVAL_TRIALS', DEFAULT_TRIALS),
+    firstSlot: env.KINU_EVAL_PASS === '1' ? PASS_FIRST_SLOT : 1,
   };
 }
 

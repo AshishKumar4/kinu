@@ -12,7 +12,8 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { DelegationBudget } from './depth';
 import { SubordinateRosterStore } from './roster';
 import { requireSubordinateActorName } from '../identity/actor-key';
-import { codenameFor, type NameOrigin } from '../identity/naming';
+import { codenameFor, mintAgentName, type NameOrigin } from '../identity/naming';
+import type { WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { ActorReference } from '../identity/actor-handle';
 import { finishSubordinateBirth, type SubordinateBirth, type SubordinateSeed } from './birth';
 import type { WorkMode } from '../types/turn';
@@ -119,6 +120,14 @@ function optionalText(value: string | undefined): string | undefined {
   const text = value?.trim();
 
   return text === undefined || text === '' ? undefined : text;
+}
+
+/**
+ * What names a new hire: a model's hire its mission; an owner's agent the words it was opened with or the mission
+ * they gave it, never the workspace's mission it inherits.
+ */
+function namingBrief(input: { readonly brief?: string; readonly mission?: string }, ownerCreated: boolean, mission: string): string | null {
+  return ownerCreated ? optionalText(input.brief) ?? optionalText(input.mission) ?? null : mission;
 }
 
 /** Only the birth assignment carries a fork; later tasks have no new prefix. */
@@ -329,13 +338,28 @@ interface SubordinateStatusView {
 }
 
 
+/**
+ * Names a parent's new hires ({@link mintAgentName}): free in the workspace's directory, read once, and in the parent's
+ * own roster, where a birth waits before its directory row exists.
+ */
+export function agentNamer(
+  directory: Pick<WorkspaceActorDirectory, 'namesFrom'>, roster: Pick<SubordinateRosterStore, 'get'>,
+): (role: string, brief: string | null) => string {
+  return (role, brief) => mintAgentName({ role, brief }, (base) => {
+    const had = directory.namesFrom(base);
+
+    return (name) => had.has(name) || roster.get(name) !== null;
+  });
+}
+
 /** Roster transitions precede facet admission and are restored exactly if it fails; broadcasts follow both. */
 export function createTeamToolDeps(deps: {
   /** Derived by its parent, never chosen here. */
   delegation: DelegationBudget;
   roster: SubordinateRosterStore;
   runtime: SubordinateRuntime;
-  createName(role: string): string;
+  /** From what the hire was first asked (its brief), else its role ({@link agentNamer}). */
+  createName(role: string, brief: string | null): string;
   now(): number;
   inheritedContext(): Promise<SerializedMessage[]>;
   originContext?(): Promise<readonly ModelMessage[]>;
@@ -371,6 +395,8 @@ export function createTeamToolDeps(deps: {
     role?: RoleId;
     tier?: TierId;
     mission?: string;
+    /** An owner's agent: the words it was opened with, which name it. */
+    brief?: string;
     inheritedContext?: SerializedMessage[];
   }, ownerCreated: boolean, mode: WorkMode | null): Effect.Effect<{
     name: string;
@@ -396,14 +422,16 @@ export function createTeamToolDeps(deps: {
       : yield* requiredText(input.mission ?? '', 'mission');
 
     const typedName = input.name?.trim();
-    const name = typedName === undefined || typedName === '' ? deps.createName(roleLabel) : typedName;
+    const named = typedName !== undefined && typedName !== '';
+    const name = named ? typedName : deps.createName(roleLabel, namingBrief(input, ownerCreated, mission));
     requireSubordinateActorName(name);
 
     if (deps.roster.get(name)) return yield* Effect.die(new Error(`subordinate "${name}" already exists`));
 
-    // A typed title is the owner's and final; a role yields `auto`; nothing gives the slug's codename,
-    // which the title policy may claim once.
-    const chosen = optionalText(input.displayName);
+    // A typed title is final, and so is the name a model's hire gives, the one it was told to (a hire "named
+    // tidepool" showed "Planner", staging 2026-10-08); an owner's slug is only an address. A role alone yields `auto`;
+    // nothing gives the slug's codename, which the title policy may claim once.
+    const chosen = optionalText(input.displayName) ?? (named && !ownerCreated ? name : undefined);
     const provisional = ownerCreated && input.role === undefined;
     const displayName = chosen ?? (provisional ? codenameFor(name) : displayNameForRole(roleLabel));
     const nameOrigin: 'user' | 'auto' = chosen ? 'user' : 'auto';

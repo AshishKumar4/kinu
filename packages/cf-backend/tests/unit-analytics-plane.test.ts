@@ -791,7 +791,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
       'orchestrator', 'workers-ai', 'deepseek-v4', '', '', '',
     ]);
     // The trailing 0 is `attempts`: a turn is not a delivery.
-    expect(point.doubles).toEqual([1, 4200, 0, 6, 9, 1200, 340, 900, 12, 45, 7, 0.0031, 1, 0]);
+    expect(point.doubles).toEqual([1, 4200, 0, 6, 9, 1200, 340, 900, 12, 45, 7, 0.0031, 1, 0, 0]);
   });
 
   test('an unpriced call reports priced 0, so an average cost cannot be diluted', () => {
@@ -819,7 +819,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
     expect(point.doubles?.[1]).toBe(91);
     expect(point.doubles?.[4]).toBe(1);
     // No token report or price on a tool row: a zero would pool into spend aggregates.
-    expect(point.doubles?.slice(5)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(point.doubles?.slice(5)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   });
 
   test('a first-token row is its own kind, so a silent turn is absent rather than zero', () => {
@@ -934,7 +934,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
 
   test('the four primitives implement the platform\'s own translation table', () => {
     const { turns, tokens, firstToken } =
-      controlPlaneMetricsQueries({ sinceHours: 24 });
+      controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' });
 
     // Weighted count: each surviving row stands for `_sample_interval` originals.
     expect(turns).toContain('SUM(_sample_interval) AS turns');
@@ -947,14 +947,14 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
 
   test('a ratio divides by a measured denominator, not by the row count', () => {
     // `usd` is 0 for unpriced and free calls alike, so the denominator is `priced`, not the row count.
-    const { tokens } = controlPlaneMetricsQueries({ sinceHours: 24 });
+    const { tokens } = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' });
     expect(tokens).toContain(
       'SUM(_sample_interval * double12) / SUM(_sample_interval * double13) AS usdPerPricedCall',
     );
   });
 
   test('a built query names the dataset, bounds the window, and aliases by slot name', () => {
-    const sql = controlPlaneMetricsQueries({ sinceHours: 24 }).latency;
+    const sql = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' }).latency;
     expect(sql).toContain('FROM kinu_agent_metrics');
     expect(sql).toContain('blob9 AS model');
     expect(sql).toContain("WHERE timestamp > NOW() - INTERVAL '24' HOUR");
@@ -965,7 +965,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
 
   test('a panel whose group-by has open cardinality carries a row bound', () => {
     // `model` and `tool` values are uncapped and the surface renders every row, so the panel's top-N is the bound.
-    const built = controlPlaneMetricsQueries({ sinceHours: 24 });
+    const built = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' });
 
     for (const name of ['latency', 'tokens', 'toolFailures', 'firstToken'] as const) {
       expect(built[name]).toContain('LIMIT 50');
@@ -979,7 +979,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   });
 
   test('no shipped query uses an unweighted aggregate', () => {
-    const queries = Object.values(controlPlaneMetricsQueries({ sinceHours: 24 }));
+    const queries = Object.values(controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' }));
 
     for (const sql of queries) {
       // Bare forms an unsampled dataset would allow; `SUM(` is legal only weighted by the sample interval.
@@ -993,7 +993,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   });
 
   test('the control plane gets exactly the panels it is promised', () => {
-    const queries = controlPlaneMetricsQueries({ sinceHours: 24 });
+    const queries = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' });
     expect(Object.keys(queries).sort())
       .toEqual(['adminOps', 'firstToken', 'latency', 'startups', 'tokens', 'toolFailures', 'turns']);
     expect(queries.firstToken).toContain("blob1 = 'ttft'");
@@ -1009,7 +1009,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     const digest = analyticsDigest('my-workspace');
 
     const queries = controlPlaneMetricsQueries({
-      sinceHours: 6, workspaceDigest: digest,
+      sinceHours: 6, datasetSuffix: '', workspaceDigest: digest,
     });
 
     expect(queries.turns).toContain(`index1 = '${digest}'`);
@@ -1021,7 +1021,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
 
   test('the lookback is a whole positive number of hours whatever the caller passes', () => {
     const hours = (sinceHours: number): string =>
-      controlPlaneMetricsQueries({ sinceHours }).turns;
+      controlPlaneMetricsQueries({ sinceHours, datasetSuffix: '' }).turns;
 
     expect(hours(0)).toContain("INTERVAL '1' HOUR");
     expect(hours(-5)).toContain("INTERVAL '1' HOUR");
@@ -1030,7 +1030,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
 
   test('nothing in the query builders reads an environment or a binding', () => {
     // The control plane renders the not-configured arm with no secret or binding, so builders are pure.
-    const queries = controlPlaneMetricsQueries({ sinceHours: 1 });
+    const queries = controlPlaneMetricsQueries({ sinceHours: 1, datasetSuffix: '' });
     expect(queries.turns).toContain("INTERVAL '1' HOUR");
   });
 });

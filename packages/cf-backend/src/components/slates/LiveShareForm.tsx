@@ -41,6 +41,13 @@ const ACCESS: readonly AccessOption<LiveShareVisibility>[] = [
   { id: "public", icon: <GlobeIcon size={15} />, label: "Anyone with the link", detail: "No sign-in needed. It still runs as you." },
 ];
 
+/** Who a share lets in, as the share records them. */
+function whoCanOpen(share: LiveShareRecord): string {
+  if (share.visibility === "public") return "Anyone with the link can open it.";
+
+  return share.users.length === 0 ? "Only you can open it." : `${share.users.join(", ")} can open it.`;
+}
+
 function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
   row: SlateGraphNamespace;
   visibility: LiveShareVisibility;
@@ -267,7 +274,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
       <>
         <div className="space-y-3 text-xs">
           <p className="p-notice-success rounded-md px-3 py-2" data-share-created>
-            Shared. {created.share.visibility === "public" ? "Anyone with the link can open it." : `${emailList.join(", ")} can open it.`}
+            Shared. {whoCanOpen(created.share)}
             {created.listing === "pending" && " The list will catch up."}
           </p>
           {created.url === null ? (

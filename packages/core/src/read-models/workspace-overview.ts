@@ -70,6 +70,8 @@ function pendingActionEffect(kind: PendingActionKind): QueueEffect {
   switch (kind) {
     case 'deferred_action':
       return 'decision';
+    case 'workspace_proposal':
+      return 'decision';
     case 'unseen_changes':
       return 'update';
     case 'scaffold_version':

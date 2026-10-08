@@ -9,10 +9,16 @@ import {
   type Tracer,
 } from '@kinu.run/core/obs';
 
+/** What runs where the runtime offers no tracing API: the work, untraced, never a failed request. */
+const UNTRACED: ScopedSpan = { isTraced: false, setAttribute: () => undefined, fail: () => undefined };
+
 /** Native spans are invocation-bound; exception records carry classification, never message text. */
 export function createWorkersTracer(): Tracer {
   return {
     span<T>(name: string, attributes: SpanOpenAttributes, fn: (span: ScopedSpan) => T): T {
+      // A loaded Worker's compatibility date, not this one's, decides whether the API exists there.
+      if (typeof tracing?.enterSpan !== 'function') return fn(UNTRACED);
+
       return tracing.enterSpan(name, (native) => {
         native.setAttributes({
           [SPAN_ATTR_ISOLATE_GEN]: attributes.isolateGen,

@@ -12,9 +12,10 @@ namespaces its caller's `eval` programs reach (executors, `memory`, `tasks`,
 `reads.<model>`, `agent.send`, `ai.run` and `slates.<id>.<method>`, each called
 as the caller, with the caller's role reach, Plan permissions, egress and
 approval gates (decision M3 in `docs/ARCHITECTURE-DECISIONS.md`).
-`package.json` names no capabilities. What only the agent does (delegating,
-steering itself, making tools, changing slates) is refused where the host
-routes a call (`SLATE_EXCLUDED` in `packages/core/src/slates/surface.ts`), as
+`package.json` names no capabilities. What only the agent does (steering
+itself, making tools, changing slates) is refused where the host routes a
+call; delegating (`agents.*`) is the owner's own slate's alone, so no share
+grants it and approving it refuses (`SLATE_EXCLUDED` in `packages/core/src/slates/surface.ts`), as
 is any member the impact table does not name (`packages/core/src/slates/members.ts`).
 
 **How every route resolves as the caller.** The host mints the `workspace` stub
@@ -218,7 +219,9 @@ identified on an origin that strips sessions by design, so the app host mints a
 short-lived viewer ticket for (viewer, share), and the share origin exchanges it
 for a `__Host-` cookie scoped to that origin. The cookie names a viewer of one
 slate and nothing else, so hostile slate HTML that reads it gains nothing the
-viewer did not already hold there.
+viewer did not already hold there. The share's one link serves both: a visitor
+with no cookie yet is sent to the app's `/shared/live/<workspace>/<share>`,
+which signs them in and hands them the ticket, and so is the Drive's Open.
 
 **The Drive** at `/drive` (My stuff) and `/shared` (Shared). My stuff tiles the
 owner's slates, blueprints, folders and files; Shared tiles what others shared
@@ -261,8 +264,8 @@ operations `share`, `unshare`, `publish`, `inspect`, `shares`, `graph`,
 `liveShares` and `viewerRequests` in `packages/core/src/slates/rpc.ts`. App
 host: `/api/shared` (library, `publish`, `fork`, `live`, `revoke`,
 `live/open`) and `/api/shared/blueprint/:id` in
-`packages/cf-backend/src/shared/routes.ts`; pages `/drive`, `/shared` and
-`/shared/blueprint/:id`; the viewer ticket mint.
+`packages/cf-backend/src/shared/routes.ts`; pages `/drive`, `/shared`,
+`/shared/blueprint/:id` and `/shared/live/:workspace/:share`; the viewer ticket mint.
 
 **The grant.** A live share stores a `ShareGrant` (`sharing.ts`): the slates a
 viewer may enter and one entry per admitted namespace member with its impact.

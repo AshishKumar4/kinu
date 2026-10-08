@@ -3,7 +3,7 @@
   * (process, require, workspace.slates, env, crafted tools) and loopback egress (server.ts `CodemodeEgress`).
   */
 
-import { DynamicWorkerExecutor } from '@cloudflare/codemode';
+import { DynamicWorkerExecutor, sanitizeToolName } from '@cloudflare/codemode';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
   explainSandboxError, renderCraftedDefinitions,
@@ -67,6 +67,36 @@ function attributeProviders(providers: ResolvedProvider[]): ResolvedProvider[] {
 
 type ProgramResult = Awaited<ReturnType<DynamicWorkerExecutor['execute']>>;
 
+/**
+ * A provider as the sandbox must hold it for a program to reach each member by the name it wrote. The vendor registers
+ * a member under its sanitized name (`delete` as `delete_`) but dispatches the name the program wrote, so `state.delete`
+ * never resolved; its namespace serves its own properties first, so each such name is set there as the sanitized
+ * member. `workspace.createTool` takes the function itself, sent as its source: source written as text in the program
+ * had its escapes read once by the program and again by the tool's parser.
+ */
+function reachableAsWritten(provider: ResolvedProvider): ResolvedProvider {
+  const ns = provider.name;
+
+  const lines = Object.keys(provider.fns)
+    .filter((name) => sanitizeToolName(name) !== name)
+    .map((name) => `    ${ns}[${JSON.stringify(name)}] = ${ns}[${JSON.stringify(sanitizeToolName(name))}];`);
+
+  if (ns === 'workspace' && Object.hasOwn(provider.fns, 'createTool')) {
+    lines.push('    { const create = workspace.createTool; workspace.createTool = (name, description, code, ...rest) => '
+      + 'create(name, description, typeof code === "function" ? String(code) : code, ...rest); }');
+  }
+
+  if (lines.length === 0) return provider;
+
+  // Before its own prelude, which defines what it serves itself (a crafted tool's body) under the written name.
+  return { ...provider, prelude: [...lines, ...(provider.prelude === undefined ? [] : [provider.prelude])].join('\n') };
+}
+
+/** Console output as the program meant it: an object as JSON, where the vendor's `String` logs `[object Object]`, and `[]` as `""`. */
+const SHOWN_CONSOLE = 'const __kinuShown = (value) => { if (typeof value === "string") return value; '
+  + 'try { return JSON.stringify(value) ?? String(value); } catch { return String(value); } }; '
+  + 'for (const level of ["log", "warn", "error"]) { const write = console[level]; console[level] = (...args) => write(...args.map(__kinuShown)); }';
+
 export interface ProgramLaunch {
   run(source: string, providers: ResolvedProvider[]): Promise<ProgramResult>;
 }
@@ -81,12 +111,23 @@ export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: Worker
   async run(source: string, providers: ResolvedProvider[]): Promise<ProgramResult> {
     const { kinuNode, egress } = this.ctx.props;
 
-    return await (await programWorker({ loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode })).execute(source, providers);
+    const worker = await programWorker({ loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode });
+
+    return await worker.execute(`async () => { ${SHOWN_CONSOLE}\n return await (\n${normalizeCode(source)}\n)(); }`, providers.map(reachableAsWritten));
   }
+
+  /** Asked from a detached background job's context (core jobs/runner `alive`), over the path its programs take. */
+  answer(): void {}
 }
 
 export function codemodeLauncher(props: CodemodeLauncherProps): ProgramLaunch {
   return { run: (source, providers) => exports.CodemodeLauncher({ props }).run(source, providers) };
+}
+
+/** A context the platform dropped delivers no answer, this one's included, so a job whose context stops answering
+ *  has lost its work's answers too. */
+export async function jobContextAnswers(): Promise<void> {
+  await exports.CodemodeLauncher({ props: { kinuNode: false, egress: null } }).answer();
 }
 
 /** No work deadline, where codemode's default is 60 s: a node agent's whole scaffold loop is one program, bounded

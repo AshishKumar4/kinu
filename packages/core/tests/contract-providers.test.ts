@@ -3,7 +3,6 @@
 import { describe, test, expect } from 'bun:test';
 import { withModelStack } from '../src/providers/wire-model';
 import { asFetchFunction } from '../src/providers/fetch-shim';
-import { normalizeCodexResponsesRequest } from '../src/providers/codex';
 import { generateText } from 'ai';
 import * as v from 'valibot';
 import {
@@ -15,7 +14,7 @@ import {
   type ModelCallDeps, type ProviderDeps, type AuthResolution,
 } from '../src/index';
 import {
-  createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
+  createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
 
 const CodexRequestBodySchema = v.object({
   instructions: v.optional(v.string()),
@@ -41,6 +40,7 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
   return {
     env: {},
     sessionAffinity: 'kinu-test',
+    workspaceAffinity: 'kinu-test',
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },
@@ -185,7 +185,7 @@ describe('Anthropic provider contract', () => {
 });
 
 describe('Codex provider contract', () => {
-  test('attaches every WAF-bypass header returned by getAuth', async () => {
+  test('attaches every WAF-bypass header returned by getAuth, and the conversation it caches under', async () => {
     const mock = createMockFetch([
       { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
@@ -211,6 +211,8 @@ describe('Codex provider contract', () => {
     expect(req.headers['authorization']).toBe('Bearer codex-token');
     expect(req.headers['originator']).toBe('codex_cli_rs');
     expect(req.headers['chatgpt-account-id']).toBe('acct-test-123');
+    expect(req.headers['session_id']).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+    expect(req.headers['x-client-request-id']).toBe(req.headers['conversation_id']);
   });
 
   test('sends system instructions in the shape required by the Codex backend', async () => {
@@ -287,14 +289,6 @@ describe('Codex provider contract', () => {
     ]));
   });
 
-  test('leaves a non-array input untouched', () => {
-    const out = normalizeCodexResponsesRequest({ method: 'POST', body: JSON.stringify({ model: 'gpt-5.5', input: 'hello' }) });
-
-    const sent = present(out, 'the recorded codex request');
-    const body = v.parse(CodexStoredBodySchema, JSON.parse(v.parse(v.string(), sent.body)));
-    expect(body.input).toBe('hello');
-  });
-
   test('refreshes on 401 by naming the refused login to getAuth', async () => {
     let calls = 0;
     const refusedNamed: string[] = [];
@@ -302,6 +296,7 @@ describe('Codex provider contract', () => {
     const deps: ModelCallDeps = {
       env: {},
       sessionAffinity: 'kinu-test',
+      workspaceAffinity: 'kinu-test',
       async getAuth(key, opts) {
         if (key !== CODEX_CRED_KEY) return null;
 

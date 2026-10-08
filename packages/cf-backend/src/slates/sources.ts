@@ -51,6 +51,19 @@ interface SlateSourceDeps {
   };
 }
 
+/** A page's `<title>` as a person reads it, or null when it has none: an answer's page is called by it, saved or shown. */
+async function pageTitle(html: string): Promise<string | null> {
+  let text = '';
+
+  await new HTMLRewriter().on('title', { text(chunk) { text += chunk.text; } }).transform(new Response(html)).arrayBuffer();
+
+  // The title's text as written; `&amp;` last, so an escaped entity stays itself.
+  const title = text.split(/\s+/).filter((word) => word !== '').join(' ')
+    .replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"').replaceAll('&#39;', "'").replaceAll('&amp;', '&');
+
+  return title === '' ? null : title;
+}
+
 /** Resolves a slate's id to its source, and reads and digests what the source holds. */
 export class SlateSources {
   constructor(private readonly deps: SlateSourceDeps) {}
@@ -63,7 +76,7 @@ export class SlateSources {
 
     return {
       kind: 'message', root: `${EPHEMERAL_ROOT}/${ephemeralSlateId(address)}`, html: block.html, author: block.author ?? UNBOUND,
-      bound: block.author !== null, project: parseSlateProject({ name: address.name, browser: PAGE_ENTRY, slate: { title: address.name } }),
+      bound: block.author !== null, project: parseSlateProject({ browser: PAGE_ENTRY, slate: { title: await pageTitle(block.html) ?? address.name } }),
     };
   }
 

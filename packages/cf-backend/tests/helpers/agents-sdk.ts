@@ -7,6 +7,7 @@ import { Lifecycle } from 'agents/lifecycle';
 import { parseJsonValue, type JsonObject, type JsonValue, type SqlValue } from '@kinu.run/core';
 import type { McpCredentialTransport } from '../../src/user/mcp';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { SdkError, SdkErrorCode } from '@modelcontextprotocol/client';
 
 type ModuleMockFactory = Parameters<typeof mock.module>[1];
 
@@ -24,7 +25,7 @@ let harnessFiberSeq = 0;
 /** Fibers running in this process; the interrupted scan skips them, as `_runFiberActiveFibers` does. */
 const harnessActiveFibers = new Set<string>();
 
-/** Live fiber bodies, so a test can join what production detaches on purpose. */
+/** Live fiber and lane bodies, so a test can join what production detaches on purpose. */
 const harnessFiberBodies = new Set<Promise<unknown>>();
 
 /** `cf_agents_runs`, as `agents/dist/index.js:663` declares it. */
@@ -126,7 +127,14 @@ export async function joinHarnessKeepAlives(agent: workersModule.DurableObject):
   while (open !== undefined && open.size > 0) await Promise.allSettled(open);
 }
 
-/** Resolves when every `runFiber` body started so far has settled. */
+/** A lane's body (`ActorAgent.holdLane`), joined with the fibers. */
+export function trackHarnessLane<Result>(lane: Promise<Result>): Promise<Result> {
+  harnessFiberBodies.add(lane);
+
+  return lane.finally(() => { harnessFiberBodies.delete(lane); });
+}
+
+/** Resolves when every `runFiber` body and lane started so far has settled. */
 export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);
 }
@@ -158,26 +166,6 @@ export function abandonHarnessFibers(): void {
   harnessFiberBodies.clear();
   held.clear();
   harnessActiveFibers.clear();
-}
-
-/** Seeds the row a dead activation leaves: the isolate lost the in-memory active set but kept the
- *  `cf_agents_runs` row (same INSERT as `agents/dist/index.js:2899`). */
-export function seedOrphanFiberRow(
-  storage: DurableObjectStorage, name: string, snapshot: JsonValue, createdAt = Date.now(),
-): string {
-  const id = `orphan-${String(++harnessFiberSeq)}`;
-  storage.sql.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
-    id TEXT PRIMARY KEY NOT NULL,
-    name TEXT NOT NULL,
-    snapshot TEXT,
-    created_at INTEGER NOT NULL
-  )`);
-  storage.sql.exec(
-    `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, ?, ?)`,
-    id, name, snapshot === undefined ? null : JSON.stringify(snapshot), createdAt,
-  );
-
-  return id;
 }
 
 function recoveryContextOf(row: RunRow, managed: boolean): FiberRecoveryContext {
@@ -658,6 +646,8 @@ export function mockAgentsSdk(): void {
 
           return await new Launcher({ ...workerContext(), props }, { LOADER: Object.create(inProcessWorkerLoader()) }).run(...args);
         },
+        // One process: a job's context always answers.
+        answer: async () => {},
       }),
     },
     tracing: {
@@ -840,8 +830,8 @@ export interface RecordedMcpConnection {
   connectionError: string | null;
   tools: { name: string; description?: string; title?: string; inputSchema: unknown; annotations?: Tool['annotations'] }[];
   options: { transport: RecordedMcpTransport };
-  /** The connection's MCP client, as far as a raw `tools/list` read goes. */
-  client?: { request(): Promise<object> };
+  /** The connection's MCP client, as far as a raw `tools/list` read goes; no `transport` once it closed. */
+  client?: { request(): Promise<object>; transport?: object | undefined };
   sessionId?: string;
   clearResumedSession?(): void;
 }
@@ -919,6 +909,10 @@ let mcpWaited = 0;
 
 let mcpEstablishGate: Promise<void> | null = null;
 
+let mcpRestoreGate: Promise<void> | null = null;
+
+let mcpRestoreArrived: (() => void) | null = null;
+
 let mcpEstablishArrived: (() => void) | null = null;
 
 /** Named by the harness, not construction order: every stand-in Agent has its own manager. */
@@ -965,6 +959,27 @@ export function hangMcpEstablish(): McpEstablishGate {
   mcpEstablishArrived = () => { arrival.resolve(); };
 
   return { entered: arrival.promise, release: () => { gate.resolve(); } };
+}
+
+/**
+ * Holds every dial `restoreConnectionsFromStorage` starts, as a dial still on the wire is held: the connection
+ * stays `connecting` until `release`. Unheld, a restored dial lands at once.
+ */
+export function holdMcpRestore(): McpEstablishGate {
+  const gate = Promise.withResolvers<void>();
+  const arrival = Promise.withResolvers<void>();
+  mcpRestoreGate = gate.promise;
+  mcpRestoreArrived = () => { arrival.resolve(); };
+
+  return { entered: arrival.promise, release: () => { gate.resolve(); } };
+}
+
+/** The transport under a ready connection closed: the SDK keeps the state `ready`, and its client has no transport. */
+export function closeMcpTransport(id: string): void {
+  const connection = liveMcpManager?.mcpConnections[id];
+
+  if (!connection) throw new Error(`No live MCP connection for ${id}.`);
+  connection.client = { request: async () => { throw new SdkError(SdkErrorCode.NotConnected, 'Not connected'); }, transport: undefined };
 }
 
 /** Every failure this seam classifies is an `Error` subclass, as the SDK's transports raise. */
@@ -1055,7 +1070,7 @@ export function seedUndiscoveredMcpTools(id: string, answer: () => Promise<objec
   const connection = manager.mcpConnections[id];
   connection.connectionState = 'connected';
   connection.tools = [];
-  connection.client = { request: answer };
+  connection.client = { request: answer, transport: {} };
 }
 
 /** As the SDK's request: an aborted signal rejects it at once, a later abort when it comes, with the signal's reason. */
@@ -1089,6 +1104,8 @@ export function resetRecordedMcp(): void {
   mcpWaited = 0;
   mcpEstablishGate = null;
   mcpEstablishArrived = null;
+  mcpRestoreGate = null;
+  mcpRestoreArrived = null;
 }
 
 /** The pinned SDK's probe status read (`client-zqKcsyFa.js:204-210`). */
@@ -1129,6 +1146,11 @@ function isMcpDiscoveryUnauthorized(error: Error): boolean {
   return error.message.includes('Unauthorized') || error.message.includes('401');
 }
 
+/** What the vendor's `Event` subscription returns. */
+interface HarnessDisposable {
+  dispose(): void;
+}
+
 /**
  * Mirrors the real manager (`client-zqKcsyFa.js`): register does not connect (`:478`), reuse keeps a live
  * transport (`:1719-1720`), remove drops row and connection (`:2299-2305`), probe failure keeps cached tools.
@@ -1137,6 +1159,30 @@ class FakeMCPClientManager {
   mcpConnections: Record<string, RecordedMcpConnection> = {};
   /** The vendor's restore-once flag; the host's write to it is the contract under test. */
   _isRestored = false;
+
+  /** Dials in flight, as `_pendingConnections` holds them (`client-zqKcsyFa.js`): `waitForConnections` waits on these. */
+  private readonly pending = new Set<Promise<void>>();
+
+  private readonly stateListeners = new Set<() => void>();
+
+  /** The vendor's `Event<void>`: a listener, and a disposable that removes it. */
+  onServerStateChanged = (listener: () => void): HarnessDisposable => {
+    this.stateListeners.add(listener);
+
+    return { dispose: () => { this.stateListeners.delete(listener); } };
+  };
+
+  /** No event is fired here: the state listener sees every change this fake makes. */
+  onObservabilityEvent = (_listener: (event: { type: string }) => void): HarnessDisposable => ({ dispose: () => {} });
+
+  private changed(): void {
+    for (const listener of this.stateListeners) listener();
+  }
+
+  private track(dial: Promise<void>): void {
+    const tracked = dial.finally(() => { this.pending.delete(tracked); });
+    this.pending.add(tracked);
+  }
 
   async registerServer(id: string, options: {
     url: string; name: string; callbackUrl?: string; clientId?: string; authUrl?: string;
@@ -1157,6 +1203,7 @@ class FakeMCPClientManager {
     this.mcpConnections[id] ??= {
       connectionState: 'connecting', connectionError: null, tools: [], options: { transport },
     };
+    this.changed();
 
     return id;
   }
@@ -1187,25 +1234,49 @@ class FakeMCPClientManager {
 
     delete this.mcpConnections[id];
     mcpServers.delete(id);
+    this.changed();
   }
 
-  /** Returns early once restored (`_isRestored`, `client-zqKcsyFa.js:1533-1534`). */
+  /** Returns early once restored (`_isRestored`, `client-zqKcsyFa.js:1533-1534`); each restored connection starts
+   *  `connecting` with its dial tracked, not awaited (`:1541-1580`). */
   async restoreConnectionsFromStorage(): Promise<void> {
     if (this._isRestored) return;
     mcpRestored += 1;
 
     for (const row of mcpServers.values()) {
-      this.mcpConnections[row.id] ??= {
-        connectionState: 'ready', connectionError: null, tools: [], options: { transport: row.transport },
+      if (this.mcpConnections[row.id]) continue;
+
+      const connection: RecordedMcpConnection = {
+        connectionState: 'connecting', connectionError: null, tools: [], options: { transport: row.transport },
       };
+
+      this.mcpConnections[row.id] = connection;
+      this.track(this.restoreDial(connection));
     }
 
     this._isRestored = true;
   }
 
-  async establishConnection(id: string): Promise<void> {
-    mcpEstablished.push(id);
+  /** `_restoreServer`: connect, then discover. Unheld, it lands before restore returns. */
+  private async restoreDial(connection: RecordedMcpConnection): Promise<void> {
+    if (mcpRestoreGate) {
+      mcpRestoreArrived?.();
+      await mcpRestoreGate;
+    }
 
+    connection.connectionState = 'ready';
+    this.changed();
+  }
+
+  establishConnection(id: string): Promise<void> {
+    mcpEstablished.push(id);
+    const dial = this.establish(id);
+    this.track(dial);
+
+    return dial;
+  }
+
+  private async establish(id: string): Promise<void> {
     // The real one awaits `_connectWithRetry` unbounded.
     if (mcpEstablishGate) {
       mcpEstablishArrived?.();
@@ -1215,10 +1286,12 @@ class FakeMCPClientManager {
     const connection = this.mcpConnections[id];
 
     if (connection) connection.connectionState = 'ready';
+    this.changed();
   }
 
   async waitForConnections(): Promise<void> {
     mcpWaited += 1;
+    await Promise.allSettled(this.pending);
   }
 
   /** A provider with no queued `authUrl` models a server that needed no sign-in. */
@@ -1245,6 +1318,9 @@ class FakeMCPClientManager {
 
     connection.connectionState = 'connected';
 
+    if (connection.client) connection.client.transport = {};
+    this.changed();
+
     return { state: 'connected' };
   }
 
@@ -1260,14 +1336,24 @@ class FakeMCPClientManager {
 
     if (probe === null) {
       connection.connectionState = 'ready';
+      this.changed();
 
       return;
     }
 
     connection.connectionState = isMcpDiscoveryUnauthorized(probe) ? 'authenticating' : 'connected';
+    this.changed();
   }
 
   async callTool(params: { serverId: string; name: string; arguments?: JsonObject }, options?: { signal?: AbortSignal }): Promise<CallToolResult> {
+    const connection = this.mcpConnections[params.serverId];
+
+    // The client refuses a request on a transport that is not connected, before sending it (`Protocol.request`).
+    if (connection === undefined || connection.connectionState === 'connecting'
+      || (connection.client !== undefined && connection.client.transport === undefined)) {
+      throw new SdkError(SdkErrorCode.NotConnected, 'Not connected');
+    }
+
     mcpToolCalls.push(params);
 
     if (mcpCallToolHeld) {

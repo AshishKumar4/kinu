@@ -42,6 +42,7 @@ import {
   CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
 } from './ladder-cache';
 import type { GateCacheRequest, Plan, Store, ToolVersions } from './ladder-cache';
+import { fromEnvironment, type RemoteProofs } from './ladder-proofs';
 import { auditClosure } from './ladder-audit';
 import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
@@ -204,6 +205,9 @@ export interface Gate {
   /** Where its evidence lands under the deploy's report, for a row armada runs: the row writes it under
    *  BENCH_ARTIFACTS in its container, its verdict carries it back, and the deploy unpacks it there. */
   readonly evidence?: string;
+  /** The armada secrets a deploy row needs beyond its deployment's own ({@link armadaPhaseRun}), by name. Secrets are
+   *  given per armada job, so a row that names any runs in a job of its own, and no other row's container holds them. */
+  readonly secrets?: readonly string[];
 }
 
 /** The environment names the by-name projections in `packages/test-utils`
@@ -977,7 +981,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1072,7 +1076,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/ladder-proofs.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts',
     label: 'Gate ladder wiring and cache soundness',
     tier: 'push',
     // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
@@ -1120,8 +1124,10 @@ export const LADDER: readonly Gate[] = [
     // the evals dispatch suite at 0.2 s (3 tests); the reset suite joined
     // 2026-10-01 at 0.1 s (4 tests), the version telemetry suite at 0.1 s
     // (2 tests), the continuous staging and promotion suite at 2 s (7 tests), and
-    // the deploy's live status suite at 0.5 s (4 tests).
-    seconds: 90,
+    // the deploy's live status suite at 0.5 s (4 tests). deploy.test.ts gained the
+    // smoke's version reads 2026-10-08: three routes against a local server, the
+    // slowest held to its 6 s bound (3 tests).
+    seconds: 100,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
       + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
       + 'that ships bytes staging never verified or that production cannot return from: each '
@@ -1130,7 +1136,7 @@ export const LADDER: readonly Gate[] = [
       + 'that stores it, or one stored under a name no provider reads, evals dispatched from a branch that '
       + 'does not hold the build, and a reset that stops '
       + 'partway with no record, no barrier, or no way to finish it. And a version\'s uncaught exception, '
-      + 'platform kill, failed or owed effect, wake loop or alarm storm left out of the deploy\'s findings. '
+      + 'platform kill, failed or owed effect, wake loop or idle wake left out of the deploy\'s findings. '
       + 'And two deploys of one environment at once, or continuous staging deploying a tip a newer one '
       + 'passed, or one tip twice, or on another revision\'s install, and a promotion of an unverified build '
       + 'or a red one retried.',
@@ -2016,32 +2022,6 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun run gate:agents-fields',
-    label: 'Agents action/field relation',
-    tier: 'local',
-    seconds: 0.34,
-    catches: 'a field of the `agents` tool that the handler reads and nothing declares, or '
-      + 'declares and nothing reads. The input was one flat `v.object`, and valibot\'s '
-      + '`object` EXCLUDES an unknown entry rather than rejecting it, so '
-      + '`{ action:"fork", task:"x", budgetUsd:5, wallClockMs:1000 }` parsed to '
-      + '`{ action:"fork", task:"x" }` — measured against the shipped parser 2026-08-18. Both '
-      + 'spend caps gone with no error and nothing recording the loss. The structural half is '
-      + 'what this holds: an action can join AGENTS_TOOL_ACTIONS while its fields never join '
-      + 'the schema, and every symptom is a field arriving ABSENT. Not a tautology — the two '
-      + 'sides are the DECLARATION (the picklist in registry.ts, AGENTS_ACTION_FIELDS and the '
-      + 'schema entries) and the CODE (the `input.<field>` reads each `case` arm of '
-      + 'dispatchAgentsAction performs, followed through every whole-input hand-off, including '
-      + 'across the module boundary into readMissionLimits where budget_usd is actually read). '
-      + '31 reads over 7 arms and 6 hops today. An input handed somewhere it cannot follow '
-      + 'fails the gate instead of being skipped, so a green cannot come from a walk that '
-      + 'stopped early.',
-    blind: 'what a read is USED for — a read whose value is discarded still counts — and field '
-      + 'TYPES entirely. The advertised JSON Schema is bound to the same map at compile time '
-      + '(the property types are derived from it) and asserted under full deps in '
-      + 'unit-agents-tool.test.ts, so this gate deliberately does not build a tool.',
-    inputs: { kind: 'derived' },
-  },
-  {
     run: 'bun scripts/flake-gate.ts',
     label: 'Changed test files, repeated',
     tier: 'commit',
@@ -2211,18 +2191,17 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run verify:lean',
     label: 'Lean proofs, consistency, and traceability',
-    tier: 'deploy',
+    tier: 'ci',
     // 10 s WARM: 10.1 and 9.3 s at 961dd0ab2 (lane/formal-proofs) in a detached
     // worktree on the 24-thread box, 2026-09-22, at load 20-21 with other lanes
     // running, after one cold run of 24.4 s. The growth from 2.2 s (2026-08-21,
     // warm, `lake build` a no-op) is the refinement fixtures regenerated and
     // diffed and 824 refinement cases under bun test (2.4 s of it).
     //
-    // COLD IT IS ~15 MINUTES, and that is what CI pays: the lean-verify workflow
-    // caches `~/.elan` and not the Lean build cache, so a runner rebuilds 330 theorems
-    // every time. That is why CI_EXEMPT keeps it off the ci tier, and why both
-    // figures are written down rather than averaged into one that describes
-    // neither machine.
+    // COLD IT IS ~15 MINUTES, which a GitHub runner paid on every push. On armada the
+    // environment builds lean/ once (scripts/armada/install.sh) and each checkout keeps
+    // `.lake`, so a CI run rebuilds only what its commit changed: that is why it is a
+    // ci row, run on every commit, and why lean-verify.yml is gone.
     //
     // Declared at ZERO until 2026-08-21, which made the deploy tier's cost line
     // fiction and its budget unenforceable.
@@ -2451,15 +2430,16 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:devbox-e2e',
     label: 'Devbox contracts on real golden containers',
-    here: 'until it moves: it deploys its own Worker, bucket and containers through this machine\'s wrangler session '
-      + 'and R2 keys, which no armada run carries yet.',
+    // Its Worker, bucket and containers through the deploy's REST token, never a wrangler login; its desktop client in
+    // the container's own Chrome. The staging identity whatever the deployment: production is never its authority.
+    secrets: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'KINU_EVAL_STAGING_WEB_IDENTITY'],
     shared: 'browser',
     phase: 'post-publish',
     alone: 'uses the staging eval identity on its own throwaway Worker, application, bucket and boxes; the browser lane owns its desktop client.',
     tier: 'deploy',
     // 2026-10-06, dc20261006045352da6d8: 17 contracts and verified cleanup, 370 s whole run (D72).
     seconds: 370,
-    catches: 'tools and FUSE missing from the real golden; lost exec bytes, unsafe process kills or trust; a broken desktop click; '
+    catches: 'tools and FUSE missing from the real golden; lost exec bytes, unsafe process kills or trust; a desktop that opens empty or cannot launch; '
       + 'snapshot and R2 recovery data loss, whole-file deltas, failed compaction, serial mounts and disk-pressure failures.',
     blind: 'long snapshot lifetime, account saturation, the model path, and a product adapter no contract drives. No Docker image is built or started.',
     inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },
@@ -2944,10 +2924,6 @@ export const CI_EXEMPT = {
     'proves the tree being deployed, not a push: it materialises a `git worktree add --detach` copy and runs eight '
     + '`bun test` processes inside it. It runs in the deploy\'s source-phase job on armada, whose '
     + 'checkout carries the whole history.',
-  'bun run verify:lean':
-    'runs in the deploy\'s source-phase job on armada. The armada environment installs elan and '
-    + 'builds lean/ once (scripts/armada/install.sh), and each checkout keeps that build, so a run rebuilds only what '
-    + 'changed. lean-verify.yml is gone; this is where the proofs are checked.',
   'bun run gate:first-run':
     'has nothing to run against at CI. Its subject is the deployment that just went up, so it '
     + 'runs AFTER the upload and the smoke gate, on a build that exists — at CI there is no such '
@@ -3065,11 +3041,16 @@ function armadaTaskName(gate: Gate): string {
   return gate.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80);
 }
 
-/** The matrix of a deploy phase's armada rows (`armada run <sha> -- --deploy-phase=<phase>`), weighed by their
- *  declared seconds so the longest start first. */
-function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined): CIMatrix {
+/** A row's own secrets as one name (`--deploy-secrets=`): the armada job it runs in. Empty for a row that names none. */
+export function secretGroup(gate: Gate): string {
+  return [...gate.secrets ?? []].sort((left, right) => left.localeCompare(right)).join(',');
+}
+
+/** The matrix of a deploy phase's armada rows whose own secrets are `group` (`armada run <sha> -- --deploy-phase=<phase>
+ *  --deploy-secrets=<group>`), weighed by their declared seconds so the longest start first. */
+function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined, group: string): CIMatrix {
   return {
-    include: armadaPhaseRows(phases).map((gate) => {
+    include: armadaPhaseRows(phases).filter((gate) => secretGroup(gate) === group).map((gate) => {
       const entry: CIMatrixEntry = { name: armadaTaskName(gate), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.run] };
 
       if (readsDeployment(gate) && origin !== undefined) entry.origin = origin;
@@ -3579,6 +3560,13 @@ function recordTestFiles(
   return recorded.every(Boolean);
 }
 
+/** A recorded proof, uploaded so a later commit's container can carry it; a lost upload is a note, never a red. */
+async function carryProof(remote: RemoteProofs | undefined, proof: { readonly run: string; readonly key: string; readonly store: Store; readonly notes: Set<string> }): Promise<void> {
+  if (remote === undefined) return;
+
+  for (const lost of await remote.push([proof.key], proof.store)) proof.notes.add(`${proof.run}: its proof did not reach the bucket (${lost})`);
+}
+
 function cacheRunEnvironment(closure: Closure, argv: readonly string[]): ReturnType<typeof gateEnvironment> | undefined {
   if (closure.kind !== 'derived') return undefined;
   const env = gateEnvironment(closure);
@@ -3616,7 +3604,7 @@ function rowArgv(gate: Gate, tracked: readonly string[], deploying: boolean, tim
   return argv;
 }
 
-const ArmadaReportSchema = v.object({
+export const ArmadaReportSchema = v.object({
   job: v.string(),
   verdicts: v.optional(v.object({
     rows: v.array(v.object({
@@ -3637,17 +3625,23 @@ function unpackEvidence(report: string, evidence: { readonly dir: string; readon
   if (unpacked.exitCode !== 0) throw new Error(`unpacking evidence into ${into}: ${unpacked.stderr.toString().trim()}`);
 }
 
-/** The `armada run` of a deploy phase's rows at this exact SHA. A row that drives the deployment gets its origin
- *  through its matrix entry, and the stable secrets it needs by name: the scripted model's bearer and that
- *  deployment's own identity (evalWebIdentityEnv). */
-function armadaPhaseRun(phase: string, rows: readonly Gate[], sha: string): string[] {
-  const origin = rows.some(readsDeployment) ? process.env['KINU_EVAL_ORIGIN'] : undefined;
+/** The `armada run` of a deploy phase's rows at this exact SHA, all of one {@link secretGroup}. A row that drives the
+ *  deployment gets its origin through its matrix entry, and the stable secrets it needs by name: the scripted model's
+ *  bearer and that deployment's own identity (evalWebIdentityEnv); the group's own secrets join them. */
+export function armadaPhaseRun(phase: string, rows: readonly Gate[], sha: string, origin = process.env['KINU_EVAL_ORIGIN']): string[] {
+  const group = rows[0] === undefined ? '' : secretGroup(rows[0]);
 
-  if (rows.some(readsDeployment) && origin === undefined) throw new Error(`the ${phase} rows drive the deployment, and KINU_EVAL_ORIGIN names none`);
-  const secrets = origin === undefined ? [] : [`--secrets=${SCRIPTED_MODEL_KEY_ENV},${evalWebIdentityEnv(origin)}`];
-  const planArgs = [`--deploy-phase=${phase}`, ...origin === undefined ? [] : [`--deploy-origin=${origin}`]];
+  if (rows.some((gate) => secretGroup(gate) !== group)) throw new Error(`the ${phase} rows of one armada job name different secrets`);
+  const driven = rows.some(readsDeployment) ? origin : undefined;
 
-  return [resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}`, ...secrets, '--', ...planArgs];
+  if (rows.some(readsDeployment) && driven === undefined) throw new Error(`the ${phase} rows drive the deployment, and KINU_EVAL_ORIGIN names none`);
+  const names = [...new Set([...driven === undefined ? [] : [SCRIPTED_MODEL_KEY_ENV, evalWebIdentityEnv(driven)], ...group === '' ? [] : group.split(',')])];
+  const planArgs = [`--deploy-phase=${phase}`, ...driven === undefined ? [] : [`--deploy-origin=${driven}`], ...group === '' ? [] : [`--deploy-secrets=${group}`]];
+
+  return [
+    resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}${group === '' ? '' : ` (${String(rows.length)} row with its own secrets)`}`,
+    ...names.length === 0 ? [] : [`--secrets=${names.join(',')}`], '--', ...planArgs,
+  ];
 }
 
 /** `argv` run here, its output printed as it comes, with its exit code and everything it printed. */
@@ -3665,7 +3659,7 @@ async function echoed(argv: readonly string[]): Promise<{ readonly exitCode: num
   return { exitCode: await run.exited, said };
 }
 
-type ArmadaReport = v.InferOutput<typeof ArmadaReportSchema>;
+export type ArmadaReport = v.InferOutput<typeof ArmadaReportSchema>;
 
 /** Where `armada run` keeps each run's report, as `<project>-<task job>.json` (armada's src/ci.ts). */
 const ARMADA_REPORTS = join(homedir(), '.local', 'state', 'armada', 'runs');
@@ -3713,6 +3707,15 @@ function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefi
  * the run could not grade them.
  */
 async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
+  const groups = new Map<string, Gate[]>();
+
+  for (const gate of rows) groups.set(secretGroup(gate), [...groups.get(secretGroup(gate)) ?? [], gate]);
+
+  return (await Promise.all([...groups.values()].map(async (group) => armadaPhaseJob(phases, group, report)))).flat();
+}
+
+/** One armada job of a phase's rows that share their own secrets. */
+async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
   const sha = fullRevision();
   const phase = phases.join(',');
   const argv = armadaPhaseRun(phase, rows, sha);
@@ -3720,20 +3723,28 @@ async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[]
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
   const { exitCode, said } = await echoed(argv);
   const graded = armadaReport(said);
-
-  // A task that wrote no verdict is reported under its own name, with its exit and output: its row is red with them.
-  const verdicts = new Map((graded?.verdicts?.rows ?? []).flatMap((row) => {
-    const gate = row.run === undefined ? rows.find((each) => armadaTaskName(each) === row.name) : rows.find((each) => each.run === row.run);
-
-    return gate === undefined ? [] : [[gate.run, row] as const];
-  }));
-
-  const found = graded === undefined ? `\`armada run\` exited ${String(exitCode)} and wrote no report` : [`job ${graded.job}`, ...graded.problems].join('; ');
-  const reproduce = `node_modules/.bin/armada run ${sha} -- --deploy-phase=${phase}`;
+  const reproduce = `node_modules/.bin/armada run ${sha} -- ${argv.slice(argv.indexOf('--') + 1).join(' ')}`;
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
-  return rows.filter((gate) => !recordArmadaRow(report, gate, verdicts.get(gate.run), { found, reproduce, said })).map((gate) => gate.run);
+  return armadaRowVerdicts(rows, graded, exitCode).filter(({ gate, verdict, found }) => !recordArmadaRow(report, gate, verdict, { found, reproduce, said }))
+    .map(({ gate }) => gate.run);
+}
+
+/** Each row's own verdict from a phase job's report, and what was found about it: the task that wrote no verdict is
+ *  reported under its task's name, with its exit and output, and armada names each problem by the task it is about. */
+export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | undefined, exitCode: number): { readonly gate: Gate; readonly verdict: ArmadaRow | undefined; readonly found: string }[] {
+  const reported = graded?.verdicts?.rows ?? [];
+
+  return rows.map((gate) => {
+    const task = armadaTaskName(gate);
+    const verdict = reported.find((row) => row.run === gate.run) ?? reported.find((row) => row.run === undefined && row.name === task);
+
+    const found = graded === undefined ? `\`armada run\` exited ${String(exitCode)} and wrote no report`
+      : [`job ${graded.job}`, ...graded.problems.filter((problem) => problem.startsWith(`${task} `))].join('; ');
+
+    return { gate, verdict, found };
+  });
 }
 
 /** CI's exact-SHA rows stay visible in the deploy's report; a red is imported as red and never run until green. */
@@ -3803,7 +3814,7 @@ async function ciCommand(): Promise<number | undefined> {
   if (process.argv.includes('--ci-plan')) {
     const phases = phasesNamed(option('deploy-phase'));
 
-    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts()) : armadaPlan(phases, option('deploy-origin'))));
+    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts()) : armadaPlan(phases, option('deploy-origin'), option('deploy-secrets') ?? '')));
 
     return 0;
   }
@@ -3829,6 +3840,9 @@ async function ciCommand(): Promise<number | undefined> {
 if (import.meta.main) {
   // Before any gate spawns: TMPDIR is a base name of every gate's environment (ladder-cache.ts), so each inherits it.
   if (process.env.TMPDIR === undefined && existsSync(SCRATCH_TMPDIR)) process.env.TMPDIR = SCRATCH_TMPDIR;
+
+  // Read, and deleted from the environment, before this process spawns anything: no row sees the bucket's credentials.
+  const remoteStore = fromEnvironment(process.env);
 
   const ciStatus = await ciCommand();
 
@@ -4150,6 +4164,7 @@ if (import.meta.main) {
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
   const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: process.argv.includes('--no-cache') });
+  const remote = caching ? remoteStore : undefined;
   const tools = toolVersions(root, await pathNodeVersion());
   const store = storeAt(defaultStoreDirectory());
   const revision = fullRevision();
@@ -4178,7 +4193,16 @@ if (import.meta.main) {
     }
 
     const argv = missing === undefined ? undefined : [...(missing[0]?.argv.slice(0, -1) ?? []), ...missing.flatMap((proof) => proof.argv.slice(-1))];
-    const plan = caching && !nativeChanged ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
+    let plan = caching && !nativeChanged ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
+
+    // A proof an earlier container recorded, under the same closure key, copied in only when its HMAC checks.
+    if (plan?.kind === 'miss' && remote !== undefined) {
+      const pulled = await remote.pull(plan.key, store);
+      const stored = store.lookup(plan.key);
+
+      if (stored.kind === 'entry') plan = { kind: 'hit', key: plan.key, entry: stored.entry, closure: plan.closure };
+      else if (pulled.kind !== 'absent') notes.add(`${gate.run}: the bucket's proof under ${plan.key.slice(0, 12)} is ${'why' in pulled ? `unreachable (${pulled.why})` : pulled.kind}, so it runs`);
+    }
 
     if (plan?.kind === 'hit') {
       // A reused CI verdict names the revision that proved it, and carries the file walls that proof measured.
@@ -4338,7 +4362,10 @@ if (import.meta.main) {
         { seconds, revision, timings: ciTimings(timingPath) },
       );
 
-      if (proofRecorded) recorded.push(gate.run);
+      if (proofRecorded) {
+        recorded.push(gate.run);
+        await carryProof(remote, { run: gate.run, key: plan.key, store, notes });
+      }
 
       return;
     }

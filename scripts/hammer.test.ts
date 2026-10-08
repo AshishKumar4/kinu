@@ -18,7 +18,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawnTest } from '@kinu.run/test-utils';
 
 import {
-  BURNER, artifactPath, completeRun, failingTests, hammerOnce, measuredFiles, reportedCounts, type HammerRun,
+  BURNER, artifactPath, completeRun, failingBlocks, failingTests, hammerOnce, measuredFiles, reportedCounts, type HammerRun,
 } from './hammer';
 
 /** Bun's real output, trimmed to the shapes the parse reads. */
@@ -102,6 +102,17 @@ describe('what a run REPORTED, read from bun\'s own output', () => {
     expect(failingTests(FAILING_OUTPUT))
       .toEqual(['packages/cf-backend/tests/unit-zz-flake.test.ts > intermittently failing fixture > passes the first time']);
     expect(failingTests(REAL_OUTPUT)).toEqual([]);
+  });
+
+  // 2026-10-08: a CI hammer red named its test, and why stayed in an artifact that left with the vessel.
+  test('a failing test\'s block is its error through its (fail) line, and a passing run has none', () => {
+    expect(failingBlocks(FAILING_OUTPUT)).toEqual([[
+      "11 |   test('passes the first time this suite is run and fails afterwards', () => {",
+      '                                                            ^',
+      'error: expect(received).toBe(expected)',
+      '(fail) intermittently failing fixture > passes the first time [0.83ms]',
+    ].join('\n')]);
+    expect(failingBlocks(REAL_OUTPUT)).toEqual([]);
   });
 
   test('a governed file absent from the measured set is visible in both directions', () => {

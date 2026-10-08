@@ -10,10 +10,9 @@
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
-import { DELEGATION_LANE_FIBER } from '../src/fiber-recovery';
-import { abandonHarnessFibers } from './helpers/agents-sdk';
+import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
 import {
-  GATEWAY_CATALOG, eventsOver, gatewayWorkspace, nextTurn, reactivateOrchestratorHarness, rosterOver, wakeForDelegatedTask,
+  GATEWAY_CATALOG, eventsOver, gatewayWorkspace, reactivateOrchestratorHarness, rosterOver, wakeForDelegatedTask,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { chatCompletion, openingOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
@@ -42,22 +41,16 @@ async function afterReset(db: Workspace['db'], gateway: StubbedAiBinding, build 
 
 /**
  * One maintenance pass of `workspace` and the delegation drain it starts, then what comes first: that drain ending, or
- * the task's third run, which waits forever as each run does. Drains a reset left behind stay open, so this pass's
- * drain is any that was not open before it.
+ * the task's third run, which waits forever as each run does. Each activation drains on its own lane, so a drain a reset
+ * left behind is not this one.
  */
 async function drainEndsOrThirdRun(workspace: Workspace, runs: AwaitedList<number>): Promise<'ended' | 'ran again'> {
-  const drains = () => workspace.agent.harnessOpenFiberRows().filter((row) => row.name === DELEGATION_LANE_FIBER).map((row) => row.id);
-  const before = new Set(drains());
-
   const ended = (async () => {
     await workspace.agent.terminalRetryPass();
+    // The drain runs as a lane, which the fibers join holds.
+    await joinHarnessFibers();
 
-    for (let lap = 0; lap < 1000; lap++) {
-      if (drains().every((id) => before.has(id))) return 'ended' as const;
-      await nextTurn();
-    }
-
-    throw new Error('the pass\'s delegation drain never ended and ran nothing');
+    return 'ended' as const;
   })();
 
   return await Promise.race([ended, runs.until((seen) => seen.length > 2).then(() => 'ran again' as const)]);

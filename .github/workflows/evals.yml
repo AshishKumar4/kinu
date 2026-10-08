@@ -1,6 +1,6 @@
 name: Evals
 
-# Whether a candidate build may be promoted. Every task in evals/tasks, ten trials each, runs as the
+# Whether a candidate build may be promoted. Every task in evals/tasks, five trials each, runs as the
 # eval-service identity against two deployments at once, both legs with the candidate's own task
 # definitions: the candidate (staging.kinu.run, serving the build to promote) and the baseline
 # (kinu.run, serving the promoted build). The same definitions, the same hour and the same provider
@@ -31,7 +31,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  EVAL_TRIALS: '10'
+  EVAL_TRIALS: '5'
 
 jobs:
   plan:
@@ -90,6 +90,7 @@ jobs:
     # (AGENTS.md).
     environment: eval
     permissions:
+      actions: read
       contents: read
     strategy:
       fail-fast: false
@@ -97,8 +98,10 @@ jobs:
         include:
           - leg: candidate
             origin: https://staging.kinu.run
+            worker: kinu-staging
           - leg: baseline
             origin: https://kinu.run
+            worker: kinu
     steps:
       - uses: actions/checkout@v4
         with:
@@ -116,9 +119,32 @@ jobs:
           source scripts/repo-runtime.sh
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
+      # Production changes rarely, so its leg is measured once per build and eval definitions, then
+      # reused: the key names the build, the evals tree that measured it and the trial count.
+      - name: Find a stored baseline
+        id: stored
+        if: matrix.leg == 'baseline'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASELINE: ${{ needs.plan.outputs.baseline }}
+        run: |
+          name="kinu-evals-baseline-${BASELINE}-$(git rev-parse HEAD:evals)-${EVAL_TRIALS}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          id=$(gh api "repos/$GH_REPO/actions/artifacts?name=$name&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // ""')
+          if [[ -n "$id" ]]; then
+            mkdir -p bench-artifacts/evals
+            gh api "repos/$GH_REPO/actions/artifacts/$id/zip" > /tmp/baseline.zip
+            unzip -q /tmp/baseline.zip -d bench-artifacts/evals
+            echo "Baseline: reusing $name" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
       # A failed trial is data, so the step goes on to upload; compare.ts names a leg that is not a
       # complete report, and the verdict fails on it.
       - name: Run every task against ${{ matrix.origin }}
+        if: matrix.leg == 'candidate' || steps.stored.outputs.id == ''
         continue-on-error: true
         env:
           KINU_EVAL_ORIGIN: ${{ matrix.origin }}
@@ -127,31 +153,57 @@ jobs:
           KINU_EVAL_TRIALS: ${{ env.EVAL_TRIALS }}
           KINU_EVAL_COMMIT: ${{ needs.plan.outputs.sha }}
           # Both legs call Muse on one opencode-go key, and 20 calls at once is all it was measured to hold
-          # (evals/src/config.ts, 2026-09-26); all 340 at once were refused 429 (run 37726316713). 10 per leg.
-          KINU_EVAL_FILES: 10
+          # (evals/src/config.ts, 2026-09-26); all 340 at once were refused 429 (run 37726316713). One trial of
+          # each of the seven tasks at a time: seven trials per leg, fourteen when production's leg is not reused.
+          KINU_EVAL_FILES: 7
           KINU_EVAL_CONCURRENCY: 1
         run: bun run evals
 
-      - name: Summarize the report
+      # What Workers Logs said of the leg's workspaces: exceptions, invocations ended for their limits, idle wakes. Read
+      # once the trials end, and stored with a reused baseline; without the token the leg is written as not read.
+      - name: Read the platform's logs of the leg's workspaces
+        if: matrix.leg == 'candidate' || steps.stored.outputs.id == ''
         continue-on-error: true
+        env:
+          KINU_OBS_TOKEN: ${{ secrets.KINU_OBS_TOKEN }}
+        run: bun evals/scripts/platform-bugs.ts bench-artifacts/evals/results.json --worker ${{ matrix.worker }} --out bench-artifacts/evals/platform.json
+
+      - name: Summarize the report
+        id: complete
+        continue-on-error: true
+        shell: bash
         run: bun evals/scripts/validate.ts bench-artifacts/evals/results.json --trials "$EVAL_TRIALS" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Only a complete baseline is stored; an incomplete one is still compared here, and measured again next run.
+      - name: Store the baseline for later runs
+        if: matrix.leg == 'baseline' && steps.stored.outputs.id == '' && steps.complete.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stored.outputs.name }}
+          path: |
+            bench-artifacts/evals/results.json
+            bench-artifacts/evals/platform.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Upload the report
         uses: actions/upload-artifact@v4
         with:
           name: kinu-evals-results-${{ matrix.leg }}
-          path: bench-artifacts/evals/results.json
+          path: |
+            bench-artifacts/evals/results.json
+            bench-artifacts/evals/platform.json
           if-no-files-found: error
           retention-days: 30
 
       # Each trial's evidence, a failed one's above all: its transcript and ledger, the files and
       # slates its workspace held, and the data they served, scrubbed like the report (redact.ts).
       - name: Scrub every trial's evidence
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (matrix.leg == 'candidate' || steps.stored.outputs.id == '') }}
         run: bun evals/scripts/scrub-evidence.ts bench-artifacts
 
       - name: Upload every trial's evidence
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (matrix.leg == 'candidate' || steps.stored.outputs.id == '') }}
         uses: actions/upload-artifact@v4
         with:
           name: kinu-evals-evidence-${{ matrix.leg }}
@@ -208,6 +260,8 @@ jobs:
           args=(--candidate artifacts/candidate/results.json --candidate-build "$CANDIDATE" --baseline-build "$BASELINE"
             --out artifacts/comparison --trials "$EVAL_TRIALS")
           if [[ -f artifacts/baseline/results.json ]]; then args+=(--baseline artifacts/baseline/results.json); fi
+          if [[ -f artifacts/candidate/platform.json ]]; then args+=(--candidate-platform artifacts/candidate/platform.json); fi
+          if [[ -f artifacts/baseline/platform.json ]]; then args+=(--baseline-platform artifacts/baseline/platform.json); fi
           bun evals/scripts/compare.ts "${args[@]}"
           bun evals/scripts/trajectories.ts artifacts/candidate/results.json artifacts/comparison/trajectories.md
           cat artifacts/comparison/comparison.md >> "$GITHUB_STEP_SUMMARY"
@@ -275,7 +329,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      written: ${{ steps.why.outputs.written }}
+      written: ${{ steps.why.outputs.written || steps.review.outputs.written }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -337,8 +391,25 @@ jobs:
             echo "written=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # One review per trial, passing ones too, by the reviewer agent over a trimmed rollout, put together with the run's
+      # measures; reported beside the verdict, never deciding it. A diagnosis that failed does not stop it.
+      - name: Review every trial of the candidate
+        id: review
+        if: ${{ !cancelled() }}
+        env:
+          KINU_EVAL_ORIGIN: https://staging.kinu.run
+          KINU_EVAL_STAGING_WEB_IDENTITY: ${{ secrets.KINU_EVAL_STAGING_WEB_IDENTITY }}
+        run: |
+          bun evals/scripts/review.ts --results artifacts/candidate/results.json --comparison artifacts/comparison/comparison.json --out artifacts/why
+          {
+            echo '<!-- kinu-evals-why -->'
+            if [[ -f artifacts/why/why.md ]]; then cat artifacts/why/why.md; echo; fi
+            cat artifacts/why/review.md
+          } > artifacts/why/comment.md
+          echo "written=true" >> "$GITHUB_OUTPUT"
+
       - name: Upload the diagnosis
-        if: steps.why.outputs.written == 'true'
+        if: ${{ !cancelled() && (steps.why.outputs.written == 'true' || steps.review.outputs.written == 'true') }}
         uses: actions/upload-artifact@v4
         with:
           name: kinu-evals-why

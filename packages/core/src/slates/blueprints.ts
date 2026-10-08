@@ -14,7 +14,7 @@ import { secretSightings, type SecretSighting } from '../safety/secret-patterns'
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { nanoid } from '../utils/nanoid';
 import type { WorkspaceSlateContentStore } from './content';
-import { slateProject, type SlateProject } from './project';
+import { slateProject, slateTitle, type SlateProject } from './project';
 import { namespaceHead, type SlateUsage } from './capability-graph';
 import type { WorkspaceSlates } from './runtime';
 import { type NewSlateShare, type ShareUser, type SlateShareStore } from './shares';
@@ -101,7 +101,7 @@ export interface BlueprintHeading {
 }
 
 function heading(record: SlateShareRecord, project: SlateProject): BlueprintHeading {
-  return { title: project.slate.title ?? project.name ?? record.slate, description: project.description ?? '' };
+  return { title: slateTitle(project, record.slate), description: project.description ?? '' };
 }
 
 export interface BlueprintReading {
@@ -137,7 +137,7 @@ export class WorkspaceBlueprints {
 
       return {
         slate, version,
-        title: project.slate.title ?? project.name ?? slate,
+        title: slateTitle(project, slate),
         description: project.description ?? '',
         entries: this.entries(tree, chosen),
         reaches: reachOf(this.deps.usage(slate)),
@@ -276,7 +276,7 @@ export class WorkspaceBlueprints {
       return {
         workspace,
         slate: admitted.slate.id.value,
-        title: project.slate.title ?? project.name ?? admitted.slate.id.value,
+        title: slateTitle(project, admitted.slate.id.value),
         requirements: admitted.unsatisfied.map((requirement) => ({ name: requirementNamespace(requirement.name.value), facet: requirement.facet.value })),
       };
     }));

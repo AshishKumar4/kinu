@@ -32,8 +32,8 @@ import {
 } from "@kinu.run/core";
 import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
 import { redactPayload, redactSecrets, segmentBySteers } from "@kinu.run/core";
-import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage } from "@kinu.run/core";
-import { ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
+import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure } from "@kinu.run/core";
+import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import type { UnavailableDevice } from "@/hooks/use-kinu";
 
@@ -47,6 +47,28 @@ function messageCreatedAt(message: UIMessage): string | number | Date | undefine
   const parsed = v.safeParse(MessageCreatedAtSchema, message);
 
   return parsed.success ? parsed.output.createdAt : undefined;
+}
+
+/** When the message was written, in ms since the epoch; undefined when the transport did not stamp it. */
+export function messageTime(message: UIMessage): number | undefined {
+  const at = messageCreatedAt(message);
+
+  if (at === undefined) return undefined;
+
+  if (at instanceof Date) return at.getTime();
+  const ms = typeof at === "number" ? at : Date.parse(at);
+
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** What a turn nobody typed draws as, to fold the same one in a row; null for a turn a person wrote. */
+export function eventTurnKey(message: UIMessage): string | null {
+  const programmatic = classifyProgrammaticTurn({ metadata: message.metadata, id: message.id });
+  const kind = programmatic?.kind ?? (message.role === "system" ? "system" : null);
+
+  if (kind === null || kind === "workspace_created") return null;
+
+  return JSON.stringify([kind, rowText(message)]);
 }
 
 function formatTime(date: Date): string {
@@ -140,6 +162,23 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
           </button>
           <div ref={prose} className="prose-thinking mt-1 ml-3.5" data-folded={expanded ? undefined : ""} data-overflows={long ? "" : undefined}><MarkdownContent content={text} /></div>
         </>
+      )}
+    </div>
+  );
+}
+
+/** A settled answer's failure as its turn recorded it, a provider's refusal in the provider's words. */
+function FailedTurnRow({ message, live, onRetry }: { message: UIMessage; live: boolean; onRetry: (() => void) | undefined }) {
+  const failure = live ? null : turnFailure({ metadata: message.metadata });
+
+  if (failure === null) return null;
+
+  return (
+    <div className="flex items-start gap-2 p-row-text p-text-2" role="status" data-turn-failure>
+      <WarningCircleIcon size={14} className="shrink-0 mt-0.5 p-danger" weight="fill" />
+      <code className="min-w-0 flex-1 p-t-code break-all">{failure}</code>
+      {onRetry !== undefined && (
+        <button onClick={onRetry} className="shrink-0 p-t-control p-accent hover:opacity-90 cursor-pointer">Retry this turn</button>
       )}
     </div>
   );
@@ -405,38 +444,35 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
   );
 }
 
-/** Shown when the event happens; the agent reads it at its next step. */
-const SYSTEM_PILL = "inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2";
-
+/** Shown when it happens, as the chat's other events are; the agent reads it at its next step. */
 export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<UnavailableDevice> | null }) {
   if (devices === null) return null;
   const [only] = devices;
 
-  let offline: ReactNode = <span>No machine connected <Link to="/devices" className="p-accent hover:underline">Connect</Link></span>;
+  let offline = "No machine connected";
 
   if (only !== undefined && devices.length === 1) {
-    offline = <span>{only.label} is offline</span>;
+    offline = `${only.label} is offline`;
   } else if (devices.length > 1) {
-    offline = <span>Your machines are offline</span>;
+    offline = "Your machines are offline";
   }
 
   return (
-    <div className="flex justify-center animate-fade-in py-1">
-      <div className={SYSTEM_PILL}>
-        <DesktopTowerIcon size={13} className="p-warning" weight="fill" />
-        {offline}
-      </div>
-    </div>
+    <EventRow
+      icon={DesktopTowerIcon}
+      tone="p-warning"
+      label="Machine"
+      body={offline}
+      action={devices.length === 0 ? <Link to="/devices" className="mt-1 mr-2 shrink-0 p-row-text p-accent hover:underline">Connect</Link> : undefined}
+      hooks={{ "data-device-offline": String(devices.length) }}
+    />
   );
 }
 
 export function ModelFallbackRows({ notices }: { notices: readonly string[] }) {
-  return notices.map((notice, index) => (
-    <div key={`${String(index)}:${notice}`} className="flex justify-center animate-fade-in py-1">
-      <div className={SYSTEM_PILL} role="status">
-        <ArrowsLeftRightIcon size={13} className="p-warning" />
-        <span>{notice}</span>
-      </div>
+  return foldRepeats(notices, (notice) => notice).map(({ item: notice, count }, index) => (
+    <div key={`${String(index)}:${notice}`} role="status">
+      <EventRow icon={ArrowsLeftRightIcon} tone="p-warning" label="Model" body={notice} count={count} hooks={{ "data-model-fallback": "" }} />
     </div>
   ));
 }
@@ -481,9 +517,11 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
 // referential identity and skips re-rendering.
 export const MessageView = memo(function MessageView({
   message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
-  signalState, steers, onOpenChangeNote, answerSlates,
+  signalState, steers, onOpenChangeNote, answerSlates, onRetry, repeats,
 }: {
   message: UIMessage;
+  /** A turn nobody typed that came this many times in a row ({@link eventTurnKey}), drawn once. */
+  repeats?: number;
   /** Resolved once by the thread owner (`threadLiveTail`), passed to the last row only; null means history. */
   liveTail?: LiveTail | null;
   signalState?: CardState;
@@ -498,6 +536,8 @@ export const MessageView = memo(function MessageView({
   onOpenChangeNote?: (source: string, anchor: DiffAnchor | undefined) => void;
   /** The chat an answer's `<slate-ui>` blocks resolve in; absent, a transcript shows their source. */
   answerSlates?: AnswerChat | undefined;
+  /** Re-runs this answer's turn: the newest answer's, when it failed. */
+  onRetry?: (() => void) | undefined;
 }) {
   const isUser = message.role === "user";
   const isLive = tail !== null;
@@ -514,13 +554,13 @@ export const MessageView = memo(function MessageView({
   if (programmatic) {
     return (
       <ProgrammaticTurnCard
-        turn={programmatic} text={rowText(message)} state={signalState ?? "shown"} />
+        turn={programmatic} text={rowText(message)} state={signalState ?? "shown"} count={repeats} />
     );
   }
 
   if (message.role === "system") {
     return <ProgrammaticTurnCard turn={{ kind: "system_event", event: "system" }}
-      text={rowText(message)} state={signalState ?? "shown"} />;
+      text={rowText(message)} state={signalState ?? "shown"} count={repeats} />;
   }
 
   const sentNotes = isUser ? changeNotesCard({ metadata: message.metadata }) : null;
@@ -649,6 +689,7 @@ export const MessageView = memo(function MessageView({
         </Fragment>
       ))}
       {!isLive && endedMidWork({ metadata: message.metadata }) && <StoppedMidWorkRow />}
+      <FailedTurnRow message={message} live={isLive} onRetry={onRetry} />
       {!isLive && <ChangedSlates message={message} />}
       {!isLive && (
         <div className="flex items-center gap-2">

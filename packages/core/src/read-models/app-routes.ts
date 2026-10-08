@@ -22,8 +22,13 @@ export const APP_ROUTES = {
   driveFolder: '/drive/*',
   shared: '/shared',
   sharedBlueprint: '/shared/blueprint/:id',
+  /** Where a person a live share names enters it: signed in, they are handed the share's ticket. */
+  sharedLive: '/shared/live/:workspace/:share',
   deploy: '/deploy',
   updates: '/updates',
+  /** Where a provider's sign-in ends in its helper window: it tells the tab that opened it, then closes. `?next=`
+   *  is where that tab began, for a window the browser opened that cannot close itself. */
+  connected: '/connected',
 } as const;
 
 type AppRoute = (typeof APP_ROUTES)[keyof typeof APP_ROUTES];

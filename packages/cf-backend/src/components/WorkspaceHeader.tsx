@@ -7,7 +7,8 @@ import { PencilSimpleIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import type { PanelAgent } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { composing } from "@/components/ui/form";
-import { ChatMascot, WorkspaceLogo, mascotSeed } from "./Marks";
+import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
+import type { ChatActions } from "@/hooks/use-agents-nav";
 
 type Rename = (name: string) => Promise<void>;
 
@@ -17,7 +18,7 @@ interface BarItem {
   readonly label: string;
   readonly to: string;
   readonly activity?: PanelAgent["activity"];
-  readonly mascot?: string;
+  readonly mascot?: { readonly seed: string; readonly colour: number };
   readonly logo?: string | null;
   readonly rename?: { readonly value: string; readonly save: Rename };
   readonly remove?: () => void;
@@ -28,12 +29,9 @@ interface BarItem {
   readonly tab?: string;
 }
 
-export interface ChatTab {
+export interface ChatTab extends ChatActions {
   readonly agent: PanelAgent;
   readonly to: string;
-  readonly rename: Rename;
-  readonly remove?: () => void;
-  readonly clears?: boolean;
 }
 
 export interface WorkspaceHeaderProps {
@@ -50,7 +48,7 @@ export function WorkspaceHeader({ workspace, chats, active, newChat, leading, tr
   const items: BarItem[] = [
     { key: "overview", label: workspace.title, logo: workspace.logo ?? null, to: workspace.to, title: true, rename: { value: workspace.editValue, save: workspace.rename }, remove: workspace.remove },
     ...chats.map(({ agent, to, rename, remove, clears }) => ({
-      key: agent.key, label: agent.label, to, activity: agent.activity, mascot: mascotSeed(workspace.name, agent.key), rename: { value: agent.label, save: rename },
+      key: agent.key, label: agent.label, to, activity: agent.activity, mascot: { seed: mascotSeed(workspace.name, agent.key), colour: mascotColour(workspace.name, agent.colour) }, rename: { value: agent.label, save: rename },
       ...(remove && { remove }), ...(clears === true && { clears }),
       tab: agent.open.kind === "chat" ? agent.open.path ?? "main" : agent.key,
     })),
@@ -95,7 +93,7 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
           </span>
           <Link to={item.to} className="p-bar-link" aria-current={active ? "page" : undefined}
             title={item.title ? "Workspace overview" : undefined}>
-            {item.mascot !== undefined && <ChatMascot seed={item.mascot} activity={item.activity} />}
+            {item.mascot !== undefined && <ChatMascot seed={item.mascot.seed} colour={item.mascot.colour} activity={item.activity} />}
             {item.title === true && <WorkspaceLogo title={item.label} logo={item.logo} />}
             <span className="p-status-label truncate">{item.label}</span>
           </Link>

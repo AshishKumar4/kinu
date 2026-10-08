@@ -25,7 +25,10 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActiveSkillSet } from '../skills/types';
 import { withTaskPlan, type TaskPlanContext } from '../tools/task-plan-scope';
 import { withToolText, type ToolTextOverrides } from '../tools/tool-text';
-import { BUILTIN_TOOL_NAMES, type AgentsToolAction, type BuiltinToolName } from '../tools/registry';
+import { withFamilyToolNotes } from '../prompting/tool-families';
+import { resolvePromptModelProfile } from '../prompting/model-profile';
+import { BUILTIN_TOOL_NAMES, type BuiltinToolName } from '../tools/registry';
+import type { AgentsOp } from '../operations/agents';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { callableToolNames, toolsForInvocation } from '../execution/work-mode';
@@ -63,7 +66,7 @@ export interface TurnAssemblySources {
   wiredToolNames(workMode: WorkMode): readonly string[];
   /** Namespaces reachable only inside `eval`. */
   codemodeCapabilities(workMode: WorkMode): readonly string[];
-  agentsActions(workMode: WorkMode): readonly AgentsToolAction[];
+  agentsActions(workMode: WorkMode): readonly AgentsOp[];
   temporaryAsk(): boolean;
   soul(): Promise<string | undefined>;
   agentsMd(window: ModelWindow): Promise<AgentsMdSources>;
@@ -71,13 +74,15 @@ export interface TurnAssemblySources {
   artifacts(): { readonly sections: Readonly<Record<string, string>>; readonly tools: ToolTextOverrides };
   executors(): ReturnType<NonNullable<AgentRuntime['executionRouter']>['listExecutors']>;
   taskPlan(): TaskPlanContext | null;
-  cacheKey(): string;
+  /** The conversation extensions keep their state under (`conversationKey`). */
+  conversationKey(): string;
   /** Guards and charges each model step. */
   readonly budget?: SpendGate;
   readonly operations?: ModelOperationSink;
   readonly scaffoldSpend: ModelCallSpend;
   readonly attachmentBudget: NonNullable<ActorExecutionInput['chat']['attachments']>['budget'];
   readonly observeStream?: ActorExecutionInput['chat']['observeStream'];
+  readonly paceStep?: ActorExecutionInput['chat']['paceStep'];
   extensions(): readonly KinuExtension[];
   dynamic(turn: { readonly memoryTail: string | undefined; readonly activeSkills: ActiveSkillSet | null }): ActorExecutionInput['dynamic'];
   operation(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile;
@@ -121,8 +126,8 @@ export function metadataTier(metadata: JsonObject | undefined): TierId | undefin
   return parsed.success ? parsed.output.profile_tier : undefined;
 }
 
-/** One cache line per conversation. */
-export function promptCacheKey(affinity: string, conversation: string): string {
+/** The key a conversation's extension state (compaction's plans and archives) is kept under. */
+export function conversationKey(affinity: string, conversation: string): string {
   return `${affinity}:${conversation}`;
 }
 
@@ -184,7 +189,8 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const callable = pick(sources.settle === undefined && workMode === drafted.workMode ? builtins : filterToolSetBySkills(sources.toolset(workMode), activeSkills), allowed);
   const artifacts = sources.artifacts();
   const taskPlan = sources.taskPlan();
-  const invocable = toolsForInvocation(workMode, withToolText(callable, artifacts.tools));
+  // Evolved text, written for this agent, wins over its family's.
+  const invocable = toolsForInvocation(workMode, withToolText(withFamilyToolNotes(callable, resolvePromptModelProfile({ id: spec }).family), artifacts.tools));
   const tools = withOperationProfile(taskPlan === null ? invocable : withTaskPlan(invocable, taskPlan), operation);
   const externalTools = allowed.has('eval') ? pick(external, allowed) : {};
   const { pinned, invoked } = splitTurnSkills(activeSkills);
@@ -221,10 +227,12 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     system: buildSystemPromptSync(sources.rt, prompt),
     attachments: { accepts: models.catalog.acceptedMedia(spec), vfs: sources.rt.storage.vfs, budget: sources.attachmentBudget },
     tools,
-    cache: { providerId: provider, modelId, sessionKey: sources.cacheKey(), retention: sources.config.getCacheRetention() },
+    conversationKey: sources.conversationKey(),
+    cache: { providerId: provider, modelId, retention: sources.config.getCacheRetention() },
     ...(sources.budget !== undefined && { budget: sources.budget }),
     ...(sources.operations !== undefined && { operations: sources.operations }),
     ...(sources.observeStream !== undefined && { observeStream: sources.observeStream }),
+    ...(sources.paceStep !== undefined && { paceStep: sources.paceStep }),
     ...(providerOptions !== undefined && { providerOptions }),
     ...routedChat(models, spec, profile),
   };
@@ -305,13 +313,13 @@ export interface TurnSourcesBundle {
   readonly skills: TurnSkillSurface;
   readonly wiredToolNames: readonly string[];
   readonly codemodeCapabilities: readonly string[];
-  readonly agentsActions: readonly AgentsToolAction[];
+  readonly agentsActions: readonly AgentsOp[];
   readonly temporaryAsk: boolean;
   readonly soul: string | null;
   readonly identity: PromptIdentity;
   readonly agentsMd: AgentsMdSources;
   readonly artifacts: ReturnType<TurnAssemblySources['artifacts']>;
-  readonly cacheKey: string;
+  readonly conversationKey: string;
   readonly models: Readonly<Record<string, { readonly window: ModelWindow; readonly media: readonly MediaModality[] }>>;
 }
 
@@ -343,7 +351,7 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
     identity,
     agentsMd,
     artifacts: sources.artifacts(),
-    cacheKey: sources.cacheKey(),
+    conversationKey: sources.conversationKey(),
     models: Object.fromEntries(windows),
   };
 }
@@ -351,7 +359,7 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
 /** What the assembling isolate supplies itself. */
 export type LocalTurnSources = Omit<TurnAssemblySources,
   'backend' | 'executors' | 'profileInputs' | 'ancestors' | 'skills' | 'wiredToolNames' | 'codemodeCapabilities' | 'agentsActions' | 'temporaryAsk'
-  | 'soul' | 'identity' | 'agentsMd' | 'artifacts' | 'cacheKey' | 'models' | 'toolset' | 'externalTools'> & {
+  | 'soul' | 'identity' | 'agentsMd' | 'artifacts' | 'conversationKey' | 'models' | 'toolset' | 'externalTools'> & {
   readonly models: Omit<TurnModelSources, 'catalog'>;
 };
 
@@ -403,6 +411,6 @@ export function turnSourcesFromBundle(bundle: TurnSourcesBundle, local: LocalTur
     identity: async () => bundle.identity,
     agentsMd: async () => bundle.agentsMd,
     artifacts: () => bundle.artifacts,
-    cacheKey: () => bundle.cacheKey,
+    conversationKey: () => bundle.conversationKey,
   };
 }

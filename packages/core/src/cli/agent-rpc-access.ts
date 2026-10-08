@@ -77,6 +77,8 @@ export const AGENT_RPC_ACCESS = {
   createTimerTrigger: 'interactive',
   // The call is the approval: a scoped token would bypass the gate.
   decideDeferredApprovals: 'interactive',
+  // The owner's approval of a workspace the agent proposed: the call creates it.
+  decideWorkspaceProposal: 'interactive',
   // Authored code acts through the agent's bindings, behind the ordinary side-effect gates.
   slate: 'interactive',
   previewSlate: 'interactive',
@@ -165,6 +167,7 @@ export const AGENT_RPC_ACCESS = {
   send: 'interactive',
 
   destroyAgent: 'never',
+  quietForDeletion: 'never',
 } as const satisfies Record<string, AgentRpcAccess>;
 
 export type AgentRpcMethod = keyof typeof AGENT_RPC_ACCESS;

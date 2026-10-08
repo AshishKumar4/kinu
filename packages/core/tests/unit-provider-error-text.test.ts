@@ -185,6 +185,16 @@ describe('describeProviderError', () => {
   });
 
   // KINU-043: the provider's own words stay on the diagnostics record, out of the message; a key in them never leaves the process.
+  test('a provider that echoes the key it refused does not put it in the reason shown and handed to the model', () => {
+    // Assembled at runtime: a declared key shape trips push protection.
+    const key = ['sk', 'proj', 'A1b2'.repeat(6)].join('-');
+    const described = describeProviderError({ cause: { message: `Incorrect API key provided: ${key}.`, code: 'invalid_api_key', status: 401 } });
+
+    expect(described).not.toContain(key);
+    expect(described).toContain('Incorrect API key provided');
+    expect(described).toContain('HTTP 401');
+  });
+
   test('the boundary message carries facts, and no log line carries the key', () => {
     const lines: string[] = [];
     const restore = setDiagnosticsSink(createLineLogger((line) => { lines.push(line); }));
@@ -265,7 +275,7 @@ describe('a Cloudflare AI refusal reaches the user in Cloudflare\'s words', () =
   const REFUSED = { errors: [{ message: 'AiError: No such model: No such model workers-ai/@cf/zai-org/glm-5.3 or task', code: 5007 }], success: false, result: {}, messages: [] };
 
   const deps: ModelCallDeps = {
-    env: {}, sessionAffinity: 'kinu-test',
+    env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test',
     fetch: asFetchFunction(async () => Response.json(REFUSED, { status: 400, statusText: 'Bad Request' })),
     getAuth: async () => ({ baseURL: 'https://api.cloudflare.com/client/v4/accounts/A/ai/v1', headers: { Authorization: 'Bearer t', 'cf-aig-gateway-id': 'default' } }),
     hasCredential: async () => true,

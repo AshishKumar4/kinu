@@ -19,7 +19,7 @@ import { TerminalTransitions } from '../src/orchestrator/terminal-transition';
 import { initToolEffectClaimTable } from '../src/tools/effect-claim';
 import { initActorDdl } from '../src/identity/schema';
 import { readActivityLog } from '../src/identity/activity-log';
-import { toKinuError } from '../src/obs/index';
+import { createRecordingLogger, setDiagnosticsSink, toKinuError } from '../src/obs/index';
 import { asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider } from '../src/index';
 import { makeExecRaw, makeSql } from './helpers';
 
@@ -107,6 +107,31 @@ test.each([404, 400, 413, 422])('a gateway %i ends the owed effect after one att
   expect(activity()[0]?.[1]).toContain(`HTTP ${String(status)}`);
 });
 
+test('a provider rate-limiting the account leaves the effect owed until its stated reset, and no failure is logged', async () => {
+  const provider = createOpenAICompatible({
+    name: 'workers-ai', baseURL: 'https://gateway.example.test/v1',
+    fetch: Object.assign(async () => new Response('{"error":{"message":"rate limited"}}', {
+      status: 429, headers: { 'content-type': 'application/json', 'retry-after': '40' },
+    }), { preconnect: async (): Promise<void> => {} }),
+  });
+
+  const { ledger, rows, activity } = ledgerOver(429, wrapped(calling(provider('fast'))));
+  const logger = createRecordingLogger();
+  const restore = setDiagnosticsSink(logger);
+
+  try {
+    await (await ledger.run('turn-1', [{ name: 'sleep_time', scope: 'm-1', input: {}, lane: 'detached' }])).reported;
+  } finally {
+    restore();
+  }
+
+  expect(rows()).toEqual([{ status: 'pending', attempts: 1 }]);
+  expect(ledger.nextRetryAt()).toBe(NOW + 40_000);
+  expect(logger.emitted.map((line) => line.event)).toContain('turn.terminal_effect_rate_limited');
+  expect(logger.emitted.map((line) => line.event)).not.toContain('turn.terminal_effect_failed');
+  expect(activity()).toEqual([]);
+});
+
 test.each([429, 408, 503])('a %i stays owed, with its wake', async (status) => {
   const { ledger, rows, activity } = ledgerOver(status);
 
@@ -154,6 +179,7 @@ function planSpent() {
   const model = provider.createModel('gpt-6.1-sol', {
     env: {},
     sessionAffinity: 'kinu-test',
+    workspaceAffinity: 'kinu-test',
     fetch: asFetchFunction(async () => Response.json(
       { error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'usage limit reached', param: null, type: 'rate_limit_error' } },
       { status: 429 },
@@ -228,11 +254,7 @@ test('settled turns under an owner-fixable refusal leave one row per effect and 
   expect(transitions.nextRetryAt()).toBeNull();
   expect(transitions.hasIncomplete()).toBe(false);
 
-  // An activation for any other reason arms nothing for them.
   const armed = wakes.length;
-
-  await transitions.armOwedRecovery();
-  expect(wakes.length).toBe(armed);
 
   // The owner's change: both fall due on one wake.
   await transitions.modelSettingsChanged();

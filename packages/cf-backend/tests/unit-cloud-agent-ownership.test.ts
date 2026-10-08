@@ -869,9 +869,14 @@ describe('cloud agent ownership safety', () => {
 });
 
 /** The owner's account with `jarvis` registered, and its DELETE route, whose destroy reaches `workspace`'s real object. */
-async function deletesReaching(workspace: { readonly agent: { destroyAgent(ownerUserId: string): Promise<{ ok: true }> } }) {
+async function deletesReaching(workspace: {
+  readonly agent: { destroyAgent(ownerUserId: string): Promise<{ ok: true }>; quietForDeletion(ownerUserId: string): Promise<void> };
+}) {
   const userDO = createTestUserDO({
     durableObjectId: USER_ID,
+    quietWorkspaceGate: async (_name, ownerUserId) => {
+      await workspace.agent.quietForDeletion(ownerUserId);
+    },
     destroyWorkspaceGate: async (_name, ownerUserId) => {
       await workspace.agent.destroyAgent(ownerUserId);
     },

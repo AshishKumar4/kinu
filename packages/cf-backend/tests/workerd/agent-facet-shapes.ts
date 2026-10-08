@@ -4,6 +4,16 @@ export interface AgentFacetAnswer {
   readonly stderr: string;
 }
 
+/** A running job's probe latencies, quiet and with CPU-bound invocations queued on its object. */
+export interface ProbeContention {
+  readonly quiet: readonly number[];
+  readonly loaded: readonly number[];
+  /** From the load's start to its last invocation's answer. */
+  readonly loadedMs: number;
+  /** One queued invocation's CPU, measured alone. */
+  readonly burnMs: number;
+}
+
 export interface OnePlaneObservation {
   readonly home: string;
   /** The agent's `pwd; id -u` from its own isolate. */

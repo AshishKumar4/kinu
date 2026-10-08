@@ -9,6 +9,7 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { SlateHost } from '../../src/slates/host';
+import { initSlateBuildTable } from '../../src/slates/builds';
 import { ROOT_SLATE_CALLER, slateCallerKey } from '../../src/slates/bindings';
 import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/core';
 import { ContentRef } from '@agent-core/core';
@@ -56,6 +57,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     browserActor: async () => null,
     catalog: async () => ({ mcp: [], slates: [] }),
     shareUrl: async () => null,
+    shareEntry: () => null,
   });
 
   private prepare(): void {
@@ -66,6 +68,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
         ...v.parse(v.array(v.union([v.string(), v.number(), v.boolean(), v.null()])), values)),
       transactionSync: (write) => this.ctx.storage.transactionSync(write),
     });
+    initSlateBuildTable((ddl) => { this.ctx.storage.sql.exec(ddl); });
     seedBaseFilesystem(this.vfs);
     const files = this.vfs.as(CRED_KERNEL);
     const root = '/slates/network';

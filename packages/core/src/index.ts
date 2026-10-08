@@ -19,7 +19,7 @@ export {
 export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
 
 export {
-  assembleActorTurn, withCompactionTrigger, promptCacheKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, metadataTier,
+  assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, metadataTier,
   type AssembledTurn, type RunTurnSources, type TurnSourcesBundle, type LocalTurnSources, type PinValues, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
 } from './orchestrator/turn-assembly';
 
@@ -45,6 +45,8 @@ export {
 } from './identity/effect-tombstones';
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
+
+export { initActivationTable, listActivations, recordActivation, type Activation } from './identity/activations';
 
 export { ChatHistoryEntrySchema } from './types/chat';
 
@@ -137,7 +139,7 @@ export {
   applyWorkspaceTitle,
   deriveWorkspaceTitle,
   fallbackWorkspaceIdentity,
-  mintSubordinateName,
+  mintAgentName,
   parseWorkspaceTitle,
   planWorkspaceTitle, autoTitleMayReplace, nameOriginOf, persistAutoTitle, titleActorFromMessage,
   resolveWorkspaceTitle,
@@ -246,11 +248,11 @@ export type * from './types/evaluation';
 
 // Slate stores live in `@kinu.run/core/slates`: they touch `node:util`, and client
 // code value-imports this barrel. Keep worker-only modules off it.
-export { parseSlateProject, type SlateProject } from './slates/project';
+export { parseSlateProject, slateTitle, type SlateProject } from './slates/project';
 
 export {
   SHARE_KINDS, SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH,
-  formatBlueprintId, parseBlueprintId, blueprintPagePath,
+  formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
   ShareGrantSchema, SlateCapabilityGraphSchema, ShareCardSchema,
@@ -263,14 +265,14 @@ export {
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
 } from './slates/sharing';
 
-export { slateAddressImpact } from './slates/members';
+export { slateAddressImpact, slateOwnerOnly } from './slates/members';
 
 export {
   slateCapabilityGraph, cutShareGrant, grantAdmits, type SlateSurfaceCatalog, type SlateUsage,
 } from './slates/capability-graph';
 
 export {
-  SlateCallRequestSchema, routeSlateCall, issuedSlateInvocation, routeViewerCall, slateCallAddress,
+  SlateCallRequestSchema, SLATE_DRIVEN_MEMBERS, routeSlateCall, issuedSlateInvocation, routeViewerCall, admitNestedViewerCall, slateCallAddress,
   type SlateCallRequest, type SlateRoute, type SlateInvocation, type SlateViewer,
 } from './slates/surface';
 
@@ -279,7 +281,7 @@ export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 
 export {
-  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer,
+  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue,
   type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
@@ -287,8 +289,8 @@ export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, routeSl
 
 // Browser-safe slate vocabulary, so it belongs on this value-imported barrel.
 export {
-  buildSlateHostContext, isSlateFrameMessage, slateFrameSrc, slateInlineHeight, slateLinkId,
-  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
+  buildSlateHostContext, isSlateFrameMessage, slateFrameSrc, slateLinkId,
+  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
   SlateFrameMessageSchema, type SlateHostContext,
 } from './slates/host-context';
 
@@ -472,7 +474,6 @@ export {
   BUILTIN_TOOL_SPECS,
   replayPolicyFor,
   type ReplayPolicy,
-  AGENTS_TOOL_ACTIONS,
   renderToolSchemaDescription,
   renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
   TOOL_REACH,
@@ -481,7 +482,6 @@ export {
   codemodeCapabilitiesFor,
   type ToolSurfaceNarrowing,
   type ToolReach,
-  type AgentsToolAction,
   type BuiltinToolName,
   type BuiltinToolSpec,
   REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
@@ -491,7 +491,7 @@ export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, codemodeInputSchema,
   renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
-  slateToolReach, callCodemodeMember,
+  slateToolReach, callCodemodeMember, requireCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
@@ -562,8 +562,7 @@ export {
 export {
   agentsActionsFor,
   agentsProfileContext, delegationChoices,
-  AGENTS_ACTION_FIELDS,
-  type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
+  type AgentsCall, type AgentsProfileContext, type DelegatedProfile,
 } from './delegation/agents-tool';
 
 export {
@@ -573,7 +572,12 @@ export {
 
 export { createAgentsCodemodeProvider, createAgentsTool, resumableAgentsInput } from './delegation/agents-operations';
 
-export { AGENTS_OPS } from './operations/agents';
+export {
+  actorNamespaces, hostedSurfaceActor, SURFACE_POLICY,
+  type SurfaceActor, type SurfaceCall, type SurfacePolicy, type SurfaceWeb,
+} from './delegation/actor-surface';
+
+export { AGENTS_OPS, type AgentsOp } from './operations/agents';
 
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
 
@@ -585,6 +589,7 @@ export { SubordinateRosterStore, initSubordinateRosterTable, subordinateTitle } 
 export {
   admitSubordinateReport,
   admitSubordinateTask,
+  agentNamer,
   createTeamToolDeps,
   describeSubordinateHandoff,
   normalizeReportContent,
@@ -1015,7 +1020,7 @@ export {
   type NimbusSandboxHandle,
   type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
   EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS,
-  type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
+  type ExecutorCapability, type ExecutorKind, type ExecutorProvider, type ExecutorProviderSurface,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type ResourceLimits, type PreviewRouteCheck,
   type SandboxSize, type SandboxSizes,
@@ -1118,6 +1123,12 @@ export {
   checkpointSubject, parseCheckpointSubject, checkpointRefTimestampMs,
   checkpointReason, stagingOutcome,
 } from './checkpoints/format';
+
+export {
+  createCheckpointEngine, PROJECT_MARKERS,
+  type CheckpointEngine, type CheckpointEngineOptions, type CheckpointGitRun, type CheckpointHost,
+  type CheckpointOutcome, type CheckpointRequest,
+} from './checkpoints/engine';
 
 // Semantic memory
 export {
@@ -1470,6 +1481,14 @@ export {
   type PendingDeviceConsent,
   type PendingConsentRow,
   type DeviceConsentNotice,
+  WorkspaceProposals,
+  WorkspaceProposalStore,
+  initWorkspaceProposalsTable,
+  proposedSoul,
+  type WorkspaceProposal,
+  type WorkspaceProposalAnswer,
+  type WorkspaceProposalInput,
+  type WorkspaceProposalReceipt,
   SECRET_PATTERNS,
   scanText,
   countDetections,
@@ -1534,6 +1553,7 @@ export {
   type ReportHeadDelta, type PublishHeadStream,
   reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
+  ForkNotices, forkNoticeDeliveries, initForkNoticeTable, type ForkNotice,
   HeadController, runHeadSplit, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   type HeadJournalPort,
@@ -1544,7 +1564,7 @@ export {
   extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
-  type HeadInferenceDeps, type RunInference, type HeadWorkspaceLayout,
+  type HeadInferenceDeps, type RunInference,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS, spawnSeatedHead, type HeadSeat, type SeatedHeadDeps,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
   HeadFileChanges,
@@ -1969,7 +1989,7 @@ export type {
   InstructionSourceView,
 } from './read-models/instruction-approvals';
 
-export { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
+export { agentStatusFacts, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
 
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
@@ -2191,6 +2211,10 @@ export {
 
 export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
 
+export { SLATE_IMPORT_MAP, SLATE_PAGE_HEAD, SLATE_PAGE_PREAMBLE } from './web/slate-page';
+
+export { APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH } from './web/fonts';
+
 export {
   approvalDocument, authDocument, installDocument, loginDocument, type BuiltinSignIn, type LoginProvider,
 } from './http/public-pages';
@@ -2200,7 +2224,7 @@ export {
 } from './read-models/alternate-takes';
 
 export {
-  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, SLATE_LINK, slatesToPreview, applySignalCard,
+  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, SLATE_LINK, slatesToPreview, applySignalCard,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,

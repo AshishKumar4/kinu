@@ -6,12 +6,19 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { resolvePublicSessionPlan, type KinuPublicSession } from '../evals/src/session';
 import { BACKGROUND_POLICY } from '../packages/core/src/index';
 import { CANARY_PREFIX, canaryAsk, type CanaryLoad } from './canary-script';
-import { ledgerFindings, measureCanaryLedger, readCanaryLedger, type CanaryFinding, type CanaryMeasurement } from './durability-canary-ledger';
-import { measureCanaryTelemetry, telemetryFindings, type CanaryTelemetryMeasurement, type CanaryTouch, type CanaryWindow } from './durability-canary-telemetry';
+import { ledgerFindings, measureCanaryLedger, readCanaryLedger, withInterruptedSteps, type CanaryFinding, type CanaryMeasurement } from './durability-canary-ledger';
+import { measureCanaryTelemetry, telemetryFindings, type CanaryActivation, type CanaryTelemetryMeasurement, type CanaryTouch, type CanaryWindow } from './durability-canary-telemetry';
+import { SETTLE_CAP_MS, SETTLE_GAP_MS, settledRead } from './prod-logs';
 
 const MINUTE = 60_000;
 
 const TELEMETRY_LAG = 2 * MINUTE;
+
+
+
+function telemetryCounts(measured: CanaryTelemetryMeasurement): string {
+  return JSON.stringify([measured.active.startups, measured.active.disruptions, measured.idle?.invocations ?? null]);
+}
 
 const RECHECK = 15 * MINUTE;
 
@@ -82,7 +89,7 @@ const plan = {
     firstWorkspaceTouch: (plannedMs + marginMs) / MINUTE, recheckEvery: RECHECK / MINUTE,
     maxRecheckAfterFirstTouch: recheckCapMs / MINUTE, idleTail: tailMs / MINUTE,
     idleMeasurementStartsAfterLastTouch: TELEMETRY_LAG / MINUTE, telemetryLagAfterTail: TELEMETRY_LAG / MINUTE,
-    earliestReport: (plannedMs + marginMs + tailMs + TELEMETRY_LAG) / MINUTE },
+    earliestReport: (plannedMs + marginMs + tailMs + TELEMETRY_LAG + SETTLE_GAP_MS) / MINUTE },
   noWorkspaceTraffic: 'Disconnect after the first tool output; inspect only at the planned work end plus margin, then at most every 15 minutes up to the cap. Disconnect again for the entire idle tail.',
   accountLeaseHeartbeat: 'Every 60 s, POST /api/user/workspaces/:name/touch updates UserDO.last_visited only; no workspace RPC. Idle object telemetry includes any invocation it might unexpectedly cause.',
   assumptions: ['The ideate swarm has five parallel nodes, each using helper steps.',
@@ -197,10 +204,47 @@ const activeTo = measured?.finishedAt ?? touches.at(-1)?.to ?? observedTo;
 
 if (session !== null) {
   try {
-    telemetry = await measureCanaryTelemetry({ worker, workspace: session.workspace,
-      observed: { from: createdAt, to: observedTo }, active: { from: activeFrom, to: activeTo }, idle, touches,
+    // Read after the idle window closed: the read may itself start the object, and no window counts it.
+    let ring: CanaryActivation[] | null = null;
+
+    try {
+      ring = (await session.activations()).map((row) => ({ ordinal: row.ordinal, at: row.startedAt, version: row.version }));
+    } catch (error) {
+      // The telemetry ordinals stand in, and the report names the substitution as a limitation.
+      findings.push({ name: 'activations.unread', kind: 'measurement', cause: String(error), evidence: [] });
+    }
+
+    const read = () => measureCanaryTelemetry({ worker, workspace: session?.workspace ?? '',
+      observed: { from: createdAt, to: observedTo }, active: { from: activeFrom, to: activeTo }, idle, touches, activations: ring,
       helperActors: measured?.helper.helpers.flatMap((helper) => helper.actor === null ? [] : [helper.actor]) ?? [] });
-    findings.push(...telemetryFindings(telemetry));
+
+    // Rows land late, so the read is repeated until what it counts holds still, as every verdict reader does.
+    const settled = await settledRead({
+      read, fingerprint: telemetryCounts, rows: (counted) => counted.active.rows.length + (counted.idle?.invocations ?? 0),
+      now: () => Date.now(), sleep: (ms) => waitUntil(Date.now() + ms, 'telemetry settling'), gapMs: SETTLE_GAP_MS, capMs: SETTLE_CAP_MS,
+    });
+
+    telemetry = settled.settled ? settled.value : settled.last;
+
+    if (settled.settled) findings.push(...telemetryFindings(telemetry));
+    else {
+      findings.push({ name: 'telemetry.unsettled', kind: 'measurement', evidence: [],
+        cause: `Telemetry counts still moved after ${String(settled.reads)} reads; no disruption or idle verdict is given.` });
+    }
+
+    if (measured !== null && settled.settled) {
+      // An activation only an ordinal gap shows has no time to bracket a step with.
+      const disruptionsAt = telemetry.active.rows.flatMap((row) => row.at === null ? [] : [Date.parse(row.at)]);
+
+      const owners = [{ owner: 'root', markers: measured.root.markers },
+        ...measured.helper.helpers.map((helper) => ({ owner: `helper.${helper.name}`, markers: helper.markers }))];
+
+      const split = owners.reduce<CanaryFinding[]>((kept, { owner, markers }) => withInterruptedSteps(kept, owner, markers, disruptionsAt), integrityFindings);
+      const others = findings.filter((finding) => !integrityFindings.includes(finding));
+
+      findings.splice(0, findings.length, ...others, ...split);
+      integrityFindings = split.filter((finding) => finding.kind !== 'disruption');
+    }
   } catch (error) {
     findings.push({ name: 'telemetry.unavailable', kind: 'measurement', cause: String(error), evidence: [] });
   }

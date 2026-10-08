@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
-import { actorConnectionTag, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
+import { actorConnectionTag, agentHome, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { gatewayWorkspace, storedChat, workspaceFiles, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
@@ -34,7 +34,11 @@ function refusedOnce() {
   let calls = 0;
 
   const workspace = gatewayWorkspace(stubAiBinding((run) => {
-    if (!JSON.stringify(requestOf(run).messages).includes(ASK)) return chatCompletion(run, '{"title":"Deploy notes"}');
+    // The naming model is asked the same words: only the turn's own calls count.
+    if (!JSON.stringify(requestOf(run).messages).includes(ASK) || JSON.stringify(requestOf(run).messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) {
+      return chatCompletion(run, '{"title":"Deploy notes"}');
+    }
+
     calls += 1;
 
     return calls === 1 ? Response.json({ error: { message: 'Bad Request' } }, { status: 400 }) : chatCompletion(run, 'Answered once.');
@@ -195,7 +199,8 @@ describe('Retry on a failed turn', () => {
       await frames.until((sent) => done(sent, id).length > 0);
     };
 
-    const counted = async () => (await agent.execWorkspaceCommand(`cat /home/sub-*/${COUNTER}`)).stdout;
+    const home = agentHome(agent.agentOf(subordinate.actorId).homeName);
+    const counted = async () => (await agent.execWorkspaceCommand(`cat ${home}/${COUNTER}`)).stdout;
 
     await ask('first', 'submit-message');
     expect(refused).toBe(true);

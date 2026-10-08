@@ -179,6 +179,18 @@ export class EvalVerifier {
     return invokedInTurn(await this.#session.runEvents(), name, this.#startedAt);
   }
 
+  /** The lead's own run events since this turn's prompt, oldest first: what it did, read from the record, not its words. */
+  async leadEvents(): Promise<readonly RunEvent[]> {
+    return (await this.#session.runEvents()).filter((event) => Date.parse(event.timestamp) >= this.#startedAt);
+  }
+
+  /** This turn's tool calls: each one's name and its arguments as the run recorded them, a bounded digest. */
+  async turnToolCalls(): Promise<{ name: string; args: string }[]> {
+    return (await this.leadEvents())
+      .filter((event): event is Extract<RunEvent, { type: 'tool_call_end' }> => event.type === 'tool_call_end')
+      .map((event) => ({ name: event.name, args: JSON.stringify(event.args ?? null) }));
+  }
+
   /**
    * The agent's answer to a question turn: its last reply that `answerPattern` matches whole
    * (anchored, the answer in its first group) once Markdown emphasis, quotes and a closing period

@@ -247,7 +247,7 @@ describe('workspace diff lifecycle', () => {
     const drive = mossaicVfs(fakeMossaic().tenant('owner'));
     rt.storage.vfs = withMountTable(rt.storage.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]);
     const identity = { uid: 2001, gid: 2001 };
-    const home = provisionAgentHome((await workspace.privileged()).root, actorHomeName({ origin: 'agent', storageKey: 'builder' }), identity);
+    const home = provisionAgentHome((await workspace.privileged()).root, actorHomeName({ origin: 'agent', name: 'builder', storageKey: 'builder' }), identity);
     const session = await workspace.session();
     const builder = session.vfs.as(agentCred(identity));
     const kernel = session.vfs.as(CRED_KERNEL);
@@ -277,7 +277,7 @@ describe('workspace diff lifecycle', () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
     const identity = { uid: 2001, gid: 2001 };
-    const home = provisionAgentHome((await workspace.privileged()).root, actorHomeName({ origin: 'agent', storageKey: 'builder' }), identity);
+    const home = provisionAgentHome((await workspace.privileged()).root, actorHomeName({ origin: 'agent', name: 'builder', storageKey: 'builder' }), identity);
     const builder = (await workspace.session()).vfs.as(agentCred(identity));
     await resetWorkspaceBaseline(rt, baselines);
 
@@ -300,7 +300,7 @@ describe('workspace diff lifecycle', () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
     const identity = { uid: 2001, gid: 2001 };
-    const home = provisionAgentHome((await workspace.privileged()).root, actorHomeName({ origin: 'agent', storageKey: 'builder' }), identity);
+    const home = provisionAgentHome((await workspace.privileged()).root, actorHomeName({ origin: 'agent', name: 'builder', storageKey: 'builder' }), identity);
     const session = await workspace.session();
     const builder = session.vfs.as(agentCred(identity));
     const user = session.vfs.as(CRED_SESSION_USER);

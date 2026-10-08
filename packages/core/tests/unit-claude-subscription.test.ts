@@ -103,6 +103,7 @@ function deps(fetchFn: typeof fetch, logins: AuthResolution[], affinity = 'kinu-
     fetch: fetchFn,
     asked,
     sessionAffinity: affinity,
+    workspaceAffinity: affinity,
     async getAuth(key, opts) {
       expect(key).toBe(CLAUDE_CRED_KEY);
       asked.push(opts?.rejected?.Authorization ?? null);

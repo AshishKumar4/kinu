@@ -30,6 +30,48 @@ it('a slate survives eviction on its own URL', async () => {
   ]);
 });
 
+it('a slate is listed once in the work surface, under its title, in this activation and the next', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('titled'));
+  const boot = await subject().serveSlate({ workspace: 'durability-titled', owner: 'durability-owner', id: 'tally', body: 'tally-body' });
+  const tabs = await subject().previewTabs('durability-titled');
+
+  // Its port is named for it, and the listing says it holds that port, so the strip draws one tab for it.
+  expect(tabs.ports.filter((port) => port.port === boot.port)).toEqual([{ port: boot.port, name: 'tally' }]);
+  expect(tabs.slates).toEqual([{ id: 'tally', title: 'tally', port: boot.port }]);
+
+  // An activation that never booted it still knows the port is its: the reservation says so, not a memory of the boot.
+  await abortAllDurableObjects();
+  expect((await subject().previewTabs('durability-titled')).slates).toEqual([{ id: 'tally', title: 'tally', port: boot.port }]);
+});
+
+it('an edit that breaks a slate\'s build ships nothing: the agent is told where, and the slate keeps its last working version across an eviction', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('lilt'));
+  const at = { workspace: 'durability-lilt', owner: 'durability-owner' };
+
+  const good = await subject().slateBuild({ ...at, phase: 'good' });
+
+  expect(good.wrote).toContain('The slate lilt builds.');
+  expect([good.preview, good.serves, good.told]).toEqual(['builds', 'lilt-good', []]);
+
+  // The write that breaks it answers with the compiler's file and line, and the user is still served the build before it.
+  const broken = await subject().slateBuild({ ...at, phase: 'broken' });
+
+  expect(broken.wrote).toMatch(/does not build[\s\S]*client\.tsx:\d+:\d+[\s\S]*Adjacent JSX elements/);
+  expect(broken.preview).toContain('Adjacent JSX elements');
+  expect(broken.serves).toBe('lilt-good');
+  expect(broken.told).toEqual([expect.stringMatching(/^lilt: [\s\S]*Adjacent JSX elements/)]);
+
+  // A new activation, which never ran it, serves the same last working version and still tells the agent why.
+  await abortAllDurableObjects();
+  const served = await subject().slateBuild({ ...at, phase: 'served' });
+
+  expect([served.serves, served.told]).toEqual(['lilt-good', [expect.stringContaining('Adjacent JSX elements')]]);
+
+  const fixed = await subject().slateBuild({ ...at, phase: 'fixed' });
+
+  expect([fixed.preview, fixed.serves, fixed.told]).toEqual(['builds', 'lilt-fixed', []]);
+});
+
 it('a removed slate’s URL is dead even when a new app claims its port', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('removed'));
 
@@ -219,6 +261,27 @@ it('the workspace terminal is the runtime shell: a typed line runs and its outpu
     expect(refused.code).toBe(1008);
     expect(refused.reason).toContain('terminal frame refused');
   }
+});
+
+// Staging 2026-10-08: a 20 MB print failed its row's write (SQLITE_TOOBIG) as an uncaught rejection.
+it('a print past the row limit runs, and its row keeps the head a reader shows with the length printed', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('clip'));
+  const workspace = 'durability-clip';
+  const printed = 3_000_000;
+  await subject().serveSlate({ workspace, owner: 'durability-owner', id: 'beside-clip', body: 'served' });
+
+  expect((await subject().runInWorkspace(workspace, `node -e "process.stdout.write('x'.repeat(${String(printed)}))"`)).exitCode).toBe(0);
+  const [row] = await subject().executorOutputs(workspace);
+
+  expect(row?.stdout_len).toBe(printed);
+  expect(row?.stdout).toBe('x'.repeat(16 * 1024));
+
+  // A print that reads like a clip note is output, not metadata: its length is its own.
+  const lookalike = 'ok\n[kinu: clipped from 9999999 chars]';
+  expect((await subject().runInWorkspace(workspace, `node -e "process.stdout.write('ok\\n[kinu: clipped from 9999999 chars]')"`)).exitCode).toBe(0);
+  const [plain] = await subject().executorOutputs(workspace);
+
+  expect(plain).toEqual({ stdout: lookalike, stdout_len: lookalike.length });
 });
 
 it('a node run leaves its log janitor as an alarm the object sleeps on, not a timer it stays awake for', async () => {

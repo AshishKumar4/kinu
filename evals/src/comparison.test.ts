@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison, validateEvalResults, whyIncomplete } from './comparison';
+import type { PlatformReport } from './platform';
 import { mannWhitney } from './shifts';
 
 /**
@@ -12,6 +13,10 @@ type Trial = {
   taskVersion?: string; failed?: string; trial?: number;
   inputTokens?: number; cacheReadTokens?: number; costUsd?: number; model?: string; durationMs?: number; harnessInfra?: boolean;
   badInputCalls?: number;
+  /** Provider-reported requests, oldest first. */
+  steps?: { actor: string; inputTokens: number; cacheReadTokens: number }[];
+  toolFailures?: { tool: string; cause: string; count: number }[];
+  workspace?: string;
 };
 
 function outcomeOf(trial: Trial) {
@@ -38,20 +43,27 @@ function fileResult(taskId: string, trials: readonly Trial[], side: { productSha
           session: {
             metadata: {
               taskId, taskVersion: trial.taskVersion ?? 'v1', evalCommit: side.evalCommit, productSha: trial.productSha ?? side.productSha, arm: 'product',
-              trial: trial.trial ?? index + 1,
+              trial: trial.trial ?? index + 1, ...trial.workspace !== undefined && { workspace: trial.workspace },
             },
             events: [],
           },
           usage: {
             model: trial.model ?? 'workers-ai/@cf/zai-org/glm-5.3', inputTokens: trial.inputTokens,
-            metadata: { cacheReadTokens: trial.cacheReadTokens, costUsd: trial.costUsd },
+            metadata: {
+              cacheReadTokens: trial.cacheReadTokens, costUsd: trial.costUsd,
+              steps: (trial.steps ?? []).map((step, stepIndex) => ({
+                ...step, timestamp: '2026-10-08T00:00:00.000Z', runId: 'run', stepIndex, outputTokens: 10, cacheWriteTokens: 0,
+              })),
+            },
           },
           output: {
+            toolFailures: trial.toolFailures ?? [],
             metrics: {
-              modelTurns: 4, toolCalls: 6, toolErrors: trial.badInputCalls ?? 0, badInputCalls: trial.badInputCalls ?? 0, unknownToolCalls: 0,
+              modelTurns: 4, toolCalls: 6, toolErrors: trial.badInputCalls ?? (trial.toolFailures ?? []).reduce((sum, failure) => sum + failure.count, 0), badInputCalls: trial.badInputCalls ?? 0, unknownToolCalls: 0,
               providerWaits: 2, providerWaitMs: 30_000,
             },
             turns: [{
+              part: 'build', turn: 1,
               outcome: outcomeOf(trial),
               checks: trial.refused === undefined && trial.reset === undefined && trial.hung === undefined && trial.cancelled === undefined
                 ? [{ id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } }]
@@ -97,16 +109,36 @@ describe('mannWhitney', () => {
 });
 
 describe('compareEvalResults', () => {
-  test('a measure that moved beyond noise is named for its task, and moves no verdict', () => {
-    const before = trialsOf(9, 10);
-    const after = trialsOf(9, 10).map((trial, index) => ({ ...trial, badInputCalls: [2, 3, 2, 4, 3, 2, 5, 3, 2, 4][index] }));
-    const comparison = compareEvalResults(report('budget-board', before, BASE), report('budget-board', after, NEXT));
+  const SPREAD = [2, 3, 2, 4, 3, 2, 5, 3, 2, 4];
+
+  // "Evals should show no degradations" (the owner): more malformed calls or tokens is one, as a fall in passes is.
+  test.each([
+    { moved: 'badInputCalls', before: {}, after: (index: number) => ({ badInputCalls: SPREAD[index] }), verdict: 'regressed' },
+    { moved: 'toolErrors', before: {}, after: (index: number) => ({ toolFailures: [{ tool: 'shell', cause: 'error', count: SPREAD[index] ?? 1 }] }), verdict: 'regressed' },
+    { moved: 'inputTokens', before: { inputTokens: 1_000 }, after: (index: number) => ({ inputTokens: 1_000 * (SPREAD[index] ?? 1) }), verdict: 'regressed' },
+    { moved: 'inputTokens', before: { inputTokens: 5_000 }, after: (index: number) => ({ inputTokens: 1_000 * (SPREAD[index] ?? 1) }), verdict: 'unchanged' },
+    // How long a trial took is the task's and the machine's, not a regression of the build.
+    { moved: 'wallTimeMs', before: { durationMs: 60_000 }, after: (index: number) => ({ durationMs: 60_000 * (SPREAD[index] ?? 1) }), verdict: 'unchanged' },
+  ])('$moved moving beyond noise is named for its task, and the verdict is $verdict', ({ moved, before, after, verdict }) => {
+    const comparison = compareEvalResults(
+      report('budget-board', trialsOf(9, 10, before), BASE),
+      report('budget-board', trialsOf(9, 10).map((trial, index) => ({ ...trial, ...after(index) })), NEXT),
+    );
+
     const row = comparison.rows[0];
 
-    expect(comparison.verdict).toBe('unchanged');
-    expect(row?.reason === null ? row.shifts.find((shift) => shift.measure === 'badInputCalls')?.pValue : null).toBeLessThan(0.05);
+    expect(comparison.verdict).toBe(verdict);
+    expect(row?.reason === null ? row.shifts.find((shift) => shift.measure === moved)?.pValue : null).toBeLessThan(0.05);
     expect(row?.reason === null ? row.shifts.find((shift) => shift.measure === 'modelSteps')?.pValue : null).toBe(1);
-    expect(renderEvalComparison(comparison)).toContain('calls refused as bad input 0.0 [0.0\u20130.0] \u2192 3.0 [2.0\u20133.8]');
+  });
+
+  test('a regression in a measure is said in the promote verdict, by task, measure and spread', () => {
+    const after = trialsOf(9, 10).map((trial, index) => ({ ...trial, badInputCalls: SPREAD[index] }));
+    const comparison = compareEvalResults(report('budget-board', trialsOf(9, 10), BASE), report('budget-board', after, NEXT));
+    const complete = { baseline: null, candidate: null };
+
+    expect(evalGateVerdict(comparison, complete)).toMatchObject({ pass: false });
+    expect(evalGateVerdict(comparison, complete).reason).toContain('calls refused as bad input 0.0 [0.0\u20130.0] \u2192 3.0 [2.0\u20133.8]');
   });
 
   test('every check attempted is compared by its own pass rate', () => {
@@ -116,6 +148,71 @@ describe('compareEvalResults', () => {
     expect(row?.reason === null ? row.checks : null).toEqual([
       { check: 't1 builds', baseline: { attempted: 10, passed: 10 }, candidate: { attempted: 10, passed: 3 }, pValue: fisherExact({ passed: 10, trials: 10 }, { passed: 3, trials: 10 }) },
     ]);
+  });
+
+  // oh-my-pi holds 95–100% after a conversation's first request (the owner). ChatGPT spends the owner's plan and never gates.
+  test.each([
+    { model: 'workers-ai/@cf/zai-org/glm-5.3', warm: 900, verdict: 'regressed' },
+    { model: 'workers-ai/@cf/zai-org/glm-5.3', warm: 980, verdict: 'unchanged' },
+    { model: 'chatgpt/gpt-6.1-sol', warm: 900, verdict: 'unchanged' },
+  ])('$model reading $warm of 1000 prompt tokens from cache after each first request is $verdict', ({ model, warm, verdict }) => {
+    const steps = [
+      { actor: 'main', inputTokens: 1_000, cacheReadTokens: 0 },
+      { actor: 'hire-1', inputTokens: 1_000, cacheReadTokens: 0 },
+      { actor: 'main', inputTokens: 1_000, cacheReadTokens: warm },
+    ];
+
+    const comparison = compareEvalResults(report('t', trialsOf(9, 10, { model }), BASE), report('t', trialsOf(9, 10, { model, steps }), NEXT));
+
+    expect(comparison.profiles[0]?.candidate.steadyCacheHitRate).toBe(warm / 1_000);
+    expect(comparison.verdict).toBe(verdict);
+  });
+
+  // The platform's own account of the trials' workspaces, joined by name: a bug in more of them is a regression.
+  test('a task whose workspaces saw platform bugs in significantly more trials regressed, and unread logs gate nothing', () => {
+    const named = (prefix: string) => trialsOf(9, 10).map((trial, index) => ({ ...trial, workspace: `${prefix}-${String(index)}` }));
+
+    const read = (prefix: string, threw: number): PlatformReport => ({
+      measured: true, worker: 'kinu', from: 0, to: 1, sampling: 1,
+      workspaces: Array.from({ length: 10 }, (_, index) => ({
+        workspace: `${prefix}-${String(index)}`, objects: 2, failures: [], idleWakes: 0,
+        ended: index < threw ? [{ outcome: 'exception', count: 1 }, { outcome: 'canceled', count: 3 }] : [{ outcome: 'canceled', count: 3 }],
+      })),
+    });
+
+    const [before, after] = [report('t', named('eval-t-base'), BASE), report('t', named('eval-t-next'), NEXT)];
+    const compared = compareEvalResults(before, after, {}, { baseline: read('eval-t-base', 0), candidate: read('eval-t-next', 8) });
+
+    expect(compared.verdict).toBe('regressed');
+    expect(compared.platform?.tasks[0]?.candidate).toMatchObject({ trials: 10, bugTrials: 8, exceptions: 8, canceled: 30 });
+    expect(compareEvalResults(before, after, {}, { baseline: read('eval-t-base', 0), candidate: { measured: false, why: 'no token' } }).verdict).toBe('unchanged');
+    expect(renderEvalComparison(compared)).toContain('| t | 0/10: 0 thrown, 0 over limits, 0 idle wakes, 30 cancelled | 8/10: 8 thrown');
+  });
+
+  test('the run report gives each task\u2019s failed calls by tool and cause, and every value beside its change', () => {
+    const failing = (count: number) => trialsOf(9, 10, { inputTokens: 1000, toolFailures: [{ tool: 'file', cause: 'bad_input', count }] });
+    const rendered = renderEvalComparison(compareEvalResults(report('t', failing(1), BASE), report('t', failing(2), NEXT)));
+
+    expect(rendered).toContain('| `file` | bad_input | 10 | 20 |');
+    expect(rendered).toContain('| **Run** | 90.0% (0 pp) |');
+    expect(rendered).toMatch(/\| t \| 90\.0% \(0 pp\) \|[^\n]*\| 2\.0 \(\+1\.0\) \|/u);
+  });
+
+  // The exact test needs four trials a side to call any fall; below that a run cannot say a task held.
+  test.each([
+    { trials: 3, before: 3, after: 0, verdict: 'regressed' },
+    { trials: 3, before: 1, after: 0, verdict: 'regressed' },
+    { trials: 3, before: 3, after: 1, verdict: 'inconclusive' },
+    { trials: 3, before: 3, after: 3, verdict: 'inconclusive' },
+    { trials: 4, before: 4, after: 4, verdict: 'unchanged' },
+    { trials: 5, before: 5, after: 1, verdict: 'regressed' },
+    { trials: 5, before: 5, after: 2, verdict: 'unchanged' },
+  ])('$before/$trials \u2192 $after/$trials is $verdict', ({ trials, before, after, verdict }) => {
+    const comparison = compareEvalResults(report('t', trialsOf(before, trials), BASE), report('t', trialsOf(after, trials), NEXT));
+
+    expect(comparison.verdict).toBe(verdict);
+
+    if (verdict === 'inconclusive') expect(renderEvalComparison(comparison)).toContain('Too few trials to tell any fall from noise');
   });
 
   test('a significant fall on any task is a regression, whatever else rose', () => {

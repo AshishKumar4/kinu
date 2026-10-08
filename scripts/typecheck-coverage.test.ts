@@ -100,7 +100,7 @@ describe('this tree', () => {
 
     expect(tests.length).toBeGreaterThan(0);
     expect(tests).toContain('tests/live-model/deep-evolution.test.ts');
-    expect(tests).toContain('evals/tasks/order-book.eval.ts');
+    expect(tests).toContain('evals/tasks/chess.eval.ts');
     expect(coverage).toEqual({ governed: tests, missing: [], staleExceptions: [] });
 
     // This was excluded by the devbox config even though its sibling tests were

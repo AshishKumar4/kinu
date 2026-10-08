@@ -93,6 +93,7 @@ export const FIRST_RUN_CASES = [
   'share-capability-cut',
   'blueprint-fork',
   'slate-browser',
+  'users-share',
   'drive',
   'device-link',
   'background-settle',
@@ -253,6 +254,14 @@ export const FIRST_RUN_DEFECTS = {
     provedRedAt: null,
     redDirection: 'Green requires title(engine, url) to answer \'Example Domain\' for both chrome and kitesurf. Before this, connectBrowser from a slate answered "runs only inside an eval program"; '
       + 'packages/cf-backend/tests/workerd/slate-share.test.ts proves the gate admits the caller\'s own session and refuses another\'s.',
+  },
+  'users-share': {
+    id: 'users-share',
+    found: 'A share for named people answered its link with a bare "Not found" to the very people it named, and its create answer listed no one; only the Drive card\'s signed entry got them in.',
+    missedBecause: 'The host 404s any users-share visitor without a viewer cookie, and the dialog copies that bare link; the unit proofs minted the ticket through /api/shared/live/open directly, as no recipient holding the link can.',
+    provedRedAt: 'c9fee59a0',
+    redDirection: 'RED on the deployed c9fee59a0 (2026-10-08 staging walk): the recipient following the share link got 404 "Not found", and the create answer\'s share.users was []. '
+      + 'Green requires the link to send a visitor with no cookie to the app\'s page for the share, the answer to name the recipient, and the named account to enter as itself through that page\'s ticket.',
   },
   'blueprint-fork': {
     id: 'blueprint-fork',
@@ -755,6 +764,7 @@ const SHORT_SUBJECT = {
   'share-capability-cut': 'cut',
   'blueprint-fork': 'fork',
   'slate-browser': 'browse',
+  'users-share': 'named',
   'drive': 'drive',
   'device-link': 'link',
   'background-settle': 'wake',

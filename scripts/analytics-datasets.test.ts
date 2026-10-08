@@ -25,7 +25,7 @@ import { Visitor, parseSync, type Expression, type VisitorObject } from 'oxc-par
 import * as v from 'valibot';
 
 import { parseJsonc } from './jsonc';
-import { ANALYTICS_SCHEMAS, boundaryOf } from '@kinu.run/core/analytics';
+import { ANALYTICS_DATASET_SUFFIX, ANALYTICS_SCHEMAS, analyticsDataset, boundaryOf } from '@kinu.run/core/analytics';
 import * as record from '@kinu.run/core/analytics';
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -35,38 +35,54 @@ const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
 /** Only the block this file is about. A narrow schema rather than the
  *  manifest's full one: this asks a single question of the config, and a shape
  *  that admitted more would start answering others. */
+const DatasetsSchema = v.optional(v.array(v.object({ binding: v.string(), dataset: v.string() })));
+
+const VarsSchema = v.optional(v.looseObject({ ANALYTICS_DATASET_SUFFIX: v.optional(v.string()) }));
+
 const WranglerSchema = v.object({
-  analytics_engine_datasets: v.optional(v.array(v.object({
-    binding: v.string(), dataset: v.string(),
-  }))),
+  analytics_engine_datasets: DatasetsSchema,
+  vars: VarsSchema,
+  env: v.optional(v.record(v.string(), v.looseObject({ analytics_engine_datasets: DatasetsSchema, vars: VarsSchema }))),
 });
 
 /** Binding name → dataset name. */
 type DatasetBindings = Readonly<Record<string, string>>;
 
-const BOUND: DatasetBindings = Object.fromEntries(
-  (parseJsonc(readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), WranglerSchema, WRANGLER)
-    .analytics_engine_datasets ?? []).map((dataset) => [dataset.binding, dataset.dataset]),
-);
+const WRANGLER_CONFIG = parseJsonc(readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), WranglerSchema, WRANGLER);
 
-/** What the read path names. */
-const READ: DatasetBindings = Object.fromEntries(
-  ANALYTICS_SCHEMAS.map((schema) => [schema.binding, schema.dataset]),
+/** Each deployment: what wrangler binds for writes, and the suffix its readers name datasets with. */
+const DEPLOYMENTS: readonly { readonly name: string; readonly bound: DatasetBindings; readonly suffix: string | undefined }[] = [
+  { name: 'production', ...WRANGLER_CONFIG },
+  ...Object.entries(WRANGLER_CONFIG.env ?? {}).map(([name, env]) => ({ name, ...env })),
+].map(({ name, analytics_engine_datasets, vars }) => ({
+  name,
+  bound: Object.fromEntries((analytics_engine_datasets ?? []).map((dataset) => [dataset.binding, dataset.dataset])),
+  suffix: vars?.ANALYTICS_DATASET_SUFFIX,
+}));
+
+/** What the read path names under a suffix. */
+const read = (suffix: string): DatasetBindings => Object.fromEntries(
+  ANALYTICS_SCHEMAS.map((schema) => [schema.binding, analyticsDataset(schema, suffix)]),
 );
 
 describe('the Worker reads the datasets it writes', () => {
-  test('wrangler binds exactly the datasets the schemas name', () => {
-    // Both directions: a missing binding leaves a writer silently unbound, and
-    // an extra one is a dataset nothing in the code base can read.
-    expect(Object.keys(BOUND).length).toBeGreaterThan(0);
-    expect(BOUND).toEqual(READ);
-  });
+  test.each(DEPLOYMENTS.map((deployment) => [deployment.name, deployment] as const))(
+    '%s binds exactly the datasets its readers name',
+    (_name, { bound, suffix }) => {
+      // Both directions: a missing binding leaves a writer silently unbound, and an extra one is a dataset nothing in
+      // the code base can read. Staging shares production's account, so a reader on the wrong name reads production.
+      expect(Object.keys(bound).length).toBeGreaterThan(0);
+      expect(suffix).toMatch(ANALYTICS_DATASET_SUFFIX);
+      expect(bound).toEqual(read(suffix ?? ''));
+    },
+  );
 
-  test('the equality has a red direction', () => {
-    // A reader naming another dataset is exactly the shipped defect this file
-    // was written for. If this passed, the test above would be measuring nothing.
-    const [agent] = ANALYTICS_SCHEMAS;
-    expect(BOUND).not.toEqual({ ...READ, [agent.binding]: `${agent.dataset}_other` });
+  test('staging is one of them, and reads no dataset production writes', () => {
+    const production = DEPLOYMENTS.find((deployment) => deployment.name === 'production');
+    const staging = DEPLOYMENTS.find((deployment) => deployment.name === 'staging');
+
+    expect(staging?.suffix).not.toBe(production?.suffix);
+    expect(Object.values(read(staging?.suffix ?? '')).filter((name) => Object.values(production?.bound ?? {}).includes(name))).toEqual([]);
   });
 });
 

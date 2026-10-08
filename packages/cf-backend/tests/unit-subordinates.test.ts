@@ -150,7 +150,7 @@ describe("a delegated run settles its hirer's roster", () => {
     roster.assign('researcher', brief);
     await runDelegatedTask(workspace, child.actor.handle.actorId, brief);
 
-    const endings = agentSql(child.actor.handle.actorId)<{ reason: string }>`
+    const endings = agentSql(workspace, child.actor.handle.actorId)<{ reason: string }>`
       SELECT json_extract(payload, '$.reason') AS reason FROM run_events WHERE type = 'run_end'`;
 
     expect(endings).toEqual([{ reason: 'completed' }]);
@@ -336,5 +336,26 @@ describe('an agent\'s window hears only what it may act on', () => {
     expect(heard.get('workspace')).toEqual(expect.arrayContaining([...own, 'device_available']));
     expect(heard.get('agent')?.filter((type) => own.includes(type))).toEqual([]);
     expect(heard.get('agent')).toContain('device_available');
+  });
+});
+
+describe('a dismissed agent\'s window', () => {
+  test('is told its agent is no longer hosted here, rather than kept talking to it', async () => {
+    const { agent } = orchestratorHarness();
+    const sent: string[] = [];
+
+    await agent.setSoul('# Purpose\n\nAudit the ledger.');
+    const { name } = await agent.createSubordinateAgent();
+    const resolved = await agent.resolveHostedActorRoute(name);
+
+    if ('reason' in resolved) throw new Error(resolved.error);
+    const window = socketConnection({ id: 'agent', tags: [actorConnectionTag(resolved.actorId)], send: (frame) => { sent.push(typeof frame === 'string' ? frame : ''); } });
+
+    // The window's first frame opens its agent's room.
+    await agent.onMessage(window, '{}');
+    await agent.dismissSubordinate(name);
+    await agent.onMessage(window, '{}');
+
+    expect(sent.at(-1)).toContain('no longer hosted here');
   });
 });

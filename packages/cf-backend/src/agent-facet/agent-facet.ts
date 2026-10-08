@@ -13,6 +13,7 @@ import {
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
   type SendState,
 } from '@kinu.run/core';
+import { StepPacer } from './step-pacer';
 import { AgentDatabase } from './agent-database';
 import { runAgentTask, type AgentWorkspace } from './agent-turn';
 import { FacetChat } from './agent-chat';
@@ -134,6 +135,8 @@ export interface AgentFacetCalls {
   drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>>;
   /** A retirement waits on it. */
   idle(): Promise<void>;
+  /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). */
+  step(turnId: string): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
   messageCount(snapshot: AgentSnapshot): Promise<number>;
@@ -177,6 +180,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   private held: FacetChat | undefined;
 
+  private readonly pacer = new StepPacer();
+
   protected workspace(): NimbusSandboxHandle {
     this.box ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.env.WORKSPACE.session())
       .sandbox(this.env.WORKSPACE_NAME, { shellId: this.env.SHELL_ID, root: this.env.HOME }));
@@ -212,7 +217,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
     database.adopt({ ...snapshot, scaffold: [prepared.scaffold] });
     const actor = await database.acquire();
-    const chat = new FacetChat({ actor, database, workspace: this.env.WORKSPACE, providers: this.env, storage: this.ctx.storage });
+    const chat = new FacetChat({ actor, database, workspace: this.env.WORKSPACE, providers: this.env, storage: this.ctx.storage, pacer: this.pacer });
 
     chat.session.measureSessionStart({ restored: chat.session.restoreHistory() });
     this.held = chat;
@@ -230,7 +235,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd> {
-    return await runAgentTask(this.open(snapshot), this.env.WORKSPACE, this.env, task);
+    return await runAgentTask({ database: this.open(snapshot), workspace: this.env.WORKSPACE, providers: this.env, pacer: this.pacer }, task);
   }
 
   async enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
@@ -379,6 +384,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async idle(): Promise<void> {
     await this.held?.idle();
+  }
+
+  async step(turnId: string): Promise<void> {
+    await this.pacer.grant(turnId);
   }
 
   async history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]> {

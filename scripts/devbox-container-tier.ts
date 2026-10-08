@@ -9,21 +9,34 @@ import * as v from 'valibot';
 import { copyPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
+import { r2 } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
-import { deleteR2Prefix, wranglerSessionToken } from './cloudflare-rest';
+import { deleteR2Prefix, restApiToken } from './cloudflare-rest';
 import { runWrangler, wranglerProvesAbsence, deleteContainerApps, containerAppIds, publishTeardown, runTeardownOnce, delay } from './fixtures/r2-bench/deploy-substrate';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import artifact from '../packages/devbox/block-lower/upstream.json';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/contract-types';
 import { shellQuote } from '../packages/core/src/utils/shell';
 import { withTestChrome } from './test-chrome';
+import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 
 const REPO = join(import.meta.dir, '..');
 
 const ACCOUNT = 'f44999d1ddda7012e9a87729eba250f1';
 
 const PART_BYTES = 256 * 1024 * 1024;
+
+/** The box's own words when the platform refused it a container and it armed a startup (packages/devbox/src/devbox.ts). */
+const ASK_AGAIN = 'A startup is armed, so ask again';
+
+/** Asks of one call, a minute apart in all: the startup the box armed retries within seconds. */
+const ASK_AGAIN_TIMES = 12;
+
+const ASK_AGAIN_MS = 5_000;
+
+/** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
+const DESKTOP_SEEN_MS = 30_000;
 
 const Json = v.looseObject({ error: v.optional(v.string()) });
 
@@ -99,6 +112,20 @@ function recoveryReport(argument: number) {
   }), JSON.parse(readFileSync(process.argv[argument + 1] ?? '', 'utf8')));
 }
 
+/** The registry token production's devbox holds and the deploy's REST token, armada secrets both (the row's `secrets`),
+ *  never wrangler's OAuth token, which expired mid-run (2026-10-08: the fixture's snapshot cleanup answered 401 minutes
+ *  after it started) and which no armada container holds. Every wrangler this tier starts reads the REST token as its
+ *  CLOUDFLARE_API_TOKEN, so none falls back to a login. */
+function fixtureTokens() {
+  const token = process.env['DEVBOX_REGISTRY_TOKEN']?.trim() ?? '';
+  const rest = restApiToken();
+
+  if (token === '' || rest === '') throw new Error('the real-container tier needs DEVBOX_REGISTRY_TOKEN and KINU_CLOUDFLARE_API_TOKEN (armada secrets)');
+  process.env['CLOUDFLARE_API_TOKEN'] = rest;
+
+  return { token, rest };
+}
+
 async function main(): Promise<void> {
   const identity = tierIdentity(process.env);
   const recoveryArgument = process.argv.indexOf('--cleanup-report');
@@ -108,13 +135,12 @@ async function main(): Promise<void> {
   const run = recovering?.run ?? `dc${new Date().toISOString().replace(/\D/gu, '').slice(0, 14)}${crypto.randomUUID().slice(0, 5)}`;
   const worker = `kinu-${run}`;
   const box = `eval-devbox-${run}`;
-  const names = [box, `${box}-native`, `${box}-disk`, 'devbox-golden'];
+  // The last is a box only the desktop's check opens, so it opens on a fresh box.
+  const names = [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`];
   const app = `${worker}-contractbox`;
   const scratch = recovering === undefined ? mkdtempSync(join(tmpdir(), 'kinu-devbox-contracts-')) : dirname(process.argv[recoveryArgument + 1] ?? '');
   process.env['WRANGLER_LOG_PATH'] = join(scratch, 'wrangler');
-  const token = wranglerSessionToken();
-  // Only the throwaway application's REST cleanup uses this credential; never printed or persisted.
-  process.env['KINU_CLOUDFLARE_API_TOKEN'] = token;
+  const { token, rest } = fixtureTokens();
   const report = join(scratch, 'report.json');
   const steps: Step[] = recovering?.steps ?? [];
   const snapshots = new Set<string>(recovering?.snapshots);
@@ -129,12 +155,25 @@ async function main(): Promise<void> {
     if (origin === undefined) throw new Error('the fixture has not deployed');
     const url = new URL(path, origin);
     url.searchParams.set('box', name);
-    const reply = await fetch(url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
-    const value: unknown = await reply.json();
 
-    if (!reply.ok) throw new Error(`${path}: ${String(reply.status)} ${JSON.stringify(value).slice(-900)}`);
+    // A box the platform refused a container (a dropped connection, no room) arms its own startup and says to ask
+    // again; a contract asks again, as an agent does, rather than read a platform refusal as the contract broken
+    // (390ad4e4c's disk-chain: "Network connection lost." after /lose-snapshot).
+    for (let asked = 1; ; asked += 1) {
+      const reply = await fetch(url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+      const value: unknown = await reply.json();
 
-    return v.parse(schema, value);
+      if (reply.ok) return v.parse(schema, value);
+      const said = JSON.stringify(value);
+
+      if (asked < ASK_AGAIN_TIMES && said.includes(ASK_AGAIN)) {
+        process.stdout.write(`[${run}] ${path}: not ready, asking again: ${said.slice(-300)}\n`);
+        await delay(ASK_AGAIN_MS);
+        continue;
+      }
+
+      throw new Error(`${path}: ${String(reply.status)} ${said.slice(-900)}`);
+    }
   };
 
   const step = async <Evidence>(contract: string, work: () => Promise<Evidence>) => {
@@ -190,16 +229,22 @@ async function main(): Promise<void> {
       requireEqual(containerAppIds(REPO, [app], () => undefined), []);
       },
       bucket: async () => {
-      if (!runWrangler(REPO, ['r2', 'bucket', 'list']).includes(worker)) return;
-      await deleteR2Prefix({ accountId: ACCOUNT, bucket: worker, prefix: '', token });
+      // By name: `r2 bucket list` answers its first 20 buckets only, so a bucket past that page read as gone, and
+      // every run on an account of more than 20 left its bucket behind (seven on 2026-10-08).
+      const before = r2(worker);
+
+      if (before.state === 'absent') return;
+
+      if (before.state === 'unknown') throw new Error(before.reason);
+      await deleteR2Prefix({ accountId: ACCOUNT, bucket: worker, prefix: '', token: rest });
       const accessKeyId = process.env['R2_ACCESS_KEY_ID'];
       const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
 
       if (accessKeyId !== undefined && secretAccessKey !== undefined) await drainBucketResidue(r2ResiduePlane({ accountId: ACCOUNT, accessKeyId, secretAccessKey }), worker);
       runWrangler(REPO, ['r2', 'bucket', 'delete', worker]);
-      const buckets = runWrangler(REPO, ['r2', 'bucket', 'list']);
+      const after = r2(worker);
 
-      if (buckets.includes(worker)) throw new Error('the bucket is still listed after deletion');
+      if (after.state !== 'absent') throw new Error(`the bucket is ${after.state === 'present' ? 'still there' : after.reason} after deletion`);
       },
     });
 
@@ -227,39 +272,71 @@ async function main(): Promise<void> {
     return;
   }
 
-  /** The desktop's own client, framed by the product route, driven in a browser on this host. */
+  /**
+   * What a person sees on opening the desktop of a fresh box with nothing launched, through the product's client and
+   * routes in a browser on this host: a desktop (its background, a panel along its foot), not a black screen, whose
+   * panel launches a terminal and a browser (D80). Production opened an empty X session and showed a cursor on black.
+   */
   const desktopClient = async () => {
     await step('desktop-client', async () => {
-      const nativeBox = names[1] ?? '';
-      await shell('printf %s "<body style=margin:0><div style=width:100vw;height:100vh;background:#c00 onclick=\\\"this.style.background=\x27#00c\x27\\\"></div>" >/var/tmp/click.html; '
-        + 'DISPLAY=:0 setsid x-www-browser --kiosk file:///var/tmp/click.html >/var/tmp/browser.log 2>&1 </dev/null & '
-        + 'until DISPLAY=:0 xdotool search --class chromium >/dev/null 2>&1; do sleep 0.1; done', nativeBox);
+      const fresh = names[4] ?? '';
 
       return withTestChrome(async browser => {
         const page = await browser.newPage();
         page.setDefaultTimeout(0);
         await page.setExtraHTTPHeaders({ authorization: `Bearer ${identity}` });
         await page.setViewport({ width: 1300, height: 820 });
-        await page.goto(`${origin}/view?box=${nativeBox}`);
+        await page.goto(`${origin}/view?box=${fresh}`);
         const frame = await (await page.waitForSelector('iframe'))?.contentFrame();
 
         if (frame == null) throw new Error('the desktop client did not frame');
 
-        const shows = async (blue: boolean) => (await frame.waitForFunction(wantBlue => {
+        // The desktop a quarter in from its corner, where X never starts its pointer (the middle), and the foot's middle,
+        // in the desktop's own coordinates; and where the client draws it.
+        const screen = () => frame.evaluate((size, footY) => {
           const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
 
           if (canvas === undefined || canvas.width < 640) return null;
-          const [r = 0, , b = 0] = canvas.getContext('2d')?.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data ?? [];
+          const context = canvas.getContext('2d');
+          const at = (x: number, y: number) => [...context?.getImageData(x * canvas.width / size.width, y * canvas.height / size.height, 1, 1).data ?? []];
           const rect = canvas.getBoundingClientRect();
 
-          return (wantBlue ? b > 150 && r < 80 : r > 150 && b < 80) && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }, { polling: 'raf' }, blue)).jsonValue();
+          return { desktop: at(size.width / 4, size.height / 4), panel: at(size.width / 2, footY), rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height } };
+        }, DESKTOP_SIZE, DESKTOP_SIZE.height - DESKTOP_PANEL.height / 2);
 
-        const red = await shows(false);
+        await frame.waitForFunction(() => {
+          const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
 
-        if (red === null || red === false) throw new Error('the desktop rendered no red page');
-        await page.mouse.click(red.x + 10, red.y + 10);
-        await shows(true);
+          return canvas !== undefined && canvas.width >= 640 && canvas.getContext('2d')?.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data[3] === 255;
+        }, { polling: 'raf' });
+
+        const near = (rgba: readonly number[] | undefined, hex: string) => rgba !== undefined
+          && [1, 3, 5].every((at, channel) => Math.abs((rgba[channel] ?? -99) - Number.parseInt(hex.slice(at, at + 2), 16)) <= 12);
+
+        // The first frame may come before the panel paints: a person sees the desktop within seconds, or sees none.
+        const seenBy = Date.now() + DESKTOP_SEEN_MS;
+        let seen = await screen();
+
+        while (!(near(seen?.desktop, DESKTOP_COLOURS.background) && near(seen?.panel, DESKTOP_COLOURS.panel)) && Date.now() < seenBy) {
+          await delay(250);
+          seen = await screen();
+        }
+
+        if (seen === null || !near(seen.desktop, DESKTOP_COLOURS.background) || !near(seen.panel, DESKTOP_COLOURS.panel)) {
+          throw new Error(`opening the desktop of a fresh box showed ${JSON.stringify({ desktop: seen?.desktop, panel: seen?.panel })} `
+            + `${String(DESKTOP_SEEN_MS / 1000)} s after its first frame, not its background ${DESKTOP_COLOURS.background} and panel ${DESKTOP_COLOURS.panel}`);
+        }
+
+        const rect = seen.rect;
+
+        const opened = async (launcher: keyof typeof DESKTOP_PANEL.launchers, windowClass: string) => {
+          await page.mouse.click(rect.x + DESKTOP_PANEL.launchers[launcher] * rect.width / DESKTOP_SIZE.width,
+            rect.y + (DESKTOP_SIZE.height - DESKTOP_PANEL.height / 2) * rect.height / DESKTOP_SIZE.height);
+          await shell(`until DISPLAY=:0 xdotool search --onlyvisible --class ${windowClass} >/dev/null 2>&1; do sleep 0.1; done`, fresh);
+        };
+
+        await opened('terminal', 'xterm');
+        await opened('browser', 'chromium');
 
         const elsewhere = await frame.evaluate(() => new Promise<string>(resolve => {
           document.addEventListener('securitypolicyviolation', event => { resolve(event.violatedDirective); }, { once: true });
@@ -268,7 +345,7 @@ async function main(): Promise<void> {
 
         requireEqual(elsewhere, 'connect-src');
 
-        return 'the product desktop routes carried a click to the golden\'s Chromium; foreign sockets refused';
+        return 'a fresh box\'s desktop opened on its background and panel; the panel\'s clicks opened a terminal and a browser; foreign sockets refused';
       });
     });
   };

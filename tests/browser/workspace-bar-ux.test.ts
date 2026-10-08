@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
 const TAB_SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'workspace-bar-ux');
 
@@ -51,7 +52,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
   /** Kept equal to the gallery's two-frame refusal, so a chain it stopped chaining fails the equality. */
   const CREATE_REFUSAL_CHAIN = 'the workspace refused the new agent: subordinate quota exhausted';
 
-  test('+ asks the workspace question; the first message opens the chat as the current tab and is sent once', async () => {
+  test('+ asks the workspace question; the first message opens and names the chat as the current tab and is sent once', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
       const sends = () => page.evaluate(() => Number(document.documentElement.dataset.galleryChatSends ?? '0'));
@@ -64,7 +65,8 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await page.type('[data-new-chat] textarea', 'Audit the coupon rules');
       await page.click('[data-new-chat] button[type="submit"]');
       await waitForNewChatOpen(page);
-      await page.waitForSelector('[data-agent-pane^="checkout-fixes/agents/"] textarea');
+      // Named from its first words, which the workspace is asked to name it by.
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/audit-coupon-rules"] textarea');
       await page.waitForFunction((from) => Number(document.documentElement.dataset.galleryChatSends ?? '0') === from + 1, {}, before);
 
       // The opening is spent: leaving the chat and coming back sends nothing again.
@@ -233,7 +235,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
 
       await page.waitForFunction(() => (document.documentElement.dataset.galleryModelCalls ?? '').includes('setReasoningEffort'));
       const calls = await page.evaluate(() => JSON.parse(document.documentElement.dataset.galleryModelCalls ?? '[]'));
-      expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'agent-1'] }]);
+      expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'audit-coupon-rules'] }]);
       await page.close();
     });
   });
@@ -368,6 +370,117 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await page.tap('.p-bar-menu button');
       await page.waitForSelector('[data-drawer]');
       await page.close();
+    });
+  });
+
+  test('on a phone, Escape closes the menu, and the bar\'s toggle then brings the workspace pane up', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const toggle = '.p-bar [data-inspector-toggle]';
+
+      try {
+        await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+        await page.goto(`${origin}/gallery.html?frame=workspaceshell`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector(toggle);
+        await page.tap('.p-bar-menu button');
+        await page.waitForSelector('[data-drawer]');
+        await page.keyboard.press('Escape');
+        // A touch where the toggle is drawn: a menu still standing over the bar would take it instead.
+        await page.tap(toggle);
+        await page.evaluate(async () => {
+          await Promise.allSettled(document.getAnimations()
+            .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+            .map((animation) => animation.finished));
+          await new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); });
+        });
+        expect(await page.$eval(toggle, (button) => button.getAttribute('aria-pressed'))).toBe('true');
+
+        // The workspace pane is the one on screen: its Files tab takes a touch.
+        await page.tap('#inspector button[aria-label="Files"]');
+        await page.waitForSelector('#inspector button[aria-label="Files"][aria-current="true"]');
+      } finally { await page.close(); }
+    });
+  });
+
+  test('a chat renames and deletes from its sidebar row as from its tab, through the same dialog', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const rows = 'ul[aria-label="Chats"]';
+
+      try {
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=workspaceshell`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector(`${rows} [data-workspace-chat]`);
+        await startChat(page, 'Audit the coupon rules');
+        await waitForNewChatOpen(page);
+        const label = await openTab(page);
+
+        // With a pointer, the row's pencil comes up under it and renames the chat where its tab shows it too.
+        await page.hover(`${rows} [data-workspace-chat]:not([data-workspace-chat="main"])`);
+        await page.click(`button[aria-label="Rename chat ${label}"]`);
+        // The field opens on the name selected, so typing replaces it.
+        await page.waitForSelector(`${rows} input[aria-label="Rename ${label}"]`);
+        await page.keyboard.type('Payments triage');
+        await page.keyboard.press('Enter');
+        await page.waitForFunction((chats) => (document.querySelector(`${chats} [data-active] a`)?.textContent ?? '').includes('Payments triage'), {}, CHATS);
+        await page.waitForFunction((list) => (document.querySelector(list)?.textContent ?? '').includes('Payments triage'), {}, rows);
+
+        // Its bin asks as the tab's × does; Delete takes the chat from the bar and the sidebar.
+        await page.hover(`${rows} [data-workspace-chat]:not([data-workspace-chat="main"])`);
+        await page.click('button[aria-label="Delete chat Payments triage"]');
+        await page.waitForSelector('[role="dialog"]');
+        await clickDialogButton(page, 'Delete');
+        await page.waitForFunction((chats) => document.querySelector(`${chats} [data-active]`)?.getAttribute('data-agent-tab') === 'main', {}, CHATS);
+        await page.waitForFunction((list) => !(document.querySelector(list)?.textContent ?? '').includes('Payments triage'), {}, rows);
+
+        // Main's row clears it, never deletes it.
+        await page.hover(`${rows} [data-workspace-chat="main"]`);
+        expect(await page.$('button[aria-label="Delete chat Main"]')).toBeNull();
+        await page.click('button[aria-label="Clear chat Main"]');
+        await page.waitForSelector('[role="dialog"]');
+        await clickDialogButton(page, 'Cancel');
+      } finally { await page.close(); }
+    });
+  });
+
+  test('on a phone, the open overview\'s name in the bar takes a tap to rename it', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const title = '.p-bar-tab[data-title]';
+
+      try {
+        await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+        await page.goto(`${origin}/gallery.html?frame=workspaceshell`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector(`${title} .p-bar-link`);
+        await page.tap(`${title} .p-bar-link`);
+        await page.waitForSelector('[data-workspace-overview]');
+        // A touch where the pencil is drawn opens the field; one that fell through to the name would not.
+        await page.tap(`${title} button[aria-label^="Rename "]`);
+        await page.waitForSelector(`${title} input[aria-label="Workspace name"]`);
+      } finally { await page.close(); }
+    });
+  });
+
+  test('on a phone, the overview\'s task lanes reflow to its width, with no sideways scroll', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const width = TEST_REQUIREMENTS.wcagReflow.values.width;
+
+      try {
+        await page.setViewport({ width, height: 900, isMobile: true, hasTouch: true });
+        await page.goto(`${origin}/gallery.html?frame=workspaceshell&agents=panel&board=full`, { waitUntil: 'networkidle0' });
+        await page.tap('.p-bar-tab[data-title] .p-bar-link');
+        await page.waitForSelector('[data-lane="done"] [data-task-card]');
+
+        const reach = await page.evaluate(() => ({
+          page: document.querySelector('[data-workspace-overview]')?.scrollWidth ?? Infinity,
+          cards: Math.max(...[...document.querySelectorAll('[data-task-card]')].map((card) => card.getBoundingClientRect().right)),
+        }));
+
+        // Every card is read by scrolling down only.
+        expect(reach.page).toBeLessThanOrEqual(TEST_REQUIREMENTS.wcagReflow.values.width);
+        expect(reach.cards).toBeLessThanOrEqual(TEST_REQUIREMENTS.wcagReflow.values.width);
+      } finally { await page.close(); }
     });
   });
 

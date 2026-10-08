@@ -3,7 +3,7 @@ import {
   ActorSession, EventLog, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory,
   BUILTIN_PROFILE_CATALOG, actorReferenceOf, createAgentStores, profileCatalogDigest,
   collectDynamicContext, createActorHost, defaultLoopOrigin, explorationActorKey,
-  captureOperationProfile, initRunEventTables, promptCacheKey, runHeadInference, vfsTurnSkills,
+  captureOperationProfile, initRunEventTables, conversationKey, runHeadInference, vfsTurnSkills,
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedActor, type HostedNodeSeat,
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs, type RunTurnSources,
   type SqlExec, type SqlValue, type WriteObserver,
@@ -59,7 +59,7 @@ export function fixtureRunSources(
     identity: async () => ({ agent: actor.record.name }),
     artifacts: () => ({ sections: {}, tools: { descriptions: {}, fields: {} } }),
     taskPlan: () => null,
-    cacheKey: () => promptCacheKey('fixture', actor.record.actorId),
+    conversationKey: () => conversationKey('fixture', actor.record.actorId),
     scaffoldSpend: { source: 'scaffold', report: () => {} },
     attachmentBudget: actor.session.orchestrator.acc.context,
     extensions: () => [],
@@ -152,7 +152,7 @@ export function headSeatFactory(
       name: explorationActorKey(input.id), creationId: input.id, origin: 'swarm', lifetime: 'task',
     });
 
-    const agentName = actorHomeName({ origin: 'swarm', storageKey: binding.storageKey });
+    const agentName = actorHomeName({ origin: 'swarm', name: binding.name, storageKey: binding.storageKey });
     writes?.set(binding.reference.actorId, observer);
     const actor = await host.acquire(binding.reference);
 

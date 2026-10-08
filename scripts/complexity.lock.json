@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-08",
-  "files": 3036,
-  "functions": 79600,
+  "files": 3074,
+  "functions": 80328,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -50,10 +50,6 @@
       "complexity": 38
     },
     {
-      "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
-      "complexity": 38
-    },
-    {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
       "complexity": 37
     },
@@ -75,10 +71,6 @@
     },
     {
       "key": "packages/core/src/tui/input-state.ts#reduceInput",
-      "complexity": 36
-    },
-    {
-      "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 36
     },
     {
@@ -142,10 +134,6 @@
       "complexity": 31
     },
     {
-      "key": "packages/cf-backend/src/slates/host.ts#SlateHost.operation",
-      "complexity": 31
-    },
-    {
       "key": "packages/cf-backend/tests/workerd/http-model-fake.ts#probeControl",
       "complexity": 31
     },
@@ -176,10 +164,6 @@
     {
       "key": "scripts/shell-words.ts#readScript",
       "complexity": 30
-    },
-    {
-      "key": "packages/cf-backend/src/components/ProfileCatalogSettings.tsx#ProfileCatalogSettings",
-      "complexity": 29
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/changes/ChangesPanel.tsx#ChangesPanel",
@@ -266,10 +250,6 @@
       "complexity": 28
     },
     {
-      "key": "scripts/agents-fields.ts#collectReads>walkExcept",
-      "complexity": 28
-    },
-    {
       "key": "scripts/bench-devbox-fixture.test.ts#driverC3Proof>answer",
       "complexity": 28
     },
@@ -347,6 +327,10 @@
     },
     {
       "key": "scripts/capability-parity.ts#findAsymmetries",
+      "complexity": 27
+    },
+    {
+      "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 27
     },
     {

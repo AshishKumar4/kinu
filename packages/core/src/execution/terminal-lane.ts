@@ -364,7 +364,7 @@ function writeClipNote(term: TerminalWriter, stream: string, shown: number, stor
   const withheld = stored - shown;
 
   if (withheld <= 0) return;
-  term.write(`\x1b[2m... ${withheld.toLocaleString()} more ${stream} characters are stored and not shown here\x1b[0m\r\n`);
+  term.write(`\x1b[2m... ${withheld.toLocaleString()} more ${stream} characters were printed and are not shown here\x1b[0m\r\n`);
 }
 
 /**

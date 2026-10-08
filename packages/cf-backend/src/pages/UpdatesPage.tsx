@@ -17,6 +17,9 @@ import { StepRow } from "@/components/deploy/DeployStepRow";
 
 const RUN_POLL_MS = 2000;
 
+/** `/api/updates` answers 404 to everyone but the deployment's owner, so a 404 here means the reader is someone else. */
+const NOT_OWNER = "Updates are installed by the person who deployed this Kinu. They see what is available here and install it.";
+
 function read<Schema extends v.GenericSchema>(
   schema: Schema,
   path: string,
@@ -24,6 +27,8 @@ function read<Schema extends v.GenericSchema>(
 ): Effect.Effect<v.InferOutput<Schema>> {
   return Effect.gen(function* () {
     const response = yield* Effect.promise(() => fetch(path, init));
+
+    if (response.status === 404) return yield* Effect.die(new Error(NOT_OWNER));
 
     if (!response.ok) {
       const said = v.safeParse(v.object({ error: v.string() }), yield* Effect.promise(() => response.json()));
@@ -109,7 +114,9 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
           that first put it here, with its own Cloudflare key.
         </p>
       </div>
-      {err !== null && <div className="p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">{err}</div>}
+      {err !== null && (err.includes(NOT_OWNER)
+        ? <p className="text-sm p-text-2" data-updates="not-owner">{NOT_OWNER}</p>
+        : <div className="p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">{err}</div>)}
       {offer === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
       {offer !== null && (
         <section className="space-y-4" aria-label="This deployment's build">

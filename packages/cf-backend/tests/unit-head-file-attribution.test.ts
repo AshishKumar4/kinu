@@ -56,11 +56,11 @@ test('two heads writing at the same time each report only their own file', async
 
     if (!branch.accepted) throw new Error(`the branch was refused: ${branch.reason}`);
 
-    const seat = db.query<{ storage_key: string }, [string]>('SELECT storage_key FROM workspace_actors WHERE creation_id = ?')
+    const seat = db.query<{ name: string; storage_key: string }, [string]>('SELECT name, storage_key FROM workspace_actors WHERE creation_id = ?')
       .get(`${branch.branchId}-head`);
 
     if (seat === null) throw new Error(`branch ${branch.branchId} seated no head`);
-    homes.set(task, agentHome(actorHomeName({ origin: 'swarm', storageKey: seat.storage_key })));
+    homes.set(task, agentHome(actorHomeName({ origin: 'swarm', name: seat.name, storageKey: seat.storage_key })));
 
     return { task, head: `${branch.branchId}-head` };
   }));

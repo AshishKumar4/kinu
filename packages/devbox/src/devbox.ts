@@ -192,6 +192,8 @@ const BOOT_ID_PATH = '/tmp/devbox-boot-id';
 
 const NO_START_IMAGE = 'no image to start: name it `devbox` in the container `images` map';
 
+const NO_CONTAINER = 'this server runs no containers, as a local dev server never does: a box runs on a deployment';
+
 /** Scheduled-callback names. Each MUST name a public method on the class:
  *  `Container.schedule` rejects anything it cannot call back. */
 const STARTUP_CALLBACK = 'devboxStartup';
@@ -214,6 +216,15 @@ const GOLDEN_KEY = 'devbox:golden';
 const AWAITING_GOLDEN_KEY = 'devbox:awaiting-golden';
 
 type StartSource = { readonly kind: 'image' } | { readonly kind: 'own' | 'golden'; readonly id: string };
+
+/** A box with nothing to start from waits on the golden object, and is ready as its answer says (D65, D79). */
+type BaseWait = Extract<GoldenAnswer, { readonly kind: 'pending' }>;
+
+const BaseWaitSchema = v.object({
+  kind: v.literal('pending'),
+  reason: v.string(),
+  building: v.optional(v.object({ step: v.nullable(v.string()) })),
+});
 
 /** A classified recovery obligation; executed outside the restore block. */
 const RECOVERY_ACTION_KEY = 'devbox:recovery-action';
@@ -497,22 +508,21 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.#awaitContainerStopped();
   }
 
-  get #awaitingGolden(): string | undefined {
-    const held = v.safeParse(v.string(), this.ctx.storage.kv.get(AWAITING_GOLDEN_KEY));
-
-    return held.success ? held.output : undefined;
+  /** The golden object's last answer while this box has nothing to start from. */
+  get #awaitingGolden(): BaseWait | undefined {
+    return parsedOrNull(BaseWaitSchema, this.ctx.storage.kv.get<StoredValue>(AWAITING_GOLDEN_KEY)) ?? undefined;
   }
 
-  set #awaitingGolden(reason: string | undefined) {
-    if (reason === undefined) this.ctx.storage.kv.delete(AWAITING_GOLDEN_KEY);
-    else this.ctx.storage.kv.put(AWAITING_GOLDEN_KEY, reason);
+  set #awaitingGolden(wait: BaseWait | undefined) {
+    if (wait === undefined) this.ctx.storage.kv.delete(AWAITING_GOLDEN_KEY);
+    else this.ctx.storage.kv.put(AWAITING_GOLDEN_KEY, wait);
   }
 
   async goldenReady(answer: GoldenAnswer): Promise<void> {
     if (this.#awaitingGolden === undefined) return;
 
     if (answer.kind === 'pending') {
-      this.#awaitingGolden = answer.reason;
+      this.#awaitingGolden = answer;
 
       return;
     }
@@ -692,7 +702,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** Its own snapshot, else the golden (or the image, with no builder), else wait to be told (D65). */
-  async #startSource(lost?: string): Promise<StartSource | { readonly kind: 'pending'; readonly reason: string }> {
+  async #startSource(lost?: string): Promise<StartSource | BaseWait> {
     const own = lost === undefined ? this.#snapshots.wake() : undefined;
 
     if (own !== undefined) return { kind: 'own', id: own };
@@ -750,7 +760,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const next = await this.#startSource(golden);
 
     if (next.kind === 'pending') {
-      this.#awaitingGolden = next.reason;
+      this.#awaitingGolden = next;
 
       return false;
     }
@@ -1186,7 +1196,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const source = startsContainer ? await this.#startSource() : undefined;
 
       if (source?.kind === 'pending') {
-        this.#awaitingGolden = source.reason;
+        this.#awaitingGolden = source;
         this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: false, awaitingGolden: source.reason });
 
         return;
@@ -1730,7 +1740,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (!wasRunning) await this.#startContainer();
 
-    if (this.#awaitingGolden !== undefined && this.ctx.container?.running !== true) return { kind: 'pending', reason: this.#awaitingGolden };
+    const base = this.#awaitingGolden;
+
+    // The step its base is at rides along: the caller holds while the build moves on (D79).
+    if (base !== undefined && this.ctx.container?.running !== true) return base;
     await this.#resolveAdoption();
 
     // Native allocation can report running before restoration starts.
@@ -2973,7 +2986,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #container(): Container {
     const container = this.ctx.container;
 
-    if (container === undefined) throw new DevboxError("io", 'this devbox has no container binding');
+    // A dev server runs no container (vite.config.ts), so a box there is refused once rather than retried.
+    if (container === undefined) throw new DevboxError('configuration', NO_CONTAINER);
 
     return container;
   }

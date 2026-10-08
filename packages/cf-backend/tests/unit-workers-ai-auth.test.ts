@@ -143,7 +143,7 @@ describe('Workers AI credential refresh', () => {
     });
 
     const result = await generateText({
-      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'),
+      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }),
       prompt: 'ping',
     });
 
@@ -177,7 +177,7 @@ describe('Workers AI credential refresh', () => {
     });
 
     await expect(generateText({
-      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'),
+      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }),
       prompt: 'ping',
     })).rejects.toThrow();
     // Exactly one forced-refresh retry against a credential already refused twice.

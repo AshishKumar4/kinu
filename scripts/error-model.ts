@@ -120,6 +120,12 @@ export const DECLARED = byFile([
     reason: 'agent-utils sits below core and holds no runner: a leaf utility throws and catches as plain async code, '
       + 'and core brings each failure in with `attempt`',
   }] as const),
+  ['packages/core/src/checkpoints/engine.ts', {
+    mechanisms: ['throw', 'catch'],
+    reason: 'the checkpoint engine the device daemon runs as a generated copy holds no runner, so the daemon\'s '
+      + 'dependency-free JavaScript runs it unchanged: it throws and catches as plain async code, and each host brings '
+      + 'a failure in at its own edge',
+  }],
   ['packages/compaction/src/codec.ts', {
     mechanisms: ['throw', 'catch'],
     reason: 'the `Codec` @better-compact/core calls: an invalid handle is thrown, the library\'s codec contract, and a value '
@@ -252,7 +258,7 @@ export const DECLARED = byFile([
       'gallery fixtures that mirror workspace RPC answers'],
     ['packages/cf-backend/src/gallery-slate-fallback.tsx', ['frameRpc'],
       'a gallery fixture that mirrors SlateHost.preview\'s answer'],
-    ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'previewSlate', 'galleryPlanRpc', 'galleryRosterRpc', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
+    ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'previewSlate', 'slate', 'galleryPlanRpc', 'galleryRosterRpc', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
       'gallery fixtures that mirror RPC, HTTP and model-test answers'],
     ['packages/cf-backend/src/hooks/use-kinu.ts', ['dismissSubordinate'],
       'the dismissSubordinate RPC answer as the hook passes it on'],
@@ -260,7 +266,7 @@ export const DECLARED = byFile([
       'the saveNoteFromMcp RPC answer the MCP save_note tool returns'],
     ['packages/cf-backend/src/orchestrator.ts', ['resolveHostedActorRoute', 'announceDeviceUnavailable', 'announceDeviceAvailable', 'setTurnFeedback', 'restoreWorkspaceBaseline', 'recordHeadStep', 'destroyAgent', 'saveNoteFromMcp', 'liveShareBundle', 'renameSubordinateAgent', 'dismissSubordinate', 'prepareTerminal', 'setCurriculumTaskStatus', 'rawCopyFromFork'],
       'workspace DO RPC answers (callable methods and DO-to-DO calls) read by the UI, the CLI and other objects'],
-    ['packages/cf-backend/src/slates/host.ts', ['blueprintAnswer', 'readLiveShareRecord', 'unshare', 'operation', 'preview', 'releaseInvocation', 'surfaceCall', 'storageCall', 'viewerCall', 'run', 'call', 'remove'],
+    ['packages/cf-backend/src/slates/host.ts', ['blueprintAnswer', 'viewerAnswer', 'readLiveShareRecord', 'unshare', 'operation', 'sharing', 'savePage', 'preview', 'releaseInvocation', 'surfaceCall', 'storageCall', 'viewerCall', 'run', 'call', 'remove'],
       '`SlateAnswer`, the slate host\'s refusal-as-value over DO RPC, and the share ledger\'s recorded `ok`'],
     ['packages/cf-backend/src/terminal-route.ts', ['deviceTerminal', 'workspaceTerminal', 'sandboxCommand'],
       'the terminal routes\' HTTP JSON bodies'],

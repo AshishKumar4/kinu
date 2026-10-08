@@ -161,7 +161,8 @@ function renderTemporaryTaskBrief(input: {
 export function createTemporaryAgentPort(deps: {
   roster: SubordinateRosterStore;
   runtime: SubordinateRuntime;
-  createName(role: string): string;
+  /** From what the hire was first asked (its brief), else its role (`agentNamer`). */
+  createName(role: string, brief: string | null): string;
   now(): number;
   afterTurn(child: ActorReference, work: () => Promise<void>): void;
 }): TemporaryAgentPort {
@@ -174,7 +175,8 @@ export function createTemporaryAgentPort(deps: {
       const roleLabel = request.roleLabel.trim();
 
       if (!roleLabel) return { reason: 'bad_input', error: 'hire requires a role' };
-      const name = deps.createName(`ask-${roleLabel}`);
+      // An advisor's brief is written for it, not by anyone, so it is named for its role.
+      const name = deps.createName(`ask-${roleLabel}`, request.lane ? null : task);
       const startedAt = deps.now();
 
       const outcome = (status: TemporaryRunOutcome['status'], answer: string, transcript: 'kept' | 'none', reason?: ErrorCode): TemporaryRunOutcome => ({

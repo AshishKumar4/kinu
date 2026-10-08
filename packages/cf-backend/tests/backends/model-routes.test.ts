@@ -15,6 +15,9 @@ import { cliAccount, unreachableAssets, unreachableKv, unreachableNamespace } fr
 
 const ACCOUNT_AI = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
+/** The owner's gateway `default`, at its endpoints for each author's own API. */
+const GATEWAY = 'https://gateway.ai.cloudflare.com/v1/abc123abc123abc1/default';
+
 const ORIGIN = 'https://kinu.example.test';
 
 const CLI_TOKEN = `ptc_${'0'.repeat(32)}_abcdefghijklmnopqrstuvwxyz`;
@@ -109,9 +112,11 @@ const MessagesRequestSchema = v.object({
 
 describe('a gateway model on both backends', () => {
   // The owner's default, GPT 6.1 Sol through their own gateway, was sent on Chat Completions with the turn's tools and
-  // refused in these words (measured 2026-10-06); OpenAI's own provider speaks Responses, and so must every route to it.
+  // refused in these words (measured 2026-10-06); OpenAI's own provider speaks Responses, and so must every route to it,
+  // at the gateway's endpoint for it, which takes the SDK's own request.
   test('a gateway model speaks its author\'s own API on both backends, the CLI through the signed-in proxy', async () => {
     const wire: string[] = [];
+    const keys: string[] = [];
     const menu = ['my-gateway/openai/gpt-6.1-sol', 'my-gateway/google/gemini-2.5-flash', 'my-gateway/anthropic/claude-sonnet-4.5'];
 
     const upstream = asFetchFunction(async (input, init) => {
@@ -124,21 +129,22 @@ describe('a gateway model on both backends', () => {
         });
       }
 
-      const body = v.parse(v.object({ model: v.string(), tools: v.optional(v.array(v.unknown())), system: v.optional(v.unknown()) }), JSON.parse(await new Request(input, init).text()));
-      const endpoint = url.slice(`${ACCOUNT_AI}/`.length);
+      const request = new Request(input, init);
+      const body = v.parse(v.object({ model: v.string(), tools: v.optional(v.array(v.unknown())), system: v.optional(v.unknown()) }), JSON.parse(await request.text()));
+      const endpoint = url.startsWith(GATEWAY) ? url.slice(`${GATEWAY}/`.length) : url.slice(`${ACCOUNT_AI}/`.length);
       wire.push(`${endpoint} ${body.model}`);
 
-      // The gateway's `/messages` refuses Anthropic's system blocks: it takes one string (measured 2026-10-06).
-      if (endpoint === 'messages') {
-        if (body.system !== undefined && !v.is(v.string(), body.system)) return Response.json({ error: { type: 'invalid_request_error', message: 'Invalid value at system' } }, { status: 400 });
+      // At an author's endpoint the gateway's token is its own header: `Authorization` there is the author's key.
+      if (url.startsWith(GATEWAY)) keys.push([...request.headers.keys()].filter((name) => /authorization|api-key|gateway-id/u.test(name)).join(' '));
 
+      if (endpoint === 'anthropic/v1/messages') {
         return Response.json({
           id: 'msg_1', type: 'message', role: 'assistant', model: body.model, stop_reason: 'end_turn', stop_sequence: null,
           content: [{ type: 'text', text: 'served' }], usage: { input_tokens: 1, output_tokens: 1 },
         });
       }
 
-      if (endpoint === 'responses') {
+      if (endpoint === 'openai/responses') {
         return Response.json({
           id: 'resp_1', object: 'response', created_at: 1, model: body.model, status: 'completed', error: null, incomplete_details: null,
           output: [{ id: 'msg_1', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'served', annotations: [] }] }],
@@ -167,14 +173,15 @@ describe('a gateway model on both backends', () => {
     try {
       const answered: string[] = [];
 
-      for (const spec of menu) answered.push(await answer(hosted.resolveModel(spec, 'kinu-test')), await answer(local.resolveModel(spec, 'kinu-test')));
+      for (const spec of menu) answered.push(await answer(hosted.resolveModel(spec, { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' })), await answer(local.resolveModel(spec, { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' })));
 
-      expect({ answered, wire }).toEqual({
+      expect({ answered, wire, keys }).toEqual({
         answered: ['served', 'served', 'served', 'served', 'served', 'served'],
         wire: [
-          'responses openai/gpt-6.1-sol', 'responses openai/gpt-6.1-sol', 'chat/completions google/gemini-2.5-flash',
-          'chat/completions google/gemini-2.5-flash', 'messages anthropic/claude-sonnet-4.5', 'messages anthropic/claude-sonnet-4.5',
+          'openai/responses gpt-6.1-sol', 'openai/responses gpt-6.1-sol', 'chat/completions google/gemini-2.5-flash',
+          'chat/completions google/gemini-2.5-flash', 'anthropic/v1/messages claude-sonnet-4-5', 'anthropic/v1/messages claude-sonnet-4-5',
         ],
+        keys: ['cf-aig-authorization', 'cf-aig-authorization', 'cf-aig-authorization', 'cf-aig-authorization'],
       });
     } finally {
       globalThis.fetch = workerFetch;
@@ -182,8 +189,8 @@ describe('a gateway model on both backends', () => {
   });
 
   // Fable 5.1 and Opus 5.5 think by default, and Anthropic reads a tool result only after the signed thinking that
-  // called it, unchanged. The gateway's `/messages` is Anthropic's own API, so the replay keeps the block whole and
-  // caches as Anthropic does (both measured through Cloudflare's REST `/ai/v1/messages`, 2026-10-06).
+  // called it, unchanged. The gateway's endpoint for Anthropic is Anthropic's own API, so the replay keeps the block
+  // whole and caches as Anthropic does.
   test('a gateway Claude turn that thinks, calls a tool and reads its result sends its signed thinking back whole', async () => {
     const spec = 'my-gateway/anthropic/claude-opus-5.5';
     const replayed: unknown[] = [];
@@ -215,14 +222,14 @@ describe('a gateway model on both backends', () => {
     try {
       const answers: string[] = [];
 
-      for (const model of [hosted.resolveModel(spec, 'kinu-test'), local.resolveModel(spec, 'kinu-test')]) {
+      for (const model of [hosted.resolveModel(spec, { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), local.resolveModel(spec, { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' })]) {
         const events: ChatEvent[] = [];
 
         for await (const event of runChat({
           modelSpec: 'test/model',
           model, system: 'You read files.', history: [{ role: 'user', content: 'What does a.txt say?' }],
           tools: { look: tool({ description: 'Read a file.', inputSchema: z.object({ path: z.string() }), execute: async () => 'hello' }) },
-          cache: { providerId: 'my-gateway', modelId: 'anthropic/claude-opus-5.5', sessionKey: 'kinu-test' },
+          cache: { providerId: 'my-gateway', modelId: 'anthropic/claude-opus-5.5' },
         })) events.push(event);
 
         answers.push(events.flatMap((event) => (event.type === 'text-delta' ? [event.delta] : [])).join(''));
@@ -320,7 +327,7 @@ describe('an account\'s model menu', () => {
       const refused = await menu();
       const served = await menu();
       const hosted = createAgentProviderRegistry({ env: {}, fetch: upstream, userDO: { caller: testOwner, stub: account } });
-      const answer = (await generateText({ model: hosted.resolveModel('openai-compat:groq/llama-4-scout', 'kinu-test'), prompt: 'hi' })).text;
+      const answer = (await generateText({ model: hosted.resolveModel('openai-compat:groq/llama-4-scout', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hi' })).text;
 
       expect({ refused, served, catalogReads, answer, sent }).toEqual({
         // The refused read fails the listing that met it; the next ones read again, together.

@@ -17,6 +17,7 @@ import { withBrowser } from '../../scripts/live-app-harness';
 import { DOCUMENT_FAULTS, recordScriptFailures } from '../../scripts/script-failures';
 import { launchTestChrome, type TestChrome } from '../../scripts/test-chrome';
 import { webHeaders, type PublicWebIdentity, type WorkspaceWeb } from './session';
+import { appearance, type Appearance } from './appearance';
 import { look, type Press, type Sight } from './sight';
 
 /** Chrome, with the pointer and colour scheme declared (`declaredSettings`), as
@@ -48,6 +49,9 @@ export async function signedInPage(browser: Browser, identity: PublicWebIdentity
 export const DRAW_MS = 60_000;
 
 const Faults = v.object({ errors: v.array(v.string()), scripts: v.array(v.string()) });
+
+/** What a page says when asked one thing it may not hold. */
+const Said = v.nullable(v.string());
 
 /**
  * `work`, or a failure once the draw budget passes. Chrome's own protocol never times out here (`protocolTimeout: 0`,
@@ -107,20 +111,58 @@ export class SlateView {
     })());
   }
 
+  /** Press the first control whose accessible name, its `aria-label`, else its `title`, else its text, `name` matches. */
+  async pressNamed(name: RegExp): Promise<boolean> {
+    return bounded(`the slate page, pressed for ${name.source}`, (async () => {
+      const control = await this.frame.evaluateHandle((source, flags) => [...document.querySelectorAll('button, [role="button"], [role="gridcell"]')]
+        .find((element) => new RegExp(source, flags).test((element.getAttribute('aria-label') ?? element.getAttribute('title') ?? element.textContent ?? '').trim()))
+        ?? null, name.source, name.flags);
+
+      if (!(control instanceof ElementHandle)) return false;
+      await control.click();
+      await control.dispose();
+
+      return true;
+    })());
+  }
+
   /** What failed in the page: errors nothing caught and scripts that did not load (`script-failures.ts`). */
   async faults(): Promise<{ errors: string[]; scripts: string[] }> {
     return v.parse(Faults, await bounded('the slate page, asked what failed', this.frame.evaluate(DOCUMENT_FAULTS)));
   }
+
+  /** The page's colours and width, over the workspace's own background (`--c-bg`) where the page draws none. */
+  async appearance(): Promise<Appearance> {
+    const host = v.parse(Said, await bounded('the workspace page, asked its background', this.frame.page().evaluate(HOST_BACKGROUND)));
+
+    return bounded('the slate page, asked how it looks', this.frame.evaluate(appearance, host));
+  }
+
+  /** Whether the workspace says over this page that its latest edit did not build (`InlineSlate`'s notice). */
+  async broken(): Promise<string | null> {
+    return v.parse(Said, await bounded('the workspace page, asked about the build', this.frame.page().evaluate(BROKEN_NOTICE)));
+  }
 }
+
+/** In the workspace page: its theme's background, as the slate it holds is told it (`SLATE_THEME_TOKENS`). */
+const HOST_BACKGROUND = 'getComputedStyle(document.documentElement).getPropertyValue("--c-bg").trim() || null';
+
+/** In the workspace page: the words of a broken-build notice, or null with none. */
+const BROKEN_NOTICE = 'document.querySelector("[data-slate-broken]")?.textContent ?? null';
+
+/** A phone's window, as a person holds one. */
+export const PHONE = { width: 390, height: 844 } as const;
 
 /** The workspace's pages as its owner opens them, in one Chrome. */
 export class WorkspaceBrowser {
   constructor(private readonly browser: Browser, private readonly web: WorkspaceWeb) {}
 
-  /** A fresh page of the workspace at `query`, recording what fails in each document it loads. */
-  async open(query = ''): Promise<Page> {
+  /** A fresh page of the workspace at `query`, in the owner's `mode` when one is named, recording what fails in each
+   *  document it loads. */
+  async open(query = '', mode?: 'light' | 'dark'): Promise<Page> {
     const page = await signedInPage(this.browser, this.web.identity);
 
+    if (mode !== undefined) await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode }]);
     await recordScriptFailures(page);
     await bounded('the workspace page', page.goto(`${this.web.origin}/workspace/${encodeURIComponent(this.web.workspace)}${query}`, { waitUntil: 'domcontentloaded' }));
 
@@ -128,10 +170,21 @@ export class WorkspaceBrowser {
   }
 
   /** The slate `id` opened in the work surface, as the Drive's link to it opens it. */
-  async workSurface(id: string): Promise<SlateView> {
-    const page = await this.open(`?slate=${encodeURIComponent(id)}`);
+  async workSurface(id: string, mode?: 'light' | 'dark'): Promise<SlateView> {
+    const page = await this.open(`?slate=${encodeURIComponent(id)}`, mode);
 
     return loaded(await shown(page, `#inspector iframe[title=${JSON.stringify(id)}]`, `the work surface's frame of ${id}`), id);
+  }
+
+  /** The page `view` draws, opened on its own in a window of `size`: as it is drawn on a phone. */
+  async alone(view: SlateView, size: { readonly width: number; readonly height: number }): Promise<SlateView> {
+    const page = await signedInPage(this.browser, this.web.identity);
+
+    await page.setViewport({ ...size, isMobile: true, hasTouch: true });
+    await recordScriptFailures(page);
+    await bounded('the slate page, opened alone', page.goto(view.frame.url(), { waitUntil: 'domcontentloaded' }));
+
+    return new SlateView(page.mainFrame());
   }
 
   /** The chat's latest preview of the slate `id` (`InlineSlate`), unfolded the way a person unfolds it. */

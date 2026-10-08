@@ -1,17 +1,17 @@
 // Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
-import { APICallError, wrapLanguageModel, type LanguageModel } from 'ai';
-import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
+import { APICallError, wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
+import type { ModelAffinity, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
-import { authenticatedSend } from './authenticated-send';
-import { authCacheKey, cloneModelInfos, positiveInteger, StaleModelList, statelessResponses } from './util';
-import { asFetchFunction, copyHeaders } from './fetch-shim';
+import { authenticatedSend, signedSend } from './authenticated-send';
+import { authCacheKey, cloneModelInfos, conversationUuid, positiveInteger, StaleModelList, statelessResponses } from './util';
+import { asFetchFunction } from './fetch-shim';
 import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
 
-import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
+import { JsonValueSchema } from '../utils/json';
 import { Effect } from 'effect';
-import { classify, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, settle } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';
 import { heardFetch } from './middleware/attempt';
 import { lazyModel } from './wire-model';
@@ -24,6 +24,24 @@ const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 
 /** Evolution's mechanical-call tier. */
 const CODEX_FAST_MODEL = 'gpt-6-luna';
+
+/**
+ * ChatGPT's backend caches under a session id, as Codex CLI and oh-my-pi send one: the workspace's, so its conversations
+ * share their static prompt, each named by its own conversation id, as oh-my-pi names a fork under its root's session.
+ * Measured on chatgpt.com/backend-api/codex (2026-10-08), conversations of six appended steps on a ~7,300-token prefix:
+ * - without these headers nothing was read until the sixth step, and with a `prompt_cache_key` alone nothing in six;
+ * - one session per conversation: 7,168 tokens read on 123 of 135 later steps and none on the rest (52 of 60 with a key
+ *   as well); a second conversation's first step on the same prefix read nothing, 13 of 13;
+ * - one session shared by two conversations, each with its own `conversation_id` and `x-client-request-id`: 73 of 80
+ *   later steps, and the second conversation's first step read 7,040–7,168 in 6 of 8.
+ */
+export function chatgptSessionHeaders(affinity: ModelAffinity) {
+  const conversation = conversationUuid(`kinu-chatgpt-conversation:${affinity.sessionAffinity}`);
+
+  return {
+    session_id: conversationUuid(`kinu-chatgpt-session:${affinity.workspaceAffinity}`), conversation_id: conversation, 'x-client-request-id': conversation,
+  };
+}
 
 /** A dead ChatGPT login's remedy. */
 const CODEX_DEAD_LOGIN = 'Your ChatGPT login is no longer valid.';
@@ -130,17 +148,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           });
         };
 
-        const requestInit = normalizeCodexResponsesRequest(init);
-
-        const send = (auth: AuthResolution): Promise<Response> => {
-          const merged = copyHeaders(init?.headers);
-
-          for (const [name, value] of Object.entries(auth.headers)) merged.set(name, value);
-
-          return transport(input, { ...requestInit, headers: merged });
-        };
-
-        const answer = yield* Effect.promise(() => authenticatedSend({ key: CODEX_CRED_KEY, getAuth: deps.getAuth, send }));
+        const answer = yield* Effect.promise(() => authenticatedSend({ key: CODEX_CRED_KEY, getAuth: deps.getAuth, send: signedSend(transport, input, init) }));
 
         if (answer.kind === 'refused') return refusedLoginResponse();
 
@@ -179,9 +187,10 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
       })));
 
       const model = lazyModel('openai.responses', modelId, async () => (await import('@ai-sdk/openai'))
-        .createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: heardFetch(customFetch) }).responses(modelId));
+        .createOpenAI({ baseURL, apiKey: 'oauth-placeholder', headers: chatgptSessionHeaders(deps), fetch: heardFetch(customFetch) })
+        .responses(modelId));
 
-      return wrapLanguageModel({ model, middleware: statelessResponses(true) });
+      return wrapLanguageModel({ model, middleware: [statelessResponses(true), CODEX_INSTRUCTIONS] });
     },
   };
 }
@@ -282,87 +291,18 @@ function parseCodexModels(input: { body: unknown }): ModelInfo[] {
 
 const CODEX_DEFAULT_INSTRUCTIONS = 'You are Kinu, a helpful coding agent.';
 
-export function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestInit | undefined {
-  if (!init) return init;
-  const serializedBody = v.safeParse(v.string(), init.body);
+/** chatgpt.com's Codex route takes the system prompt only as `instructions`, and refuses a call without them. */
+const CODEX_INSTRUCTIONS: LanguageModelMiddleware = {
+  specificationVersion: 'v4',
+  transformParams: async ({ params }) => {
+    if (nonEmptyString({ value: params.providerOptions?.openai?.instructions })) return params;
+    const system = params.prompt.flatMap((message) => (message.role === 'system' ? [message.content.trim()] : []));
+    const instructions = system.filter(Boolean).join('\n\n') || CODEX_DEFAULT_INSTRUCTIONS;
 
-  if (!serializedBody.success) return init;
-
-  return settleSync(Effect.map(decodedBody(serializedBody.output), (decoded) => (decoded === null ? init : withInstructions(init, decoded))));
-}
-
-function decodedBody(text: string): Effect.Effect<JsonValue | null> {
-  return Effect.try({ try: (): JsonValue => v.parse(JsonValueSchema, JSON.parse(text)), catch: (cause) => ({ cause }) }).pipe(
-    Effect.catchIf((failed) => classify(failed) === 'malformed-input', () => Effect.succeed(null)),
-    Effect.catch((failed) => Effect.die(failed.cause)),
-  );
-}
-
-function withInstructions(init: RequestInit, decoded: JsonValue): RequestInit {
-  const parsedBody = v.safeParse(JsonObjectSchema, decoded);
-
-  if (!parsedBody.success) return init;
-  const body = parsedBody.output;
-
-  if (nonEmptyString({ value: body.instructions })) return init;
-
-  const parsedInput = v.safeParse(JsonArraySchema, body.input);
-
-  if (!parsedInput.success) {
     return {
-      ...init,
-      body: JSON.stringify({ ...body, instructions: CODEX_DEFAULT_INSTRUCTIONS }),
+      ...params,
+      prompt: params.prompt.filter((message) => message.role !== 'system'),
+      providerOptions: { ...params.providerOptions, openai: { ...params.providerOptions?.openai, instructions } },
     };
-  }
-
-  const input = parsedInput.output;
-  const instructionParts: string[] = [];
-  const remainingInput: JsonValue[] = [];
-
-  for (const item of input) {
-    const instruction = parseInstructionInputItem(item);
-
-    if (instruction) {
-      const text = contentToText(instruction.content);
-
-      if (text) instructionParts.push(text);
-    } else {
-      remainingInput.push(item);
-    }
-  }
-
-  const instructions = instructionParts.join('\n\n').trim() || CODEX_DEFAULT_INSTRUCTIONS;
-
-  return {
-    ...init,
-    body: JSON.stringify({ ...body, instructions, input: remainingInput }),
-  };
-}
-
-const InstructionInputItemSchema = v.object({
-  role: v.picklist(['developer', 'system']),
-  content: JsonValueSchema,
-});
-
-function parseInstructionInputItem(value: JsonValue): v.InferOutput<typeof InstructionInputItemSchema> | null {
-  const parsed = v.safeParse(InstructionInputItemSchema, value);
-
-  return parsed.success ? parsed.output : null;
-}
-
-const InstructionContentPartsSchema = v.array(v.object({ text: v.optional(v.string()) }));
-
-function contentToText(content: JsonValue): string {
-  const text = v.safeParse(v.string(), content);
-
-  if (text.success) return text.output.trim();
-  const parts = v.safeParse(InstructionContentPartsSchema, content);
-
-  if (!parts.success) return '';
-
-  return parts.output
-    .map((part) => part.text ?? '')
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-}
+  },
+};

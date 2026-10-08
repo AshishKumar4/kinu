@@ -363,13 +363,14 @@ export class SubordinateRosterStore {
     );
   }
 
-  /** End durable activity independently of report delivery; an explicit answer or block stands. */
+  /** End durable activity independently of report delivery; an explicit answer or block stands. A turn its parent
+   *  awaits nothing from (no current task: the owner's own chat) ends idle however it ended: a block would wait on no one. */
   finishTurn(name: string, ending: TaskTurnEnding, now: number): boolean {
     const entry = this.get(name);
 
     // Task agents may owe a later turn's answer while their own helpers or inbox still hold work.
     if (entry === null || entry.lifetime !== 'durable' || entry.status !== 'working') return false;
-    this.applyReport(name, ending === 'answered' ? 'progress' : 'blocked', 'turn_end', now);
+    this.applyReport(name, ending === 'answered' || entry.currentTask === null ? 'progress' : 'blocked', 'turn_end', now);
 
     return true;
   }

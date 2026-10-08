@@ -1,18 +1,19 @@
 /**
- * Eviction recovery through a real `OrchestratorAgent`: the alarm's housekeeping pass hands a left-behind fiber row to `onFiberRecovered`.
- * Defends: recovery that never releases its row and re-enters on every boot. Vendor half: `tests/workerd/do-eviction-recovery.test.ts`.
+ * Eviction recovery through a real `OrchestratorAgent`: a lane's `fibers` row outlives the activation running it, and
+ * the next activation re-drives it from that row. Defends: a lane lost to a reset that nothing re-drives, and recovery
+ * that holds the start. Vendor half: `tests/workerd/do-eviction-recovery.test.ts`.
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import {
   ActorSession, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, PROGRAMMATIC_MESSAGE_ID_PREFIX,
-  TERMINAL_EFFECT_RETRY_CEILING_MS, type JsonValue,
+  TERMINAL_EFFECT_RETRY_CEILING_MS,
 } from '@kinu.run/core';
-import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import {
   catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, jobsOver, orchestratorHarness,
-  alarmDue, driveUntil, reactivateOrchestratorHarness, until, workspaceMainActor,
-  type ActorHarness, type HarnessOrchestratorAgent, storedChat } from './helpers/actor-harness';
-import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
+  alarmDue, driveUntil, reactivateOrchestratorHarness, seedOrphanFiber, until, workspaceMainActor,
+  type ActorHarness, type HarnessOrchestratorAgent, storedChat,
+} from './helpers/actor-harness';
+import { answeringGateway, chatCompletion, openingOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { lifecycleIncident } from '../src/sandbox-lifecycle';
 // Relative path, not `@kinu.run/devbox`: the barrel reaches `cloudflare:workers`, which does not exist under bun.
@@ -25,27 +26,16 @@ type Harness = ActorHarness<HarnessOrchestratorAgent>;
 
 afterEach(() => { setSystemTime(); });
 
-function interrupted(
-  name: string, snapshot: JsonValue,
-): FiberRecoveryContext {
-  return {
-    id: `fiber-${name}`,
-    name,
-    snapshot,
-    createdAt: Date.now() - 60_000,
-    recoveryReason: 'interrupted',
-  };
-}
+/** The next activation over the same rows, its start returned, with nothing else arriving. */
+async function nextActivation(harness: Harness, gateway?: StubbedAiBinding): Promise<Harness> {
+  const next = await reactivateOrchestratorHarness(harness.db, undefined, gateway === undefined ? undefined : {
+    world: { aiGateway: gateway },
+    beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
+  });
 
-/** Refuses a `void` hook result: it leaves a managed row `interrupted` forever. */
-async function recover(
-  agent: HarnessOrchestratorAgent, ctx: FiberRecoveryContext,
-): Promise<FiberRecoveryResult> {
-  const result = await agent.harnessRecoverFiber(ctx);
+  await next.started;
 
-  if (result === undefined) throw new Error(`onFiberRecovered returned nothing for "${ctx.name}"`);
-
-  return result;
+  return next;
 }
 
 /** The programmatic turns the workspace ran, as its conversation stores them, once the queue drains. */
@@ -67,112 +57,80 @@ const ADVISOR_REPLY = JSON.stringify({
   class: 'wrong-work',
 });
 
-interface Recovering {
-  readonly result: Promise<FiberRecoveryResult>;
-  /** Flipped in the promise's own continuation, so ordering against the lane needs no clock. */
-  readonly answered: () => boolean;
-}
-
-function recovering(agent: HarnessOrchestratorAgent, ctx: FiberRecoveryContext): Recovering {
-  let answered = false;
-
-  const result = (async () => {
-    const value = await agent.harnessRecoverFiber(ctx);
-    answered = true;
-
-    if (value === undefined) throw new Error(`onFiberRecovered returned nothing for "${ctx.name}"`);
-
-    return value;
-  })();
-
-  return { result, answered: () => answered };
-}
-
 describe('a background job whose executor died', () => {
-  test('the recovery hands the re-drive to a carrier and terminalizes the old fiber', async () => {
-    const { agent, db } = orchestratorHarness();
-    jobsOver(db).create({
+  test('the next activation re-drives it from its lane row, and takes the row', async () => {
+    const harness = orchestratorHarness();
+    await harness.started;
+    jobsOver(harness.db).create({
       id: 'bgjob-evicted', kind: 'search', workMode: 'build',
       input: JSON.stringify({ task: 'keep going' }), now: Date.now(), label: 'keep going',
     });
+    const orphan = seedOrphanFiber(harness.db, `${BACKGROUND_FIBER_PREFIX}search`, { phase: 'running', jobId: 'bgjob-evicted', kind: 'search' });
 
-    expect(jobsOver(db).get('bgjob-evicted')?.status).toBe('running');
+    const next = await nextActivation(harness);
+    await joinHarnessFibers();
 
-    const result = await recover(agent, interrupted(
-      `${BACKGROUND_FIBER_PREFIX}search`,
-      { phase: 'running', jobId: 'bgjob-evicted', kind: 'search' },
-    ));
-
-    // `completed` means the obligation has a carrier, not that the job ran: a wake resolves only when its queued turn ends.
-    expect(result.status).toBe('completed');
-    expect(result).toMatchObject({ snapshot: { lane: 'bg:search', redrive: 'background-job' } });
-    // `toContain`: re-driving a running job also opens the job lane's own fiber.
-    expect(agent.harnessOpenFiberRows().map((row) => row.name)).toContain('bg:search');
-
-    await agent.harnessJoinDetachedFibers();
-    expect(agent.harnessOpenFiberRows()).toEqual([]);
+    expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).not.toContain(orphan);
+    expect(jobsOver(harness.db).get('bgjob-evicted')?.resumeAttempts).toBe(1);
   });
 
-  /** A wake delivered on an idle agent resolves only when its turn ends; the hook must answer without awaiting it inside `blockConcurrencyWhile`. */
-  test("a settled job's wake is delivered DETACHED, not awaited by the hook", async () => {
+  /** A settled job's lane row is the only record that its wake never landed; the wake resolves when its turn ends. */
+  test("a settled job's lost wake is delivered by the next activation, and its start does not wait for the turn", async () => {
     const queued = Promise.withResolvers<void>();
     const arrived = Promise.withResolvers<void>();
 
     // The wake's turn runs on the model the platform gateway serves, and holds there until released.
-    const { agent, db } = gatewayWorkspace(stubAiBinding(async (run) => {
+    const gateway = stubAiBinding(async (run) => {
       arrived.resolve();
       await queued.promise;
 
       return chatCompletion(run, 'Read the answer.');
-    }));
+    });
 
-    const jobs = jobsOver(db);
+    const harness = gatewayWorkspace(gateway);
+    await harness.started;
+    const jobs = jobsOver(harness.db);
     jobs.create({
       id: 'bgjob-settled', kind: 'search', workMode: 'build',
       input: JSON.stringify({ task: 'done already' }), now: Date.now(), label: 'done already',
     });
     jobs.settle('bgjob-settled', jobs.epochOf('bgjob-settled') ?? 0, '"answer"', Date.now());
+    const orphan = seedOrphanFiber(harness.db, `${BACKGROUND_FIBER_PREFIX}search`, { phase: 'running', jobId: 'bgjob-settled', kind: 'search' });
 
-    const recovery = recovering(agent, interrupted(
-      `${BACKGROUND_FIBER_PREFIX}search`,
-      { phase: 'running', jobId: 'bgjob-settled', kind: 'search' },
-    ));
-
+    const next = await nextActivation(harness, gateway);
     await arrived.promise;
-    expect(recovery.answered()).toBe(true);
-    expect(await recovery.result).toMatchObject({
-      status: 'completed', snapshot: { redrive: 'background-job' },
-    });
+
+    // Still the wake's carrier while its turn runs: a reset now leaves the next activation the same row.
+    expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).toContain(orphan);
 
     queued.resolve();
-    await agent.harnessJoinDetachedFibers();
+    await joinHarnessFibers();
     expect(jobs.get('bgjob-settled')?.status).toBe('completed');
+    expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).not.toContain(orphan);
   });
 });
 
 describe('the post-turn lanes', () => {
-  test('the evolution lane leaves a durable row and hands the re-entry to a carrier', async () => {
-    const { agent, db } = gatewayWorkspace(answeringGateway('Done.'));
-    // The first turn creates the platform's fiber table; the second's lanes run under the recorder.
-    await catalogTurn(agent, 'Tidy the notes.');
-    db.run('CREATE TABLE fiber_starts (name TEXT NOT NULL)');
-    db.run('CREATE TRIGGER record_fiber_start AFTER INSERT ON cf_agents_runs BEGIN INSERT INTO fiber_starts VALUES (NEW.name); END');
-    await catalogTurn(agent, 'Tidy them again.');
-    await agent.harnessJoinDetachedFibers();
+  test('the evolution lane leaves a row, and the next activation runs the lane its row names', async () => {
+    const gateway = answeringGateway('Done.');
+    const harness = gatewayWorkspace(gateway);
+    harness.db.run('CREATE TABLE lane_starts (name TEXT NOT NULL)');
+    harness.db.run('CREATE TRIGGER record_lane_start AFTER INSERT ON fibers BEGIN INSERT INTO lane_starts VALUES (NEW.name); END');
+    const started = (): string[] => harness.db.query<{ name: string }, []>('SELECT name FROM lane_starts').all().map((row) => row.name);
 
-    // `runFiber` writes the row before the body runs; a bare `keepAliveWhile` leaves nothing for a later activation.
-    expect(db.query<{ name: string }, []>('SELECT name FROM fiber_starts').all().map((row) => row.name))
-      .toContain('evolution:settle');
+    await catalogTurn(harness.agent, 'Tidy the notes.');
+    await joinHarnessFibers();
+    expect(started()).toContain('evolution:settle');
 
-    const result = await recover(agent, interrupted('evolution:settle', { lane: 'evolution:settle' }));
+    const before = started().length;
+    const orphan = seedOrphanFiber(harness.db, 'evolution:settle', null);
+    const next = await nextActivation(harness, gateway);
+    await joinHarnessFibers();
 
-    // Only the durable half re-enters here: `settleTracked` joins promises this activation never dispatched,
-    // and the session pass spends model calls, too heavy for a hook awaited inside the init gate.
-    expect(result).toEqual({
-      status: 'completed',
-      snapshot: { lane: 'evolution:settle', redrive: 'session-evolution' },
-    });
-    await agent.harnessJoinDetachedFibers();
+    // The seed itself, then the lane the activation ran in its place; both rows are gone once it settles.
+    expect(started().slice(before)).toEqual(['evolution:settle', 'evolution:settle']);
+    expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).not.toContain(orphan);
+    expect(next.agent.harnessOpenFiberRows()).toEqual([]);
   });
 
   /** The advisor's hire is its own terminal row: the snapshot is its input, so a fresh activation replays it. */
@@ -222,7 +180,7 @@ describe('the post-turn lanes', () => {
   const notes = (harness: Harness): number => count(harness, "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'");
 
   const advisorsWorking = (harness: Harness): number =>
-    count(harness, "SELECT COUNT(*) AS n FROM actor_subordinates WHERE name LIKE 'ask-advisor-%' AND status = 'working'");
+    count(harness, "SELECT COUNT(*) AS n FROM actor_subordinates WHERE (name = 'ask-advisor' OR name LIKE 'ask-advisor-%') AND status = 'working'");
 
   test('a hire cut before it ran is replayed by the next activation and lands exactly one note', async () => {
     const { harness, calls, restart } = await cutReview();
@@ -324,34 +282,40 @@ describe('an advisor answer handed to a turn', () => {
   });
 });
 
-describe('a fiber nobody defined a recovery for', () => {
-  test('is classified terminally instead of being re-offered until the age bound', async () => {
-    const { agent } = orchestratorHarness();
+describe('a fork-interrupted notice', () => {
+  /** The reconcile that minted it retired its forks, so the row is the notice's only carrier until the inbox takes it. */
+  test('one a dead activation was delivering is delivered by the next one\'s wake', async () => {
+    const asked: string[] = [];
 
-    const result = await recover(agent, interrupted('some:future-lane', { anything: true }));
+    const harness = gatewayWorkspace(stubAiBinding((run) => {
+      asked.push(openingOf(run));
 
-    // The SDK releases an interrupted row when this hook returns and retains it when it throws,
-    // so the terminal error is the mechanism, not just the wording.
-    expect(result.status).toBe('error');
-    expect(String(result.status === 'error' ? result.error : '')).toContain('some:future-lane');
+      return chatCompletion(run, 'Noted.');
+    }));
+
+    await harness.started;
+    const left = Date.now() - 60_000;
+
+    harness.db.query(
+      `INSERT INTO fork_notices (notice_key, signal, attempts, due_at, started_at) VALUES ('fork:dead', ?, 0, ?, ?)`,
+    ).run(JSON.stringify({ kind: 'fork_interrupted', text: 'Your forks stopped with the last process.' }), left, left);
+
+    await harness.agent.terminalRetryPass();
+    await until(() => harness.db.query('SELECT 1 FROM fork_notices').all().length === 0, 'the inbox took the notice');
+
+    expect(asked.filter((opening) => opening.includes('Your forks stopped with the last process.'))).toHaveLength(1);
   });
+});
 
-  test('the scan releases the row it recovered, and the carrier retires its own', async () => {
-    const { agent } = orchestratorHarness();
+describe('a lane row no recovery names', () => {
+  test('is taken by the next activation rather than kept forever', async () => {
+    const harness = orchestratorHarness();
+    await harness.started;
+    const orphan = seedOrphanFiber(harness.db, 'some:future-lane', { anything: true });
 
-    // Seeded rather than run: a fiber running in this process deletes its own row on the way out.
-    agent.harnessSeedOrphanFiber('evolution:settle', { lane: 'evolution:settle' });
-    expect(agent.harnessOpenFiberRows()).toHaveLength(1);
+    const next = await nextActivation(harness);
 
-    await agent.harnessAlarmHousekeeping();
-
-    // The recovered row is released and the carrier's row stands in its place.
-    expect(agent.harnessOpenFiberRows().map((row) => row.name)).toEqual(['evolution:settle']);
-    await agent.harnessJoinDetachedFibers();
-    expect(agent.harnessOpenFiberRows()).toEqual([]);
-
-    await agent.harnessAlarmHousekeeping();
-    expect(agent.harnessOpenFiberRows()).toEqual([]);
+    expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).not.toContain(orphan);
   });
 });
 
@@ -513,9 +477,10 @@ describe("a workspace's job settles are not its box's use", () => {
     for (let n = 0; n < 10; n++) {
       const jobId = `bgjob-run-${String(n)}`;
       jobs.create({ id: jobId, kind: 'run', workMode: 'build', input: JSON.stringify({ code: 'return 1' }), now: Date.now(), label: 'run' });
-      await recover(agent, interrupted(`${BACKGROUND_FIBER_PREFIX}run`, { phase: 'running', jobId, kind: 'run' }));
+      seedOrphanFiber(db, `${BACKGROUND_FIBER_PREFIX}run`, { phase: 'running', jobId, kind: 'run' });
     }
 
+    await agent.activateActor();
     await agent.harnessJoinDetachedFibers();
 
     expect(jobs.listRunning(20).total).toBe(0);

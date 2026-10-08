@@ -11,6 +11,7 @@ import {
   cloudflareReconnectPath, listAvailableModels,
   type ModelMenu, type ModelMenuEntry, type ModelTestResult, type ProviderFailure,
 } from "../lib/user-api";
+import { connectCloudflareInHelper } from "../lib/connect-window";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
 import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { ChatGptPlanUsage } from "./account/ChatGptConnect";
@@ -298,6 +299,7 @@ export function ConnectedModelPicker({
     return (
       <a
         href={cloudflareReconnectPath(window.location.pathname)}
+        onClick={(event) => { if (connectCloudflareInHelper(window.location.pathname)) event.preventDefault(); }}
         className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 p-t-status hover:opacity-80"
         title="Reconnect Cloudflare with Workers AI permissions"
       >

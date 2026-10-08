@@ -40,7 +40,7 @@ import type {
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
 } from './slate-durability-shapes';
-import type { JsonValue, SlateCallResult } from '@kinu.run/core';
+import type { JsonValue, SlateSurfaceResult } from '@kinu.run/core';
 
 interface SlateActorRootRpc extends Rpc.DurableObjectBranded {
   craftedSlate(): Promise<string>;
@@ -193,11 +193,12 @@ interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
-  setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
+  setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript, ownerUserId?: string): Promise<void>;
+  /** The owner deletes the workspace while its hire's turn is parked; the alarm the deleted object holds. */
+  deleteWhileChildWorks(workspace: string, ownerUserId: string): Promise<{ readonly alarm: number | null }>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
   modelSaw(workspace: string, texts: readonly string[]): Promise<void>;
-  restartAlarm(workspace: string, exclude: string): Promise<import('./hire-shapes').JobWatchState>;
   callerObserved(): Promise<void>;
   openHire(workspace: string, prompt: string): Promise<void>;
   reenter(workspace: string): Promise<void>;
@@ -214,7 +215,6 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   outrunJobWindow(workspace: string): Promise<void>;
   openJobGate(workspace: string): Promise<void>;
   redeliverJobWake(workspace: string, jobId: string): Promise<void>;
-  ageJobFiber(workspace: string, jobId: string): Promise<number>;
   jobWatchState(workspace: string): Promise<import('./hire-shapes').JobWatchState>;
   jobRows(workspace: string): Promise<import('./hire-shapes').JobRow[]>;
 }
@@ -252,13 +252,14 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
+  probeUnderLoad(workspace: string, burns: number, iterations: number): Promise<import('./agent-facet-shapes').ProbeContention>;
   deletedWorkspaceFacet(workspace: string): Promise<{ readonly before: string[]; readonly after: string[] }>;
   onePlane(workspace: string, agent: string): Promise<OnePlaneObservation>;
   swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
   craftedFromNode(workspace: string): Promise<CraftedFromNodeObservation>;
   agentWorkspaceAnswer(workspace: string, agent: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
   agentWorkspaceListing(workspace: string, agent: string): Promise<RelayedAnswer<readonly { readonly key: string; readonly kind: string }[]>>;
-  slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateCallResult>>;
+  slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateSurfaceResult>>;
   programHostAnswer(workspace: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
   swarmJobNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
   jobWindowArmed(workspace: string, count: number): Promise<void>;
@@ -296,7 +297,10 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
     workspace: string; owner: string; id: string; body: string; preferredPort?: number;
   }): Promise<ServedSlate>;
   portReservations(workspace: string): Promise<DurabilityReservation[]>;
+  previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }>;
+  slateBuild(input: { workspace: string; owner: string; phase: 'good' | 'broken' | 'served' | 'fixed' }): Promise<{ wrote: string | null; preview: string; serves: string | null; told: string[] }>;
   programOnWhiteboard(input: { workspace: string; owner: string; program: string }): Promise<string>;
+  craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }>;
   forgetActivation(workspace: string): Promise<void>;
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
   drivePreview(url: string): Promise<PreviewAnswer>;
@@ -306,6 +310,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   pictureKeys(workspace: string): Promise<string[]>;
   openWorkspace(workspace: string, owner: string): Promise<void>;
   runInWorkspace(workspace: string, command: string): Promise<{ exitCode: number; stdout: string }>;
+  executorOutputs(workspace: string): Promise<Array<{ stdout: string; stdout_len: number }>>;
   readWorkspaceFile(workspace: string, path: string): Promise<string | null>;
   driveTerminal(workspace: string, line: string, until: string): Promise<
     | { ok: true; frames: string[]; output: string }
@@ -341,6 +346,8 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   revoke(share: string): Promise<ProbeAnswer>;
   stopped(): Promise<boolean>;
   drive(session: string): Promise<string>;
+  typed(say: string): Promise<string>;
+  driveShared(session: string, approved: readonly string[], claim: { userId: string | null; source: string; consented: boolean }): Promise<{ answer: string; dialed: number }>;
 }
 
 

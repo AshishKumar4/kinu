@@ -53,11 +53,14 @@ export const LATEST_RESET_KEY = 'resets/latest.json';
 /** The words a production reset is confirmed with. */
 export const PRODUCTION_CONFIRMATION = 'reset production';
 
+/** It names its own version on every answer, as the product does (`x-kinu-version`), so a deploy's smoke test can tell
+ *  the placeholder still answering at an edge from the build it deployed. */
 const PLACEHOLDER = `const notice = { ok: false, resetting: true, build: null, message: 'Kinu is being reset to a fresh deployment. Back in a few minutes.' };
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const health = new URL(request.url).pathname === '/api/health';
-    return new Response(JSON.stringify(notice), { status: health ? 200 : 503, headers: { 'content-type': 'application/json', 'retry-after': '300' } });
+    const headers = { 'content-type': 'application/json', 'retry-after': '300', 'x-kinu-version': env.CF_VERSION_METADATA.id };
+    return new Response(JSON.stringify(notice), { status: health ? 200 : 503, headers });
   },
 };
 `;
@@ -100,6 +103,9 @@ export interface ResetTarget {
   stampless: (attempt: number) => Promise<boolean>;
   /** Drops every eval bearer this machine keeps for the origin: each named a session the reset deleted. */
   forgetSessions: () => void;
+  /** Takes eval-service's credentials before a reset deletes them, or checks the ones a resumed reset owes its restore
+   *  (scripts/credential-checkpoint.ts); throws, refusing the reset, when it cannot. */
+  checkpoint: (step: 'capture' | 'owed') => void;
 }
 
 export interface WipeInput {
@@ -186,6 +192,7 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
         compatibility_date: config.compatibility_date,
         workers_dev: false,
         routes: config.routes,
+        version_metadata: { binding: 'CF_VERSION_METADATA' },
         exports: Object.fromEntries(classes.map((name) => [name, { type: 'durable-object', state: 'deleted' }])),
       }));
 
@@ -213,6 +220,14 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
     },
     forgetSessions: () => {
       rmSync(dirname(evalSessionPath(site, undefined)), { recursive: true, force: true });
+    },
+    checkpoint: (step) => {
+      const taken = Bun.spawnSync([process.execPath, join(import.meta.dir, 'credential-checkpoint.ts'), step, site], { stdout: 'inherit', stderr: 'inherit' });
+
+      if (taken.exitCode !== 0) {
+        throw new Error(step === 'capture' ? 'eval-service\'s credentials were not captured, as the line above says; nothing was deleted'
+          : 'the checkpoint this reset owes its restore is not intact, as the line above says; remove it to finish without it');
+      }
     },
   };
 }
@@ -243,8 +258,8 @@ export function pendingReset(worker: string, live: Serving, latest: Reset | unde
   return latest.placeholderVersion === '' || latest.placeholderVersion === live.versionId ? latest : undefined;
 }
 
-function resumed(worker: string, live: Serving, latest: Reset | undefined): Reset {
-  const pending = pendingReset(worker, live, latest);
+function resumed(worker: string, live: Serving, target: ResetTarget): Reset {
+  const pending = pendingReset(worker, live, target.latest());
 
   if (pending === undefined) {
     throw new Error(`version ${live.versionId} of ${worker} binds no class, as a reset placeholder does, and no reset record names it: `
@@ -252,6 +267,7 @@ function resumed(worker: string, live: Serving, latest: Reset | undefined): Rese
   }
 
   console.log(`reset: ${worker} serves the placeholder of ${pending.tag}, whose record is ${pending.state ?? 'done'}; finishing it`);
+  target.checkpoint('owed');
 
   return { ...pending, placeholderVersion: live.versionId };
 }
@@ -273,6 +289,7 @@ function begin(input: WipeInput, live: Serving): Reset {
   const refused = credentialRefusal(applications, chains, input.restToken);
 
   if (refused !== undefined) throw new Error(refused);
+  target.checkpoint('capture');
   const tag = `reset-${new Date().toISOString().replace(/[-:]|\.\d+/gu, '')}`;
 
   const started: Reset = {
@@ -359,7 +376,7 @@ export async function wipe(input: WipeInput): Promise<Reset> {
   origin(input.config);
   const live = input.target.serving();
 
-  return finish(input, live.bound.size === 0 ? resumed(worker, live, input.target.latest()) : begin(input, live));
+  return finish(input, live.bound.size === 0 ? resumed(worker, live, input.target) : begin(input, live));
 }
 
 /** Asks on the terminal, and only there: piped input is no person's answer. */

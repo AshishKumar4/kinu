@@ -59,7 +59,7 @@ export class EvictionProbeDO extends Agent<Cloudflare.Env> {
     });
   }
 
-  /** The shape `ActorAgent.onFiberRecovered` returns for every lane it recognises. */
+  /** The vendor half: what the platform hands a recovery hook, which Kinu no longer overrides (D11). */
   override async onFiberRecovered(ctx: {
     id: string; name: string; snapshot: unknown; createdAt: number;
   }): Promise<{ status: 'completed'; snapshot: unknown }> {

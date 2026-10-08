@@ -21,6 +21,7 @@ import {
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
+  ReasoningEffortSchema,
   type WorkspaceSpend,
   AccountSpendSchema,
   AccountUsageSchema,
@@ -43,8 +44,6 @@ export interface CloudWebhookTriggerInput {
   accepted_content_type?: string;
   rate_limit_per_min?: number;
 }
-
-const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
 
 const CliAuthStartSchema = v.object({
   deviceToken: v.string(), userCode: v.string(), verificationUrl: v.string(),

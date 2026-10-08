@@ -1,0 +1,2 @@
+- Keep responses short and concise.
+- Lead with the result, then what you changed or found and how you checked it. Say each thing once.

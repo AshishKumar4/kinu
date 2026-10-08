@@ -4418,6 +4418,67 @@ tree for it. Job `20261007220730-765aa172` returned `a3146b2f…`,
 335,856,114 bytes, and a new environment (`ccdf65f8…`, job
 `20261007220922-089ccf45`) built the same bytes again.
 
+D79. A call that meets a box waiting for its base snapshot is held, not
+refused (2026-10-08). After the reset deploy of `f69a2671a` to staging, the
+golden was being rebuilt, and all 600 execs of the first-run case
+`sandbox-exec-output` were refused `unavailable` with "the base snapshot is
+being rebuilt (about 30 s); the box starts when it is ready": the agent got
+a refusal to retry for a wait D66 already knows the end of. The box starts by
+itself once the build verifies, so the refusal was the wrong contract.
+
+The golden object records the step its build is at (`building` in its
+state: starting the base image, reading the base, fetching, installing and
+checking the tools, snapshotting the base), and its pending answer to a box
+carries `building: { step }` while a build is under way, `step` null before
+it begins; after a failed build it carries the build's words and no
+`building`. The box keeps that answer and returns it as its readiness. The
+box still arms no clock. The caller holds: the cf-backend sandbox lane
+(`readinessPastBase` in `sandbox-exec-lane.ts`) asks again every second while
+the readiness carries `building`, and its bound is the build's progress,
+never a total. Each new step re-arms 180 s, which is past the builder's own
+120 s give-up on its longest step and every fresh install measured in D66
+(31.2 s at most). A build that names no new step for 180 s is refused in the
+box's words with the step it stalled at; a failed build and every other
+pending answer are refused at once, as before; the call's own stop ends the
+hold. A notice the golden object fails to deliver is covered too: each ask
+asks the golden again, which answers `ready` once one is built.
+`cf-backend/tests/unit-sandbox-base-wait.test.ts` is red on the refusal and
+green held; `devbox/tests/golden.test.ts` and `golden-start.test.ts` pin the
+step the golden answers and the box passes on.
+
+D80. Opening the desktop shows a desktop: a background, a panel with a
+terminal and a browser to launch, and the windows open (2026-10-08). On
+production (`beaf28a46`), the owner opened Env → Desktop on a fresh box and
+saw a cursor on black. Nothing had failed: D70's start script brought up
+Xkasmvnc and a bare openbox, the tools held no panel and no terminal, and
+openbox's only way in is its right-click root menu, whose terminal entry had
+nothing to run. The tier's desktop check could not see it: it launched its own
+kiosk page first and clicked that.
+
+The tools now carry tint2, xterm, `x11-xserver-utils` and
+`fonts-dejavu-core` (D66: the golden installs the tarball's list, so nothing
+is installed at open). The start script sets the root background and starts
+tint2 after openbox, writing the panel's configuration and its two launchers
+as it writes Chromium's flags; it waits for the panel's window, so the first
+frame shows it. tint2 resolves a background id as it reads it, so the
+backgrounds come first: named before they are defined, the panel took the
+transparent background 0 and drew black (probe on armada, trixie with the
+tools' packages, job `20261008203914-30819315`). The launchers sit at fixed
+centres (24 and 60 px, 18 px above the foot) because the padding fixes them.
+
+The tier's desktop step is now what a person does: a box no other contract
+touched, its desktop opened through the product's client and routes with
+nothing launched; within 30 s of the client's first frame the screen shows
+the background a quarter in from its corner and the panel at its foot, and a
+click on each launcher opens an xterm and a Chromium window in the box. Not
+the screen's middle: X starts its pointer there, and the client draws it,
+lightening the pixel by a quarter on either session. The foreign-socket
+refusal stays. Red on the desktop production runs (run
+`dc202610082057400e72f`: `{"desktop":[0,0,0],"panel":[0,0,0]}` 30 s after the
+first frame, the black screen); green on this one (`dc2026100820574061df2`:
+the desktop step in 5.9 s, every other contract green, cleanup verified). The tarball is `5046244c…`, 349,830,567
+bytes (armada job `20261008204556-b92029c0`), 14 MB above D78's.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

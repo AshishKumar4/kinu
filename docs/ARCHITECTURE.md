@@ -287,8 +287,8 @@ appends a fresh `<dynamic_context>` block only when its render changes and
 freezes earlier blocks to preserve cache breakpoints; `dropSuperseded`, the
 compaction first rung, is the only unfreezer. Step pruning (`step-prune.ts`)
 shrinks old tool outputs near `stepContextLimit`, the resolved model window less
-`outputReserveTokens`. `cache-breakpoints.ts` places Anthropic `cache_control`
-and OpenAI `prompt_cache_key`. The usage-repair middleware
+`outputReserveTokens`. `cache-breakpoints.ts` places Anthropic `cache_control`;
+no request carries a `prompt_cache_key`. The usage-repair middleware
 (`packages/core/src/providers/middleware/usage-repair.ts`) restores the
 `cached_tokens` Cloudflare AI zeroes or drops in its duplicate final usage report.
 [EXTENSIONS.md](./EXTENSIONS.md) has the per-turn hook contract.
@@ -383,20 +383,31 @@ token, which exists only for a workspace this user's registry issued one to and
 dies with it, so there is nothing to spoof. A second in-SQL check covers server
 membership plus `allowed_tools`.
 
-Connecting and reading descriptors are separate jobs. `userMcp_warmConnections`
-owns connecting and always runs off the turn. Two triggers reach it: the first
-`/api/user` hit per isolate, under the Worker's `ctx.waitUntil`, which covers
-the first interactive turn; and every settled turn, from
-`ActorAgent.warmUserMcpInBackground` inside the `improvement_lanes` terminal
-effect. The second exists because the first is keyed per isolate: an
-alarm-woken, email-woken, or peer-woken workspace never trips it, and an evicted
-UserDO has already spent it. `userMcp_toolDescriptors` runs on the turn's
-critical path, so it starts no network work and waits for none. It reads the
-current connection snapshot and returns. A configured server that is not
-connected yet is reported through `unavailable`, and the next turn installs it
-once the connection completes. `userMcp_callTool` connects on explicit use. One
-autonomous or post-eviction turn may lack MCP tools; its settle warms the next
-one, and a failed warm is named and retried by the following settle.
+Connecting and reading descriptors are separate jobs. The UserDO's `onStart`
+reconciles the SDK's server rows with `user_mcp_servers` (orphans removed,
+credentialed rows moved onto the closure transport) and starts every dial,
+awaiting none (`UserMcpServers.start`). The object hibernates within seconds of
+going idle, so this runs often, and every MCP request joins that one activation
+instead of starting its own. `userMcp_warmConnections` waits for the dials and
+reads tool lists, always off the turn. Two triggers reach it: the first
+`/api/user` hit per isolate, under the Worker's `ctx.waitUntil`, and every
+settled turn, from `ActorAgent.warmUserMcpInBackground`. `userMcp_toolDescriptors`
+runs on the turn's critical path, so it starts no network work and waits for
+none. It reads the current connection snapshot and returns. A configured server
+that is not connected yet is reported through `unavailable`, and the next turn
+installs it once the connection completes. `userMcp_callTool` makes its server
+callable first: it waits for a dial still in flight, redials a failed or closed
+connection once, and refuses with the connection's state otherwise. The SDK's
+client refuses a request on an unconnected transport before sending it, so the
+redial repeats nothing the server saw.
+
+Every change of a connection's observed state is logged as
+`mcp.connection_changed` (`serverId`, `from`, `to`, the event that prompted the
+look). Every failed call is logged as `mcp.call_failed` with a `kind` decided by
+error class (`classifyMcpFailure`): `auth`, `not_connected`,
+`connection_closed`, `timeout`, `http`, `server_error`, `protocol`,
+`send_failed`, `cancelled`, `refused`, or `unknown`; a server's own `isError`
+answer is `tool_error`.
 
 A server name addresses its tools (`mcp_<server>_<tool>`), so names are unique.
 `userMcp_add` and `userMcp_update` seal and validate first, then claim the
@@ -603,7 +614,7 @@ proved-in-abstract-model entries and 90 by-construction witnesses against 46
 requirements, with no `sorry` (measured 2026-09-09 by
 `lean/check-traceability.mjs`). Axiom reports use only Lean's three kernel
 axioms. One separate SQLite FTS5 assumption is documented and enrolled. CI
-(`.github/workflows/lean-verify.yml`, `scripts/verify-lean.sh`) checks
+(the ladder's CI row `bun run verify:lean`, `scripts/verify-lean.sh`) checks
 compilation, negative consistency, axiom closure, and
 requirement-to-proof-to-source traceability. These are checked statements about
 the models, not a proof that the deployed TypeScript refines them. See

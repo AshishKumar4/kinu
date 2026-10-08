@@ -349,6 +349,7 @@ const ORCHESTRATOR_METHODS = [
   'supervisorOp',
   'agentWorkspace',
   'workspaceTitle',
+  'activations',
   // Eval-only. Never `@callable`; the route admits only the eval-service identity.
   'evalAbortActivation',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];
@@ -361,8 +362,8 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...ORCHESTRATOR_METHODS,
 ];
 
-/** Never gated: `destroyAgent` must work when start throws. */
-const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'evalAbortActivation']);
+/** Never gated: a deletion must work when start throws, and must not start a workspace to delete it. */
+const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'quietForDeletion', 'evalAbortActivation']);
 
 export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [
   ...ACTOR_AGENT_RPC_SURFACE,

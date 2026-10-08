@@ -114,65 +114,14 @@
    out as a floating four-sided box instead of a tab.
    ════════════════════════════════════════════════════════════════════ */
 
-/* Three webfonts, latin subsets, self-hosted from public/assets — no font
-   CDN at runtime. Schibsted Grotesk is the variable [wght 400-900] cut:
-   one file carries every UI weight. Newsreader is the brand mark: the
-   KinuLogo lockup is its only consumer, a variable [wght 400-700] cut at a
-   fixed optical size — it appears at exactly one size, so the opsz axis
-   bought nothing and cost 74 KB. Fallback stacks stay intact, so an
-   unloaded font degrades to the face this product shipped before. Each
-   licence travels with the files because OFL requires it. */
-@font-face {
-  font-family: "Schibsted Grotesk";
-  src: url("/assets/fonts/schibsted-latin-var.woff2") format("woff2-variations");
-  font-weight: 400 900;
-  font-style: normal;
-  font-display: swap;
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: "Newsreader";
-  src: url("/assets/fonts/newsreader-latin-var.woff2") format("woff2-variations");
-  font-weight: 400 700;
-  font-style: normal;
-  font-display: swap;
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: "Fragment Mono";
-  src: url("/assets/fonts/fragmentmono-latin.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-
+/* The app's faces and their stacks are core's (packages/core/src/web/fonts.ts), one list for this stylesheet and
+   every slate page's head; they arrive through `virtual:kinu-theme.css`. */
 html, body, #root {
   width: 100%; height: 100%; margin: 0;
   font-family: var(--font-ui);
 }
 
 :root {
-  /* type — three faces, three jobs, all self-hosted above.
-
-     `--font-ui` and `--font-display` are the same Schibsted Grotesk stack:
-     the mock sets headings, labels and body in one grotesk and earns its
-     hierarchy with weight, not typeface swaps. They stay two tokens because
-     the roles can diverge later without touching call sites.
-
-     `--font-serif` is Newsreader, and the brand mark is its only reader:
-     `KinuLogo.tsx` is the one `font-serif` call site. The signed-out
-     shell declares the same display and mono stacks, because the two
-     surfaces are one product.
-
-     `--font-mono` carries a second job besides code: every eyebrow and
-     section label is set in it (see `.p-eyebrow`), the mock's own label
-     convention (WORKSPACES, the run-history columns). */
-  --font-display: "Schibsted Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  --font-ui: "Schibsted Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
-  --font-serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-  --font-mono: "Fragment Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-
   /* Radii — the mock's own measures, stated as roles. Outer cards and the
      composer are 14px; the grouped cards INSIDE a surface (tool rows,
      journal, key-value tables) stay at Tailwind's 12px rung; rows and
@@ -1562,6 +1511,8 @@ body > .annotation-toolbar {
 }
 .p-bar-tab[data-active] { flex-shrink: 0; }
 .p-bar-tab[data-title] { min-width: 144px; max-width: 320px; flex-shrink: 2; }
+/* The open tab keeps its name whole, the workspace's on its overview too: the strip scrolls before it is cut. */
+.p-bar-tab[data-title][data-active] { flex-shrink: 0; }
 .p-bar-sizer, .p-bar-link {
   display: flex;
   align-items: center;
@@ -1612,16 +1563,18 @@ body > .annotation-toolbar {
   pointer-events: none;
   transition: opacity var(--dur-fast) ease-out;
 }
-/* A tap is no hover: on touch, only the open chat's tab carries its actions, so a tap meant for a name never lands
-   on a pencil or a cross that appeared under it. The workspace renames in its settings there. */
+/* A tap is no hover: on touch, only the open tab carries its actions, so a tap meant for a name never lands on a
+   pencil or a cross that appeared under it. The workspace's name is open on its overview, and renames there. The open
+   tab is widened for them rather than its name cut short: nothing moves, since on touch they never come and go. */
 @media (hover: hover) {
   .p-bar-tab:is(:hover, :focus-within) .p-bar-actions { opacity: 1; pointer-events: auto; }
   .p-bar-tab:is(:hover, :focus-within):has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
   .p-bar-tab:is(:hover, :focus-within):has(.p-bar-action:only-child) .p-bar-link { padding-right: calc(var(--flare) + 32px); }
 }
 @media (hover: none) {
-  .p-bar-tab[data-active]:not([data-title]) .p-bar-actions { opacity: 1; pointer-events: auto; }
-  .p-bar-tab[data-active]:not([data-title]):has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
+  .p-bar-tab[data-active] .p-bar-actions { opacity: 1; pointer-events: auto; }
+  .p-bar-tab[data-active]:has(.p-bar-actions) :is(.p-bar-sizer, .p-bar-link) { padding-right: calc(var(--flare) + 52px); }
+  .p-bar-tab[data-active]:has(.p-bar-action:only-child) :is(.p-bar-sizer, .p-bar-link) { padding-right: calc(var(--flare) + 32px); }
 }
 .p-bar-action {
   display: flex;
@@ -1662,6 +1615,8 @@ body > .annotation-toolbar {
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
 .p-bar-icon:hover, .p-bar-icon:focus-visible { outline: none; background: var(--c-neutral-tint); color: var(--c-text); }
+/* The header's count of agents at work out of sight: the accent, so it reads in dark and light alike. */
+.p-agents-badge { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
 .p-bar-icon[aria-current="page"], .p-bar-icon[aria-pressed="true"] { color: var(--c-text); }
 .p-bar-trailing { display: flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0 10px 0 6px; }
 .p-bar-outline { position: absolute; top: 8px; bottom: 0; left: 0; pointer-events: none; }

@@ -32,6 +32,7 @@ import { initBackgroundJobsTable } from '../jobs/store';
 import { initToolEffectClaimTable } from '../tools/effect-claim';
 import { initDeferredApprovalsTable } from '../safety/deferred-approval';
 import { initDeviceConsentRequestsTable } from '../safety/device-consent';
+import { initWorkspaceProposalsTable } from '../safety/workspace-proposals';
 import { initInstructionApprovalsTable } from '../safety/instruction-trust';
 import { initPlanReviewTable } from '../plans/review';
 import { initGitHubActivityTable } from '../github/activity';
@@ -162,6 +163,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initEffectTombstoneTable(execRaw);
   initDeferredApprovalsTable(execRaw);
   initDeviceConsentRequestsTable(execRaw);
+  initWorkspaceProposalsTable(execRaw);
   initPlanReviewTable(execRaw);
   initGitHubActivityTable(execRaw);
   // KINU-N028. A missing table must not fail open.

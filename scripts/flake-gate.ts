@@ -344,7 +344,7 @@ const BLIND_SPOTS = [
   'a merge repeats only the test files it changes itself: one it takes whole from a side was that side\'s own '
     + 'commits\' subject, and the sweep\'s',
   'a flake that a changed helper or product file puts into a suite this commit does not change: the nightly sweep '
-    + '(`bun run sweep:flakes`, .github/workflows/flake-sweep.yml) repeats every suite the CI tier runs',
+    + '(`bun run sweep:flakes`, scripts/nightly-sweeps.ts) repeats every suite the CI tier runs',
   'N runs sample N interleavings: greens raise confidence and prove nothing about absence',
   'a browser or pool suite never runs beside itself here, so a race between two copies of one is not provoked; a '
     + 'plain suite\'s runs do run beside each other',

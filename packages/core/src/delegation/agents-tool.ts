@@ -1,5 +1,6 @@
 /**
- * `agents`: the one delegation tool: swarm, hire, msg, list, dismiss, as the wired deps allow (agentsActionsFor).
+ * `agents`: the one delegation tool, its operations as the wired deps offer them (agentsActionsFor), each dispatched
+ * with the fields its declaration admitted (`agents-operations.ts`).
  * Swarm call contract: docs/EXPLORATION.md "Presets", "Validity over the resolved configuration",
  * "Accepted and ignored".
  */
@@ -7,11 +8,8 @@ import { REAL_CLOCK } from '../types/clock';
 import { currentWorkMode, inWorkMode, workModeRefusal } from '../execution/work-mode';
 import type { LanguageModel, ModelMessage } from 'ai';
 import * as v from 'valibot';
-import {
-  AGENTS_TOOL_ACTIONS,
-  type AgentsToolAction,
-} from '../tools/registry';
-import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
+import { AGENTS_OPS, type AgentsOp } from '../operations/agents';
+import { SwarmConfigSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
 import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
@@ -22,27 +20,26 @@ import type { ActorReference } from '../identity/actor-handle';
 import type { SubordinateBirth } from '../subordinates/birth';
 import type { SerializedMessage } from '../types/heads';
 import { freezeInheritedContext } from '../orchestrator/heads-support';
-import { SWARM_CONTEXTS } from '../types/swarm';
+import type { BranchContext } from '../types/swarm';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
 import type { ModelCallSink } from '../events/model-call';
 import type { WebSearchProvider } from '../web/index';
 import { readStartedSwarmProfile } from '../strategy/swarm-resume';
 import {
-  NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_DOCTRINE,
+  SWARM_PRESET_DOCTRINE,
   resolveSwarm, swarmValidity,
-  type NamedSwarmPreset, type SwarmConfig, type SwarmInput, type SwarmNodeAssignment,
+  type NamedSwarmPreset, type SwarmInput, type SwarmNodeAssignment,
   type SwarmPreset,
 } from '../strategy/swarm';
 import {
-  TierIdSchema, tierIdsOf,
+  tierIdsOf,
   effectiveRoleCatalog,
   resolveTurnProfile,
   type ProfileAuthorityInputs, type ProfileProvenance,
   type ResolvedTurnProfile, type ResolveTurnProfileInput, type RoleId, type TierId,
 } from '../profiles';
 import { VERIFIER_KIND_DOC, VERIFIER_KINDS } from '../strategy/objective';
-import type { Objective } from '../strategy/objective';
 import { readResumeRedrive, readSpawnStarted } from '../jobs/threshold';
 import {
   localMissionScope, readMissionLimits, MissionBudgetExhausted,
@@ -64,14 +61,13 @@ import {
   type DelegationBudget,
 } from '../subordinates/depth';
 import {
-  SUBORDINATE_LIFETIMES,
   type SubordinateLifetime,
   type TemporaryAgentPort,
   type TemporaryRunRequest,
 } from '../subordinates/temporary';
 import {
   parseJsonObject,
-  type JsonObject,
+  type JsonObject, type JsonValue,
 } from '../utils/json';
 import {
   countedMsgSend,
@@ -147,6 +143,8 @@ export interface TeamToolDeps {
     role?: RoleId;
     tier?: TierId;
     mission?: string;
+    /** The words the owner opened it with: they name it, and its mission stays the creator's. */
+    brief?: string;
   }): Promise<{
     name: string; displayName: string; subordinate: SubordinateRosterEntry;
   }>;
@@ -328,21 +326,30 @@ interface UnifiedRosterResult {
   note?: string;
 }
 
-/** Actions this deps set supports: the one gate shared by the tool schema, the prompt's Delegation
- *  section and `agents.*` codemode. Presence-typed so prompt assembly need not build the substrate. */
-export function agentsActionsFor(deps: { swarm?: object; swarms: boolean; team?: object; peers?: object }): AgentsToolAction[] {
-  const converse = deps.team !== undefined || deps.peers !== undefined;
+/** What wires each operation; a search needs exactly the exploration substrate, so it has no deps group of its own. */
+const OFFERED_WHEN = {
+  swarm: (deps) => deps.swarm !== undefined && deps.swarms,
+  hire: (deps) => deps.team !== undefined,
+  assign: (deps) => deps.team !== undefined || deps.peers !== undefined,
+  hireWorkspace: (deps) => deps.peers !== undefined,
+  message: (deps) => deps.team !== undefined || deps.peers !== undefined,
+  reply: (deps) => deps.peers !== undefined,
+  list: (deps) => deps.team !== undefined || deps.peers !== undefined,
+  dismiss: (deps) => deps.team !== undefined,
+} as const satisfies Record<AgentsOp, (deps: AgentsWiring) => boolean>;
 
-  const present = {
-    // A search needs exactly the exploration substrate, so it has no deps group of its own.
-    swarm: deps.swarm !== undefined && deps.swarms,
-    hire: converse,
-    msg: converse,
-    list: converse,
-    dismiss: deps.team !== undefined,
-  } satisfies Record<AgentsToolAction, boolean>;
+/** The deps an operation's presence reads, presence-typed so prompt assembly need not build the substrate. */
+interface AgentsWiring {
+  readonly swarm?: object;
+  readonly swarms: boolean;
+  readonly team?: object;
+  readonly peers?: object;
+}
 
-  return AGENTS_TOOL_ACTIONS.filter((action) => present[action]);
+/** The operations this deps set offers: the one gate shared by the tool, the prompt's Delegation section and
+ *  `agents.*` codemode. */
+export function agentsActionsFor(deps: AgentsWiring): AgentsOp[] {
+  return AGENTS_OPS.filter((op) => OFFERED_WHEN[op](deps));
 }
 
 /** The deps with the substrate withheld while the account's swarms are off, so every rendering omits `swarm`. */
@@ -350,104 +357,89 @@ export function offered(deps: AgentsToolDeps): AgentsToolDeps {
   return deps.swarms ? deps : { ...deps, swarm: undefined };
 }
 
-export interface AgentsToolInput {
-  action: AgentsToolAction;
-  /** What the search is for, in prose — never the measured quantity. */
-  task?: string;
-  /** Cumulative spend cap for everything this helper spawns; nests under the caller's mission scope. */
-  budget_usd?: number;
-  budget_tokens?: number;
-  budget_label?: string;
-  preset?: SwarmPreset;
-  /** What is measured, in what unit, and which direction is better. Optional; refused on `ideate`. */
-  objective?: Objective;
-  key?: string;
-  config?: Partial<SwarmConfig>;
-  from?: NamedSwarmPreset;
-  label?: string;
-  name?: string;
-  branches?: number;
-  depth?: number;
+/** A search's fields, as `agents.swarm` admits them. */
+interface SwarmFields {
+  /** What the search is for, in prose; never the measured quantity. */
+  readonly task: string;
+  readonly preset?: SwarmPreset;
+  /** What is measured, in what unit, and which direction is better: its wire form, which the search reads. */
+  readonly objective?: JsonValue;
+  readonly key?: string;
+  /** Its wire form too: preset "custom"'s axes. */
+  readonly config?: JsonValue;
+  readonly from?: NamedSwarmPreset;
+  readonly label?: string;
+  readonly name?: string;
+  readonly branches?: number;
+  readonly depth?: number;
   /** Exclusive with `branches`; see {@link SwarmInput.nodes}. */
-  nodes?: readonly SwarmNodeAssignment[];
+  readonly nodes?: readonly SwarmNodeAssignment[];
   /** Exclusive with `tier`; see {@link SwarmInput.models}. */
-  models?: readonly string[];
-  /** The role a delegation runs under; one per swarm. On `hire` it is the discriminant: present
-   *  creates, absent hands the workstream to `agent`. */
-  role?: RoleId;
-  /** Explicit, else the role's default tier, else `default`. Exclusive with `models`. */
-  tier?: TierId;
-  agent?: string;
-  mission?: string;
-  scope?: 'subordinate' | 'workspace';
-  message?: string;
-  topic?: string;
-  deliverable?: string;
-  event_id?: string;
-  keep_history?: boolean;
-  /** `durable` (default) stays in the roster; `task` answers once and is archived. */
-  lifetime?: SubordinateLifetime;
-  context?: 'fresh' | 'inherit';
+  readonly models?: readonly string[];
+  readonly role?: RoleId;
+  readonly tier?: TierId;
+  /** Cumulative spend caps for everything the search spawns; they nest under the caller's mission scope. */
+  readonly budgetUsd?: number;
+  readonly budgetTokens?: number;
+  readonly budgetLabel?: string;
 }
 
-type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
+/** A new helper's fields, as `agents.hire` admits them. */
+interface HireFields {
+  readonly role: RoleId;
+  readonly mission: string;
+  readonly name?: string;
+  /** Explicit, else the role's default tier. */
+  readonly tier?: TierId;
+  readonly context?: BranchContext;
+  /** `durable` (default) stays in the roster; `task` answers once and is archived. */
+  readonly lifetime?: SubordinateLifetime;
+}
 
-/**
- * Which fields each action's handler reads. `gate:agents-fields` holds each list to the `input.<field>`
- * reads in `dispatchAgentsAction`; a field outside an action's list is refused, not ignored.
- */
-export const AGENTS_ACTION_FIELDS = {
-  // Mission caps (`budget_*`) sit beside the swarm fields per *Presets*, enforced through `missionScope`.
-  // No iteration or wall-clock cap: nothing enforces either (*Accepted and ignored*).
-  swarm: [
-    'task', 'preset', 'objective', 'key', 'config', 'from', 'label', 'name', 'branches', 'depth',
-    'nodes', 'models',
-    'role', 'tier',
-    'budget_usd', 'budget_tokens', 'budget_label',
-  ],
-  // `role` creates (with `lifetime`, `tier`); `agent` hands work to an existing agent (`deliverable`,
-  // `topic`). Ordered by variant: the codemode variant union is held to this list.
-  hire: ['role', 'mission', 'agent', 'tier', 'lifetime', 'context', 'scope', 'message', 'deliverable', 'topic'],
-  msg: ['agent', 'event_id', 'message', 'topic'],
-  list: ['agent'],
-  dismiss: ['agent', 'keep_history'],
-} as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
+/** An existing agent's next workstream, as `agents.assign` admits it. */
+interface AssignFields {
+  readonly agent: string;
+  readonly message: string;
+  readonly deliverable?: string;
+  readonly topic?: string;
+}
 
-/** Every input field and its type, declared once: the model parse refuses unknown fields, replay drops them. */
-const AgentsInputEntries = {
-  action: v.picklist(AGENTS_TOOL_ACTIONS),
-  context: v.optional(v.picklist(SWARM_CONTEXTS)),
-  task: v.optional(v.string()),
-  budget_usd: v.optional(v.number()),
-  budget_tokens: v.optional(v.number()),
-  budget_label: v.optional(v.string()),
-  // Spelled out rather than spread from tools/swarm-input.ts: `gate:agents-fields` reads these keys.
-  preset: v.optional(v.picklist(SWARM_PRESETS)),
-  objective: v.optional(SwarmObjectiveSchema),
-  key: v.optional(v.string()),
-  config: v.optional(SwarmConfigSchema),
-  from: v.optional(v.picklist(NAMED_SWARM_PRESETS)),
-  label: v.optional(v.string()),
-  name: v.optional(v.string()),
-  branches: v.optional(v.number()),
-  depth: v.optional(v.number()),
-  nodes: v.optional(SwarmNodeAssignmentsSchema),
-  models: v.optional(SwarmModelsSchema),
-  agent: v.optional(v.string()),
-  role: v.optional(v.string()),
-  mission: v.optional(v.string()),
-  tier: v.optional(TierIdSchema),
-  scope: v.optional(v.picklist(['subordinate', 'workspace'])),
-  message: v.optional(v.string()),
-  topic: v.optional(v.string()),
-  deliverable: v.optional(v.string()),
-  event_id: v.optional(v.string()),
-  keep_history: v.optional(v.boolean()),
-  lifetime: v.optional(v.picklist(SUBORDINATE_LIFETIMES)),
-};
+interface HireWorkspaceFields {
+  readonly mission: string;
+  readonly message: string;
+  readonly agent?: string;
+}
 
-/** The engine's input, checked as each operation's fields are mapped onto it: a field it does not declare is refused. */
-export const AgentsEngineInputSchema = v.strictObject(AgentsInputEntries);
+interface MessageFields {
+  readonly agent: string;
+  readonly message: string;
+  readonly topic?: string;
+}
+
+interface ReplyFields {
+  readonly eventId: string;
+  readonly message: string;
+}
+
+interface ListFields {
+  readonly agent?: string;
+}
+
+interface DismissFields {
+  readonly agent: string;
+  readonly keepHistory?: boolean;
+}
+
+/** One served operation's call, with the fields its declaration admitted: the dispatcher reads these and no others. */
+export type AgentsCall =
+  | { readonly op: 'swarm'; readonly fields: SwarmFields }
+  | { readonly op: 'hire'; readonly fields: HireFields }
+  | { readonly op: 'assign'; readonly fields: AssignFields }
+  | { readonly op: 'hireWorkspace'; readonly fields: HireWorkspaceFields }
+  | { readonly op: 'message'; readonly fields: MessageFields }
+  | { readonly op: 'reply'; readonly fields: ReplyFields }
+  | { readonly op: 'list'; readonly fields: ListFields }
+  | { readonly op: 'dismiss'; readonly fields: DismissFields };
 
 export interface AgentsToolCallOptions {
   abortSignal?: AbortSignal;
@@ -463,15 +455,15 @@ function badInput(error: string): never {
  *  null when there is no governor or scope. */
 function missionScope(
   budget: MissionGovernor | undefined,
-  input: AgentsToolInput,
+  fields: SwarmFields,
 ): { governor: MissionGovernor; scope: MissionScope } | null {
   if (!budget) return null;
-  const limits = readMissionLimits(input);
+  const limits = readMissionLimits({ budget_usd: fields.budgetUsd, budget_tokens: fields.budgetTokens });
   let labels: readonly string[] = budget.scope;
 
   if (limits) {
     // A blank label names no sub-ledger; the generated one keeps it addressable.
-    const declared = input.budget_label?.trim();
+    const declared = fields.budgetLabel?.trim();
     const label = declared === undefined || declared === '' ? `swarm-${nanoid()}` : declared;
     budget.declare(label, limits);
     labels = [label];
@@ -540,9 +532,9 @@ function resolveDelegatedProfile(
   }
 }
 
-interface AgentsActionCall {
+interface AgentsActionCall<F> {
   deps: AgentsToolDeps;
-  input: AgentsToolInput;
+  fields: F;
   mode: WorkMode;
   toolOptions: AgentsToolCallOptions | undefined;
 }
@@ -556,22 +548,27 @@ function swarmSubstrate(deps: AgentsToolDeps): AgentsSwarmDeps {
   return swarm;
 }
 
-interface SwarmActionCall extends AgentsActionCall {
+/** A field the operation checked against `schema` and passed on as sent, read as the search takes it. */
+function readWireForm<S extends v.GenericSchema>(schema: S, sent: JsonValue | undefined): v.InferOutput<S> | undefined {
+  return sent === undefined ? undefined : v.parse(schema, sent);
+}
+
+interface SwarmActionCall extends AgentsActionCall<SwarmFields> {
   budget?: MissionGovernor;
 }
 
-async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmActionCall): Promise<object> {
+async function runSwarmAction({ deps, fields, mode, toolOptions, budget }: SwarmActionCall): Promise<object> {
   const swarm = swarmSubstrate(deps);
 
   // A re-drive replays its stored profile snapshot and never consults today's catalog. Read from the
-  // options bag (see `RESUME_REDRIVE_OPTION`): the input is the durable row.
+  // options bag (see `RESUME_REDRIVE_OPTION`): the fields are the durable row.
   const redrive = readResumeRedrive({ toolOptions });
 
-  if (!redrive && !input.preset && !deps.profile) {
+  if (!redrive && !fields.preset && !deps.profile) {
     return badInput(`swarm needs \`preset\`: the shape of the search${deps.profile ? '' : ' (no role catalog is wired here to take its default from)'}. ${SWARM_PRESET_DOCTRINE.join(' ')}`);
   }
 
-  if (!input.task) {
+  if (!fields.task) {
     return badInput('swarm needs `task`: what the search is for, in prose. The measured '
       + 'quantity goes in `objective`, never here.');
   }
@@ -585,14 +582,14 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
     if (ctx) {
       const resolution = resolveDelegatedProfile(
         ctx,
-        input.role,
-        input.tier,
-        input.preset === undefined ? 'role_default' : 'explicit',
+        fields.role,
+        fields.tier,
+        fields.preset === undefined ? 'role_default' : 'explicit',
       );
 
       if ('error' in resolution) return badInput(resolution.error);
       delegated = resolution;
-    } else if (input.role !== undefined || input.tier !== undefined) {
+    } else if (fields.role !== undefined || fields.tier !== undefined) {
       return badInput('role and tier need a profile catalog, which this actor does not have: '
         + 'call again without them.');
     }
@@ -600,37 +597,37 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
 
   // A re-drive with no preset is not `ideate`: its first attempt may have used the role's default, so
   // the preset comes off the same stored record as role, tier and model.
-  const started = redrive && input.preset === undefined
-    ? readStartedSwarmProfile(swarm.rt.storage, swarm.rt.actor, input.task)
+  const started = redrive && fields.preset === undefined
+    ? readStartedSwarmProfile(swarm.rt.storage, swarm.rt.actor, fields.task)
     : null;
 
-  const preset: SwarmPreset = input.preset
+  const preset: SwarmPreset = fields.preset
     ?? delegated?.resolved.defaultPreset
     ?? started?.profile.defaultPreset
     ?? 'ideate';
 
   // `tier` and `models` are exclusive routing inputs.
-  if (input.models !== undefined && input.tier !== undefined) {
+  if (fields.models !== undefined && fields.tier !== undefined) {
     return badInput('`models` routes each node to the model its slot is assigned, and `tier` '
-      + `resolves one model for the whole run: you named both (tier "${String(input.tier)}" and `
-      + `${String(input.models.length)} model spec(s)), and one of the two routing decisions would `
+      + `resolves one model for the whole run: you named both (tier "${String(fields.tier)}" and `
+      + `${String(fields.models.length)} model spec(s)), and one of the two routing decisions would `
       + 'be ignored. Route through `tier` for one model across the search, or through `models` '
       + 'for per-node routing.');
   }
 
   const call: SwarmInput = {
     preset,
-    task: input.task,
-    objective: input.objective,
-    key: input.key,
-    config: input.config,
-    from: input.from,
-    label: input.label,
-    branches: input.branches,
-    depth: input.depth,
-    name: input.name,
-    nodes: input.nodes,
-    models: input.models,
+    task: fields.task,
+    objective: readWireForm(SwarmObjectiveSchema, fields.objective),
+    key: fields.key,
+    config: readWireForm(SwarmConfigSchema, fields.config),
+    from: fields.from,
+    label: fields.label,
+    branches: fields.branches,
+    depth: fields.depth,
+    name: fields.name,
+    nodes: fields.nodes,
+    models: fields.models,
   };
 
   // Resolution first: *Validity over the resolved configuration* is stated over the resolved tuple.
@@ -641,7 +638,7 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
 
   if (illegal) throw new KinuError(illegal.reason, illegal.error);
 
-  const mission = missionScope(budget, input);
+  const mission = missionScope(budget, fields);
   let rt: AgentRuntime = swarm.rt;
 
   if (mission) {
@@ -737,11 +734,11 @@ export function verifierKinds(): string {
   return VERIFIER_KINDS.map((kind) => `${kind} (spec {${VERIFIER_KIND_DOC[kind].specFields.join(', ')}})`).join(', ');
 }
 
-/** The peer topic for a hire or msg, or a refusal when the caller claimed the transport's reserved one. */
-function requestedTopic(input: AgentsToolInput): { topic: string } {
-  const requested = input.topic?.trim();
+/** The peer topic for an assignment or a message, or a refusal when the caller claimed the transport's reserved one. */
+function requestedTopic(requested: string | undefined): { topic: string } {
+  const trimmed = requested?.trim();
   // A blank topic is no topic: the default is what the transport routes on.
-  const topic = requested === undefined || requested === '' ? 'message' : requested;
+  const topic = trimmed === undefined || trimmed === '' ? 'message' : trimmed;
 
   return topic === PEER_REPLY_TOPIC
     ? badInput(`topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes`)
@@ -749,153 +746,102 @@ function requestedTopic(input: AgentsToolInput): { topic: string } {
 }
 
 /** The refusal of a `swarm` the account's beta withholds; null when the beta is not what stops it. */
-export function withheldBeta(wired: AgentsToolDeps, action: AgentsToolInput['action']): string | null {
-  if (action !== 'swarm' || wired.swarm === undefined || wired.swarms) return null;
+export function withheldBeta(wired: AgentsToolDeps, op: AgentsOp): string | null {
+  if (op !== 'swarm' || wired.swarm === undefined || wired.swarms) return null;
 
   return `swarm is a beta this account has not turned on: "${SWARMS_BETA_SETTING}" in Settings, Beta`;
 }
 
-/** Whether this actor may run the action now: unwired is `unsupported`, a durable roster change under
- *  Plan is `denied`, as is an action the account's beta withholds. `hire` is decided in its arm, since Plan
- *  permits a `task` hire. */
-function actionAdmission(
-  actions: readonly AgentsToolInput['action'][], mode: WorkMode, action: AgentsToolInput['action'], beta: string | null,
-): Refusal | null {
+/** Plan keeps what changes no roster: a search, a message, a reply and the roster read. `hire` is decided in its arm,
+ *  since Plan permits a `task` hire. */
+const PLAN_KEEPS = {
+  swarm: true, hire: true, assign: false, hireWorkspace: false, message: true, reply: true, list: true, dismiss: false,
+} as const satisfies Record<AgentsOp, boolean>;
+
+/** Whether this actor may run the operation now: unwired is `unsupported`, a durable roster change under Plan is
+ *  `denied`, as is a search the account's beta withholds. */
+function opAdmission(offeredOps: readonly AgentsOp[], mode: WorkMode, op: AgentsOp, beta: string | null): Refusal | null {
   if (beta !== null) return { reason: 'denied', error: beta };
 
-  if (!actions.includes(action)) {
-    return { reason: 'unsupported', error: `action "${action}" is not available here. Available: ${actions.join(', ')}` };
+  if (!offeredOps.includes(op)) {
+    return { reason: 'unsupported', error: `agents.${op} is not available here. Available: ${offeredOps.join(', ')}` };
   }
 
-  return action === 'hire' ? null : workModeRefusal(mode, action !== 'dismiss', 'agents.' + action);
+  return workModeRefusal(mode, PLAN_KEEPS[op], 'agents.' + op);
 }
 
-/** Refuse fields the chosen hire variant cannot act on, naming the field that does the job; neither
- *  the parse nor the codemode namespace catches cross-variant fields. */
-function assertHireVariant(input: AgentsToolInput): void {
-  if (!input.role) {
-    if (input.context !== undefined) {
-      return badInput('field "context" belongs to a hire that creates with `role`: an existing agent already has its conversation');
-    }
-
-    if (input.mission !== undefined) {
-      return badInput('field "mission" is not available on a hire that names an existing agent: its brief is `message`');
-    }
-
-    if (input.tier !== undefined) {
-      return badInput('field "tier" is not available on a hire that names an existing agent: it already runs at its own tier');
-    }
-
-    if (input.lifetime !== undefined) {
-      return badInput('field "lifetime" is not available on a hire that names an existing agent: it already has one; `lifetime` belongs to a hire that creates with `role`');
-    }
-
-    return;
-  }
-
-  if (input.message !== undefined) {
-    return badInput('field "message" is not available for a hire that creates an agent: its brief is `mission`');
-  }
-
-  if (input.deliverable !== undefined) {
-    return badInput('field "deliverable" is not available on a hire that creates an agent: say what the result should be in `mission`');
-  }
-
-  if (input.topic !== undefined) {
-    return badInput('field "topic" is not available on a hire that creates an agent: it labels a message to an agent that already exists');
-  }
-
-  if (input.lifetime === 'task' && input.tier !== undefined) {
-    return badInput('field "tier" is not available on a lifetime:"task" hire: it runs at its role\'s tier; omit it, or hire `durable` for an override');
-  }
-}
-
-/**
- * The one delegation dispatch, for the `agents` tool and `agents.*` codemode. Every read of `input`
- * happens inside the try, since codemode input is unvalidated. Only `toolOptions.abortSignal` is read.
- */
-/** The `hire scope=workspace` route: a whole new workspace, which only the
- *  orchestrator's peer seam may open. */
-interface WorkspaceHireCall extends AgentsActionCall {
+/** A new workspace, which only the orchestrator's peer seam may open. */
+interface WorkspaceHireCall extends AgentsActionCall<HireWorkspaceFields> {
   spawnDepthRefusal: () => { reason: ErrorCode; error: string } | null;
 }
 
-async function hireWorkspace({ deps, input, mode, toolOptions, spawnDepthRefusal }: WorkspaceHireCall): Promise<object> {
+async function hireWorkspace({ deps, fields, mode, toolOptions, spawnDepthRefusal }: WorkspaceHireCall): Promise<object> {
   const peers = deps.peers;
-
-  if (input.context !== undefined) return badInput('field "context" belongs to a subordinate hire with `role`, not scope="workspace"');
   const workspaceDepth = spawnDepthRefusal();
 
   if (workspaceDepth) throw new KinuError(workspaceDepth.reason, workspaceDepth.error);
 
   // Classified: a fresh workspace escapes the depth cap, so this refusal must land in `refused`.
   if (!peers) {
-    throw new KinuError('denied', 'hire scope=workspace creates a whole workspace, which only the workspace orchestrator may do: '
-      + 'hire a subordinate here instead (omit scope), or run a search.');
+    throw new KinuError('denied', 'agents.hireWorkspace creates a whole workspace, which only the workspace orchestrator may do: '
+      + 'hire a subordinate here instead, or run a search.');
   }
-
-  if (input.role !== undefined) {
-    return badInput('field "role" is not available for action "hire" on this actor');
-  }
-
-  if (input.tier !== undefined) {
-    return badInput('field "tier" is not available for action "hire" on this actor');
-  }
-
-  if (!input.mission || !input.message) return badInput('hire scope=workspace requires mission and message');
 
   const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
-    purpose: input.mission,
-    message: input.message,
+    purpose: fields.mission,
+    message: fields.message,
     mode,
   };
 
-  if (input.agent) Object.assign(request, { name: input.agent });
+  if (fields.agent) Object.assign(request, { name: fields.agent });
 
   if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
 
   return await peers.spawnWorkspace(request);
 }
 
-interface CreateHireCall extends Omit<AgentsActionCall, 'toolOptions'> {
+interface CreateHireCall extends Omit<AgentsActionCall<HireFields>, 'toolOptions'> {
   team: TeamToolDeps;
-  input: AgentsToolInput & { role: string; mission: string };
-  lifetime: 'durable' | 'task';
+  lifetime: SubordinateLifetime;
 }
 
-async function hireCreate({ deps, team, input, mode, lifetime }: CreateHireCall): Promise<object> {
+async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall): Promise<object> {
   const ctx = deps.profile?.();
 
   if (!ctx) {
     throw new KinuError('denied', 'This actor wires no role catalog. Hire cannot resolve a role without one.');
   }
 
-  const inheritedContext = input.context === 'inherit'
+  const inheritedContext = fields.context === 'inherit'
     ? [...freezeInheritedContext(await team.inheritedContext?.()
       ?? badInput('context:"inherit" requires this actor\'s parent-conversation source'))]
     : undefined;
 
   if (lifetime === 'task') {
-    if (input.agent !== undefined) {
-      return badInput('field "agent" is not available on a lifetime:"task" hire: it is archived the '
+    if (fields.name !== undefined) {
+      return badInput('field "name" is not available on a lifetime:"task" hire: it is archived the '
         + 'moment it answers, so a name you chose is never addressable. Omit it, or hire `durable`.');
+    }
+
+    if (fields.tier !== undefined) {
+      return badInput('field "tier" is not available on a lifetime:"task" hire: it runs at its role\'s tier; omit it, or hire `durable` for an override');
     }
 
     const temporary = team.temporary;
 
     if (!temporary) {
       throw new KinuError('denied', 'lifetime:"task" needs a task-agent substrate, which this actor has none of: '
-        + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (op:"list" shows the roster).');
+        + 'omit `lifetime` for a durable hire, or hand the work to an existing agent with op:"assign" (op:"list" shows the roster).');
     }
 
-    const delegatedTask = resolveDelegatedProfile(ctx, input.role, undefined);
+    const delegatedTask = resolveDelegatedProfile(ctx, fields.role, undefined);
 
     if ('error' in delegatedTask) return badInput(delegatedTask.error);
 
     const request: TemporaryRunRequest = {
       role: delegatedTask.resolved.role.id,
-      roleLabel: input.role,
-      task: input.mission,
+      roleLabel: fields.role,
+      task: fields.mission,
       mode,
     };
 
@@ -904,15 +850,15 @@ async function hireCreate({ deps, team, input, mode, lifetime }: CreateHireCall)
     return await temporary.start(request);
   }
 
-  const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
+  const delegated = resolveDelegatedProfile(ctx, fields.role, fields.tier);
 
   if ('error' in delegated) return badInput(delegated.error);
   // Only an explicit tier is stored; the child re-derives its role's default.
-  const resolvedTier = input.tier !== undefined ? delegated.resolved.tier : undefined;
+  const resolvedTier = fields.tier !== undefined ? delegated.resolved.tier : undefined;
 
   const request: Parameters<TeamToolDeps['spawn']>[0] = {
     role: delegated.resolved.role.id,
-    mission: input.mission,
+    mission: fields.mission,
     mode,
   };
 
@@ -920,126 +866,120 @@ async function hireCreate({ deps, team, input, mode, lifetime }: CreateHireCall)
 
   if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
 
-  if (input.agent) Object.assign(request, { name: input.agent });
+  if (fields.name) Object.assign(request, { name: fields.name });
 
   return await team.spawn(request);
 }
 
-/** Narrows `role` and `mission` for `hireCreate` without an assertion. */
-function isHireCreateInput(
-  input: AgentsToolInput,
-): input is AgentsToolInput & { role: string; mission: string } {
-  return Boolean(input.role) && Boolean(input.mission);
+interface RosterCall {
+  readonly mode: WorkMode;
+  readonly toolOptions: AgentsToolCallOptions | undefined;
+  readonly spawnGuard: () => void;
+  readonly isSubordinate: (name: string) => Promise<boolean>;
 }
 
-interface HireActionCall extends WorkspaceHireCall {
-  spawnGuard: () => void;
-  isSubordinate: (name: string) => Promise<boolean>;
+/** An existing agent's next workstream: a subordinate's reports later, a peer's reply is awaited. Spends no depth. */
+async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, toolOptions, isSubordinate }: RosterCall): Promise<object> {
+  const { team, peers } = deps;
+  const asked = requestedTopic(fields.topic);
+
+  if (team && await isSubordinate(fields.agent)) {
+    const assignment: Parameters<TeamToolDeps['assign']>[0] = { name: fields.agent, task: fields.message, mode };
+
+    if (fields.deliverable) Object.assign(assignment, { deliverable: fields.deliverable });
+
+    const handoff = await countedMsgSend(
+      { action: 'assign', transport: 'subordinate', addressing: 'agent', target: fields.agent, chars: fields.message.length },
+      () => team.assign(assignment),
+      handoffCount,
+    );
+
+    return {
+      status: 'working',
+      agent: fields.agent,
+      ...renderHandoff(handoff),
+      note: `${ASSIGN_NOTES[handoff.delivery]} The subordinate's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
+    };
+  }
+
+  if (peers) {
+    const request: Parameters<PeersToolDeps['ask']>[0] = { agent: fields.agent, topic: asked.topic, message: fields.message, mode };
+
+    if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+
+    return await countedMsgSend(
+      { action: 'assign', transport: 'peer', addressing: 'agent', target: fields.agent, chars: fields.message.length },
+      () => peers.ask(request),
+      peerAskCount,
+    );
+  }
+
+  return badInput(`unknown agent "${fields.agent}": check the roster with op:"list"`);
 }
 
-async function runHireAction(
-  { deps, input, mode, toolOptions, spawnGuard, spawnDepthRefusal, isSubordinate }: HireActionCall,
-): Promise<object> {
-  const team = deps.team;
-  const peers = deps.peers;
+/** A message to an agent, with no workstream handed over. Waking an agent is a spawn-shaped spend. */
+async function messageAgent(deps: AgentsToolDeps, fields: MessageFields, { mode, spawnGuard, isSubordinate }: RosterCall): Promise<object> {
+  const { team, peers } = deps;
+  const { agent, message } = fields;
 
-  // Plan bars a durable roster change but keeps a `task` hire; read on the same field routing reads.
-  const lifetime = input.lifetime ?? 'durable';
-  const planBar = workModeRefusal(mode, lifetime === 'task', 'agents.hire');
+  spawnGuard();
+  const sent = requestedTopic(fields.topic);
 
-  if (planBar) throw new KinuError(planBar.reason, planBar.error);
+  if (team && await isSubordinate(agent)) {
+    const handoff = await countedMsgSend(
+      { action: 'message', transport: 'subordinate', addressing: 'agent', target: agent, chars: message.length },
+      () => team.message({ name: agent, content: message, mode }),
+      handoffCount,
+    );
 
-  if ((input.scope ?? 'subordinate') === 'workspace') {
-    return await hireWorkspace({ deps, input, mode, toolOptions, spawnDepthRefusal });
+    return { status: handoff.delivery === 'queued' ? 'queued' : 'delivered', agent, ...renderHandoff(handoff) };
   }
 
-  if (!peers && input.scope !== undefined) {
-    return badInput('field "scope" is not available for action "hire" on this actor');
+  if (peers) {
+    return await countedMsgSend(
+      { action: 'message', transport: 'peer', addressing: 'agent', target: agent, chars: message.length },
+      () => peers.send({ agent, topic: sent.topic, message, mode }),
+      peerSendCount,
+    );
   }
 
-  // `role` is the discriminator: with it this hire creates (named `agent`); without it, it hands work
-  // to an existing agent, which spends no depth.
-  if (!input.role) {
-    if (!input.agent || !input.message) {
-      return badInput(team
-        ? 'hire requires a target and a brief: `role` with `mission` to create an agent, or `agent` with `message` to hand the workstream to one that exists.'
-        : 'hire requires agent and message');
-    }
-
-    assertHireVariant(input);
-    spawnGuard();
-    const asked = requestedTopic(input);
-
-    if (team && await isSubordinate(input.agent)) {
-      const assignment: Parameters<TeamToolDeps['assign']>[0] = {
-        name: input.agent,
-        task: input.message,
-        mode,
-      };
-
-      if (input.deliverable) Object.assign(assignment, { deliverable: input.deliverable });
-
-      const handoff = await countedMsgSend(
-        { action: 'hire', transport: 'subordinate', addressing: 'agent', target: input.agent, chars: input.message.length },
-        () => team.assign(assignment),
-        handoffCount,
-      );
-
-      return {
-        status: 'working',
-        agent: input.agent,
-        ...renderHandoff(handoff),
-        note: `${ASSIGN_NOTES[handoff.delivery]} The subordinate's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
-      };
-    }
-
-    if (peers) {
-      const request: Parameters<PeersToolDeps['ask']>[0] = {
-        agent: input.agent, topic: asked.topic, message: input.message, mode,
-      };
-
-      if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-
-      return await countedMsgSend(
-        { action: 'hire', transport: 'peer', addressing: 'agent', target: input.agent, chars: input.message.length },
-        () => peers.ask(request),
-        peerAskCount,
-      );
-    }
-
-    return badInput(`unknown agent "${input.agent}": check the roster with op:"list"`);
-  }
-
-  // From here the hire creates, which spends a tree level.
-  const createDepth = spawnDepthRefusal();
-
-  if (createDepth) throw new KinuError(createDepth.reason, createDepth.error);
-
-  if (!team) {
-    // Capability absence is `denied`.
-    throw new KinuError('denied', 'hiring subordinates is not available on this actor');
-  }
-
-  assertHireVariant(input);
-
-  if (!input.mission) return badInput('hire requires role and mission');
-
-  // `agent` is the name to create under; the role is validated, spawn-checked, and stored with its tier.
-  if (!isHireCreateInput(input)) return badInput('hire requires role and mission');
-
-  return await hireCreate({ deps, team, input, mode, lifetime });
+  return badInput(`unknown agent "${agent}": check the roster with op:"list"`);
 }
 
-export async function dispatchAgentsAction(
+/** The roster, or one agent's status: provenance, not addressing, so `knows` includes archived rows. */
+async function roster(deps: AgentsToolDeps, fields: ListFields): Promise<object> {
+  const { team, peers } = deps;
+
+  if (fields.agent && team && await team.knows(fields.agent)) return await team.status({ name: fields.agent });
+
+  const subordinates = team ? await team.list() : undefined;
+  const peerRoster = peers ? await peers.listPeers() : undefined;
+  const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
+  const listed: UnifiedRosterResult = {};
+
+  if (subordinates) Object.assign(listed, { subordinates });
+
+  if (peerRoster) Object.assign(listed, { peers: peerRoster });
+
+  if (empty) Object.assign(listed, { note: 'No helper agents yet: create one with op:"hire".' });
+
+  return listed;
+}
+
+/** The operations that create or wake an agent, checked against the mission cap before they run. */
+const SPAWNING: ReadonlySet<AgentsOp> = new Set(['swarm', 'hire', 'assign', 'hireWorkspace']);
+
+/** The one delegation dispatch, for the `agents` tool and `agents.*` codemode, over each operation's own fields. Only
+ *  `toolOptions.abortSignal` is read. */
+export async function dispatchAgentsCall(
   deps: AgentsToolDeps,
-  input: AgentsToolInput,
+  call: AgentsCall,
   toolOptions?: AgentsToolCallOptions,
 ): Promise<object> {
   // A withheld swarm is refused at admission, so its arm never reads the substrate.
-  const actions = agentsActionsFor(offered(deps));
+  const offeredOps = agentsActionsFor(offered(deps));
   const mode = inWorkMode(deps.mode, currentWorkMode);
-  const team = deps.team;
-  const peers = deps.peers;
+  const { team, peers } = deps;
 
   // No catch: a roster read failure must reach the caller, not route the assignment to the peer path.
   const isSubordinate = async (name: string): Promise<boolean> => {
@@ -1048,134 +988,79 @@ export async function dispatchAgentsAction(
     return (await team.list()).some((entry) => entry.name === name);
   };
 
-  // An action this actor does not wire: `unsupported` (obs/error.ts), classified so it counts as refused.
-  const admission = actionAdmission(actions, mode, input.action, withheldBeta(deps, input.action));
+  // An operation this actor does not wire: `unsupported` (obs/error.ts), classified so it counts as refused.
+  const admission = opAdmission(offeredOps, mode, call.op, withheldBeta(deps, call.op));
 
   if (admission) throw new KinuError(admission.reason, admission.error);
 
-  // Spawn seam: check the mission cap before any action that creates or wakes an agent. `list`,
-  // `dismiss` and the `event_id` half of `msg` stay available.
+  // Spawn seam: check the mission cap before any operation that creates or wakes an agent.
   const spawnGuard = () => {
     const refusal = deps.budget?.guard('spawn');
 
     if (refusal) throw new MissionBudgetExhausted(refusal);
   };
 
-  if (input.action === 'swarm' || input.action === 'hire') spawnGuard();
+  if (SPAWNING.has(call.op)) spawnGuard();
 
-  // Depth seam: covers a toolset cached before the identity was seeded. Applies to both lifetimes; a
-  // hire naming an existing `agent` is not a spawn and stays available.
+  // Depth seam: covers a toolset cached before the identity was seeded. An assignment to an existing agent is not a
+  // spawn and stays available.
   const spawnDepthRefusal = () =>
     team && delegationExhausted(team.delegation) ? delegationDepthRefusal(team.delegation) : null;
 
+  const rosterCall: RosterCall = { mode, toolOptions, spawnGuard, isSubordinate };
+
   try {
-    switch (input.action) {
+    switch (call.op) {
       case 'swarm':
-        return await runSwarmAction({ deps, input, mode, toolOptions, budget: deps.budget });
+        return await runSwarmAction({ deps, fields: call.fields, mode, toolOptions, budget: deps.budget });
 
-      case 'hire':
-        return await runHireAction({ deps, input, mode, toolOptions, spawnGuard, spawnDepthRefusal, isSubordinate });
+      case 'hire': {
+        // Plan bars a durable roster change but keeps a `task` hire.
+        const lifetime = call.fields.lifetime ?? 'durable';
+        const planBar = workModeRefusal(mode, lifetime === 'task', 'agents.hire');
 
-      case 'msg': {
-        // `agent` and `event_id` are exclusive; the sandbox has no schema, so both surfaces enforce it here.
-        if (input.agent && input.event_id) {
-          return badInput(
-            'msg takes ONE target: `agent` to name an agent, or `event_id` to answer the agent '
-            + 'message event you were given. Naming both leaves it undecided who this is for: '
-            + 'drop `event_id` to message the named agent, or drop `agent` to answer that event.',
-          );
-        }
+        if (planBar) throw new KinuError(planBar.reason, planBar.error);
+        const createDepth = spawnDepthRefusal();
 
-        if (!input.message) return badInput('msg requires a message');
-        // Bound to consts: the counter's closures would otherwise re-read `input.message` without its narrowing.
-        const message = input.message;
+        if (createDepth) throw new KinuError(createDepth.reason, createDepth.error);
 
-        if (input.event_id) {
-          if (!peers) {
-            throw new KinuError('denied', 'answering an event by `event_id` needs the peer transport, which this actor does not have');
-          }
+        // Capability absence is `denied`; admission already holds `hire` to a wired team.
+        if (!team) throw new KinuError('denied', 'hiring subordinates is not available on this actor');
 
-          const answered = input.event_id;
-
-          return await countedMsgSend(
-            { action: 'msg', transport: 'peer', addressing: 'event', target: answered, chars: message.length },
-            () => peers.reply({ eventId: answered, message }),
-            peerReplyCount,
-          );
-        }
-
-        const agent = input.agent;
-
-        if (!agent) {
-          return badInput(peers
-            ? 'msg requires a target: `agent` to name an agent, or `event_id` to answer the agent message event you were given.'
-            : 'msg requires agent and message');
-        }
-
-        // Waking an agent is a spawn-shaped spend; answering an asked question is not.
-        spawnGuard();
-        const sent = requestedTopic(input);
-
-        if (team && await isSubordinate(agent)) {
-          const handoff = await countedMsgSend(
-            { action: 'msg', transport: 'subordinate', addressing: 'agent', target: agent, chars: message.length },
-            () => team.message({ name: agent, content: message, mode }),
-            handoffCount,
-          );
-
-          return {
-            status: handoff.delivery === 'queued' ? 'queued' : 'delivered',
-            agent: input.agent,
-            ...renderHandoff(handoff),
-          };
-        }
-
-        if (peers) {
-          return await countedMsgSend(
-            { action: 'msg', transport: 'peer', addressing: 'agent', target: agent, chars: message.length },
-            () => peers.send({ agent, topic: sent.topic, message, mode }),
-            peerSendCount,
-          );
-        }
-
-        return badInput(`unknown agent "${input.agent}": check the roster with op:"list"`);
+        return await hireCreate({ deps, team, fields: call.fields, mode, lifetime });
       }
 
-      case 'list': {
-        // Provenance, not addressing: `knows` includes archived rows; hire and msg route on the active roster.
-        if (input.agent && team && await team.knows(input.agent)) {
-          return await team.status({ name: input.agent });
-        }
+      case 'assign':
+        return await assignWork(deps, call.fields, rosterCall);
 
-        const subordinates = team ? await team.list() : undefined;
-        const peerRoster = peers ? await peers.listPeers() : undefined;
-        const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
-        const roster: UnifiedRosterResult = {};
+      case 'hireWorkspace':
+        return await hireWorkspace({ deps, fields: call.fields, mode, toolOptions, spawnDepthRefusal });
 
-        if (subordinates) Object.assign(roster, { subordinates });
+      case 'message':
+        return await messageAgent(deps, call.fields, rosterCall);
 
-        if (peerRoster) Object.assign(roster, { peers: peerRoster });
+      case 'reply': {
+        if (!peers) throw new KinuError('denied', 'answering an event needs the peer transport, which this actor does not have');
+        const { eventId, message } = call.fields;
 
-        if (empty) Object.assign(roster, { note: 'No helper agents yet: create one with op:"hire".' });
-
-        return roster;
+        return await countedMsgSend(
+          { action: 'reply', transport: 'peer', addressing: 'event', target: eventId, chars: message.length },
+          () => peers.reply({ eventId, message }),
+          peerReplyCount,
+        );
       }
+
+      case 'list':
+        return await roster(deps, call.fields);
 
       case 'dismiss':
-        if (!team) {
-          throw new KinuError('denied', 'dismiss applies to subordinates, which this actor does not have');
-        }
+        if (!team) throw new KinuError('denied', 'dismiss applies to subordinates, which this actor does not have');
 
-        if (!input.agent) return badInput('dismiss requires agent');
-
-        return await team.dismiss({
-          name: input.agent,
-          keepHistory: input.keep_history ?? true,
-        });
+        return await team.dismiss({ name: call.fields.agent, keepHistory: call.fields.keepHistory ?? true });
     }
   } catch (err) {
     if (err instanceof KinuError) throw err;
-    const failure = toKinuError({ doing: 'agents.' + input.action, cause: err, otherwise: 'io' });
+    const failure = toKinuError({ doing: 'agents.' + call.op, cause: err, otherwise: 'io' });
     failure.message = renderThrownChain({ cause: failure });
     throw failure;
   }

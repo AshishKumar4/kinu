@@ -5,7 +5,7 @@ import type { Schedule } from '../types/primitives';
 import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
-import { REAL_CLOCK, type Clock } from '../types/clock';
+import { every, REAL_CLOCK, type Clock } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob, type JobResume } from './store';
 import { JobOutputFeeds, type JobOutputFrame } from './live-output';
@@ -15,12 +15,21 @@ import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { WorkMode } from '../types/turn';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
-import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { classify, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
+import { silenceBoundMs } from '../platform-catalog';
+import { fmtSpan } from '../utils/format';
+import { Effect } from 'effect';
 
 /** Stamped by Kinu: `do.evict.no_signal` means the platform delivers no eviction notice. */
 const EVICTION_INTERRUPT_ERROR = 'interrupted by Durable Object eviction before completion';
 
-/** Shared with each backend's fiber-recovery hook, which matches on it. */
+/** How long a detached job's context may go unheard before its work is given up as lost. */
+const JOB_SILENCE_MS = silenceBoundMs('job.context_silence_ms');
+
+/** Four probes a bound, so one lost answer never decides. */
+const JOB_PROBE_MS = JOB_SILENCE_MS / 4;
+
+/** Shared with each backend's start-of-life recovery, which matches on it. */
 export const BACKGROUND_FIBER_PREFIX = 'bg:';
 
 /**
@@ -128,11 +137,15 @@ export interface BackgroundJobRunnerDeps {
   scheduleResume?: (atMs: number) => Promise<void> | void;
   /** Absent: one process owns the store (a Durable Object). */
   holder?: JobHolder;
+  /** Asked from the context a detached job's work runs in. A context the platform dropped answers nothing, its work's
+   *  answers included, so a job unheard for {@link JOB_SILENCE_MS} is recovered as an evicted one is, at the next
+   *  {@link BackgroundJobRunner.recoverLost}. Absent: no job is watched. */
+  alive?: () => Promise<void>;
 }
 
 /** The workspace's half of every job runner in it. */
 export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutput'>>
-  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock' | 'holder'>;
+  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock' | 'holder' | 'alive'>;
 
 const SearchJobInputSchema = v.object({ task: v.string() });
 
@@ -204,6 +217,19 @@ export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent
     + `what you changed.`;
 }
 
+interface JobAttempt {
+  /** Its row as the attempt started. */
+  readonly job: BackgroundJob;
+  readonly epoch: number;
+  readonly controller: AbortController | null;
+}
+
+interface WatchedJob {
+  at: number;
+  probe: Promise<void> | null;
+  readonly disarm: () => void;
+}
+
 export class BackgroundJobRunner {
   /** In-memory: eviction loses them, and recover() fails the orphan. */
   private readonly controllers = new Map<string, AbortController>();
@@ -216,6 +242,11 @@ export class BackgroundJobRunner {
    */
   private readonly cancelling = new Set<string>();
   private readonly fenced = new Map<string, () => Promise<void>>();
+
+  /** Each watched job's context: when it last answered, the probe it has not answered yet, and how to stop asking. */
+  private readonly heard = new Map<string, WatchedJob>();
+  /** Why a job's executor went away, for its bounded settle; absent, it was evicted. */
+  private readonly interrupted = new Map<string, string>();
 
   readonly output: JobOutputFeeds;
 
@@ -361,11 +392,17 @@ export class BackgroundJobRunner {
         await this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
           ctx.stash({ phase: 'running', jobId, kind });
           let status: string;
+          let attempt: JobAttempt | null = null;
+          // Started here, in the context the work runs in: that context's answers are the ones asked for.
+          const unwatch = this.watch(jobId);
 
           try {
-            await this.settleAndWake(jobId, exec);
-            // A fenced write is a no-op (§5.3), so the store decides whether the job settled.
-            status = this.deps.store.get(jobId)?.status ?? 'missing';
+            attempt = this.attemptOf(jobId);
+            await this.settleAndWake(jobId, attempt, exec);
+            // A fenced write is a no-op (§5.3), so the store decides whether the job settled, and whether by this attempt.
+            const row = this.deps.store.get(jobId);
+
+            status = row?.epoch === attempt.epoch ? row.status : 'superseded';
           } catch (err) {
             // Must not reject: both fiber implementations delete their recovery row in `finally`.
             diagnostics.failure(
@@ -373,7 +410,9 @@ export class BackgroundJobRunner {
               toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
               { jobId },
             );
-            status = this.failUnsettled(jobId, { cause: err }) ? 'failed' : 'running';
+            status = this.failUnsettled(jobId, attempt?.epoch ?? null, { cause: err }) ? 'failed' : 'running';
+          } finally {
+            unwatch();
           }
 
           ctx.stash({ phase: status === 'running' ? 'running' : 'settled', jobId, kind });
@@ -386,17 +425,20 @@ export class BackgroundJobRunner {
           { jobId, kind },
         );
 
+        let attempt: JobAttempt | null = null;
+
         try {
-          if (this.deps.store.get(jobId)?.status === 'running') {
-            await this.settleAndWake(jobId, async () => { throw cause; });
-          }
+          attempt = this.deps.store.get(jobId)?.status === 'running' ? this.attemptOf(jobId) : null;
+
+          if (attempt !== null) await this.settleAndWake(jobId, attempt, async () => { throw cause; });
         } catch (err) {
           diagnostics.failure(
             'jobs.settlement_failed',
             toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
             { jobId },
           );
-          this.failUnsettled(jobId, { cause: err });
+
+          this.failUnsettled(jobId, attempt?.epoch ?? null, { cause: err });
         }
       } finally {
         if (driver && this.fiberDrivers.get(jobId) === driver) this.fiberDrivers.delete(jobId);
@@ -407,12 +449,73 @@ export class BackgroundJobRunner {
     this.fiberDrivers.set(jobId, driver);
   }
 
-  /** Throws only when a store write or the durable retry breadcrumb fails. */
-  private async settleAndWake<T>(jobId: string, exec: () => Promise<T>): Promise<void> {
+  /** One probe in flight at a time: a dropped context leaves it unanswered, and the job unheard. */
+  private watch(jobId: string): () => void {
+    const { alive } = this.deps;
+
+    if (alive === undefined) return () => {};
+
+    const clock = this.deps.clock ?? REAL_CLOCK;
+
+    // A refusal is an answer too: only silence says the context is gone.
+    const answered = (): void => {
+      watched.at = clock.now();
+      watched.probe = null;
+    };
+
+    const watched: WatchedJob = {
+      at: clock.now(),
+      probe: null,
+      disarm: every(clock, JOB_PROBE_MS, () => { watched.probe ??= hold(Effect.promise(alive)).then(answered); }),
+    };
+
+    this.heard.set(jobId, watched);
+
+    return () => {
+      watched.disarm();
+
+      // Only its own: a re-drive watches its own context under the same id.
+      if (this.heard.get(jobId) === watched) this.heard.delete(jobId);
+    };
+  }
+
+  /**
+   * A job unheard past {@link JOB_SILENCE_MS} lost its work with the context that ran it: its executor is let go and
+   * the job recovered as an evicted one is, re-driven or settled with what it had produced. Asked by any later event:
+   * a job's open fiber holds the object's alarm heartbeat, so one comes while any job runs.
+   */
+  async recoverLost(): Promise<void> {
+    const now = (this.deps.clock ?? REAL_CLOCK).now();
+
+    for (const [jobId, { at, disarm }] of this.heard) {
+      if (now - at < JOB_SILENCE_MS) continue;
+      disarm();
+      this.heard.delete(jobId);
+      diagnostics.event('jobs.lost', { jobId, kind: this.deps.store.get(jobId)?.kind ?? 'unknown', silentMs: now - at });
+      this.controllers.get(jobId)?.abort(new Error('its work stopped answering'));
+      this.controllers.delete(jobId);
+      this.fiberDrivers.delete(jobId);
+      this.interrupted.set(jobId, `interrupted before completion: nothing came back from its work for ${fmtSpan(now - at)}, so it was given up as lost`);
+      await this.recoverJob(jobId);
+    }
+  }
+
+  /**
+   * The attempt that holds the job as its work starts: the epoch its writes are fenced on, and the controller that
+   * stops it. A re-drive claims the job under a new epoch first, so an attempt given up as lost that still finishes
+   * is refused every write (§5.3) and settles nothing.
+   */
+  private attemptOf(jobId: string): JobAttempt {
     const job = this.deps.store.get(jobId);
 
     if (job === null) throw new Error('Cannot execute a background job with no durable authority record');
-    const epoch = job.epoch;
+
+    return { job, epoch: job.epoch, controller: this.controllers.get(jobId) ?? null };
+  }
+
+  /** Throws only when a store write or the durable retry breadcrumb fails. */
+  private async settleAndWake<T>(jobId: string, attempt: JobAttempt, exec: () => Promise<T>): Promise<void> {
+    const { job, epoch } = attempt;
 
     type Recorded =
       | { readonly kind: 'settled'; readonly result: T }
@@ -428,7 +531,8 @@ export class BackgroundJobRunner {
         : { kind: 'failed', error: renderThrownChain({ cause: err }) };
     }
 
-    this.controllers.delete(jobId);
+    // Only its own: a re-drive that took the job over holds the controller now.
+    if (attempt.controller !== null && this.controllers.get(jobId) === attempt.controller) this.controllers.delete(jobId);
 
     // Already cancelled: do not relabel the abort as a failure.
     if (this.deps.store.get(jobId)?.status === 'cancelled') return;
@@ -440,8 +544,19 @@ export class BackgroundJobRunner {
         return;
       }
 
-      if (outcome.kind === 'settled') this.deps.store.settle(jobId, epoch, serializeJobResult({ value: outcome.result }), Date.now());
-      else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
+      const settled = outcome.kind === 'settled'
+        ? this.deps.store.settle(jobId, epoch, serializeJobResult({ value: outcome.result }), Date.now())
+        : this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
+
+      // Refused: the job was taken over or already settled, and owes this attempt no word.
+      if (!settled) {
+        diagnostics.event('jobs.attempt_refused', { jobId, epoch });
+
+        return;
+      }
+
+      // A re-driven attempt that finished owes no account of the one that was lost.
+      this.interrupted.delete(jobId);
       this.deps.logActivity?.('bg_job_settled',
         outcome.kind === 'settled' ? `${jobId} completed` : `${jobId} failed: ${outcome.error}`);
       this.notifySettled(jobId);
@@ -463,17 +578,21 @@ export class BackgroundJobRunner {
     const job = this.deps.store.get(jobId);
     const harvested = job ? await this.harvestOf(job) : { ok: true, value: null } as const;
     const now = Date.now();
+    const interrupted = this.interrupted.get(jobId) ?? EVICTION_INTERRUPT_ERROR;
+    let settled: boolean;
+
+    this.interrupted.delete(jobId);
 
     if (!harvested.ok) {
-      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR}: ${why}, and reading `
+      settled = this.deps.store.fail(jobId, epoch, `${interrupted}: ${why}, and reading `
         + `what it had produced failed: ${harvested.error}`, now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} failed unreadable: ${why}`);
     } else if (harvested.value === null) {
-      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR}: ${why}, and it had `
+      settled = this.deps.store.fail(jobId, epoch, `${interrupted}: ${why}, and it had `
         + 'produced no partial result to hand back', now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty: ${why}`);
     } else {
-      this.deps.store.settle(jobId, epoch, serializeJobResult({ value: {
+      settled = this.deps.store.settle(jobId, epoch, serializeJobResult({ value: {
         partial: true,
         why: `This result is PARTIAL: ${why}. It is what the work had completed, not a `
           + 'finished answer: say so if you use it.',
@@ -483,6 +602,8 @@ export class BackgroundJobRunner {
       this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial: ${why}`);
     }
 
+    // Refused: another attempt holds or settled the job, and owes this one's caller no word.
+    if (!settled) return;
     this.notifySettled(jobId);
     await this.wake(jobId);
   }
@@ -509,16 +630,20 @@ export class BackgroundJobRunner {
     }
   }
 
-  /** Last-resort terminal write; keeps an already-recorded outcome and attempts no wake. */
-  private failUnsettled(jobId: string, thrown: { cause: unknown }): boolean {
+  /**
+   * Last-resort terminal write; keeps an already-recorded outcome and attempts no wake.
+   * Under the attempt's own epoch: an attempt whose settlement failed cannot fail the re-drive that took it over.
+   * `null` when the attempt could not read its row: it holds no epoch, and fails the job as it stands.
+   */
+  private failUnsettled(jobId: string, epoch: number | null, thrown: { cause: unknown }): boolean {
     if (this.cancelling.has(jobId)) return false;
 
     try {
       const job = this.deps.store.get(jobId);
 
-      if (!job || job.status !== 'running') return true;
-      this.deps.store.fail(jobId, job.epoch, renderThrownChain(thrown), Date.now());
-      this.notifySettled(jobId);
+      if (!job || job.status !== 'running' || (epoch !== null && job.epoch !== epoch)) return true;
+
+      if (this.deps.store.fail(jobId, job.epoch, renderThrownChain(thrown), Date.now())) this.notifySettled(jobId);
 
       return true;
     } catch (failErr) {
@@ -731,6 +856,7 @@ export class BackgroundJobRunner {
 
   /** Timer entry: re-arms a not-yet-due attempt, since its schedule row can be lost. */
   async recoverDueResumes(): Promise<void> {
+    await this.recoverLost();
     const next = this.nextResumeAt();
 
     if (next === null) return;

@@ -1443,6 +1443,36 @@ export const PLATFORM_CATALOG = {
       + 'in which case the timeout is measuring the neighbour rather than the work.',
   },
 
+  'do.facet.cpu_ms': {
+    subject: 'Active CPU time a Durable Object facet from a loaded Worker may spend: the default, whatever its parent declares',
+    limit: { value: 30_000, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: '~/kinu-logs/research/FACET-CPU-LIMIT-1008.md §1',
+    date: '2026-10-08',
+    trigger: 'a facet spending about 30 s of CPU on work no newer call into it is waiting for',
+    onBreach: 'the facet is reset and the call rejects in its caller; the parent keeps running',
+    observable: [
+      { context: 'the call into the facet, parent limits.cpu_ms unset', message: 'Worker exceeded CPU time limit.' },
+      { context: 'the call into the facet, parent limits.cpu_ms 300000', message: 'Durable Object exceeded its CPU time limit and was reset.' },
+    ],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: 'yielding CPU burn in a facet, parent limits.cpu_ms unset', value: 31_538, unit: 'ms' },
+      { scenario: 'yielding CPU burn in a facet, parent limits.cpu_ms 300000', value: 32_564, unit: 'ms' },
+      { scenario: 'same, again (§5 long)', value: 32_018, unit: 'ms' },
+      { scenario: '200 slices of 0.42 s, each inside its own call into the facet: all ran (§5 lexical)', value: 84_000, unit: 'ms' },
+      { scenario: '200 slices of one long call, each resumed by a call into the facet that waits for it: all ran (§5 permit)', value: 110_000, unit: 'ms' },
+    ],
+    notes:
+      'The parent\'s limits.cpu_ms (300000 here) does not reach its facets. A call into the facet that starts a piece of '
+      + 'work and waits for it gives that piece a budget of its own, even when the piece is a continuation of a longer '
+      + 'call (§5): so long work in a facet is paced by calls into it. Unmeasured (§2): WorkerCode limits.cpuMs, which the '
+      + 'Dynamic Workers docs say can only lower the plan\'s. In production (§3) a hired agent\'s turn, run inside the '
+      + 'one call that hands it over, was killed after 22 steps.',
+  },
+
   'do.facet.abort_reuses_isolate': {
     subject:
       'ctx.facets.abort(name) rejects pending work but REUSES the same isolate, only rotating the '
@@ -1972,6 +2002,33 @@ export const PLATFORM_CATALOG = {
       { scenario: 'openrouter/ling-3.0-flash-vl: request to first content (n=2,206, p99 6.1s)', value: 94_900, unit: 'ms' },
       { scenario: 'workers-ai/glm-5.3: request to first content, 429 waits out (n=127, p99 45.5s)', value: 73_100, unit: 'ms' },
       { scenario: 'openrouter/mercury-2.5: request to first content (n=1,298, p99 13.0s)', value: 27_300, unit: 'ms' },
+    ],
+  },
+
+  'job.context_silence_ms': {
+    subject: 'Longest the context a detached background job runs in may leave its liveness probe unanswered before the job is given up as lost',
+    limit: { value: 600_000, unit: 'ms' },
+    origin: 'self-imposed',
+    bounds: 'silence',
+    evidence: 'observed-in-production',
+    provenance: '~/kinu-logs/research/HUNG-RPC-ArmedBat.md:67-87',
+    date: '2026-10-08',
+    trigger: 'a running job whose context answered no probe for the bound, read at an alarm',
+    onBreach: 'the job is recovered as an evicted one is: re-driven if its kind resumes, else settled failed saying it was lost, and its agent woken',
+    observable: [{ context: 'the job\'s settled error', message: 'nothing came back from its work for' }],
+    firstPartySignal: true,
+    notes: 'Twice the per-invocation CPU limit Kinu configures (limits.cpu_ms 300 s), which staging reached (302.5 s, '
+      + '2026-10-08). A probe waits for the CPU queued ahead of it on its object\'s thread and nothing else, so the '
+      + 'bound holds while no object queues more than it: the most any production workspace object spent in any 600 s '
+      + 'window was 577.8 s, a 4 % margin over that coarse upper bound. A job misjudged past it is safe: its re-drive '
+      + 'claims a new epoch first, and the first attempt is refused every write. Silence re-armed by every answer, '
+      + 'never a limit on how long the job runs. Staging bgjob-qwywfmf0ej8nhsf4jxlym (2026-10-08 07:44Z) detached and '
+      + 'never ended while its workspace served 800+ more invocations.',
+    measurements: [
+      { scenario: 'staging OrchestratorAgent, max CPU in one invocation over 24 h (n=279,216)', value: 302_500, unit: 'ms' },
+      { scenario: 'production OrchestratorAgent, max CPU in one invocation over 7 days, sampled', value: 29_338, unit: 'ms' },
+      { scenario: 'production, most CPU one workspace object spent in any 600 s window over 72 h: the most a probe can queue behind', value: 577_805, unit: 'ms' },
+      { scenario: 'workerd, a probe sent into 40 queued invocations of 28 ms CPU each: it waits for the work ahead of it, then answers', value: 953, unit: 'ms' },
     ],
   },
 

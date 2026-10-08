@@ -1,4 +1,4 @@
-import { slateUiSegments, type JsonValue } from '@kinu.run/core';
+import { safeJsonParse, slateUiSegments, type JsonValue } from '@kinu.run/core';
 import type { SlateView, WorkspaceBrowser } from '../src/browser';
 import { sightEvidence, type Sight } from '../src/sight';
 import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
@@ -25,6 +25,62 @@ export async function madeNoApp(verifier: EvalVerifier): Promise<void> {
     const listing = await verifier.slates();
 
     return { pass: listing.slates.length === 0, evidence: { slates: listing.slates.map((slate) => slate.id) } };
+  });
+}
+
+/** A server of its own: no slate needs one, so one stands in for a page. */
+const SERVER = /http\.server|npx (?:serve|http-server)|\bvite\b/u;
+
+/** A page file, by its path. */
+const PAGE = /[\w./-]*\.html?\b/gu;
+
+/** A slate the code names, `slates.<id>` or `slates["<id>"]`, and whether the code previews it there. */
+const NAMED = /slates(?:\.([A-Za-z_$][\w$]*)|\[\s*["'`]([^"'`]+)["'`]\s*\])(\s*\.\s*\$preview\s*\()?/gu;
+
+/** A browser on a page: the agent looking at what it built. */
+const LOOK = /\bscreenshot\b|openBrowser|connectBrowser/u;
+
+/** Every string in a call's recorded arguments, as the agent wrote it: a program's code reads as code, not JSON. */
+function written(args: string): string {
+  const strings = (value: JsonValue): string[] => {
+    if (typeof value === 'string') return [value];
+
+    return value !== null && typeof value === 'object' ? Object.values(value).flatMap(strings) : [];
+  };
+
+  return strings(safeJsonParse(args)).join('\n');
+}
+
+/**
+ * The calls of a turn that stand in for the slates it was asked for, `slates` (none for an answer drawn in the chat):
+ * a server of its own; a page written outside `/slates/<id>/` of an asked-for slate; a preview of any other slate; and a
+ * browser on a page before any asked-for slate was previewed, so not on the real one. Checking the real slate as it
+ * renders, its `$preview()` and a screenshot of the URL that answers, is what the slates skill asks for, and passes.
+ */
+export function prototypeSteps(calls: readonly { readonly name: string; readonly args: string }[], slates: readonly string[]): string[] {
+  const asked = new Set(slates);
+  let previewed = false;
+
+  return calls.flatMap(({ name, args: recorded }) => {
+    const args = written(recorded);
+    const named = [...args.matchAll(NAMED)].map((found) => ({ id: found[1] ?? found[2] ?? '', previews: found[3] !== undefined }));
+    const pages = [...args.matchAll(PAGE)].map(([path]) => path).filter((path) => ![...asked].some((id) => path.includes(`/slates/${id}/`)));
+    const others = named.filter(({ id, previews }) => previews && !asked.has(id));
+    const bare = /\$preview\s*\(/u.test(args) && !named.some(({ previews }) => previews) && !named.some(({ id }) => asked.has(id));
+
+    previewed ||= named.some(({ id, previews }) => previews && asked.has(id));
+    const looked = (LOOK.test(name) || LOOK.test(args)) && !previewed;
+
+    return SERVER.test(args) || pages.length > 0 || others.length > 0 || bare || looked ? [`${name}: ${recorded.slice(0, 240)}`] : [];
+  });
+}
+
+/** No prototype stood in for what the turn was asked to build: `slates`, or none for an answer drawn in the chat. */
+export async function madeNoPrototype(verifier: EvalVerifier, slates: readonly string[] = []): Promise<void> {
+  await verifier.check('built-no-prototype', async () => {
+    const steps = prototypeSteps(await verifier.turnToolCalls(), slates);
+
+    return { pass: steps.length === 0, evidence: { steps, slates: [...slates] } };
   });
 }
 

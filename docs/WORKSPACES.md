@@ -152,8 +152,10 @@ A workspace holds the state. Agents are the actors that work inside it.
 
     Actor isolation has one contract and one applier. `agentHomeLayout` in
     `packages/core/src/vfs/agent-home.ts` gives an actor its home at `0o755`
-    and its tmp at `0o700`. The kind shows in the name: `/home/sub-<slug>` for
-    a subordinate, `/home/head-<id>` for a head or swarm node. Both backends
+    and its tmp at `0o700`. A subordinate lives under its own name
+    (`/home/fix-coupon-expiry`), drawn from what it was first asked and new to
+    the workspace; one hired before that, or under a cousin's name, lives at
+    `/home/sub-<id>`. A head or swarm node lives at `/home/head-<id>`. Both backends
     provision homes through `facetHomeProvisioner` over the three host-owned
     members from `WorkspaceBundle.privileged()`: the local runtime in its own
     process, and the hosted workspace in-isolate on the orchestrator that owns

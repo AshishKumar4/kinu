@@ -55,6 +55,9 @@ export interface ShareCardDeps {
 export class ShareCardJobs extends LifecycleCapability {
   readonly #deps: ShareCardDeps;
 
+  /** Deliveries mid-send, which a withdrawal lets land before the recipients are told to forget. */
+  readonly #sending = new Set<Promise<void>>();
+
   constructor(deps: ShareCardDeps) {
     super('kinu-share-cards');
     this.#deps = deps;
@@ -104,12 +107,22 @@ export class ShareCardJobs extends LifecycleCapability {
     await Promise.all(pushes);
   }
 
-  /** For the account-delete sweep: every card not yet delivered is cancelled, and every account sent one is named. */
+  /**
+   * For the account-delete sweep: every account that holds or is owed a card is named, every delivery not yet made
+   * is cancelled, and a delivery mid-send has landed. A pending removal's recipient has no sent row, only its job, so
+   * both are read before the jobs go; the forget that follows is then the last word each recipient hears.
+   */
   async withdraw(): Promise<string[]> {
-    await Promise.all(this.lifecycle.jobs.list().filter((job) => job.fn === SHARE_CARD_JOB).map((job) => this.lifecycle.jobs.cancel(job.id)));
+    const jobs = this.lifecycle.jobs.list().filter((job) => job.fn === SHARE_CARD_JOB);
+    const owed = jobs.map((job) => v.parse(ShareCardWriteSchema, job.payload).recipient);
 
-    return this.#deps.sql.exec(`SELECT DISTINCT recipient_user_id FROM share_cards_sent`).toArray()
+    const sent = this.#deps.sql.exec(`SELECT DISTINCT recipient_user_id FROM share_cards_sent`).toArray()
       .map((row) => v.parse(v.object({ recipient_user_id: v.string() }), row).recipient_user_id);
+
+    await Promise.all(jobs.map((job) => this.lifecycle.jobs.cancel(job.id)));
+    await Promise.allSettled(this.#sending);
+
+    return [...new Set([...sent, ...owed])];
   }
 
   /** One job per recipient and share: a newer write replaces an older one not yet delivered, since only the last counts. */
@@ -119,14 +132,31 @@ export class ShareCardJobs extends LifecycleCapability {
     });
   }
 
+  /**
+   * One attempt at a delivery. The driver retries an attempt with the job it read at dispatch, so each attempt first
+   * asks for the job's durable row: one cancelled since, or replaced by a newer write, sends nothing. That check and
+   * the send's start share one turn, so a withdrawal either finds the job to cancel or the send to wait for.
+   */
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
     if (job.fn !== SHARE_CARD_JOB) return undefined;
     const write = v.parse(ShareCardWriteSchema, job.payload);
     const recipient = this.#deps.recipient(write.recipient);
     const caller = await this.#deps.caller();
+    const current = this.lifecycle.jobs.get(job.id);
 
-    if (write.op === 'put') await recipient.shareCards_put(caller, { ownerUserId: write.owner, workspace: write.workspace, shareId: write.share, card: write.card });
-    else await recipient.shareCards_remove(caller, write.owner, write.workspace, write.share);
+    if (current === undefined || JSON.stringify(current.payload) !== JSON.stringify(job.payload)) return undefined;
+
+    const sending = write.op === 'put'
+      ? recipient.shareCards_put(caller, { ownerUserId: write.owner, workspace: write.workspace, shareId: write.share, card: write.card })
+      : recipient.shareCards_remove(caller, write.owner, write.workspace, write.share);
+
+    this.#sending.add(sending);
+
+    try {
+      await sending;
+    } finally {
+      this.#sending.delete(sending);
+    }
 
     return undefined;
   }

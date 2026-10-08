@@ -2,6 +2,7 @@
 // dataset binding has no read side. Aggregates are sample-weighted upstream, so never post-process a number.
 import { Cause, Effect } from 'effect';
 import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
+import { ANALYTICS_DATASET_SUFFIX } from '../obs/analytics/schemas';
 import { settle } from '../obs/effect';
 import * as v from 'valibot';
 
@@ -11,6 +12,8 @@ const SQL_API = (accountId: string): string =>
 export interface AnalyticsSqlEnv {
   CLOUDFLARE_ACCOUNT_ID?: string;
   ANALYTICS_SQL_API_TOKEN?: string;
+  /** What this deployment appends to a dataset name on the read path (`analyticsDataset`). */
+  ANALYTICS_DATASET_SUFFIX?: string;
 }
 
 /** `unconfigured` is not `failed`: a missing token must not look like an outage. */
@@ -40,6 +43,9 @@ export function analyticsMissingSettings(env: AnalyticsSqlEnv): readonly string[
   if (!(env.CLOUDFLARE_ACCOUNT_ID ?? '').trim()) missing.push('CLOUDFLARE_ACCOUNT_ID');
 
   if (!(env.ANALYTICS_SQL_API_TOKEN ?? '').trim()) missing.push('ANALYTICS_SQL_API_TOKEN');
+
+  // Malformed, it would name another deployment's datasets or none, so nothing is read.
+  if (!ANALYTICS_DATASET_SUFFIX.test(env.ANALYTICS_DATASET_SUFFIX ?? '')) missing.push('ANALYTICS_DATASET_SUFFIX');
 
   return missing;
 }

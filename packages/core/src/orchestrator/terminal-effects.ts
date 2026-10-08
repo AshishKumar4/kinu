@@ -15,6 +15,7 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { writeActivityLog } from '../identity/activity-log';
 import { OWNER_FIXABLE_REFUSALS, providerRefusalCode, providerStatusOf } from '../providers/util';
+import { statedRetryAfterMs } from '../providers/fallback-cooldown';
 import type { AgentOrchestrator, TurnContinuity } from './agent-orchestrator';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
@@ -785,6 +786,8 @@ export class TerminalEffectLedger {
       // A real synchronous failure rolled back its body, not its right to back off.
       if (inline) this.recordAttempt(sequenceId, row, nextAttemptAt);
 
+      if (this.deferredForRateLimit(sequenceId, row, { cause: err }, nextAttemptAt)) return;
+
       const failure = toKinuError({
         doing: `running the ${name} effect a settled turn owed`,
         cause: err,
@@ -861,6 +864,24 @@ export class TerminalEffectLedger {
       SET status = ${status}, attempts = ${attempts}, next_attempt_at = ${next}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
         AND effect_key = ${row.key} AND status != 'completed'`;
+  }
+
+  /**
+   * A provider rate-limiting the account refuses for a while, and its reset is part of the answer: the effect is owed
+   * until then, which is not a failure (staging f69a2671a: 14 sleep_time runs read as failed on a 429). A spent
+   * allowance answers 429 too, and is the owner's to fix, so it is left to park.
+   */
+  private deferredForRateLimit(sequenceId: string, row: PendingRow, failure: { readonly cause: unknown }, nextAttemptAt: number): boolean {
+    if (providerStatusOf(failure) !== 429 || providerRefusalCode(failure) === 'budget') return false;
+    const now = this.deps.now();
+    const dueAt = Math.max(nextAttemptAt, now + (statedRetryAfterMs(failure, now) ?? 0));
+
+    void this.deps.sql`UPDATE terminal_effects SET next_attempt_at = ${dueAt}
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND effect_key = ${row.key} AND status != 'completed'`;
+    diagnostics.event('turn.terminal_effect_rate_limited', { sequence: sequenceId, effect: row.key, attempts: row.attempts + 1, dueInMs: dueAt - now });
+    this.record(sequenceId, row.key, 'pending');
+
+    return true;
   }
 
   private recordAttempt(sequenceId: string, row: PendingRow, nextAttemptAt: number): void {

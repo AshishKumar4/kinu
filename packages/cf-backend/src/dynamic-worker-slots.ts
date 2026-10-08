@@ -116,6 +116,7 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     runEvents: (...args) => settle(through((isolate) => isolate.runEvents(...args))),
     runEventText: (...args) => settle(through((isolate) => isolate.runEventText(...args))),
     idle: (...args) => settle(through((isolate) => isolate.idle(...args))),
+    step: (...args) => settle(through((isolate) => isolate.step(...args))),
     history: (...args) => settle(through((isolate) => isolate.history(...args))),
     historyPage: (...args) => settle(through((isolate) => isolate.historyPage(...args))),
     messageCount: (...args) => settle(through((isolate) => isolate.messageCount(...args))),

@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
-import { terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
+import { canaryActivations } from './durability-canary-telemetry';
+import { idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
 
 const HOUR = 3_600_000;
 
-const quiet: VersionRead = { ended: [], thrown: [], deployResets: [], effects: { failed: 0, failedTurns: 0, terminal: { observations: 0, settled: [], owed: [] } }, startups: [], alarms: [] };
+const quiet: VersionRead = { ended: [], thrown: [], deployResets: [], effects: { failed: 0, failedTurns: 0, terminal: { observations: 0, settled: [], owed: [], parked: [], deleted: [] } }, startups: [], idleWakes: [] };
 
 const HUNG = 'The Workers runtime canceled this request because it detected that your Worker\'s code had hung and would never generate a response.';
 
@@ -32,6 +33,28 @@ describe('what one deployed version did, as a deploy reports it', () => {
     expect(findings[0]?.finding).not.toContain('recovered');
   });
 
+  // Staging beaf28a46, 2026-10-08: both "still owed" sequences were task reminders in eval workspaces deleted 1.6 s
+  // later; an effect parked on an owner-fixable refusal is owed by design (T1-T3) until the owner acts.
+  test('a sequence parked on the owner or ended by its workspace\'s deletion is not owed work; a parked effect that failed since is', () => {
+    const at = (timestamp: number, event: string, sequence: string, fields: Record<string, string> = {}) => ({
+      timestamp, $workers: { durableObjectId: fields.object ?? 'object-a' }, source: { event, code: '', cause: '', fields: { sequence, ...fields } },
+    });
+
+    const read = terminalEffectStates([
+      at(10, 'turn.terminal_effect_parked', 'quota', { effect: 'v1:turn_lessons:a' }),
+      at(11, 'turn.terminal_effects_owed', 'quota', { owed: 'v1:turn_lessons:a' }),
+      at(10, 'turn.terminal_effect_parked', 'refused-then-broke', { effect: 'v1:turn_lessons:b' }),
+      at(20, 'turn.terminal_effect_failed', 'refused-then-broke', { effect: 'v1:turn_lessons:b' }),
+      at(21, 'turn.terminal_effects_owed', 'refused-then-broke', { owed: 'v1:turn_lessons:b' }),
+      at(30, 'turn.terminal_effects_owed', 'reminder', { owed: 'v1:task_reminder:c', object: 'deleted-workspace' }),
+      at(30, 'turn.terminal_effects_owed', 'reminder', { owed: 'v1:task_reminder:d', object: 'live-workspace' }),
+    ], new Map([['deleted-workspace', 32]]));
+
+    expect(read.parked.map((sample) => sample.sequence)).toEqual(['quota']);
+    expect(read.deleted.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['deleted-workspace/reminder']);
+    expect(read.owed.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['object-a/refused-then-broke', 'live-workspace/reminder']);
+  });
+
   // Staging's versions f62dfcb9 and b39035fc, 2026-09-30: 19 hung SupervisorRPC calls made by one orchestrator, and a
   // sleep_time effect failed and left owed, while 609 canceled sandbox calls were callers going away.
   test('an uncaught exception, a platform kill and a failed or owed effect are each a finding, with what a fixer starts from', () => {
@@ -47,7 +70,7 @@ describe('what one deployed version did, as a deploy reports it', () => {
       effects: {
         failed: 2, failedTurns: 2,
         failedSample: { object: '5c7e7ea536ffeb1e', sequence: 'dd25fbbb/42219f95', detail: 'v1:sleep_time:42219f95 (unavailable): the sleep-time compute returned no usable update' },
-        terminal: { observations: 3, settled: [], owed: [{ object: '5c7e7ea536ffeb1e', sequence: 'dd25fbbb/42219f95', detail: 'owed v1:sleep_time:42219f95' }] },
+        terminal: { observations: 3, settled: [], owed: [{ object: '5c7e7ea536ffeb1e', sequence: 'dd25fbbb/42219f95', detail: 'owed v1:sleep_time:42219f95' }], parked: [], deleted: [] },
       },
     });
 
@@ -77,19 +100,83 @@ describe('what one deployed version did, as a deploy reports it', () => {
     ]);
   });
 
-  // Staging under the tiers and the evals, 2026-09-30: at most 16 alarms in an object-hour, and at most 3 startups.
-  test('an object woken as often as the product calls a wake loop, by startups or alarms, is a finding, and the measured busiest is none', () => {
+  // Staging under the tiers and the evals, 2026-09-30: at most 3 startups in an object-hour.
+  test('an object started as often as the product calls a wake loop is a finding, and the measured busiest is none', () => {
     const loop = ALERT_THRESHOLDS.startupsPerHour;
 
     const findings = versionFindings({
       ...quiet,
       startups: [{ object: 'looping', hour: 0, startups: loop }, { object: 'busiest-measured', hour: 0, startups: 3 }],
-      alarms: [{ object: 'storming', hour: HOUR, count: loop }, { object: 'busiest-measured', hour: HOUR, count: 16 }],
     });
 
-    expect(findings).toEqual([
-      { what: 'a wake loop', finding: `object looping started ${String(loop)} times in an hour, 1 such hour(s)` },
-      { what: 'an alarm storm', finding: `object storming took ${String(loop)} alarms in the hour from 1970-01-01T01:00:00Z` },
+    expect(findings).toEqual([{ what: 'a wake loop', finding: `object looping started ${String(loop)} times in an hour, 1 such hour(s)` }]);
+  });
+
+  // Staging 36acc5de2 and fb848438c, 2026-10-08: a failed drain re-armed a second ahead after its eval ended (1,816 alarms
+  // in an hour, nothing else of its object), while live turns took 30-122 alarms an hour beside their own model calls.
+  test('an alarm with nothing to watch is an idle wake, however few; an alarm beside its object\'s own work is none', () => {
+    const minute = 60_000;
+
+    const minutes = (object: string, from: number, to: number, count = 1) =>
+      Array.from({ length: to - from }, (_, at) => ({ object, minute: HOUR + (from + at) * minute, count }));
+
+    const alarms = [...minutes('storming', 0, 60, 30), ...minutes('live-turn', 0, 60, 2), ...minutes('turn-ended', 0, 12)];
+    const work = [...minutes('storming', 0, 1), ...minutes('live-turn', 0, 60).filter((_, at) => at % 4 === 0), ...minutes('turn-ended', 0, 3)];
+    const idle = idleWakeHours(alarms, work);
+
+    expect(idle).toEqual([{ object: 'storming', hour: HOUR, count: 54 * 30 }, { object: 'turn-ended', hour: HOUR, count: 4 }]);
+    expect(versionFindings({ ...quiet, idleWakes: idle })).toEqual([
+      { what: 'idle wakes', finding: 'object storming woke 1620 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
+      { what: 'idle wakes', finding: 'object turn-ended woke 4 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
     ]);
   });
+});
+
+// Staging 2026-10-08: an 08:19:16Z row was absent from a read at 10:25Z and present at 10:50Z.
+describe('a read that issues a verdict', () => {
+  const reader = (counts: readonly number[]) => {
+    let clock = 0;
+    let at = 0;
+
+    return {
+      read: () => Promise.resolve(counts[Math.min(at++, counts.length - 1)] ?? 0),
+      fingerprint: (count: number) => String(count), rows: (count: number) => count,
+      now: () => clock,
+      sleep: (ms: number) => {
+        clock += ms;
+
+        return Promise.resolve();
+      },
+      gapMs: 10, capMs: 60,
+    };
+  };
+
+  test('is settled once two reads a gap apart agree, and names what landed after the first', async () => {
+    expect(await settledRead(reader([5, 7, 7]))).toEqual({ settled: true, value: 7, reads: 3, lateRows: 2 });
+  });
+
+  test('is unsettled when its counts still move at the cap, however close they came', async () => {
+    expect(await settledRead(reader([1, 2, 3, 4, 5, 6, 7, 8]))).toEqual({ settled: false, last: 7, reads: 7, lateRows: 6 });
+  });
+});
+
+// Staging 2026-10-08: the canary's workspace started six times, and analytics kept two of its startup rows.
+test('activations are the ordinals\' deltas, so a dropped startup row loses no count', () => {
+  const hour = (at: number, first: number, last: number, object = 'canary') => ({ object, name: 'eval-canary', hour: at * HOUR, first, last });
+
+  expect(ordinalHours([hour(1, 4, 6), hour(2, 9, 9), hour(1, 1, 1, 'quiet')]).map((row) => [row.object, row.startups])).toEqual([
+    ['canary', 3], ['canary', 3], ['quiet', 1],
+  ]);
+});
+
+const startup = (timestamp: number, activation: number) => ({
+  timestamp, source: { event: 'actor.startup', code: '', cause: '', fields: { activation } }, $workers: { scriptVersion: { id: 'v' } }, $metadata: {},
+});
+
+// Staging 2026-10-08: the canary's object started six times and telemetry kept four of the startup rows.
+test('a dropped startup row is an activation still: the ordinals count it, at an unknown time', () => {
+  const read = canaryActivations(null, [startup(10, 3), startup(40, 6), startup(20, 4)]);
+
+  expect(read.map((activation) => [activation.ordinal, activation.at])).toEqual([[3, 10], [4, 20], [5, null], [6, 40]]);
+  expect(canaryActivations([{ ordinal: 9, at: 5, version: null }], [startup(10, 3)])).toEqual([{ ordinal: 9, at: 5, version: null }]);
 });

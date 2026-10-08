@@ -40,8 +40,10 @@ export const PAGE_ROWS = {
   driveFolder: ['drive'],
   shared: ['blueprint-fork'],
   sharedBlueprint: ['blueprint-fork'],
+  sharedLive: ['users-share'],
   deploy: ['deploy-door'],
   updates: { unreachable: 'the update offer answers only the deployment\'s recorded owner and 404s everyone else (updates/routes.ts), and the eval identity is not the owner' },
+  connected: { unreachable: 'only a provider sign-in ends here, in a window it opened, and a deployed row signs in with a minted session, never through a provider' },
 } as const satisfies Record<keyof typeof APP_ROUTES, Rows | Unreachable>;
 
 /** Every pane of the workspace strip. */
@@ -62,7 +64,7 @@ export const ENTRY_ROWS = {
   tui: ['enter-sends'],
   cli: ['workspace-title', 'preview-address', 'command-refusal', 'multi-account'],
   daemon: ['device-link', 'two-machines', 'approve-clears'],
-  shareHost: ['public-share', 'share-capability-cut'],
+  shareHost: ['public-share', 'share-capability-cut', 'users-share'],
 } as const satisfies Record<string, Rows>;
 
 /** What the owner asked a deployed proof of, beyond a page answering. */

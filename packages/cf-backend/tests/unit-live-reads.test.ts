@@ -186,7 +186,9 @@ test('an agent dismissed names the Agents panel and the roster', async () => {
 // eval-site-preview-1-2ypddc, staging f75f06932, 2026-10-01: the eval's settle read the jobs every second because it
 // had no other way to learn one ended; the room's frame for the jobs read is that way.
 test('a job that ends names the jobs read', async () => {
-  const { agent, db } = orchestratorHarness();
+  const { agent, db, started } = orchestratorHarness();
+  // Started by this activation, which runs it: one already running when it began is a dead one's, and re-driven.
+  await started;
   jobsOver(db).create({ id: 'bgjob-build', kind: 'shell', workMode: 'build', now: Date.now(), label: 'build', input: '{"command":"build"}' });
   const named = namedReads(agent);
   endTick(agent);

@@ -170,6 +170,8 @@ export interface TestUserDOOptions {
   destroyWorkspaceError?: string;
   /** Hold workspace teardown open to observe the in-flight destroy window, or route the call to a real workspace object. */
   destroyWorkspaceGate?: (name: string, ownerUserId: string) => Promise<void>;
+  /** What the workspace's quiet before its deletion does; nothing when unset. */
+  quietWorkspaceGate?: (name: string, ownerUserId: string) => Promise<void>;
   /** Revive over storage a retired DO wrote (eviction). The caller owns the handle; `close` leaves it open. */
   storage?: Database;
   /** How many subtree pushes a capability install reports missed, asked per call. */
@@ -536,6 +538,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({
+        async quietForDeletion(ownerUserId: string) {
+          await options.quietWorkspaceGate?.(name, ownerUserId);
+        },
         async destroyAgent(ownerUserId: string) {
           if (options.destroyWorkspaceGate) await options.destroyWorkspaceGate(name, ownerUserId);
 

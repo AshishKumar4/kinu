@@ -71,7 +71,8 @@ import { buildDrainBatch } from '../src/events/hub/drain';
 import { createTestActor, createTestRuntime, makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 
-const TARGET_ID = 'state/output-format';
+// A section with no slots: the fixtures below rewrite its last words, which must not cut a `{{slot}}`.
+const TARGET_ID = 'state/persistence';
 
 const target = PROMPT_SECTIONS.find((section) => section.id === TARGET_ID);
 
@@ -746,7 +747,7 @@ describe('routing — every typed edit lands in the store that already owns it',
 
     const { port } = scriptedRefiner(proposalText({
       scope: 'workspace',
-      summary: 'tighten the output-format section',
+      summary: 'tighten the persistence section',
       edits: [{
         kind: 'prompt_section',
         sectionId: TARGET_ID,
@@ -1421,7 +1422,7 @@ describe('promotion — a live trial is the only thing that applies', () => {
 
     const { port } = scriptedRefiner(proposalText({
       scope: 'workspace',
-      summary: 'tighten the output-format section',
+      summary: 'tighten the persistence section',
       edits: [{
         kind: 'prompt_section',
         sectionId: TARGET_ID,
@@ -1452,7 +1453,7 @@ describe('promotion — a live trial is the only thing that applies', () => {
 
     const { port } = scriptedRefiner(proposalText({
       scope: 'workspace',
-      summary: 'tighten the output-format section',
+      summary: 'tighten the persistence section',
       edits: [{
         kind: 'prompt_section',
         sectionId: TARGET_ID,

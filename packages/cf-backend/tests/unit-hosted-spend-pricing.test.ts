@@ -61,7 +61,7 @@ test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the ro
     ? mainDatabase(workspace).query<{ payload: string }, [string]>(
       "SELECT payload FROM run_events WHERE type = 'step_finish' AND actor_id = ? ORDER BY ts, event_index",
     ).all(root.actorId)
-    : agentSql(hire.actor_id)<{ payload: string }>`
+    : agentSql(workspace, hire.actor_id)<{ payload: string }>`
       SELECT payload FROM run_events WHERE type = 'step_finish' AND actor_id = ${hire.actor_id} ORDER BY ts, event_index`)
     .map((row) => v.parse(StepSpendSchema, JSON.parse(row.payload)).usd);
 

@@ -17,7 +17,7 @@ import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, chmodS
 import { homedir, constants as osConstants } from 'node:os';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, actorHomeName, agentAffinityKey, MAIN_AGENT,
+  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, actorHomeName, actorAffinity, MAIN_AGENT,
   observeNamespace, withMountTable, type WriteObserver,
   WORKSPACE_IDENTITY_DDL,
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
@@ -316,7 +316,7 @@ function buildCLIRuntime(
 
   let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
     llm: config.llm,
-    conversation: agentAffinityKey(actor.name),
+    affinity: actorAffinity(actor),
     credentials: config.providerCredentials,
     oauthStore: config.oauthStore,
     route: resolution,
@@ -420,9 +420,10 @@ function buildCLIRuntime(
   const filesOwner: FilesOwner = 'user';
 
   // Each call is a fresh `sh -c`; a named one keeps its directory and exports in a file under KINU_HOME, per agent.
+  // Every workspace's shells share that directory, and a facet's home is unique only in its own workspace.
   const facetShell = (facet: string | undefined): Shell => {
     const bash = createBashShell(createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(space, facet)), {
-      home: cwd, scope: facet === undefined ? agentName : `${agentName}/${facet}`, stateDirectory: join(kinuHome(), 'shells'),
+      home: cwd, scope: facet === undefined ? agentName : `${actor.workspaceId}/${facet}`, stateDirectory: join(kinuHome(), 'shells'),
     });
 
     // A named shell resumes where an earlier process left it, so its review starts there too.
@@ -649,7 +650,7 @@ async function buildCLIHeadRuntime(
 
   if (opts.actorBinding.origin !== 'swarm') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
-  const physicalName = actorHomeName({ origin: opts.actorBinding.origin, storageKey: actor.storageKey });
+  const physicalName = actorHomeName({ origin: opts.actorBinding.origin, name: actor.name, storageKey: actor.storageKey });
 
   const stores = createAgentStores(() => sql, () => actor, (write) => parent.storage.transactionSync(write), () => parent.filesForActor(actor));
 

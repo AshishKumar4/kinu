@@ -40,7 +40,7 @@ import {
   publishSubordinateReport,
   TurnReports,
   type SubordinateReportLedger,
-  mintSubordinateName,
+  agentNamer,
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
   missionOf,
@@ -653,7 +653,7 @@ export class LocalAgentHost {
         roster,
         runtime: this.childRuntime(input.key),
         now: () => Date.now(),
-        createName: mintSubordinateName,
+        createName: agentNamer(input.tree.directory, roster),
         afterTurn: (_child, work) => { this.retireOffTurn(input.key, work); },
       }),
       team: null,
@@ -909,11 +909,8 @@ export class LocalAgentHost {
 
     if (entry.parentKey === null) {
       // Finish a retirement this process interrupted; only the recorded storage path lives outside the database.
-      await recoverLocalActorRetirements(entry.ws.rt.actor, async (path) => {
-        const storageKey = path[path.length - 1];
-
-        if (storageKey === undefined) return;
-        const record = entry.tree.host.describe(storageKey);
+      await recoverLocalActorRetirements(entry.ws.rt.actor, async (_path, reference) => {
+        const record = entry.tree.host.describe(reference.actorId);
 
         if (record) await this.discardActorBytes(entry.ws, record);
       });
@@ -963,6 +960,14 @@ export class LocalAgentHost {
 
     if (!state || event.type !== 'turn-start') return;
     state.ownerDriven = event.kind === 'user';
+
+    // The owner writing to an agent that waits on input answers that wait, as a message from its hirer does.
+    if (state.ownerDriven) {
+      const roster = this.requireActorEntry(child.actor.record.parentActorId ?? '').roster;
+
+      if (roster.get(child.name)?.status === 'awaiting_input') roster.resumeAfterMessage(child.name);
+    }
+
     state.spoke = false;
     state.settled = false;
     state.mode = event.workMode;
@@ -1096,7 +1101,7 @@ export class LocalAgentHost {
       inheritedContext: (): Promise<SerializedMessage[]> => inheritedContextFromTranscript(parent.actor.session.canonical.transcript(parent.sessionId)),
       originContext: async () => parent.actor.session.history,
       ownMission: () => missionOf(soulOf(parent.tree.db)) ?? '',
-      createName: mintSubordinateName,
+      createName: agentNamer(parent.tree.directory, parent.roster),
       rosterMoved: () => { parent.tree.liveReads.moved(ROSTER_READS); },
       broadcastTask: (event) => parent.session.host.broadcast(metadataBroadcastEvent(
         'subordinate_event',

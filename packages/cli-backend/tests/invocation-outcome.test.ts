@@ -26,9 +26,9 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
     }),
   });
 
-  const tool = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: providers })({
+  const tool = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: providers })({
     cwd: WORKSPACE_ROOT,
-    native: {}, external: () => ({}), craftedTools: () => [], providers: [],
+    native: {}, external: () => ({}), craftedTools: () => [],
   });
 
   const accumulator = new TurnAccumulator();

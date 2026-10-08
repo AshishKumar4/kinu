@@ -82,6 +82,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly resident = new ResidentSlateProcesses({
     session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
     facetManager: async () => this.facets,
+    retained: () => [],
     // What OrchestratorAgent hands its slates; kept to ask where esbuild ran.
     bundler: (vfs) => {
       const bundler = supervisorEsbuildService(this.ctx, this.env, vfs);

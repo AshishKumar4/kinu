@@ -46,9 +46,17 @@
 # Step 3 asserts this from wrangler's own output rather than trusting it.
 #
 # Usage:
-#   bun run deploy [--promote | --rollback] [--reset]
-#   bash scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only]
+#   bun run deploy [--promote | --rollback] [--reset] [--evals]
+#   bash scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] [--evals]
 #   bash scripts/deploy.sh --rollback
+#
+# `--evals` runs the real-model evals a deploy can start: on staging, the
+# evals.yml dispatch (five trials on staging against production) and the soak;
+# on a promotion, the soak on production. Without it a deploy runs no real-model
+# eval (the owner, 2026-10-08): evals run on a staging that has stopped moving,
+# against production, and staging stays quiet while they run, so they are
+# dispatched by hand once it has (`bun scripts/evals-dispatch.ts <sha>`, then
+# `bun scripts/promote.ts evals <run>` names the run in the build's record).
 #
 # `--promote` deploys production, and only the build staging verified: the
 # record staging's green deploy of HEAD wrote (scripts/promote.ts) stands for
@@ -131,6 +139,7 @@ KINU_GATES_ONLY=0
 KINU_PROMOTE=0
 KINU_ROLLBACK=0
 KINU_RESET=0
+KINU_EVALS=0
 for option in "$@"; do
   case "$option" in
     --promote) KINU_PROMOTE=1 ;;
@@ -138,9 +147,10 @@ for option in "$@"; do
     --bootstrap) KINU_BOOTSTRAP=1 ;;
     --gates-only) KINU_GATES_ONLY=1 ;;
     --reset) KINU_RESET=1 ;;
+    --evals) KINU_EVALS=1 ;;
     *)
       echo -e "${RED}Unknown option '$option'.${NC}"
-      echo "Usage: scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] | --rollback"
+      echo "Usage: scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] [--evals] | --rollback"
       exit 2
       ;;
   esac
@@ -501,6 +511,9 @@ smoke_red() {
   SMOKE_FAIL=1
 }
 
+# The smoke's reads of this deploy's own version: `ours` and `not_ours`.
+source "$KINU_ROOT/scripts/deploy-smoke.sh"
+
 publish_build() {
 echo ""
 echo -e "${BOLD}Step 2: Building Kinu for $KINU_ENV${NC}"
@@ -621,9 +634,6 @@ if [ "$KINU_RESET" = "1" ]; then
   echo ""
   echo -e "${BOLD}Step 2b: Resetting $KINU_WORKER${NC}"
   KINU_RESET_RECORD="$(mktemp -t kinu-reset.XXXXXX.json)"
-  # Eval-service's credentials, the reviewer's login among them, outlive the reset: restored once the build serves.
-  bun "$KINU_ROOT/scripts/credential-checkpoint.ts" save "$KINU_URL" \
-    || { publish_red "eval-service's credentials were not captured, as the line above says, so nothing was reset or deployed"; return 1; }
   bun "$KINU_ROOT/scripts/reset.ts" wipe "$KINU_ENV" "$KINU_RESET_RECORD" \
     || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped, and a deploy with --reset finishes it from its record"; return 1; }
   KINU_RECORD_ARGS=("$KINU_RESET_RECORD")
@@ -678,61 +688,57 @@ fi
 cd "$KINU_ROOT" || { publish_red "cannot cd to $KINU_ROOT"; return 1; }
 
 # ── Step 4: Post-deploy smoke test ───────────────────────────────
+# Every check reads the response of the version this deploy made (`ours`): a
+# version it replaced may still answer at an edge for seconds after the upload.
 echo ""
-echo -e "${BOLD}Step 4: Post-deploy smoke test${NC}"
-echo "Waiting 10s for deployments to propagate..."
-sleep 10
+echo -e "${BOLD}Step 4: Post-deploy smoke test of version ${KINU_VERSION:-<unnamed>}${NC}"
 
 SMOKE_FAIL=0
 KINU_SMOKE_FINDINGS=()
+SMOKE_BODY="$(mktemp -t kinu-smoke-body.XXXXXX)"
 
-# The deployment's own route.
-LIVE_STATUS=$(curl -so /dev/null -w '%{http_code}' --max-time 15 "$KINU_URL" 2>/dev/null || echo "000")
-if [ "$LIVE_STATUS" = "200" ]; then
-  echo -e "${GREEN}✅ Kinu live site returns 200${NC} ($KINU_URL)"
-else
+if [ -z "$KINU_VERSION" ]; then
+  smoke_red "wrangler named no Version ID, so no answer can be told to be this deploy's"
+fi
+
+# The deployment's own route, and the application shell it serves.
+ours "$SMOKE_BODY" --max-time 15 "$KINU_URL"
+LIVE_STATUS="$KINU_STATUS"
+FINDING="$(not_ours "the live site")"
+if [ -n "$FINDING" ]; then
+  smoke_red "$FINDING"
+elif [ "$LIVE_STATUS" != "200" ]; then
   smoke_red "Kinu live site returns $LIVE_STATUS ($KINU_URL)"
+elif grep -q "id=\"$KINU_APP_ROOT\"" "$SMOKE_BODY" && grep -q '<script type="module"' "$SMOKE_BODY"; then
+  echo -e "${GREEN}✅ Kinu live site returns 200 with the application shell${NC} ($KINU_URL)"
+else
+  smoke_red "Kinu live site returned 200 without the application shell"
 fi
-
-if [ "$LIVE_STATUS" = "200" ]; then
-  LIVE_HTML=$(curl -fsSL --max-time 15 "$KINU_URL" 2>/dev/null || true)
-  if grep -q "id=\"$KINU_APP_ROOT\"" <<< "$LIVE_HTML" \
-    && grep -q '<script type="module"' <<< "$LIVE_HTML"; then
-    echo -e "${GREEN}✅ Kinu live site serves the application shell${NC}"
-  else
-    smoke_red "Kinu live site returned 200 without the application shell"
-  fi
-fi
-
 
 # One GET that answers "did my deploy land?". /api/health reads its build stamp
 # out of the deployed asset bundle, so a mismatch here also means the CLI
-# download assets are stale or missing. Edge rollout takes up to ~2 minutes,
-# so the stamp check retries with backoff before calling the deploy bad —
-# a stamp that NEVER converges is the real failure this guards.
-HEALTH_SHA=""
-for _try in 1 2 3 4 5 6 7 8; do
-  HEALTH_JSON=$(curl -s --max-time 15 "${KINU_URL}api/health?smoke=$_try" 2>/dev/null)
-  HEALTH_SHA=$(printf '%s' "$HEALTH_JSON" | json_field build.sha)
-  [ "$HEALTH_SHA" = "$KINU_SHA" ] && break
-  sleep 15
-done
-if [ "$HEALTH_SHA" = "$KINU_SHA" ]; then
+# download assets are stale or missing.
+ours "$SMOKE_BODY" --max-time 15 "${KINU_URL}api/health"
+HEALTH_SHA="$(json_field build.sha < "$SMOKE_BODY")"
+FINDING="$(not_ours "/api/health")"
+if [ -n "$FINDING" ]; then
+  smoke_red "$FINDING"
+elif [ "$HEALTH_SHA" = "$KINU_SHA" ]; then
   echo -e "${GREEN}✅ /api/health reports the deployed build ($KINU_SHA)${NC}"
 else
   smoke_red "/api/health build stamp is '${HEALTH_SHA:-<none>}', expected '$KINU_SHA'"
-  echo "   Body: ${HEALTH_JSON:0:200}"
+  echo "   Body: $(head -c 200 "$SMOKE_BODY")"
 fi
 
 # The §0 regression: this asset once came back as the SPA shell wearing an
 # application/json content-type, so `kinu update` could never see a version.
-VERSION_SHA=""
-for _try in 1 2 3 4 5 6 7 8; do
-  VERSION_SHA=$(curl -fsSL --max-time 15 "${KINU_URL}downloads/kinu-version.json?smoke=$_try" 2>/dev/null | json_field sha)
-  [ "$VERSION_SHA" = "$KINU_SHA" ] && break
-  sleep 15
-done
-if [ "$VERSION_SHA" = "$KINU_SHA" ]; then
+ours "$SMOKE_BODY" --max-time 15 "${KINU_URL}downloads/kinu-version.json"
+VERSION_SHA="$(json_field sha < "$SMOKE_BODY")"
+SIGNED_ARTIFACT_SHA="$(bun -e 'const m=JSON.parse(await Bun.stdin.text()); process.stdout.write(m.checksums?.["/downloads/"+process.argv[1]] ?? "")' "$KINU_WORKER_ARTIFACT" < "$SMOKE_BODY" 2>/dev/null)"
+FINDING="$(not_ours "kinu-version.json")"
+if [ -n "$FINDING" ]; then
+  smoke_red "$FINDING"
+elif [ "$VERSION_SHA" = "$KINU_SHA" ]; then
   echo -e "${GREEN}✅ Published kinu-version.json is real JSON for this build${NC}"
 else
   smoke_red "Published kinu-version.json sha is '${VERSION_SHA:-<unparseable>}', expected '$KINU_SHA'"
@@ -741,25 +747,29 @@ fi
 # The self-deploy channel. Same SPA-shell hazard as the stamp above, and worse
 # consequences: a deployment reading a shell instead of a manifest would try to
 # upload a Worker made of an HTML page.
-RELEASE_SHA=""
-for _try in 1 2 3 4 5 6 7 8; do
-  RELEASE_SHA=$(curl -fsSL --max-time 15 "${KINU_URL}downloads/release.json?smoke=$_try" 2>/dev/null | json_field sha)
-  [ "$RELEASE_SHA" = "$KINU_SHA" ] && break
-  sleep 15
-done
-RELEASE_ARTIFACT_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/$KINU_WORKER_ARTIFACT.sha256" 2>/dev/null | awk '{print $1}')"
-SIGNED_ARTIFACT_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/kinu-version.json" 2>/dev/null \
-  | bun -e 'const m=JSON.parse(await Bun.stdin.text()); process.stdout.write(m.checksums?.["/downloads/"+process.argv[1]] ?? "")' "$KINU_WORKER_ARTIFACT")"
-ARTIFACT_STATUS="$(curl -s -o /dev/null -w '%{http_code}' -I --max-time 30 "${KINU_URL}downloads/$KINU_WORKER_ARTIFACT" 2>/dev/null)"
-if [ "$RELEASE_SHA" = "$KINU_SHA" ] && [ -n "$RELEASE_ARTIFACT_SHA" ] \
+ours "$SMOKE_BODY" --max-time 15 "${KINU_URL}downloads/release.json"
+RELEASE_SHA="$(json_field sha < "$SMOKE_BODY")"
+RELEASE_FINDING="$(not_ours "release.json")"
+ours "$SMOKE_BODY" --max-time 15 "${KINU_URL}downloads/$KINU_WORKER_ARTIFACT.sha256"
+RELEASE_ARTIFACT_SHA="$(awk '{print $1}' "$SMOKE_BODY")"
+CHECKSUM_FINDING="$(not_ours "the worker artifact's .sha256")"
+ours /dev/null -I --max-time 30 "${KINU_URL}downloads/$KINU_WORKER_ARTIFACT"
+ARTIFACT_STATUS="$KINU_STATUS"
+ARTIFACT_FINDING="$(not_ours "the worker artifact route")"
+if [ -n "$RELEASE_FINDING$CHECKSUM_FINDING$ARTIFACT_FINDING" ]; then
+  for FINDING in "$RELEASE_FINDING" "$CHECKSUM_FINDING" "$ARTIFACT_FINDING"; do [ -z "$FINDING" ] || smoke_red "$FINDING"; done
+elif [ "$RELEASE_SHA" = "$KINU_SHA" ] && [ -n "$RELEASE_ARTIFACT_SHA" ] \
   && [ "$RELEASE_ARTIFACT_SHA" = "$SIGNED_ARTIFACT_SHA" ] && [ "$ARTIFACT_STATUS" = "200" ]; then
   echo -e "${GREEN}✅ release.json names this build, the artifact route answers, and its checksum is the signed one${NC}"
 else
   smoke_red "release.json sha is '${RELEASE_SHA:-<unparseable>}' (expected '$KINU_SHA'); worker artifact checksum '${RELEASE_ARTIFACT_SHA:-<none>}' vs signed '${SIGNED_ARTIFACT_SHA:-<none>}'; artifact route answered ${ARTIFACT_STATUS:-<none>}"
 fi
 
-CLI_SHIM=$(curl -s --max-time 15 "${KINU_URL}downloads/kinu" 2>/dev/null)
-if echo "$CLI_SHIM" | grep -q 'downloads/kinu-cli-' && ! echo "$CLI_SHIM" | grep -q 'github.com'; then
+ours "$SMOKE_BODY" --max-time 15 "${KINU_URL}downloads/kinu"
+FINDING="$(not_ours "the CLI launcher")"
+if [ -n "$FINDING" ]; then
+  smoke_red "$FINDING"
+elif grep -q 'downloads/kinu-cli-' "$SMOKE_BODY" && ! grep -q 'github.com' "$SMOKE_BODY"; then
   echo -e "${GREEN}✅ Kinu CLI launcher uses the deployed build artifacts${NC}"
 else
   smoke_red "Kinu CLI launcher is not using the deployed build artifacts"
@@ -775,29 +785,31 @@ for artifact in "${KINU_CLI_ARTIFACTS[@]}"; do
     kinu-runtime-cpython.tar.gz) MEMBER='kinu/node_modules/@nimbus-sh/runtime-cpython/manifest.json' ;;
     *) MEMBER='kinu/cli.js' ;;
   esac
-  CLI_ARTIFACT_OK=0
-  for attempt in 1 2 3 4 5 6; do
-    if curl -fsSL --max-time 60 "${KINU_URL}downloads/$artifact" -o "$CLI_ARTIFACT_TMP" \
-      && tar -tzf "$CLI_ARTIFACT_TMP" > "$CLI_ARTIFACT_LIST" \
-      && grep -Fq "$MEMBER" "$CLI_ARTIFACT_LIST"; then
-      CLI_ARTIFACT_OK=1
-      break
-    fi
-    [ "$attempt" = "6" ] || sleep 5
-  done
-  if [ "$CLI_ARTIFACT_OK" != "1" ]; then
-    smoke_red "$artifact is missing, unreadable, or carries no $MEMBER"
+  ours "$CLI_ARTIFACT_TMP" -L --max-time 60 "${KINU_URL}downloads/$artifact"
+  ARTIFACT_STATUS="$KINU_STATUS"
+  FINDING="$(not_ours "$artifact")"
+  if [ -n "$FINDING" ]; then
+    smoke_red "$FINDING"
     continue
   fi
-  PUBLISHED_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/$artifact.sha256" 2>/dev/null | awk '{print $1}')"
+  if [ "$ARTIFACT_STATUS" != "200" ] || ! tar -tzf "$CLI_ARTIFACT_TMP" > "$CLI_ARTIFACT_LIST" 2>/dev/null \
+    || ! grep -Fq "$MEMBER" "$CLI_ARTIFACT_LIST"; then
+    smoke_red "$artifact answered $ARTIFACT_STATUS, is unreadable, or carries no $MEMBER"
+    continue
+  fi
+  ours "$SMOKE_BODY" --max-time 15 "${KINU_URL}downloads/$artifact.sha256"
+  FINDING="$(not_ours "$artifact.sha256")"
+  PUBLISHED_SHA="$(awk '{print $1}' "$SMOKE_BODY")"
   ACTUAL_SHA="$(sha256sum "$CLI_ARTIFACT_TMP" | awk '{print $1}')"
-  if [ -n "$PUBLISHED_SHA" ] && [ "$PUBLISHED_SHA" = "$ACTUAL_SHA" ]; then
+  if [ -n "$FINDING" ]; then
+    smoke_red "$FINDING"
+  elif [ -n "$PUBLISHED_SHA" ] && [ "$PUBLISHED_SHA" = "$ACTUAL_SHA" ]; then
     echo -e "${GREEN}✅ $artifact downloads and matches its published .sha256${NC}"
   else
     smoke_red "$artifact checksum is missing or does not match the download"
   fi
 done
-rm -f "$CLI_ARTIFACT_TMP" "$CLI_ARTIFACT_LIST"
+rm -f "$CLI_ARTIFACT_TMP" "$CLI_ARTIFACT_LIST" "$SMOKE_BODY"
 
 # Every name the deployment serves, over a certificate that verifies, before anything drives it. The upload returns
 # before the edge holds a certificate for each new name: staging's first deploy started its tiers while the one for
@@ -967,7 +979,7 @@ fi
 
 if [ "$KINU_PROMOTE" = "1" ]; then
   if [ -z "$KINU_TIERS_WHY" ]; then
-    if provision_eval_keys "$KINU_EVAL_ORIGIN"; then start_soak; fi
+    if [ "$KINU_EVALS" = "1" ] && provision_eval_keys "$KINU_EVAL_ORIGIN"; then start_soak; fi
     run_phase post-publish
   else
     skip_phase post-publish "$KINU_TIERS_WHY"
@@ -977,7 +989,7 @@ else
   # Started first, so its hours run while the wave runs here. Without its run
   # this build has no verdict to be promoted on, so a failed dispatch is a red.
   KINU_EVAL_KEYS=0
-  if [ "$KINU_SERVING" = "1" ]; then
+  if [ "$KINU_EVALS" = "1" ] && [ "$KINU_SERVING" = "1" ]; then
     if provision_eval_keys "$KINU_EVAL_ORIGIN" "$EVAL_BASELINE_ORIGIN"; then
       KINU_EVAL_KEYS=1
       dispatch_evals \
@@ -1033,10 +1045,12 @@ fi
 # this deploy published, read through `scripts/prod-logs.ts version` once the
 # tiers have driven it (the soak may still run), with zero users the traffic being our
 # own: an invocation that ended in an uncaught exception or that the platform
-# ended, a terminal effect that failed or was left owed, an object woken as
-# often as the product calls a wake loop, by startups or by alarms. Each is a
-# red of this deploy whatever its tests said, in the report under `telemetry`
-# (L18); so is telemetry it cannot read.
+# ended, a terminal effect that failed or was left owed, an object started as
+# often as the product calls a wake loop, an alarm with nothing to watch. Each
+# is a red of this deploy whatever its tests said, in the report under
+# `telemetry` (L18); so is telemetry it cannot read, and telemetry whose counts
+# still move after an hour of re-reads (it re-reads every ten minutes until
+# two reads agree, since rows land late).
 if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ]; then
   echo ""
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
@@ -1081,7 +1095,10 @@ echo "          version ${KINU_VERSION:-unknown}"
 echo "          build   $KINU_SHA"
 echo ""
 echo -e "${GREEN}✅ Kinu Worker deployed and verified.${NC}"
-if [ "$KINU_ENV" = "staging" ]; then
+if [ "$KINU_ENV" = "staging" ] && [ -z "$KINU_EVALS_RUN" ]; then
+  echo "No eval ran. Once staging has stopped moving: bun scripts/evals-dispatch.ts $KINU_SHA, then bun scripts/promote.ts evals <its run>;"
+  echo "a green Verdict lets it be promoted with: bun run deploy --promote"
+elif [ "$KINU_ENV" = "staging" ]; then
   echo "Promote it to production with: bun run deploy --promote"
 else
   echo "Return production to the build it took before with: bun run deploy --rollback"

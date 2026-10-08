@@ -34,7 +34,7 @@ import {
   authenticateRequest, AuthError, crossSiteRejection,
   type AuthIdentity,
 } from "./auth/session";
-import { containPreviewResponse, hostOf, isPreviewHostRequest, serveApp } from "@kinu.run/core";
+import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
 import { ownerCaller } from "@kinu.run/core";
 import { appendIdentityHeaders } from "./cli/rpc-gate";
@@ -201,7 +201,7 @@ export default {
 
     const response = await worker.fetch(request, env, ctx);
 
-    return withTransportSecurity(response, url, env);
+    return published(response, url, env);
   },
 
   // Cloudflare Email Routing catch-all on EMAIL_DOMAIN.
@@ -258,15 +258,23 @@ function httpsUpgrade(url: URL, env: Env): Response | null {
 
 const HSTS = 'max-age=31536000; includeSubDomains';
 
-/** `includeSubDomains` deliberately covers preview hosts (the zone cert has the
- *  wildcard); no `preload`. 101 passes untouched: handshake headers are immutable. */
-function withTransportSecurity(response: Response, url: URL, env: Env): Response {
+/** The header naming the version of this Worker that answered a request. */
+const VERSION_HEADER = 'x-kinu-version';
+
+/** What every response a published host serves carries: HSTS, and the version that answered. `includeSubDomains`
+ *  deliberately covers preview hosts (the zone cert has the wildcard); no `preload`. A new version reaches the edge
+ *  over seconds, so the version a deploy's smoke test reads is the one that answered it, not the one it just uploaded
+ *  (2026-10-08: 23 s after the deploy of b8340eebf, one of its requests was answered by the reset placeholder before
+ *  it). 101 passes untouched: handshake headers are immutable. */
+function published(response: Response, url: URL, env: Env): Response {
   if (url.protocol !== 'https:' || response.status === 101 || !isPublishedHost(url, env)) {
     return response;
   }
 
   const headers = new Headers(response.headers);
   headers.set('strict-transport-security', HSTS);
+
+  if (env.CF_VERSION_METADATA !== undefined) headers.set(VERSION_HEADER, env.CF_VERSION_METADATA.id);
 
   return new Response(response.body, {
     status: response.status,
@@ -277,6 +285,14 @@ function withTransportSecurity(response: Response, url: URL, env: Env): Response
 
 /** Preview hosts serve only previews: no session is minted there. Share labels first, so neither parser sees the other's. */
 const previewHost = new Hono<FamilyEnv<Env, object>>({ getPath: rawPath });
+
+// The app's own faces, on every preview host's own origin, so a slate's page sets its text as the chat does; any other
+// name under the path is the page's own to answer.
+previewHost.get(`${SLATE_FONTS_PATH}:file`, async (c, next) => {
+  const file = appFontFile(c.req.param('file'));
+
+  return file === null ? await next() : await c.env.ASSETS.fetch(new Request(new URL(`${APP_FONTS_PATH}${file}`, c.req.url)));
+});
 
 previewHost.use('*', async (c, next) => {
   const share = await handleSlateShareHostRequest(c.req.raw, c.env);

@@ -8,7 +8,6 @@ import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import {
   Agent, callable, getCurrentAgent,
   type AgentContext, type Connection, type ConnectionContext,
-  type FiberRecoveryContext, type FiberRecoveryResult,
   type WSMessage,
 } from "agents";
 import {
@@ -43,7 +42,7 @@ import {
 import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { createAgentTracing, hold, logged, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createActorCompaction, type CompactionExtension,
   createCompactionStateStore,
@@ -53,7 +52,7 @@ import { convertToModelMessages } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 
 import {
-  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference, createDbCodemodeProvider,
+  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference,
   type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
@@ -81,7 +80,7 @@ import {
   // (see turn-failure.ts).
   TurnAccumulator, AgentOrchestrator, ActorSession, type AgentOrchestratorDeps, type BackendHost,
   type ChatTurnInput, type ComposedRequest,
-  type AgentsToolAction,
+  type AgentsOp,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
   BUILTIN_TOOLS,
@@ -98,7 +97,7 @@ import {
   // Spend governor is opt-in: no label means no cap.
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   normalizeUsage, priceCall, type Usage,
-  generateReported, type GenerateRequest,
+  generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
   WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
@@ -133,12 +132,12 @@ import {
   type SubordinateReportStatus, type SubordinateReportOrigin,
   type SubordinateEventResult,
   // One minting rule for every subordinate, on either backend
-  mintSubordinateName,
+  agentNamer,
   // Subordinate tree depth cap: derived per child, never stated by one
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  parseModelSpec, specModelInfo, assembleActorTurn, promptCacheKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources,
+  parseModelSpec, specModelInfo, assembleActorTurn, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources,
   type ModelWindow, type AgentsMdSources,
   ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
@@ -153,9 +152,9 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile, turnAuthor,
   type OperationProfile,
-  agentRoleSwitch, executorNamespace, toolsNamespace, createStateCodemodeProvider, runWorkModeInvocation, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
+  agentRoleSwitch, toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type CodemodeSurface,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
-  narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
+  narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
@@ -173,14 +172,6 @@ import {
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
 import {
-  classifyRecoveredFiber, EVOLUTION_LANE_FIBER,
-  TERMINAL_LANE_FIBER,
-  // Recovery budget this backend declares to the SDK, applied before the framework allocates.
-  sweepUnrecoverableFibers, fiberRowStore,
-  FIBER_RECOVERY_MAX_AGE_MS,
-  type FiberLaneTransports,
-} from "./fiber-recovery";
-import {
   // Shared retry pace for notice carrier, this tick's re-arm and the job runner's deferral.
   recoveryBackoffMs,
   // Once-only lifecycle for one settled response; both backends drive this state machine.
@@ -190,18 +181,21 @@ import {
   AdvisorRecoverySnapshotSchema,
   type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
-import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
-import { codemodeLauncher, type ProgramLaunch } from "./codemode-sandbox";
+import { createCodemodeToolFactory, type CodemodeFactory, type CodemodeScope } from "./codemode-tool";
+import { BROWSER_PRELUDE } from './browser-prelude';
+import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import type { AgentStoreBroker } from "./agent-facets";
-import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
+import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel, SlateSurfaceValue } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
+import type { SlateDispatchContext } from "./slates/host";
 import { diagnostics, KinuError, refusalOf, refusing, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
+import type { McpToolSurface } from "./user/mcp-servers";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import type { WorkspaceTerminal } from "./workspace-host";
@@ -363,8 +357,8 @@ function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   return BUILTIN_TOOLS.filter((name) => gate[name] ?? true);
 }
 
-/** The `agents` actions this actor profile supports, gated by the same rule as the tool's enum. */
-function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsToolAction[] {
+/** The `agents` operations this actor profile offers, by the same rule the tool offers them. */
+function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsOp[] {
   return agentsActionsFor({ swarm: {}, swarms, team: deps.team, peers: deps.peers });
 }
 
@@ -396,6 +390,7 @@ export interface UntimedArms {
 
 export interface ActorDynamicContextExtras {
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
+  readonly failingSlates?: () => readonly string[];
   readonly extraMissingCapabilities?: () => readonly MissingCapability[];
 }
 
@@ -408,9 +403,17 @@ interface WorkspaceTitleInputs {
  * unreachable; every other class is the turn's own fault. */
 const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable', 'timeout', 'io']);
 
-/** Where a slate's `connectBrowser`, `pageTools` and `callPageTool` run: in its class's isolate, which holds the socket. */
-const SLATE_BROWSER_DRIVER = "a slate drives a browser from its class (this.env.workspace.web.connectBrowser); its page asks the class";
+/** A namespace member a slate calls: run it, or, when the host asks only whether it may, refuse as running it would. */
+async function slateMember(
+  providers: readonly CodemodeProvider[], route: Extract<SlateRoute, { kind: 'namespace' }>, context: SlateDispatchContext,
+): Promise<JsonValue> {
+  if (!context.authorizeOnly) return await callCodemodeMember(providers, route.namespace, route.member, route.args) ?? null;
+  requireCodemodeMember(providers, route.namespace, route.member);
 
+  return null;
+}
+
+/** Where a slate's `connectBrowser`, `pageTools` and `callPageTool` run: in its class's isolate, which holds the socket. */
 /**
  * A slate calling as a hosted actor reaches only that actor's own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
@@ -424,20 +427,10 @@ function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearc
     throw new KinuError('unsupported', 'a hosted actor on this backend must run on the cf runtime');
   }
 
-  const providers: CodemodeProvider[] = [
-    ...(runtime.executionRouter?.getProviders() ?? []).map(executorNamespace),
-    // A slate's web writes nothing into the workspace, since a share visitor may call it; its browser is the actor's own.
-    createWebCodemodeProvider({ provider: webSearch, files: null, sessions: web.sessions, prelude: { missing: SLATE_BROWSER_DRIVER } }),
-    createDbCodemodeProvider(actor.stores.appData),
-    createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
-    createMemoryCodemodeProvider(() => ({
-      memory: runtime.memory, vectorStore: runtime.vectorStore, facts: actor.stores.facts, actor: actor.handle, conversations,
-    })),
-    createFileCodemodeProvider(() => ({
-      vfs: runtime.toolFiles, home: runtime.storage.home, planes: runtime.planes, memory: runtime.memory,
-      ledger: actor.session.orchestrator.acc.files, budget: actor.session.orchestrator.acc.context,
-    })),
-  ];
+  const surface = hostedSurfaceActor(actor, {
+    web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
+    conversations, vectorStore: runtime.vectorStore,
+  });
 
   const native = buildBuiltinTools({
     rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
@@ -445,13 +438,15 @@ function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearc
     fileLedger: actor.session.orchestrator.acc.files, contextBudget: actor.session.orchestrator.acc.context,
   });
 
-  return { providers, native };
+  return { actor: surface, native };
 }
 
 /** What a slate binding call runs with: the mode its actor's role leaves it, and that role's tool reach. */
 interface SlateAuthority {
   readonly mode: WorkMode;
   readonly reach: ToolSurfaceNarrowing;
+  /** The profile a call runs under: the turn's when one is live, else this one resolved now, as a hire reads its role. */
+  readonly operation?: OperationProfile;
 }
 
 /** `use` over the namespaces and tools an authority reaches, in its mode; each tool is reached through its record. */
@@ -463,6 +458,9 @@ async function reachedIn<A>(
 
   return await runWorkModeInvocation(authority.mode, () => use([...narrowed, toolsNamespace(reachedTools, undefined)]));
 }
+
+/** The evolution lane's `fibers` row name. */
+export const EVOLUTION_LANE_FIBER = 'evolution:settle';
 
 export abstract class ActorAgent extends Agent<Env> {
   // Actor profile: these members are the whole difference between actor kinds.
@@ -498,7 +496,13 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (refusal) return settle(Effect.fail(new KinuError(refusal.reason, refusal.error)));
 
-    return super.alarm();
+    return this.recoverLostJobs().then(async () => { await super.alarm(); });
+  }
+
+  /** Each alarm, the keepAlive heartbeat a running job's fiber holds among them, asks whether a job's work went silent. */
+  private async recoverLostJobs(): Promise<void> {
+    await settleLogged('jobs.lost_recovery_failed', { doing: 'recover the background jobs whose work stopped answering', otherwise: 'io' },
+      () => this.jobAuthorities.recoverLost(), { workspace: this.name });
   }
   /** Actor kind for the operational dataset's `agentKind` dimension. Abstract because a
    * bundler may rewrite `constructor.name`. */
@@ -599,7 +603,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Spliced between `agents` and `web` so provider order (and the LLM-visible type description)
    *  is stable across actor kinds. */
-  protected extraCodemodeProviders(): CodemodeProvider[] { return []; }
+  /** `agent.*`, its own lifecycle: only the workspace's main actor has one. */
+  protected agentSelf(): AgentSelfHost | null { return null; }
 
   protected abstract get engine(): EvolutionEngine;
 
@@ -787,7 +792,7 @@ export abstract class ActorAgent extends Agent<Env> {
       roster.ensureSchema();
 
       return createTemporaryAgentPort({
-        roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
+        roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: agentNamer(this.actorDirectoryStore(), roster),
         afterTurn: (child, work) => {
           this.detachOwned(Effect.promise(async () => {
             await this.agentTurnSettled(child);
@@ -809,7 +814,7 @@ export abstract class ActorAgent extends Agent<Env> {
       inheritedContext: () => this.readInheritedContext(),
       originContext: () => this.mainWorkingContext(),
       ownMission: () => this.ownMission(),
-      createName: mintSubordinateName,
+      createName: agentNamer(this.actorDirectoryStore(), this.subordinateRoster),
       rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',
@@ -907,6 +912,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
     agentName: () => this.actorHandle().name,
+    workspaceId: () => this.actorHandle().workspaceId,
     appTitle: 'Kinu',
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
@@ -1208,10 +1214,9 @@ export abstract class ActorAgent extends Agent<Env> {
       turnIsLive: (turnId) => this.mainChatTurn() === turnId,
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
       settled: async () => {},
-      // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber. Rests
-      // once the close has left the held set, so of a close's end and a quiet pump, whichever comes last rests the actor.
-      hold: (close) => this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
-        ctx.stash({ lane: TERMINAL_LANE_FIBER });
+      // Kept alive, not recovered: the ledger row is the obligation and the terminal wake replays it. Rests once the
+      // close has left the held set, so of a close's end and a quiet pump, whichever comes last rests the actor.
+      hold: (close) => this.holdLane(async () => {
         await close();
         await this.restWhenIdle();
       }).finally(() => { this.overviewChanged(); }),
@@ -1267,6 +1272,8 @@ export abstract class ActorAgent extends Agent<Env> {
       await this.wakes.cancel(TERMINAL_RETRY_JOB);
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed, { laps: 0, arms: null });
+      // A lap or an owed effect's retry that found its arm already gone: a wake nothing else may log.
+      else diagnostics.event('wake.nothing_owed', { workspace: this.name, laps: prior.laps, arms: prior.arms ?? 'none' });
     }
 
     // A turn a deploy cut short reads right by the next tick of the wake it armed.
@@ -1832,17 +1839,15 @@ export abstract class ActorAgent extends Agent<Env> {
   private _evolutionSettling: AsyncTaskOwner | null = null;
 
   /**
-   * Settle both evolution lanes (turn lane and cadence session pass) in a durable fiber, detached so
-   * the chat queue is not blocked. A fiber, not `keepAliveWhile`: its `cf_agents_runs` row lets
-   * {@link onFiberRecovered} resume a lane lost to deploy/restart. Inputs are re-read from durable
-   * queues, so the stash holds only the lane name. One lane at a time.
+   * Settle both evolution lanes (turn lane and cadence session pass) in a durable fiber, detached so the chat queue is
+   * not blocked. Inputs are re-read from durable queues, so the row needs no checkpoint: one an earlier activation left
+   * is re-driven by the next (`OrchestratorAgent.recoverDeadActivation`). One lane at a time.
    */
   protected settleEvolutionInBackground(): void {
     if (this._evolutionSettling !== null) return;
     const owner: AsyncTaskOwner = { promise: null };
     this._evolutionSettling = owner;
-    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.runFiber(EVOLUTION_LANE_FIBER, async (ctx) => {
-      ctx.stash({ lane: EVOLUTION_LANE_FIBER });
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.rt.schedule.fiber(EVOLUTION_LANE_FIBER, async () => {
       await this.orch.settleTracked();
       await this.orch.runDueSessionEvolution();
     })), recording({ doing: 'settling the turn and session evolution lanes', otherwise: 'unavailable' }, (failure) => {
@@ -1925,7 +1930,7 @@ export abstract class ActorAgent extends Agent<Env> {
       profile: async () => {
         const mode = await this.preparedWorkMode();
 
-        return this.routingProfile([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.turnCodemodeProviders())], mode);
+        return this.routingProfile([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.ownNamespaces(mode))], mode);
       },
       bindModel: spec => this.ownedModelServices.resolveModel(spec),
       modelContext: spec => this.modelCatalog.contextFor(spec),
@@ -2053,9 +2058,7 @@ export abstract class ActorAgent extends Agent<Env> {
           turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this.mainChatTurn() ?? WORKSPACE_RUN_ID,
           durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
-        clamp: {
-          files: this.rt.storage, budget: this.acc.context, producer: 'external_tool',
-        },
+        spill: this.rt.storage,
       }));
 
     return this._mcpToolsCache;
@@ -2063,7 +2066,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   // The eval sandbox reads craftStore.list() on every execute, so saved tools appear without
   // cache coherence work.
-  private readonly _codemodeFactories = new Map<string, CodemodeFactory>();
+  private _codemodeFactory: CodemodeFactory | null = null;
+  /** A slate's crafted-tool calls, by the actor whose programs they launch; null for a share's viewer. */
+  private readonly _slateToolFactories = new Map<string | null, CodemodeFactory>();
 
   /** Lazy: `boundSql` is not touched until a store is first read, so this can be built here
    *  rather than in the constructor body. */
@@ -2346,11 +2351,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return null;
   }
 
-  /** Re-drives a recovered job fiber. */
-  protected workspaceJobs(): FiberLaneTransports['jobs'] {
-    return this.jobAuthorities;
-  }
-
   /** Every actor's runner; null addresses the root's sockets. */
   protected actorJobRunner(owner: string | null, actor: ActorJobSeams): BackgroundJobRunner {
     const { notifySettled, ...own } = actor;
@@ -2370,6 +2370,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected workspaceJobPorts(owner: string | null): WorkspaceJobPorts {
     return {
       clock: this.jobClock(),
+      alive: jobContextAnswers,
       jobOutput: (frame) => { this.broadcastToActor(owner, JSON.stringify(frame)); },
       // Only this request's device work moves; parallel foreground commands remain stoppable.
       onDetached: (jobId, requestIds) => {
@@ -2699,6 +2700,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const runtime = createCFRuntime(this, {
         env: this.env,
         ctx: this.ctx,
+        holdLane: (body) => this.holdLane(body),
         workspaceBox: (shellId) => this.workspaceBox(shellId),
         acc: () => this.acc,
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
@@ -2749,8 +2751,10 @@ export abstract class ActorAgent extends Agent<Env> {
    * role, so a slate never reaches more than the actor it calls as.
    */
   private dispatchHostedSlateCall(
-    name: string, rest: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode,
-  ): Effect.Effect<JsonValue, KinuError> {
+    hops: readonly [SlateCallerHop, ...SlateCallerHop[]], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext,
+  ): Effect.Effect<SlateSurfaceValue, KinuError> {
+    const [{ name }, ...rest] = hops;
+
     return Effect.gen({ self: this }, function* () {
       if (rest.length > 0) {
         return yield* new KinuError('denied', 'A caller path names one hosted actor; a nested path names an actor no directory holds.');
@@ -2775,15 +2779,16 @@ export abstract class ActorAgent extends Agent<Env> {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(actor.handle.actorId),
         }, this.agentStores(actor.handle.actorId).conversations());
 
+        const providers = actorNamespaces(surface.actor, SURFACE_POLICY.slate);
         // Narrow by the child's own durable, per-actor role, in the mode that role leaves the caller.
-        const authority = await this.hostedSlateAuthority(actor, mode, surface.providers, Object.keys(surface.native));
+        const authority = await this.hostedSlateAuthority(actor, mode, providers, Object.keys(surface.native));
         const reach = slateToolReach(authority.reach);
 
         if (route.kind === 'tool') {
-          return this.callSlateTool({ rt: actor.runtime, providers: surface.providers, reach, route, mode: authority.mode });
+          return this.callSlateTool({ rt: actor.runtime, actor: surface.actor, reach, route, mode: authority.mode, context });
         }
 
-        return await callCodemodeMember(reach.narrowProviders(providersInWorkMode(authority.mode, surface.providers)), route.namespace, route.member, route.args) ?? null;
+        return await slateMember(reach.narrowProviders(providersInWorkMode(authority.mode, providers)), route, context);
       }));
     });
   }
@@ -2806,39 +2811,56 @@ export abstract class ActorAgent extends Agent<Env> {
    * One capability route, run as this actor, narrowed by its own current role.
    * Not `@callable`: reached on the stub transport only.
    */
-  slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode): Promise<JsonValue> {
+  slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Promise<SlateSurfaceValue> {
     return settle(Effect.gen({ self: this }, function* () {
+      // Only a namespace member is checked without running it; anything else asked about alone would run.
+      if (context.authorizeOnly && route.kind !== 'namespace') {
+        return yield* new KinuError('bad_input', `A ${route.kind} route runs at the host; it is not authorized to run elsewhere`);
+      }
+
       // Hops resolve hosted actors through the directory, inside this object, so an unreachable
       // name is refused here rather than as a rejected RPC deeper down.
       const [next, ...rest] = path;
 
       if (next !== undefined) {
-        return yield* this.dispatchHostedSlateCall(next.name, rest, route, mode);
+        return yield* this.dispatchHostedSlateCall([next, ...rest], route, mode, context);
       }
 
       switch (route.kind) {
         case 'namespace': {
-          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces()));
-          const providers = providersInWorkMode(authority.mode, this.slateNamespaces());
+          // The root's own path: a share's viewer comes here too, and never holds `agents`.
+          const owner = context.viewer !== true;
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode, owner)));
+          const providers = providersInWorkMode(authority.mode, this.slateNamespaces(mode, owner));
 
-          return (yield* Effect.promise(async () => callCodemodeMember(slateToolReach(authority.reach).narrowProviders(providers), route.namespace, route.member, route.args))) ?? null;
+          // The owner's own slate hires under the owner's role as of now, as a program in a turn does.
+          return yield* Effect.promise(async () => runOperationProfile(owner ? authority.operation ?? null : null, async () => slateMember(
+            slateToolReach(authority.reach, owner).narrowProviders(providers), route, context,
+          )));
         }
 
         case 'tool': {
-          const providers = this.slateNamespaces();
-          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, providers));
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode)));
 
           return yield* Effect.promise(async () => this.callSlateTool({
-            rt: this.rt, providers, reach: slateToolReach(authority.reach), route, mode: authority.mode,
+            rt: this.rt, actor: this.surfaceActor(mode), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
           }));
         }
 
         case 'mcp': {
           // The role admits MCP tools by descriptor key, same as `toolAllowed(d.toolKey)` in native turns.
           const { stub, caller } = yield* Effect.promise(async () => this.userHub());
-          const surface = v.parse(McpToolSurfaceSchema, JSON.parse(yield* Effect.promise(async () => stub.userMcp_toolDescriptors(caller))));
+          const surface = async (): Promise<McpToolSurface> => v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
+          let offered = yield* Effect.promise(surface);
+
+          // A slate call is not a turn opening: a server the user object is still dialling is waited for, once.
+          if (offered.unavailable.some((row) => row.server === route.server)) {
+            yield* Effect.promise(async () => stub.userMcp_warmConnections(caller));
+            offered = yield* Effect.promise(surface);
+          }
+
           // A server is named as the actor's programs name it, so a fork reaches its forker's server of that name.
-          const descriptor = surface.descriptors.find((d) => d.serverName === route.server && d.name === route.tool);
+          const descriptor = offered.descriptors.find((d) => d.serverName === route.server && d.name === route.tool);
 
           if (descriptor === undefined) return yield* new KinuError('missing', `${route.server} offers no tool ${route.tool} to this actor`);
           // Enforce `readOnly` grants here so a read grant cannot write through a non-read-only tool.
@@ -2847,7 +2869,7 @@ export abstract class ActorAgent extends Agent<Env> {
             return yield* new KinuError('denied', `${descriptor.toolKey} is read-granted to viewers but ${route.server} does not mark it read-only`);
           }
 
-          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(), [descriptor.toolKey]));
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode), [descriptor.toolKey]));
 
           requireWorkModePermission(authority.mode, descriptor.readOnly === true, descriptor.toolKey);
 
@@ -2899,7 +2921,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async slateAiRun(
     route: Extract<SlateRoute, { kind: 'ai' }>,
     actor?: ActorHandle,
-  ): Promise<JsonValue> {
+  ): Promise<SlateSurfaceValue> {
     let profile: ResolvedTurnProfile;
 
     try {
@@ -2921,6 +2943,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (route.system !== undefined) input.system = route.system;
 
+    if (route.stream === true) return this.slateAiStream({ model, prompt: route.prompt, ...(route.system !== undefined && { system: route.system }) }, spec);
+
     const answer = await generateReported(input, {
       spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       spec,
@@ -2931,28 +2955,56 @@ export abstract class ActorAgent extends Agent<Env> {
     return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
   }
 
-  protected codemodeLaunch(actor: string): (online: boolean) => ProgramLaunch {
+  /**
+   * `ai.stream`: the answer's text as UTF-8 bytes, each written as the model writes it, which the slate's class reads as
+   * text. Its spend is filed once the stream drains, as any streamed call's is; a reader that stops early ends the call.
+   */
+  private slateAiStream(request: StreamRequest, spec: string): ReadableStream<Uint8Array> {
+    const chunks = streamTextReported(request, {
+      spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations }, spec,
+    });
+
+    const encoder = new TextEncoder();
+
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const next = await chunks.next();
+
+        if (next.done === true) controller.close();
+        else controller.enqueue(encoder.encode(next.value));
+      },
+      async cancel() { await chunks.return(undefined); },
+    });
+  }
+
+  /** `actor` is whose browser sessions the program's egress reaches; null reaches only a new Kitesurf browser. */
+  protected codemodeLaunch(actor: string | null): (online: boolean) => ProgramLaunch {
     const workspace = this.workspaceName();
 
     return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor } : null });
   }
 
-  /** A crafted tool: a native tool is its own namespace on a slate's surface, never a member of `tools`. */
+  /**
+   * A crafted tool: a native tool is its own namespace on a slate's surface, never a member of `tools`. Every member
+   * its program reaches passes `context.nested` first, and a viewer's program holds no browser session of this actor's.
+   */
   private async callSlateTool(input: {
-    rt: HostedActor['runtime']; providers: CodemodeProvider[];
-    reach: ToolSurfaceNarrowing; route: Extract<SlateRoute, { kind: 'tool' }>; mode: WorkMode;
+    rt: HostedActor['runtime']; actor: SurfaceActor;
+    reach: ToolSurfaceNarrowing; route: Extract<SlateRoute, { kind: 'tool' }>; mode: WorkMode; context: SlateDispatchContext;
   }): Promise<JsonValue> {
-    const { rt, providers, reach, route, mode } = input;
-    const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
+    const { rt, actor, reach, route, mode, context } = input;
+    const launch = context.viewer ? null : rt.actor.actorId;
+    const policy = context.viewer ? SURFACE_POLICY.slateToolForViewer : SURFACE_POLICY.slateTool;
+    let factory = this._slateToolFactories.get(launch);
 
-    const factory = createCodemodeToolFactory({
-      launch: this.codemodeLaunch(rt.actor.actorId), rt,
-      workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
-      browserSessions: this.browserSessionsFor(rt.actor.actorId),
-      extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
-    });
+    if (factory === undefined) {
+      factory = createCodemodeToolFactory({ launch: this.codemodeLaunch(launch), workspace: this.workspaceName() });
+      this._slateToolFactories.set(launch, factory);
+    }
 
-    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}), route.name, route.input)) ?? null;
+    const scope: CodemodeScope = { reach, nested: context.nested, namespaces: (executor) => actorNamespaces(actor, policy, { executor }) };
+
+    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}), route.name, route.input, scope)) ?? null;
   }
 
   /** Workspace read models belong to the root; the orchestrator supplies them. */
@@ -2969,13 +3021,15 @@ export abstract class ActorAgent extends Agent<Env> {
   private async slateAuthority(
     requested: WorkMode, providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = [],
   ): Promise<SlateAuthority> {
-    const { profile } = await this.actorProfile({
+    const { profile, inputs } = await this.actorProfile({
       actor: this.actorHandle(),
       workMode: requested,
       availableTools: [...actorActiveTools(this.actorToolDeps()), ...mcpToolKeys, ...codemodeCapabilitiesFor(providers)],
     });
 
-    return { mode: profile.workMode, reach: narrowToolSurface((this.operationProfile()?.profile ?? profile).allowedTools) };
+    const operation = this.operationProfile() ?? captureOperationProfile({ actor: this.actorHandle(), profile, inputs, runId: WORKSPACE_RUN_ID, turnId: null });
+
+    return { mode: profile.workMode, reach: narrowToolSurface(operation.profile.allowedTools), operation };
   }
 
   /**
@@ -3008,23 +3062,14 @@ export abstract class ActorAgent extends Agent<Env> {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
         }, this.agentStores(hosted.handle.actorId).conversations());
 
-        const authority = await this.hostedSlateAuthority(hosted, requested, surface.providers, Object.keys(surface.native));
+        const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
+        const authority = await this.hostedSlateAuthority(hosted, requested, providers, Object.keys(surface.native));
 
-        return await reachedIn(authority, [...surface.providers, createStateCodemodeProvider(hosted.runtime.actor.programState)], surface.native, use);
+        return await reachedIn(authority, providers, surface.native, use);
       });
     }
 
-    // The actor's own surface, as its eval has it: a screenshot is saved into its workspace, and it delegates.
-    const providers = [
-      ...(this.rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
-      createWebCodemodeProvider({
-        provider: this.ownedModelServices.getWebSearchProvider(), files: this.rt.storage,
-        sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: { missing: SLATE_BROWSER_DRIVER },
-      }),
-      createAgentsCodemodeProvider(() => this.getAgentsToolDeps(requested)),
-      ...this.turnCodemodeProviders(),
-      createStateCodemodeProvider(this.rt.actor.programState),
-    ];
+    const providers = actorNamespaces(this.surfaceActor(requested), SURFACE_POLICY.operations);
 
     const mcp = await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog));
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
@@ -3032,27 +3077,9 @@ export abstract class ActorAgent extends Agent<Env> {
     return await reachedIn(authority, providers, { ...this.extensions.tools(), ...mcp, ...this.getRawToolsForWorkMode(authority.mode) }, use);
   }
 
-  /** Unconditional on every ActorAgent; tasks reuses `this.taskList`, the store the snapshot reads. */
-  private baseCodemodeProviders(): CodemodeProvider[] {
-    return [
-      createMemoryCodemodeProvider(() => ({
-        memory: this.rt.memory, vectorStore: this.rt.vectorStore,
-        facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
-      })),
-      createFileCodemodeProvider(() => ({
-        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
-      })),
-      createTasksCodemodeProvider(this.taskList, this.config),
-    ];
-  }
-
-  /**
-   * Single list read by `beforeTurn` (nameable capabilities) and `getCodemodeToolFactory` (narrowing).
-   * Providers outside this list cannot be named by a role nor narrowed, so `db` belongs here.
-   * The db provider decides Plan per table scope at invocation.
-   */
-  protected turnCodemodeProviders(): CodemodeProvider[] {
-    return [...this.baseCodemodeProviders(), createDbCodemodeProvider(this.stores.appData), ...this.extraCodemodeProviders()];
+  /** The namespaces this actor's own programs reach in `mode`: what a role names and narrows. */
+  protected ownNamespaces(mode: WorkMode): CodemodeProvider[] {
+    return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program);
   }
 
   /** The Chrome sessions `actorId` opened; the table lives on the workspace object every actor shares. */
@@ -3061,54 +3088,60 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * The eval namespaces a slate's surface reaches, as this actor's programs reach them, less `agents`, `tools` and
-   * `state`; the host refuses what else only the agent does. Read per call: executors attach and detach while this
-   * object lives.
+   * The eval namespaces a slate's surface reaches, as this actor's programs reach them, less `tools` and `state`, and
+   * less `agents` unless `owner`: the owner's own slate, as the owner, with no share in it. The host refuses what else
+   * only the agent does. Read per call: executors attach and detach while this object lives.
    */
-  protected slateNamespaces(): CodemodeProvider[] {
-    return [
-      ...(this.rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
-      createWebCodemodeProvider({
-        provider: this.ownedModelServices.getWebSearchProvider(), files: null, sessions: this.browserSessionsFor(this.rt.actor.actorId),
-        prelude: { missing: SLATE_BROWSER_DRIVER },
-      }),
-      ...this.turnCodemodeProviders(),
-    ];
+  protected slateNamespaces(mode: WorkMode, owner = false): CodemodeProvider[] {
+    return actorNamespaces(this.surfaceActor(mode), owner ? SURFACE_POLICY.ownerSlate : SURFACE_POLICY.slate);
   }
 
-  /** Built once per DO; crafted tools saved mid-turn still work because craftStore is re-read per call. */
-  private getCodemodeToolFactory(mode: WorkMode, profileKey: string): CodemodeFactory {
-    // The profile digest is part of the key: two roles can share tool names yet reach
-    // different namespaces.
-    const profile = this.operationProfile()?.profile;
-    const narrowing = narrowToolSurface(profile?.allowedTools);
-    const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${profile?.digest ?? ''}:${String(this._accountSwarms)}`;
+  /** This actor as every caller's namespaces are built over it (`actorNamespaces`); it delegates in `mode`. */
+  protected surfaceActor(mode: WorkMode): SurfaceActor {
+    return {
+      executors: () => this.rt.executionRouter?.getProviders() ?? [],
+      web: {
+        search: this.ownedModelServices.getWebSearchProvider(), files: this.rt.storage,
+        browser: { sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: BROWSER_PRELUDE },
+      },
+      memory: () => ({
+        memory: this.rt.memory, vectorStore: this.rt.vectorStore, facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
+      }),
+      files: () => ({
+        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
+        slate: (operation) => this.slate(operation),
+      }),
+      // `this.taskList` is the store the turn's snapshot reads; the role switch is the native `tasks` tool's.
+      tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null) }),
+      // Plan is decided per table scope at invocation.
+      db: this.stores.appData,
+      programState: this.rt.actor.programState,
+      agents: () => this.getAgentsToolDeps(mode),
+      self: this.agentSelf(),
+    };
+  }
 
-    if (!this._codemodeFactories.has(key)) {
-      this._codemodeFactories.set(key, createCodemodeToolFactory({
-        launch: this.codemodeLaunch(this.rt.actor.actorId),
-        rt: this.rt,
-        browserSessions: this.browserSessionsFor(this.rt.actor.actorId),
-        reach: narrowing,
-        workspace: this.workspaceName(),
-        webSearch: this.ownedModelServices.getWebSearchProvider(),
-        agents: () => this.getAgentsToolDeps(mode),
-        // Narrowed by the same set as the native surface, so the sandbox cannot bypass a role.
-        extraProviders: () => narrowing.narrowProviders(this.turnCodemodeProviders()),
-        // Drives the UI's default executor; one upsert per executor per turn (reset in beforeTurn).
-        onExecutorUsed: (name) => {
-          if (this._executorsUsedThisTurn.has(name)) return;
-          this._executorsUsedThisTurn.add(name);
-          this.config.setLastActiveExecutor(name);
-        },
-      }));
-    }
+  /**
+   * This actor's eval: its namespaces as its own programs reach them, narrowed by the turn's profile, so the sandbox
+   * cannot bypass a role. Crafted tools saved mid-turn still work because craftStore is re-read per call.
+   */
+  private evalTool(surface: CodemodeSurface, mode: WorkMode) {
+    this._codemodeFactory ??= createCodemodeToolFactory({
+      launch: this.codemodeLaunch(this.rt.actor.actorId),
+      workspace: this.workspaceName(),
+      // Drives the UI's default executor; one upsert per executor per turn (reset in beforeTurn).
+      onExecutorUsed: (name) => {
+        if (this._executorsUsedThisTurn.has(name)) return;
+        this._executorsUsedThisTurn.add(name);
+        this.config.setLastActiveExecutor(name);
+      },
+    });
+    const actor = this.surfaceActor(mode);
 
-    const factory = this._codemodeFactories.get(key);
-
-    if (factory === undefined) throw new KinuError('io', `eval profile ${key} was not built`);
-
-    return factory;
+    return this._codemodeFactory.toolFor(surface, {
+      reach: narrowToolSurface(this.operationProfile()?.profile?.allowedTools),
+      namespaces: (executor) => actorNamespaces(actor, SURFACE_POLICY.program, { executor }),
+    });
   }
 
   /** One object so a cost can never be filed for an operation that was never opened. */
@@ -3573,7 +3606,7 @@ export abstract class ActorAgent extends Agent<Env> {
           durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
         // The sandbox declares the finished native surface, so core builds it last over all other tools.
-        codemode: (surface) => this.getCodemodeToolFactory(mode, profileKey).toolFor(surface),
+        codemode: (surface) => this.evalTool(surface, mode),
         external: () => this._turnExternalTools,
         // Lives on the accumulator so the cached toolset keeps a stable reference and resets per turn.
         contextBudget: this.acc.context,
@@ -3589,6 +3622,7 @@ export abstract class ActorAgent extends Agent<Env> {
         facts: this.facts,
         webSearch: this.ownedModelServices.getWebSearchProvider(),
         jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() },
+        slate: (operation) => this.slate(operation),
       };
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
@@ -4055,7 +4089,7 @@ export abstract class ActorAgent extends Agent<Env> {
       externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),
       wiredToolNames: (mode) => (mode === 'plan' && turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
       // `agent` / `llm` are reachable only inside `eval`: derived from the providers wired for this mode.
-      codemodeCapabilities: () => codemodeCapabilitiesFor(this.turnCodemodeProviders()),
+      codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.ownNamespaces(mode)),
       agentsActions: () => actorAgentsActions(turnActorDeps, this._accountSwarms === true),
       temporaryAsk: () => turnActorDeps.team?.temporary !== undefined,
       soul: async () => this.getSoulText(),
@@ -4063,7 +4097,7 @@ export abstract class ActorAgent extends Agent<Env> {
       identity: async () => reads.identity,
       artifacts: () => this.turnArtifacts(),
       taskPlan: () => null,
-      cacheKey: () => promptCacheKey(this.ownedModelServices.affinityKey, CHAT_SESSION_ID),
+      conversationKey: () => conversationKey(this.ownedModelServices.affinityKey, CHAT_SESSION_ID),
       budget: this.budget,
       operations: this.modelOperations,
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
@@ -4111,6 +4145,7 @@ export abstract class ActorAgent extends Agent<Env> {
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: () => this.subordinateDelegates(),
       approvals: extras.approvals,
+      ...(extras.failingSlates !== undefined && { failingSlates: extras.failingSlates }),
     });
   }
 
@@ -4260,72 +4295,18 @@ export abstract class ActorAgent extends Agent<Env> {
     return (await this.modelForSource('judge')).model;
   }
 
-  // Work that outlives its request goes through `runFiber` (a `cf_agents_runs` row);
-  // recovery classification lives in ./fiber-recovery.ts.
-
-  /**
-   * Not `async` on purpose: the SDK awaits this inside `blockConcurrencyWhile`, which resets the object
-   * at `do.block_concurrency.cancel_ms`; re-drives go to {@link redriveRecoveredLane}. Must never throw.
-   */
-  override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-    this.actorHandle();
-
-    return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
-  }
-
-  /** Built fresh per recovery rather than captured at interruption time. */
-  private get fiberLanes(): FiberLaneTransports {
-    return {
-      jobs: this.workspaceJobs(),
-      runDueSessionEvolution: () => this.orch.runDueSessionEvolution(),
-      armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
-      deliverSignal: (signal) => this.orch.inbox.send(signal),
-      redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),
-    };
-  }
-
-  /** Declared so the value Kinu reads and the SDK enforces are the same (see fiber-recovery.ts). */
-  static options = {
-    fiberRecoveryMaxAgeMs: FIBER_RECOVERY_MAX_AGE_MS,
-  };
-
-  /** Set when this activation's fiber sweep ran to its end; later ticks skip it. */
-  private fiberSweepFinished = false;
-
-  /**
-   * Cleanup only; called from `onStart`, synchronous and bounded so safe in the init gate.
-   * Failures are logged and dropped so activation still succeeds.
-   */
-  protected sweepUnrecoverableFiberRows(activation: boolean): boolean {
-    // Once per activation: only a truncated or failed pass leaves rows for the wake's ticks.
-    if (this.fiberSweepFinished && !activation) return false;
-    // A failed pass reports truncated so the caller arms the wake and retries.
-    let truncated = true;
-
-    settleLoggedSync('fiber.unrecoverable_sweep_failed', { doing: 'dropping the interrupted-fiber rows the recovery budget refused', otherwise: 'io' }, () => {
-      const result = sweepUnrecoverableFibers(fiberRowStore(this.boundSql), Date.now());
-
-      if (result.dropped > 0 || result.truncated) {
-        diagnostics.event('fiber.unrecoverable_rows_dropped', {
-          dropped: result.dropped,
-          scanned: result.scanned,
-          truncated: result.truncated,
-        });
-      }
-
-      truncated = result.truncated;
-      this.fiberSweepFinished = !truncated;
-    }, { workspace: this.name });
-
-    return truncated;
-  }
-
   /**
    * Async maintenance that may queue turns or cross objects, so it runs in the alarm, never activation.
    * Idempotent; returns whether the budget filled and work must continue next tick.
    */
   protected async maintenanceWork(): Promise<boolean> {
     return recoverSubordinateLifecycles(this.subordinateRoster, this.subordinateRuntime());
+  }
+
+  /** A lane: work held alive whose own row outlives the activation running it, so the next one re-drives what it left
+   *  (D11). Not a fiber: the platform's recovery hook runs under a timeout. */
+  protected holdLane<T>(body: () => Promise<T>): Promise<T> {
+    return this.keepAliveWhile(body);
   }
 
   /** Detached work this actor owns until its lexical error boundary settles. */
@@ -4362,26 +4343,9 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Every budgeted activation sweep; subclasses fold in their own. True if any pass filled its
-   *  budget (caller arms the wake). Synchronous so the init gate can run the same seam. `activation`:
-   *  the pass `onStart` runs, which sweeps the fiber table whatever a previous pass on this instance found. */
-  protected maintenanceSweeps(activation = false): boolean {
-    return this.sweepUnrecoverableFiberRows(activation);
-  }
-
-  /**
-   * Re-drive one interrupted lane off the init gate via `runFiber`, whose synchronous prefix writes
-   * the durable `cf_agents_runs` row before this returns; one dispatch per entry (own checkpoint).
-   */
-  protected redriveRecoveredLane(
-    lane: string, checkpoint: JsonValue, body: () => Promise<void>,
-  ): void {
-    this.detachOwned(logged('fiber.lane_redrive_failed', { doing: `re-driving the "${lane}" lane an interruption left behind`, otherwise: 'unavailable' }, async () => {
-      // The stash wrapper writes `initialSnapshot` in the same synchronous prefix as the row insert,
-      // so a reset never finds a recoverable lane with a null payload.
-      await this._runFiberWithStashWrapper(lane, async () => { await body(); }, {
-        initialSnapshot: checkpoint,
-      });
-    }, { workspace: this.name, lane }));
+   *  budget (caller arms the wake). Synchronous so the init gate can run the same seam. */
+  protected maintenanceSweeps(): boolean {
+    return false;
   }
 
   protected invalidateModelCaches(): void {

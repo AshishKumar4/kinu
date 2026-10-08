@@ -19,6 +19,7 @@ import { requestUrl } from '@kinu.run/core';
 const providerDeps = (env: ProviderEnv) => ({
   env,
   sessionAffinity: 'kinu-test',
+  workspaceAffinity: 'kinu-test',
   getAuth: async () => null,
   hasCredential: async () => false,
 });
@@ -256,16 +257,17 @@ describe('platform gateway availability', () => {
       .toThrow(/ai-gateway unavailable: Workers AI binding/);
   });
 
-  test('an available env builds a model whose requests reach the binding', async () => {
+  // Staging, 2026-10-08: every `ai-gateway/workers-ai/*` row answered 400 "No such model workers-ai/@cf/…" (code 5007).
+  test('an available env builds a model whose requests reach the binding under Workers AI\'s own id', async () => {
     const stub = stubAiBinding(() => Response.json(completion));
-    const provider = createAIGatewayProvider();
-    const model = provider.createModel('@cf/test/model', providerDeps(platformGatewayEnv(stub)));
+    const model = createAIGatewayProvider().createModel('workers-ai/@cf/zai-org/glm-5.3', providerDeps(platformGatewayEnv(stub)));
 
     const result = await generateText({ model, prompt: 'hi' });
 
     expect(result.text).toBe('BINDING');
     expect(stub.runs).toHaveLength(1);
     expect(stub.runs[0].headers).not.toHaveProperty('authorization');
+    expect(stub.runs[0].query).toMatchObject({ model: '@cf/zai-org/glm-5.3' });
   });
 });
 
@@ -283,7 +285,7 @@ describe('user-billed providers stay off the platform binding', () => {
 
     for (const provider of [createWorkersAIProvider(), createMyGatewayProvider()]) {
       const model = provider.createModel('@cf/test/model', {
-        env, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
+        env, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
       });
 
       // No user credential: the credential path answers 401, never falls back to the platform
@@ -300,6 +302,7 @@ describe('user-billed providers stay off the platform binding', () => {
     const deps = {
       env: platformGatewayEnv(stub),
       sessionAffinity: 'kinu-test',
+      workspaceAffinity: 'kinu-test',
       getAuth: async () => userAuth,
       hasCredential: async () => true,
       fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {

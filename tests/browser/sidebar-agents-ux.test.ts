@@ -155,3 +155,59 @@ describe('the sidebar before the roster answers', () => {
     });
   });
 });
+
+/** The colour a mascot is drawn in: its gradient's first stop. */
+function mascotColours(page: Page, rows: string): Promise<string[]> {
+  return page.$$eval(`${rows} .p-mascot stop`, (stops) => stops.filter((stop) => stop.getAttribute('offset') === '0').map((stop) => stop.getAttribute('stop-color') ?? ''));
+}
+
+// Production, 2026-10-08: the owner's chats and hires wore few colours between them, and the agents working out of
+// sight, with no tab of their own, showed nowhere that they were.
+describe('who is at work, and who is who', () => {
+  test('each chat and each hire wears a colour no other agent of its workspace does', async () => {
+    await withGallery(async (gallery) => {
+      const page = await shell(gallery, 1280);
+
+      try {
+        await page.waitForSelector('[data-workspace-chat] .p-mascot');
+        const chats = await mascotColours(page, '[data-workspace-chat]');
+        expect({ drawn: chats.length, distinct: new Set(chats).size }).toEqual({ drawn: 5, distinct: 5 });
+
+        await page.click('[data-agents-counter]');
+        await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
+        // The person's chats and the agents hired into them: every one its own colour, none a chat's.
+        const agents = await mascotColours(page, `${LIST} [data-agent-row]`);
+        expect(agents.length).toBeGreaterThan(chats.length);
+        expect(new Set(agents).size).toBe(agents.length);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('agents at work with no tab spin on the All agents row and are counted on the bar\'s agents button', async () => {
+    await withGallery(async (gallery) => {
+      // The fixture's out-of-sight workers: the coupon auditor it hired, and two swarm workers.
+      const busy = await shell(gallery, 1280);
+      // Nothing works out of sight here: every agent has a tab, and all of them are idle.
+      const quiet = await gallery.newPage();
+      await quiet.setViewport({ width: 1280, height: 900 });
+      await quiet.goto(`${gallery.origin}/gallery.html?frame=workspaceshell`, { waitUntil: 'networkidle0' });
+
+      const shown = (page: Page) => page.evaluate(() => ({
+        spinning: document.querySelector('[data-agents-counter] [data-status="working"]') !== null,
+        counted: document.querySelector('button[aria-label="All agents"] [data-working-agents]')?.textContent ?? null,
+      }));
+
+      try {
+        await busy.waitForSelector('[data-agents-counter]');
+        await quiet.waitForSelector('[data-agents-counter]');
+        expect({ busy: await shown(busy), quiet: await shown(quiet) })
+          .toEqual({ busy: { spinning: true, counted: '3' }, quiet: { spinning: false, counted: null } });
+      } finally {
+        await busy.close();
+        await quiet.close();
+      }
+    });
+  });
+});

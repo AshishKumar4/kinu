@@ -17,8 +17,6 @@ import { withClampedToolResult } from './clamp';
 import { withCheckedInput, withCheckedInputs } from './tool-schema';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 import { codemodeInputSchema } from './sandbox-contract';
-import { executorNamespace } from './executor-operations';
-import type { CodemodeProvider } from '../types/codemode';
 import { serveReport, type ReportDeps } from './report-operations';
 import { createFileTool } from './file-operations';
 import { serveShell } from './shell-operations';
@@ -54,7 +52,6 @@ export interface CodemodeSurface {
    * native definition, so the tools prefix stays the same in every workspace. The dynamic block declares them.
    */
   readonly external: () => ToolSet;
-  readonly providers: CodemodeProvider[];
   /** Where a program's relative paths start, its `process.cwd()`: the runtime's own (`PathPlanes.cwd`). */
   readonly cwd: string;
 }
@@ -64,16 +61,17 @@ export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 
 /** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */
 export function codemodeSurface(
-  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'executionRouter' | 'planes'>, native: ToolSet, external: () => ToolSet = () => ({}),
+  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'planes'>, native: ToolSet, external: () => ToolSet = () => ({}),
 ): CodemodeSurface {
   return {
     native,
     craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
     external: () => withCheckedInputs(external()),
-    providers: (rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
     cwd: rt.planes.cwd,
   };
 }
+
+import type { SlateCallResult, SlateOperation } from '../slates/rpc';
 
 export interface BuiltinToolDeps {
   workMode?: WorkMode;
@@ -96,6 +94,8 @@ export interface BuiltinToolDeps {
   fileLedger?: TurnFileLedger;
   /** Per-turn context budget; omitted → fresh one, so the policy is per-root. */
   contextBudget?: TurnContextBudget;
+  /** The workspace's slates, so `file` answers whether a slate it wrote into still builds. */
+  slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
   /** Per-turn escalation ledger; omitted → fresh one. */
   escalations?: TurnEscalationLedger;
   /** Test seam; defaults to one JSON line per event on `console`. */
@@ -138,7 +138,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     shell: rt.shell, router: rt.executionRouter, files: rt.storage, budget, escalations, logger,
   }));
 
-  const files = { vfs: rt.toolFiles, home: rt.storage.home, ledger: deps.fileLedger ?? new TurnFileLedger(), budget, memory, planes: rt.planes };
+  const files = {
+    vfs: rt.toolFiles, home: rt.storage.home, ledger: deps.fileLedger ?? new TurnFileLedger(), budget, memory, planes: rt.planes,
+    ...(deps.slate !== undefined && { slate: deps.slate }),
+  };
 
   tools.file = createFileTool(files);
 

@@ -758,7 +758,7 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
   }
 
   const advisors = (harness: ActorHarness<HarnessOrchestratorAgent>) => harness.db.query<{ origin: string; tab: number; input: number; lifetime: string }, []>(
-    "SELECT origin, tab, input, lifetime FROM workspace_actors WHERE name LIKE 'ask-advisor-%'",
+    "SELECT origin, tab, input, lifetime FROM workspace_actors WHERE name = 'ask-advisor' OR name LIKE 'ask-advisor-%'",
   ).all();
 
   /** Notes once the lanes ran and every hired advisor's delegated turn has drained. */

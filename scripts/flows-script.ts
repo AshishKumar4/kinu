@@ -26,6 +26,20 @@ export const AGENT_PLAN_ASK = 'Flow agent plan: plan the release checklist.';
 
 export const AGENT_PLAN = '# Release checklist\n\n1. Tag the build.\n2. Write the notes.';
 
+/** The proposed-workspace row's ask in the workspace's own pane, and the workspace its turn proposes. */
+export const WORKSPACE_PROPOSAL_ASK = 'Flow proposal: propose the pricing workspace.';
+
+export const PROPOSED_WORKSPACE = {
+  name: 'Flow pricing watch',
+  brief: 'Flow proposal brief: watch competitor pricing.',
+  soul: 'You keep notes short.',
+} as const;
+
+/** What the wake says when the owner approves, before the new workspace's link; the turn repeats the link. */
+export const PROPOSAL_APPROVED_WAKE = 'Your owner approved the workspace';
+
+export const PROPOSAL_LINK_REPLY = 'NEW WORKSPACE';
+
 /** The live-memory row's ask, and the note its turn saves. */
 export const MEMORY_ASK = 'Flow memory: save the release note.';
 
@@ -119,6 +133,17 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   const latest = request.userTexts.at(-1) ?? '';
 
+  // The workspace's own agent proposes; the owner's approval wakes it with the link, which its reply repeats.
+  const approved = latest.includes(PROPOSAL_APPROVED_WAKE) ? /\bhttps?:\/\/\S+\/workspace\/\S+/u.exec(latest)?.[0] : undefined;
+
+  if (approved !== undefined) return { text: `${PROPOSAL_LINK_REPLY} ${approved}` };
+
+  if (latest.includes(WORKSPACE_PROPOSAL_ASK)) {
+    return request.turn.length > 0
+      ? { text: 'PROPOSED' }
+      : { toolCall: { name: 'eval', arguments: { code: `return await agent.proposeWorkspace(${[PROPOSED_WORKSPACE.name, PROPOSED_WORKSPACE.brief, PROPOSED_WORKSPACE.soul].map((arg) => JSON.stringify(arg)).join(', ')});` } } };
+  }
+
   if (latest.includes(MEMORY_ASK)) {
     return request.turn.length > 0 ? { text: 'DONE' } : { toolCall: { name: 'memory', arguments: { op: 'note', content: FLOW_MEMORY_NOTE } } };
   }
@@ -134,11 +159,14 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
       } } };
   }
 
-  // The agent's own Plan turn submits its plan; once submitted, or on the approval's handoff turn, it says so and ends.
+  // The agent's own Plan turn submits its plan, then says so and ends. A turn offered no submit_plan names the tools
+  // it was offered, which is what a row waiting on a plan that never came needs to read (staging, 2026-10-08).
   if (latest.includes(AGENT_PLAN_ASK)) {
-    return request.available.includes('submit_plan') && !request.called.includes('submit_plan')
+    if (request.called.includes('submit_plan')) return { text: 'DONE' };
+
+    return request.available.includes('submit_plan')
       ? { toolCall: { name: 'submit_plan', arguments: { edits: [{ start: 1, content: AGENT_PLAN }] } } }
-      : { text: 'DONE' };
+      : { text: `NO PLAN: this turn was offered no submit_plan, only ${request.available.join(', ') || 'no tools'}.` };
   }
 
   if (asked(SLATE_ASK) && request.available.includes('file')) {

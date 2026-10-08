@@ -13,7 +13,6 @@
  * array answering each key it deleted).
  */
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
 import * as v from 'valibot';
 
 const API = 'https://api.cloudflare.com/client/v4';
@@ -43,15 +42,6 @@ const PAGE = 1_000;
  */
 export function restApiToken(): string {
   return (process.env['KINU_CLOUDFLARE_API_TOKEN'] ?? process.env['CLOUDFLARE_API_TOKEN'] ?? process.env['CF_API_TOKEN'] ?? '').trim();
-}
-
-/** The wrangler login's own token, which reads R2 and the registry as the deploy does; an Access-only API token cannot. */
-export function wranglerSessionToken(): string {
-  const ran = spawnSync(join(import.meta.dir, '..', 'node_modules/.bin/wrangler'), ['auth', 'token', '--json'], { encoding: 'utf8' });
-
-  if (ran.status !== 0) throw new Error(`\`wrangler auth token\` failed: ${ran.stderr.slice(-400)}`);
-
-  return v.parse(v.object({ token: v.pipe(v.string(), v.minLength(1)) }), JSON.parse(ran.stdout)).token;
 }
 
 /** Only the REST API deletes an application whose id has this shape. */

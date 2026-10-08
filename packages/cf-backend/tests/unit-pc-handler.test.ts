@@ -1,6 +1,6 @@
 // Both rails pick a UserDO by name: refuse malformed ids and over-budget sources before any
 // idFromName, so a random user id never wakes a Durable Object.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import { type PcIngressEnv, type PcUserNamespace } from "@kinu.run/core";
 import { pcRoutes } from "../src/pc-routes";
 import type { UserCaller } from "@kinu.run/core";
@@ -140,21 +140,28 @@ describe("/pc/connect-ticket", () => {
     const userDO = makeUserDO();
     const env = makeEnv(userDO);
 
-    for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
-      const user = knock.toString(16).padStart(32, "0");
-      const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
-      expect(response.status).toBe(401);
+    // The budget is per minute window: every knock lands inside one, however slowly the run goes.
+    setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+    try {
+      for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
+        const user = knock.toString(16).padStart(32, "0");
+        const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
+        expect(response.status).toBe(401);
+      }
+
+      expect(userDO.idNames.length).toBe(KNOCKS_PER_WINDOW);
+
+      for (let knock = 0; knock < 5; knock++) {
+        const user = (1000 + knock).toString(16).padStart(32, "f");
+        const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
+        expect(response.status).toBe(429);
+      }
+
+      expect(userDO.idNames.length).toBe(KNOCKS_PER_WINDOW);
+    } finally {
+      setSystemTime();
     }
-
-    expect(userDO.idNames.length).toBe(KNOCKS_PER_WINDOW);
-
-    for (let knock = 0; knock < 5; knock++) {
-      const user = (1000 + knock).toString(16).padStart(32, "f");
-      const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
-      expect(response.status).toBe(429);
-    }
-
-    expect(userDO.idNames.length).toBe(KNOCKS_PER_WINDOW);
   });
 });
 
@@ -192,14 +199,21 @@ describe("/pc/connect upgrade", () => {
     const userDO = makeUserDO();
     const env = makeEnv(userDO);
 
-    for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
-      const response = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
-      expect(response.status).toBe(200);
-    }
+    // The budget is per minute window: every knock lands inside one, however slowly the run goes.
+    setSystemTime(new Date('2026-01-01T00:00:00Z'));
 
-    const denied = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
-    expect(denied.status).toBe(429);
-    expect(userDO.fetched.length).toBe(KNOCKS_PER_WINDOW);
+    try {
+      for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
+        const response = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
+        expect(response.status).toBe(200);
+      }
+
+      const denied = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
+      expect(denied.status).toBe(429);
+      expect(userDO.fetched.length).toBe(KNOCKS_PER_WINDOW);
+    } finally {
+      setSystemTime();
+    }
   });
 });
 
@@ -280,17 +294,24 @@ describe('/pc/update-refused', () => {
     const userDO = makeUserDO();
     const env = makeEnv(userDO);
 
-    for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
-      expect((await pcRoutes.fetch(ticketPost(JSON.stringify({ user: GOOD_USER, token: WRONG_TOKEN })), env)).status).toBe(401);
-    }
+    // The budget is per minute window: every knock lands inside one, however slowly the run goes.
+    setSystemTime(new Date('2026-01-01T00:00:00Z'));
 
-    for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
-      expect((await pcRoutes.fetch(post(JSON.stringify({ ...refusal, token: WRONG_TOKEN })), env)).status).toBe(401);
-    }
+    try {
+      for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
+        expect((await pcRoutes.fetch(ticketPost(JSON.stringify({ user: GOOD_USER, token: WRONG_TOKEN })), env)).status).toBe(401);
+      }
 
-    expect(userDO.idNames).toHaveLength(2 * KNOCKS_PER_WINDOW);
-    expect((await pcRoutes.fetch(post(JSON.stringify(refusal)), env)).status).toBe(429);
-    expect(userDO.idNames).toHaveLength(2 * KNOCKS_PER_WINDOW);
+      for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
+        expect((await pcRoutes.fetch(post(JSON.stringify({ ...refusal, token: WRONG_TOKEN })), env)).status).toBe(401);
+      }
+
+      expect(userDO.idNames).toHaveLength(2 * KNOCKS_PER_WINDOW);
+      expect((await pcRoutes.fetch(post(JSON.stringify(refusal)), env)).status).toBe(429);
+      expect(userDO.idNames).toHaveLength(2 * KNOCKS_PER_WINDOW);
+    } finally {
+      setSystemTime();
+    }
   });
 
   test('only POST records a refusal', async () => {

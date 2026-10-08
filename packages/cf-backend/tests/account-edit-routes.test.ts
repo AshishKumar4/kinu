@@ -84,7 +84,8 @@ test('after an account edit in Settings, the root\'s next request and an existin
   const before = await round('before');
   await save(EDITED, 1);
   const after = await round('after');
-  const upstream = (spec: string) => spec.slice('ai-gateway/'.length);
+  // The gateway's Workers AI endpoint takes the model's own `@cf/` id.
+  const upstream = (spec: string) => spec.slice('ai-gateway/workers-ai/'.length);
 
   expect({ before, after }).toEqual({
     before: { root: [upstream(GATEWAY_MODEL)], child: [upstream(GATEWAY_MODEL)] },

@@ -41,7 +41,7 @@ test("a hire's write tells the workspace's pages that Changes moved, so a tab no
     name: 'builder-1', displayName: 'Builder', nameOrigin: 'user', roleId: 'task', mission: 'build the thing',
   });
 
-  const home = agentHome(actorHomeName({ origin: 'agent', storageKey: hire.actor.handle.storageKey }));
+  const home = agentHome(actorHomeName({ origin: 'agent', name: hire.actor.handle.name, storageKey: hire.actor.handle.storageKey }));
 
   const moved = (): unknown[] => frames.map((frame) => v.parse(v.looseObject({ type: v.string() }), JSON.parse(frame)))
     .filter((frame) => frame.type === 'changes_moved');

@@ -102,12 +102,18 @@ it('a share is granted what its graph observes, across the app hop and its cycle
   ]);
   expect(await granted('users', [{ slate: 'issues', namespace: 'agent', member: 'send' }])).toContain('issues:agent.send');
 
-  // What only the agent does is refused where the host routes it, so it never enters a graph or a grant.
+  // What only the agent does is refused where the host routes it, so it never enters a graph or a grant. Helpers the
+  // owner's own slate hired are in its graph, as delegating, and no share carries them or may be approved them.
   const overreach = v.parse(GraphSchema, answer(await probe.operationAs('root', { op: 'graph', id: 'overreach' })));
 
-  expect(overreach.namespaces).toEqual([]);
+  expect(overreach.namespaces.map((each) => [each.namespace, each.members.map((member) => [member.member, member.impact])])).toEqual([
+    ['agents', [['hire', 'delegate']]],
+  ]);
   expect(v.parse(ShareSchema, answer(await probe.operationAs('root', { op: 'share', id: 'overreach', visibility: 'public', approved: [] })))
     .share.grant.members).toEqual([]);
+  expect(await probe.operationAs('root', {
+    op: 'share', id: 'overreach', visibility: 'public', approved: [{ slate: 'overreach', namespace: 'agents', member: 'hire' }],
+  })).toMatchObject({ ok: false, reason: 'bad_input', error: expect.stringContaining('a share cannot grant it') });
 });
 
 it('Plan mode may read a graph but not share, and a hired agent may do neither', async () => {
@@ -226,4 +232,33 @@ it("a slate's class connects the browser its caller opened, through the eval pro
   expect(await probe.drive('not-mine')).toContain('browser not-mine is not one this agent opened');
   // A Kitesurf browser is opened for the call itself.
   expect(await probe.drive('kitesurf')).toContain('Browser Run started a Kitesurf browser');
+  // Each was authorized at the host before the class dialed, so the slate's graph names it as any call it made.
+  const graph = v.parse(GraphSchema, answer(await probe.operationAs('root', { op: 'graph', id: 'driver' })));
+
+  expect(graph.namespaces.find((row) => row.namespace === 'web')?.members).toContainEqual(expect.objectContaining({ member: 'connectBrowser', impact: 'execute' }));
+});
+
+it("a share's viewer drives a browser from the class only as the grant allows, and never the owner's session", async () => {
+  const ungranted = subject('driver-ungranted');
+  await ungranted.start();
+
+  // Not granted: refused at the host before the class dials, so no browser opens on the owner's account.
+  expect(await ungranted.driveShared('kitesurf', [], CLAIM)).toEqual({ answer: expect.stringContaining('does not grant web.connectBrowser to viewers'), dialed: 0 });
+
+  const granted = subject('driver-granted');
+  await granted.start();
+
+  // Granted: a new Kitesurf browser, and still none of the owner's own sessions.
+  expect(await granted.driveShared('kitesurf', ['connectBrowser'], CLAIM)).toEqual({ answer: expect.stringContaining('Browser Run started a Kitesurf browser'), dialed: 1 });
+  expect(await granted.driveShared('owned-session', ['connectBrowser'], CLAIM)).toEqual({ answer: expect.stringContaining('browser owned-session is not one this agent opened'), dialed: 0 });
+});
+
+it('a slate\'s class reads ai.stream a piece at a time, as the model writes it, through the binding its calls cross', async () => {
+  const probe = env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName('typist'));
+
+  const pieces: unknown = JSON.parse(await probe.typed('live'));
+
+  // Whole and in order, in more than one read: the model's last piece came only once the class held the first.
+  expect(v.parse(v.array(v.string()), pieces).join('')).toBe('Typing live');
+  expect(v.parse(v.array(v.string()), pieces).length).toBeGreaterThan(1);
 });

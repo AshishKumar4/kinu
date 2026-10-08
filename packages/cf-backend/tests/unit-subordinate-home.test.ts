@@ -29,7 +29,7 @@ async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorA
 
   if (row === null) throw new Error(`no directory row names ${name}`);
 
-  return { parent, name, agentName: actorHomeName({ origin: 'agent', storageKey: row.storage_key }) };
+  return { parent, name, agentName: actorHomeName({ origin: 'agent', name, storageKey: row.storage_key }) };
 }
 
 const hire = {
@@ -43,7 +43,7 @@ describe('a hosted subordinate runs as its own home', () => {
   test('hiring provisions the home on the workspace and the runtime acts as that uid', async () => {
     const parent = orchestratorHarness();
     const child = await hostedSubordinateHarness(parent, { ...hire, name: 'builder-1' });
-    const agentName = actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey });
+    const agentName = actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey });
 
     const home = await parent.agent.statWorkspaceFile(agentHome(agentName));
     expect(home).toMatchObject(DIRECTORY);
@@ -65,7 +65,7 @@ describe('a hosted subordinate runs as its own home', () => {
   test('a call that streams its output runs as the subordinate too', async () => {
     const parent = orchestratorHarness();
     const child = await hostedSubordinateHarness(parent, { ...hire, name: 'builder-3' });
-    const agentName = actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey });
+    const agentName = actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey });
     const shell = present(child.actor.runtime.shell, 'a hosted subordinate runtime carries a shell');
     const heard: string[] = [];
     const decoder = new TextDecoder();
@@ -93,9 +93,21 @@ describe('a hosted subordinate runs as its own home', () => {
     const saved = present(/full result at ([^\]]+)\]/u.exec(clamped)?.[1], 'the saved path');
 
     expect(clamped).not.toContain('the full result was not saved');
-    expect(saved).toStartWith(`${agentHome(actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }))}/.kinu/tool-output/`);
+    expect(saved).toStartWith(`${agentHome(actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }))}/.kinu/tool-output/`);
     expect(await file({ op: 'read', path: saved, offset: 19_999, limit: 2 })).toContain('20000');
     expect(await shell({ command: `cd /tmp && tail -n 1 ${saved}` })).toContain('20000');
+  });
+
+  test('a chat opened with words is named from them, and its home is /home/<name>', async () => {
+    const parent = orchestratorHarness();
+    await parent.agent.setSoul(SOUL);
+    const first = await parent.agent.createSubordinateAgent('Fix the coupon expiry check in pricing.ts');
+    // The same words again: a name the workspace has had is numbered, so the two homes stay two.
+    const second = await parent.agent.createSubordinateAgent('Fix the coupon expiry check, again');
+
+    expect([first.name, second.name]).toEqual(['fix-coupon-expiry', 'fix-coupon-expiry-2']);
+    expect(await parent.agent.statWorkspaceFile('/home/fix-coupon-expiry')).toMatchObject(DIRECTORY);
+    expect(await parent.agent.statWorkspaceFile('/home/fix-coupon-expiry-2')).toMatchObject(DIRECTORY);
   });
 
   test('an archive keeps the home', async () => {

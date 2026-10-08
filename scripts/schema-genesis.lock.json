@@ -146,10 +146,6 @@
     "settled INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, turn_id)"
   ],
-  "agent_wakes@packages/core/src/subordinates/open-turns.ts": [
-    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
-    "wake_at INTEGER NOT NULL"
-  ],
   "alternate_takes@packages/core/src/mcts/takes.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -586,7 +582,9 @@
     "executor TEXT NOT NULL",
     "command TEXT NOT NULL",
     "stdout TEXT",
+    "stdout_len INTEGER",
     "stderr TEXT",
+    "stderr_len INTEGER",
     "exit_code INTEGER",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "PRIMARY KEY (actor_id, id)"
@@ -655,6 +653,13 @@
     "source_message_created_at INTEGER NOT NULL",
     "forked_at INTEGER NOT NULL"
   ],
+  "fork_notices@packages/core/src/heads/fork-notices.ts": [
+    "notice_key TEXT PRIMARY KEY",
+    "signal TEXT NOT NULL",
+    "attempts INTEGER NOT NULL",
+    "due_at INTEGER NOT NULL",
+    "started_at INTEGER"
+  ],
   "fork_staged_files@packages/core/src/identity/schema.ts": [
     "path TEXT PRIMARY KEY"
   ],
@@ -704,21 +709,6 @@
     "metric_calls INTEGER NOT NULL DEFAULT 0",
     "iterations INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY (actor_id, run_id)"
-  ],
-  "github_activity@packages/core/src/github/activity.ts": [
-    "id INTEGER PRIMARY KEY AUTOINCREMENT",
-    "at INTEGER NOT NULL",
-    "actor_id TEXT",
-    "source TEXT NOT NULL",
-    "action TEXT NOT NULL",
-    "subject TEXT NOT NULL",
-    "repo TEXT NOT NULL",
-    "number INTEGER",
-    "url TEXT",
-    "title TEXT",
-    "ref TEXT",
-    "state TEXT",
-    "ci TEXT"
   ],
   "github_items@packages/core/src/github/activity.ts": [
     "repo TEXT NOT NULL",
@@ -852,14 +842,6 @@
     "created_at INTEGER NOT NULL",
     "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, root_id)"
-  ],
-  "memory_chunks@packages/agent-utils/src/memory/store.ts": [
-    "id TEXT PRIMARY KEY",
-    "path TEXT NOT NULL",
-    "start_line INTEGER NOT NULL",
-    "end_line INTEGER NOT NULL",
-    "hash TEXT NOT NULL",
-    "text TEXT NOT NULL"
   ],
   "memory_note_chunks@packages/agent-utils/src/memory/store.ts": [
     "id TEXT PRIMARY KEY",
@@ -1070,6 +1052,13 @@
     "recipient_user_id TEXT NOT NULL",
     "card TEXT NOT NULL",
     "PRIMARY KEY (workspace, share_id, recipient_user_id)"
+  ],
+  "slate_builds@packages/cf-backend/src/slates/builds.ts": [
+    "slate TEXT PRIMARY KEY",
+    "good_key TEXT",
+    "good_image TEXT",
+    "failed_key TEXT",
+    "failure TEXT"
   ],
   "slate_file_manifest@packages/core/src/state/workspace-schema.ts": [
     "slate_id TEXT NOT NULL",
@@ -1430,14 +1419,6 @@
     "card TEXT NOT NULL",
     "PRIMARY KEY (owner_user_id, workspace, share_id)"
   ],
-  "user_shares_received@packages/core/src/state/user-schema.ts": [
-    "owner_user_id TEXT NOT NULL",
-    "owner_email TEXT NOT NULL",
-    "workspace TEXT NOT NULL",
-    "share_id TEXT NOT NULL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "PRIMARY KEY (owner_user_id, workspace, share_id)"
-  ],
   "user_unrevoked_grants@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",
     "reasons_json TEXT NOT NULL",
@@ -1476,6 +1457,12 @@
     "trigger_id TEXT NOT NULL",
     "secret TEXT NOT NULL",
     "created_at INTEGER NOT NULL"
+  ],
+  "workspace_activations@packages/core/src/identity/activations.ts": [
+    "slot INTEGER PRIMARY KEY",
+    "ordinal INTEGER NOT NULL",
+    "started_at INTEGER NOT NULL",
+    "version TEXT"
   ],
   "workspace_actors@packages/core/src/identity/workspace-actors.ts": [
     "actor_id TEXT PRIMARY KEY",
@@ -1536,5 +1523,16 @@
     "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
     "decisions INTEGER NOT NULL",
     "overview TEXT NOT NULL"
+  ],
+  "workspace_proposals@packages/core/src/safety/workspace-proposals.ts": [
+    "id TEXT PRIMARY KEY",
+    "name TEXT NOT NULL",
+    "soul TEXT NOT NULL",
+    "brief TEXT NOT NULL",
+    "status TEXT NOT NULL DEFAULT 'pending'",
+    "requested_at INTEGER NOT NULL",
+    "decided_at INTEGER",
+    "workspace TEXT",
+    "error TEXT"
   ]
 }

@@ -206,7 +206,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     name: 'delegation-task-lifetime',
     opts: {
       availableTools: ['agents'],
-      agentsActions: ['hire', 'msg', 'list'],
+      agentsActions: ['hire', 'message', 'list'],
       temporaryAsk: true,
       registeredExecutors: [],
     },

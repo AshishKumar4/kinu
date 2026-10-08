@@ -51,7 +51,8 @@ export const WORKSPACE = {
     name: 'createTool', impact: 'mutate',
     help: 'Save a crafted tool, callable as `tools.<name>(args)` from the next program; the same name updates it. `code` is '
       + `${CRAFTED_TOOL_BODY}; helpers may precede it. In its body, ${WORKSPACE_FILE_BINDINGS}, and call `
-      + '`tools.<name>(args)`; `require`, `import` and `eval` are refused.',
+      + '`tools.<name>(args)`; `require`, `import` and `eval` are refused. `code` may be the function itself, '
+      + '`createTool(name, description, async (args) => { ... })`, saved as its source: it closes over nothing in this program.',
     input: v.strictObject({ name: v.pipe(v.string(), v.nonEmpty()), description: v.pipe(v.string(), v.nonEmpty()), code: v.pipe(v.string(), v.nonEmpty()) }),
     output: v.object({ name: v.string(), action: v.picklist(['created', 'updated']) }),
   }),

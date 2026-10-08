@@ -13,7 +13,11 @@ import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import { agentStateShellId, type AgentFacetPlacement, type AgentWorkspaceHost } from '../../src/agent-facets';
 import { joinedOnlyByItself } from './agents-sdk';
 
-const databases = new Map<string, Database>();
+/**
+ * Each workspace object's agents' databases, by storage key. A facet's storage is its object's, so an activation
+ * over the same storage finds them, and another workspace, which may key an agent alike, never does.
+ */
+const databases = new WeakMap<Database, Map<string, Database>>();
 
 /** Models a suite scripts, by the conversation (`agentAffinityKey`) their calls are routed under. */
 const scriptedModels = new Map<string, () => LanguageModel>();
@@ -89,21 +93,25 @@ async function sessionOrFailure(open: Promise<HostedSession>): Promise<() => Hos
 
 let contextOver: ((db: Database, id: string) => AgentContext) | null = null;
 
-export function agentDatabase(storageKey: string): Database {
-  const held = databases.get(storageKey);
+/** The database of the agent keyed `storageKey` in the workspace whose own storage is `workspace`. */
+export function agentDatabase(workspace: Database, storageKey: string): Database {
+  const agents = databases.get(workspace) ?? new Map<string, Database>();
+  const held = agents.get(storageKey);
 
   if (held !== undefined) return held;
 
   if (contextOver === null) throw new Error('no harness has been built, so no agent database can be');
   const db = new Database(':memory:');
 
-  databases.set(storageKey, db);
+  agents.set(storageKey, db);
+  databases.set(workspace, agents);
   new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable });
 
   return db;
 }
 
-export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => AgentContext): InProcessAgentFacets {
+/** `workspace`: the storage of the object these agents are facets of. */
+export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => AgentContext, workspace: () => Database): InProcessAgentFacets {
   const live = new Map<string, OpenFacet>();
   // Two calls that race to open one agent reach one isolate, as a stub's do.
   const opening = new Map<string, Promise<OpenFacet>>();
@@ -137,13 +145,13 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
     drop: (storageKey) => {
       live.delete(storageKey);
       opening.delete(storageKey);
-      databases.get(storageKey)?.close();
-      databases.delete(storageKey);
+      databases.get(workspace())?.get(storageKey)?.close();
+      databases.get(workspace())?.delete(storageKey);
     },
   };
 
   async function openFacet(placement: AgentFacetPlacement, host: AgentWorkspaceHost) {
-      const db = agentDatabase(placement.storageKey);
+      const db = agentDatabase(workspace(), placement.storageKey);
       const session = await sessionOrFailure(host.session());
       const stateSession = await sessionOrFailure(host.stateSession());
 
@@ -183,6 +191,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           enqueueTurn: (input) => host.enqueueTurn(input),
           executeTool: (call) => host.executeTool(call),
           observe: (lines) => host.observe(lines),
+          paceStep: (turnId) => {
+            traceCalls.push('paceStep');
+
+            return host.paceStep(turnId);
+          },
           answerMetadata: (turnId, narration) => host.answerMetadata(turnId, narration),
           getAuth: (key, opts) => host.getAuth(key, opts),
           listCredentials: () => host.listCredentials(),

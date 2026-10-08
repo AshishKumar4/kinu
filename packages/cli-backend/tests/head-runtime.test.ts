@@ -117,7 +117,7 @@ function headDeps(
       };
     },
     reportModelCall: () => {},
-    webSearch: stubWeb, codemodeExtras: () => [],
+    webSearch: stubWeb,
     governor: () => governor, journal: () => journal, ...over,
   };
 }
@@ -662,7 +662,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
     };
 
     const runtime = createCLIHeadRuntime(headDeps(
-      scratchProbeModel(barrier(2, () => {}), (id) => `${parent.space}/home/${actorHomeName({ origin: 'swarm', storageKey: key(id) })}/note.txt`),
+      scratchProbeModel(barrier(2, () => {}), (id) => `${parent.space}/home/${actorHomeName({ origin: 'swarm', name: explorationActorKey(id), storageKey: key(id) })}/note.txt`),
       { journal: () => journal, parentRuntime: parent },
     ));
 

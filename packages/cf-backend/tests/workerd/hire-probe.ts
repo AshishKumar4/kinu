@@ -6,7 +6,6 @@
  */
 
 import { Agent, getAgentByName, type AgentContext } from 'agents';
-import { Effect } from 'effect';
 import * as v from 'valibot';
 import { actorReferenceOf, isSubordinateOrigin, ownerCaller, type ArchiveCursor, type Clock } from '@kinu.run/core';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
@@ -15,7 +14,6 @@ import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface'
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
 import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
-import { FIBER_RECOVERY_MAX_AGE_MS } from '../../src/fiber-recovery';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 
 export * from '../../src/server';
@@ -47,7 +45,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'ageJobFiber', 'jobWatchState', 'jobRows'];
+    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'jobWatchState', 'jobRows', 'pendingAlarm'];
 
     for (const name of reads) Reflect.deleteProperty(this, name);
 
@@ -76,16 +74,9 @@ export class HireOrchestrator extends ProductionOrchestrator {
     await this.workspaceBox(this.shellId()).files.write(JOB_GATE, 'open');
   }
 
-  /** What a restart's fiber recovery does for a job whose fiber outlived its settle: re-deliver its wake. */
+  /** What a restart does for a job whose lane row outlived its settle: re-deliver its wake. */
   async redeliverJobWake(jobId: string): Promise<void> {
-    await this.workspaceJobs().recover({ phase: 'running', jobId, kind: 'shell' });
-  }
-
-  async ageJobFiber(jobId: string): Promise<number> {
-    return this.probeState.storage.sql.exec(
-      `UPDATE cf_agents_runs SET created_at = ? WHERE name LIKE 'bg:%' AND json_extract(snapshot, '$.jobId') = ?`,
-      Date.now() - FIBER_RECOVERY_MAX_AGE_MS - 1_000, jobId,
-    ).rowsWritten;
+    await this.jobAuthorities.recover({ phase: 'running', jobId, kind: 'shell' });
   }
 
   async jobWatchState(): Promise<JobWatchState> {
@@ -93,7 +84,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
       incarnation: this.probeIncarnation,
       terminalRetry: this.probeState.storage.sql.exec(`SELECT 1 FROM cf_agents_jobs WHERE id = 'terminal-retry'`).toArray().length > 0,
       agentWakes: this.probeState.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM cf_agents_jobs WHERE capability = 'kinu-agent-wakes'`).one().n,
-      fibers: this.probeState.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM cf_agents_runs WHERE name LIKE 'bg:%'`).one().n,
+      fibers: this.probeState.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM fibers WHERE name LIKE 'bg:%'`).one().n,
       wakes: this.probeWakeCount,
       started: this.probeStarted,
       jobs: await this.jobRows(),
@@ -107,15 +98,6 @@ export class HireOrchestrator extends ProductionOrchestrator {
   override async onStart(): Promise<void> {
     await super.onStart();
     this.probeStarted = true;
-  }
-
-  override onAlarm(): void {
-    super.onAlarm();
-    this.detachOwned(Effect.promise(async () => {
-      await fetch(hireControlUrl(this.name, 'alarm-returned'), {
-        method: 'POST', body: JSON.stringify(await this.jobWatchState()),
-      });
-    }));
   }
 
   async jobRows(): Promise<JobRow[]> {
@@ -286,6 +268,11 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   /** Every delegated turn ended and every task agent its answer retired: a hirer no longer waits on either. Each agent's
    *  isolate answers idle once its effects closed and it told this workspace what it still owes. */
+  /** The alarm this object holds, as a deleted workspace must hold none. */
+  async pendingAlarm(): Promise<number | null> {
+    return await this.ctx.storage.getAlarm();
+  }
+
   async settled(): Promise<void> {
     await this.agentTurns.idle();
     await this.delegatedTurns.idle();
@@ -326,7 +313,7 @@ const WireLogSchema = v.looseObject({
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
     'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'
-    | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'ageJobFiber' | 'jobWatchState' | 'jobRows'>;
+    | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'jobWatchState' | 'jobRows' | 'pendingAlarm'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -334,7 +321,7 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 }
 
 type OwnerTarget = Pick<UserDO,
-  'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential' | 'getProfileCatalog' | 'putProfileCatalog'>;
+  'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential' | 'getProfileCatalog' | 'putProfileCatalog' | 'removeWorkspace'>;
 
 export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
@@ -346,18 +333,18 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     return this.env.UserDO.get(this.env.UserDO.idFromName(name));
   }
 
-  async setup(workspace: string, model: string, script: ChildScript): Promise<void> {
+  async setup(workspace: string, model: string, script: ChildScript, ownerUserId = `${workspace}-owner`): Promise<void> {
     await fetch(hireControlUrl(workspace, 'reset'), {
       method: 'POST', body: JSON.stringify({ script }),
     });
 
     const target = await this.target(workspace);
     const caller = await ownerCaller(this.env);
-    const userDO = this.owner(`${workspace}-owner`);
+    const userDO = this.owner(ownerUserId);
 
     await userDO.registerWorkspace(caller, workspace, 'Hire Probe');
 
-    const claim = await target.claimOwner(`${workspace}-owner`);
+    const claim = await target.claimOwner(ownerUserId);
 
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await userDO.setCredential(caller, 'openai-compat.default', {
@@ -376,6 +363,14 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     await target.setSoul('# Hire Probe\n\n## Mission\n\nDelegate exactly what the owner asks for.');
   }
 
+  /** The owner deletes the workspace while its hire works, as an eval's teardown does; answers the alarm the deleted
+   *  object holds once the deletion answered. */
+  async deleteWhileChildWorks(workspace: string, ownerUserId: string): Promise<{ readonly alarm: number | null }> {
+    await this.owner(ownerUserId).removeWorkspace(await ownerCaller(this.env), workspace, ownerUserId);
+
+    return { alarm: await (await this.target(workspace)).pendingAlarm() };
+  }
+
   /** Let a parked child finish its turn. */
   async releaseChild(): Promise<void> {
     await fetch(hireControlUrl(this.name, 'release-child'), { method: 'POST' });
@@ -392,15 +387,6 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     for (const text of texts) url.searchParams.append('text', text);
 
     await fetch(url);
-  }
-
-  async restartAlarm(workspace: string, exclude: string): Promise<JobWatchState> {
-    const url = new URL(hireControlUrl(workspace, 'restart-alarm'));
-    url.searchParams.set('exclude', exclude);
-
-    const response = await fetch(url);
-
-    return await response.json();
   }
 
   /** Settles when the caller's own `agents` call resolved into its next model
@@ -475,10 +461,6 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
   async redeliverJobWake(workspace: string, jobId: string): Promise<void> {
     await (await this.target(workspace)).redeliverJobWake(jobId);
-  }
-
-  async ageJobFiber(workspace: string, jobId: string): Promise<number> {
-    return await (await this.target(workspace)).ageJobFiber(jobId);
   }
 
   async jobWatchState(workspace: string): Promise<JobWatchState> {

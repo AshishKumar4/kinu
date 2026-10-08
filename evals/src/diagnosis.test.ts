@@ -52,7 +52,7 @@ describe('the advisory diagnosis contract', () => {
 
     if (first === undefined) throw new Error('reply has no trial');
 
-    const hung = makeAssertion([{ outcome: { status: 'hung', message: 'held by open run run' }, checks: [], turnWallMs: 1, verificationWallMs: 0 }]);
+    const hung = makeAssertion([{ part: 'build', turn: 1, outcome: { status: 'hung', message: 'held by open run run' }, checks: [], turnWallMs: 1, verificationWallMs: 0 }]);
     const hungReviews = [{ id: 'trial-1', insights: extractInsights(hung, evidence) }];
     const causedBy = (kind: string) => JSON.stringify({ ...reply, trials: [{ ...first, cause: { kind } }] });
 
