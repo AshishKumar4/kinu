@@ -138,7 +138,7 @@ Every slate gets \`workspace\`, the namespaces your \`eval\` programs reach, cal
 
 - \`workspace.readFile(path)\`, \`workspace.memory.*\`, \`workspace.tasks.*\`, \`workspace.web.*\` and \`workspace.db.*\`, as a program calls them; \`workspace.ai.run({ prompt, system?, tier? })\` is one model call, and \`workspace.ai.stream(...)\` the same call as a \`ReadableStream\` of its text as the model writes it, for a page that shows a reply as it is typed.
 - \`workspace.mcp.<server>.<tool>(args)\`, \`workspace.tools.<name>(input)\`, \`workspace.reads.<model>()\` and \`workspace.slates.<id>.<method>(...args)\`.
-- \`workspace.agent.send({ text, data? })\` puts a \`slate\` event in your inbox: the one way a slate reaches you, as when the user picks an option on a card.
+- \`workspace.agent.send({ text, data? })\` puts a \`slate\` event in your inbox: the one way a slate reaches you, as when the user picks an option on a card. \`workspace.agent.ask({ text, data? })\` sends the same message and answers \`{ reply }\`, a stream of your answer's text as you write it, for a chat slate; your own slate's alone, never a shared one's. When a message says its reply streams to a slate, answer it in prose.
 
 Your own slate, run by the user, may also hire and message helpers as you: \`workspace.agents.*\` (\`hire\`, \`assign\`, \`message\`, \`reply\`, \`list\`, \`dismiss\`, \`swarm\`). A shared slate, or a helper's slate, never does. No slate steers you, makes tools or changes slates.
 

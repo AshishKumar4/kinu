@@ -30,9 +30,9 @@ import { nativeTool, operationTool } from './operation-surfaces';
 import { serveTasks, type RoleSwitch } from './tasks-operations';
 import type { WebSearchProvider } from '../web/index';
 import { serveWeb } from './web-operations';
-import type { SubmitPlanToolDeps } from '../types/plans';
+import type { ReplyToCommentToolDeps, SubmitPlanToolDeps } from '../types/plans';
 import { PLAN } from '../operations/plan';
-import { servePlan } from './plan-operations';
+import { servePlan, servePlanReply } from './plan-operations';
 import type { JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, settleSync, type Logger } from '../obs/index';
@@ -90,8 +90,10 @@ export interface BuiltinToolDeps {
   /** Wired only on subordinate actors. */
   report?: ReportDeps;
   webSearch?: WebSearchProvider;
-  /** Plan mode only; its absence is the gate. */
+  /** Owner-driven root turns; its absence is the gate. */
   submitPlan?: SubmitPlanToolDeps;
+  /** Only while a review the owner sent back holds comments the agent may answer; its absence is the gate. */
+  replyToComment?: ReplyToCommentToolDeps;
   /** Per-turn ledger: lets `file` refuse blind edits. Omitted → fresh one, so the policy is per-root. */
   fileLedger?: TurnFileLedger;
   /** Per-turn context budget; omitted → fresh one, so the policy is per-root. */
@@ -170,10 +172,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     tools.report = operationTool(BUILTIN_TOOL_DESCRIPTIONS.report, serveReport(() => report));
   }
 
-  // Outside BUILTIN_TOOLS: exists only on Plan turns.
-  const submitPlan = deps.submitPlan;
+  // Outside BUILTIN_TOOLS: the plan review's tools exist only where their deps are wired.
+  const { submitPlan, replyToComment } = deps;
 
   if (submitPlan) tools.submit_plan = operationTool(PLAN.submit.help, servePlan(submitPlan));
+
+  if (replyToComment) tools.reply_to_comment = operationTool(PLAN.reply.help, servePlanReply(replyToComment));
 
   // `mcp_` is reserved for MCP (isMcpToolKey).
   for (const name of Object.keys(tools)) {

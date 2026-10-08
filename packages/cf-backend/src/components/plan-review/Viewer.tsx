@@ -11,12 +11,16 @@ import { computeListIndices, groupBlocks, type Frontmatter, type FrontmatterValu
 import { buildHeadingSlugMap } from '@plannotator/ui/utils/slugify';
 import { copyTextToClipboard } from '@plannotator/ui/utils/clipboard';
 import { useAnnotationHighlighter } from '@plannotator/ui/hooks/useAnnotationHighlighter';
+import type { GeneralNote, PassageNote } from '@kinu.run/core';
+import { editorAnnotationOf, reviewNoteOf } from './notes';
 
 interface ViewerProps {
   blocks: Block[];
   frontmatter?: Frontmatter | null;
-  annotations: Annotation[];
-  onAddAnnotation: (annotation: Annotation) => void;
+  /** The passages to highlight. */
+  annotations: readonly PassageNote[];
+  /** A new comment, in the shape the review stores. */
+  onAddAnnotation: (note: PassageNote | GeneralNote) => void;
   onSelectAnnotation: (id: string | null) => void;
   selectedAnnotationId: string | null;
   mode: EditorMode;
@@ -501,6 +505,8 @@ export const Viewer = ({
   const globalCommentButtonRef = useRef<HTMLButtonElement>(null);
   const [globalCommentOpen, setGlobalCommentOpen] = useState(false);
   const headingSlugMap = useMemo(() => buildHeadingSlugMap(blocks), [blocks]);
+  const highlights = useMemo(() => annotations.map(editorAnnotationOf), [annotations]);
+  const onHighlight = useCallback((annotation: Annotation) => onAddAnnotation(reviewNoteOf(annotation)), [onAddAnnotation]);
 
   const {
     toolbarState,
@@ -514,8 +520,8 @@ export const Viewer = ({
     applyAnnotations,
   } = useAnnotationHighlighter({
     containerRef,
-    annotations,
-    onAddAnnotation,
+    annotations: highlights,
+    onAddAnnotation: onHighlight,
     onSelectAnnotation,
     selectedAnnotationId,
     mode,
@@ -524,9 +530,7 @@ export const Viewer = ({
   });
 
   useEffect(() => {
-    const eligible = annotations.filter((annotation) => (
-      annotation.type !== AnnotationType.GLOBAL_COMMENT && Boolean(annotation.originalText)
-    ));
+    const eligible = highlights.filter((annotation) => Boolean(annotation.originalText));
 
     const timer = window.setTimeout(() => {
       clearAllHighlights();
@@ -534,20 +538,10 @@ export const Viewer = ({
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [annotations, applyAnnotations, blocks, clearAllHighlights, readOnly]);
+  }, [highlights, applyAnnotations, blocks, clearAllHighlights, readOnly]);
 
   const addGlobalComment = useCallback((text: string) => {
-    onAddAnnotation({
-      id: annotationId(),
-      blockId: '',
-      startOffset: 0,
-      endOffset: 0,
-      type: AnnotationType.GLOBAL_COMMENT,
-      text,
-      originalText: '',
-      createdA: Date.now(),
-      author: 'Owner',
-    });
+    onAddAnnotation({ id: annotationId(), type: 'GLOBAL_COMMENT', text, createdA: Date.now(), author: 'Owner' });
     setGlobalCommentOpen(false);
   }, [onAddAnnotation]);
 

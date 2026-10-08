@@ -78,8 +78,11 @@ export function isBuiltinToolName(value: string): value is BuiltinToolName {
 /** The subordinate → parent progress tool id. */
 export const REPORT_TOOL: BuiltinToolName = 'report';
 
-/** Plan mode's completion tool. Not in TOOL_REACH: `buildBuiltinTools` adds it only on Plan turns. */
+/** The plan review's submission tool. Not in TOOL_REACH: `buildBuiltinTools` adds it where its deps are wired. */
 export const SUBMIT_PLAN_TOOL = 'submit_plan';
+
+/** The agent's reply in a review comment thread; wired like `submit_plan`, and only while the owner awaits replies. */
+export const REPLY_TO_COMMENT_TOOL = 'reply_to_comment';
 
 /** Builtins dropped when an actor's profile wires no deps for them. `agents` is never dropped. */
 export const DEPS_GATED_TOOLS: readonly BuiltinToolName[] = [REPORT_TOOL];

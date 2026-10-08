@@ -25,8 +25,21 @@ export type SlateAnswer<Value> =
 
 export type SlateCallResult = SlateAnswer<JsonValue>;
 
-/** What a slate's own call on its surface answers: JSON, or for `ai.stream` the answer's UTF-8 text as the model writes it. */
-export type SlateSurfaceValue = JsonValue | ReadableStream<Uint8Array>;
+/**
+ * `agent.ask`'s answer, at once: the agent's reply as UTF-8 text, written as the agent writes it. A message that never
+ * lands in a turn ends it with why.
+ */
+export interface SlateReply {
+  readonly reply: ReadableStream<Uint8Array>;
+}
+
+/** What a slate's own call on its surface answers: JSON, a stream of text (`ai.stream`), or a reply (`agent.ask`). */
+export type SlateSurfaceValue = JsonValue | ReadableStream<Uint8Array> | SlateReply;
+
+/** Whether an answer is JSON, as every answer is but a streamed one. */
+export function isJsonAnswer(value: SlateSurfaceValue): value is JsonValue {
+  return !(value instanceof ReadableStream) && !(value !== null && typeof value === 'object' && 'reply' in value && value.reply instanceof ReadableStream);
+}
 
 export type SlateSurfaceResult = SlateAnswer<SlateSurfaceValue>;
 
