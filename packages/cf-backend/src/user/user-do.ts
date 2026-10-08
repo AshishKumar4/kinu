@@ -33,7 +33,7 @@ import { UserTerminals } from './terminals';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
 import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-servers';
 import { UserAccountMemory } from './account-memory';
-import type { AccountMemoryView, AccountNoteHit, AccountProposal, Fact, SqlValue } from '@kinu.run/core';
+import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, SqlValue } from '@kinu.run/core';
 import {
   UserSessions, CLI_AGENT_WEBSOCKET_CAPABILITY, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
@@ -525,8 +525,8 @@ export class UserDO extends Agent<Env> {
     return this.accountMemory.accountMemory_searchNotes(caller, query, limit);
   }
 
-  accountMemory_propose(caller: UserCaller, proposal: AccountProposal, agent: string): Promise<string> {
-    return this.accountMemory.accountMemory_propose(caller, proposal, agent);
+  accountMemory_propose(caller: UserCaller, proposal: AccountProposal, proposer: AccountProposer, delivery?: string): Promise<string> {
+    return this.accountMemory.accountMemory_propose(caller, proposal, proposer, delivery);
   }
 
   accountMemory_view(caller: UserCaller): Promise<AccountMemoryView> {

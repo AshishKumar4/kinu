@@ -4,9 +4,9 @@ import { Effect } from 'effect';
 import type { Memory } from '../types/primitives';
 import type { VectorStore, VectorSearchHit } from './vector-store';
 import { reciprocalRankFusion } from './vector-store';
-import { searchFacts, type FactSearchHit, type MemoryScope, type ScopedFact } from './facts';
+import { searchFacts, unifiedFacts, type Fact, type FactSearchHit, type MemoryScope } from './facts';
 import type { AccountNoteHit } from './account';
-import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError } from '../obs/index';
+import { attempt, diagnostics, settle, toKinuError, type ErrorCode, type KinuError } from '../obs/index';
 
 export interface LexicalHit {
   readonly id: string;
@@ -70,9 +70,12 @@ export interface HybridSearchOptions {
   finalK?: number;
   /** RRF constant. Default 60 (Cormack/Lynam). */
   rrfK?: number;
-  /** Both scopes' facts (`unifiedFacts`), read inside their arm so a failed read degrades: a second lexical source,
-   *  rendered `fact: <key>` or `account fact: <key>`. */
-  facts?: () => Promise<readonly ScopedFact[]> | readonly ScopedFact[];
+  /** This workspace's facts, a second lexical source rendered `fact: <key>`, read inside its arm so a failed read
+   *  degrades the arm, never the search. */
+  facts?: () => readonly Fact[];
+  /** The account's facts, joined below the workspace's in the same arm (`unifiedFacts`) and rendered `account fact: <key>`.
+   *  A failed read costs only them: the workspace's facts are still searched. */
+  accountFacts?: () => Promise<readonly Fact[]>;
   /** The account's notes the query matches, a fourth source that degrades as the others do. */
   accountNotes?: (query: string, limit: number) => Promise<readonly AccountNoteHit[]>;
   rehydrate?: SnippetRehydrator;
@@ -103,7 +106,7 @@ export function hybridSearch(
   const perSourceK = options.perSourceK ?? 20;
   const finalK = options.finalK ?? 10;
   const rrfK = options.rrfK ?? 60;
-  const unified = options.facts;
+  const { facts: ownFacts, accountFacts } = options;
 
   const lexicalArm = armOf(() => lexicalSearch(query, perSourceK), 'run the lexical half of a hybrid search', 'io');
 
@@ -111,9 +114,17 @@ export function hybridSearch(
     ? armOf(() => vectorStore.search(query, perSourceK), 'run the semantic half of a hybrid search', 'unavailable')
     : Effect.succeed({ kind: 'skipped' });
 
-  const factsArm: Effect.Effect<FactsOutcome> = unified
-    ? armOf(async () => searchFacts(await unified(), query, perSourceK), 'run the facts half of a hybrid search', 'io')
-    : Effect.succeed({ kind: 'skipped' });
+  const sharedFacts: Effect.Effect<readonly Fact[]> = accountFacts === undefined ? Effect.succeed([]) : attempt(
+    { doing: "read the account's facts for a hybrid search", otherwise: 'unavailable' }, accountFacts,
+  ).pipe(Effect.catch((error) => Effect.sync(() => {
+    diagnostics.failure('memory.account_fact_search_failed', error);
+
+    return [];
+  })));
+
+  const factsArm: Effect.Effect<FactsOutcome> = ownFacts === undefined && accountFacts === undefined
+    ? Effect.succeed({ kind: 'skipped' })
+    : Effect.flatMap(sharedFacts, (shared) => armOf(() => searchFacts(unifiedFacts(ownFacts?.() ?? [], shared), query, perSourceK), 'run the facts half of a hybrid search', 'io'));
 
   const notesSource = options.accountNotes;
 

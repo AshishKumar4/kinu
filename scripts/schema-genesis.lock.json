@@ -1560,8 +1560,13 @@
     "proposal_json TEXT NOT NULL",
     "origin_json TEXT NOT NULL",
     "fingerprint TEXT NOT NULL",
+    "delivery TEXT UNIQUE",
     "status TEXT NOT NULL DEFAULT 'pending'",
     "created_at INTEGER NOT NULL",
     "decided_at INTEGER"
+  ],
+  "account_proposal_outbox@packages/core/src/orchestrator/sleep-time-lane.ts": [
+    "delivery TEXT PRIMARY KEY",
+    "proposal_json TEXT NOT NULL"
   ]
 }

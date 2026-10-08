@@ -156,5 +156,9 @@ export function filterToolSetBySkills(tools: ToolSet, activeSkills: ActiveSkillS
  * which the turn read once (`TurnAssemblySources.accountFacts`): the block's bytes change only when a fact does.
  */
 export function renderFactsForTurn(facts: FactsStore, account: readonly Fact[] = []): string | undefined {
-  return renderFactsBlock(unifiedFacts(facts.recentTopK(20), account), { maxChars: account.length === 0 ? 2000 : 3000 }) || undefined;
+  // Every key this workspace holds suppresses the account's, not only the newest twenty the block shows.
+  const held = account.length === 0 ? new Set<string>() : new Set(facts.all().map((fact) => fact.key));
+  const shared = account.filter((fact) => !held.has(fact.key));
+
+  return renderFactsBlock(unifiedFacts(facts.recentTopK(20), shared), { maxChars: account.length === 0 ? 2000 : 3000 }) || undefined;
 }

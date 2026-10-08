@@ -43,8 +43,9 @@ export interface Fact {
   origin: FactOrigin | null;
 }
 
-/** One value a key held, newest first; `value` null where the fact was forgotten. */
+/** One value a key held, newest first. A forgotten fact is a revision too, with no value; JSON `null` is a value. */
 export interface FactRevision {
+  readonly forgotten: boolean;
   readonly value: JsonValue | null;
   readonly importance: number;
   readonly veracity: Veracity;
@@ -258,6 +259,7 @@ export function createFactsStore(sql: SqlExecutor, actor: Pick<ActorHandle, 'act
           WHERE actor_id = ${actorId} AND key = ${canonical} ORDER BY rev DESC LIMIT ${HISTORY_KEPT}`;
 
       return rows.map((row) => ({
+        forgotten: row.value_json === null,
         value: row.value_json === null ? null : safeJsonParse(row.value_json),
         importance: row.importance, veracity: veracityOf(row.veracity), origin: originOf(row.origin_json), at: row.at,
       }));

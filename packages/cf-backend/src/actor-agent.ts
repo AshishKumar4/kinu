@@ -20,7 +20,7 @@ import {
 } from '@kinu.run/core';
 import type { SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
-import type { AccountMemory, Fact } from '@kinu.run/core';
+import type { AccountMemory, AccountProposer, Fact } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
 import {
@@ -473,7 +473,10 @@ interface TurnMemoryReads {
  * A slate calling as a hosted actor reaches only that actor's own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
  */
-function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearchProvider; readonly sessions: BrowserSessions }, conversations: ConversationRecall) {
+function hostedActorSurface(
+  actor: HostedActor, web: { readonly search: WebSearchProvider; readonly sessions: BrowserSessions }, conversations: ConversationRecall,
+  account?: AccountMemory,
+) {
   const webSearch = web.search;
   // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
   const runtime = actor.runtime;
@@ -484,12 +487,12 @@ function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearc
 
   const surface = hostedSurfaceActor(actor, {
     web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
-    conversations, vectorStore: runtime.vectorStore,
+    conversations, vectorStore: runtime.vectorStore, ...(account !== undefined && { account }),
   });
 
   const native = buildBuiltinTools({
     rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
-    conversations,
+    conversations, ...(account !== undefined && { account }),
     fileLedger: actor.session.orchestrator.acc.files, contextBudget: actor.session.orchestrator.acc.context,
   });
 
@@ -3305,9 +3308,10 @@ export abstract class ActorAgent extends Agent<Env> {
   ): Promise<A> {
     if (actor !== null) {
       return await this.actorHost().run(actor, async (hosted) => {
+        // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
         const surface = hostedActorSurface(hosted, {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
-        }, this.agentStores(hosted.handle.actorId).conversations());
+        }, this.agentStores(hosted.handle.actorId).conversations(), this.accountMemoryFor(hosted.record.name));
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
         const authority = await this.hostedSlateAuthority(hosted, requested, providers, Object.keys(surface.native));
@@ -3353,7 +3357,7 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       memory: () => ({
         memory: this.rt.memory, vectorStore: this.rt.vectorStore, facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
-        account: this.accountMemory(this.actorHandle().name),
+        account: this.accountMemory({ by: 'agent', agent: this.actorHandle().name }),
       }),
       files: () => ({
         vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
@@ -3438,10 +3442,10 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * The account's memory as `agent` reaches it, through the owner's user object; each call finds the hub then, so a
-   * toolset built before the workspace was claimed reaches it once it is. `agent` is who a proposal names.
+   * The account's memory as `proposer` reaches it, through the owner's user object; each call finds the hub then, so a
+   * toolset built before the workspace was claimed reaches it once it is. `proposer` is who a proposal names.
    */
-  protected accountMemory(agent: string): AccountMemory {
+  protected accountMemory(proposer: AccountProposer): AccountMemory {
     return {
       facts: async () => {
         const { stub, caller } = await this.userHub();
@@ -3453,18 +3457,23 @@ export abstract class ActorAgent extends Agent<Env> {
 
         return await stub.accountMemory_searchNotes(caller, query, limit);
       },
-      propose: async (proposal) => {
+      propose: async (proposal, delivery) => {
         const { stub, caller } = await this.userHub();
 
-        return await stub.accountMemory_propose(caller, proposal, agent);
+        return await stub.accountMemory_propose(caller, proposal, proposer, delivery);
       },
     };
+  }
+
+  /** The account's memory for the agent named `agent`, or none where this workspace has no owner to hold it. */
+  protected accountMemoryFor(agent: string): AccountMemory | undefined {
+    return this.getOwnerUserId() === null ? undefined : this.accountMemory({ by: 'agent', agent });
   }
 
   /** The account's facts for one turn's memory block; a user object that does not answer costs the turn that block's
    *  account lines, never the turn. */
   accountFactsForTurn(): Promise<readonly Fact[]> {
-    return settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' }, async () => await this.accountMemory(this.actorHandle().name).facts()),
+    return settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' }, async () => await this.accountMemory({ by: 'agent', agent: this.actorHandle().name }).facts()),
       (failure) => Effect.sync(() => {
         diagnostics.failure('memory.account_read_failed', failure, { workspace: this.name });
 
@@ -3911,7 +3920,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // memory.search uses hybrid retrieval when available; otherwise FTS5-only.
         vectorStore: this.rt.vectorStore,
         facts: this.facts,
-        account: this.accountMemory(this.actorHandle().name),
+        account: this.accountMemory({ by: 'agent', agent: this.actorHandle().name }),
         webSearch: this.ownedModelServices.getWebSearchProvider(),
         jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() },
         slate: (operation) => this.slate(operation),

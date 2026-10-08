@@ -10,7 +10,7 @@ import {
   accountProposals, applySleepTimeUpdate, runSleepTimeCompute, SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type SleepTimeUpdate, type SleepTimeWindow,
 } from '../memory/sleep-time-compute';
-import type { AccountMemory } from '../memory/account';
+import { AccountProposalSchema, type AccountMemory } from '../memory/account';
 import { attempt, diagnostics, settle, type KinuError } from '../obs/index';
 import type { SessionTranscript } from '../session/transcript';
 import type { LLM, RawSqlExec, SqlExecutor } from '../types/primitives';
@@ -30,6 +30,12 @@ export function initSleepTimeUpdatesTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS sleep_time_updates (
       effect_key  TEXT PRIMARY KEY,
       update_json TEXT NOT NULL
+    )`);
+  // Account proposals a commit owes the user object, kept until it takes each: `delivery` is the proposal's identity
+  // there, so a delivery repeated after a crash or a refusal files nothing new.
+  execRaw(`CREATE TABLE IF NOT EXISTS account_proposal_outbox (
+      delivery      TEXT PRIMARY KEY,
+      proposal_json TEXT NOT NULL
     )`);
 }
 
@@ -67,6 +73,10 @@ export class SleepTimeLane {
   runTerminal(): Promise<TerminalEffectOutcome> {
     return settle(Effect.gen({ self: this }, function* () {
       if (!this.deps.config.getSleepTimeComputeEnabled()) return { status: 'completed', detail: 'the lane is off' } as const;
+      // What an earlier pass owes the account goes first, whether or not this one is due.
+      const account = this.deps.account?.();
+
+      if (account !== undefined) yield* this.deliver(account);
       const window = yield* this.window();
 
       if (!sleepTimeDue(window)) {
@@ -215,9 +225,17 @@ export class SleepTimeLane {
           ON CONFLICT(effect_key) DO NOTHING`;
       }
 
-      // One commit, so a replay never repeats a prefix.
+      const proposals = account === undefined ? [] : accountProposals(update, window.turns);
+
+      // One commit, so a replay never repeats a prefix: the workspace's facts, and the account proposals it owes.
       const summary = this.deps.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.deps.facts, update);
+
+        for (const [index, proposal] of proposals.entries()) {
+          void this.deps.sql`INSERT INTO account_proposal_outbox (delivery, proposal_json)
+            VALUES (${`${key}#${String(index)}`}, ${JSON.stringify(proposal)}) ON CONFLICT(delivery) DO NOTHING`;
+        }
+
         this.finish(key);
 
         return applied;
@@ -227,23 +245,28 @@ export class SleepTimeLane {
         workspace: this.deps.workspace, upserted: summary.upserted, decayed: summary.decayed, skipped: summary.skipped,
       });
 
-      // After the commit: a proposal the user object does not take is logged, and the workspace's facts stand. A
-      // replay files the same proposals again; the account keeps one pending proposal per key and value.
-      if (account !== undefined) yield* this.propose(account, accountProposals(update, window.turns));
+      if (account !== undefined) yield* this.deliver(account);
     }).pipe(Effect.tapError((failure) => Effect.sync(() => {
       if (isDefinitiveTerminalFailure(failure.code)) this.deps.transactionSync(() => { this.finish(key); });
       diagnostics.failure('memory.fact_compression_failed', failure);
     })));
   }
 
-  private propose(account: AccountMemory, proposals: ReturnType<typeof accountProposals>): Effect.Effect<void> {
-    return Effect.forEach(proposals, (proposal) => attempt(
-      { doing: 'proposing an account fact for the owner to approve', otherwise: 'unavailable' }, async () => await account.propose(proposal),
+  /**
+   * Hands the user object every proposal the outbox holds, each removed once it is taken. One it refuses or never
+   * answers stays, and every later pass delivers it again; the delivery id makes that file nothing new.
+   */
+  private deliver(account: AccountMemory): Effect.Effect<void> {
+    const owed = this.deps.sql<{ delivery: string; proposal_json: string }>`SELECT delivery, proposal_json FROM account_proposal_outbox ORDER BY delivery`;
+
+    return Effect.forEach(owed, (row) => attempt(
+      { doing: 'proposing an account fact for the owner to approve', otherwise: 'unavailable' },
+      async () => await account.propose(v.parse(AccountProposalSchema, JSON.parse(row.proposal_json)), row.delivery),
     ).pipe(Effect.match({
-      onSuccess: () => undefined,
-      onFailure: (failure) => { diagnostics.failure('memory.account_proposal_failed', failure, { workspace: this.deps.workspace }); },
+      onSuccess: () => { void this.deps.sql`DELETE FROM account_proposal_outbox WHERE delivery = ${row.delivery}`; },
+      onFailure: (failure) => { diagnostics.failure('memory.account_proposal_failed', failure, { workspace: this.deps.workspace, delivery: row.delivery }); },
     })), { discard: true }).pipe(Effect.tap(() => Effect.sync(() => {
-      if (proposals.length > 0) diagnostics.event('memory.account_proposed', { workspace: this.deps.workspace, proposed: proposals.length });
+      if (owed.length > 0) diagnostics.event('memory.account_proposed', { workspace: this.deps.workspace, owed: owed.length });
     })));
   }
 

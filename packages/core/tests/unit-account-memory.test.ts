@@ -6,7 +6,8 @@
 import { describe, expect, test } from 'bun:test';
 import { createMemoryVfs, createTestFactsStore, createTestRuntime } from '@kinu.run/test-utils';
 import {
-  accountProposals, actorNamespaces, callOperation, initFactsTable, listOperations, renderFactsBlock, searchFacts, sleepTimeWindow, SURFACE_POLICY, TurnContextBudget,
+  accountProposals, actorNamespaces, callOperation, initEffectTombstoneTable, initFactsTable, initSleepTimeUpdatesTable, listOperations, renderFactsBlock,
+  searchFacts, SleepTimeLane, sleepTimeWindow, SURFACE_POLICY, TurnContextBudget,
   unifiedFacts, WORKSPACE_ROOT,
   type AccountMemory, type AccountProposal, type ConversationProjection, type Fact, type JsonObject, type SurfaceActor,
 } from '../src/index';
@@ -76,7 +77,38 @@ describe('both scopes as one list', () => {
   });
 });
 
+describe('the account fails alone', () => {
+  test("a search whose account read fails still finds the workspace's facts", async () => {
+    const failing: AccountMemory = {
+      facts: async () => { throw new Error('the user object did not answer'); },
+      searchNotes: async () => [],
+      propose: async () => 'amp_1',
+    };
+
+    const actor = actorWith(failing);
+
+    await call(actor, 'memory.remember', { key: 'deploy_target', value: 'staging' });
+
+    expect(await call(actor, 'memory.search', { query: 'deploy target' })).toMatchObject({
+      hits: [expect.objectContaining({ ref: 'fact: deploy_target', scope: 'workspace' })],
+    });
+  });
+});
+
 describe("each step's memory block, as the prompt cache sees it", () => {
+  test("a workspace fact older than the newest twenty still keeps the account's of its key out of the block", () => {
+    const { facts } = createTestFactsStore();
+
+    facts.upsert('reply_language', 'English for this client');
+
+    for (let index = 0; index < 25; index += 1) facts.upsert(`note_${String(index)}`, String(index));
+
+    const block = renderFactsForTurn(facts, [fact('reply_language', 'Hindi')]) ?? '';
+
+    expect(block).not.toContain('Hindi');
+  });
+
+
   test('the same bytes on every step of a turn, with the account read once, until a fact itself changes', () => {
     const { facts } = createTestFactsStore();
     const account = [fact('owner_name', 'Ashish', { importance: 0.9 })];
@@ -208,3 +240,56 @@ describe('the background pass proposes to the account from the owner\'s own word
     expect(accountProposals(update, silent)).toEqual([]);
   });
 });
+
+describe("the background pass's proposals reach the account, once each", () => {
+  const PROPOSING = JSON.stringify({ upserts: [], decay: [], account: [{ key: 'owner_city', value: 'Lisbon', rationale: 'the owner said so' }] });
+
+  /** Three answered turns in the owner's own words, newest first, as the transcript reads them. */
+  const TURNS: ConversationProjection[] = [3, 2, 1].flatMap((turn) => [
+    { id: `a${String(turn)}`, position: 0, role: 'assistant' as const, turnId: null, content: 'noted', toolCalls: [], recordedAt: 0 },
+    { id: `u${String(turn)}`, position: 0, role: 'user' as const, turnId: null, content: `I live in Lisbon (${String(turn)})`, toolCalls: [], recordedAt: 0 },
+  ]);
+
+  test('a proposal the user object refuses stays owed, and the next pass delivers it under the same delivery', async () => {
+    const { rt, stores, testSql } = createTestRuntime();
+
+    initFactsTable(testSql.execRaw);
+    initSleepTimeUpdatesTable(testSql.execRaw);
+    initEffectTombstoneTable(testSql.execRaw);
+    stores.config.setSleepTimeComputeEnabled(true);
+
+    const deliveries: Array<string | undefined> = [];
+    let refusing = true;
+
+    const account: AccountMemory = {
+      facts: async () => [],
+      searchNotes: async () => [],
+      propose: async (_proposal, delivery) => {
+        if (refusing) throw new Error('the user object did not answer');
+        deliveries.push(delivery);
+
+        return 'amp_1';
+      },
+    };
+
+    const lane = new SleepTimeLane({
+      sql: rt.storage.sql, actor: rt.actor, config: stores.config, facts: stores.facts,
+      transcript: () => ({ newestFirst: async () => TURNS }),
+      llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: async () => PROPOSING }),
+      transactionSync: (write) => write(),
+      armWake: () => {},
+      workspace: 'research',
+      account: () => account,
+    });
+
+    await lane.runTerminal();
+    expect(deliveries).toEqual([]);
+
+    refusing = false;
+    await lane.runTerminal();
+    await lane.runTerminal();
+
+    expect(deliveries).toEqual(['a3#0']);
+  });
+});
+

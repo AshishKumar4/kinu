@@ -385,7 +385,7 @@ const MemoryOriginSchema = v.nullable(v.object({ by: v.picklist(['agent', 'backg
 const AccountMemorySchema = v.object({
   facts: v.array(v.object({
     key: v.string(), value: JsonValueSchema, importance: v.number(), veracity: v.string(), lastObservedAt: v.number(), origin: MemoryOriginSchema,
-    history: v.array(v.object({ value: v.nullable(JsonValueSchema), origin: MemoryOriginSchema, at: v.number() })),
+    history: v.array(v.object({ forgotten: v.boolean(), value: v.nullable(JsonValueSchema), origin: MemoryOriginSchema, at: v.number() })),
   })),
   notes: v.array(v.object({ id: v.string(), content: v.string(), origin: MemoryOriginSchema, createdAt: v.number() })),
   pending: v.array(v.object({

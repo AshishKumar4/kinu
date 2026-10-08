@@ -1177,8 +1177,9 @@ export {
 } from './memory/facts';
 
 export {
-  AccountProposalSchema, initAccountMemoryTables, proposalFingerprint, rankNotes,
+  AccountMemoryStore, AccountProposalSchema, initAccountMemoryTables,
   type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNote, type AccountNoteHit, type AccountProposal,
+  type AccountProposalFiling, type AccountProposer,
 } from './memory/account';
 
 export {

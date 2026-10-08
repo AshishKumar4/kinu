@@ -24,20 +24,27 @@ function originText(origin: MemoryOrigin): string {
   return origin.by === "background" ? `Noticed${where} in your own words` : `Copied${where}`;
 }
 
-function valueText(value: JsonValue | null): string {
-  if (value === null) return "(forgotten)";
-
+/** A value as the owner reads it: a string as its words, anything else as JSON, so `null`, `3` and `true` stay what they are. */
+function valueText(value: JsonValue): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-/** Edits a fact's value as text: an object or list when it parses as one, the text itself otherwise. */
-function parsedValue(text: string): JsonValue {
-  const trimmed = text.trim();
+/** One value a fact held; a forgotten one says so, and a JSON `null` reads as one. */
+function revisionText(revision: { readonly forgotten: boolean; readonly value: JsonValue | null }): string {
+  if (revision.forgotten) return "(forgotten)";
 
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return trimmed;
-  const parsed = v.safeParse(JsonValueSchema, tolerate(() => JSON.parse(trimmed), "malformed-input"));
+  return valueText(revision.value ?? null);
+}
 
-  return parsed.success ? parsed.output : trimmed;
+/**
+ * The edited text as the value it replaces: words for a string, JSON for anything else, so editing a number or a flag
+ * keeps its type. Undefined when JSON was expected and the text is not JSON.
+ */
+function editedValue(was: JsonValue, text: string): JsonValue | undefined {
+  if (typeof was === "string") return text;
+  const parsed = v.safeParse(JsonValueSchema, tolerate(() => JSON.parse(text), "malformed-input"));
+
+  return parsed.success ? parsed.output : undefined;
 }
 
 type Busy = { readonly what: string } | null;
@@ -107,7 +114,7 @@ function Pending({ state, busy, act }: SectionProps) {
 }
 
 function Facts({ state, busy, act }: SectionProps) {
-  const [editing, setEditing] = useState<{ key: string; text: string } | null>(null);
+  const [editing, setEditing] = useState<{ key: string; text: string; invalid: boolean } | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
 
   return (
@@ -122,14 +129,21 @@ function Facts({ state, busy, act }: SectionProps) {
               {editing?.key === fact.key ? (
                 <form className="flex gap-1.5" onSubmit={(event) => {
                   event.preventDefault();
-                  const text = editing.text;
+                  const value = editedValue(fact.value, editing.text);
 
-                  detach(act("saving this fact", async () => { await putAccountFact(fact.key, parsedValue(text)); }));
+                  if (value === undefined) {
+                    setEditing({ ...editing, invalid: true });
+
+                    return;
+                  }
+
+                  detach(act("saving this fact", async () => { await putAccountFact(fact.key, value); }));
                   setEditing(null);
                 }}>
                   <span className="font-mono p-row-text">{fact.key}:</span>
-                  <input aria-label={`Value of ${fact.key}`} className="flex-1 min-w-0 px-1.5 rounded p-fill p-row-text" value={editing.text}
-                    onChange={(event) => setEditing({ key: fact.key, text: event.target.value })} />
+                  <input aria-label={`Value of ${fact.key}`} aria-invalid={editing.invalid} className="flex-1 min-w-0 px-1.5 rounded p-fill p-row-text" value={editing.text}
+                    title={editing.invalid ? "This fact holds JSON: write a number, true, false, null, a list or an object." : undefined}
+                    onChange={(event) => setEditing({ key: fact.key, text: event.target.value, invalid: false })} />
                   <button type="submit" disabled={busy !== null} className="px-2 rounded-md p-t-control p-accent-fill">Save</button>
                 </form>
               ) : (
@@ -143,7 +157,7 @@ function Facts({ state, busy, act }: SectionProps) {
                 <ClockCounterClockwiseIcon size={14} />
               </button>
               <button type="button" className="px-1.5 rounded p-t-control p-text-2 hover:p-text" disabled={busy !== null}
-                onClick={() => setEditing({ key: fact.key, text: valueText(fact.value) })}>Edit</button>
+                onClick={() => setEditing({ key: fact.key, text: valueText(fact.value), invalid: false })}>Edit</button>
               <button type="button" className="px-1.5 rounded p-t-control p-danger" disabled={busy !== null}
                 onClick={() => detach(act("forgetting this fact", async () => { await forgetAccountFact(fact.key); }))}>Forget</button>
             </div>
@@ -152,7 +166,7 @@ function Facts({ state, busy, act }: SectionProps) {
             <ol className="ml-6 space-y-0.5" data-account-memory-history={fact.key}>
               {fact.history.map((revision) => (
                 <li key={revision.at} className="p-meta p-text-2">
-                  {new Date(revision.at).toLocaleString()}: {valueText(revision.value)} <span className="p-text-3">({originText(revision.origin)})</span>
+                  {new Date(revision.at).toLocaleString()}: {revisionText(revision)} <span className="p-text-3">({originText(revision.origin)})</span>
                 </li>
               ))}
             </ol>

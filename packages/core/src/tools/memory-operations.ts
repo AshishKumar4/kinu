@@ -5,7 +5,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { VectorStore } from '../memory/vector-store';
 import { createNoopVectorStore } from '../memory/vector-store';
 import { appendMemoryNote } from '../memory/note';
-import { normalizeFactKey, unifiedFacts, type Fact, type FactsStore, type MemoryScope } from '../memory/facts';
+import { normalizeFactKey, type Fact, type FactsStore, type MemoryScope } from '../memory/facts';
 import type { AccountMemory } from '../memory/account';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
 import type { ConversationRecall } from '../memory/conversation-search';
@@ -142,9 +142,6 @@ function unlabelled(found: { semantic: boolean; hits: SearchHit[] }) {
  * account is read inside its arm, so a user object that does not answer costs the account's hits, never the search.
  */
 async function searchMemory({ memory, vectorStore, facts, account }: MemoryDeps, query: string): Promise<{ semantic: boolean; hits: SearchHit[] }> {
-  const scoped = facts === undefined && account === undefined
-    ? undefined
-    : async () => unifiedFacts(facts?.all() ?? [], account === undefined ? [] : await account.facts());
 
   const accountNotes = account === undefined ? undefined : async (q: string, limit: number) => await account.searchNotes(q, limit);
 
@@ -158,7 +155,9 @@ async function searchMemory({ memory, vectorStore, facts, account }: MemoryDeps,
 
   const hits = await hybridSearch(query, lexical, index, {
     finalK: 10, rehydrate: memorySnippetRehydrator(memory),
-    ...(scoped !== undefined && { facts: scoped }), ...(accountNotes !== undefined && { accountNotes }),
+    ...(facts !== undefined && { facts: () => facts.all() }),
+    ...(account !== undefined && { accountFacts: async () => await account.facts() }),
+    ...(accountNotes !== undefined && { accountNotes }),
   });
 
   return { semantic: index.available, hits: hits.map((h) => ({ ref: h.label ?? `${h.path}:${h.startLine}-${h.endLine}`, text: h.snippet, score: h.rrfScore, scope: h.scope })) };

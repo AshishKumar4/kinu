@@ -19,7 +19,7 @@ async function account() {
 describe('a proposal is kept only once the owner accepts it', () => {
   test('a fact said in one workspace, once accepted, is what another reads, with who said it', async () => {
     const { harness, user, owner, research, billing } = await account();
-    const id = await user.accountMemory_propose(research, { kind: 'fact', key: 'Owner Name', value: 'Ashish' }, 'main');
+    const id = await user.accountMemory_propose(research, { kind: 'fact', key: 'Owner Name', value: 'Ashish' }, { by: 'agent', agent: 'main' });
 
     expect(await user.accountMemory_facts(billing)).toEqual([]);
     expect((await user.accountMemory_view(owner)).pending).toEqual([
@@ -38,8 +38,8 @@ describe('a proposal is kept only once the owner accepts it', () => {
 
   test('a declined proposal keeps nothing, and the same ask filed twice is one proposal', async () => {
     const { harness, user, owner, research } = await account();
-    const first = await user.accountMemory_propose(research, { kind: 'note', content: 'Invoices go to accounts@example.com' }, 'background');
-    const again = await user.accountMemory_propose(research, { kind: 'note', content: '  Invoices go to accounts@example.com ' }, 'background');
+    const first = await user.accountMemory_propose(research, { kind: 'note', content: 'Invoices go to accounts@example.com' }, { by: 'background' });
+    const again = await user.accountMemory_propose(research, { kind: 'note', content: '  Invoices go to accounts@example.com ' }, { by: 'background' });
 
     expect(again).toBe(first);
     expect(await user.accountMemory_decide(owner, first, 'decline')).toBe(true);
@@ -49,12 +49,46 @@ describe('a proposal is kept only once the owner accepts it', () => {
 
   test('an accepted note is searched by every workspace, by its words and their other forms', async () => {
     const { harness, user, owner, research, billing } = await account();
-    const id = await user.accountMemory_propose(research, { kind: 'note', content: 'Invoices go to accounts@example.com every month' }, 'main');
+    const id = await user.accountMemory_propose(research, { kind: 'note', content: 'Invoices go to accounts@example.com every month' }, { by: 'agent', agent: 'main' });
 
     await user.accountMemory_decide(owner, id, 'accept');
 
     expect((await user.accountMemory_searchNotes(billing, 'invoice', 5)).map((hit) => hit.text)).toEqual(['Invoices go to accounts@example.com every month']);
     expect(await user.accountMemory_searchNotes(billing, 'timezone', 5)).toEqual([]);
+    harness.close();
+  });
+});
+
+describe('what a proposal is filed as', () => {
+  test('a delivery filed again files nothing new, even after the owner decided the first', async () => {
+    const { harness, user, owner, research } = await account();
+    const first = await user.accountMemory_propose(research, { kind: 'fact', key: 'timezone', value: 'Asia/Kolkata' }, { by: 'background' }, 'turn-9#0');
+
+    await user.accountMemory_decide(owner, first, 'decline');
+
+    expect(await user.accountMemory_propose(research, { kind: 'fact', key: 'timezone', value: 'Asia/Kolkata' }, { by: 'background' }, 'turn-9#0')).toBe(first);
+    expect((await user.accountMemory_view(owner)).pending).toEqual([]);
+    harness.close();
+  });
+
+  test('an agent named "background" is an agent: its origin names it, and its fact is kept as stated', async () => {
+    const { harness, user, owner, research } = await account();
+    const id = await user.accountMemory_propose(research, { kind: 'fact', key: 'owner_name', value: 'Ashish' }, { by: 'agent', agent: 'background' });
+
+    await user.accountMemory_decide(owner, id, 'accept');
+
+    expect((await user.accountMemory_facts(research)).map((fact) => [fact.veracity, fact.origin])).toEqual([
+      ['stated', { by: 'agent', agent: 'background', workspace: 'research' }],
+    ]);
+    harness.close();
+  });
+
+  test('a key that normalizes to nothing, or a note of blanks, is refused before it is filed', async () => {
+    const { harness, user, owner, research } = await account();
+
+    await expect(user.accountMemory_propose(research, { kind: 'fact', key: '  ', value: 'x' }, { by: 'agent', agent: 'main' })).rejects.toThrow('An account fact needs a key.');
+    await expect(user.accountMemory_propose(research, { kind: 'note', content: '   ' }, { by: 'agent', agent: 'main' })).rejects.toThrow('An account note needs words.');
+    expect((await user.accountMemory_view(owner)).pending).toEqual([]);
     harness.close();
   });
 });
@@ -86,7 +120,7 @@ describe("the owner's own writes", () => {
 
   test("a workspace may read and propose, never accept, edit, view the queue or forget", async () => {
     const { harness, user, research } = await account();
-    const id = await user.accountMemory_propose(research, { kind: 'fact', key: 'owner_name', value: 'Ashish' }, 'main');
+    const id = await user.accountMemory_propose(research, { kind: 'fact', key: 'owner_name', value: 'Ashish' }, { by: 'agent', agent: 'main' });
 
     for (const refused of [
       () => user.accountMemory_decide(research, id, 'accept'),

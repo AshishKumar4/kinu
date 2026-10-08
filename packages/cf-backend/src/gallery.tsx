@@ -693,14 +693,14 @@ const ACCOUNT_MEMORY_FIXTURE: JsonValue = {
     {
       key: "owner_name", value: "Ashish", importance: 0.9, veracity: "stated", lastObservedAt: NOW - 3 * 864e5,
       origin: { by: "agent", workspace: "Support inbox", agent: "main" },
-      history: [{ value: "Ashish", origin: { by: "agent", workspace: "Support inbox", agent: "main" }, at: NOW - 3 * 864e5 }],
+      history: [{ forgotten: false, value: "Ashish", origin: { by: "agent", workspace: "Support inbox", agent: "main" }, at: NOW - 3 * 864e5 }],
     },
     {
       key: "reply_language", value: "English, short answers", importance: 0.7, veracity: "stated", lastObservedAt: NOW - 864e5,
       origin: { by: "owner" },
       history: [
-        { value: "English, short answers", origin: { by: "owner" }, at: NOW - 864e5 },
-        { value: "English", origin: { by: "owner", workspace: "Storefront" }, at: NOW - 6 * 864e5 },
+        { forgotten: false, value: "English, short answers", origin: { by: "owner" }, at: NOW - 864e5 },
+        { forgotten: false, value: "English", origin: { by: "owner", workspace: "Storefront" }, at: NOW - 6 * 864e5 },
       ],
     },
   ],
