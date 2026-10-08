@@ -126,6 +126,10 @@ jobs:
           KINU_EVAL_STAGING_WEB_IDENTITY: ${{ matrix.leg == 'candidate' && secrets.KINU_EVAL_STAGING_WEB_IDENTITY || '' }}
           KINU_EVAL_TRIALS: ${{ env.EVAL_TRIALS }}
           KINU_EVAL_COMMIT: ${{ needs.plan.outputs.sha }}
+          # Both legs call Muse on one opencode-go key, and 20 calls at once is all it was measured to hold
+          # (evals/src/config.ts, 2026-09-26); all 340 at once were refused 429 (run 37726316713). 10 per leg.
+          KINU_EVAL_FILES: 10
+          KINU_EVAL_CONCURRENCY: 1
         run: bun run evals
 
       - name: Summarize the report
