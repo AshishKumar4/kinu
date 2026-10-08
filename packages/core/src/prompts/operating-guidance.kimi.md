@@ -1,2 +1,0 @@
-- Keep tool use continuous: act on each result as it arrives, and keep earlier results in view instead of restating them.
-- On long work, save each durable decision to memory as you make it.

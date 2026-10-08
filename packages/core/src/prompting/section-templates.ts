@@ -35,18 +35,23 @@ import leadParallel from '../prompts/lead-parallel.md' with { type: 'text' };
 import leadReview from '../prompts/lead-review.md' with { type: 'text' };
 import leadInterruptions from '../prompts/lead-interruptions.md' with { type: 'text' };
 import leadDelivery from '../prompts/lead-delivery.md' with { type: 'text' };
-// GPT wording follows Codex's instructions and Claude wording Claude Code's (THIRD_PARTY_NOTICES.md).
+// Each family's wording follows its vendor's prompting guide: OpenAI's GPT-6 guide and Codex's instructions
+// (THIRD_PARTY_NOTICES.md), Anthropic's Claude best practices, Google's Gemini strategies, Meta's Muse Spark docs.
 import operatingGeneric from '../prompts/operating-guidance.generic.md' with { type: 'text' };
 import operatingGpt from '../prompts/operating-guidance.gpt.md' with { type: 'text' };
 import operatingClaude from '../prompts/operating-guidance.claude.md' with { type: 'text' };
 import operatingGemini from '../prompts/operating-guidance.gemini.md' with { type: 'text' };
-import operatingKimi from '../prompts/operating-guidance.kimi.md' with { type: 'text' };
+import operatingMuse from '../prompts/operating-guidance.muse.md' with { type: 'text' };
 import toolUseGeneric from '../prompts/tool-use.generic.md' with { type: 'text' };
 import toolUseGpt from '../prompts/tool-use.gpt.md' with { type: 'text' };
 import toolUseClaude from '../prompts/tool-use.claude.md' with { type: 'text' };
+import toolUseGemini from '../prompts/tool-use.gemini.md' with { type: 'text' };
+import toolUseMuse from '../prompts/tool-use.muse.md' with { type: 'text' };
 import outputGeneric from '../prompts/output-format.generic.md' with { type: 'text' };
 import outputGpt from '../prompts/output-format.gpt.md' with { type: 'text' };
 import outputClaude from '../prompts/output-format.claude.md' with { type: 'text' };
+import outputGemini from '../prompts/output-format.gemini.md' with { type: 'text' };
+import outputMuse from '../prompts/output-format.muse.md' with { type: 'text' };
 import briefGpt from '../prompts/lead-brief.gpt.md' with { type: 'text' };
 import { definePromptSection, type PromptSection } from './template';
 import type { PromptModelFamily } from './model-profile';
@@ -218,9 +223,8 @@ export const LEAD_INTERRUPTION = definePromptSection('lead/interruptions', '', l
 
 export const LEAD_DELIVERY = definePromptSection('lead/delivery', '', leadDelivery.trimEnd());
 
-// A family's wording for a section: GPT reads Codex's, Claude reads Claude Code's, any other model the generic
-// text, which alone carries every behaviour. Gemini and Kimi add their own lines to it. The familyDelta slot
-// survives promotion.
+// A family's wording for a section, from its vendor's guide; any other model reads the generic text, which alone
+// carries every behaviour (Kimi's and GLM's guides add nothing a prompt can say). The familyDelta slot survives promotion.
 const delta = (id: string, source: string) => definePromptSection(id, '', source.trimEnd());
 
 const OPERATING_GENERIC = delta('delta/operating-generic', operatingGeneric);
@@ -232,24 +236,27 @@ const OUTPUT_GENERIC = delta('delta/output-generic', outputGeneric);
 const FAMILY_DELTAS = new Map<string, Readonly<Partial<Record<PromptModelFamily, readonly PromptSection<''>[]>>>>([
   [OPERATING_GUIDANCE.id, {
     generic: [OPERATING_GENERIC],
+    kimi: [OPERATING_GENERIC],
     gpt: [delta('delta/operating-gpt', operatingGpt)],
     claude: [delta('delta/operating-claude', operatingClaude)],
-    gemini: [OPERATING_GENERIC, delta('delta/operating-gemini', operatingGemini)],
-    kimi: [OPERATING_GENERIC, delta('delta/operating-kimi', operatingKimi)],
+    gemini: [delta('delta/operating-gemini', operatingGemini)],
+    muse: [OPERATING_GENERIC, delta('delta/operating-muse', operatingMuse)],
   }],
   [TOOL_USE_SECTION.id, {
     generic: [TOOL_USE_GENERIC],
+    kimi: [TOOL_USE_GENERIC],
     gpt: [delta('delta/tool-use-gpt', toolUseGpt)],
     claude: [delta('delta/tool-use-claude', toolUseClaude)],
-    gemini: [TOOL_USE_GENERIC],
-    kimi: [TOOL_USE_GENERIC],
+    gemini: [delta('delta/tool-use-gemini', toolUseGemini)],
+    muse: [delta('delta/tool-use-muse', toolUseMuse)],
   }],
   [OUTPUT_FORMAT_SECTION.id, {
     generic: [OUTPUT_GENERIC],
+    kimi: [OUTPUT_GENERIC],
     gpt: [delta('delta/output-gpt', outputGpt)],
     claude: [delta('delta/output-claude', outputClaude)],
-    gemini: [OUTPUT_GENERIC],
-    kimi: [OUTPUT_GENERIC],
+    gemini: [delta('delta/output-gemini', outputGemini)],
+    muse: [delta('delta/output-muse', outputMuse)],
   }],
   [LEAD_BRIEF.id, {
     gpt: [delta('delta/brief-gpt', briefGpt)],

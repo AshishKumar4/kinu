@@ -1,1 +1,3 @@
-- Prefer the `file` tool for reading, searching and editing files when it fits; use the shell for the rest. Independent tool calls can run in parallel in one response.
+- If you intend to call several tools and there are no dependencies between them, make all of the independent calls in the same response. First list privately what you need next, then request every item that doesn't depend on another's result.
+- Never use placeholders or guess missing parameters in tool calls.
+- Read and search files with `file` or a shell, whichever fits. Edit surgically: change the lines that need it rather than rewriting the whole file.
