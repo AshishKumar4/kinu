@@ -124,7 +124,7 @@ export default function PluginsPage() {
         />
 
         <PluginSection title="MCP servers" onRetry={servers.reload} what="your MCP servers"
-          action={<Button variant="ghost" size="sm" onClick={() => setManaging(true)}>Manage</Button>}
+          action={<Button variant="ghost" size="sm" onClick={() => setManaging(true)} data-manage-servers>Manage</Button>}
           empty="No MCP servers of your own yet. Use Manage to add one."
           rows={mapResource(servers.resource, (rows) => rows
             .filter((server) => server.presetId === null)
