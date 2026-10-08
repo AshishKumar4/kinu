@@ -29,7 +29,9 @@ import { codemodeNamespace, nativeTool } from './operation-surfaces';
 import { withClampedToolResult } from './clamp';
 import { BUILTIN_TOOL_DESCRIPTIONS } from './registry';
 import type { Tool } from 'ai';
-import { FILE } from '../operations/file';
+import { FILE, type SlateBuildNoteSchema } from '../operations/file';
+import { SLATES_ROOT } from '../vfs/workspace-path';
+import type { SlateCallResult, SlateOperation } from '../slates/rpc';
 
 /** Most names one `list` returns; matches `tools/db-codemode.ts` SELECT_LIMIT_MAX. */
 const FILE_LIST_MAX_ENTRIES = 1_000;
@@ -128,6 +130,26 @@ export interface FileDeps {
   readonly memory?: Memory;
   /** Where paths land (`vfs/resolve.ts`), so results name files as `root://path`. */
   readonly planes: PathPlanes;
+  /** The workspace's slates, so a write into one answers whether it still builds, by the build its preview serves. */
+  readonly slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
+}
+
+const SLATE_FILE = new RegExp(`^${SLATES_ROOT}/([^/]+)/`);
+
+const BrokenSchema = v.object({ broken: v.string() });
+
+/** Whether the slate a written file belongs to still builds; nothing for a file outside one, or where no slate host answers. */
+async function slateBuild(deps: FileDeps, path: string): Promise<{ readonly build?: v.InferOutput<typeof SlateBuildNoteSchema> }> {
+  const slate = SLATE_FILE.exec(resolvePath(path, deps.planes).absolute)?.[1];
+
+  if (slate === undefined || deps.slate === undefined) return {};
+  const previewed = await deps.slate({ op: 'preview', id: slate });
+
+  // Only its own files can be at fault; a preview this deployment cannot serve says nothing about them.
+  if (!previewed.ok) return previewed.reason === 'bad_input' ? { build: { slate, builds: false, error: previewed.error } } : {};
+  const broken = v.safeParse(BrokenSchema, previewed.value);
+
+  return { build: broken.success ? { slate, builds: false, error: broken.output.broken } : { slate, builds: true } };
 }
 
 /** Read per call: a turn's ledger and budget are its own. */
@@ -326,7 +348,10 @@ function fileOps(deps: FileDeps) {
         return failure(vfsFail.reason, vfsFail.error);
       }
 
-      return { path, reference: referenceOf(path), bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const, ...undo(report) };
+      return {
+        path, reference: referenceOf(path), bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const, ...undo(report),
+        ...await slateBuild(deps, path),
+      };
     },
     edit: async (path: string, raw: readonly { readonly old_text: string; readonly new_text: string }[]) => {
       requireBuild('file.edit');
@@ -384,6 +409,7 @@ function fileOps(deps: FileDeps) {
         path, reference: referenceOf(path),
         applied: outcome.applied.map((a) => ({ line: a.line, removedLines: a.removedLines, addedLines: a.addedLines })),
         ...undo(report),
+        ...await slateBuild(deps, path),
       };
     },
   };

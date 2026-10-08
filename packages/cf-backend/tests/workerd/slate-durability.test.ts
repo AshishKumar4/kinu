@@ -44,6 +44,34 @@ it('a slate is listed once in the work surface, under its title, in this activat
   expect((await subject().previewTabs('durability-titled')).slates).toEqual([{ id: 'tally', title: 'tally', port: boot.port }]);
 });
 
+it('an edit that breaks a slate\'s build ships nothing: the agent is told where, and the slate keeps its last working version across an eviction', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('lilt'));
+  const at = { workspace: 'durability-lilt', owner: 'durability-owner' };
+
+  const good = await subject().slateBuild({ ...at, phase: 'good' });
+
+  expect(good.wrote).toContain('The slate lilt builds.');
+  expect([good.preview, good.serves, good.told]).toEqual(['builds', 'lilt-good', []]);
+
+  // The write that breaks it answers with the compiler's file and line, and the user is still served the build before it.
+  const broken = await subject().slateBuild({ ...at, phase: 'broken' });
+
+  expect(broken.wrote).toMatch(/does not build[\s\S]*client\.tsx:\d+:\d+[\s\S]*Adjacent JSX elements/);
+  expect(broken.preview).toContain('Adjacent JSX elements');
+  expect(broken.serves).toBe('lilt-good');
+  expect(broken.told).toEqual([expect.stringMatching(/^lilt: [\s\S]*Adjacent JSX elements/)]);
+
+  // A new activation, which never ran it, serves the same last working version and still tells the agent why.
+  await abortAllDurableObjects();
+  const served = await subject().slateBuild({ ...at, phase: 'served' });
+
+  expect([served.serves, served.told]).toEqual(['lilt-good', [expect.stringContaining('Adjacent JSX elements')]]);
+
+  const fixed = await subject().slateBuild({ ...at, phase: 'fixed' });
+
+  expect([fixed.preview, fixed.serves, fixed.told]).toEqual(['builds', 'lilt-fixed', []]);
+});
+
 it('a removed slate’s URL is dead even when a new app claims its port', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('removed'));
 

@@ -441,6 +441,7 @@ export interface UntimedArms {
 
 export interface ActorDynamicContextExtras {
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
+  readonly failingSlates?: () => readonly string[];
   readonly extraMissingCapabilities?: () => readonly MissingCapability[];
 }
 
@@ -3277,6 +3278,7 @@ export abstract class ActorAgent extends Agent<Env> {
       })),
       createFileCodemodeProvider(() => ({
         vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
+        slate: (operation) => this.slate(operation),
       })),
       createTasksCodemodeProvider(this.taskList, this.config),
     ];
@@ -3833,6 +3835,7 @@ export abstract class ActorAgent extends Agent<Env> {
         facts: this.facts,
         webSearch: this.ownedModelServices.getWebSearchProvider(),
         jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() },
+        slate: (operation) => this.slate(operation),
       };
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
@@ -4307,6 +4310,7 @@ export abstract class ActorAgent extends Agent<Env> {
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: () => this.subordinateDelegates(),
       approvals: extras.approvals,
+      ...(extras.failingSlates !== undefined && { failingSlates: extras.failingSlates }),
     });
   }
 

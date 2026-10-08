@@ -11,7 +11,14 @@ const Lines = (text: string) => v.optional(described(v.pipe(v.number(), v.intege
 
 const Truncated = v.optional(described(v.strictObject({ shown: v.number(), total: v.number() }), 'Present when not all of it is shown.'));
 
-const Written = { path: v.string(), reference: described(v.string(), 'The file as results name it, root://path.'), undo: v.optional(described(v.string(), 'Why undo cannot restore this change.')) };
+/** A write into a slate's directory: whether the slate builds now, in the compiler's words when it does not. */
+export const SlateBuildNoteSchema = described(v.strictObject({ slate: v.string(), builds: v.boolean(), error: v.optional(v.string()) }),
+  'A write under /slates/<id>/: whether that slate still builds. One that does not keeps showing its last working version.');
+
+const Written = {
+  path: v.string(), reference: described(v.string(), 'The file as results name it, root://path.'), undo: v.optional(described(v.string(), 'Why undo cannot restore this change.')),
+  build: v.optional(SlateBuildNoteSchema),
+};
 
 /** One replacement. The input format may change; every other operation reads files as they are. */
 const FileEditSchema = v.strictObject({

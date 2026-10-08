@@ -54,7 +54,16 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'executorRows');
     Reflect.deleteProperty(this, 'runShell');
     Reflect.deleteProperty(this, 'previewTabs');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs']);
+    Reflect.deleteProperty(this, 'failingSlates');
+    sealRpcSurface(this, [
+      ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs',
+      'failingSlates',
+    ]);
+  }
+
+  /** What the agent's next model step is told of slates that do not build. */
+  async failingSlates(): Promise<string[]> {
+    return [...this.extraDynamicContext().failingSlates?.() ?? []];
   }
 
   /** What the work surface's strip is drawn from: the workspace's listed preview ports, and the slates with their ports. */
@@ -160,7 +169,7 @@ export { ObservedOrchestrator as OrchestratorAgent };
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
-  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs'>;
+  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -201,6 +210,21 @@ const RUNNER = [
 ].join('\n');
 
 const SharedValueSchema = v.object({ share: v.object({ handle: v.string() }) });
+
+const LILT_GOOD = 'export default function App() { return <p data-words>lilt-good</p>; }';
+
+/** Two elements side by side with no parent: the compile error the owner's Lilt hit. */
+const LILT_BROKEN = 'export default function App() {\n  return <p>lilt</p>\n  <p>broken</p>;\n}';
+
+const LILT_FIXED = 'export default function App() { return <><p data-words>lilt-fixed</p></>; }';
+
+/** One step of the build flow, as the agent and the user each see it. */
+interface SlateBuildSeen {
+  readonly wrote: string | null;
+  readonly preview: string;
+  readonly serves: string | null;
+  readonly told: string[];
+}
 
 const GraphValueSchema = v.object({
   namespaces: v.array(v.object({ namespace: v.string(), members: v.array(v.object({ member: v.string(), impact: v.string() })) })),
@@ -349,6 +373,38 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
   async previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {
     return (await this.workspaceTarget(workspace)).previewTabs();
+  }
+
+  /**
+   * The agent writes the `lilt` slate through its own `workspace.writeFile`, reading each file first as an agent must:
+   * `client.tsx` that builds, then one that does not. `phase` names which: `good`, `broken`, then `fixed`; each answers
+   * the write's own answer, what the preview says, what its client bundle serves, and what the next step is told.
+   */
+  async slateBuild(input: { workspace: string; owner: string; phase: 'good' | 'broken' | 'served' | 'fixed' }): Promise<SlateBuildSeen> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    if (input.phase === 'good') {
+      await this.claimWorkspace(target, input.workspace, input.owner);
+      await target.runProgram(`return await workspace.writeFile("/slates/lilt/package.json", ${JSON.stringify(JSON.stringify({ browser: 'client.tsx', slate: { title: 'Lilt' } }))});`);
+    }
+
+    const source = { good: LILT_GOOD, broken: LILT_BROKEN, fixed: LILT_FIXED, served: null }[input.phase];
+
+    const wrote = source === null ? null : await target.runProgram([
+      'const path = "/slates/lilt/client.tsx";',
+      'if (await workspace.exists(path)) await workspace.readFile(path);',
+      `return await workspace.writeFile(path, ${JSON.stringify(source)});`,
+    ].join('\n'));
+
+    const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: 'lilt' });
+    const shown = preview.ok ? v.parse(v.object({ url: v.string(), broken: v.optional(v.string()) }), preview.value) : null;
+    const client = shown === null ? null : await this.drivePreview(new URL('/__kinu/client.js', shown.url).href);
+
+    return {
+      wrote, preview: shown === null ? `refused: ${preview.ok ? '' : preview.error}` : shown.broken ?? 'builds',
+      serves: client === null ? null : ['lilt-good', 'lilt-fixed'].find((word) => client.body.includes(word)) ?? 'neither',
+      told: [...await target.failingSlates()],
+    };
   }
 
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {

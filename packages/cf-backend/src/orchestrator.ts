@@ -61,6 +61,7 @@ import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
+import { initSlateBuildTable } from "./slates/builds";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import type { MessageBlock } from "./slates/sources";
@@ -1180,6 +1181,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       facts: turn.actor.stores.facts,
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
+      slate: (operation) => this.slateAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation),
       ...(report !== undefined && { report }),
       // The owner's own Plan turn, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
       ...(turn.input.mode === 'plan' && !turn.parentDriven && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
@@ -1832,6 +1834,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return deafInbox ? [deafInbox] : [];
       },
+      failingSlates: () => this.slates.failingBuilds().map(({ slate, failure }) => `${slate}: ${failure}`),
     };
   }
 
@@ -3143,6 +3146,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
     initChangeNotesTable(execRaw);
     initSlatePictureTable(execRaw);
+    initSlateBuildTable(execRaw);
     initBrowserSessionTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
