@@ -4,13 +4,12 @@ import {
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
-import { codexEgressFetch, deviceRouteFetch, type CodexEgressNamespace } from '../egress/codex-egress-route';
+import { deviceRouteFetch } from '../egress/model-relay-route';
 
 export type AccountLedgerTarget = Pick<OrchestratorAgent, 'accountSpend'>;
 
 export interface AccountUsageEnv<Id> extends OwnerCapabilityEnv {
   OrchestratorAgent: ObjectNamespace<Id, AccountLedgerTarget>;
-  CodexEgress?: CodexEgressNamespace;
 }
 
 const LIMITS = new Map<string, LimitCache>();
@@ -34,8 +33,8 @@ export async function readUserAccountUsage<Id>(input: {
   const cache = LIMITS.get(userId) ?? new LimitCache();
 
   LIMITS.set(userId, cache);
-  const container = env.CodexEgress === undefined ? undefined : codexEgressFetch(env.CodexEgress, userId);
-  const codex = container === undefined ? undefined : deviceRouteFetch({ provider: 'codex', container, hub: userDO, caller: async () => owner });
+  // Codex's limits are read where its calls go: through the connected machine.
+  const codex = deviceRouteFetch({ provider: 'codex', hub: userDO, caller: async () => owner });
 
   const [usage, live] = await Promise.all([
     readAccountUsage(workspaces.map(({ name }) => ({
@@ -45,7 +44,7 @@ export async function readUserAccountUsage<Id>(input: {
     cache.read(held.map(({ key }) => key).filter(limitReadable).map((key) => ({
       key,
       headers: () => userDO.getAuthHeaders(owner, key),
-      ...(baseCredentialKey(key) === 'codex.oauth' && codex !== undefined && { fetch: codex }),
+      ...(baseCredentialKey(key) === 'codex.oauth' && { fetch: codex }),
     })), { refresh: input.refresh === true }),
   ]);
 

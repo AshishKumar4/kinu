@@ -121,9 +121,6 @@
       // The workspace's container (`@kinu.run/devbox`), one per workspace, named
       // by `sandboxIdForWorkspace`.
       { "class_name": "KinuDevbox", "name": "KinuDevbox" },
-      // One Codex egress container per user (src/egress/codex-egress.ts):
-      // chatgpt.com refuses Workers egress and serves a container's own.
-      { "class_name": "CodexEgress", "name": "CodexEgress" },
       // Control plane — one instance ("site"), the singleton the admin surface
       // reads. It is a singleton because its questions are fleet-wide: "who are
       // the users", "which workspaces exist", "what did an admin do" have no
@@ -152,13 +149,6 @@
       //   available when a tunnel WebSocket attaches at runtime.
     ]
   },
-  // PINNED BY DIGEST, not by tag. A tag is a mutable pointer, and this is the one
-  // file where a mutable pointer decides which bytes run inside a container
-  // holding somebody's workspace: a tag can be re-pushed by anyone who can push
-  // that repository, and the next container start would pick the new image up
-  // with nothing here changed and nothing to read afterwards that says which
-  // image ran.
-  //
   // KinuDevbox runs on the `durable_object` scheduling policy: each box starts
   // the image named `devbox` at the size it chose (devbox `src/sizes.ts`), so
   // there is no application-wide instance type, instance cap or rollout. A
@@ -167,15 +157,6 @@
     {
       "class_name": "KinuDevbox",
       "scheduling_policy": "durable_object",
-    },
-    {
-      // Built from containers/codex-egress (node:22-alpine pinned by digest) and
-      // pushed with `wrangler containers build -p`. One instance per user who
-      // is using Codex right now; each sleeps after 5 idle minutes.
-      "class_name": "CodexEgress",
-      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-codex-egress@sha256:de0f028f7f84e93a9164ea99540e06c8756038a3ca0ec7f7cf1d38a47822817e",
-      "max_instances": 50,
-      "instance_type": "lite"
     }
   ],
   // Every Durable Object class the Worker carries, declared (Durable Object
@@ -197,7 +178,9 @@
     "DeployRunDO": { "type": "durable-object", "storage": "sqlite" },
     "MossaicUserDO": { "type": "durable-object", "storage": "sqlite" },
     "MossaicShardDO": { "type": "durable-object", "storage": "sqlite" },
-    "CodexEgress": { "type": "durable-object", "storage": "sqlite" }
+    // Codex model calls go through the account's connected machine; no
+    // container carries them (owner, 2026-10-07).
+    "CodexEgress": { "type": "durable-object", "state": "deleted" }
   },
   // Synthetic monitoring. Every 15 minutes the worker probes its own public
   // surface and emails OPS_ALERT_EMAIL when something breaks — the checks
@@ -479,7 +462,6 @@
           { "class_name": "UserDO", "name": "UserDO" },
           { "class_name": "MonitorDO", "name": "MonitorDO" },
           { "class_name": "KinuDevbox", "name": "KinuDevbox" },
-          { "class_name": "CodexEgress", "name": "CodexEgress" },
           { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" },
           { "class_name": "DeployRunDO", "name": "DeployRunDO" },
           { "class_name": "MossaicUserDO", "name": "MOSSAIC_USER" },
@@ -490,12 +472,6 @@
         {
           "class_name": "KinuDevbox",
           "scheduling_policy": "durable_object"
-        },
-        {
-          "class_name": "CodexEgress",
-          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-codex-egress@sha256:de0f028f7f84e93a9164ea99540e06c8756038a3ca0ec7f7cf1d38a47822817e",
-          "max_instances": 10,
-          "instance_type": "lite"
         }
       ],
       "send_email": [{ "name": "EMAIL" }],

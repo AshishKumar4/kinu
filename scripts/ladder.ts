@@ -217,9 +217,8 @@ const AMBIENT_BY_NAME: Extract<Inputs, { kind: 'derived' }> = {
   ],
 };
 
-/** `egress-interception.ts` loads each forwarder class it admits by path (`loadForwarderSurface`), and the classes
- *  it scans live under cf-backend (`declaredForwarderClasses`). */
-const FORWARDER_CLASSES = ['packages/cf-backend/'];
+/** Rows that read cf-backend's sources by path, never by import, so their closure names the tree. */
+const CF_BACKEND_SOURCES = ['packages/cf-backend/'];
 
 /** A row that builds the client with vite: vite reads the client graph by
  *  path and Tailwind scans the tree for class names, so every tracked file is
@@ -339,7 +338,7 @@ export const LADDER: readonly Gate[] = [
       + 'at 25s and, past 31s, RESET the object. That invariant held at the method and '
       + 'was defeated at the object.',
     blind: 'I/O added on any other DO lifecycle path.',
-    inputs: { kind: 'derived', imports: FORWARDER_CLASSES },
+    inputs: { kind: 'derived', imports: CF_BACKEND_SOURCES },
   },
   {
     run: 'bun run gate:duplication',
@@ -388,7 +387,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether interception actually engages at runtime, and DNS, which '
       + 'leaves regardless and which the gate reports as a known residual '
       + 'rather than closing.',
-    inputs: { kind: 'derived', imports: FORWARDER_CLASSES },
+    inputs: { kind: 'derived', imports: CF_BACKEND_SOURCES },
   },
   {
     run: 'bun run gate:typecheck-coverage',
@@ -971,7 +970,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1047,7 +1046,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts. For infra, '
       + 'everything that needs an account: no test here proves a `wrangler r2 bucket create` '
       + 'creates a bucket.',
-    inputs: { ...AMBIENT_BY_NAME, imports: FORWARDER_CLASSES },
+    inputs: { ...AMBIENT_BY_NAME, imports: CF_BACKEND_SOURCES },
   },
   {
     run: 'bun test --timeout=0 --isolate scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts',

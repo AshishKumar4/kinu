@@ -595,8 +595,8 @@ describe('a container namespace is bound to the application the deploy names, or
     .map((resource) => resource.name);
 
   test('each application is named as wrangler names it: the top-level Worker, the class, the environment', () => {
-    expect(named(infrastructure, 'container')).toEqual(['kinu-kinudevbox', 'kinu-codexegress']);
-    expect(named(staging, 'container')).toEqual(['kinu-kinudevbox-staging', 'kinu-codexegress-staging']);
+    expect(named(infrastructure, 'container')).toEqual(['kinu-kinudevbox']);
+    expect(named(staging, 'container')).toEqual(['kinu-kinudevbox-staging']);
     expect(named(staging, 'container-namespace')).toEqual(named(staging, 'container'));
   });
 

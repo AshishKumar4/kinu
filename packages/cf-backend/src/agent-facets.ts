@@ -80,9 +80,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   relayDevice(provider: RelayedProvider) { return this.answers.relayDevice(provider); }
   relayModelCall(deviceId: string, callId: string, request: Request) { return this.answers.relayModelCall(deviceId, callId, request); }
   cancelModelRelay(callId: string) { return this.answers.cancelModelRelay(callId); }
-  forwardCodex(callId: string, request: Request) { return this.answers.forwardCodex(callId, request); }
   sayToParent(signal: AgentSignal) { return this.answers.sayToParent(signal); }
-  cancelCodex(callId: string) { return this.answers.cancelCodex(callId); }
 }
 
 /** One agent's own stores, in its isolate (D9). */
@@ -154,9 +152,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   relayDevice(provider: RelayedProvider) { return relayedAnswer(this.host().relayDevice(provider)); }
   relayModelCall(deviceId: string, callId: string, request: Request) { return relayedAnswer(this.host().relayModelCall(deviceId, callId, request)); }
   cancelModelRelay(callId: string) { return relayedAnswer(this.host().cancelModelRelay(callId)); }
-  forwardCodex(callId: string, request: Request) { return relayedAnswer(this.host().forwardCodex(callId, request)); }
   sayToParent(signal: AgentSignal) { return relayedAnswer(this.host().sayToParent(signal)); }
-  cancelCodex(callId: string) { return relayedAnswer(this.host().cancelCodex(callId)); }
 }
 
 const UIChunkSchema = v.custom<UIMessageChunk>((value) => v.is(v.looseObject({ type: v.string() }), value), 'a UI message chunk');
