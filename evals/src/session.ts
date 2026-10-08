@@ -511,6 +511,8 @@ const PublicBackgroundJobSchema = v.object({
   error: v.optional(v.nullable(v.string())),
   /** When the job began, in milliseconds since the epoch. */
   createdAt: v.optional(v.number()),
+  settledAt: v.optional(v.nullable(v.number())),
+  resumeAttempts: v.optional(v.number()),
 });
 
 const BackgroundJobsSchema = v.array(PublicBackgroundJobSchema);

@@ -1,5 +1,6 @@
 /** EvolutionEngine: turn-level evolution rated from the user's next message. */
 
+import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
@@ -111,7 +112,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     engine.onEvent(e => events.push(e));
 
     const turn = makeTurn({
-      toolCalls: [{ name: 'eval', args: { code: 'return 42' }, result: 42 }],
+      toolCalls: [compactToolCall({ name: 'eval', args: { code: 'return 42' }, result: 42 })],
     });
 
     await engine.reviewTurn(turn, 'great, now do the same for the prod cluster');
@@ -130,7 +131,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     const engine = new EvolutionEngine(rt, stores.history);
 
     const turn = makeTurn({
-      toolCalls: [{ name: 'eval', args: {}, result: 'x' }],
+      toolCalls: [compactToolCall({ name: 'eval', args: {}, result: 'x' })],
       craftedToolsUsed: ['my_crafted_tool'],
     });
 
@@ -148,7 +149,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
         VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
     const engine2 = new EvolutionEngine(rt2, stores2.history);
     await engine2.reviewTurn(makeTurn({
-      toolCalls: [{ name: 'eval', args: {}, result: 'x' }],
+      toolCalls: [compactToolCall({ name: 'eval', args: {}, result: 'x' })],
       craftedToolsUsed: ['my_crafted_tool'],
     }), 'thanks, that worked — next please deploy it');
 
@@ -164,7 +165,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     ratedAs(rt, 'corrected');
     const engine = new EvolutionEngine(rt, stores.history);
     await engine.reviewTurn(makeTurn({
-      toolCalls: [{ name: 'mcp__github__create_issue', args: {}, result: 'x' }],
+      toolCalls: [compactToolCall({ name: 'mcp__github__create_issue', args: {}, result: 'x' })],
       craftedToolsUsed: [],
     }), 'wrong again — that broke the deploy');
     expect(rt.storage.sql`SELECT name FROM crafted_tools WHERE uses > 0`).toEqual([]);
@@ -223,7 +224,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     });
 
     const acted: Partial<CompletedTurn> = {
-      toolCalls: [{ name: 'shell', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
+      toolCalls: [compactToolCall({ name: 'shell', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } })],
     };
 
     const headless = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': pattern } });
@@ -252,7 +253,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
 
     await engine.reviewTurn(makeTurn({
       turnId: 'exec-2', hadError: true,
-      toolCalls: [{ name: 'shell', args: { command: 'bun test' }, result: { error: 'exit 1' } }],
+      toolCalls: [compactToolCall({ name: 'shell', args: { command: 'bun test' }, result: { error: 'exit 1' } })],
     }), null);
 
     expect(listTurnRatings(rt.storage.sql, rt.actor)).toEqual([]);

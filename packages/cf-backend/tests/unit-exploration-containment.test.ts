@@ -161,7 +161,11 @@ describe('head tool surface — containment', () => {
     const { tools, capture } = buildSurface();
     const execute = toolExecute<{ code: string }, string>(tools.eval);
     await execute({ code: 'return 1' });
-    expect(capture.toolCalls).toEqual([{ toolCallId: 'test-tool-call', name: 'eval', args: { code: 'return 1' }, result: 'ran', outcome: { success: true } }]);
+    expect(capture.toolCalls).toEqual([{
+      toolCallId: 'test-tool-call', name: 'eval', argsWindow: '{"code":"return 1"}', resultWindow: '"ran"',
+      target: 'return 1', program: 'return 1', op: null, argsDigest: expect.any(String),
+      writtenPaths: [], revisitedPaths: [], outcome: { success: true },
+    }]);
   });
 
 });

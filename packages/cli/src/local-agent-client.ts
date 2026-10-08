@@ -4,7 +4,8 @@ import type { LanguageModel } from 'ai';
 import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
-import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type ProposerOutcome } from '@kinu.run/core';
+import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
+import * as v from 'valibot';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
@@ -48,7 +49,6 @@ import {
   promptFiles,
   promptText,
 } from './agent-client';
-import { asRecord } from './options';
 import type {
   AgentChangelogView,
   AgentRefinementView,
@@ -198,6 +198,8 @@ export class LocalAgentClient implements AgentClient {
   /** The turn opening under a send's id answers it; a send the running turn read leaves at that landing. */
   private readonly awaiting = new Map<string, PendingLocalTurn>();
   private live: readonly PendingLocalTurn[] = [];
+  /** The running turn's calls as its own events showed them; its turn record keeps only what evolution reads. */
+  private turnCalls = new TurnCalls();
   private closed = false;
   private readonly recorder = new SessionRecorder('local');
   /**
@@ -569,9 +571,11 @@ export class LocalAgentClient implements AgentClient {
   }
 
   private handleSessionEvent(event: SessionEvent): void {
-    const mapped = mapSessionEvent(event);
+    if (event.type === 'turn-start') this.turnCalls = new TurnCalls();
+    const mapped = mapSessionEvent(event, this.turnCalls.calls);
 
     if (!mapped) return;
+    this.turnCalls.observe(mapped);
 
     if (event.type === 'turn-start') {
       // Turns under an awaited send's id (or carried by it) belong to that send; wakes and delegations to nobody.
@@ -593,7 +597,26 @@ export class LocalAgentClient implements AgentClient {
   }
 }
 
-function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
+class TurnCalls {
+  readonly calls: AgentTurnResult['toolCalls'] = [];
+  private readonly byId = new Map<string, AgentTurnResult['toolCalls'][number]>();
+
+  observe(event: AgentClientEvent): void {
+    if (event.type === 'tool-call') {
+      const call = { name: event.toolName, args: event.args };
+      this.calls.push(call);
+      this.byId.set(event.toolCallId, call);
+    } else if (event.type === 'tool-result') {
+      const call = this.byId.get(event.toolCallId);
+
+      if (call === undefined) return;
+      call.result = event.result;
+      call.outcome = v.parse(ToolOutcomeSchema, event);
+    }
+  }
+}
+
+function mapSessionEvent(event: SessionEvent, toolCalls: AgentTurnResult['toolCalls']): AgentClientEvent | null {
   switch (event.type) {
     case 'turn-start':
       return { type: 'turn-start', kind: event.kind, text: event.text, event: event.event };
@@ -612,12 +635,7 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
         steps: event.turn.steps,
         durationMs: event.turn.durationMs,
         hadError: event.turn.hadError,
-        toolCalls: event.turn.toolCalls.map((call) => ({
-          name: call.name,
-          args: asRecord({ value: decodeJsonValue({ value: call.args }) }, 'input'),
-          result: call.result === undefined ? undefined : renderToolResult(call.result),
-          outcome: call.outcome,
-        })),
+        toolCalls,
       };
 
       // An all-absent report is truthy; gate on `usageReported` so an unmetered turn does not look measured.
