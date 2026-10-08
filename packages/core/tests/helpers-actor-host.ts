@@ -49,13 +49,14 @@ const TIERS: TierAssignments = { default: { model: 'fake/test-model' } };
 
 const PROVIDER: ProviderCatalogSnapshot = { revision: 'rev-hosted-fixture', availableModels: ['fake/test-model'] };
 
-function envelope(): ProfileCatalogEnvelope {
-  const catalog = { roles: { tester: TESTER }, tiers: TIERS };
+/** The fixture's catalog: its one role on `tiers`. */
+export function fixtureCatalog(tiers: TierAssignments): ProfileCatalogEnvelope {
+  const catalog = { roles: { tester: TESTER }, tiers };
 
   return { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog };
 }
 
-const ENVELOPE = envelope();
+const ENVELOPE = fixtureCatalog(TIERS);
 
 /** A run's compaction trigger, kept in memory: no fold runs here, but a run measures and arms as every turn does. */
 export function fixtureCompaction(key = 'fixture-run'): HeadInferenceDeps['compaction'] {
