@@ -143,9 +143,12 @@ async function programWorker(input: { readonly loader: WorkerLoader; readonly eg
 
 export class KinuSandboxExecutor {
   readonly #inner: ProgramLaunch;
+  /** Source run before each program, in its scope: `describe` (`describeProgramSource`). */
+  readonly #prelude: string;
 
-  constructor(launch: ProgramLaunch) {
+  constructor(launch: ProgramLaunch, prelude = '') {
     this.#inner = launch;
+    this.#prelude = prelude;
   }
 
   async execute(code: string, providers: DynamicProviderInput) {
@@ -157,7 +160,7 @@ export class KinuSandboxExecutor {
       // The vendor reads only err.message. Carry an explicitly thrown refusal
       // as a result so the shared completion mapper retains its classification.
       const callable = normalizeCode(code);
-      const source = `async () => { try { return await (${callable})(); } catch (cause) { if (cause && cause.success === false && typeof cause.error === 'string') return cause; throw cause; } }`;
+      const source = `async () => { ${this.#prelude}\n try { return await (${callable})(); } catch (cause) { if (cause && cause.success === false && typeof cause.error === 'string') return cause; throw cause; } }`;
       const result = await this.#inner.run(source, attributeProviders(providerArr));
 
       // DWE returns sandbox-internal failures as strings; only the native-tool ReferenceError is

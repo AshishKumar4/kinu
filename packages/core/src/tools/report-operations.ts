@@ -51,5 +51,5 @@ export function serveReport(deps: () => ReportDeps): Served {
 
 /** `report.*` for a hire's programs. */
 export function createReportCodemodeProvider(deps: () => ReportDeps): CodemodeProvider {
-  return codemodeNamespace('report', [serveReport(deps)]);
+  return codemodeNamespace('report', 'Report progress, completion or a blocker on your assignment.', [serveReport(deps)]);
 }

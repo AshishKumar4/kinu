@@ -1,7 +1,7 @@
 import type { ToolSet } from 'ai';
 import { REFUSAL_TYPE } from '../types/tool-outcome';
-import type { CodemodeProvider } from '../types/codemode';
-import { namespaceDeclaration, nativeOperations } from './operation-surfaces';
+import type { CodemodeProvider, MemberDeclaration } from '../types/codemode';
+import { namespaceDeclaration } from './operation-surfaces';
 
 /** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts and UI. */
 
@@ -233,6 +233,7 @@ export const BUILTIN_TOOL_SPECS = {
       'A refused call, in any namespace, resolves to a `Refusal` instead of throwing: check for one before reading a result\'s fields. Returning it fails the call with that reason.',
       'Run independent calls together with `await Promise.all([...])`, and `return` the values you need rather than logging them.',
       'Start with one `//` comment naming the operation and its target; the interface shows it as the call\'s intent.',
+      '`describe(\'db\')` returns a namespace\'s full TypeScript declarations, `describe(\'db.select\')` one member\'s, and `describe()` all of them: read one before you rely on an option\'s name or a result\'s shape.',
     ],
     example: "eval({code:\"// List the newest reports\\nconst fs = require('fs/promises');\\nconst files = await fs.readdir('reports');\\nreturn files.slice(0, 5)\"})",
   },
@@ -322,26 +323,72 @@ const SANDBOX_RUNS = {
 /** The `code` field description on the `eval` input schema, shared via `codemodeInputSchema`. */
 export const CODEMODE_CODE_DESCRIPTION = 'The JavaScript program.';
 
-/**
- * The `eval` docstring: its registry description, the substrate, the one `Refusal` every namespace names, then
- * every namespace declaration in order.
- * Both backends compose it here, never through a template token: a `$` in a declaration is text.
- */
-export function renderCodemodeDescription(
-  providers: readonly Pick<CodemodeProvider, 'name' | 'types' | 'declarations' | 'tools'>[], native: ToolSet, substrate: SandboxSubstrate = 'hosted',
-): string {
-  const described = new Set(Object.values(native).flatMap(nativeOperations));
-  // Only the members a narrowing or the work mode left are declared.
+type DescribedProvider = Pick<CodemodeProvider, 'name' | 'summary' | 'types' | 'declarations' | 'tools'>;
 
-  const declarations = providers.map(({ name, types, declarations: members, tools }) => (members === undefined
-    ? types
-    : namespaceDeclaration(name, Object.fromEntries(Object.entries(members).filter(([member]) => Object.hasOwn(tools, member))), described)));
+/** The members a narrowing or the work mode left, as declared. */
+function reachedDeclarations({ declarations, tools }: DescribedProvider): [string, MemberDeclaration][] {
+  return Object.entries(declarations ?? {}).filter(([member]) => Object.hasOwn(tools, member));
+}
+
+/**
+ * The `eval` docstring: its registry description, the substrate, then each namespace with what it is for and its
+ * members' call forms. Full declarations are a program's to read on demand (`programDeclarations`), as Codex code mode
+ * leaves them out: they were half the text of every request.
+ * Both backends compose it here, never through a template token: a `$` in a call form is text.
+ */
+export function renderCodemodeDescription(providers: readonly DescribedProvider[], substrate: SandboxSubstrate = 'hosted'): string {
+  const listed = providers.flatMap((provider) => {
+    const members = reachedDeclarations(provider).map(([, declared]) => declared.call);
+    const purpose = provider.summary === undefined ? '' : ` ${provider.summary}`;
+
+    if (members.length > 0) return [`- ${provider.name}:${purpose} ${members.join(', ')}`];
+
+    // A namespace declared only as text is listed by name; `describe` answers its declaration.
+    return provider.declarations === undefined && provider.types !== undefined && provider.types !== '' ? [`- ${provider.name}:${purpose}`] : [];
+  });
 
   return [
     BUILTIN_TOOL_DESCRIPTIONS.eval,
     `- ${SANDBOX_RUNS[substrate]}`,
-    'Namespaces:',
-    REFUSAL_TYPE,
-    ...declarations.filter((types): types is string => types !== undefined && types !== '').map((types) => types.trimEnd()),
+    'Namespaces, each with its members\' call forms: positional arguments, then one object of options. '
+      + 'Any call can resolve to a `Refusal`, `{ success: false, reason, error }`.',
+    ...listed,
   ].join('\n');
+}
+
+/**
+ * What `describe` answers in a program, by `ns` and `ns.member`, with `Refusal` beside them: each namespace's and each
+ * member's full declaration, over the members a narrowing or the work mode left.
+ */
+export function programDeclarations(providers: readonly DescribedProvider[]): Readonly<Record<string, string>> {
+  return Object.fromEntries([
+    ['Refusal', REFUSAL_TYPE],
+    ...providers.flatMap((provider): [string, string][] => {
+      const members = reachedDeclarations(provider);
+
+      if (provider.declarations === undefined) {
+        return provider.types === undefined || provider.types === '' ? [] : [[provider.name, provider.types.trimEnd()]];
+      }
+
+      if (members.length === 0) return [];
+
+      return [
+        [provider.name, namespaceDeclaration(provider.name, Object.fromEntries(members))],
+        ...members.map(([member, declared]): [string, string] => [`${provider.name}.${member}`, declared.full]),
+      ];
+    }),
+  ]);
+}
+
+/**
+ * `describe` as a program's own function over `declarations`: a namespace or member it does not have throws, naming
+ * the namespaces it does. Source text, so each backend defines it in the program's scope.
+ */
+export function describeProgramSource(declarations: Readonly<Record<string, string>>): string {
+  return `const describe = ((declared) => (name) => {
+  const namespaces = Object.keys(declared).filter((key) => !key.includes('.'));
+  if (name === undefined) return namespaces.map((key) => declared[key]).join('\\n');
+  if (Object.hasOwn(declared, String(name))) return declared[String(name)];
+  throw new Error(\`describe: nothing is named "\${String(name)}"; namespaces: \${namespaces.join(', ')}\`);
+})(${JSON.stringify(declarations)});`;
 }

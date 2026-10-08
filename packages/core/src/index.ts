@@ -474,7 +474,7 @@ export {
   replayPolicyFor,
   type ReplayPolicy,
   renderToolSchemaDescription,
-  renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
+  renderCodemodeDescription, programDeclarations, describeProgramSource, CODEMODE_CODE_DESCRIPTION,
   TOOL_REACH,
   isBuiltinToolName,
   narrowToolSurface,
