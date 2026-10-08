@@ -2944,15 +2944,13 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  /** The actor a slate's caller path names: this one, or the hosted actor its one hop names. */
-  protected slateCallerActorId(path: readonly SlateCallerHop[]): string {
+  /** The actor a slate's caller path names: this one, or the hosted actor its one hop names; a nested path names none. */
+  protected slateCallerActorId(path: readonly SlateCallerHop[]): string | null {
     const [next, ...rest] = path;
 
     if (next === undefined) return this.actorHandle().actorId;
 
-    if (rest.length > 0) throw new KinuError('denied', 'A caller path names one hosted actor; a nested path names an actor no directory holds.');
-
-    return this.hostedSlateCaller(next.name).actorId;
+    return rest.length > 0 ? null : this.hostedSlateCaller(next.name).actorId;
   }
 
   /** The hosted actor a caller path's one hop names, from this actor's directory. */
