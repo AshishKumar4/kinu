@@ -394,6 +394,8 @@ folder, or one whose folder is gone; there is no adoption. Evals and fixtures bi
 | Mounts on the file plane | `/pc`, `/sandbox`, `/skills`, `/shared` (Drive), `/context` | `/skills`, `/shared`, `/context`, `/agent`; `/shared` answers `ENXIO` without a Drive; `/pc` and `/sandbox` are native host paths, never device/container mounts |
 | Mounts in the shell | the same table, through `mountedAuthority` | none: `/pc` in the host shell is the machine's own path |
 
+File checkpoints have one engine, `core/src/checkpoints/engine.ts`. The CLI runs it (`cli-backend/src/checkpoints.ts`), and the device daemon carries a generated copy (`scripts/daemon-generated.ts`), so both take and restore snapshots by the same rules: no wall clock on git, one store operation at a time, a failed snapshot never blocks the mutation it precedes, and a write's workdir climbs from the entry itself and stops at the temp directory and the home folder. `cli-backend/tests/checkpoint-engine.test.ts` holds each rule on both hosts.
+
 Both backends mount through one Kinu API: `withMountTable(base, mounts)`
 (`core/src/vfs/mounts.ts`) gives the `file` tool its view.
 `WorkspaceBundle.mountTable(plane, cred)` (`core/src/vfs/nimbus-workspace.ts`)
@@ -524,7 +526,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts`, created by the store on first use |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
 | Task list | `agent_tasks` (one plan per actor; note and plan link are columns) | `core/src/tools/task-store.ts` |
-| Approvals | `deferred_approvals`, `device_consent_requests`, `instruction_approvals` | `core/src/safety/deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts` |
+| Approvals | `deferred_approvals`, `device_consent_requests`, `instruction_approvals`, `workspace_proposals` | `core/src/safety/deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts`, `workspace-proposals.ts` |
 | Plan review | `plan_reviews` | `core/src/plans/review.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |

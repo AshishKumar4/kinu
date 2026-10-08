@@ -9,8 +9,8 @@ import {
   MCP_PRESETS,
   type ListedMcpTools, type McpPreset, type McpPresetId, type McpToolRefusal, type McpTransport,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderCauseChain, tolerate, toKinuError } from '@kinu.run/core/obs';
-import { SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
+import { diagnostics, KinuError, renderCauseChain, tolerate, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
+import { ProtocolError, SdkError, SdkErrorCode, SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as v from 'valibot';
 
@@ -225,6 +225,104 @@ export function mapConnectionStatus(state: string | undefined): McpConnectionSta
     default:               return 'unknown';
   }
 }
+
+/** A connection as observed: the SDK's state, `closed` for a ready one whose client lost its transport, `absent` for none. */
+export type McpObservedState = McpConnectionStatus | 'closed' | 'absent';
+
+/** The members of an SDK connection an observation reads. */
+export interface McpObservedConnection {
+  readonly connectionState: string;
+  readonly connectionError?: string | null;
+  readonly client?: { readonly transport?: unknown };
+}
+
+/**
+ * The SDK leaves a connection `ready` when its transport closes (`Protocol._onclose` clears only the
+ * client's transport), so its next request fails "Not connected"; that connection reads as `closed`.
+ */
+export function observedMcpState(connection: McpObservedConnection | undefined): McpObservedState {
+  if (connection === undefined) return 'absent';
+  const status = mapConnectionStatus(connection.connectionState);
+
+  if (status === 'ready' && connection.client !== undefined && connection.client.transport === undefined) return 'closed';
+
+  return status;
+}
+
+/** Logs `mcp.connection_changed` once per change of a server's observed state, with the state it left. */
+export class McpTransitionLog {
+  private readonly seen = new Map<string, McpObservedState>();
+
+  constructor(private readonly connections: () => Readonly<Record<string, McpObservedConnection | undefined>>) {}
+
+  /** `after` names what prompted the look: an SDK event type, or the step that just ran. */
+  observe(after: string): void {
+    const live = this.connections();
+
+    for (const serverId of new Set([...this.seen.keys(), ...Object.keys(live)])) {
+      const from = this.seen.get(serverId) ?? 'absent';
+      const to = observedMcpState(live[serverId]);
+
+      if (to === from) continue;
+
+      if (to === 'absent') this.seen.delete(serverId);
+      else this.seen.set(serverId, to);
+      diagnostics.event('mcp.connection_changed', { serverId, from, to, after, error: live[serverId]?.connectionError ?? '' });
+    }
+  }
+}
+
+/** What an MCP call failed on; `mcp.call_failed` carries it. `tool_error` is a server's own `isError` answer. */
+export type McpFailureKind =
+  | 'auth' | 'not_connected' | 'connection_closed' | 'timeout' | 'http' | 'server_error' | 'protocol'
+  | 'send_failed' | 'cancelled' | 'refused' | 'tool_error' | 'unknown';
+
+/** The states a call goes out in: the transport is open, whether or not discovery has finished. */
+export const CALLABLE_MCP_STATES: ReadonlySet<McpObservedState> = new Set(['ready', 'connected', 'discovering']);
+
+/**
+ * Decided by error class and code, never text: the first link of the cause chain that says. A call refused before
+ * dispatch carries no transport error, so `state`, the connection's when the call failed, says what it met.
+ */
+export function classifyMcpFailure(input: { cause: unknown; state?: McpObservedState }): McpFailureKind {
+  if (isMcpTransportUnauthorized(input)) return 'auth';
+
+  for (const error of causeChain(input)) {
+    const kind = failureKindOf(error);
+
+    if (kind !== undefined) return kind;
+  }
+
+  if (input.state === 'authenticating') return 'auth';
+
+  return input.state === undefined || CALLABLE_MCP_STATES.has(input.state) ? 'unknown' : 'not_connected';
+}
+
+/** A Kinu code that says nothing of the wire (`unavailable`, `io`, ...) defers to its cause. */
+const KINU_FAILURE_KINDS: Partial<Record<ErrorCode, McpFailureKind>> = {
+  cancelled: 'cancelled', timeout: 'timeout', denied: 'refused', missing: 'refused', bad_input: 'refused', unsupported: 'refused',
+};
+
+function failureKindOf(error: Error): McpFailureKind | undefined {
+  // Before `SdkError`, which `SdkHttpError` extends.
+  if (error instanceof SdkHttpError || error instanceof SseError) return 'http';
+
+  if (error instanceof SdkError) return SDK_FAILURE_KINDS[error.code] ?? 'protocol';
+
+  if (error instanceof ProtocolError) return 'server_error';
+
+  if (error instanceof KinuError) return KINU_FAILURE_KINDS[error.code];
+
+  return undefined;
+}
+
+/** Any other local SDK refusal is a protocol mismatch between the client and the server. */
+const SDK_FAILURE_KINDS: Partial<Record<SdkErrorCode, McpFailureKind>> = {
+  [SdkErrorCode.NotConnected]: 'not_connected',
+  [SdkErrorCode.ConnectionClosed]: 'connection_closed',
+  [SdkErrorCode.RequestTimeout]: 'timeout',
+  [SdkErrorCode.SendFailed]: 'send_failed',
+};
 
 /** `appConfigured` is only meaningful for `oauth-app` presets: whether env carries both client
  *  credentials. */

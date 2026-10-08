@@ -237,7 +237,7 @@ describe('createHostCheckpoints', () => {
     expect(await engine.status()).toEqual({ available: true });
   });
 
-  test('a git add killed mid-run is no checkpoint: it fails and nothing is written from the index', async () => {
+  test('a git add killed mid-run is no checkpoint: none is taken, nothing is written from the index, the mutation goes on', async () => {
     const { root, work } = setup();
     const ran = join(root, 'git-calls');
     const engine = engineOver(root, wrappedGit(root, ran, 'if [ "$1" = add ]; then kill -9 $$; fi'));
@@ -245,7 +245,7 @@ describe('createHostCheckpoints', () => {
     writeFileSync(join(work, 'a.txt'), 'the owner\'s work');
     engine.beginTurn({ turnId: 't', sessionId: 's' });
 
-    await expect(engine.ensureCheckpoint(work)).rejects.toThrow();
+    expect(await engine.ensureCheckpoint(work)).toBeNull();
     expect(readFileSync(ran, 'utf8').split('\n')).not.toContain('write-tree');
     expect(await engine.list()).toEqual([]);
   });
@@ -289,7 +289,7 @@ describe('createHostCheckpoints', () => {
     writeFileSync(join(work, 'a.txt'), 'before the turn');
     engine.beginTurn({ turnId: 't', sessionId: 's' });
 
-    await expect(engine.ensureCheckpoint(work)).rejects.toThrow('fatal: index.lock exists');
+    expect(await engine.ensureCheckpoint(work)).toBeNull();
     expect(await engine.ensureCheckpoint(work)).toBeTruthy();
     expect((await engine.list()).map((entry) => entry.turnId)).toEqual(['t']);
   });

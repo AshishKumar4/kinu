@@ -18,7 +18,7 @@ import {
   escapeHtml, publicPage, UsageSchema, usageTotal,
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
-  type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
+  type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
   type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
   type MissionGovernor, type WorkspaceOverviewShare, slateCapabilityGraph, type SlateCapabilityGraph,
   ephemeralSlateAddress, type EphemeralSlateAddress,
@@ -28,6 +28,7 @@ import type { KvStore } from '@kinu.run/agent-utils';
 import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
+import { SlateBuilds, slateImage, type FailingSlateBuild } from './builds';
 import { slateBatchStub } from './rpc-transport';
 import { ROOT_SLATE_CALLER, slateCallerKey, slateCredentialKey, shareCaller, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
 import { codemodeEgress } from '../codemode-egress';
@@ -56,11 +57,11 @@ interface SlateApps extends DurableApps {
   owners(): Promise<ReadonlyMap<number, string>>;
 }
 
-export interface SlateHostDeps extends ResidentSlateDeps {
+export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   readonly ctx: DurableObjectState;
   readonly workspace: string;
   /** Runs as the caller: its own providers, role reach, read models and gates. */
-  dispatch(caller: SlateCaller, route: SlateCapabilityRoute, context: SlateDispatchContext): Promise<JsonValue>;
+  dispatch(caller: SlateCaller, route: SlateCapabilityRoute, context: SlateDispatchContext): Promise<SlateSurfaceValue>;
   /** The actor whose browser sessions the caller's slate drives, as that actor's eval programs do; null for a share's
    *  viewer, whose grant no CDP socket passes through. */
   browserActor(caller: SlateCaller): Promise<string | null>;
@@ -90,6 +91,15 @@ export interface SlateHostDeps extends ResidentSlateDeps {
  */
 function heldKey(caller: SlateCaller, id: string): string {
   return ephemeralSlateAddress(id) === null ? `${slateCallerKey(caller)}#${id}` : `page#${id}`;
+}
+
+/** A viewer's answer is JSON: routing refuses a viewer every streamed member, so a stream here is a routing fault. */
+function viewerAnswer(result: SlateSurfaceResult): SlateCallResult {
+  if (!result.ok) return result;
+
+  return result.value instanceof ReadableStream
+    ? { ok: false, ...refusalOf(new KinuError('io', 'A share viewer\'s call answered a stream')) }
+    : { ...result, value: result.value };
 }
 
 /** The one surface every slate is given, as its process sees it. */
@@ -136,6 +146,9 @@ export interface SlateAppCall {
 
 interface RunningSlate {
   readonly key: string;
+  /** The source digest its image was built from: the last that built, while `broken` says why a newer one did not. */
+  readonly built: string;
+  readonly broken: string | null;
   readonly revision: number;
   readonly caller: SlateCaller;
   readonly id: string;
@@ -163,9 +176,12 @@ export class SlateHost {
   /** A published blueprint never changes. */
   private readonly blueprintHeadings = new Map<string, { title: string; description: string }>();
   private readonly usage: SlateUsageStore;
+  private readonly builds: SlateBuilds;
 
   constructor(private readonly deps: SlateHostDeps) {
-    this.resident = new ResidentSlateProcesses({ session: deps.session, facetManager: deps.facetManager, bundler: deps.bundler });
+    this.resident = new ResidentSlateProcesses({
+      session: deps.session, facetManager: deps.facetManager, bundler: deps.bundler, retained: () => this.builds.retained(),
+    });
     this.store = new SqliteSlateStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
     this.state = new SqliteSlateStateStore(deps.ctx.storage.sql);
     initSlateLiveShareTables((ddl) => { deps.ctx.storage.sql.exec(ddl); });
@@ -174,6 +190,7 @@ export class SlateHost {
     this.pages = new EphemeralSlates(deps.ctx.storage.sql);
     initSlateUsageTable((ddl) => { deps.ctx.storage.sql.exec(ddl); });
     this.usage = new SlateUsageStore(deps.ctx.storage.sql);
+    this.builds = new SlateBuilds(deps.ctx.storage.sql);
     this.slateSources = new SlateSources({
       project: (cred, id) => this.project(cred, id), trees: (cred) => this.sources(cred), host: deps,
     });
@@ -685,7 +702,7 @@ export class SlateHost {
   async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
       requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
-      const { source, app } = await this.served(id);
+      const { source, app, broken } = await this.served(id);
       const preview = await this.deps.apps.url(app.port, app.capability);
 
       if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
@@ -694,11 +711,18 @@ export class SlateHost {
       if (source.kind === 'files') this.deps.previewed?.(id);
       // Every page the runner serves reports its height; a slate's own server serves pages that do not.
       const sized = source.project.browser !== undefined && source.project.slate.runtime === 'worker';
+      const shown = { url: preview.url, port: app.port, sized, title: slateTitle(source.project, id) };
 
-      return { ok: true, value: { url: preview.url, port: app.port, sized } };
+      // Its latest source does not build: the last that did is what this URL serves, and the compiler's words say why.
+      return { ok: true, value: broken === null ? shown : { ...shown, broken } };
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' preview', cause, otherwise: 'io' })) };
     }
+  }
+
+  /** Every slate whose latest source does not build, in the compiler's words. */
+  failingBuilds(): FailingSlateBuild[] {
+    return this.builds.failing();
   }
 
   /** Answers the refusal instead of throwing, so the route can tell `missing` from `bad_input`. */
@@ -744,6 +768,7 @@ export class SlateHost {
         forgetSlateFiles(this.deps.ctx.storage.sql, new SlateId(id));
         this.state.forget(id);
         this.usage.forget(id);
+        this.builds.forget(id);
       });
       await this.deps.forgetPicture?.(id);
 
@@ -793,7 +818,7 @@ export class SlateHost {
   }
 
   /** Every call a slate makes, routed and held to its caller's reach as of now: a held stub proves its slate, nothing more. */
-  async surfaceCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
+  async surfaceCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateSurfaceResult> {
     try {
       const parsed = v.safeParse(SlateCallRequestSchema, request);
 
@@ -882,7 +907,7 @@ export class SlateHost {
       // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
       const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.live.live(input.share).grant, id, { namespace, member }); };
 
-      const result = await this.run(caller, call.route, { nested, ...(request.authorize && { authorizeOnly: true }) }, viewer);
+      const result = viewerAnswer(await this.run(caller, call.route, { nested, ...(request.authorize && { authorizeOnly: true }) }, viewer));
       row = { ...row, ok: result.ok };
 
       if (result.ok) this.debitShare(share, result.value);
@@ -893,11 +918,11 @@ export class SlateHost {
     }
   }
 
-  private async run(caller: SlateCaller, route: SlateRoute, context: SlateDispatchContext, viewer?: SlateViewer): Promise<SlateCallResult> {
+  private async run(caller: SlateCaller, route: SlateRoute, context: SlateDispatchContext, viewer?: SlateViewer): Promise<SlateSurfaceResult> {
     switch (route.kind) {
       case 'namespace': {
         const value = await this.deps.dispatch(caller, route, context);
-        const refused = answeredRefusal(value);
+        const refused = value instanceof ReadableStream ? null : answeredRefusal(value);
 
         return refused === null ? { ok: true, value } : { ok: false, ...refused };
       }
@@ -1014,7 +1039,8 @@ export class SlateHost {
       if (project.slate.runtime !== 'worker') throw new KinuError('unsupported', 'Resident slate previews require slate.runtime worker; run node projects through the sandbox executor');
       // The loader evaluates boot options only on a cache miss. This identity
       // must not reuse an image created before outbound mediation was supplied.
-      const key = `slate:mediated:${this.deps.workspace}:${held}:${await this.slateSources.digest(caller.cred, id, source)}`;
+      const digest = await this.slateSources.digest(caller.cred, id, source);
+      const key = `slate:mediated:${this.deps.workspace}:${held}:${digest}`;
       const running = this.running.get(held);
 
       if (running?.key === key && await running.process.isRunning()) {
@@ -1022,6 +1048,20 @@ export class SlateHost {
         this.running.set(held, refreshed);
 
         return refreshed;
+      }
+
+      const read = await this.slateSources.reader(caller.cred, source);
+
+      // A source that does not compile ships nothing: the slate keeps the last build that did, and says why.
+      const { image, key: built, broken } = await slateImage({
+        builds: this.builds, slate: id, key: digest, build: () => this.resident.build({ owner: id, root, project, read, cred: caller.cred }),
+      });
+
+      if (running !== undefined && running.built === built && await running.process.isRunning()) {
+        const kept = { ...running, revision, broken };
+        this.running.set(held, kept);
+
+        return kept;
       }
 
       await this.stopHeld(held);
@@ -1040,14 +1080,13 @@ export class SlateHost {
         ? await this.deps.apps.ensure({ owner: id, preferredPort: project.slate.port })
         : null;
 
-      const process = await this.resident.start({
-        key, owner: id, root, project, read: await this.slateSources.reader(caller.cred, source), cred: caller.cred, bindings, globalOutbound,
-        app: app === null ? null : { port: app.port },
-      });
+      const process = await this.resident.launch({
+        key, owner: id, root, project, read, cred: caller.cred, bindings, globalOutbound, app: app === null ? null : { port: app.port },
+      }, image);
 
       if ((this.revisions.get(id) ?? 0) !== revision) { await process.stop(); continue; }
 
-      const started = { key, revision, caller, id, source, process, app };
+      const started = { key, built, broken, revision, caller, id, source, process, app };
       this.running.set(held, started);
 
       return started;
@@ -1065,6 +1104,8 @@ export class SlateHost {
     }
 
     for (const id of ids) this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
+
+    this.builds.changed([...ids]);
 
     if (ids.size > 0) markStoreChanged(this.deps.ctx.storage.sql);
 

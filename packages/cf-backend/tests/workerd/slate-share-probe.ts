@@ -17,10 +17,11 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
   agentCred, bindActorHandle, initWorkspaceSchema, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
-  shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
+  shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
+import { initSlateBuildTable } from '../../src/slates/builds';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../../src/slates/bindings';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -73,6 +74,45 @@ const DRIVER = [
   '  }',
   '}',
 ].join('\n');
+
+/** A class that reads `ai.stream` as its page would, a piece at a time, and answers what it read and in how many pieces. */
+const TYPIST = [
+  'import { SlateObject } from "kinu:slate";',
+  'export class Slate extends SlateObject {',
+  '  async fetch(request) {',
+  '    const pieces = [];',
+  '    for await (const piece of await this.env.workspace.ai.stream({ prompt: new URL(request.url).searchParams.get("say") })) {',
+  '      pieces.push(piece);',
+  '      await this.env.workspace.writeFile("/typed", pieces.join(""));',
+  '    }',
+  '    return Response.json(pieces);',
+  '  }',
+  '}',
+].join('\n');
+
+/**
+ * UTF-8 bytes, a piece at a time, as a model writes them. The last waits until its reader has said it holds text
+ * already, so the stream ends only if what came before it reached the reader first.
+ */
+function typedPieces(pieces: readonly string[], read: Promise<void>): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const left = [...pieces];
+
+  return new ReadableStream({
+    async pull(controller) {
+      const piece = left.shift();
+
+      if (piece === undefined) {
+        controller.close();
+
+        return;
+      }
+
+      if (left.length === 0) await read;
+      controller.enqueue(encoder.encode(piece));
+    },
+  });
+}
 
 /** Each time this isolate's Browser Run was dialed: a browser the class reached, whatever the dial then answered. */
 let browserRunDials = 0;
@@ -129,6 +169,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec, transactionSync: (write) => ctx.storage.transactionSync(write),
     });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
+    initSlateBuildTable((ddl: string) => ctx.storage.sql.exec(ddl));
     seedBaseFilesystem(this.vfs);
     // As the Kinu boot leaves every workspace: slates are the workspace's, not its main agent's.
     settleWorkspaceSlates(this.vfs.as(CRED_KERNEL), (path) => { this.vfs.registerSharedDirectory(path); });
@@ -149,6 +190,16 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       facetManager: async () => facets,
       bundler: (vfs) => supervisorEsbuildService(ctx, env, vfs),
       dispatch: async (_caller, route, context) => {
+        // The actor's half of `ai.stream`: the model's text, a piece at a time, as the actor hands it over.
+        if (route.kind === 'ai' && route.stream === true) return typedPieces(['Typ', 'ing ', route.prompt], this.#typing.promise);
+
+        // The typist's word that it has text already: the model's last piece waits on it.
+        if (route.kind === 'namespace' && route.member === 'writeFile' && route.args[0] === '/typed') {
+          this.#typing.resolve();
+
+          return null;
+        }
+
         if (route.kind !== 'namespace') throw new Error(`probe dispatch answers namespace only, got ${route.kind}`);
 
         // The actor's half of authorizing a browser member: it is within reach, so the class may run it.
@@ -263,6 +314,21 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return actorId === PROBE_ACTOR && sessionId === OWNED_SESSION;
   }
 
+  /** Settled once the typist has written down text it read: its stream's last piece waits on it. */
+  #typing = Promise.withResolvers<void>();
+
+  /** What the typist slate's class read from `ai.stream`, through the runner and the binding, as the owner. */
+  async typed(say: string): Promise<string> {
+    this.#typing = Promise.withResolvers<void>();
+    const files = this.vfs.as(CRED_KERNEL);
+    files.mkdir('/slates/typist', { recursive: true });
+    files.writeFile('/slates/typist/package.json', JSON.stringify({ main: 'server.js' }));
+    files.writeFile('/slates/typist/server.js', TYPIST);
+    const process = await this.host.ensure(ROOT_SLATE_CALLER, 'typist');
+
+    return await (await process.request(new Request(`https://slate.invalid/?say=${encodeURIComponent(say)}`))).text();
+  }
+
   /** What the owner's driver slate answers when its class connects `session`. */
   async drive(session: string): Promise<string> {
     const files = this.vfs.as(CRED_KERNEL);
@@ -318,7 +384,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   /** A call a share's viewer makes with no invocation: the share must name the running call it rides. */
-  async unnamedShareCall(share: string): Promise<SlateCallResult> {
+  async unnamedShareCall(share: string): Promise<SlateSurfaceResult> {
     return this.host.surfaceCall({ ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'workspace', { path: ['readFile'], args: ['/x'], invocation: null });
   }
 
@@ -470,7 +536,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  async replay(share: string): Promise<SlateCallResult> {
+  async replay(share: string): Promise<SlateSurfaceResult> {
     return this.host.surfaceCall(
       { ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'workspace', { path: ['readFile'], args: ['/x'], invocation: this.lastCall },
     );
@@ -489,7 +555,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return this.processes.getRunning().length === this.ownersOwn;
   }
 
-  async slateCallAs(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
+  async slateCallAs(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateSurfaceResult> {
     const parsed = v.safeParse(v.object({ invocation: v.nullable(v.string()) }), request);
 
     // The close listener releases with a null invocation; a replay must present the id the slate's call carried.

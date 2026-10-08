@@ -35,6 +35,8 @@ export interface DynamicContextInput {
   /** Backend-only planes, as callbacks: no backend re-splices the result. */
   readonly subordinateDelegates?: () => readonly DynamicDelegate[];
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
+  /** Slates whose latest source does not build, each `id: why`. */
+  readonly failingSlates?: () => readonly string[];
 }
 
 export function subordinateDelegatesOf(
@@ -79,6 +81,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     liveHeadRuns: stores.headJournal.listLive(),
     subordinateDelegates: input.subordinateDelegates?.(),
     approvals: input.approvals?.(),
+    failingSlates: input.failingSlates?.(),
     missingCapabilities: [
       ...(runnableSandbox(input.tools, profile) === undefined ? [] : input.unavailableMcp ?? []).map(({ server, reason }) => ({
         source: server === null ? 'MCP catalog' : `MCP server "${server}"`, reason,

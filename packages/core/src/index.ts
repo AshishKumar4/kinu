@@ -282,7 +282,7 @@ export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 
 export {
-  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer,
+  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue,
   type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
@@ -1127,6 +1127,12 @@ export {
   checkpointReason, stagingOutcome,
 } from './checkpoints/format';
 
+export {
+  createCheckpointEngine, PROJECT_MARKERS,
+  type CheckpointEngine, type CheckpointEngineOptions, type CheckpointGitRun, type CheckpointHost,
+  type CheckpointOutcome, type CheckpointRequest,
+} from './checkpoints/engine';
+
 // Semantic memory
 export {
   reciprocalRankFusion,
@@ -1478,6 +1484,14 @@ export {
   type PendingDeviceConsent,
   type PendingConsentRow,
   type DeviceConsentNotice,
+  WorkspaceProposals,
+  WorkspaceProposalStore,
+  initWorkspaceProposalsTable,
+  proposedSoul,
+  type WorkspaceProposal,
+  type WorkspaceProposalAnswer,
+  type WorkspaceProposalInput,
+  type WorkspaceProposalReceipt,
   SECRET_PATTERNS,
   scanText,
   countDetections,

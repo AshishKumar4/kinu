@@ -5,13 +5,13 @@ import * as v from 'valibot';
 import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, agentCred, agentHome, agentIdentity,
   openWorkspaceMainActor, RunEventRecorder, SESSION_UID, WORKSPACE_RUN_ID,
-  type JsonValue, type SlateCallResult, actorHomeName } from '@kinu.run/core';
+  type JsonValue, type SlateSurfaceResult, actorHomeName } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import {
   hostedSubordinateHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
 } from './helpers/actor-harness';
-import { chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
+import { chatCompletion, wordByWordCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import { createWorkspaceBundle } from '../../core/tests/helpers';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { joinHarnessFibers, recordedMcpToolCalls, resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
@@ -51,7 +51,7 @@ async function childCaller(db: Database, agentName: string, actorName: string): 
 
 /** Calls on slate `id`'s surface, as `caller`. */
 function surface(agent: ReturnType<typeof orchestratorHarness>['agent'], caller: SlateCaller, id: string) {
-  return (path: string[], args: JsonValue[] = []): Promise<SlateCallResult> => agent.slateCallAs(caller, id, 'workspace', { path, args, invocation: null });
+  return (path: string[], args: JsonValue[] = []): Promise<SlateSurfaceResult> => agent.slateCallAs(caller, id, 'workspace', { path, args, invocation: null });
 }
 
 test('an MCP tool called through eval answers its data whole, fails on a protocol failure, and obeys the allowlist', async () => {
@@ -263,7 +263,7 @@ test('the agent slate operation commits, forks and restores its authored source'
   await writeText(files, root + '/package.json', JSON.stringify({ main: 'server.ts' }));
   await writeText(files, root + '/server.ts', 'export default { fetch() { return new Response("first"); } };');
 
-  const record = (result: SlateCallResult) => {
+  const record = (result: SlateSurfaceResult) => {
     if (!result.ok) throw new Error(result.reason + ': ' + result.error);
 
     return v.parse(v.object({ id: v.string() }), result.value);
@@ -624,6 +624,33 @@ test('a slate\'s agent.send delivers one inbox signal naming the slate', async (
 
   expect(await surface(actor.agent, asChild, 'pager')(['agent', 'send'], [{ text: 'x' }]))
     .toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('no inbox of its own') });
+});
+
+test('a slate\'s ai.stream hands over the answer as the model writes it, and files its spend once it is read through', async () => {
+  const gateway = stubAiBinding((run) => wordByWordCompletion(run, ['Typ', 'ing ', 'live']));
+  const actor = orchestratorHarness(undefined, { aiGateway: gateway });
+  actor.agent.harnessInstallCatalog({ tiers: { default: { model: GATEWAY_MODEL } }, availableModels: [GATEWAY_MODEL] });
+  const files = workspaceFiles(actor.agent);
+  await files.mkdir('/slates/typist', { recursive: true });
+  await writeText(files, '/slates/typist/package.json', JSON.stringify({ main: 'server.ts' }));
+
+  const answer = await surface(actor.agent, ROOT_SLATE_CALLER, 'typist')(['ai', 'stream'], [{ prompt: 'say it', system: 'be brief' }]);
+
+  if (!answer.ok || !(answer.value instanceof ReadableStream)) throw new Error(`ai.stream answered no stream: ${JSON.stringify(answer)}`);
+  const reader = answer.value.getReader();
+  const decoder = new TextDecoder();
+  const pieces: string[] = [];
+
+  for (let read = await reader.read(); !read.done; read = await reader.read()) pieces.push(decoder.decode(read.value));
+
+  // The text arrives a piece at a time, in order, and whole.
+  expect(pieces.join('')).toBe('Typing live');
+  expect(pieces.length).toBeGreaterThan(1);
+  expect(JSON.stringify(gateway.runs[0]?.query)).toContain('be brief');
+
+  const ledger = new RunEventRecorder(sqlOver(actor.db), openWorkspaceMainActor(sqlOver(actor.db)));
+
+  expect(ledger.spendByProducer().get('slate')).toMatchObject({ calls: 1, callsWithoutUsage: 0 });
 });
 
 test('a slate\'s ai.run runs one model call under the caller authority, as a slate spend row', async () => {

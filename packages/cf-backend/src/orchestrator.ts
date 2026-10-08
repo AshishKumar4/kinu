@@ -62,6 +62,7 @@ import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
+import { initSlateBuildTable } from "./slates/builds";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import type { MessageBlock } from "./slates/sources";
@@ -111,7 +112,7 @@ import {
   drainAssignments, delegatedTaskMetadata,
   appendMemoryNote,
   parseMemoryNotes,
-  type SlateCallRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
+  type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type SlateSurfaceCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
@@ -228,6 +229,7 @@ import {
 } from "@kinu.run/core/analytics";
 import {
   agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
+  WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
@@ -286,8 +288,8 @@ const SANDBOX_STARTING = 'sandbox_starting';
 
 const SANDBOX_REFUSED = 'sandbox_refused';
 
-/** Smaller than the fiber sweep's row budget: each sealed head costs a durable report write
- *  and a broadcast. A pass that fills either budget arms the maintenance wake. */
+/** Smaller than the fiber sweep's row budget: each sealed head or re-pended lease costs a write and an event.
+ *  A pass that fills a budget arms the maintenance wake. */
 const ORPHAN_SEAL_MAX_ROWS = 256;
 
 /** Transfer id is fresh per transfer, so two readers of one path cannot replace
@@ -1194,6 +1196,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       facts: turn.actor.stores.facts,
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
+      slate: (operation) => this.slateAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation),
       ...(report !== undefined && { report }),
       // The owner's own Plan turn, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
       ...(turn.input.mode === 'plan' && !turn.parentDriven && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
@@ -1485,8 +1488,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ).toArray().length > 0;
   }
 
-  /** A lease from before this activation lost its runner; effects dedupe on rerun. */
-  private rependDeadActivationLeases(): void {
+  /** A lease from before this activation lost its runner; effects dedupe on rerun. True when the pass filled its budget. */
+  private rependDeadActivationLeases(): boolean {
     // Looked for first: every wake runs this, and a write tells each open page its agents moved.
     const dead = this.boundExec().exec(
       `SELECT 1 FROM agent_log
@@ -1496,19 +1499,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.activationStartedAt,
     ).toArray();
 
-    if (dead.length === 0) return;
+    if (dead.length === 0) return false;
 
     const rows = this.boundExec().exec(
       `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
-       WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
-         AND consumed_at IS NOT NULL AND consumed_at < ?
+       WHERE rowid IN (
+         SELECT rowid FROM agent_log
+         WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
+           AND consumed_at IS NOT NULL AND consumed_at < ?
+         LIMIT ?
+       )
        RETURNING id`,
       this.activationStartedAt,
+      ORPHAN_SEAL_MAX_ROWS,
     ).toArray();
 
     for (const row of rows) {
       diagnostics.event('subordinate.assignment_repended', { workspace: this.name, assignment: v.parse(LeasedRowSchema, row).id, cause: 'dead_activation' });
     }
+
+    return rows.length >= ORPHAN_SEAL_MAX_ROWS;
   }
 
   protected readonly delegatedTurns = new DelegatedTurnRunners({
@@ -1846,6 +1856,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return deafInbox ? [deafInbox] : [];
       },
+      failingSlates: () => this.slates.failingBuilds().map(({ slate, failure }) => `${slate}: ${failure}`),
     };
   }
 
@@ -2018,10 +2029,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Every pass runs (no short-circuit): each owns a different table and is budgeted and idempotent. */
   protected override maintenanceSweeps(activation = false): boolean {
+    const leases = this.rependDeadActivationLeases();
     const branches = this.reconcileOrphanedBranches();
     const fibers = super.maintenanceSweeps(activation);
 
-    return branches || fibers;
+    return leases || branches || fibers;
   }
 
   protected get engine(): EvolutionEngine {
@@ -2384,6 +2396,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Owner's revoke path; drops the webhook secret with the row.
       cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
       armCompactNow: () => { this.compactionState.armCompaction(this.name); },
+      proposeWorkspace: (proposal) => this.proposals.propose(proposal),
     });
   }
 
@@ -3055,6 +3068,33 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
+  // Lazy like `consents`. A proposed workspace is created through the account's one creation path, under its owner.
+  private _proposals: WorkspaceProposals | null = null;
+  private get proposals(): WorkspaceProposals {
+    return this._proposals ??= new WorkspaceProposals({
+      store: new WorkspaceProposalStore(this.boundSql),
+      newId: () => `wsp-${nanoid(10)}`,
+      now: () => Date.now(),
+      create: async ({ displayName, purpose, soul }) => {
+        const { stub: userDO, caller } = await this.userHub();
+
+        return createCloudWorkspaceForUser({ env: this.env, userId: this.requireOwnerUserId(), userDO, caller, input: { displayName, purpose }, soul });
+      },
+      link: (workspace) => `${this.env.CLI_PUBLIC_ORIGIN ?? ''}/workspace/${encodeURIComponent(workspace)}`,
+      // Read through `this.orch` at delivery time, never captured, as the deferrals' inbox is.
+      inbox: { send: (signal) => this.orch.inbox.send(signal) },
+      announce: () => { this.overviewChanged(); },
+    });
+  }
+
+  /** The owner's one decision on a workspace the agent proposed; a second answer decides nothing. */
+  @callable()
+  async decideWorkspaceProposal(id: string, answer: WorkspaceProposalAnswer): Promise<{ decided: boolean; workspace: string | null }> {
+    const asked = v.parse(v.object({ id: v.string(), answer: v.picklist(['approve', 'decline']) }), { id, answer });
+
+    return settle(Effect.map(this.proposals.decide(asked.id, asked.answer), (decided) => ({ decided: decided !== null, workspace: decided?.workspace ?? null })));
+  }
+
   /** Called by the UserDO over DO RPC. Resolves on decision or `timeout`; `timeout` is not
    *  `deny`, since an unanswered prompt means the owner was away. */
   async awaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
@@ -3160,6 +3200,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
     initChangeNotesTable(execRaw);
     initSlatePictureTable(execRaw);
+    initSlateBuildTable(execRaw);
     initBrowserSessionTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
@@ -3208,7 +3249,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // An unborn workspace owes nothing: its first claim writes it.
     if (this.storageRefusal !== undefined || !this.workspaceBorn()) return;
-    this.rependDeadActivationLeases();
     // Row-budgeted (init gate); a truncated pass drains under the wake below.
     this.maintenanceUnfinished = this.maintenanceSweeps(true);
     // An activation is the only moment a workspace whose wake was lost can notice; the arm is detached.
@@ -3614,6 +3654,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return buildPendingActions({
       scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       deferredActions: this.deferrals.list(),
+      workspaceProposals: this.proposals.open(),
       unseenChanges: {
         count: unseen.length,
         revertable: unseen.filter((entry) => entry.revert !== undefined).length,
@@ -4606,7 +4647,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { html: addressedBlock(texts, address).html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
   }
 
-  async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateCallResult> {
+  async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateSurfaceResult> {
     return this.slates.surfaceCall(caller, id, name, request);
   }
 
