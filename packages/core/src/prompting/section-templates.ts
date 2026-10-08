@@ -197,7 +197,7 @@ export const LEAD_RESPONSIBILITY = definePromptSection('lead/responsibility', '{
 
 export const LEAD_BRIEF = definePromptSection('lead/brief', '{{familyDelta}}', leadBrief.trimEnd());
 
-export const LEAD_PARALLEL = definePromptSection('lead/parallel', '{{#if hasTaskHire}}{{/if}}', leadParallel.trimEnd());
+export const LEAD_PARALLEL = definePromptSection('lead/parallel', '', leadParallel.trimEnd());
 
 export const LEAD_REVIEW = definePromptSection('lead/review', '', leadReview.trimEnd());
 

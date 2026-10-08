@@ -338,7 +338,7 @@ export function buildSystemPromptSync(
     ...(lead ? [
       render(LEAD_RESPONSIBILITY, { hasTaskHire: surface.temporaryAsk }),
       render(LEAD_BRIEF, { familyDelta: promptFamilyDelta(LEAD_BRIEF.id, surface.model.family) }),
-      render(LEAD_PARALLEL, { hasTaskHire: surface.temporaryAsk }),
+      render(LEAD_PARALLEL, {}),
       render(LEAD_REVIEW, {}),
       render(LEAD_INTERRUPTION, {}),
       render(LEAD_DELIVERY, {}),

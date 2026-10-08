@@ -250,7 +250,7 @@ export const BUILTIN_TOOL_SPECS = {
         + 'concurrent calls run side by side. A `name` keeps its directory and exported variables from call to call, '
         + 'and runs one call at a time.',
       'Output starts with the directory the command started in, holds both streams, labelled when both wrote, and gives the exit code when it is not zero.',
-      'Each runtime keeps its own files; `workspace` is the filesystem the `file` tool reads. Read and edit a file there with `file`, not `cat`, `head`, `sed` or heredocs; the shell is for programs, builds, tests, git and searches across many files.',
+      'Each runtime keeps its own files; `workspace` is the filesystem the `file` tool reads.',
       'In a container, `nproc` and `free` report the host: size parallelism from the cpus and memory the execution status lists.',
     ],
     example: "shell({runtime:'workspace', command:'npm test'})",
@@ -259,6 +259,7 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'file',
     summary: 'Read, list, stat, search, edit or write files in your workspace.',
     notes: [
+      'Read and edit workspace files with this tool, not with `cat`, `head`, `sed` or heredocs in a shell.',
       'Find before you read: `search` a file for the lines you need, then `read` around them. Read a large file in pages with `offset` and `limit`; a read that stops early names the offset that continues it.',
       'Read a file in this turn before you `edit` it. An edit matches the text as last read, and fails when its `old_text` is absent or occurs more than once: copy just enough to be unique.',
     ],

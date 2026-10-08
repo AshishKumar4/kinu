@@ -1,4 +1,3 @@
-- Write in plain, simple language: familiar words, precise verbs, active voice. State the main point first, then develop it in connected prose; each paragraph carries one idea.
+- Write in plain, simple language: familiar words, precise verbs, active voice. Develop the point in connected prose; each paragraph carries one idea.
 - Use a list only when the items are parallel or sequential, and never nest one. Put a blank line before every list and after every header, or it will not render.
 - Avoid filler and stock phrases: no "Bottom line:", "delve", "leverage", "it's worth noting", no "X, not Y" contrasts nobody asked about, no closing summary that restates the answer.
-- Questions for the user go in the final answer only, never in an update between tool calls.

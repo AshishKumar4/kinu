@@ -56,11 +56,11 @@ const callText = (event: Extract<RunEvent, { type: 'tool_call_end' }>): string =
 const HIRES = /"op":"hire"|agents\.hire\(/;
 
 /** A call that asks a helper how far it got, or sleeps to wait for one. */
-const CHECKS_ON_A_HELPER: Readonly<Record<string, RegExp>> = {
-  agents: /"op":"(list|message)"/,
-  eval: /agents\.(list|message)\(|setTimeout|\bsleep\(/,
-  shell: /\bsleep\b|\bwatch\b/,
-};
+const CHECKS_ON_A_HELPER = new Map([
+  ['agents', /"op":"(list|message)"/],
+  ['eval', /agents\.(list|message)\(|setTimeout|\bsleep\(/],
+  ['shell', /\bsleep\b|\bwatch\b/],
+]);
 
 /**
  * The lead's calls between its first hire and the first run a report started that check on the helper, and whether
@@ -72,7 +72,7 @@ function waiting(events: readonly RunEvent[]) {
   const wake = after.findIndex((event) => event.type === 'run_start' && event.caused_by === 'event_drain');
 
   const checks = (wake === -1 ? after : after.slice(0, wake)).flatMap((event) => event.type === 'tool_call_end'
-    && (CHECKS_ON_A_HELPER[event.name]?.test(callText(event)) ?? false) ? [{ tool: event.name, call: callText(event).slice(0, 200) }] : []);
+    && (CHECKS_ON_A_HELPER.get(event.name)?.test(callText(event)) ?? false) ? [{ tool: event.name, call: callText(event).slice(0, 200) }] : []);
 
   return { hired: hire !== -1, checks, woken: wake !== -1 };
 }
