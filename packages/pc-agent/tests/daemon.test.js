@@ -8,7 +8,7 @@
 
 const { scratchDir } = require('../../test-utils/src/scratch');
 
-const { killAndAwaitExit, recordedIn, runToExit } = require('../../test-utils/src/spawn');
+const { isRunning, killAndAwaitExit, recordedIn, runToExit } = require('../../test-utils/src/spawn');
 
 const { AwaitedList } = require('@kinu.run/test-utils');
 
@@ -1409,18 +1409,6 @@ describe('daemon process under Bun against a local hub', () => {
     }
   }
 
-  /** Whether `pid` names a process this user can still signal. */
-  function processAlive(pid) {
-    try {
-      process.kill(pid, 0);
-
-      return true;
-    } catch (err) {
-      if (err && err.code === 'ESRCH') return false;
-      throw err;
-    }
-  }
-
   async function until(predicate, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
 
@@ -1771,13 +1759,13 @@ describe('daemon process under Bun against a local hub', () => {
 
         if (supervisor === null) throw new Error(`no supervisor state under ${requestDir}: log says ${firstLog()}`);
         const supervisorPid = supervisor.pid;
-        expect(processAlive(supervisorPid)).toBe(true);
+        expect(isRunning(supervisorPid)).toBe(true);
         expect(fs.existsSync(path.join(requestDir, 'result'))).toBe(true);
 
         // The one writer of that FIFO dies without acknowledging.
         first.child.kill('SIGKILL');
         await first.child.exited;
-        expect(await until(() => !processAlive(supervisorPid), 20_000)).toBe(true);
+        expect(await until(() => !isRunning(supervisorPid), 20_000)).toBe(true);
 
         // The result outlives it, so a replacement daemon still delivers and
         // clears the request — writing the FIFO here would hang the daemon
@@ -1849,11 +1837,11 @@ describe('daemon process under Bun against a local hub', () => {
 
           if (!started) throw new Error(`the shell never started the job: log says ${daemonLog()}`);
           job = Number(started[1]);
-          expect(processAlive(job)).toBe(true);
+          expect(isRunning(job)).toBe(true);
 
           child.kill('SIGTERM');
           await child.exited;
-          expect(await until(() => !processAlive(job), 10_000)).toBe(true);
+          expect(await until(() => !isRunning(job), 10_000)).toBe(true);
           expect(daemonLog()).toContain('device.terminals_closed_with_daemon rpc-ptysignal0-1');
         } finally {
           child.kill('SIGTERM');

@@ -2,6 +2,18 @@ import { attempt, KinuError, settle, settleSync, tolerate } from '@kinu.run/core
 import { Effect } from 'effect';
 import { closeSync, fstatSync, openSync, readFileSync } from 'node:fs';
 
+/**
+ * Whether `pid` is still running. A zombie waiting for its reaper has stopped, though `kill(pid, 0)` still reaches it:
+ * under load a killed descendant can wait seconds for pid 1 to reap it.
+ */
+export function isRunning(pid: number): boolean {
+  if (process.platform !== 'linux') return tolerate(() => process.kill(pid, 0), 'esrch') === true;
+
+  const status = tolerate(() => readFileSync(`/proc/${String(pid)}/status`, 'utf8'), 'enoent');
+
+  return status !== undefined && !/^State:\s*Z/mu.test(status);
+}
+
 export interface Exited {
   /** Null when a signal ended it. */
   readonly exitCode: number | null;
