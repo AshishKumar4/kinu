@@ -370,16 +370,18 @@ describe('hire', () => {
         expect(await root.rpc('getActivePlanReview', [], PlanSchema)).toBeNull();
         expect((await pane.rpc('getActorSnapshot', [name], v.looseObject({ activePlan: PlanSchema }))).activePlan?.id).toBe(shown?.id);
 
+        const feedbackAnswered = pane.nextAnswer();
+
         const decided = await pane.rpc('decidePlanReview', [shown?.id ?? '', shown?.revision ?? 0, 'request_changes', 'Name the ledger files.'],
           v.looseObject({ ok: v.boolean(), queued: v.optional(v.boolean()) }));
 
         expect(decided).toMatchObject({ ok: true, queued: true });
         expect((await pane.rpc('getActivePlanReview', [], PlanSchema))?.status).toBe('changes_requested');
 
-        // The feedback is the agent's next turn, in its own chat: no clock, so a turn that never comes hangs here.
-        let lines = await probe(workspace).childLines(workspace, name);
+        // The feedback is the agent's next turn, in its own chat, streamed to its window: no clock, so a turn that never comes hangs here.
+        await feedbackAnswered;
+        const lines = await probe(workspace).childLines(workspace, name);
 
-        while (!lines.some((line) => line.includes('Name the ledger files.')) || !lines.at(-1)?.includes(CHILD_ANSWER)) lines = await probe(workspace).childLines(workspace, name);
         expect(lines.find((line) => line.includes('Name the ledger files.'))).toContain('The owner requested changes to plan');
       } finally {
         pane.close();

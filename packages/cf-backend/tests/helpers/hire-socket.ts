@@ -20,6 +20,7 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
   const replyStreams = new Set<string>();
   const finished = new Set<string>();
   let roster: v.InferOutput<typeof HireRosterSchema> = [];
+  const awaitingAnswer: (() => void)[] = [];
   let nextId = 0;
 
   const rpc = async <T>(method: string, args: JsonValue[], schema: v.GenericSchema<T>): Promise<T> => {
@@ -63,6 +64,8 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
       if (frame.body?.includes(reply)) replyStreams.add(frame.id);
 
       if (frame.done === true) finished.add(frame.id);
+
+      if (frame.done === true && replyStreams.has(frame.id)) for (const answered of awaitingAnswer.splice(0)) answered();
     }
 
     settled();
@@ -82,6 +85,8 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
       } }));
     },
     completed: () => completion.promise,
+    /** The next streamed answer carrying the reply, from a turn that ends after this is asked. */
+    nextAnswer: () => new Promise<void>((answered) => { awaitingAnswer.push(answered); }),
     close: () => { socket.close(); },
   };
 }
