@@ -1511,6 +1511,8 @@ body > .annotation-toolbar {
 }
 .p-bar-tab[data-active] { flex-shrink: 0; }
 .p-bar-tab[data-title] { min-width: 144px; max-width: 320px; flex-shrink: 2; }
+/* The open tab keeps its name whole, the workspace's on its overview too: the strip scrolls before it is cut. */
+.p-bar-tab[data-title][data-active] { flex-shrink: 0; }
 .p-bar-sizer, .p-bar-link {
   display: flex;
   align-items: center;
@@ -1561,16 +1563,18 @@ body > .annotation-toolbar {
   pointer-events: none;
   transition: opacity var(--dur-fast) ease-out;
 }
-/* A tap is no hover: on touch, only the open chat's tab carries its actions, so a tap meant for a name never lands
-   on a pencil or a cross that appeared under it. The workspace renames in its settings there. */
+/* A tap is no hover: on touch, only the open tab carries its actions, so a tap meant for a name never lands on a
+   pencil or a cross that appeared under it. The workspace's name is open on its overview, and renames there. The open
+   tab is widened for them rather than its name cut short: nothing moves, since on touch they never come and go. */
 @media (hover: hover) {
   .p-bar-tab:is(:hover, :focus-within) .p-bar-actions { opacity: 1; pointer-events: auto; }
   .p-bar-tab:is(:hover, :focus-within):has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
   .p-bar-tab:is(:hover, :focus-within):has(.p-bar-action:only-child) .p-bar-link { padding-right: calc(var(--flare) + 32px); }
 }
 @media (hover: none) {
-  .p-bar-tab[data-active]:not([data-title]) .p-bar-actions { opacity: 1; pointer-events: auto; }
-  .p-bar-tab[data-active]:not([data-title]):has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
+  .p-bar-tab[data-active] .p-bar-actions { opacity: 1; pointer-events: auto; }
+  .p-bar-tab[data-active]:has(.p-bar-actions) :is(.p-bar-sizer, .p-bar-link) { padding-right: calc(var(--flare) + 52px); }
+  .p-bar-tab[data-active]:has(.p-bar-action:only-child) :is(.p-bar-sizer, .p-bar-link) { padding-right: calc(var(--flare) + 32px); }
 }
 .p-bar-action {
   display: flex;

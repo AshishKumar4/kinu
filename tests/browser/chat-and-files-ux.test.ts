@@ -3244,16 +3244,15 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       const page = await newPage();
       await page.setViewport({ width: 1000, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
+      // Adding a tier is one of the Advanced settings, closed until asked for.
+      await page.click('[data-section="advanced"] > button');
       await page.waitForSelector('[aria-label="New tier id"]');
-
 
       await page.type('[aria-label="New tier id"]', 'review');
       await page.keyboard.press('Enter');
-      await page.waitForSelector('[aria-label="review reasoning effort"]');
-      // A new tier starts as a copy of default (a Workers AI model, no levels): nothing to pick.
-      expect(await page.$eval('[aria-label="review reasoning effort"]', (choice) =>
-        choice.hasAttribute('disabled') || choice.hasAttribute('data-disabled'),
-      )).toBe(true);
+      await page.waitForSelector('[data-tier="review"] [data-model-picker="review model"]');
+      // A new tier starts as a copy of default (a Workers AI model, no levels): no thinking to pick.
+      expect(await page.$('[aria-label="review reasoning effort"]')).toBeNull();
 
       // Point it at a model that documents five levels: the choice offers
       // exactly those, in the model's order, through the combobox every tier row carries.
@@ -3264,23 +3263,19 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       await page.keyboard.type('Opus');
       await page.waitForSelector('[role="option"]');
       await page.click('[role="option"]');
-      await page.waitForFunction(() => {
-        const choice = document.querySelector('[aria-label="review reasoning effort"]');
+      await page.waitForSelector('[aria-label="review reasoning effort"]');
+      const levels = () => page.$$eval('[aria-label="review reasoning effort"] [role="tab"]', (tabs) => tabs.map((tab) => tab.textContent?.trim()));
 
-        return choice !== null && !choice.hasAttribute('disabled') && !choice.hasAttribute('data-disabled');
-      });
-      expect(await choiceOptions(page, 'review reasoning effort'))
-        .toEqual(['Model default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
+      expect(await levels()).toEqual(['Auto', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
 
       // Its provider holds two accounts, so the row asks which; the model's levels stay offered on either.
       expect((await choiceOptions(page, 'review model account')).slice(1)).toEqual(['main', 'work']);
       await chooseOption(page, 'review model account', 'work');
       await page.waitForFunction(() => document.querySelector('[aria-label="review model account"]')?.textContent?.trim() === 'work');
-      expect(await choiceOptions(page, 'review reasoning effort'))
-        .toEqual(['Model default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
+      expect(await levels()).toEqual(['Auto', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
 
       // The role editor lists the new tier.
-      expect(await choiceOptions(page, 'Default tier')).toContain('review');
+      expect(await choiceOptions(page, 'Default tier')).toContain('review model');
 
       // Removing it is one click, and only a non-builtin offers it.
       expect(await page.$('[aria-label="Remove tier default"]')).toBeNull();
@@ -3295,23 +3290,23 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       const page = await newPage();
       await page.setViewport({ width: 1000, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="New tier id"]');
+      await page.waitForSelector('[aria-label="default fallbacks"]');
 
-      const chain = () => page.$eval('[aria-label="deep fallbacks"]', (group) => [...group.querySelectorAll('[data-spec]')]
+      const chain = () => page.$eval('[aria-label="default fallbacks"]', (group) => [...group.querySelectorAll('[data-spec]')]
         .map((chip) => chip.getAttribute('data-spec') ?? ''));
 
       // The model picker's trigger is named from inside it; `data-model-picker` is where that name sits.
-      const offered = async (label: string) => (await choiceOptions(page, 'deep add fallback', '[data-model-picker="deep add fallback"]'))
+      const offered = async (label: string) => (await choiceOptions(page, 'default add fallback', '[data-model-picker="default add fallback"]'))
         .some((option) => option.includes(label));
 
       const settled = (specs: readonly string[]) => page.waitForFunction((wanted) => {
-        const chips = [...document.querySelectorAll('[aria-label="deep fallbacks"] [data-spec]')].map((chip) => chip.getAttribute('data-spec'));
+        const chips = [...document.querySelectorAll('[aria-label="default fallbacks"] [data-spec]')].map((chip) => chip.getAttribute('data-spec'));
 
         return JSON.stringify(chips) === JSON.stringify(wanted);
       }, {}, specs);
 
       const pick = async (label: string) => {
-        await page.click('[data-model-picker="deep add fallback"]');
+        await page.click('[data-model-picker="default add fallback"]');
         await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
 
         for (const option of await page.$$('[role="option"]')) {
@@ -3331,7 +3326,7 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       await settled(['anthropic/claude-opus-4-7']);
 
       // An entry names its account: switch the first to `work`, then the same model is offered on each account left.
-      await chooseOption(page, 'deep fallback 1 account', 'work');
+      await chooseOption(page, 'default fallback 1 account', 'work');
       await settled(['anthropic@work/claude-opus-4-7']);
 
       await pick('Claude Opus 4.7');
@@ -3344,7 +3339,7 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       await pick('Llama 4');
       await settled(['anthropic@work/claude-opus-4-7', 'anthropic/claude-opus-4-7', 'anthropic@main/claude-opus-4-7', 'workers-ai/llama-4']);
 
-      await page.click('[aria-label="Remove anthropic@work/claude-opus-4-7 from the deep fallbacks"]');
+      await page.click('[aria-label="Remove anthropic@work/claude-opus-4-7 from the default fallbacks"]');
       await settled(['anthropic/claude-opus-4-7', 'anthropic@main/claude-opus-4-7', 'workers-ai/llama-4']);
       await page.close();
     });

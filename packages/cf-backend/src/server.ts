@@ -201,7 +201,7 @@ export default {
 
     const response = await worker.fetch(request, env, ctx);
 
-    return withTransportSecurity(response, url, env);
+    return published(response, url, env);
   },
 
   // Cloudflare Email Routing catch-all on EMAIL_DOMAIN.
@@ -258,15 +258,23 @@ function httpsUpgrade(url: URL, env: Env): Response | null {
 
 const HSTS = 'max-age=31536000; includeSubDomains';
 
-/** `includeSubDomains` deliberately covers preview hosts (the zone cert has the
- *  wildcard); no `preload`. 101 passes untouched: handshake headers are immutable. */
-function withTransportSecurity(response: Response, url: URL, env: Env): Response {
+/** The header naming the version of this Worker that answered a request. */
+const VERSION_HEADER = 'x-kinu-version';
+
+/** What every response a published host serves carries: HSTS, and the version that answered. `includeSubDomains`
+ *  deliberately covers preview hosts (the zone cert has the wildcard); no `preload`. A new version reaches the edge
+ *  over seconds, so the version a deploy's smoke test reads is the one that answered it, not the one it just uploaded
+ *  (2026-10-08: 23 s after the deploy of b8340eebf, one of its requests was answered by the reset placeholder before
+ *  it). 101 passes untouched: handshake headers are immutable. */
+function published(response: Response, url: URL, env: Env): Response {
   if (url.protocol !== 'https:' || response.status === 101 || !isPublishedHost(url, env)) {
     return response;
   }
 
   const headers = new Headers(response.headers);
   headers.set('strict-transport-security', HSTS);
+
+  if (env.CF_VERSION_METADATA !== undefined) headers.set(VERSION_HEADER, env.CF_VERSION_METADATA.id);
 
   return new Response(response.body, {
     status: response.status,

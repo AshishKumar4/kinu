@@ -701,7 +701,8 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 
       expect(seen.map((s) => s.path)).toEqual(['/api/user/ai/v1/chat/completions', '/api/user/ai/v1/responses']);
       expect(wireCalls).toBe(2);
-      expect(seen.map((s) => s.model)).toEqual([DEFAULT_WORKERS_AI_MODEL_ID, 'openai/gpt-4.1']);
+      // OpenAI's own request, OpenAI's own id: the worker forwards it to the gateway's endpoint for OpenAI.
+      expect(seen.map((s) => s.model)).toEqual([DEFAULT_WORKERS_AI_MODEL_ID, 'gpt-4.1']);
 
       for (const request of seen) {
         expect(request.auth).toBe(`Bearer ${CLOUD_TOKEN}`);

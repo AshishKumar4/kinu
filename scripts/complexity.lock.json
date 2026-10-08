@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-08",
-  "files": 3051,
-  "functions": 79669,
+  "files": 3053,
+  "functions": 79762,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -172,10 +172,6 @@
     {
       "key": "scripts/shell-words.ts#readScript",
       "complexity": 30
-    },
-    {
-      "key": "packages/cf-backend/src/components/ProfileCatalogSettings.tsx#ProfileCatalogSettings",
-      "complexity": 29
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/changes/ChangesPanel.tsx#ChangesPanel",
