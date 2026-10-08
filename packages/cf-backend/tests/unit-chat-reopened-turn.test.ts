@@ -18,8 +18,7 @@ import { createRoot } from 'react-dom/client';
 import { useAgentChat } from '@cloudflare/ai-chat/react';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import type { Connection } from 'agents';
-import { tool, type UIMessage } from 'ai';
-import { z } from 'zod';
+import { jsonSchema, tool, type UIMessage } from 'ai';
 import type { KinuExtension } from '@kinu.run/core';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
@@ -457,7 +456,9 @@ async function opened(first: StartedHarness, id: string, steps: number): Promise
 /** Each activation ends inside the step's own work: the tool starts and never returns, as one that ends its process. */
 const POISONED: readonly KinuExtension[] = [{
   name: 'poisoned-step',
-  registerTools: () => ({ poison: tool({ description: 'Ends the process it runs in.', inputSchema: z.object({}), execute: () => new Promise<never>(() => {}) }) }),
+  registerTools: () => ({
+    poison: tool({ description: 'Ends the process it runs in.', inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }), execute: () => new Promise<string>(() => {}) }),
+  }),
 }];
 
 /** A model that answers with the poisoned call, and counts how often it is asked. */
@@ -490,6 +491,7 @@ test('a turn cut while it waits on the provider, at one step, by six resets in a
 
         return new Promise<Response>(() => {});
       }));
+      await last.started;
       await last.agent.terminalRetryPass();
       await reached.promise;
     }
@@ -498,6 +500,7 @@ test('a turn cut while it waits on the provider, at one step, by six resets in a
     at += 120_000;
     setSystemTime(new Date(at));
     last = await nextActivation(last, answering);
+    await last.started;
     await last.agent.terminalRetryPass();
     const final = last;
     await until(() => claimOf(final, 'req-outside')?.outcome != null, 'the turn ended');
@@ -531,6 +534,7 @@ test('a step that ends its own process every time it runs is settled at the sixt
         world: { aiGateway: poisonedModel(asked), turnExtensions: POISONED },
         beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
       });
+      await last.started;
       await last.agent.terminalRetryPass();
       const current = last;
       await until(() => asked.n === run || claimOf(current, 'req-poison')?.outcome != null, `activation ${String(run)} decided`);
@@ -556,6 +560,7 @@ test('a turn cut inside its own work is asked again only after the backoff, whic
 
   const answering = answeringGateway('Done.');
   const second = await nextActivation(first, answering);
+  await second.started;
   await second.agent.terminalRetryPass();
 
   // Owed, and not asked yet: the wake is armed for the instant the backoff ends.
