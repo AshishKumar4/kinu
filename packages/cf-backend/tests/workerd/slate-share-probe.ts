@@ -87,11 +87,25 @@ const TYPIST = [
   '}',
 ].join('\n');
 
-/** UTF-8 bytes, one enqueue per piece, as the actor's model stream is. */
+/** UTF-8 bytes, a piece at a time with a pause between, as a model writes them; never all at once. */
 function typedPieces(pieces: readonly string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
+  const left = [...pieces];
 
-  return new ReadableStream({ start(controller) { for (const piece of pieces) controller.enqueue(encoder.encode(piece)); controller.close(); } });
+  return new ReadableStream({
+    async pull(controller) {
+      const piece = left.shift();
+
+      if (piece === undefined) {
+        controller.close();
+
+        return;
+      }
+
+      await new Promise((paused) => { setTimeout(paused, 40); });
+      controller.enqueue(encoder.encode(piece));
+    },
+  });
 }
 
 /** Each time this isolate's Browser Run was dialed: a browser the class reached, whatever the dial then answered. */

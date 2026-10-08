@@ -250,5 +250,9 @@ it("a share's viewer drives a browser from the class only as the grant allows, a
 it('a slate\'s class reads ai.stream a piece at a time, as the model writes it, through the binding its calls cross', async () => {
   const probe = env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName('typist'));
 
-  expect(JSON.parse(await probe.typed('live'))).toEqual(['Typ', 'ing ', 'live']);
+  const pieces: unknown = JSON.parse(await probe.typed('live'));
+
+  // Whole and in order, and in more than one read: the class had text before the model was done.
+  expect(v.parse(v.array(v.string()), pieces).join('')).toBe('Typing live');
+  expect(v.parse(v.array(v.string()), pieces).length).toBeGreaterThan(1);
 });
