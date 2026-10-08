@@ -4,7 +4,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Effect } from 'effect';
@@ -26,6 +26,9 @@ import DEVICE_PROTOCOL from '../../core/src/execution/device-protocol.json';
 import { DIM, VERSION } from './display';
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
+
+/** Where a pidfile's contents are written before they are linked into place; the daemon writes its claim here too. */
+const CLAIMS_DIR = join(AGENT_HOME, 'pc-agent.pid.claims');
 
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
 
@@ -646,41 +649,40 @@ function claimDaemonPid(pid: number): Effect.Effect<boolean, KinuError> {
   });
 }
 
+/**
+ * Publishes `pid` as the machine's daemon, or answers false when a pidfile is already there. The pidfile appears whole
+ * or not at all: the pid is written to a file of its own under {@link CLAIMS_DIR} and linked into place, which fails
+ * when one exists. An exclusive create written afterwards left an empty pidfile for a moment, which the other claimant
+ * (this or the daemon's `claimMachine`) read as stale and removed: two connects at once each claimed and returned with
+ * two daemons running (4 in 360 runs of "concurrent connects leave one daemon owner", 2026-10-08). The daemon claims
+ * the same way.
+ */
 function writePidfile(pid: number): Effect.Effect<boolean, KinuError> {
-  let descriptor: number | null = null;
-  let created = false;
+  const claim = join(CLAIMS_DIR, `${pid}-${randomBytes(8).toString('hex')}`);
 
-  return Effect.try({
+  const publish = Effect.try({
     try: () => {
-      descriptor = openSync(PID_PATH, 'wx', 0o600);
-      created = true;
-      writeFileSync(descriptor, `${pid}\n`);
-      fsyncSync(descriptor);
-      closeSync(descriptor);
-      descriptor = null;
+      mkdirSync(CLAIMS_DIR, { recursive: true, mode: 0o700 });
+      const descriptor = openSync(claim, 'wx', 0o600);
+
+      try {
+        writeFileSync(descriptor, `${pid}\n`);
+        fsyncSync(descriptor);
+      } finally {
+        closeSync(descriptor);
+      }
+
+      linkSync(claim, PID_PATH);
       syncAgentDirectory();
 
       return true;
     },
     catch: (cause) => cause,
-  }).pipe(Effect.catch((cause) => Effect.gen(function* () {
-    if (descriptor !== null) closeSync(descriptor);
+  }).pipe(Effect.catch((cause) => (classify({ cause }) === 'eexist'
+    ? Effect.succeed(false)
+    : Effect.fail(toKinuError({ doing: `writing the device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' })))));
 
-    if (!created && classify({ cause }) === 'eexist') return false;
-
-    if (created) {
-      yield* Effect.try({
-        try: () => { rmSync(PID_PATH, { force: true }); },
-        catch: (cleanup) => toKinuError({
-          doing: `cleaning up the failed device daemon pidfile at ${PID_PATH}`,
-          cause: new AggregateError([cause, cleanup], 'pidfile write and cleanup both failed'),
-          otherwise: 'io',
-        }),
-      });
-    }
-
-    return yield* toKinuError({ doing: `writing the device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' });
-  })));
+  return Effect.ensuring(publish, Effect.sync(() => { rmSync(claim, { force: true }); }));
 }
 
 function stopRunningDaemon(): Effect.Effect<void, KinuError> {

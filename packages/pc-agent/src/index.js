@@ -3451,28 +3451,20 @@ function isPredecessor(pid) {
  * predecessor keeps serving until the hub replaces its socket, and exits
  * without touching a pidfile that no longer names it.
  */
-async function claimMachine(pidPath = PID_PATH) {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let descriptor;
+/**
+ * Publishes this process's pid as the machine's daemon unless a pidfile is already there: written to a file of its own
+ * under `<pidfile>.claims` and linked into place, so the pidfile appears whole or not at all. An exclusive create
+ * written afterwards left an empty pidfile for a moment, which the other claimant (`kinu connect`, which claims the
+ * same way) read as stale and removed, and both claims held (2026-10-08).
+ */
+function publishPidfile(pidPath) {
+  const claims = `${pidPath}.claims`;
+  const claim = path.join(claims, `${process.pid}-${crypto.randomBytes(8).toString('hex')}`);
 
-    try {
-      descriptor = fs.openSync(pidPath, 'wx', 0o600);
-    } catch (err) {
-      if (!err || err.code !== 'EEXIST') {
-        throw new Error(`claim the device daemon pidfile at ${pidPath}`, { cause: err });
-      }
+  fs.mkdirSync(claims, { recursive: true, mode: 0o700 });
 
-      const holder = readPidfile(pidPath);
-
-      if (holder === process.pid) return { held: true, holder: process.pid };
-
-      if (holder !== null && processAlive(holder) && (await processRunsThisDaemon(holder)) && !isPredecessor(holder)) {
-        return { held: false, holder };
-      }
-
-      fs.rmSync(pidPath, { force: true });
-      continue;
-    }
+  try {
+    const descriptor = fs.openSync(claim, 'wx', 0o600);
 
     try {
       fs.writeFileSync(descriptor, `${process.pid}\n`);
@@ -3481,9 +3473,39 @@ async function claimMachine(pidPath = PID_PATH) {
       fs.closeSync(descriptor);
     }
 
-    fs.chmodSync(pidPath, 0o600);
+    try {
+      fs.linkSync(claim, pidPath);
+    } catch (err) {
+      if (err && err.code === 'EEXIST') return false;
+      throw err;
+    }
 
-    return { held: true, holder: process.pid };
+    return true;
+  } finally {
+    fs.rmSync(claim, { force: true });
+  }
+}
+
+async function claimMachine(pidPath = PID_PATH) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let published;
+
+    try {
+      published = publishPidfile(pidPath);
+    } catch (err) {
+      throw new Error(`claim the device daemon pidfile at ${pidPath}`, { cause: err });
+    }
+
+    if (published) return { held: true, holder: process.pid };
+    const holder = readPidfile(pidPath);
+
+    if (holder === process.pid) return { held: true, holder: process.pid };
+
+    if (holder !== null && processAlive(holder) && (await processRunsThisDaemon(holder)) && !isPredecessor(holder)) {
+      return { held: false, holder };
+    }
+
+    fs.rmSync(pidPath, { force: true });
   }
 
   return { held: false, holder: readPidfile(pidPath) };

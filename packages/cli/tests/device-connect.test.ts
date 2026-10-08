@@ -224,9 +224,21 @@ function connectedResult(label = connectedDevice(true).label) {
 
 
 async function liveDaemons(script: string): Promise<number[]> {
-  const found = await runToExit(['pgrep', '-f', script]);
+  const found = (await runToExit(['pgrep', '-f', script])).stdout.split('\n').filter(Boolean).map(Number);
 
-  return found.stdout.split('\n').filter(Boolean).map(Number);
+  if (found.length < 2) return found;
+  // A daemon's child between fork and exec still carries the daemon's command line, so `pgrep` names it too: on
+  // 2026-10-08 the sandbox probe's bwrap was counted as a second daemon. A process whose parent is listed is no daemon.
+  const listed = await runToExit(['ps', '-o', 'pid=,ppid=', '-p', found.join(',')]);
+  const parents = new Map<number, number>();
+
+  for (const line of listed.stdout.split('\n')) {
+    const [pid, parent] = line.trim().split(/\s+/).map(Number);
+
+    if (pid !== undefined && parent !== undefined) parents.set(pid, parent);
+  }
+
+  return found.filter((pid) => !found.includes(parents.get(pid) ?? 0));
 }
 
 const DAEMON_PROBE_SCHEMA = v.object({
