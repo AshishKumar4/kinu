@@ -49,5 +49,7 @@ export function probeDurableApps(composed: ComposedFacetManager) {
 
       return { removed: removed.removed, port: removed.port };
     },
+    // A probe's ports are its own fixture's: none is named for a slate.
+    owners: async (): Promise<ReadonlyMap<number, string>> => new Map(),
   };
 }

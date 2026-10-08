@@ -9,6 +9,7 @@ import { Agent, callable, type AgentContext, type Connection, type ConnectionCon
 import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
 import { supervisorEsbuildService } from "@nimbus-sh/worker/facet-host";
+import { listPortReservations } from "@nimbus-sh/worker/port-capability";
 import { KINU_TIMER_JOB } from "./wake-jobs";
 import { NimbusTasks } from "./nimbus-tasks";
 import {
@@ -4538,6 +4539,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),
         url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
+        owners: async () => new Map([...await listPortReservations(this.ctx)].flatMap(([port, held]) => (held.owner === null ? [] : [[port, held.owner] as const]))),
       },
       catalog: () => this.slateSurfaceCatalog(),
       shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
@@ -5405,9 +5407,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     const listing = provider.listExposedPorts;
+    // A port a slate's application holds is called by the slate's title, never by its number.
+    const titles = executorId === 'workspace' ? this.slates.portTitles() : Promise.resolve(new Map<number, string>());
 
-    return settle(Effect.matchCause(Effect.promise(() => listing.call(provider)), {
-      onSuccess: (ports) => ({ ports: ports.map(({ port, name, url }) => ({ port, url, name })) }),
+    return settle(Effect.matchCause(Effect.promise(async () => Promise.all([listing.call(provider), titles])), {
+      onSuccess: ([ports, titled]) => ({ ports: ports.map(({ port, name, url }) => ({ port, url, name: name ?? titled.get(port) })) }),
       onFailure: (failed) => {
         const error = Cause.squash(failed);
 

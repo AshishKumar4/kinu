@@ -8,7 +8,9 @@ process and the preview URL all derive from that source.
 ## Preview tabs and plans
 
 Each preview gets a titled tab at the left of the workspace surface strip. A
-slate and the workspace port it serves share one tab. The pane renders the same
+slate and the workspace port it serves share one tab, matched by the port its
+application's reservation holds, so the match survives an eviction; a port a
+slate holds is named by the slate's title, never `workspace :<port>`. The pane renders the same
 component as the chat card (`SlateFrame` is `InlineSlate` in `pane` display),
 fills the available height and shows the URL. A new preview takes focus once;
 refreshing its source or reconnecting does not take it again. Changes keep their
@@ -49,12 +51,12 @@ toolchain, not in the hosted Worker runtime.
 
 To run a Worker slate, call `workspace.slates.<id>.$preview()` directly. It
 compiles and boots the module; nothing has to be checked or committed first.
-Success returns `{url, port, inline: {height}}`. A refusal carries `success:
+Success returns `{url, port, sized}`; `sized` says the page reports its own
+height, as every page the runner serves does. A refusal carries `success:
 false`, `reason` and `error`, and no URL.
 
 ```json
 {
-  "name": "notes",
   "main": "server.ts",
   "browser": "client.ts",
   "slate": {
@@ -68,14 +70,15 @@ false`, `reason` and `error`, and no URL.
 bundle served at `/__kinu/client.js`, and the host serves the page that loads
 it. Server and browser entry paths must stay inside the project.
 
-The `slate` field is strict. Only `runtime`, `title`, `port` and `inline` pass
-validation (`inline.height` sets the chat card height: 120 to 720 pixels,
-default 320). It names no capabilities: every slate calls the same surface.
+The `slate` field is strict. Only `runtime`, `title` and `port` pass
+validation. It names no capabilities: every slate calls the same surface.
 `runtime` defaults to `worker`, which requires `main`. `node` requires a port
 from 1 through 65535 and `scripts.dev` or `scripts.start`. Node projects run on
 the sandbox executor; the resident preview path refuses them. A Worker declares
-a port or lets the host allocate one. The title falls back from `slate.title`
-to package `name` to the directory id.
+a port or lets the host allocate one. `slate.title`, or the directory id
+without one, is the one name a person sees: the work surface's tab, the card,
+shares, and the port a slate's application holds. An answer's page is called
+by its `<title>`.
 
 Schema: `packages/core/src/slates/project.ts`.
 
@@ -92,7 +95,7 @@ separate slate tools. `TOOL_REACH.slate` is
 | Member | Result |
 |---|---|
 | `workspace.slates.<id>.<method>(...args)` | JSON return value of that method on the `Slate` class |
-| `workspace.slates.<id>.$preview()` | Live preview URL, port and inline height |
+| `workspace.slates.<id>.$preview()` | Live preview URL, port, and whether the page reports its height |
 | `workspace.slates.<id>.$methods()` | The methods its class exports |
 | `workspace.slates.<id>.$commit()` | Immutable source version |
 | `workspace.slates.<id>.$history()` | Durable slate record and versions |
@@ -100,6 +103,7 @@ separate slate tools. `TOOL_REACH.slate` is
 | `workspace.slates.<id>.$remove()` | Processes stopped, port, URL and `this.sql` storage released, tree deleted; committed versions stay |
 | `workspace.slates.$list()` | Project summaries and per-project problems |
 | `workspace.slates.$fork(version)` | New slate with source from that version |
+| `workspace.slates.$save(page)` | An answer's page (`<message id>/<name>`) kept as `/slates/<id>`, titled by its `<title>`; the workspace root's, as the chat card's save control is |
 | Sharing | `$inspect(version, include?)`, `$publish(version, include?)`, `$share(options)` and `$graph()` on a slate; `$shares()`, `$liveShares()`, `$unshare(share)` and `$viewerRequests(share)` on `workspace.slates` ([SLATE-SHARING.md](SLATE-SHARING.md)) |
 
 A member answers its value, or a refusal `{success: false, reason, error}`.
@@ -211,8 +215,13 @@ Browser-side fetch is separate from this server-side policy.
 The frame is a sandboxed iframe with the shared `PREVIEW_SANDBOX` policy. It
 includes `allow-same-origin` because each preview has its own hostname, so the
 workspace stays a different origin. The host posts one `host-context` message
-(theme, theme tokens, size, `inline` or `pane`), and the slate may post back one
-`size-changed` message with its height. The client talks to its own server
+(theme, theme tokens, the app's font faces, size, `inline` or `pane`), and the
+slate posts back a `size-changed` message with its document's height whenever
+it changes. In the chat the frame is that tall, with no scroller of its own: the
+runner opens every page with the app's palette, the chat's type and
+zero-specificity element defaults, its scheme set before the first paint, and
+the card stays hidden until the page has said its height. A card drawn again
+opens at the height it last had. The client talks to its own server
 through the Cap'n Web `slate` stub. It gets no host session, no storage handle
 and no RPC into the host. Whether a preview URL is available depends on the
 deployment; when it is not, `preview` refuses rather than rendering some other

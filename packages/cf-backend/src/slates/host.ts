@@ -12,7 +12,7 @@ import { SlateLiveShareStore, initSlateLiveShareTables, shareLiveSlate } from '@
 import { EphemeralSlates, initEphemeralSlateTable, SlateUsageStore, initSlateUsageTable } from '@kinu.run/core/slates';
 import {
   ingressAdmitted,
-  parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
+  parseSlateProject, slateIdFor, slateTitle, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateCallRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateCall, issuedSlateInvocation,
   routeViewerCall, admitNestedViewerCall, slateCallAddress, slateAddressImpact, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, publicPage, UsageSchema, usageTotal,
@@ -25,7 +25,8 @@ import {
 } from '@kinu.run/core';
 import { SLATES_ROOT } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
 import { ROOT_SLATE_CALLER, slateCallerKey, slateCredentialKey, shareCaller, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
@@ -49,6 +50,8 @@ export interface SlateDispatchContext {
 
 interface SlateApps extends DurableApps {
   url(port: number, capability: string): Promise<WorkspacePreviewUrl>;
+  /** Each held port's owner, the slate whose application serves on it. */
+  owners(): Promise<ReadonlyMap<number, string>>;
 }
 
 export interface SlateHostDeps extends ResidentSlateDeps {
@@ -223,7 +226,7 @@ export class SlateHost {
 
     return {
       share: record,
-      title: project?.slate.title ?? project?.name ?? record.slate,
+      title: project === undefined ? record.slate : slateTitle(project, record.slate),
       description: '',
     };
   }
@@ -307,7 +310,7 @@ export class SlateHost {
     if (namespaces.length === 0) return null;
     const project = await this.project(CRED_SESSION_USER, share.slate);
     const owner = (await this.deps.ownerTitle?.()) ?? this.deps.workspace;
-    const title = project.slate.title ?? project.name ?? share.slate;
+    const title = slateTitle(project, share.slate);
     const reached = namespaces.map((namespace) => `<li>${escapeHtml(namespace)}</li>`).join('');
 
     const html = publicPage({
@@ -597,6 +600,7 @@ export class SlateHost {
         }
 
         case 'graph': return { ok: true, value: projectJsonValue({ value: await this.graph(operation.id) }) };
+        case 'save': return await this.savePage(caller, operation.page);
       }
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate operation', cause, otherwise: 'io' })) };
@@ -610,23 +614,16 @@ export class SlateHost {
     const problems: SlateProblem[] = [];
 
     if (!vfs.exists(SLATES_ROOT)) return { slates, problems };
+    // The application's own reservation, held across evictions and activations, not this activation's memory of it.
+    const held = new Map([...await this.deps.apps.owners()].map(([port, owner]) => [owner, port]));
 
     for (const entry of vfs.readdir(SLATES_ROOT)) {
       if (entry.type !== 'directory') continue;
 
       try {
         const project = await this.project(caller.cred, entry.name);
-        const running = this.running.get(`${slateCallerKey(caller)}#${entry.name}`);
-
-        const live = running !== undefined && await running.process.isRunning()
-          && running === this.running.get(`${slateCallerKey(caller)}#${entry.name}`)
-          && running.revision === (this.revisions.get(entry.name) ?? 0);
-
-        const summary: SlateSummary = {
-          id: entry.name,
-          title: project.slate.title ?? project.name ?? entry.name,
-          port: live && running !== undefined ? running.app?.port : undefined,
-        };
+        const port = held.get(entry.name);
+        const summary: SlateSummary = { id: entry.name, title: slateTitle(project, entry.name), ...(port !== undefined && { port }) };
 
         slates.push(summary);
       } catch (cause) {
@@ -637,20 +634,64 @@ export class SlateHost {
     return { slates, problems };
   }
 
+  /** An answer's page kept as a slate of the workspace's own: its HTML as the slate's page, under the page's title. */
+  savePage(caller: SlateCaller, page: string): Promise<SlateCallResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      // The owner's choice to keep it, as publishing is; an agent writes a slate's files itself.
+      if (caller.path.length > 0) return yield* new KinuError('denied', 'Only the workspace root keeps an answer\'s page as a slate');
+
+      if (ephemeralSlateAddress(page) === null) return yield* new KinuError('bad_input', `${page} names no answer's page`);
+      const source = yield* Effect.promise(async () => this.slateSources.resolve(caller.cred, page));
+
+      if (source.kind !== 'message') return yield* new KinuError('bad_input', `${page} names no answer's page`);
+      const files = (yield* Effect.promise(async () => this.deps.session())).vfs.as(caller.cred);
+      const title = slateTitle(source.project, page);
+      const id = slateIdFor(title, (taken) => files.exists(`${SLATES_ROOT}/${taken}`));
+
+      files.mkdir(`${SLATES_ROOT}/${id}`, { recursive: true });
+      files.writeFile(`${SLATES_ROOT}/${id}/package.json`, `${JSON.stringify({ browser: 'index.html', slate: { title } }, null, 2)}\n`);
+      files.writeFile(`${SLATES_ROOT}/${id}/index.html`, source.html);
+
+      return { ok: true as const, value: { id, title } };
+    }));
+  }
+
+  /** Each port a slate's application holds, called by the slate's title: a directory slate's, or its page's `<title>`. */
+  portTitles(): Promise<ReadonlyMap<number, string>> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const titles = new Map<number, string>();
+
+      for (const [port, owner] of yield* Effect.promise(async () => this.deps.apps.owners())) {
+        const source = yield* Effect.tryPromise({
+          try: async () => this.slateSources.resolve(CRED_SESSION_USER, owner),
+          catch: (cause) => toKinuError({ doing: `naming port ${String(port)}`, cause, otherwise: 'io' }),
+        }).pipe(
+          // A slate removed, or left unreadable, since its port was held keeps the port's own name.
+          Effect.catchIf((error) => error.code === 'missing' || error.code === 'bad_input', () => Effect.succeed(null)),
+        );
+
+        if (source !== null) titles.set(port, slateTitle(source.project, owner));
+      }
+
+      return titles;
+    }));
+  }
+
   /** The application is the root's, so the URL is the same whoever asks and across launches. */
   async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
       requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
       const { source, app } = await this.served(id);
-      const { project } = source;
       const preview = await this.deps.apps.url(app.port, app.capability);
 
       if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
 
       // An answer's own block is shown where the answer is, never again as a card of the turn's slates.
       if (source.kind === 'files') this.deps.previewed?.(id);
+      // Every page the runner serves reports its height; a slate's own server serves pages that do not.
+      const sized = source.project.browser !== undefined && source.project.slate.runtime === 'worker';
 
-      return { ok: true, value: { url: preview.url, port: app.port, inline: { height: project.slate.inline.height } } };
+      return { ok: true, value: { url: preview.url, port: app.port, sized } };
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' preview', cause, otherwise: 'io' })) };
     }

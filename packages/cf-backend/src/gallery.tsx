@@ -24,7 +24,7 @@ import {
 import "virtual:kinu-theme.css";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
+import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { AlternateTakeSet, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import {
@@ -1698,6 +1698,18 @@ const SLATES_THREAD: UIMessage[] = [
   msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [{ type: "text", text: "Added an expiry column." }] }),
 ];
 
+/* `?transcript=page`: an answer whose own page the chat draws in place, and which the person may keep as a slate. */
+const PAGE_THREAD: UIMessage[] = [
+  msg({ id: "pg-u1", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Show me this week's coupon redemptions." }] }),
+  msg({
+    id: "pg-a1", role: "assistant", createdAt: NOW - 4 * 60e3,
+    parts: [{ type: "text", text: "Here they are, by code.\n\n<slate-ui name=\"redemptions\">\n<title>Coupon redemptions</title>\n<ul><li>SAVE20</li></ul>\n</slate-ui>\n\nSAVE20 leads." }],
+  }),
+];
+
+/** The pages the person kept, as `/slates` would list them. */
+const GALLERY_KEPT_PAGES: { id: string; title: string }[] = [];
+
 /* `?transcript=refused`: a turn the provider refused, as a reload reads it back. */
 const REFUSED_THREAD: UIMessage[] = [
   msg({ id: "rf-u1", role: "user", createdAt: NOW - 3 * 60e3, parts: [{ type: "text", text: "Plan the quarterly offsite." }] }),
@@ -1713,6 +1725,8 @@ function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "refused") seedGalleryChat(REFUSED_THREAD);
 
   if (transcript === "slates") seedGalleryChat(SLATES_THREAD);
+
+  if (transcript === "page") seedGalleryChat(PAGE_THREAD);
 }
 
 /** As the Durable Object broadcasts it after the walk-back. */
@@ -1753,8 +1767,8 @@ function galleryPortListing(executor: string | undefined): GalleryListing | null
 /** `&slates=3`: three slates, whose tabs overflow the strip. */
 function gallerySlates() {
   return {
-    slates: ["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
-      .map((title) => ({ id: title.toLowerCase(), title })),
+    slates: [...["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
+      .map((title) => ({ id: title.toLowerCase(), title })), ...GALLERY_KEPT_PAGES],
     problems: [],
   };
 }
@@ -1899,10 +1913,23 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   },
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
-  // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture.
-  previewSlate: (args?: unknown[]) => ({
-    ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
-  }),
+  // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture. An answer's
+  // page is served by the runner, so it reports its height; these slates stand for a server of their own.
+  previewSlate: (args?: unknown[]) => {
+    const [id] = v.parse(v.tuple([v.string()]), args);
+
+    return { ok: true, value: { url: new URL(id, SLATE_GALLERY_URL).href, port: 8789, sized: ephemeralSlateAddress(id) !== null } };
+  },
+  // Keeping an answer's page: the kept slate is listed under the page's title, and the listing moves.
+  slate: (args?: unknown[]) => {
+    const [operation] = v.parse(v.tuple([v.object({ op: v.literal("save"), page: v.string() })]), args);
+    const kept = { id: "coupon-redemptions", title: operation.page === "pg-a1/redemptions" ? "Coupon redemptions" : operation.page };
+
+    GALLERY_KEPT_PAGES.push(kept);
+    queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listSlates"] })); });
+
+    return { ok: true, value: kept };
+  },
   listPendingConsents: galleryConsents,
   inspectWork: galleryOwedWork,
   // The seed is the whole conversation, so the storage walk is exhausted at once.
@@ -4479,7 +4506,7 @@ const GALLERY_SLATE_ID = "sandbox-probe";
 /** Gallery-only previewSlate fixture. It exercises SlateFrame, not a deployed preview origin. */
 const slateRpc: Rpc = async <T,>(method: string, args?: Parameters<Rpc>[1]): Promise<T> => {
   if (method === "previewSlate") {
-    return rpcResult({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } }).json<T>();
+    return rpcResult({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } }).json<T>();
   }
 
   return stubRpc<T>(method, args);

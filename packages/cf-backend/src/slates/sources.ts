@@ -2,7 +2,7 @@ import { SlateId } from '@agent-core/core/slates';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { slateDirectory, type WorkspaceSlates } from '@kinu.run/core/slates';
 import {
-  addressedBlock, ephemeralSlateAddress, ephemeralSlateId, parseSlateProject, sha256Hex, type EphemeralSlateAddress, type SlateProject,
+  addressedBlock, ephemeralSlateAddress, ephemeralSlateId, pageTitle, parseSlateProject, sha256Hex, type EphemeralSlateAddress, type SlateProject,
 } from '@kinu.run/core';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import { ROOT_SLATE_CALLER, type SlateCaller } from './bindings';
@@ -63,7 +63,7 @@ export class SlateSources {
 
     return {
       kind: 'message', root: `${EPHEMERAL_ROOT}/${ephemeralSlateId(address)}`, html: block.html, author: block.author ?? UNBOUND,
-      bound: block.author !== null, project: parseSlateProject({ name: address.name, browser: PAGE_ENTRY, slate: { title: address.name } }),
+      bound: block.author !== null, project: parseSlateProject({ browser: PAGE_ENTRY, slate: { title: pageTitle(block.html) ?? address.name } }),
     };
   }
 

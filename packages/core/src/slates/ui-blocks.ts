@@ -82,6 +82,17 @@ export function slateUiSegments(text: string): SlateUiSegment[] {
   return prose < text.length ? [...segments, { kind: 'text', text: text.slice(prose) }] : segments;
 }
 
+const TITLE = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/i;
+
+const ENTITIES = new Map([['&amp;', '&'], ['&lt;', '<'], ['&gt;', '>'], ['&quot;', '"'], ['&#39;', "'"], ['&nbsp;', ' ']]);
+
+/** A page's `<title>` as a person reads it, or null when it has none: an answer's page is called by it, saved or shown. */
+export function pageTitle(html: string): string | null {
+  const text = (TITLE.exec(html)?.[1] ?? '').replace(/&(?:amp|lt|gt|quot|#39|nbsp);/g, (entity) => ENTITIES.get(entity) ?? entity).replace(/\s+/g, ' ').trim();
+
+  return text === '' ? null : text;
+}
+
 /** The block of an answer's texts that an address names, the first of that name; refused when the answer holds none. */
 export function addressedBlock(texts: readonly string[], address: EphemeralSlateAddress): SlateUiBlock {
   const block = texts.flatMap(slateUiSegments).find((segment) => segment.kind === 'slate' && segment.name === address.name);
