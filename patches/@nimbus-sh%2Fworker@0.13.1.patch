@@ -94,3 +94,55 @@ index 8ddd82dcb149d20a74ca292dc2d00971b5136291..77b83408adec356d80decf479c2ffaf4
    const entryPoints = Array.isArray(options.entryPoints) ? options.entryPoints : null;
    if (!entryPoints || entryPoints.some((e3) => typeof e3 !== "string")) refuse("Nimbus's bundler takes entryPoints as a list of paths");
    if (options.outfile && entryPoints.length !== 1) refuse("outfile needs exactly one entry point");
+diff --git a/dist/facets/manager.js b/dist/facets/manager.js
+index 77981ec..0f4661f 100644
+--- a/dist/facets/manager.js
++++ b/dist/facets/manager.js
+@@ -4602,7 +4602,29 @@ export class FacetManager {
+         }
+         return out;
+     }
+-    async _buildProcessBundle(entry, spec, pacer) {
++    /**
++     * Kinu patch: one launch build at a time in this isolate. A cache-miss build holds its raw cells and their
++     * serialized source together (25-50 MB for a closure near the bound), and parallel launches in one workspace,
++     * hired agents each running vitest or tsc, stacked them past the Durable Object's 128 MB (staging 2026-10-08,
++     * eval-true-myth-combinato: 10 exceededMemory). A launch that waits finds the cache warm when its key matches.
++     */
++    async _serialBundleBuild(build) {
++        const prior = this._bundleBuildTail ?? Promise.resolve();
++        let release = () => { };
++        const mine = new Promise((resolve) => { release = resolve; });
++        this._bundleBuildTail = prior.then(() => mine);
++        await prior;
++        try {
++            return await build();
++        }
++        finally {
++            release();
++        }
++    }
++    _buildProcessBundle(entry, spec, pacer) {
++        return this._serialBundleBuild(() => this._buildProcessBundleNow(entry, spec, pacer));
++    }
++    async _buildProcessBundleNow(entry, spec, pacer) {
+         if (!this.vfs) {
+             return { bundle: {}, reachableCount: 0, truncated: false };
+         }
+@@ -5428,10 +5450,12 @@ export class FacetManager {
+         if (this.vfs)
+             this.imageStore.ensureDir();
+         const processVfs = this.filesystem ? this.filesystem.bind({ pid: entry.pid, cred: entry.cred }) : null;
+-        const vfsState = processVfs
+-            ? await buildPrefetchBundle(processVfs, { cwd: opts.cwd, entryCode: '', esbuild: this.esbuild || undefined })
+-            : { bundle: {}, reachableCount: 0, truncated: false };
+-        const vfsBundle = _serializeBundleForFacet(vfsState.bundle);
++        const { vfsState, vfsBundle } = await this._serialBundleBuild(async () => {
++            const built = processVfs
++                ? await buildPrefetchBundle(processVfs, { cwd: opts.cwd, entryCode: '', esbuild: this.esbuild || undefined })
++                : { bundle: {}, reachableCount: 0, truncated: false };
++            return { vfsState: built, vfsBundle: _serializeBundleForFacet(built.bundle) };
++        });
+         assertStagedBundleFitsRpcPayload(vfsBundle, vfsState.bundle);
+         const stageSpec = {
+             mode,

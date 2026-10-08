@@ -928,6 +928,10 @@ async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoin
     ...scope, eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', 'exception'), eq('$workers.entrypoint', entrypoint),
   ], 10);
 
+  // A reset ends every call the object was serving, but only the invocation that met it logs its words: a sample
+  // without text gives way to a later one with it.
+  let textless: ExceptionSample | undefined;
+
   for (const event of ended) {
     const request = event.$metadata.requestId ?? '';
 
@@ -937,20 +941,23 @@ async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoin
     const message = [...logged].sort((a, b) => b.timestamp - a.timestamp)
       .map((line) => line.$metadata.error ?? line.source.message ?? '').find((text) => text !== '') ?? '';
 
-    if (message === CODE_UPDATE_RESET) continue;
+    if (message === CODE_UPDATE_RESET || (message === '' && textless !== undefined)) continue;
     const own = event.$workers.durableObjectId ?? '';
     const trace = event.$metadata.traceId ?? '';
     const traced = own !== '' || trace === '' ? [] : await t.sampleEvents([eq('$metadata.traceId', trace), eq('$metadata.type', 'cf-worker-event')], 20);
 
-    return {
+    const sample = {
       entrypoint,
       message,
       object: own !== '' ? own : traced.map((call) => call.$workers.durableObjectId ?? '').find((id) => id !== '') ?? '',
       request,
     };
+
+    if (message !== '') return sample;
+    textless = sample;
   }
 
-  return undefined;
+  return textless;
 }
 
 /** The first event of `event` for the version, as an effect sample. */

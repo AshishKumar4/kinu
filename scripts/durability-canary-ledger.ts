@@ -6,7 +6,8 @@ import { CANARY_PREFIX, canaryMarker, type CanaryLoad } from './canary-script';
 
 export interface CanaryFinding {
   readonly name: string;
-  readonly kind: 'defect' | 'disruption' | 'measurement';
+  /** `limitation`: what the canary cannot observe from outside; it names the gap and fails nothing. */
+  readonly kind: 'defect' | 'disruption' | 'measurement' | 'limitation';
   readonly cause: string;
   readonly evidence: readonly { readonly at: string | null; readonly event: string; readonly count: number; readonly detail: string }[];
 }
@@ -213,6 +214,12 @@ export function measureCanaryLedger(ledger: CanaryLedger, load: CanaryLoad) {
     [...message.text.matchAll(/\bKINU_CANARY_HELPER_DONE\b/g)].map(() => ({ id: message.id ?? null, role: message.role })));
 
   const helperDone = helpers.flatMap((helper) => helper.done.evidence);
+
+  // A report that lands while the root's turn runs rides its next step as a non-durable message (Inbox.prepareStep):
+  // no root row records it, so the root's rows can neither count nor miss it.
+  const absorbedMidTurn = helperDone.filter((witness) => witness.at !== null && rootRuns.some((run) =>
+    Date.parse(run.start) <= Date.parse(witness.at ?? '') && (run.end === null || Date.parse(witness.at ?? '') <= Date.parse(run.end))));
+
   const rootFinalRuns = rootRuns.filter((run) => run.done > 0);
 
   const ended = rootFinalRuns.some((run) => run.reason === 'completed') && helperDone.length > 0
@@ -237,6 +244,7 @@ export function measureCanaryLedger(ledger: CanaryLedger, load: CanaryLoad) {
       done: { count: rootDone.length, evidence: rootDone },
       markers: markers(Array.from({ length: load.steps }, (_, step) => canaryMarker('root', step)), shellWitnesses(ledger.events).filter((witness) => witness.marker.includes('_ROOT_'))) },
     helper: { found: helpers.length, helpers, resultReceivedByRoot: { count: rootReceived.length, source: 'root history, non-assistant messages', evidence: rootReceived },
+      absorbedMidTurn,
       ingressRuns: ledger.events.filter((event) => event.type === 'run_start' && event.userMessage?.includes(`${CANARY_PREFIX}_HELPER_DONE`) === true)
         .map((event) => ({ runId: event.runId, at: event.timestamp })) },
     jobs: { planned: load.jobs, found: jobs.length, completed: jobs.filter((job) => job.status === 'completed').length,
@@ -279,7 +287,15 @@ export function ledgerFindings(measured: CanaryMeasurement): CanaryFinding[] {
   once('root.result-not-exactly-once', measured.root.done.count, 'step_finish/assistant', measured.root.done.evidence);
   once('root.completed-run-count', measured.root.completedDoneRuns, 'run_end', measured.root.done.evidence);
   once('root.completed-end-count', measured.root.completedEnds, 'run_end', measured.root.done.evidence);
-  once('helper.result-delivery-not-exactly-once', measured.helper.resultReceivedByRoot.count, 'root.history', []);
+  const delivered = measured.helper.resultReceivedByRoot.count + measured.helper.ingressRuns.length;
+
+  if (delivered === 0 && measured.helper.absorbedMidTurn.length > 0) {
+    findings.push({ name: 'helper.result-absorbed-mid-turn', kind: 'limitation',
+      cause: 'The helper finished while the root turn ran, so its report rode a step as a non-durable message that no root row records.',
+      evidence: measured.helper.absorbedMidTurn.map((witness) => ({ at: witness.at, event: 'helper DONE inside a root run', count: 1, detail: witness.marker })) });
+  } else {
+    once('helper.result-delivery-not-exactly-once', delivered, 'root.history and root run_start', []);
+  }
 
   if (measured.helper.found !== 1) findings.push({ name: 'helper.not-found-exactly-once', kind: 'defect', cause: 'The retained helper ledger did not identify exactly one canary task hire.',
     evidence: [{ at: null, event: 'inspectSubordinate', count: measured.helper.found, detail: measured.helper.helpers.map((helper) => helper.name).join(', ') }] });
