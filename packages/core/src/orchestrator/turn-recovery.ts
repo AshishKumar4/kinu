@@ -3,15 +3,13 @@
  * re-opening its own open run. A turn the decision closes is settled here; its run is the caller's to close.
  */
 import { Effect } from 'effect';
-import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { attempt, diagnostics } from '../obs/index';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from '../state/agent-stores';
-import type { PreparedRequest } from '../session/requests';
 import { readVersionedScaffoldSource } from '../scaffold/versions';
 import { sha256Hex } from '../safety/argument-digest';
-import { verifyClaimedProgram, type ClaimOutcome, type ContextRevision, type StoredActorClaim } from './actor-claims';
+import { cutsThrough, verifyClaimedProgram, type ClaimOutcome, type ContextRevision, type StoredActorClaim } from './actor-claims';
 import { recordRecoverySettled, sameBuildOf } from './turn-recovery-events';
 import type { RunEventRecorder } from '../events/recorder';
 import type { ReportedTurn } from '../subordinates/turn-reports';
@@ -85,12 +83,12 @@ export function decideInterruptedTurn(turn: InterruptedTurn): Effect.Effect<Inte
       evidence.context,
     ));
 
-    const stalled = verdict.kind === 'verified' && (yield* Effect.promise(() => stalledRun(stores, claim, turn.installedBuild)));
+    const cuts = verdict.kind === 'verified' ? cutsOf(stores, claim, turn.installedBuild) : { work: 0, provider: 0 };
 
     if (turn.turnOpen()) return { kind: 'active' } as const;
 
-    if (stalled) {
-      diagnostics.event('actor.turn_stalled', { actor: turn.actor, turn: claim.turnId, runs: claim.epoch });
+    if (cuts.work >= POISON_WORK_CUTS || cuts.provider >= STALLED_PROVIDER_CUTS) {
+      diagnostics.event('actor.turn_stalled', { actor: turn.actor, turn: claim.turnId, runs: claim.epoch, workCuts: cuts.work, providerCuts: cuts.provider });
 
       return settled('error', 'stalled');
     }
@@ -111,27 +109,26 @@ function consumedEvidence(stores: Pick<AgentStores, 'claims'>, claim: StoredActo
   );
 }
 
-function furthestStep(requests: readonly { readonly epoch: number; readonly step: number | null }[], epoch: number): number {
-  return requests.reduce((far, request) => (request.epoch === epoch && request.step !== null ? Math.max(far, request.step) : far), -1);
-}
+/**
+ * Cuts inside a step's own work, in a row on one build with no step finishing, that settle the turn instead of running
+ * it again: a step that ends its own process (a tool past the CPU or memory limit) would otherwise run forever. A turn
+ * must outlast five resets from outside, the bar tardigrade's kill5 sets (2026-10-08: two such resets inside one long
+ * step ended Kinu's turn), so the sixth cut in the step's own work is the step's.
+ */
+export const POISON_WORK_CUTS = 6;
 
-const AdmittedBuildSchema = v.looseObject({ installedBuild: v.nullable(v.string()) });
+/**
+ * Cuts while the step waits on the provider, likewise counted, that settle it. None is the step's fault, but a wait can
+ * be the turn's: task-j7gjjr's model wait outlasted the workspace's memory and time limits fifteen times in a day
+ * (2026-09-25), dropping every tab's socket each time. Twenty covers five outside resets four times over.
+ */
+export const STALLED_PROVIDER_CUTS = 20;
 
-/** Undefined: none recorded. */
-async function admittedBuild(stores: Pick<AgentStores, 'history'>, admission: PreparedRequest | undefined): Promise<string | null | undefined> {
-  if (admission === undefined) return undefined;
-  const recorded = v.safeParse(AdmittedBuildSchema, await stores.history.messages.payloads.read(admission.metadata));
+/** The dead execution's cuts, itself counted ({@link TurnCut}); a host that stamps no build counts none. */
+function cutsOf(stores: Pick<AgentStores, 'claims'>, claim: StoredActorClaim, installedBuild: string | null) {
+  const cut = stores.claims.cutOf(claim.turnId);
 
-  return recorded.success ? recorded.output.installedBuild : undefined;
-}
+  if (installedBuild === null || cut === null || cut.epoch !== claim.epoch || cut.build !== installedBuild) return { work: 0, provider: 0 };
 
-async function stalledRun(stores: Pick<AgentStores, 'history'>, claim: StoredActorClaim, installedBuild: string | null): Promise<boolean> {
-  if (claim.epoch < 2 || installedBuild === null) return false;
-  const requests = stores.history.requests.forTurn(claim.turnId);
-  const admission = (epoch: number) => requests.find((request) => request.epoch === epoch && request.step === null);
-  const builds = await Promise.all([admittedBuild(stores, admission(claim.epoch - 1)), admittedBuild(stores, admission(claim.epoch))]);
-
-  if (builds.some((build) => build !== installedBuild)) return false;
-
-  return furthestStep(requests, claim.epoch) <= furthestStep(requests, claim.epoch - 1);
+  return cutsThrough(cut);
 }

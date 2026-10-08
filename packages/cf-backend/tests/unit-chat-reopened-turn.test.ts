@@ -12,7 +12,7 @@
  * written at the commit, and the next activation's relay holds only what it streamed itself, so before the restated
  * steps a tab that joined the re-drive drew the rest of the answer without the steps before the restart.
  */
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, setSystemTime, test } from 'bun:test';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useAgentChat } from '@cloudflare/ai-chat/react';
@@ -22,7 +22,7 @@ import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
 import {
-  alarmDue, GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness, until, type HarnessOrchestratorAgent, type StartedHarness,
+  armedWakes, GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness, until, type HarnessOrchestratorAgent, type StartedHarness,
 } from './helpers/actor-harness';
 import { answeringGateway, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { socketConnection } from './helpers/bindings';
@@ -431,47 +431,134 @@ test("a person's open tab redials into each re-drive across two restarts and dra
   await view.close();
 });
 
-test('a turn cut at the same step in two activations is settled, not run a third time', async () => {
-  const first = firstActivation();
+/** The claim of the turn `id`, as the next decision reads it. */
+function claimOf(harness: StartedHarness, id: string): { outcome: string | null; epoch: number } | null {
+  return harness.db.query<{ outcome: string | null; epoch: number }, [string]>('SELECT outcome, epoch FROM actor_turn_claims WHERE turn_id = ?').get(id);
+}
+
+/** Opens turn `id` on `first` and returns once the activation is inside it; its request is never answered there. */
+async function opened(first: StartedHarness, id: string, steps: number): Promise<void> {
   await first.started;
   const sent = new AwaitedList<Frame>();
   const sender = socketOn(first.agent, 'first-socket', (raw) => { sent.push(v.parse(FrameSchema, JSON.parse(raw))); });
 
   await first.agent.onConnect(sender, CONNECT);
-  // Its request is answered only when the turn ends, which no activation here reaches.
-  const answered = Promise.resolve(first.agent.onMessage(sender, chatRequest('req-stall'))).then(() => 'answered');
-  const streamed = sent.until((frames) => counted(frames, 'finish-step') === 2).then(() => 'two steps streamed');
+  const answered = Promise.resolve(first.agent.onMessage(sender, chatRequest(id))).then(() => 'answered');
+  const streamed = sent.until((frames) => counted(frames, 'finish-step') === steps).then(() => 'streamed');
 
-  expect(await Promise.race([answered, streamed])).toBe('two steps streamed');
+  expect(await Promise.race([answered, streamed])).toBe('streamed');
+}
 
-  // The re-drive reaches the very call the first activation ended inside, and ends inside it again.
-  const reached = Promise.withResolvers<void>();
+/** Each activation ends inside the step's own work: the tool `call_0` starts and its result never lands. */
+const POISONED = [{ name: 'poisoned-step', onToolResult: () => new Promise<never>(() => {}) }];
 
-  const again = stubAiBinding((run) => {
-    const step = requestOf(run).messages.filter((message) => message.role === 'tool').length;
+/** A model that answers step 0 with the call the poisoned step runs, and counts how often it is asked. */
+function poisonedModel(asked: { n: number }): StubbedAiBinding {
+  return stubAiBinding((run) => {
+    asked.n += 1;
 
-    if (step < 2) return toolCallCompletion(run, { tool: 'shell', args: { command: `echo ${String(step + 1)}` } }, `call_${String(step)}`);
-    reached.resolve();
-
-    return new Promise<Response>(() => {});
+    return toolCallCompletion(run, { tool: 'shell', args: { command: 'echo 1' } }, 'call_0');
   });
+}
 
-  const second = await nextActivation(first, again);
+test('a turn cut while it waits on the provider, at one step, by six resets in a row, goes on to its one answer', async () => {
+  let last = firstActivation();
+  let at = Date.now();
+  await opened(last, 'req-outside', 2);
+
+  try {
+    // Five more activations end inside the very call the first ended inside: an outside reset each time, never the
+    // step's. Each comes past the backoff a repeated cut earns, so it asks again at once.
+    for (let reset = 0; reset < 5; reset += 1) {
+      const reached = Promise.withResolvers<void>();
+
+      at += 120_000;
+      setSystemTime(new Date(at));
+      last = await nextActivation(last, stubAiBinding((run) => {
+        const step = requestOf(run).messages.filter((message) => message.role === 'tool').length;
+
+        if (step < 2) return toolCallCompletion(run, { tool: 'shell', args: { command: `echo ${String(step + 1)}` } }, `call_${String(step)}`);
+        reached.resolve();
+
+        return new Promise<Response>(() => {});
+      }));
+      await last.agent.terminalRetryPass();
+      await reached.promise;
+    }
+
+    const answering = answeringGateway('Three, and done.');
+    at += 120_000;
+    setSystemTime(new Date(at));
+    last = await nextActivation(last, answering);
+    await last.agent.terminalRetryPass();
+    const final = last;
+    await until(() => claimOf(final, 'req-outside')?.outcome != null, 'the turn ended');
+
+    expect(claimOf(last, 'req-outside')).toEqual({ outcome: 'completed', epoch: 7 });
+    expect(answering.runs.length).toBe(1);
+  } finally {
+    setSystemTime();
+  }
+});
+
+test('a step that ends its own process every time it runs is settled at the sixth, not run a seventh', async () => {
+  const asked = { n: 0 };
+  let at = Date.now();
+  let last = gatewayWorkspace(poisonedModel(asked), { turnExtensions: POISONED });
+  await last.started;
+  const sender = socketOn(last.agent, 'first-socket', () => {});
+
+  await last.agent.onConnect(sender, CONNECT);
+  // Its request is answered only when the turn ends, which no activation here reaches.
+  const answered = Promise.resolve(last.agent.onMessage(sender, chatRequest('req-poison'))).then(() => 'answered');
+  await until(() => asked.n === 1, 'the poisoned step ran');
+  expect(await Promise.race([answered, Promise.resolve('inside the step')])).toBe('inside the step');
+
+  try {
+    for (let run = 2; run <= 7; run += 1) {
+      // Past the backoff a cut in the step's own work earns, so this activation asks again at once.
+      at += 120_000;
+      setSystemTime(new Date(at));
+      last = await reactivateOrchestratorHarness(last.db, undefined, {
+        world: { aiGateway: poisonedModel(asked), turnExtensions: POISONED },
+        beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
+      });
+      await last.agent.terminalRetryPass();
+      const current = last;
+      await until(() => asked.n === run || claimOf(current, 'req-poison')?.outcome != null, `activation ${String(run)} decided`);
+    }
+  } finally {
+    setSystemTime();
+  }
+
+  expect(asked.n).toBe(6);
+  expect(claimOf(last, 'req-poison')).toEqual({ outcome: 'error', epoch: 6 });
+});
+
+test('a turn cut inside its own work is asked again only after the backoff, which its wake carries', async () => {
+  const asked = { n: 0 };
+  const first = gatewayWorkspace(poisonedModel(asked), { turnExtensions: POISONED });
+  await first.started;
+  const sender = socketOn(first.agent, 'first-socket', () => {});
+
+  await first.agent.onConnect(sender, CONNECT);
+  const answered = Promise.resolve(first.agent.onMessage(sender, chatRequest('req-backoff'))).then(() => 'answered');
+  await until(() => asked.n === 1, 'the step ran');
+  expect(await Promise.race([answered, Promise.resolve('inside the step')])).toBe('inside the step');
+
+  const answering = answeringGateway('Done.');
+  const second = await nextActivation(first, answering);
   await second.agent.terminalRetryPass();
-  await reached.promise;
 
-  const third = answeringGateway('Three, and done.');
-  const last = await nextActivation(second, third);
-  await last.agent.terminalRetryPass();
+  // Owed, and not asked yet: the wake is armed for the instant the backoff ends.
+  expect(answering.runs.length).toBe(0);
+  expect(claimOf(second, 'req-backoff')?.epoch).toBe(1);
+  expect(armedWakes(second.db).some((wake) => wake.time > Date.now())).toBe(true);
 
-  if (alarmDue(last.db)) await last.agent.alarm();
-  // The re-opened turn decides for itself whether it may go on (`ActorSession.resumeOrClose`).
-  await until(() => last.db.query<{ outcome: string | null }, []>(`SELECT outcome FROM actor_turn_claims WHERE turn_id = 'req-stall'`).get()?.outcome != null, 'the re-opened turn decided');
-
-  // Two runs ended at one step: the turn is closed rather than handed the same cut a third time.
-  expect(third.runs.length).toBe(0);
-  expect(last.db.query<{ outcome: string | null; epoch: number }, []>(`SELECT outcome, epoch FROM actor_turn_claims WHERE turn_id = 'req-stall'`).all())
-    .toEqual([{ outcome: 'error', epoch: 2 }]);
+  // The process that holds it asks once the backoff (the shared one, 2 s for a first cut) is over.
+  for (let waited = 0; waited < 100 && claimOf(second, 'req-backoff')?.outcome == null; waited += 1) await Bun.sleep(100);
+  expect(answering.runs.length).toBe(1);
+  expect(claimOf(second, 'req-backoff')).toEqual({ outcome: 'completed', epoch: 2 });
 });
 
 test("a person's tab opened during the re-drive draws the steps before the restart, then the rest, while it streams", async () => {

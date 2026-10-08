@@ -133,6 +133,8 @@ interface TurnContinuation {
   readonly usage: Usage;
   /** The outputs the cut step left open, named before a claim seals them. */
   readonly openOutputs: readonly string[];
+  /** Not asked again before this instant ({@link ActorSession.reaskAt}). */
+  readonly reaskAt: number | null;
 }
 
 
@@ -404,6 +406,9 @@ export class ChatSession {
   close(): void {
     this.ended = true;
     this.unobserveMeasures();
+
+    if (this.reaskTimer !== null) clearTimeout(this.reaskTimer);
+    this.reaskTimer = null;
   }
   get closed(): boolean { return this.ended; }
 
@@ -889,11 +894,21 @@ export class ChatSession {
   }
 
   private async runPump(): Promise<void> {
+    let deferred = false;
+
     try {
       for (;;) {
         // Before the item leaves the queue, so it still counts as in flight to a message sent meanwhile; and so the
         // turn's own measure is the newer.
         await this.revision;
+        const reaskAt = this.queue[0]?.continuation?.reaskAt ?? null;
+
+        if (reaskAt !== null && reaskAt > Date.now()) {
+          deferred = true;
+          await this.deferReask(reaskAt);
+          break;
+        }
+
         const item = this.queue.shift();
 
         if (item === undefined) break;
@@ -955,8 +970,22 @@ export class ChatSession {
       // Cleared synchronously, not in .finally(): the microtask would leave `pumping` stale and orphan a queued turn.
       this.pumpActive = false;
       this.activePump = null;
-      this.ports.quiet?.();
+
+      if (!deferred) this.ports.quiet?.();
     }
+  }
+
+  private reaskTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** The re-opened turn waits out its backoff: this process's timer brings it back, and the wake a process after it. */
+  private deferReask(at: number): Promise<void> {
+    this.reaskTimer ??= setTimeout(() => {
+      this.reaskTimer = null;
+
+      if (!this.ended) this.pump();
+    }, at - Date.now());
+
+    return this.ports.armTurnWake(at);
   }
 
   /** Appended, not unshifted, so it verifies final state; kicked because a startup replay has no pump yet. */
@@ -1498,6 +1527,7 @@ export class ChatSession {
         finishedSteps,
         usage,
         openOutputs,
+        reaskAt: this.actorSession.reaskAt(turn.turnId),
       },
       settle: () => {},
     };

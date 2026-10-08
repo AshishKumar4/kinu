@@ -19,12 +19,13 @@ import type { ChatTurnInput } from './chat-session';
 import { captureOperationProfile, currentOperationProfile, operationProfileStream } from '../profiles/operation';
 import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
 import {
-  programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome,
+  cutsThrough, programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome,
 } from './actor-claims';
 import type { RunEventRecorder } from '../events/recorder';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { ContextEntry, ContextSelection } from '../session/context';
 import type { JsonObject } from '../utils/json';
+import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { Usage } from '../usage';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
@@ -630,6 +631,23 @@ export class ActorSession {
   }
 
   /**
+   * When the turn a dead execution left may be asked again: the shared backoff after the phase it died in began, so a
+   * step that ends its own process is not run back to back. The first cut in a provider wait is asked again at once, as
+   * one outside reset is the common case and costs the step nothing else.
+   */
+  reaskAt(turnId: string): number | null {
+    const claim = this.options.claims.read(turnId);
+    const cut = this.options.claims.cutOf(turnId);
+
+    if (claim?.outcome !== null || cut === null || cut.epoch !== claim.epoch) return null;
+    const { work, provider } = cutsThrough(cut);
+
+    if (cut.phase === 'work') return cut.phaseAt + recoveryBackoffMs(work);
+
+    return provider < 2 ? null : cut.phaseAt + recoveryBackoffMs(provider - 1);
+  }
+
+  /**
    * A run a dead process left open goes on only if recovery says it may: the recovery sweep's own decision. Any other
    * ends as a stop ends it, before anything runs.
    */
@@ -870,6 +888,7 @@ export class ActorSession {
         measureContext: true, ...(active.trace !== null && { trace: active.trace }),
         persistStreamPart: part => stream.nativePart(part),
         persistStep: (record) => stream.nativeStep(record, () => this.recordStep(record)),
+        stepPhase: (phase) => { if (phase === 'work') this.options.claims.working(claim); else this.options.claims.progressed(claim); },
         dynamicContext: {
           ledger: this.dynamic,
           snapshot: () => {

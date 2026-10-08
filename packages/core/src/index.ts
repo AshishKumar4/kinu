@@ -1853,6 +1853,8 @@ export { boundedInt } from './utils/bounds';
 // The retry curve of every durable recovery lane; backends import it, never copy it.
 export { RECOVERY_BACKOFF_CEILING_MS, recoveryBackoffMs } from './utils/recovery-backoff';
 
+export { POISON_WORK_CUTS, STALLED_PROVIDER_CUTS } from './orchestrator/turn-recovery';
+
 export { getRunEvents, getRunEventText, getRunSummaries, listRuns } from './read-models/runs';
 
 export { turnRequestIndex, turnRequestPage } from './read-models/turn-requests';
