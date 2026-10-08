@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { API } from 'typescript/unstable/async';
 import * as v from 'valibot';
+import { childrenRunning, exitOf } from './deadline';
 import { assertMeasured, finding } from './gate-ratchet';
 import { allCommands, invocation, parseShell } from './shell-words';
 import { isRunnableSuite, trackedFiles } from './sources';
@@ -184,7 +185,12 @@ export async function programFiles(
       }
     }
   } finally {
+    // close() ends the compiler's stdin and returns before its process exits, which then outlived the test file
+    // that called it (2026-10-08, armada job 20261008055631-af5f377d): its exit is awaited here.
+    const server = childrenRunning(process.pid, '--api');
+
     await compiler.close();
+    await exitOf(server);
   }
 
   return [...fileNames].sort();
