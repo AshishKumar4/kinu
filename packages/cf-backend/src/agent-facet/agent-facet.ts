@@ -78,6 +78,8 @@ export interface PlanVerdict {
 export interface AgentSend {
   readonly text: string;
   readonly files?: readonly PromptFile[];
+  /** A card's stamp: it is its own turn, never a steer, and it renders from this. */
+  readonly card?: JsonObject;
 }
 
 export interface AgentFacetCalls {
@@ -91,10 +93,16 @@ export interface AgentFacetCalls {
   sendState(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]>;
+  /** The owner's Stop: unseen steers stay queued and rerun. */
+  stopChat(snapshot: AgentSnapshot): Promise<void>;
   /** What a reset left owed is taken up; the agent tells its workspace what is left once it rests. */
   wake(snapshot: AgentSnapshot): Promise<void>;
-  /** A refusal only the owner could fix, parked in the agent's own ledger, may answer now. */
+  /** The next request is measured on the new settings, and a refusal only the owner could fix may answer now. */
   modelSettingsChanged(snapshot: AgentSnapshot): Promise<void>;
+  /** The chat continues from before `entryId`; refused while a turn runs. */
+  revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void>;
+  /** The owner's Clear; answers why the emptied request went unmeasured, if it did. */
+  clearConversation(snapshot: AgentSnapshot): Promise<string | null>;
   owed(snapshot: AgentSnapshot): Promise<boolean>;
   /** Its own turns and effects still owed, as the workspace's work read reports them. */
   owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]>;
@@ -217,7 +225,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void> {
     return await settle(this.withChat(snapshot, async (chat) => {
-      await chat.session.admit(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
+      const words = input.files === undefined ? input.text : { text: input.text, files: input.files };
+
+      // A card's reservation has nothing of the workspace's to take in its transaction: the workspace takes its own after.
+      await chat.session.admit(words, input.card === undefined ? opts : { ...opts, metadata: input.card, consume: () => {} });
       await chat.told();
     }));
   }
@@ -244,6 +255,18 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async modelSettingsChanged(snapshot: AgentSnapshot): Promise<void> {
     return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
+  }
+
+  async stopChat(snapshot: AgentSnapshot): Promise<void> {
+    await settle(this.withChat(snapshot, (chat) => { chat.session.stop(); }));
+  }
+
+  async revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void> {
+    await settle(this.withChat(snapshot, (chat) => chat.session.revertTo(entryId)));
+  }
+
+  async clearConversation(snapshot: AgentSnapshot): Promise<string | null> {
+    return await settle(this.withChat(snapshot, async (chat) => (await chat.clear())?.message ?? null));
   }
 
   async submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult> {

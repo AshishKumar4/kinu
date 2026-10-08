@@ -9,7 +9,7 @@ import {
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type Executor,
 } from '@kinu.run/core';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, JsonObject, PreparedAgentTurn, StoredRow, TurnOpening } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, TurnOpening } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -35,6 +35,8 @@ export interface ChatTurnRequest {
   readonly explicitTier?: TierId;
   /** Where the agent's chat opened the turn. */
   readonly opening?: TurnOpening;
+  /** The approved plan the turn implements, as the agent's own plan store reads it. */
+  readonly taskPlan?: TaskPlan;
 }
 
 interface OpenTurn {
@@ -251,6 +253,7 @@ export class AgentTurns {
     const hosted: HostedTurnRequest = {
       sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving,
       ...(request.opening !== undefined && { opening: request.opening }),
+      ...(request.taskPlan !== undefined && { taskPlan: request.taskPlan }),
     };
 
     const turn: OpenTurn = {

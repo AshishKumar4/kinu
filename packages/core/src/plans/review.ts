@@ -18,6 +18,7 @@ import type {
 } from '../types/plans';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
 import { admitReviewAnnotations, byteLength } from './annotation-admission';
+import type { TaskPlan } from '../tools/task-plan-scope';
 
 export type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
@@ -268,6 +269,32 @@ const PlanHandoffMetadataSchema = v.object({
   planId: v.string(),
   revision: v.number(),
 });
+
+const PlanApprovalMetadataSchema = v.looseObject({
+  kinuEvent: v.literal('plan_approved'), planId: v.string(),
+  revision: v.pipe(v.number(), v.integer(), v.minValue(1)), decision: v.literal('approve'),
+});
+
+/** The plan a turn implements when it is an approval's handoff, keyed as the decision minted it; honoured only while
+ *  the row still says approved. Null otherwise. */
+export function approvedTaskPlan(
+  item: { readonly kind: 'user' | 'programmatic'; readonly metadata?: JsonObject; readonly idempotencyKey?: string },
+  plans: Pick<PlanReviewStore, 'get'>,
+): TaskPlan | null {
+  const parsed = item.kind === 'programmatic' ? v.safeParse(PlanApprovalMetadataSchema, item.metadata) : null;
+
+  if (parsed?.success !== true) return null;
+  const { planId, revision } = parsed.output;
+  const prefix = `plan:${planId}:${String(revision)}:approve:`;
+  const key = item.idempotencyKey ?? '';
+
+  if (!key.startsWith(prefix) || !/^\d+$/.test(key.slice(prefix.length))) return null;
+  const plan = plans.get(planId, revision);
+
+  return plan?.status === 'approved' && plan.sessionId === CHAT_SESSION_ID
+    ? Object.freeze({ id: plan.id, revision: plan.revision, sessionId: plan.sessionId })
+    : null;
+}
 
 /** Owed while the plan row still holds that decision. */
 export function planHandoffStillOwed(

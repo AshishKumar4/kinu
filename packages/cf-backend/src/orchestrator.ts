@@ -173,7 +173,7 @@ import {
   type RecordObjectiveSummary, type RecordCellSummary,
   type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
-  buildPendingActions, listPendingPlanReviews, type PendingAction,
+  buildPendingActions, type PendingAction,
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
@@ -198,7 +198,6 @@ import {
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
-  workModeUnderReview,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   EVENT_VARIANTS,
   boundEventQuery,
@@ -883,7 +882,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.hostedChatEvent(actorId, event);
     this.agentTurns.chatClosed(actorId);
 
-    if (actorId === this.actorHandle().actorId) this.mainFacetTurnEnded();
+    if (actorId === this.actorHandle().actorId) {
+      this.mainFacetTurnEnded();
+
+      if (event.type === 'turn-end') this.recordMainTurnRow(event.turn);
+    }
+
     this.overviewChanged();
 
     if (!this.liveActor(actorId)) return;
@@ -925,7 +929,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await super.modelSettingsChanged();
 
     for (const { actorId } of this.workspaceActors().list()) {
-      if (!this.isAgent(actorId)) continue;
+      if (actorId !== this.actorHandle().actorId && !this.isAgent(actorId)) continue;
       this.detachOwned(logged('agent.settings_release_failed', { doing: "telling an agent's isolate the model settings changed", otherwise: 'unavailable' },
         async () => { await (await this.agentCalls(actorId)).modelSettingsChanged(this.agentSnapshot(actorId)); }, { workspace: this.name, actor: actorId }));
     }
@@ -1183,7 +1187,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       jobs: this.hireJobs(turn.actor, turn.input.mode),
       ...(report !== undefined && { report }),
       // The owner's own Plan turn, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
-      ...(turn.input.mode === 'plan' && !turn.parentDriven && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
+      ...(turn.input.mode === 'plan' && !turn.parentDriven && { submitPlan: { submit: async (edits) => await this.agentPlanSubmit(turn.actor.handle.actorId, edits, turn.driving) } }),
     };
 
     const built = buildActorTools(deps);
@@ -1383,10 +1387,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     void this.rt;
 
     return await this.hostedWorkspace().terminal();
-  }
-
-  protected override workModeForMetadata(metadata: JsonObject | undefined): WorkMode {
-    return workModeUnderReview(super.workModeForMetadata(metadata), metadata, () => this.stores.planReviews.getActive(CHAT_SESSION_ID));
   }
 
   /** Send the replies a drained turn owes, then close its delivery leases.
@@ -2246,6 +2246,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await this.handInput(main, async () => await (await this.agentCalls(main)).enqueue(this.agentSnapshot(main), input));
   }
 
+  protected override async clearMainConversation(): Promise<string | null> {
+    const main = this.actorHandle().actorId;
+
+    return await (await this.agentCalls(main)).clearConversation(this.agentSnapshot(main));
+  }
+
+  protected override async stopMainChat(): Promise<void> {
+    const main = this.actorHandle().actorId;
+
+    await (await this.agentCalls(main)).stopChat(this.agentSnapshot(main));
+  }
+
   protected override mainChatTurn(): string | null {
     return this.agentTurns.currentTurn(this.actorHandle().actorId);
   }
@@ -2276,7 +2288,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override hostedPlanReviews(actorId: string): HostedPlanReviews | null {
-    if (this.hostedReference(actorId) === null) return null;
+    if (actorId !== this.actorHandle().actorId && this.hostedReference(actorId) === null) return null;
     const facet = () => this.agentCalls(actorId);
     const snapshot = () => this.agentSnapshot(actorId);
 
@@ -2288,12 +2300,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** A hosted agent's Plan turn submits into its own isolate's store, judged by the metadata the agent admitted it under. */
-  private async hostedPlanSubmit(turn: HostedTaskTurn, edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
-    const actorId = turn.actor.handle.actorId;
-    const result = await (await this.agentCalls(actorId)).submitPlan(this.agentSnapshot(actorId), edits, turn.driving);
+  /** An agent's Plan turn submits into its own isolate's store, judged by the metadata the agent admitted it under. */
+  private async agentPlanSubmit(actorId: string, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult> {
+    const result = await (await this.agentCalls(actorId)).submitPlan(this.agentSnapshot(actorId), edits, driving);
 
-    if (result.ok) turn.actor.stores.config.setHoldsPlans();
+    const record = this.actorDirectoryStore().retained(actorId);
+
+    if (result.ok && record !== null) actorReadHandle(this.boundSql, record).config.setHoldsPlans();
 
     return result;
   }
@@ -2301,7 +2314,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Each agent's plans from its own isolate (D9); only an agent that has submitted one is asked, retired ones included. */
   private async hostedPlans(): Promise<Map<string, readonly PlanReview[]>> {
     const holders = this.workspaceActors().list({ retired: true })
-      .filter((row) => row.parentActorId !== null && actorReadHandle(this.boundSql, row).config.getHoldsPlans());
+      .filter((row) => actorReadHandle(this.boundSql, row).config.getHoldsPlans());
 
     return new Map(await Promise.all(holders.map(async (row) => [row.actorId, await (await this.agentCalls(row.actorId)).planReviews(this.agentSnapshot(row.actorId))] as const)));
   }
@@ -2370,7 +2383,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       ...this.teamProfile(),
       peers: this.getPeersToolDeps(),
-      submitPlan: { submit: (edits) => this.submitPlanEdits(edits) },
+      // Main's plans live in its own isolate, judged by the metadata its turn was admitted under.
+      submitPlan: { submit: async (edits) => await this.agentPlanSubmit(this.actorHandle().actorId, edits, this.turnDrivingMetadata()) },
     };
   }
 
@@ -2422,8 +2436,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.invalidateModelCaches();
         yield* Effect.promise(async () => this.ensureOwnedScaffold());
 
-        // Detached: the loop is never built inside the init gate.
-        if (exists.length === 0) this.detachOwned(Effect.sync(() => { this.chatLoop.measureSessionStart(); }));
+        // Detached, never inside the init gate: main's isolate builds its chat, which measures the start-up context.
+        if (exists.length === 0) {
+          const main = this.actorHandle().actorId;
+
+          this.detachOwned(logged('subordinate.agent_wake_failed', { doing: "opening main's own isolate", otherwise: 'io' },
+            () => this.wakeAgent(main), { workspace: this.name, actor: main }));
+        }
 
         return { owner: userId, capabilityHash };
       }
@@ -2921,7 +2940,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async listWorkspaceAgents(): Promise<PanelAgent[]> {
     return readWorkspaceAgents({
-      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), queued: this.chatTurnOwed,
+      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), queued: this.agentWakes.armed(this.actorHandle().actorId),
       actors: this.workspaceActors().list({ retired: true }),
       figures: (actorIds) => {
         const main = this.actorHandle().actorId;
@@ -3331,8 +3350,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         },
         search: this.mctsSearchStore,
         runEvents: this.eventRecorder,
-        // Runs the resumed loop re-opened are live and must not be sealed as wreckage.
-        liveRuns: () => this.chatLoop.drivenRuns(),
+        // Main's runs are its isolate's (D9): none in this object's recorder is live.
+        liveRuns: () => [],
         resume: jobRedriveResumeGate({
           // Every actor's: some jobs have no fiber row.
           recoverOrphans: () => this.jobAuthorities.recoverOrphans(),
@@ -3623,7 +3642,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
-      pendingPlans: [...listPendingPlanReviews(this.boundSql), ...this.hostedPendingPlans(hostedPlans)].sort((a, b) => b.updatedAt - a.updatedAt),
+      pendingPlans: this.hostedPendingPlans(hostedPlans).sort((a, b) => b.updatedAt - a.updatedAt),
     });
   }
 
@@ -4035,7 +4054,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async sendChangeNotes(set: NotedChanges): Promise<ChangeNotesResult> {
-    return sendChangeNotes(this.rt, { value: set }, (message, consume) => this.chatLoop.admit(message.text, { id: message.id, metadata: message.metadata, consume }));
+    const main = this.actorHandle().actorId;
+
+    // Main's chat is in its own isolate, whose reservation cannot share a transaction with these rows: the notes are taken
+    // once the card is reserved there.
+    return sendChangeNotes(this.rt, { value: set }, async (message, consume) => {
+      await (await this.agentCalls(main)).admit(this.agentSnapshot(main), { text: message.text, card: message.metadata }, { id: message.id });
+      consume();
+    });
   }
 
   /** Recent branching-head runs, grouped by root_id with heads, step traces and merged synthesis. */
@@ -5494,7 +5520,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * session event this emits. */
   @callable()
   async revertConversation(entryId: string): Promise<void> {
-    await this.chatLoop.revertTo(entryId);
+    const main = this.actorHandle().actorId;
+
+    await (await this.agentCalls(main)).revertTo(this.agentSnapshot(main), entryId);
   }
 
   /**

@@ -2,7 +2,7 @@
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, projectJsonValue,
+  planHandoffStillOwed, approvedTaskPlan, workModeUnderReview, projectJsonValue,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -10,7 +10,7 @@ import {
   type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
-import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, hold, logged, settle, type KinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentDatabase } from './agent-database';
 import { FacetSpend, facetTurnSources, facetTurnTools, type AgentWorkspace, type LiveTurn } from './agent-turn';
@@ -137,15 +137,19 @@ export class FacetChat {
 
   private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     const { actor, database, workspace } = this.deps;
-    const mode = actor.session.workMode;
+    const plans = actor.stores.planReviews;
     // The one place a turn's lane is decided; the workspace rebuilds a turn from this, never from its id.
     this.parentDriven = parentDrivenTurn(item);
     this.driving = authoredTurnMetadata(item);
+    // The owner's words while a plan awaits their decision are read as its review.
+    const mode = workModeUnderReview(actor.session.workMode, this.driving, () => plans.getActive(CHAT_SESSION_ID));
     // The workspace reads the turn's sources for the tier it runs on, and the turn is assembled on that same tier.
     const explicitTier = metadataTier(item.metadata);
+    const taskPlan = approvedTaskPlan(item, plans);
 
     const prepared = await workspace.prepareChat({
-      turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening, ...(explicitTier !== undefined && { explicitTier }),
+      turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
+      ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),
     });
 
     database.prepare(lease.turnId, prepared);
@@ -348,9 +352,20 @@ export class FacetChat {
     }, prompt), mission);
   }
 
-  /** The workspace's model settings changed. */
+  /** The workspace's model settings changed: the next request is measured on them, and a refusal they fix may answer. */
   async modelSettingsChanged(): Promise<void> {
+    this.session.reviseContext({ counted: true });
     await this.terminal.modelSettingsChanged();
+  }
+
+  /** The owner's Clear, refused while a turn runs; its compaction plan goes with the conversation. Answers why the
+   *  emptied request went unmeasured, if it did. */
+  async clear(): Promise<KinuError | null> {
+    const unmeasured = await this.session.clear();
+
+    await this.trigger.state.plans.save(this.trigger.key, null);
+
+    return unmeasured;
   }
 
   /** The next instant to wake it, or none: a turn running or queued, or effects still closing, is looked at again a lap
