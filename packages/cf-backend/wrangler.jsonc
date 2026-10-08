@@ -308,6 +308,12 @@
     // With either absent the control plane's metrics view reports itself
     // unconfigured; every other admin view is unaffected.
     "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
+    // What this deployment appends to an Analytics Engine dataset NAME on the
+    // read path; writes go through the bindings below. Staging shares this
+    // account, so its own value is what keeps its panels off production's rows.
+    // `scripts/analytics-datasets.test.ts` holds it equal to each environment's
+    // `analytics_engine_datasets`.
+    "ANALYTICS_DATASET_SUFFIX": "",
     // OAuth provider visibility is config-driven. A provider appears on
     // /login only when both its CLIENT_ID var and CLIENT_SECRET secret exist.
     // Set ids as vars and secrets via `wrangler secret put`:
@@ -527,7 +533,8 @@
         "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "",
         "CONTROL_PLANE_ACCESS_AUD": "",
         "CONTROL_PLANE_ADMINS": "",
-        "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1"
+        "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
+        "ANALYTICS_DATASET_SUFFIX": "_staging"
       }
     }
   }

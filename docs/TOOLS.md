@@ -239,21 +239,24 @@ activation still recovers work the actor owes.
 
 ### Fields and replay
 
-`AGENTS_ACTION_FIELDS`, `v.strictObject`, and `parseAgentsToolInput` enforce
-one field contract for native and codemode calls. The native tool's `execute`
-parses the model's input, and every `agents.*` member parses the object the
-script passed after setting `action` itself, so the member called decides the
-action. Both then reach `dispatchAgentsAction`. An unknown field fails and
-names the field meant (the refusal strings in `agents-tool.ts` carry the exact
-text). A field another action reads fails and names that action.
+Each `agents` operation is declared once, with its own fields, in
+`delegation/agents-operations.ts`, as a `v.strictObject` the wiring assembles.
+The native tool and every `agents.*` member parse a call against it, and the
+parsed fields reach `dispatchAgentsCall` as they are, under the operation's
+name: the dispatcher's field types are checked against those declarations at
+compile time, and nothing renames or remaps them. An unknown field fails and
+names the field.
 
-| Action | Fields its handler reads |
+| Operation | Fields |
 |---|---|
-| `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `name`, `branches`, `depth`, `nodes`, `models`, `role`, `tier`, `budget_usd`, `budget_tokens`, `budget_label` |
-| `hire` | `role`, `mission`, `agent`, `tier`, `lifetime`, `context`, `scope`, `message`, `deliverable`, `topic` |
-| `msg` | `agent`, `event_id`, `message`, `topic` |
+| `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `name`, `branches`, `depth`, `nodes`, `models`, `role`, `tier`, `budgetUsd`, `budgetTokens`, `budgetLabel` |
+| `hire` | `role`, `mission`, `name`, `tier`, `context`, `lifetime` (with a task-agent port) |
+| `assign` | `agent`, `message`, `deliverable` (with a team), `topic` (with peers) |
+| `hireWorkspace` | `mission`, `message`, `agent` |
+| `message` | `agent`, `message`, `topic` (with peers) |
+| `reply` | `eventId`, `message` |
 | `list` | `agent` |
-| `dismiss` | `agent`, `keep_history` |
+| `dismiss` | `agent`, `keepHistory` |
 
 `verify` is `{kind, spec}` inside `objective`. The runner enforces `depth`,
 `branches`, `budget_usd`, and `budget_tokens`, with no iteration or wall-clock
@@ -265,8 +268,8 @@ immutable profile, and `models` and `tier` are mutually exclusive.
 
 On 2026-08-18, flat `v.object` changed `{ action:'fork', task:'x',
 budgetUsd:5, wallClockMs:1000 }` to `{ action:'fork', task:'x' }`, losing both
-spend caps. `gate:agents-fields` now checks handler reads, including
-`readMissionLimits`, against the map that generates the JSON Schema.
+spend caps. Each operation's `v.strictObject` now refuses an unknown field, and
+the dispatcher reads only the fields that declaration admitted.
 
 `resumableAgentsInput` drops unknown fields on replay, because the durable row
 has already dispatched and no model can correct it. It logs
@@ -402,10 +405,10 @@ return settled
   .flatMap((run) => run.candidates.map((c) => c.artifact));
 ```
 
-`createAgentsCodemodeProvider` routes through `dispatchAgentsAction`.
+`createAgentsCodemodeProvider` routes through `dispatchAgentsCall`.
 `agentsActionsFor(deps)` governs it and the native enum by the rule above, so a
-member exists exactly when the action does. A workspace orchestrator wires
-`swarm`, `team`, and `peers` and gets all five. A head gets none of the three,
+member exists exactly when the operation does. A workspace orchestrator wires
+`swarm`, `team`, and `peers` and gets all eight. A head gets none of the three,
 so `buildActorTools` does not add the tool and the namespace has no members.
 `forkAgent` is never projected. A sandboxed search cannot resume safely, so use
 the native tool for durable work.

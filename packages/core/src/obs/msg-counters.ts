@@ -22,7 +22,8 @@ type MsgAddressing = 'agent' | 'event';
 type MsgOutcome = 'delivered' | 'queued' | 'replied' | 'rejected' | 'failed';
 
 export interface MsgSendFact {
-  readonly action: 'msg' | 'hire';
+  /** The `agents` operation that sent it. */
+  readonly action: 'assign' | 'message' | 'reply';
   readonly transport: MsgTransport;
   readonly addressing: MsgAddressing;
   /** The agent name addressed, or the event id being answered. */

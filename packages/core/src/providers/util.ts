@@ -5,6 +5,7 @@ import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { authenticatedSend } from './authenticated-send';
 import { withCallAccount } from './quota';
 import { evidenceWindow } from '../utils/evidence-window';
+import { redactSecrets } from '../safety/secret-patterns';
 import { Effect } from 'effect';
 import { isServerCompaction } from './server-compaction';
 import * as v from 'valibot';
@@ -283,7 +284,9 @@ function describeFacts(facts: ProviderFailureFacts): string {
   if (code !== undefined && !facts.message.toLowerCase().includes(code.toLowerCase())) tags.push(code);
   const rendered = tags.length > 0 ? `${facts.message} (${tags.join(', ')})` : facts.message;
 
-  return evidenceWindow(rendered, PROVIDER_ERROR_MAX_CHARS);
+  // Shown to the owner and handed to the model as a tool result: a provider that echoes the key it refused must not
+  // put it in either.
+  return evidenceWindow(redactSecrets(rendered), PROVIDER_ERROR_MAX_CHARS);
 }
 
 /** The first HTTP status in the cause chain; a wrapper's code is only a guess. */

@@ -66,6 +66,65 @@ const ChatInputSchema = v.object({
   metadata: v.optional(v.looseObject({ kinuMode: v.optional(v.string()) })),
 });
 
+interface RelayedChunk {
+  readonly step: number;
+  readonly type: string;
+  readonly body: string;
+}
+
+const RelayedDeltaSchema = v.variant('type', [
+  v.looseObject({ type: v.picklist(['text-delta', 'reasoning-delta']), id: v.string(), delta: v.string() }),
+  v.looseObject({ type: v.literal('tool-input-delta'), toolCallId: v.string(), inputTextDelta: v.string() }),
+]);
+
+const MERGED_DELTA_TYPES: ReadonlySet<string> = new Set(['text-delta', 'reasoning-delta', 'tool-input-delta']);
+
+/**
+ * A finished step's deltas, merged per part. A late tab replays the step whole either way and draws the same answer; a
+ * chunk per token kept the turn's every token as its own frame for the turn's life, and replayed them one by one.
+ */
+function compactStep(relayed: RelayedChunk[], step: number): void {
+  let from = relayed.length;
+
+  while (from > 0 && relayed[from - 1]?.step === step) from -= 1;
+  const merged: RelayedChunk[] = [];
+  const runs: { readonly type: string; readonly part: string; readonly chunk: v.InferOutput<typeof RelayedDeltaSchema>; text: string }[] = [];
+
+  const flush = (): void => {
+    for (const run of runs.splice(0)) {
+      const chunk = run.chunk.type === 'tool-input-delta' ? { ...run.chunk, inputTextDelta: run.text } : { ...run.chunk, delta: run.text };
+
+      merged.push({ step, type: run.type, body: JSON.stringify(chunk) });
+    }
+  };
+
+  for (const entry of relayed.slice(from)) {
+    const parsed = MERGED_DELTA_TYPES.has(entry.type) ? v.safeParse(RelayedDeltaSchema, JSON.parse(entry.body)) : null;
+
+    if (parsed?.success !== true) {
+      flush();
+      merged.push(entry);
+      continue;
+    }
+
+    const chunk = parsed.output;
+    const part = chunk.type === 'tool-input-delta' ? chunk.toolCallId : chunk.id;
+    const text = chunk.type === 'tool-input-delta' ? chunk.inputTextDelta : chunk.delta;
+    const run = runs.at(-1);
+
+    if (run?.type === chunk.type && run.part === part) {
+      run.text += text;
+      continue;
+    }
+
+    flush();
+    runs.push({ type: chunk.type, part, chunk, text });
+  }
+
+  flush();
+  relayed.splice(from, relayed.length - from, ...merged);
+}
+
 interface LiveStream {
   readonly requestId: string;
   readonly turnId: string;
@@ -74,8 +133,9 @@ interface LiveStream {
   /** The answer's row id, on every provider call's `start`, so the answer stays one message. */
   readonly messageId: string;
   readonly open: OpenParts;
-  /** Every chunk this turn relayed, in order, with its step: the steps finished before it. Dropped with the turn. */
-  readonly relayed: { readonly step: number; readonly type: string; readonly body: string }[];
+  /** Every chunk this turn relayed, in order, with its step: the steps finished before it, each with its deltas merged
+   *  per part once it ends (`compactStep`). Dropped with the turn. */
+  readonly relayed: RelayedChunk[];
   /** Steps whose last chunk went out, those before this activation included. */
   finished: number;
   /** Tabs already replayed it: told again by their own probe, they are not held back again. */
@@ -561,7 +621,10 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
 
-        if (chunk.type === 'finish-step') live.finished += 1;
+        if (chunk.type === 'finish-step') {
+          compactStep(live.relayed, live.finished);
+          live.finished += 1;
+        }
 
         if (chunk.type === 'text-delta') this.wire.replies?.feed(live.turnId, chunk.delta);
       }
@@ -630,12 +693,18 @@ export class ActorChatRooms {
   }
 
   hostedRoom(actor: string): ChatWireTransport | null {
+    // Asked every time: a room kept for an actor dismissed since would feed its retired loop.
+    const wire = this.wireFor(actor);
+
+    if (wire === null) {
+      this.hosted.delete(actor);
+
+      return null;
+    }
+
     const held = this.hosted.get(actor);
 
     if (held !== undefined) return held;
-    const wire = this.wireFor(actor);
-
-    if (wire === null) return null;
     const room = new ChatWireTransport(wire);
     this.hosted.set(actor, room);
 

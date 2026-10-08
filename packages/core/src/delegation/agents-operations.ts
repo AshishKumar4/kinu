@@ -1,12 +1,13 @@
 /**
  * Delegation: a search over agents, a helper hired for a workstream, an existing agent given its next one, and
- * messages between agents. Each operation is offered only where its wiring is; the engine is `dispatchAgentsAction`.
+ * messages between agents. Each operation is offered only where its wiring is, and its fields reach `dispatchAgentsCall`
+ * as its declaration admitted them.
  */
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import {
-  AgentsEngineInputSchema, dispatchAgentsAction, nestingRoom, offered, verifierKinds, withheldBeta,
-  type AgentsToolCallOptions, type AgentsToolDeps, type AgentsToolInput,
+  agentsActionsFor, dispatchAgentsCall, nestingRoom, offered, verifierKinds, withheldBeta,
+  type AgentsCall, type AgentsToolCallOptions, type AgentsToolDeps,
 } from './agents-tool';
 import { NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_DOCTRINE } from '../strategy/swarm';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
@@ -18,7 +19,7 @@ import { endWhenSettled } from '../turn-trace';
 import { diagnostics, KinuError, settle, type ScopedSpan } from '../obs/index';
 import { JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import type { CodemodeProvider } from '../types/codemode';
-import { defineOperation, opaque, serve, type Served } from '../operations/operation';
+import { defineOperation, opaque, serve, type OperationCall, type Served } from '../operations/operation';
 import { codemodeNamespace, nativeTool } from '../tools/operation-surfaces';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { AGENTS_IMPACTS, AGENTS_SLATE, type AgentsOp } from '../operations/agents';
@@ -29,12 +30,19 @@ const text = (max: number, about: string) => described(v.pipe(v.string(), v.nonE
 
 const optional = <S extends v.GenericSchema>(schema: S) => v.optional(schema);
 
-/** Fields join by wiring, so an operation's entries are assembled, not declared whole. */
-const agentsOp = (name: AgentsOp, help: string, plan: boolean, entries: v.ObjectEntries) =>
+/** Fields join by wiring, so an operation's entries are assembled per wiring; its fields keep their types to its arm. */
+const agentsOp = <const E extends v.ObjectEntries>(name: AgentsOp, help: string, plan: boolean, entries: E) =>
   defineOperation({ ns: 'agents', name, help, impact: AGENTS_IMPACTS[name], plan, slate: AGENTS_SLATE, input: v.strictObject(entries), output: JsonValueSchema });
 
-/** A search's fields; `role` and `tier` are described as the wiring has them. */
-function swarmEntries(role: v.GenericSchema, tier: v.GenericSchema): v.ObjectEntries {
+const ROLE = described(v.pipe(v.string(), v.maxLength(64)), 'A catalog role id; your step context lists the roles.');
+
+/** A tier, which a `task` hire refuses where the wiring has one: a description never promises a lifetime the wiring
+ *  has no port for. */
+const tierField = (temporary: boolean) =>
+  described(TierIdSchema, `An inference tier id your step context lists; default: the role's.${temporary ? ' A lifetime "task" hire refuses it.' : ''}`);
+
+/** A search's fields. */
+function swarmEntries(temporary: boolean) {
   return {
     task: text(20000, 'What the search is for, stated once for every node. The measured quantity goes in `objective`.'),
     preset: optional(described(v.picklist(SWARM_PRESETS), "The search's shape.")),
@@ -50,8 +58,8 @@ function swarmEntries(role: v.GenericSchema, tier: v.GenericSchema): v.ObjectEnt
     depth: optional(described(v.pipe(v.number(), v.integer(), v.minValue(1)), 'Maximum tree depth; default the preset\'s.')),
     nodes: optional(described(SwarmNodeAssignmentsSchema, 'The first level, one entry per node; its length is the branch count. Not with `branches`.')),
     models: optional(described(SwarmModelsSchema, 'Model specs, node i runs models[i % length]. Route for capability or cost, not for variety. Not with `tier`.')),
-    role: optional(described(role, 'The role every node runs under; default yours.')),
-    tier: optional(tier),
+    role: optional(described(ROLE, 'The role every node runs under; default yours.')),
+    tier: optional(tierField(temporary)),
     budgetUsd: optional(described(v.pipe(v.number(), v.minValue(0)), 'USD cap on everything the search spawns; default none.')),
     budgetTokens: optional(described(v.pipe(v.number(), v.integer(), v.minValue(1)), 'Token cap, same scope as budgetUsd.')),
     budgetLabel: optional(described(v.pipe(v.string(), v.maxLength(120)), 'A ledger name, so several calls share one budget.')),
@@ -59,7 +67,7 @@ function swarmEntries(role: v.GenericSchema, tier: v.GenericSchema): v.ObjectEnt
 }
 
 /** The fields a stored search is re-driven with. */
-const SWARM_FIELDS = new Set(Object.keys(swarmEntries(v.string(), v.string())));
+const SWARM_FIELDS = new Set(Object.keys(swarmEntries(false)));
 
 /**
  * The background-job resume filter and detach gate (orchestrator/background-tools.ts): a call that cannot be re-driven
@@ -77,135 +85,116 @@ export function resumableAgentsInput(kind: string, input: JsonValue): JsonObject
   return v.parse(JsonObjectSchema, Object.fromEntries(Object.entries(row.output).filter(([field]) => !dropped.includes(field))));
 }
 
-/** The operations this wiring offers, each with its fields described for it. */
-function agentsOperations(wired: AgentsToolDeps) {
-  const deps = offered(wired);
-  const { team, peers } = deps;
+/** Each operation this wiring offers, its fields described for it and served straight to its arm of the dispatch.
+ *  `deps` is read per call; the operation set is fixed when served. */
+function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
+  const wired = offered(deps());
+  const { team, peers } = wired;
+  const offers = new Set(agentsActionsFor(wired));
+  const temporary = team?.temporary !== undefined;
 
   const targets = [
     ...(team ? ['a subordinate'] : []), ...(peers ? ['a peer workspace agent'] : []),
   ].join(' here or ') + (team && peers ? ' (a subordinate wins a name collision)' : '');
 
-  const role = described(v.pipe(v.string(), v.maxLength(64)), 'A catalog role id; your step context lists the roles.');
-  // A description never promises a lifetime the wiring has no port for.
-  const temporary = team?.temporary !== undefined;
-  const tier = described(TierIdSchema, `An inference tier id your step context lists; default: the role's.${temporary ? ' A lifetime "task" hire refuses it.' : ''}`);
+  const agent = described(v.pipe(v.string(), v.nonEmpty()), `The agent: ${targets}.`);
   const topic = optional(described(v.pipe(v.string(), v.maxLength(80)), 'A short label for a message to a peer workspace agent; default "message".'));
-  const ops = [];
+  const deliverable = optional(described(v.pipe(v.string(), v.maxLength(2000)), 'What the finished result is.'));
+  const served: Served[] = [];
 
-  if (deps.swarm) ops.push(agentsOp('swarm', `Run a search over short-lived nodes of yourself in parallel over this workspace and return what they found, judged, or measured by your verifier when you give an objective. It takes minutes; on a live session it runs in the background and its result wakes you. ${SWARM_PRESET_DOCTRINE.join(' ')}`, true, swarmEntries(role, tier)));
+  const dispatched = async (call: AgentsCall, { trace, native, signal }: OperationCall): Promise<JsonValue> => {
+    const options: AgentsToolCallOptions = { ...native, ...(signal !== undefined && { abortSignal: signal }), ...(trace !== undefined && { trace }) };
+    const run = dispatchAgentsCall(deps(), call, options);
 
-  if (team) {
-    ops.push(agentsOp('hire', `Create a helper under a role for one workstream; its mission is its first turn. It returns at once; the helper's report, or its failure, arrives later as a message that opens your next turn. It stays in your roster, with its context, after it reports. ${nestingRoom(team.delegation)}`, true, {
-      role,
-      mission: text(20000, `The brief, run as the new agent's first turn${temporary ? '; for lifetime "task", the whole question' : ''}.`),
-      name: optional(described(v.string(), 'A name for the new agent.')),
-      tier: optional(tier),
-      context: optional(described(v.picklist(SWARM_CONTEXTS), 'fresh (default) starts from the mission and a digest of your recent messages; inherit also carries your recent turns.')),
-      ...(temporary && {
-        lifetime: optional(described(v.picklist(SUBORDINATE_LIFETIMES), 'durable (default) stays in your roster; task answers one question, as a later message, and is archived.')),
-      }),
-    }));
-  }
-
-  if (team || peers) {
-    ops.push(agentsOp('assign', 'Hand an existing agent its next workstream; a subordinate reports later as a message, a peer\'s reply is awaited.', true, {
-      agent: described(v.pipe(v.string(), v.nonEmpty()), `The agent: ${targets}.`),
-      message: text(20000, 'The work.'),
-      ...(team && { deliverable: optional(described(v.pipe(v.string(), v.maxLength(2000)), 'What the finished result is.')) }),
-      ...(peers && { topic }),
-    }));
-  }
-
-  if (peers) {
-    ops.push(agentsOp('hireWorkspace', 'Create or reuse a specialist workspace, send it its first task and wait for the result.', true, {
-      mission: text(20000, 'What the workspace is for.'),
-      message: text(20000, 'Its first task.'),
-      agent: optional(described(v.string(), 'The workspace agent\'s name.')),
-    }));
-  }
-
-  if (team || peers) {
-    ops.push(agentsOp('message', 'Message an agent without handing it a workstream.', true, {
-      agent: described(v.pipe(v.string(), v.nonEmpty()), `The agent: ${targets}.`),
-      message: text(20000, 'What you say.'),
-      ...(peers && { topic }),
-    }));
-  }
-
-  if (peers) {
-    ops.push(agentsOp('reply', 'Answer an incoming agent message.', true, {
-      eventId: described(v.pipe(v.string(), v.nonEmpty()), 'The incoming agent message you are answering.'),
-      message: text(20000, 'Your answer.'),
-    }));
-  }
-
-  if (team || peers) {
-    const listed = [...(team ? ['your subordinates'] : []), ...(peers ? ['peer workspace agents'] : []), ...(temporary ? ['the task-lifetime agents running now'] : [])];
-
-    ops.push(agentsOp('list', `The roster: ${listed.join(', ')}.`, true, {
-      agent: optional(described(v.string(), 'Only this agent.')),
-    }));
-  }
-
-  if (team) {
-    ops.push(agentsOp('dismiss', 'Retire a subordinate; archived with its context by default.', false, {
-      agent: described(v.pipe(v.string(), v.nonEmpty()), 'The subordinate.'),
-      keepHistory: optional(described(v.boolean(), 'false deletes its storage for good; default true.')),
-    }));
-  }
-
-  return ops;
-}
-
-/** The engine's own input for an operation's: its action, and its fields in the engine's names. */
-function engineInput(op: string, fields: JsonObject): AgentsToolInput {
-  const { budgetUsd, budgetTokens, budgetLabel, eventId, keepHistory, name, ...rest } = fields;
-
-  const renamed = {
-    ...rest,
-    ...(budgetUsd !== undefined && { budget_usd: budgetUsd }),
-    ...(budgetTokens !== undefined && { budget_tokens: budgetTokens }),
-    ...(budgetLabel !== undefined && { budget_label: budgetLabel }),
-    ...(eventId !== undefined && { event_id: eventId }),
-    ...(keepHistory !== undefined && { keep_history: keepHistory }),
-  };
-
-  const mapped = {
-    swarm: { action: 'swarm', ...renamed, ...(name !== undefined && { name }) },
-    // A new helper's name rides `agent`, as the engine reads it.
-    hire: { action: 'hire', ...renamed, ...(name !== undefined && { agent: name }) },
-    assign: { action: 'hire', ...renamed },
-    hireWorkspace: { action: 'hire', scope: 'workspace', ...renamed },
-    message: { action: 'msg', ...renamed },
-    reply: { action: 'msg', ...renamed },
-    list: { action: 'list', ...renamed },
-    dismiss: { action: 'dismiss', ...renamed },
-  }[op];
-
-  return v.parse(AgentsEngineInputSchema, mapped);
-}
-
-const DELEGATING = new Set(['swarm', 'hire', 'assign', 'hireWorkspace', 'message', 'reply']);
-
-/** `deps` is read per call; the operation set is fixed when served. */
-function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
-  return agentsOperations(deps()).map((op) => serve(op, async (fields, call) => {
-    const { trace } = call;
-    const options: AgentsToolCallOptions = { ...call.native, ...(call.signal !== undefined && { abortSignal: call.signal }), ...(trace !== undefined && { trace }) };
-    const run = dispatchAgentsAction(deps(), engineInput(op.name, v.parse(JsonObjectSchema, fields)), options);
-
-    if (trace === undefined || !DELEGATING.has(op.name)) return projectJsonValue({ value: await run });
+    if (trace === undefined || !DELEGATING.has(call.op)) return projectJsonValue({ value: await run });
 
     const timer = trace.begin('turn.delegation');
-    const stamp = (span: ScopedSpan): void => { span.setAttribute('kinu.delegation.action', op.name); };
+    const stamp = (span: ScopedSpan): void => { span.setAttribute('kinu.delegation.action', call.op); };
 
     return projectJsonValue({ value: await endWhenSettled(run, timer, {
       stamp,
       failed: (span) => { stamp(span); span.fail(new KinuError('io', 'the delegation failed')); },
     }) });
-  }));
+  };
+
+  if (offers.has('swarm')) {
+    served.push(serve(agentsOp('swarm', `Run a search over short-lived nodes of yourself in parallel over this workspace and return what they found, judged, or measured by your verifier when you give an objective. It takes minutes; on a live session it runs in the background and its result wakes you. ${SWARM_PRESET_DOCTRINE.join(' ')}`, true, swarmEntries(temporary)),
+      (fields, call) => dispatched({ op: 'swarm', fields }, call)));
+  }
+
+  if (team && offers.has('hire')) {
+    const hire = {
+      role: ROLE,
+      mission: text(20000, `The brief, run as the new agent's first turn${temporary ? '; for lifetime "task", the whole question' : ''}.`),
+      name: optional(described(v.string(), 'A name for the new agent.')),
+      tier: optional(tierField(temporary)),
+      context: optional(described(v.picklist(SWARM_CONTEXTS), 'fresh (default) starts from the mission and a digest of your recent messages; inherit also carries your recent turns.')),
+    };
+
+    const help = `Create a helper under a role for one workstream; its mission is its first turn. It returns at once; the helper's report, or its failure, arrives later as a message that opens your next turn. It stays in your roster, with its context, after it reports. ${nestingRoom(team.delegation)}`;
+    const lifetime = optional(described(v.picklist(SUBORDINATE_LIFETIMES), 'durable (default) stays in your roster; task answers one question, as a later message, and is archived.'));
+
+    served.push(temporary
+      ? serve(agentsOp('hire', help, true, { ...hire, lifetime }), (fields, call) => dispatched({ op: 'hire', fields }, call))
+      : serve(agentsOp('hire', help, true, hire), (fields, call) => dispatched({ op: 'hire', fields }, call)));
+  }
+
+  if (offers.has('assign')) {
+    const help = 'Hand an existing agent its next workstream; a subordinate reports later as a message, a peer\'s reply is awaited.';
+    const assign = { agent, message: text(20000, 'The work.') };
+    const run = (fields: AgentsCallFields<'assign'>, call: OperationCall) => dispatched({ op: 'assign', fields }, call);
+
+    // A deliverable is a subordinate's to meet; a topic labels a peer's message.
+    if (team && peers) served.push(serve(agentsOp('assign', help, true, { ...assign, deliverable, topic }), run));
+    else if (team) served.push(serve(agentsOp('assign', help, true, { ...assign, deliverable }), run));
+    else served.push(serve(agentsOp('assign', help, true, { ...assign, topic }), run));
+  }
+
+  if (offers.has('hireWorkspace')) {
+    served.push(serve(agentsOp('hireWorkspace', 'Create or reuse a specialist workspace, send it its first task and wait for the result.', true, {
+      mission: text(20000, 'What the workspace is for.'),
+      message: text(20000, 'Its first task.'),
+      agent: optional(described(v.string(), 'The workspace agent\'s name.')),
+    }), (fields, call) => dispatched({ op: 'hireWorkspace', fields }, call)));
+  }
+
+  if (offers.has('message')) {
+    const help = 'Message an agent without handing it a workstream.';
+    const message = { agent, message: text(20000, 'What you say.') };
+    const run = (fields: AgentsCallFields<'message'>, call: OperationCall) => dispatched({ op: 'message', fields }, call);
+
+    served.push(peers ? serve(agentsOp('message', help, true, { ...message, topic }), run) : serve(agentsOp('message', help, true, message), run));
+  }
+
+  if (offers.has('reply')) {
+    served.push(serve(agentsOp('reply', 'Answer an incoming agent message.', true, {
+      eventId: described(v.pipe(v.string(), v.nonEmpty()), 'The incoming agent message you are answering.'),
+      message: text(20000, 'Your answer.'),
+    }), (fields, call) => dispatched({ op: 'reply', fields }, call)));
+  }
+
+  if (offers.has('list')) {
+    const listed = [...(team ? ['your subordinates'] : []), ...(peers ? ['peer workspace agents'] : []), ...(temporary ? ['the task-lifetime agents running now'] : [])];
+
+    served.push(serve(agentsOp('list', `The roster: ${listed.join(', ')}.`, true, {
+      agent: optional(described(v.string(), 'Only this agent.')),
+    }), (fields, call) => dispatched({ op: 'list', fields }, call)));
+  }
+
+  if (offers.has('dismiss')) {
+    served.push(serve(agentsOp('dismiss', 'Retire a subordinate; archived with its context by default.', false, {
+      agent: described(v.pipe(v.string(), v.nonEmpty()), 'The subordinate.'),
+      keepHistory: optional(described(v.boolean(), 'false deletes its storage for good; default true.')),
+    }), (fields, call) => dispatched({ op: 'dismiss', fields }, call)));
+  }
+
+  return served;
 }
+
+/** The fields of one operation's call, as the dispatch takes them. */
+type AgentsCallFields<Op extends AgentsOp> = Extract<AgentsCall, { readonly op: Op }>['fields'];
+
+const DELEGATING: ReadonlySet<AgentsOp> = new Set(['swarm', 'hire', 'assign', 'hireWorkspace', 'message', 'reply']);
 
 /**
  * The native `agents` tool: each operation it offers is described with it, so it promises only what is wired. A swarm

@@ -27,7 +27,8 @@ import { withTaskPlan, type TaskPlanContext } from '../tools/task-plan-scope';
 import { withToolText, type ToolTextOverrides } from '../tools/tool-text';
 import { withFamilyToolNotes } from '../prompting/tool-families';
 import { resolvePromptModelProfile } from '../prompting/model-profile';
-import { BUILTIN_TOOL_NAMES, type AgentsToolAction, type BuiltinToolName } from '../tools/registry';
+import { BUILTIN_TOOL_NAMES, type BuiltinToolName } from '../tools/registry';
+import type { AgentsOp } from '../operations/agents';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { callableToolNames, toolsForInvocation } from '../execution/work-mode';
@@ -65,7 +66,7 @@ export interface TurnAssemblySources {
   wiredToolNames(workMode: WorkMode): readonly string[];
   /** Namespaces reachable only inside `eval`. */
   codemodeCapabilities(workMode: WorkMode): readonly string[];
-  agentsActions(workMode: WorkMode): readonly AgentsToolAction[];
+  agentsActions(workMode: WorkMode): readonly AgentsOp[];
   temporaryAsk(): boolean;
   soul(): Promise<string | undefined>;
   agentsMd(window: ModelWindow): Promise<AgentsMdSources>;
@@ -312,7 +313,7 @@ export interface TurnSourcesBundle {
   readonly skills: TurnSkillSurface;
   readonly wiredToolNames: readonly string[];
   readonly codemodeCapabilities: readonly string[];
-  readonly agentsActions: readonly AgentsToolAction[];
+  readonly agentsActions: readonly AgentsOp[];
   readonly temporaryAsk: boolean;
   readonly soul: string | null;
   readonly identity: PromptIdentity;
