@@ -323,16 +323,26 @@ export async function typeIntoComposer(page: Page, text: string): Promise<Elemen
 
 /** Type into the chat column's live composer and press its Send; resolves once
  *  the pane shows the words and the turn they started has ended. */
-/** + then the first message, as a person opens a chat; resolves once that opening turn has settled. */
+/** + then the first message, as a person opens a chat; resolves once that opening turn has closed. Send is back
+ *  before the page learns the turn began, and a message sent then steers it: the agent-plan row's Plan ask became a
+ *  steer of the Auto opening, which offered no submit_plan (staging, 2026-10-08). The turn's close on the socket is
+ *  its end. */
 async function startNewChat(page: Page): Promise<void> {
-  await page.click(`${CHATS} a[aria-label="New chat"]`);
-  await until(page, 'the new-chat question', `document.querySelector('[data-new-chat] textarea') !== null`);
-  await page.type('[data-new-chat] textarea', NEW_CHAT_OPENING);
-  await page.click('[data-new-chat] button[type="submit"]');
-  await until(page, "the new chat's page", `location.pathname.includes('/agents/')`);
-  await until(page, 'the opening in the chat column',
-    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(NEW_CHAT_OPENING)})`);
-  await until(page, "the opening turn's end, Send offered again", CHAT_IDLE);
+  const ledger = await frameLedger(page);
+
+  try {
+    await page.click(`${CHATS} a[aria-label="New chat"]`);
+    await until(page, 'the new-chat question', `document.querySelector('[data-new-chat] textarea') !== null`);
+    await page.type('[data-new-chat] textarea', NEW_CHAT_OPENING);
+    await page.click('[data-new-chat] button[type="submit"]');
+    await until(page, "the new chat's page", `location.pathname.includes('/agents/')`);
+    await until(page, 'the opening in the chat column',
+      `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(NEW_CHAT_OPENING)})`);
+    await waitOn(page, "the opening turn's close on its socket", ledger.turnClosed());
+    await until(page, "the opening turn's end, Send offered again", CHAT_IDLE);
+  } finally {
+    await ledger.stop();
+  }
 }
 
 async function sendAndSettle(page: Page, text: string): Promise<void> {
@@ -627,6 +637,9 @@ export async function agentPlanIsReviewedInItsPane(target: FlowTarget): Promise<
     await page.evaluate(`${planMode}?.click()`);
     await until(page, "the agent pane's composer in Plan", `${planMode}?.getAttribute('aria-pressed') === 'true'`);
     await sendAndSettle(page, AGENT_PLAN_ASK);
+    // What the turn left in the pane, said before the wait: a turn that ended without a plan says why here.
+    const said = v.parse(v.string(), await page.evaluate(`(document.querySelector('#chat')?.innerText ?? '').slice(-1200)`));
+    process.stderr.write(`  the agent's pane after its turn: ${said.replace(/\s+/gu, ' ')}\n`);
     await until(page, "the agent's plan, decidable beside its pane", PLAN_DECISION_LIVE);
     const planReviewShown = await page.evaluate(`document.querySelector('#inspector [data-plan-body]') !== null`) === true;
 

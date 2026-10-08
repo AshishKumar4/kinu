@@ -1398,6 +1398,8 @@ export abstract class ActorAgent extends Agent<Env> {
       await this.wakes.cancel(TERMINAL_RETRY_JOB);
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed, { laps: 0, arms: null });
+      // A lap or an owed effect's retry that found its arm already gone: a wake nothing else may log.
+      else diagnostics.event('wake.nothing_owed', { workspace: this.name, laps: prior.laps, arms: prior.arms ?? 'none' });
     }
 
     // A turn a deploy cut short reads right by the next tick of the wake it armed.

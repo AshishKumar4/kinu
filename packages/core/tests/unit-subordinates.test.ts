@@ -474,6 +474,13 @@ describe('team action routing', () => {
     expect(byRole.seeds[0]).toMatchObject({ displayName: 'Auditor', nameOrigin: 'auto' });
   });
 
+  test('a hire that names its agent shows that name, and no title policy takes it', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ name: 'tidepool', role: 'planner', mission: 'Plan a three-step study of tide pools.', mode: 'plan' });
+
+    expect(h.seeds[0]).toMatchObject({ name: 'tidepool', displayName: 'tidepool', nameOrigin: 'user' });
+  });
+
   test('a model hire still refuses to invent a role or a mission', async () => {
     const h = makeTeamHarness();
 

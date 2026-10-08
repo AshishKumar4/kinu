@@ -134,11 +134,14 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
       } } };
   }
 
-  // The agent's own Plan turn submits its plan; once submitted, or on the approval's handoff turn, it says so and ends.
+  // The agent's own Plan turn submits its plan, then says so and ends. A turn offered no submit_plan names the tools
+  // it was offered, which is what a row waiting on a plan that never came needs to read (staging, 2026-10-08).
   if (latest.includes(AGENT_PLAN_ASK)) {
-    return request.available.includes('submit_plan') && !request.called.includes('submit_plan')
+    if (request.called.includes('submit_plan')) return { text: 'DONE' };
+
+    return request.available.includes('submit_plan')
       ? { toolCall: { name: 'submit_plan', arguments: { edits: [{ start: 1, content: AGENT_PLAN }] } } }
-      : { text: 'DONE' };
+      : { text: `NO PLAN: this turn was offered no submit_plan, only ${request.available.join(', ') || 'no tools'}.` };
   }
 
   if (asked(SLATE_ASK) && request.available.includes('file')) {
