@@ -6,12 +6,10 @@ import * as v from 'valibot';
 import type { AgentConfigStore, ShellApprovalMode } from '../config/store';
 import type { ApprovalGrant } from '../safety/approval-gate';
 import type { JsonValue } from '../utils/json';
-import { REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
+import { ReasoningEffortSchema, type ReasoningEffort } from '../providers/reasoning-effort';
 import { ADVISOR_SEVERITIES, type AdvisorSeverity } from '../advisor/review';
 
 const SHELL_APPROVAL_MODES: readonly ShellApprovalMode[] = ['strict', 'allow_all', 'deny_all'];
-
-const ReasoningEffortSchema = v.picklist(REASONING_EFFORTS);
 
 const ShellApprovalModeSchema = v.picklist(SHELL_APPROVAL_MODES);
 

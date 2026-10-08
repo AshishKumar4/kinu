@@ -13,10 +13,11 @@ import type {
   ProviderCatalogSnapshot, ToolCallRecord, JsonObject, JsonValue, ToolOutcome,
 } from '../../packages/core/src/index';
 import { compactToolCall } from '../../packages/core/src/evolution/tool-call-record';
+import { TurnFileLedger } from '../../packages/core/src/vfs/file-ledger';
 import {
   artifactOverrides, currentArtifacts, agentsActionsFor, buildActorTools,
   buildSystemPromptSync, createFactsStore,
-  createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
+  actorNamespaces, SURFACE_POLICY, TurnContextBudget, type SurfaceActor,
   isBuiltinToolName, JsonObjectSchema, collectDynamicContext, currentDateForPrompt, DynamicContextLedger, readMemoryTail,
   projectJsonValue, failedToolOutcome, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
@@ -25,7 +26,7 @@ import {
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import { synthesizeToolFallback } from '../../packages/core/src/utils/evidence-window';
 import {
-  createDefaultWebSearchProvider, restBrowserRunAccess, createWebCodemodeProvider,
+  createDefaultWebSearchProvider, restBrowserRunAccess,
 } from '../../packages/core/src/web/index';
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { createNodeCodemodeToolFactory } from '../../packages/cli-backend/src/codemode-tool-factory';
@@ -126,8 +127,6 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     fetch: globalThis.fetch.bind(globalThis), browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch.bind(globalThis) }),
   });
 
-  // As the CLI session builds `web.*`: no browser session in this process.
-  const web = () => createWebCodemodeProvider({ provider: webSearch, files: rt.storage });
 
   // This builds a TOOL SURFACE — the tools, the action enum and the system
   // prompt — for arms that assert their shape. It holds no session, and local
@@ -141,8 +140,8 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     rt,
     model: () => model,
     reportModelCall: liveModelCallSink(sql, rt.actor),
-    // A node's eval and web as the CLI session builds them.
-    nodeCodemode: (actor) => hostedCodemodeTool(actor, [web()]),
+    // A node's eval as the CLI session builds it.
+    nodeCodemode: (actor) => hostedCodemodeTool(actor, webSearch),
     webSearch,
     hostNode: () => Promise.reject(new Error(
       'this eval surface builds tools without a session, so it cannot seat a swarm node; '
@@ -153,19 +152,26 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   // The live rungs measure swarms, which the eval accounts have turned on.
   const agents: AgentsToolDeps = { mode: 'build', swarm, swarms: true };
 
+  const conversations = new ConversationSearchStore(sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId));
+
+  // Eval's namespaces as the CLI session builds them (`actorNamespaces`): no browser session in this process.
+  const surface: SurfaceActor = {
+    executors: () => rt.executionRouter?.getProviders() ?? [],
+    web: { search: webSearch, files: rt.storage, browser: null },
+    memory: () => ({ memory: rt.memory, facts, actor: rt.actor, conversations, vectorStore: null }),
+    files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),
+    tasks: () => ({ list: taskList, config, roleSwitch: null }),
+    db: rt.stores.appData,
+    programState: rt.actor.programState,
+    agents: () => agents,
+    self: null,
+  };
+
   // No session takes a wake here, so its calls run inline: the raw surface, over a runner nothing detaches into.
   const { raw: tools } = buildActorTools({
     rt,
-    conversations: new ConversationSearchStore(sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)),
-    codemode: createNodeCodemodeToolFactory({
-      reach: narrowToolSurface(undefined),
-      extraProviders: [
-        createAgentsCodemodeProvider(() => agents),
-        web(),
-        createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, actor: rt.actor, conversations: new ConversationSearchStore(sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) })),
-        createTasksCodemodeProvider(taskList, config),
-      ],
-    }),
+    conversations,
+    codemode: createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: actorNamespaces(surface, SURFACE_POLICY.program) }),
     agents,
     // No session stream persists this harness's calls, so none is waited for.
     effectClaims: { sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID, durable: () => Promise.resolve() },

@@ -829,7 +829,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const codemodeTool = createNodeCodemodeToolFactory({
       reach: narrowToolSurface(undefined),
-      extraProviders: [createAgentSelfProvider({
+      namespaces: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
         setCurriculumTaskStatus: async () => ({ ok: true }),
@@ -843,7 +843,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         listBackgroundJobs: async () => [],
         ...agentSelfRest,
       })],
-    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
+    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
@@ -859,7 +859,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const codemodeTool = createNodeCodemodeToolFactory({
       reach: narrowToolSurface(undefined),
-      extraProviders: [createAgentSelfProvider({
+      namespaces: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
         setCurriculumTaskStatus: async () => ({ ok: true }),
@@ -870,7 +870,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         ...agentSelfRest,
         armCompactNow: () => { arms++; },
       })],
-    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
+    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: 'return await agent.compactNow();',

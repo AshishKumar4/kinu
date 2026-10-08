@@ -165,6 +165,8 @@ export interface SignalCard {
   /** The signal as the agent will read it. */
   readonly text: string;
   readonly state: Exclude<SignalCardState, "undelivered">;
+  /** When it was last delivered, so a chat places it where it happened, not after everything since. */
+  readonly at: number;
 }
 
 /** Mid-turn splices are never persisted, so live cards age out by count, not turn boundary. */
@@ -175,11 +177,11 @@ const MAX_LIVE_CARDS = 50;
  * ignored: the client connected mid-flight and its history already shows the message.
  */
 export function applySignalCard(
-  cards: readonly SignalCard[], event: SignalCardEvent,
+  cards: readonly SignalCard[], event: SignalCardEvent, now: number,
 ): readonly SignalCard[] {
   if (event.state === "pending") {
     const card: SignalCard = {
-      id: event.id, metadata: event.metadata, text: event.text, state: "pending",
+      id: event.id, metadata: event.metadata, text: event.text, state: "pending", at: now,
     };
 
     const existing = cards.findIndex((c) => c.id === card.id);

@@ -447,7 +447,73 @@ describe('account panels', () => {
     });
   });
 
-  test('an account with no name starts blank, wears its email\'s letter, and moves on without saving an empty name', async () => {
+  // Production, 2026-10-08: connecting Cloudflare during setup ended on the setup's first step, in a new tab.
+  test('connecting Cloudflare runs in a helper window that closes itself, and setup returns to the step it was on', async () => {
+    await withGallery(async (gallery) => {
+      const route = '/welcome?step=providers';
+      const page = await freshPage(gallery, `welcome&cloudflare=off&route=${encodeURIComponent(route)}`, 'dark', 'desktop');
+
+      try {
+        // The wizard opens on the step its address names, as a sign-in returning to it reads it.
+        await page.waitForFunction(() => document.querySelector('[data-welcome-step="providers"]')?.getAttribute('aria-hidden') !== 'true');
+
+        // The connect a reader sees on this step: the one drawn, of the links into Cloudflare's sign-in.
+        const connect = '[data-welcome-step="providers"] a[href*="/auth/cloudflare/start"]';
+        await page.waitForFunction((links) => [...document.querySelectorAll(links)].some((link) => link.getClientRects().length > 0), {}, connect);
+        const opened = page.browser().waitForTarget((target) => target.opener() === page.target() && target.url().includes('/auth/cloudflare/start'));
+
+        await page.evaluate((links) => {
+          const link = [...document.querySelectorAll(links)].find((each) => each.getClientRects().length > 0);
+
+          if (link instanceof HTMLElement) link.click();
+        }, connect);
+        const helper = await opened;
+
+        // The sign-in is told to end on the connected page, and that page to send the owner back to this step.
+        const started = new URL(helper.url());
+        expect({ path: started.pathname, ends: started.searchParams.get('return_to') })
+          .toEqual({ path: '/auth/cloudflare/start', ends: `/connected?${new URLSearchParams({ next: route }).toString()}` });
+
+        const helperPage = await helper.page();
+
+        if (helperPage === null) throw new Error('the helper window has no page');
+        const closed = new Promise<void>((resolve) => { helperPage.once('close', () => { resolve(); }); });
+
+        const back = page.waitForRequest((request) => request.isNavigationRequest() && request.frame() === page.mainFrame());
+
+        // Where Cloudflare sends the helper once the owner has signed in.
+        await Promise.allSettled([helperPage.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent(route)}`)]);
+        await closed;
+        const returned = new URL((await back).url());
+
+        expect(`${returned.pathname}${returned.search}`).toBe(route);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('a sign-in that ends in a tab the browser opened sends that tab to the step it began on', async () => {
+    await withGallery(async (gallery) => {
+      const route = '/welcome?step=providers';
+      const page = await gallery.newPage();
+
+      try {
+        // Not a window this page's script opened, so it may not close itself: it goes where the connect began.
+        const onward = page.waitForRequest((request) => request.isNavigationRequest() && !request.url().includes('frame=connected'));
+        // The page leaves as soon as it has drawn, so its own load may be cut short.
+        await Promise.allSettled([page.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent(route)}`, { waitUntil: 'load' })]);
+        const reached = new URL((await onward).url());
+
+        expect(`${reached.pathname}${reached.search}`).toBe(route);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // Production, 2026-10-08: its one sign-in, Cloudflare, shares no name for most accounts; nothing guesses one.
+  test('an account its provider shared no name for starts blank, says which provider, wears its email\'s letter, and saves no empty name', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'welcome&step=0&noname=1', 'dark', 'desktop');
 
@@ -455,6 +521,7 @@ describe('account panels', () => {
         await page.waitForSelector('[aria-label="Your name"]');
         expect(await page.$eval('[aria-label="Your name"]', (el) => (el instanceof HTMLInputElement ? el.value : null))).toBe('');
         expect(await page.$eval('[data-welcome-step="profile"] [data-avatar]', (el) => el.textContent?.trim())).toBe('N');
+        await page.waitForFunction(() => (document.querySelector('[data-welcome-step="profile"]')?.textContent ?? '').includes('Cloudflare'));
 
         // Typed and cleared again: Next moves on, and no empty name reaches the account.
         await page.type('[aria-label="Your name"]', 'x');

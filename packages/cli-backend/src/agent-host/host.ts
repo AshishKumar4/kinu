@@ -963,6 +963,14 @@ export class LocalAgentHost {
 
     if (!state || event.type !== 'turn-start') return;
     state.ownerDriven = event.kind === 'user';
+
+    // The owner writing to an agent that waits on input answers that wait, as a message from its hirer does.
+    if (state.ownerDriven) {
+      const roster = this.requireActorEntry(child.actor.record.parentActorId ?? '').roster;
+
+      if (roster.get(child.name)?.status === 'awaiting_input') roster.resumeAfterMessage(child.name);
+    }
+
     state.spoke = false;
     state.settled = false;
     state.mode = event.workMode;

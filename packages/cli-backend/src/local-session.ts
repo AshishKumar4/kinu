@@ -71,11 +71,11 @@ import { ActorSession, type ActorTurnLease,
   turnReasonForMetadata, type TurnReason,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
-  createAgentsCodemodeProvider, createStateCodemodeProvider,
+  createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
+  actorNamespaces, SURFACE_POLICY, type SurfaceActor,
   type CodemodeProvider,
-  agentRoleSwitch, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider,
-  createReportCodemodeProvider, REPORT_TOOL, type ReportDeps,
+  agentRoleSwitch,
+  REPORT_TOOL, type ReportDeps,
   MissionGovernor,
   observeSystemPromptHash,
   type DynamicContext,
@@ -116,7 +116,7 @@ import { ActorSession, type ActorTurnLease,
   narrowToolSurface, codemodeCapabilitiesFor,
   type ResolvedTurnProfile,
   decodeJsonValue, projectJsonValue,
-  agentSelfHost, createAgentSelfProvider,
+  agentSelfHost,
   cancelBackgroundJob, jobResult, listBackgroundJobs,
   getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, gatedGrants, type ApprovalGrant,
@@ -127,7 +127,7 @@ import { ActorSession, type ActorTurnLease,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
-  createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
+  createActorHost, defaultLoopOrigin,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
@@ -1058,11 +1058,6 @@ export class LocalAgentSession {
     return { executor: this.rt.executor, explorer: this.rt.llm };
   }
 
-  /** Only `web.*`: a head forks its parent's resources, never its authority to delegate. */
-  private headCodemodeExtras(): CodemodeProvider[] {
-    return [this.webNamespace()];
-  }
-
   /** Skips a window outliving the session so consumed events never bind to a dead pump's turn. */
   setTimer(fn: () => Promise<void>, ms: number): void {
     setTimeout(() => detach(Effect.promise(async () => { if (this.chat.closed) return;
@@ -1184,11 +1179,7 @@ export class LocalAgentSession {
         turnId: () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
         durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
       },
-      clamp: {
-        files: this.rt.storage,
-        budget: this.actorSession.orchestrator.acc.context,
-        producer: 'external_tool',
-      },
+      spill: this.rt.storage,
     }));
     this.mcpClose = () => conn.close();
     await this.admitMcp(await this.modelCatalog.resolved());
@@ -1736,8 +1727,7 @@ export class LocalAgentSession {
   /** What this turn owes, via core's `declareTerminalRoster`; this session supplies values, never
    *  decisions, so the CLI cannot drift from the Durable Object. */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
-    // A child titles from its brief, as a hosted actor does; the workspace mission names only the root.
-    const mission = this.rt.actor.parentActorId === null ? missionOf(soulIn(this.rt.space)) : null;
+    const root = this.rt.actor.parentActorId === null;
 
     // Decided on the live turn: `shouldGate` reads RAM a restart lacks, so the row's existence carries it.
     const gated = this.rt.shell !== undefined
@@ -1775,9 +1765,12 @@ export class LocalAgentSession {
       parts.advisor = projectJsonValue({ value: this.actorSession.advisorSnapshot(scoped, input.reachableTools) });
     }
 
-    parts.autoTitle = { mission };
+    // The workspace mission names the root. A child is named once, from its brief (the turn that opened its
+    // conversation), however that turn ended: a later turn's words ("Continue") are no name for it.
+    if (root) parts.autoTitle = { mission: missionOf(soulIn(this.rt.space)) };
+    else if (input.opensConversation()) parts.autoTitle = { mission: input.userText, standIn: true };
     // The workspace's own conversation compresses into its facts; a hire's does not, as on cf.
-    parts.sleepTime = this.rt.actor.parentActorId === null;
+    parts.sleepTime = root;
 
     // One claimed effect; the sequence id is the parent's dedupe key, so a replay is recognised.
     if (input.owedReport !== null && relay !== null) {
@@ -2057,11 +2050,6 @@ export class LocalAgentSession {
     return this._webSearchProvider;
   }
 
-  /** `web.*` in eval. A program here runs in this process, which holds no Browser Run socket client, so no browser sessions. */
-  private webNamespace(): CodemodeProvider {
-    return createWebCodemodeProvider({ provider: this.getWebSearchProvider(), files: this.rt.storage });
-  }
-
   /** Skill bodies already in the turn's prompt, so a mid-turn steer adds only new ones. */
   private turnActiveSkillNames: readonly string[] = [];
 
@@ -2320,7 +2308,7 @@ export class LocalAgentSession {
       reportNodeDelta: () => this.publishHeadStream,
       model: () => this.cachedModel ?? this.defaultModel("an agents swarm"),
       reportModelCall: this.modelCallSink,
-      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.headCodemodeExtras()),
+      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.getWebSearchProvider()),
       webSearch: this.getWebSearchProvider(),
       originContext: async () => this.actorSession.history,
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
@@ -2517,8 +2505,29 @@ export class LocalAgentSession {
   private codemodeProviders(mode: WorkMode): CodemodeProvider[] {
     const report = this.reportGateOpen() ? this.reportDeps : null;
 
-    return [
-      createAgentSelfProvider(agentSelfHost({
+    return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, report === null ? {} : { report: () => report });
+  }
+
+  /** This session's actor as its namespaces are built over it (`actorNamespaces`); it delegates in `mode`. */
+  private surfaceActor(mode: WorkMode): SurfaceActor {
+    return {
+      executors: () => this.rt.executionRouter?.getProviders() ?? [],
+      // A program here runs in this process, which holds no Browser Run socket client, so no browser sessions.
+      web: { search: this.getWebSearchProvider(), files: this.rt.storage, browser: null },
+      memory: () => ({
+        memory: this.rt.memory, facts: this.factsStore, actor: this.rt.actor, conversations: this.ownConversations(), vectorStore: null,
+      }),
+      files: () => ({
+        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory,
+        ledger: this.actorSession.orchestrator.acc.files, budget: this.actorSession.orchestrator.acc.context,
+      }),
+      // `this.taskList` is the same TaskListStore the dynamic-context snapshot reads.
+      tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
+      // Plan scoping follows the resolved table scope, read from the live invocation.
+      db: this.stores.appData,
+      programState: this.rt.actor.programState,
+      agents: () => this.agentsToolDeps(mode),
+      self: agentSelfHost({
         rt: this.rt,
         scaffoldControl: () => this.scaffoldControl,
         triggers: () => this.triggerRegistry,
@@ -2526,29 +2535,8 @@ export class LocalAgentSession {
         budget: () => this.budget,
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
         armCompactNow: () => { this.compactionState.armCompaction(this.compactionKey()); },
-      })),
-      createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
-      createStateCodemodeProvider(this.rt.actor.programState),
-      // Plan scoping follows the resolved table scope, read from the live invocation.
-      createDbCodemodeProvider(this.stores.appData),
-      this.webNamespace(),
-      // `this.taskList` is the same TaskListStore the dynamic-context snapshot reads.
-      createMemoryCodemodeProvider(() => ({
-        memory: this.rt.memory, facts: this.factsStore, actor: this.rt.actor, conversations: this.ownConversations(),
-        vectorStore: null,
-      })),
-      createFileCodemodeProvider(() => ({
-        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory,
-        ledger: this.actorSession.orchestrator.acc.files, budget: this.actorSession.orchestrator.acc.context,
-      })),
-      createTasksCodemodeProvider(
-        this.taskList,
-        this.config,
-        agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),
-      ),
-      // Same gate as the native `report` tool.
-      ...(report ? [createReportCodemodeProvider(() => report)] : []),
-    ];
+      }),
+    };
   }
 
   /** One builder for constructor and rebind. */
@@ -2563,7 +2551,6 @@ export class LocalAgentSession {
       operations: this.modelOperations,
       parentRuntime: this.rt,
       webSearch: this.getWebSearchProvider(),
-      codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,
       journal: () => this.headJournal,
@@ -2770,7 +2757,7 @@ export class LocalAgentSession {
           if (narrowing.allowsTool(name)) native[name] = entry;
         }
 
-        return createNodeCodemodeToolFactory({ extraProviders: this.codemodeProviders(mode), reach: narrowing })({ ...surface, native });
+        return createNodeCodemodeToolFactory({ namespaces: this.codemodeProviders(mode), reach: narrowing })({ ...surface, native });
       },
       agents: this.agentsToolDeps(mode),
       roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),

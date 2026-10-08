@@ -3,6 +3,7 @@ export type {
   ExecutorCapability,
   ExecutorKind,
   ExecutorProvider,
+  ExecutorProviderSurface,
   ExecutorStatus,
   ExecutorLifecycleStatus,
   ExecutorInfo,
