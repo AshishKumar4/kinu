@@ -4279,8 +4279,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const warms = this.eventRecorder.readRecentByType('model_call', windowLimit)
       .flatMap((e) => (e.type === 'model_call' && e.source === 'warming' ? [e] : []));
 
-    const measures = this.eventRecorder.readContextMeasures();
-    const newest = measures.provider?.step;
+    const newest = this.eventRecorder.newestMeasuredStep() ?? undefined;
     const deviceId = newest?.egress?.startsWith('device ') === true ? newest.egress.slice('device '.length) : null;
 
     return {
@@ -4298,7 +4297,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
       contextWindow: this.modelCatalog.contextWindow(),
-      fill: contextFill(measures, this.modelCatalog.contextWindow()),
+      fill: contextFill(this.eventRecorder.readContextMeasures(), this.modelCatalog.contextWindow()),
       // Every step in the window, reporting or not: `summarizeSteps` counts the
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
