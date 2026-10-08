@@ -12,6 +12,7 @@
   "task": {
     "command": ["bun", "scripts/ladder.ts", "--tier=ci", "--ci-row={row}", "--ci-costs={timings}", "--verdicts={out}"],
     "name": "name",
-    "timeout": 1800
+    "timeout": 1800,
+    "secrets": ["R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]
   }
 }

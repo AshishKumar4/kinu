@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { Effect } from "effect";
 import { Database } from "bun:sqlite";
 import * as v from "valibot";
 import { MissionGovernor } from "../src/mission-budget";
@@ -122,7 +123,7 @@ describe("createAgentSelfProvider — shape", () => {
     expect(p.positionalArgs).toBe(true);
     expect(declared(p)).toContain("schedule(");
 
-    for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "scaffoldVersions", "schedule", "cancelSchedule", "compactNow"]) {
+    for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "proposeWorkspace", "scaffoldVersions", "schedule", "cancelSchedule", "compactNow"]) {
       const descriptor = p.tools[name];
 
       if (!descriptor) throw new Error(`missing agent.${name}`);
@@ -171,6 +172,26 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(await scaffold("a rationale", "code", { baseVersion: -1 })).toEqual(refused('"baseVersion"'));
     expect(await scaffold("a rationale", "code", { baseVersion: 1.5 })).toEqual(refused('"baseVersion"'));
     expect(host.calls).toEqual([]);
+  });
+
+  test("proposeWorkspace parks the proposal with the host, and a host with no owner account refuses it", async () => {
+    const asked: unknown[] = [];
+
+    const host = fakeHost({
+      proposeWorkspace: (proposal) => Effect.sync(() => {
+        asked.push(proposal);
+
+        return { status: "pending" as const, proposal: "wsp-1", note: "waits for the owner" };
+      }),
+    });
+
+    const propose = called(createAgentSelfProvider(host), "proposeWorkspace");
+
+    expect(await propose("Research", "Track pricing.", "Terse.")).toMatchObject({ status: "pending", proposal: "wsp-1" });
+    expect(asked).toEqual([{ name: "Research", brief: "Track pricing.", soul: "Terse." }]);
+    expect(await propose("Research", "", "Terse.")).toEqual(refused('"brief"'));
+    expect(await called(createAgentSelfProvider(fakeHost()), "proposeWorkspace")("Research", "Track pricing.", ""))
+      .toMatchObject({ success: false, reason: "unsupported" });
   });
 
   test("scaffoldVersions exposes the archive read-only via the host", async () => {
