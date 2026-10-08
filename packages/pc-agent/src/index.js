@@ -3499,6 +3499,35 @@ function publishPidfile(pidPath) {
   }
 }
 
+/**
+ * Removes the pidfile only while it still names `pid` (null: one naming no pid). It is moved aside whole and read; one
+ * naming another pid is a claim made since `pid` was read, and is linked back. A plain remove after the check removed
+ * such a claim, and two daemons both held the machine (2026-10-08). `kinu connect` removes it the same way.
+ */
+function removePidfileNaming(pidPath, pid) {
+  const claims = `${pidPath}.claims`;
+  const aside = path.join(claims, `aside-${process.pid}-${crypto.randomBytes(8).toString('hex')}`);
+
+  fs.mkdirSync(claims, { recursive: true, mode: 0o700 });
+
+  try {
+    fs.renameSync(pidPath, aside);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return;
+    throw err;
+  }
+
+  if (readPidfile(aside) !== pid) {
+    try {
+      fs.linkSync(aside, pidPath);
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') throw err;
+    }
+  }
+
+  fs.rmSync(aside, { force: true });
+}
+
 async function claimMachine(pidPath = PID_PATH) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let published;
@@ -3518,7 +3547,7 @@ async function claimMachine(pidPath = PID_PATH) {
       return { held: false, holder };
     }
 
-    fs.rmSync(pidPath, { force: true });
+    removePidfileNaming(pidPath, holder);
   }
 
   return { held: false, holder: readPidfile(pidPath) };
@@ -3541,7 +3570,7 @@ function releaseMachine(pidPath = PID_PATH) {
   if (holder !== process.pid) return;
 
   try {
-    fs.rmSync(pidPath, { force: true });
+    removePidfileNaming(pidPath, process.pid);
   } catch (err) {
     log('Could not remove the device pidfile while exiting:', errorDetail(err));
   }

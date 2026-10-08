@@ -638,11 +638,13 @@ function claimDaemonPid(pid: number): Effect.Effect<boolean, KinuError> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (yield* writePidfile(pid)) return true;
 
-      // The daemon claims this same file, so a pidfile naming this pid is this claim.
-      if ((yield* recordedDaemonPid()) === pid) return true;
+      const recorded = yield* recordedDaemonPid();
 
-      if ((yield* runningDaemonPid()) !== null) return false;
-      yield* io(`removing the stale device daemon pidfile at ${PID_PATH}`, () => { rmSync(PID_PATH, { force: true }); });
+      // The daemon claims this same file, so a pidfile naming this pid is this claim.
+      if (recorded === pid) return true;
+
+      if (recorded !== null && (yield* processAlive(recorded))) return false;
+      yield* removePidfileNaming(recorded);
     }
 
     return false;
@@ -687,11 +689,38 @@ function writePidfile(pid: number): Effect.Effect<boolean, KinuError> {
 
 function stopRunningDaemon(): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
-    const pid = yield* runningDaemonPid();
+    const recorded = yield* recordedDaemonPid();
+    const running = recorded !== null && (yield* processAlive(recorded));
 
-    if (pid && (yield* processIsInstalledDaemon(pid))) yield* stopInstalledDaemon(pid);
+    if (running && (yield* processIsInstalledDaemon(recorded))) yield* stopInstalledDaemon(recorded);
 
-    yield* io(`removing the device daemon pidfile at ${PID_PATH}`, () => { rmSync(PID_PATH, { force: true }); });
+    yield* removePidfileNaming(recorded);
+  });
+}
+
+/**
+ * Removes the pidfile only while it still names `pid` (null: one naming no pid). It is moved aside whole and read; one
+ * naming another pid is a claim made since `pid` was read, and is linked back. A plain remove after the check removed
+ * such a claim: a connect that waited for the old daemon to exit removed the claim another connect made meanwhile, and
+ * both started a daemon (2026-10-08). The daemon removes its pidfile the same way.
+ */
+function removePidfileNaming(pid: number | null): Effect.Effect<void, KinuError> {
+  const aside = join(CLAIMS_DIR, `aside-${process.pid}-${randomBytes(8).toString('hex')}`);
+
+  return io(`removing the stale device daemon pidfile at ${PID_PATH}`, () => {
+    mkdirSync(CLAIMS_DIR, { recursive: true, mode: 0o700 });
+
+    const moved = tolerate(() => {
+      renameSync(PID_PATH, aside);
+
+      return true;
+    }, 'enoent');
+
+    if (moved === undefined) return;
+    const named = Number(readFileSync(aside, 'utf-8').trim());
+
+    if ((Number.isInteger(named) && named > 0 ? named : null) !== pid) tolerate(() => { linkSync(aside, PID_PATH); }, 'eexist');
+    rmSync(aside, { force: true });
   });
 }
 
