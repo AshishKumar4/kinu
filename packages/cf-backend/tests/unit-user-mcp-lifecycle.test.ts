@@ -48,6 +48,17 @@ async function stopMessage(call: Promise<string>): Promise<string> {
   }
 }
 
+/** The message a refused call rejected with. */
+async function failureOf(call: Promise<unknown>): Promise<string> {
+  try {
+    await call;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  throw new Error('the call was not refused');
+}
+
 function harness(options?: TestUserDOOptions): TestUserDO {
   resetRecordedMcp();
 
@@ -108,14 +119,13 @@ async function authorizationsSeenDuring(body: () => Promise<void>): Promise<stri
 }
 
 describe('a server name is one identity, enforced by the database', () => {
-  test('a second row under the same name, in any case, is refused', async () => {
+  test('a second server under the same name, in any case, is refused and adds no row', async () => {
     const h = harness();
     await seedServer(h, 'srv1', { name: 'GitHub' });
-    // The UNIQUE index on `lower(name)` refuses the write itself.
-    expect(() => sqlExec(h.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-       VALUES ('srv2', 'github', 'https://other.example/sse', 'auto', NULL, NULL)`,
-    )).toThrow(/UNIQUE/i);
+    // Refused at the name claim, before the add dials anything.
+    await expect(h.userDO.userMcp_add(await testOwner(), { name: 'github', serverUrl: 'https://other.example/sse' }, 'https://kinu.example'))
+      .rejects.toThrow('github');
+    expect(sqlExec(h.db).exec('SELECT id FROM user_mcp_servers').toArray()).toEqual([{ id: 'srv1' }]);
     h.close();
   });
 
@@ -123,8 +133,9 @@ describe('a server name is one identity, enforced by the database', () => {
     const h = harness();
     await seedServer(h, 'srv1', { name: 'github' });
     await seedServer(h, 'srv2', { name: 'linear' });
-    await expect(h.userDO.userMcp_update(await testOwner(), 'srv2', { name: 'GitHub' }))
-      .rejects.toThrow("An MCP server named 'GitHub' already exists.");
+    const refused = await failureOf(h.userDO.userMcp_update(await testOwner(), 'srv2', { name: 'GitHub' }));
+    expect(refused).toContain('GitHub');
+    expect(refused).not.toMatch(/UNIQUE|constraint/iu);
     expect(storedName(h, 'srv2')).toBe('linear');
     h.close();
   });

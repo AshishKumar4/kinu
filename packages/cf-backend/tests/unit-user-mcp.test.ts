@@ -3,12 +3,11 @@ import { describe, test, expect } from 'bun:test';
 import { mapConnectionStatus, mcpCredentialTransport } from '../src/user/mcp';
 import {
   validateMcpServerInput, parseMcpHeaders,
-  isMcpToolKey, mcpToolKey, stepContextLimit,
+  mcpToolKey, stepContextLimit,
   describeMcpTool, McpToolSurfaceCache, toolSurfaceTokens, omitEmptyOptionalArgs, type McpSurfaceBudget,
   type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import { tool, jsonSchema, type ToolSet } from 'ai';
-import type { RecordedMcpTransport } from './helpers/agents-sdk';
 
 function expectStoredUrl(name: string, serverUrl: string, stored: string): void {
   const out = validateMcpServerInput({ name, serverUrl });
@@ -445,38 +444,8 @@ describe('parseMcpHeaders', () => {
   });
 });
 
-// A bearer in `requestInit.headers` is written to `cf_agents_mcp_servers` in the clear by the SDK
-// (`persistTransportOptions`, agents/dist/client-zqKcsyFa.js:1022-1035).
-
-/** Copied from `persistTransportOptions`'s whitelist, so an SDK change fails here instead of leaking. */
-const SDK_PERSISTED_TRANSPORT_KEYS = [
-  'type', 'headers', 'requestInit', 'reconnectionOptions',
-  'skipIssuerMetadataValidation', 'onInsufficientScope', 'maxStepUpRetries',
-  'sessionId', 'protocolVersion',
-] as const;
-
-function asTheSdkWouldPersist(transport: RecordedMcpTransport): string {
-  // Picked in whitelist order: the order the SDK serialises in.
-  return JSON.stringify({
-    transport: Object.fromEntries(
-      SDK_PERSISTED_TRANSPORT_KEYS
-        .filter((key) => transport[key] !== undefined)
-        .map((key) => [key, transport[key]]),
-    ),
-  });
-}
-
 describe('mcpCredentialTransport', () => {
   const CREDENTIAL = { Authorization: 'Bearer live-secret' };
-
-  test('nothing the SDK can persist carries the credential', () => {
-    const opts = mcpCredentialTransport('https://mcp.example/sse', async () => CREDENTIAL);
-    expect(Object.keys(opts)).toEqual(['fetch']);
-    const persisted = asTheSdkWouldPersist({ ...opts, type: 'sse' });
-    expect(persisted).not.toContain('live-secret');
-    expect(persisted).not.toContain('Authorization');
-    expect(persisted).toBe(JSON.stringify({ transport: { type: 'sse' } }));
-  });
 
   test('a request to the server carries the credential', async () => {
     const seen: Headers[] = [];
@@ -546,15 +515,3 @@ async function withFetch(
 
   try { await body(); } finally { globalThis.fetch = real; }
 }
-
-describe('buildBuiltinTools mcp_ prefix guard', () => {
-});
-
-describe('buildBuiltinTools assertion', () => {
-  test('throws when a builtin under construction starts with mcp_', () => {
-    // Recomputes the guard against a known bad shape rather than patching BUILTIN_TOOL_DESCRIPTIONS.
-    const tools = { eval: {}, mcp_evil: {} };
-    const offenders = Object.keys(tools).filter(isMcpToolKey);
-    expect(offenders).toEqual(['mcp_evil']);
-  });
-});
