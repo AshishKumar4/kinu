@@ -154,3 +154,17 @@ describe('the preview route still runs before app auth', () => {
     expect(assetRequests).toEqual([]);
   });
 });
+
+describe('the version that answered', () => {
+  test('is named on every response a published host serves, and on no other', async () => {
+    const { env: base, ctx } = harness(script);
+    const env = { ...base, CF_VERSION_METADATA: { id: 'cfcb250f-7659-4736-b301-32bec5b36ce3', tag: '', timestamp: '' } };
+    const read = async (url: string) => (await worker.fetch(new Request(url), env, ctx)).headers.get('x-kinu-version');
+
+    expect({
+      app: await read(`https://${APP_HOST}/assets/main.js`), missing: await read(`https://${APP_HOST}/api/no-such-route`),
+      preview: await read(`https://${PREVIEW_HOST}/index.html`), foreign: await read(`https://${FOREIGN_HOST}/assets/main.js`),
+    }).toEqual({ app: 'cfcb250f-7659-4736-b301-32bec5b36ce3', missing: 'cfcb250f-7659-4736-b301-32bec5b36ce3', preview: 'cfcb250f-7659-4736-b301-32bec5b36ce3', foreign: null });
+  });
+});
+
