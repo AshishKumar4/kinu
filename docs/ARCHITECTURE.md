@@ -614,7 +614,7 @@ proved-in-abstract-model entries and 90 by-construction witnesses against 46
 requirements, with no `sorry` (measured 2026-09-09 by
 `lean/check-traceability.mjs`). Axiom reports use only Lean's three kernel
 axioms. One separate SQLite FTS5 assumption is documented and enrolled. CI
-(`.github/workflows/lean-verify.yml`, `scripts/verify-lean.sh`) checks
+(the ladder's CI row `bun run verify:lean`, `scripts/verify-lean.sh`) checks
 compilation, negative consistency, axiom closure, and
 requirement-to-proof-to-source traceability. These are checked statements about
 the models, not a proof that the deployed TypeScript refines them. See

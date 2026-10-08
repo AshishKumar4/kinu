@@ -977,7 +977,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -2213,18 +2213,17 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run verify:lean',
     label: 'Lean proofs, consistency, and traceability',
-    tier: 'deploy',
+    tier: 'ci',
     // 10 s WARM: 10.1 and 9.3 s at 961dd0ab2 (lane/formal-proofs) in a detached
     // worktree on the 24-thread box, 2026-09-22, at load 20-21 with other lanes
     // running, after one cold run of 24.4 s. The growth from 2.2 s (2026-08-21,
     // warm, `lake build` a no-op) is the refinement fixtures regenerated and
     // diffed and 824 refinement cases under bun test (2.4 s of it).
     //
-    // COLD IT IS ~15 MINUTES, and that is what CI pays: the lean-verify workflow
-    // caches `~/.elan` and not the Lean build cache, so a runner rebuilds 330 theorems
-    // every time. That is why CI_EXEMPT keeps it off the ci tier, and why both
-    // figures are written down rather than averaged into one that describes
-    // neither machine.
+    // COLD IT IS ~15 MINUTES, which a GitHub runner paid on every push. On armada the
+    // environment builds lean/ once (scripts/armada/install.sh) and each checkout keeps
+    // `.lake`, so a CI run rebuilds only what its commit changed: that is why it is a
+    // ci row, run on every commit, and why lean-verify.yml is gone.
     //
     // Declared at ZERO until 2026-08-21, which made the deploy tier's cost line
     // fiction and its budget unenforceable.
@@ -2946,10 +2945,6 @@ export const CI_EXEMPT = {
     'proves the tree being deployed, not a push: it materialises a `git worktree add --detach` copy and runs eight '
     + '`bun test` processes inside it. It runs in the deploy\'s source-phase job on armada, whose '
     + 'checkout carries the whole history.',
-  'bun run verify:lean':
-    'runs in the deploy\'s source-phase job on armada. The armada environment installs elan and '
-    + 'builds lean/ once (scripts/armada/install.sh), and each checkout keeps that build, so a run rebuilds only what '
-    + 'changed. lean-verify.yml is gone; this is where the proofs are checked.',
   'bun run gate:first-run':
     'has nothing to run against at CI. Its subject is the deployment that just went up, so it '
     + 'runs AFTER the upload and the smoke gate, on a build that exists — at CI there is no such '

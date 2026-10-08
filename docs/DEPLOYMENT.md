@@ -550,7 +550,7 @@ Step 2 asserts downloads exist in `dist/client/downloads/`. Step 3 asserts wrang
 
 ### CI credentials
 
-GitHub runs no source CI: the ladder's CI tier runs on armada (§ CI on armada). Lean verification and secret scanning run on every push, with read-only repository tokens. Bench validation is scheduled or dispatched (or label-triggered on a PR), and live evals run only on dispatch. Every workflow uses setup-bun's `bun-version-file: package.json`, so `packageManager` controls both local and CI builds. Bun 1.4.2 emitted a different sync bundle from the pinned 1.4.0 image in run 36687270202; CI follows the declared version, not `latest`.
+GitHub runs no source CI: the ladder's CI tier runs on armada (§ CI on armada), Lean verification among its rows. GitHub keeps two workflows: secret scanning on every push, with a read-only repository token, and live evals, only on dispatch. The nightly flake sweep and bench corpus validation run on armada from a user timer (`bun scripts/nightly-sweeps.ts install <branch>`), one `armada map` each. Every workflow uses setup-bun's `bun-version-file: package.json`, so `packageManager` controls both local and CI builds. Bun 1.4.2 emitted a different sync bundle from the pinned 1.4.0 image in run 36687270202; CI follows the declared version, not `latest`.
 
 `.github/workflows/evals.yml` holds a credential, so its two jobs that read it (`evals`, `diagnose`) ask for the GitHub environment `eval`, and no pull request can start the workflow: it is dispatched after a promotion and measures the build production serves. Two things only an operator can do:
 

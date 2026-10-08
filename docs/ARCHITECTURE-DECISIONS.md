@@ -1410,8 +1410,10 @@ the pointer, and the release no longer waits on GitHub. The deploy reads the sam
 and a missing or red one ends it before any build; a promotion takes staging's record, which only a deploy past
 that gate wrote. armada grades every planned row exactly once, with each split suite's file timings, before it
 stores a verdict, so its stored verdict is the complete proof. The six hammer runs were in the CI tier and stay
-in it, each a task of its own. ci.yml and its part, artifact and collection plumbing are deleted; evals.yml,
-the secret scan, Lean verification, the bench corpus and the flake sweep stay on GitHub. armada is a pinned dev
+in it, each a task of its own. ci.yml and its part, artifact and collection plumbing are deleted; evals.yml
+and the secret scan stay on GitHub. On 2026-10-08 the rest moved: Lean verification is a CI row (armada's
+environment holds the Lean build), and the flake sweep and bench corpus validation are nightly `armada map` runs
+(scripts/nightly-sweeps.ts). armada is a pinned dev
 dependency, so the hook and the deploy run this checkout's `armada`, against `~/.config/armada/connection.json`.
 Measured 2026-10-07: the tier on armada took 7.0 to 9.1 minutes for 90 rows on 13 to 20 containers over nine
 green runs (0b74ff100 in 7.3 minutes on 13, job 20261007190749-9267a508). GitHub's hosted matrix of 2026-10-01
